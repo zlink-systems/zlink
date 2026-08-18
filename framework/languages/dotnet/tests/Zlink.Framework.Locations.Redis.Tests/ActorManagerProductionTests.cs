@@ -420,10 +420,13 @@ public sealed class ActorManagerProductionTests
                 _ => false
             });
         using var reservationDocument = JsonDocument.Parse(reservation.Bytes);
+        // ZLinkMeshNodeDescriptorKey.Rid wire name is routingIdHex
+        // (checklist C-4: shared with the authority allocation.descriptor
+        // field, 21-location-runtime.md#2.4), not "rid".
         targetRid = RoutingId.FromHex(
             reservationDocument.RootElement
                 .GetProperty("targetDescriptor")
-                .GetProperty("rid")
+                .GetProperty("routingIdHex")
                 .GetString()!);
         return true;
     }

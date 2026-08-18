@@ -65,7 +65,11 @@ internal static class ZLinkJsonSerializerOptions
         }
     }
 
-    private sealed class FrameworkSigned64JsonConverter : JsonConverter<long>
+    // Store opaque-record envelope DTOs (Runtime/Locations) reuse these two
+    // converters directly for the canonical decimal-string generation
+    // fields pinned by 21-location-runtime.md#2.4, so they can't stay
+    // private to this class.
+    internal sealed class FrameworkSigned64JsonConverter : JsonConverter<long>
     {
         public override long Read(
             ref Utf8JsonReader reader,
@@ -96,7 +100,7 @@ internal static class ZLinkJsonSerializerOptions
             writer.WriteStringValue(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    private sealed class FrameworkUnsigned64JsonConverter : JsonConverter<ulong>
+    internal sealed class FrameworkUnsigned64JsonConverter : JsonConverter<ulong>
     {
         public override ulong Read(
             ref Utf8JsonReader reader,

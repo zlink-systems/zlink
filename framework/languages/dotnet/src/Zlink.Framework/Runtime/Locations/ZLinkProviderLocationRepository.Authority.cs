@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Buffers.Binary;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -115,7 +116,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         ValidateAuthorityMutation(mutation);
 
         var metaKey = AuthorityMetaKey(key);
-        var payloadKey = AuthorityPayloadKey(key);
         var current = await ReadAuthorityRecordAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (current is null
@@ -130,19 +130,16 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 // A source handoff cleanup can arrive after the target has
                 // published a newer authority version. Submit the old
-                // metadata fence to the opaque provider so an in-flight
-                // cleanup remains observable and retryable. The expected
-                // version cannot match the target row, so this batch cannot
-                // delete the target metadata or payload.
+                // fence to the opaque provider so an in-flight cleanup
+                // remains observable and retryable. The expected version
+                // cannot match the target row, so this batch cannot delete
+                // the target's single authority row.
                 await provider.WriteAsync(
                         new ZLinkStoreWriteRequest(
                             [new ZLinkStoreCondition.Version(
                                 metaKey,
                                 new ZLinkStoreVersion(expectedStoreVersion))],
-                            [
-                                new ZLinkStoreMutation.Delete(metaKey),
-                                new ZLinkStoreMutation.Delete(payloadKey)
-                            ]),
+                            [new ZLinkStoreMutation.Delete(metaKey)]),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -166,7 +163,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return Conflict(current);
             return await StoreAuthorityAsync(
                     current,
-                    current.Meta with { PayloadSha256 = Sha256(restore.Payload) },
+                    current.Meta with { Payload = restore.Payload.ToArray() },
                     restore.Payload,
                     [new ZLinkStoreCondition.Version(metaKey, current.Version)],
                     [],
@@ -201,7 +198,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     ],
                     [
                         new ZLinkStoreMutation.Delete(metaKey),
-                        new ZLinkStoreMutation.Delete(payloadKey),
                         new ZLinkStoreMutation.Put(
                             target.Key,
                             Encode(capacity),
@@ -296,43 +292,31 @@ internal sealed partial class ZLinkProviderLocationRepository
             nextAllocation = targetAllocation;
         }
 
+        // ObjectGeneration/AuthorityOwnerGeneration live only on this single
+        // authority row now (checklist C-2b) -- current.Meta already carries
+        // both, atomically consistent by construction, so there is no
+        // separate GenerationKey read/condition to reconcile against.
         var nextAuthorityOwnerGeneration =
             current.Meta.AuthorityOwnerGeneration;
         if (changesOwner)
         {
-            var generation = await ReadGenerationAsync(key, cancellationToken)
-                .ConfigureAwait(false);
-            if (generation.ObjectGeneration != current.Meta.ObjectGeneration
-                || generation.AuthorityOwnerGeneration
-                != current.Meta.AuthorityOwnerGeneration)
-                return Conflict(current);
             var counter =
                 await ReadAuthorityOwnerGenerationCounterAsync(
                         cancellationToken)
                     .ConfigureAwait(false);
-            var highWater = Math.Max(
-                counter.Value,
-                generation.AuthorityOwnerGeneration);
             nextAuthorityOwnerGeneration =
                 put.TargetAuthorityOwnerGeneration == 0
-                    ? highWater == long.MaxValue
+                    ? counter.Value == long.MaxValue
                         ? 0
-                        : highWater + 1
+                        : counter.Value + 1
                     : put.TargetAuthorityOwnerGeneration;
             if (nextAuthorityOwnerGeneration == 0)
                 return new ZLinkAuthorityCompareExchangeResult
                     .GenerationExhausted();
             if (nextAuthorityOwnerGeneration
-                    <= generation.AuthorityOwnerGeneration
+                    <= current.Meta.AuthorityOwnerGeneration
                 || nextAuthorityOwnerGeneration > long.MaxValue)
                 return Conflict(current);
-            conditions.Add(generation.Condition);
-            mutations.Add(new ZLinkStoreMutation.Put(
-                GenerationKey(key),
-                Encode(new GenerationRecord(
-                    generation.ObjectGeneration,
-                    nextAuthorityOwnerGeneration)),
-                null));
             if (nextAuthorityOwnerGeneration > counter.Value)
             {
                 AddCondition(conditions, counter.Condition);
@@ -345,7 +329,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         var meta = current.Meta with
         {
-            PayloadSha256 = Sha256(put.Payload),
+            Payload = put.Payload.ToArray(),
             AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
             OwnerId = targetOwner.OwnerId,
             OwnerLeaseGeneration = targetOwner.LeaseGeneration,
@@ -489,20 +473,23 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
         if (!HasCapacity(target.Descriptor, capacity.Record, request.Capacity))
             return new ZLinkObjectReserveResult.PlacementCapacityExhausted();
-        var generation = await ReadGenerationAsync(request.Key, cancellationToken)
-            .ConfigureAwait(false);
+        // Reserve always creates a brand-new authority row (current is
+        // null here), so both generations are issued fresh from their
+        // Store-wide monotonic sequence -- no per-identity prior value to
+        // max against (checklist C-2b; ObjectGeneration's counter is a
+        // sibling of AuthorityOwnerGenerationCounterKey).
+        var objectCounter =
+            await ReadObjectGenerationCounterAsync(cancellationToken)
+                .ConfigureAwait(false);
         var authorityCounter =
             await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
                 .ConfigureAwait(false);
-        var authorityHighWater = Math.Max(
-            authorityCounter.Value,
-            generation.AuthorityOwnerGeneration);
-        if (generation.ObjectGeneration == ulong.MaxValue
-            || authorityHighWater == long.MaxValue)
+        if (objectCounter.Value == long.MaxValue
+            || authorityCounter.Value == long.MaxValue)
             return new ZLinkObjectReserveResult.GenerationExhausted();
 
-        var objectGeneration = generation.ObjectGeneration + 1;
-        var authorityOwnerGeneration = authorityHighWater + 1;
+        var objectGeneration = objectCounter.Value + 1;
+        var authorityOwnerGeneration = authorityCounter.Value + 1;
         var reservationId = Guid.NewGuid().ToString("N");
         var allocation = new ZLinkPlacementAllocation(
             ZLinkPlacementAllocationState.Reserved,
@@ -512,7 +499,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             request.TargetNodeLifecycleGeneration,
             request.Capacity);
         var meta = new AuthorityMeta(
-            Sha256(request.CreatingPayload),
+            request.CreatingPayload.ToArray(),
             objectGeneration,
             authorityOwnerGeneration,
             request.TargetOwner.OwnerId,
@@ -539,7 +526,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 new ZLinkStoreWriteRequest(
                 [
                     new ZLinkStoreCondition.Missing(metaKey),
-                    generation.Condition,
+                    objectCounter.Condition,
                     target.DescriptorCondition,
                     target.OwnerCondition,
                     capacity.Condition,
@@ -550,22 +537,17 @@ internal sealed partial class ZLinkProviderLocationRepository
                 [
                     new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
                     new ZLinkStoreMutation.Put(
-                        AuthorityPayloadKey(request.Key),
-                        request.CreatingPayload.ToArray(),
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        GenerationKey(request.Key),
-                        Encode(new GenerationRecord(
-                            objectGeneration,
-                            authorityOwnerGeneration)),
-                        null),
-                    new ZLinkStoreMutation.Put(
                         ReservationKey(reservationId),
                         Encode(reservation),
                         null),
                     new ZLinkStoreMutation.Put(
                         capacity.Key,
                         Encode(nextCapacity),
+                        null),
+                    new ZLinkStoreMutation.Put(
+                        ObjectGenerationCounterKey(),
+                        Encode(new ObjectGenerationCounter(
+                            objectGeneration)),
                         null),
                     new ZLinkStoreMutation.Put(
                         AuthorityOwnerGenerationCounterKey(),
@@ -670,8 +652,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
         var mutations = new List<ZLinkStoreMutation>
         {
-            new ZLinkStoreMutation.Delete(AuthorityMetaKey(current.Key)),
-            new ZLinkStoreMutation.Delete(AuthorityPayloadKey(current.Key))
+            new ZLinkStoreMutation.Delete(AuthorityMetaKey(current.Key))
         };
         var capacity = await ReadCapacityAsync(
                 current.Snapshot.Allocation.Descriptor,
@@ -911,7 +892,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ValidateAuthorityPayload(created.ReadyPayload);
             readyMeta = current.Meta with
             {
-                PayloadSha256 = Sha256(created.ReadyPayload),
+                Payload = created.ReadyPayload.ToArray(),
                 Allocation = current.Snapshot.Allocation with
                 {
                     State = ZLinkPlacementAllocationState.Active
@@ -922,17 +903,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                 AuthorityMetaKey(reservation.Key),
                 Encode(readyMeta),
                 null));
-            mutations.Add(new ZLinkStoreMutation.Put(
-                AuthorityPayloadKey(reservation.Key),
-                created.ReadyPayload.ToArray(),
-                null));
         }
         else
         {
             mutations.Add(new ZLinkStoreMutation.Delete(
                 AuthorityMetaKey(reservation.Key)));
-            mutations.Add(new ZLinkStoreMutation.Delete(
-                AuthorityPayloadKey(reservation.Key)));
         }
         var result = await provider.WriteAsync(
                 new ZLinkStoreWriteRequest(conditions, mutations),
@@ -1053,8 +1028,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 [
                     new ZLinkStoreMutation.Delete(
                         AuthorityMetaKey(reservation.Key)),
-                    new ZLinkStoreMutation.Delete(
-                        AuthorityPayloadKey(reservation.Key)),
                     new ZLinkStoreMutation.Put(
                         ReservationKey(reservation.ReservationVersion),
                         Encode(storedReservation.Record with
@@ -1595,23 +1568,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             AddCondition(conditions, pair.Value.Condition);
         }
-        var generations = new GenerationState?[request.Participants.Count];
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, request.Participants.Count),
-            new ParallelOptions
-            {
-                MaxDegreeOfParallelism = 64,
-                CancellationToken = cancellationToken
-            },
-            async (index, token) =>
-            {
-                if (request.Participants[index].OwnerTransition
-                    == ZLinkAuthorityGenerationTransition.NewOwner)
-                    generations[index] = await ReadGenerationAsync(
-                            request.Participants[index].Key,
-                            token)
-                        .ConfigureAwait(false);
-            }).ConfigureAwait(false);
+        // authorities[index].Meta already carries both generation values
+        // for this exact read (checklist C-2b: no separate GenerationKey
+        // to reconcile), so the per-participant next-generation check below
+        // compares directly against it.
         for (var index = 0; index < request.Participants.Count; index++)
         {
             var participant = request.Participants[index];
@@ -1620,19 +1580,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                                == ZLinkAuthorityGenerationTransition.NewOwner;
             if (changesOwner)
             {
-                var generation = generations[index]!;
-                ulong nextAuthorityOwnerGeneration;
-                if (generation.ObjectGeneration
-                        != authority.Meta.ObjectGeneration
-                    || generation.AuthorityOwnerGeneration
-                    != authority.Meta.AuthorityOwnerGeneration)
-                    return ZLinkAggregateCommitResult.Stale;
-                nextAuthorityOwnerGeneration =
+                ulong nextAuthorityOwnerGeneration =
                     participants[index].Metadata
                         .TargetAuthorityOwnerGeneration;
                 if (nextAuthorityOwnerGeneration == 0
                     || nextAuthorityOwnerGeneration
-                       <= generation.AuthorityOwnerGeneration
+                       <= authority.Meta.AuthorityOwnerGeneration
                     || nextAuthorityOwnerGeneration > long.MaxValue)
                     return ZLinkAggregateCommitResult.Stale;
                 ApplyCapacity(
@@ -1799,29 +1752,17 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var mutations = new List<ZLinkStoreMutation>();
                 if (changesOwner)
                 {
-                    var generation = await ReadGenerationAsync(
-                            participant.Key,
-                            token)
-                        .ConfigureAwait(false);
-                    if (generation.ObjectGeneration
-                            != authority.Meta.ObjectGeneration
-                        || generation.AuthorityOwnerGeneration
-                        != authority.Meta.AuthorityOwnerGeneration
-                        || (nextGeneration =
+                    // authority.Meta already carries both generation values
+                    // for this exact read (checklist C-2b: no separate
+                    // GenerationKey to reconcile).
+                    if ((nextGeneration =
                                 storedParticipant.Metadata
                                     .TargetAuthorityOwnerGeneration) == 0
                         || nextGeneration
-                           <= generation.AuthorityOwnerGeneration
+                           <= authority.Meta.AuthorityOwnerGeneration
                         || nextGeneration > long.MaxValue)
                         throw new ZLinkRelocationDataLostException(
                             $"Committed aggregate authority '{participant.Key.Value}' lost its generation fence.");
-                    conditions.Add(generation.Condition);
-                    mutations.Add(new ZLinkStoreMutation.Put(
-                        GenerationKey(participant.Key),
-                        Encode(new GenerationRecord(
-                            generation.ObjectGeneration,
-                            nextGeneration)),
-                        null));
                 }
 
                 var allocation = changesOwner
@@ -1836,8 +1777,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     AuthorityMetaKey(participant.Key),
                     Encode(authority.Meta with
                     {
-                        PayloadSha256 =
-                            Sha256(participant.AuthorityPayload),
+                        Payload = participant.AuthorityPayload.ToArray(),
                         AuthorityOwnerGeneration = nextGeneration,
                         OwnerId = changesOwner
                             ? request.TargetOwner.OwnerId
@@ -1850,10 +1790,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                         AggregateParticipantIndex = null,
                         AggregateExpectedStoreVersion = null
                     }),
-                    null));
-                mutations.Add(new ZLinkStoreMutation.Put(
-                    AuthorityPayloadKey(participant.Key),
-                    participant.AuthorityPayload.ToArray(),
                     null));
                 var result = await provider.WriteAsync(
                         new ZLinkStoreWriteRequest(conditions, mutations),
@@ -4108,7 +4044,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             activeDelta: 1);
         var meta = current.Meta with
         {
-            PayloadSha256 = Sha256(readyPayload),
+            Payload = readyPayload.ToArray(),
             Allocation = current.Snapshot.Allocation with
             {
                 State = ZLinkPlacementAllocationState.Active
@@ -4132,10 +4068,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     new ZLinkStoreMutation.Put(
                         AuthorityMetaKey(reservation.Key),
                         Encode(meta),
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        AuthorityPayloadKey(reservation.Key),
-                        readyPayload.ToArray(),
                         null),
                     new ZLinkStoreMutation.Put(
                         ReservationKey(reservation.ReservationVersion),
@@ -4211,11 +4143,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         var metaKey = AuthorityMetaKey(current.Key);
         var mutations = new List<ZLinkStoreMutation>(extraMutations)
         {
-            new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
-            new ZLinkStoreMutation.Put(
-                AuthorityPayloadKey(current.Key),
-                payload.ToArray(),
-                null)
+            new ZLinkStoreMutation.Put(metaKey, Encode(meta), null)
         };
         var result = await provider.WriteAsync(
                 new ZLinkStoreWriteRequest(conditions, mutations),
@@ -4251,6 +4179,12 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken)
     {
         var metaKey = AuthorityMetaKey(key);
+        // The authority record is one opaque row (checklist C-2b): a single
+        // read is already byte-atomic, so the old read-verify-retry loop
+        // that reconciled a separately read payload key against this meta
+        // key's version is gone. Retry here exists only for the aggregate
+        // participant-projection race noted below, not for payload/meta
+        // consistency.
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var first = knownMeta is null
@@ -4261,7 +4195,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (first is ZLinkStoreReadResult.Missing) return null;
             var found = ((ZLinkStoreReadResult.Found)first).Value;
             var meta = Decode<AuthorityMeta>(found.Bytes);
-            ReadOnlyMemory<byte> payloadBytes;
+            ReadOnlyMemory<byte> payloadBytes = meta.Payload;
             if (projectCommittedAggregate
                 && meta.AggregateFence is { } aggregateFence)
             {
@@ -4321,8 +4255,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                                        == ZLinkAuthorityGenerationTransition.NewOwner;
                     meta = meta with
                     {
-                        PayloadSha256 =
-                            participant.Metadata.AuthorityPayloadSha256,
+                        Payload = participant.Payload.ToArray(),
                         AuthorityOwnerGeneration = changesOwner
                             ? targetAuthorityOwnerGeneration
                             : meta.AuthorityOwnerGeneration,
@@ -4345,31 +4278,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     };
                     payloadBytes = participant.Payload;
                 }
-                else
-                {
-                    payloadBytes = await ReadAuthorityPayloadAsync(
-                            key,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
             }
-            else
-            {
-                payloadBytes = await ReadAuthorityPayloadAsync(
-                        key,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            var verify = await provider.ReadAsync(metaKey, cancellationToken)
-                .ConfigureAwait(false);
-            if (verify is not ZLinkStoreReadResult.Found verified
-                || verified.Value.Version != found.Version)
-                continue;
-            if (!CryptographicOperations.FixedTimeEquals(
-                    meta.PayloadSha256,
-                    Sha256(payloadBytes)))
-                throw new InvalidDataException(
-                    $"Authority '{key.Value}' payload checksum is invalid.");
             return new StoredAuthority(
                 key,
                 meta,
@@ -4377,25 +4286,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                 Snapshot(
                     meta,
                     found.Version,
-                    verified.Value.StoreNow,
+                    found.StoreNow,
                     payloadBytes));
         }
         throw new IOException(
             $"Authority '{key.Value}' changed continuously while it was read.");
-    }
-
-    private async ValueTask<ReadOnlyMemory<byte>> ReadAuthorityPayloadAsync(
-        ZLinkAuthorityKey key,
-        CancellationToken cancellationToken)
-    {
-        var payload = await provider.ReadAsync(
-                AuthorityPayloadKey(key),
-                cancellationToken)
-            .ConfigureAwait(false);
-        return payload is ZLinkStoreReadResult.Found found
-            ? found.Value.Bytes
-            : throw new InvalidDataException(
-                $"Authority '{key.Value}' has no payload.");
     }
 
     private async ValueTask<StoredTarget?> ReadEligibleTargetAsync(
@@ -4498,30 +4393,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 key,
                 Decode<CapacityRecord>(found.Value.Bytes),
                 new ZLinkStoreCondition.Version(key, found.Value.Version)),
-            _ => throw new InvalidOperationException()
-        };
-    }
-
-    private async ValueTask<GenerationState> ReadGenerationAsync(
-        ZLinkAuthorityKey key,
-        CancellationToken cancellationToken)
-    {
-        var storeKey = GenerationKey(key);
-        var read = await provider.ReadAsync(storeKey, cancellationToken)
-            .ConfigureAwait(false);
-        return read switch
-        {
-            ZLinkStoreReadResult.Missing => new GenerationState(
-                0,
-                0,
-                new ZLinkStoreCondition.Missing(storeKey)),
-            ZLinkStoreReadResult.Found found => new GenerationState(
-                Decode<GenerationRecord>(found.Value.Bytes).ObjectGeneration,
-                Decode<GenerationRecord>(found.Value.Bytes)
-                    .AuthorityOwnerGeneration,
-                new ZLinkStoreCondition.Version(
-                    storeKey,
-                    found.Value.Version)),
             _ => throw new InvalidOperationException()
         };
     }
@@ -4661,6 +4532,38 @@ internal sealed partial class ZLinkProviderLocationRepository
                         found.Value.Version)),
             _ => throw new InvalidOperationException(
                 "The provider returned an invalid authority generation counter result.")
+        };
+    }
+
+    // ObjectGeneration is issued from a Store-wide monotonic sequence
+    // (21-location-runtime.md#2.4, checklist C-2b) -- a sibling counter to
+    // AuthorityOwnerGenerationCounterKey, not a value derived from any
+    // single identity's prior state. A Store-wide sequence automatically
+    // guarantees per-identity monotonicity, which is why no per-identity
+    // high-water comparison is needed here (unlike the removed GenerationKey
+    // mechanism).
+    private async ValueTask<ObjectGenerationCounterState>
+        ReadObjectGenerationCounterAsync(
+            CancellationToken cancellationToken)
+    {
+        var key = ObjectGenerationCounterKey();
+        var read = await provider.ReadAsync(key, cancellationToken)
+            .ConfigureAwait(false);
+        return read switch
+        {
+            ZLinkStoreReadResult.Missing =>
+                new ObjectGenerationCounterState(
+                    0,
+                    new ZLinkStoreCondition.Missing(key)),
+            ZLinkStoreReadResult.Found found =>
+                new ObjectGenerationCounterState(
+                    Decode<ObjectGenerationCounter>(
+                        found.Value.Bytes).Value,
+                    new ZLinkStoreCondition.Version(
+                        key,
+                        found.Value.Version)),
+            _ => throw new InvalidOperationException(
+                "The provider returned an invalid object generation counter result.")
         };
     }
 
@@ -4947,17 +4850,25 @@ internal sealed partial class ZLinkProviderLocationRepository
             value,
             ZLinkJsonSerializerOptions.Default);
 
+    // Checklist C-2b / 21-location-runtime.md#2.4: the authority record is
+    // one logical opaque row addressed by one key. cpp/java/node already
+    // store the whole authority this way; the separate payload and
+    // generation-counter keys this file used to write alongside
+    // AuthorityMetaKey are gone -- AuthorityMeta now carries the payload
+    // bytes and both generation values directly, so a single Put/Delete on
+    // this key is already byte-atomic and needs no split-read integrity
+    // check.
     private static ZLinkStoreKey AuthorityMetaKey(ZLinkAuthorityKey key) =>
         Key(AuthorityMetaPrefix(key.Value));
 
-    private static ZLinkStoreKey AuthorityPayloadKey(ZLinkAuthorityKey key) =>
-        Key($"{AuthorityPrefix}payload:{EncodeSegment(key.Value)}");
-
-    private static ZLinkStoreKey GenerationKey(ZLinkAuthorityKey key) =>
-        Key($"{AuthorityPrefix}generation:{EncodeSegment(key.Value)}");
-
     private static ZLinkStoreKey AuthorityOwnerGenerationCounterKey() =>
         Key($"{AuthorityPrefix}owner-generation-counter");
+
+    // Store-wide monotonic sequence for ObjectGeneration (checklist C-2b) --
+    // a sibling to AuthorityOwnerGenerationCounterKey, not a per-identity
+    // counter.
+    private static ZLinkStoreKey ObjectGenerationCounterKey() =>
+        Key($"{AuthorityPrefix}object-generation-counter");
 
     private static string AuthorityMetaPrefix(string prefix) =>
         $"{AuthorityMetaPrefixValue}{prefix}";
@@ -5022,17 +4933,51 @@ internal sealed partial class ZLinkProviderLocationRepository
         string stableType) =>
         $"{(int)kind}:{stableType}";
 
+    // Canonical single-row authority envelope (21-location-runtime.md#2.4):
+    // Payload is the application-opaque bytes directly -- there is no
+    // separate payload key or checksum to reconcile a split read against
+    // (checklist C-2b).
+    // Canonical field names/types per 21-location-runtime.md#2.4's
+    // authority table: generation and lease fields are decimal-string
+    // JSON (64-bit values can exceed JSON number precision), payload
+    // is base64 (System.Text.Json's byte[] default), and the pending
+    // -creation field is named pendingCreation on the wire (kept as
+    // ReservedCreation in C# so existing `with` expressions and property
+    // access across this file don't need to change).
     private sealed record AuthorityMeta(
-        byte[] PayloadSha256,
+        [property: JsonPropertyName("payload")] byte[] Payload,
+        [property: JsonPropertyName("objectGeneration")]
+        [property: JsonConverter(
+            typeof(Messaging.ZLinkJsonSerializerOptions
+                .FrameworkUnsigned64JsonConverter))]
         ulong ObjectGeneration,
+        [property: JsonPropertyName("authorityOwnerGeneration")]
+        [property: JsonConverter(
+            typeof(Messaging.ZLinkJsonSerializerOptions
+                .FrameworkUnsigned64JsonConverter))]
         ulong AuthorityOwnerGeneration,
-        string OwnerId,
+        [property: JsonPropertyName("ownerId")] string OwnerId,
+        [property: JsonPropertyName("ownerLeaseGeneration")]
+        [property: JsonConverter(
+            typeof(Messaging.ZLinkJsonSerializerOptions
+                .FrameworkSigned64JsonConverter))]
         long OwnerLeaseGeneration,
+        [property: JsonPropertyName("allocation")]
         ZLinkPlacementAllocation Allocation,
+        [property: JsonPropertyName("pendingCreation")]
         ZLinkReservedObjectCreation? ReservedCreation)
     {
+        [JsonPropertyName("recordVersion")]
+        [JsonPropertyOrder(-1)]
+        public int RecordVersion { get; init; } = 1;
+
+        [JsonPropertyName("aggregateFence")]
         public ZLinkAggregateFence? AggregateFence { get; init; }
+
+        [JsonPropertyName("aggregateParticipantIndex")]
         public int? AggregateParticipantIndex { get; init; }
+
+        [JsonPropertyName("aggregateExpectedStoreVersion")]
         public string? AggregateExpectedStoreVersion { get; init; }
     }
 
@@ -5245,19 +5190,16 @@ internal sealed partial class ZLinkProviderLocationRepository
         CapacityRecord Record,
         ZLinkStoreCondition Condition);
 
-    private sealed record GenerationRecord(
-        ulong ObjectGeneration,
-        ulong AuthorityOwnerGeneration);
-
     private sealed record AuthorityOwnerGenerationCounter(ulong Value);
 
     private sealed record AuthorityOwnerGenerationCounterState(
         ulong Value,
         ZLinkStoreCondition Condition);
 
-    private sealed record GenerationState(
-        ulong ObjectGeneration,
-        ulong AuthorityOwnerGeneration,
+    private sealed record ObjectGenerationCounter(ulong Value);
+
+    private sealed record ObjectGenerationCounterState(
+        ulong Value,
         ZLinkStoreCondition Condition);
 
     private sealed class CapacityRecord

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Zlink.Framework.Contracts.Configuration;
 
 namespace Zlink.Framework.Contracts.Locations;
@@ -45,9 +46,12 @@ internal sealed record ZLinkMeshNodeDescriptor(
         = new(0, 128);
 }
 
+// Embedded as the authority record's allocation.descriptor field
+// (21-location-runtime.md#2.4); the wire field name is routingIdHex, not
+// the C# property name Rid.
 internal readonly record struct ZLinkMeshNodeDescriptorKey(
     string MeshName,
-    RoutingId Rid);
+    [property: JsonPropertyName("routingIdHex")] RoutingId Rid);
 
 internal sealed record ZLinkClientServerServerDescriptor(
     string ChannelName,

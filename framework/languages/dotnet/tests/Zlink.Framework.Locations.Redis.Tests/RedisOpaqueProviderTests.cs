@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using StackExchange.Redis;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Locations.Redis.Tests;
 
@@ -486,13 +488,17 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => store.ReadAsync(new ZLinkStoreKey(string.Empty)).AsTask());
+        // Bound raised from 1 MiB to 2 MiB (checklist C-2b): the collapsed
+        // authority row embeds its base64 payload inline, so a maximum-size
+        // (1 MiB, spec §6) payload plus JSON/base64 overhead must still fit
+        // in one opaque record value.
         await Assert.ThrowsAsync<ArgumentException>(
             () => store.WriteAsync(new ZLinkStoreWriteRequest(
                 [],
                 [
                     new ZLinkStoreMutation.Put(
                         new ZLinkStoreKey("too-large"),
-                        new byte[(1024 * 1024) + 1],
+                        new byte[(2 * 1024 * 1024) + 1],
                         null)
                 ])).AsTask());
         await Assert.ThrowsAsync<ArgumentException>(
@@ -506,5 +512,321 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => store.ScanAsync(new ZLinkStoreScanRequest("", null, 1001))
                 .AsTask());
+    }
+
+    /// <summary>
+    /// Checklist C-4 (dotnet store convergence) / C-4c: an encode-side
+    /// conformance test that drives the real Lua write path (not a pure
+    /// function) and inspects the raw ZSET member Redis stored, so a
+    /// regression in the format-tag byte, the expiresAtMs sentinel
+    /// (0 = no expiry, not -1 -- 22-location-store-redis.md#7 pins
+    /// expiresAtMs as an *unsigned* MessagePack int), or the tombstone type
+    /// (MessagePack bool 0xc2/0xc3, not an integer 0/1) fails here against
+    /// the shared golden fixture's encoding rules
+    /// (framework/runtime/protocol/golden/store-record-v1.json).
+    /// </summary>
+    [SkippableFact]
+    public async Task Opaque_record_wire_bytes_use_the_golden_tag_expiry_and_tombstone_encoding()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore(out var keyPrefix);
+        var key = new ZLinkStoreKey("wire-format:probe");
+        var recordKey =
+            $"{keyPrefix}:{{zlink-location-v3}}:opaque:{Sha256Hex(key.Value)}";
+
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(new ZLinkStoreWriteRequest(
+                [new ZLinkStoreCondition.Missing(key)],
+                [new ZLinkStoreMutation.Put(
+                    key,
+                    Encoding.UTF8.GetBytes("wire-format-value"),
+                    null)])));
+
+        await using var connection =
+            await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var database = connection.GetDatabase();
+        var putEntries = await database.SortedSetRangeByScoreWithScoresAsync(
+            recordKey);
+        var putMember = (byte[])Assert.Single(putEntries).Element!;
+        Assert.Equal(0x01, putMember[0]);
+        var (putOriginalKey, putRawBytes, putVersion, putExpiresAt, putTombstone) =
+            DecodeOpaqueMember(putMember, 1);
+        Assert.Equal(key.Value, putOriginalKey);
+        Assert.Equal("wire-format-value", Encoding.UTF8.GetString(putRawBytes));
+        Assert.False(string.IsNullOrEmpty(putVersion));
+        Assert.Equal(0UL, putExpiresAt);
+        Assert.False(putTombstone);
+
+        var current = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await store.ReadAsync(key));
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(new ZLinkStoreWriteRequest(
+                [new ZLinkStoreCondition.Version(
+                    key,
+                    current.Value.Version)],
+                [new ZLinkStoreMutation.Delete(key)])));
+
+        var deleteEntries = await database.SortedSetRangeByScoreWithScoresAsync(
+            recordKey);
+        var deleteMember = deleteEntries
+            .OrderByDescending(static entry => entry.Score)
+            .First()
+            .Element;
+        var deleteBytes = (byte[])deleteMember!;
+        Assert.Equal(0x01, deleteBytes[0]);
+        var (deleteOriginalKey, deleteRawBytes, deleteVersion, deleteExpiresAt, deleteTombstone) =
+            DecodeOpaqueMember(deleteBytes, 1);
+        Assert.Equal(key.Value, deleteOriginalKey);
+        Assert.Empty(deleteRawBytes);
+        // The tombstone still carries a real, freshly issued version (the
+        // shared golden fixture's ownerLease-tombstone vector pins a
+        // non-empty version) -- distinct from the version the Put above
+        // received.
+        Assert.False(string.IsNullOrEmpty(deleteVersion));
+        Assert.NotEqual(putVersion, deleteVersion);
+        Assert.Equal(0UL, deleteExpiresAt);
+        Assert.True(deleteTombstone);
+    }
+
+    /// <summary>
+    /// Checklist C-4 / H-class (authority single-row collapse): drives a
+    /// real Reserve -> CompleteCreation through the production
+    /// ZLinkProviderLocationRepository against live Redis, then inspects
+    /// the raw stored bytes to prove (a) the authority row is exactly one
+    /// opaque key -- no separate payload or generation key survives the
+    /// collapse (checklist C-2b) -- and (b) its JSON envelope uses the
+    /// canonical field names/types pinned by 21-location-runtime.md#2.4
+    /// and the updated store-record-v1.json authority-actor-normal vector
+    /// (payload as base64, objectGeneration/authorityOwnerGeneration/
+    /// ownerLeaseGeneration as decimal strings, allocation.state/
+    /// objectKind as lowercase strings, allocation.descriptor.
+    /// routingIdHex, allocation.descriptorLifecycleGeneration as a
+    /// string). The exact generation numbers aren't asserted against the
+    /// golden's "7"/"3" -- those are Store-wide sequence values the golden
+    /// fixture picked arbitrarily, not reproducible on demand from a
+    /// fresh Reserve.
+    /// </summary>
+    [SkippableFact]
+    public async Task Authority_row_is_a_single_opaque_key_using_the_canonical_envelope()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore(out var keyPrefix);
+        var repository = new ZLinkProviderLocationRepository(store);
+
+        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await repository.ClaimOwnerLeaseAsync(
+                "authority-envelope-owner",
+                TimeSpan.FromMinutes(2))).Token;
+        var descriptor = new ZLinkMeshNodeDescriptor(
+            "main",
+            RoutingId.From("authority-envelope-node"),
+            1,
+            1,
+            "tcp://127.0.0.1:7301",
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            string.Empty,
+            owner.OwnerId,
+            owner.LeaseGeneration,
+            default)
+        {
+            ObjectRole = ZLinkMeshNodeObjectRole.Server,
+            ObjectCapabilities =
+            [
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.Actor,
+                    "player",
+                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                    false,
+                    0)
+            ],
+            State = ZLinkFrameworkRuntimeState.Serving
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                descriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        var authorityKey = ZLinkAuthorityKeyCodec.EncodeActor(
+            "authority-envelope-actor");
+        var intent = "create:authority-envelope-actor"u8.ToArray();
+        var request = new ZLinkObjectReservationRequest(
+            ZLinkPlacementObjectKind.Actor,
+            authorityKey,
+            "player",
+            "inline:authority-envelope-actor",
+            SHA256.HashData(intent),
+            intent.Length,
+            new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid),
+            descriptor.LifecycleGeneration,
+            owner,
+            intent,
+            new ZLinkCapacityVector(1, 0, null));
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request));
+        var readyPayload = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                reserved.Reservation,
+                readyPayload));
+
+        // Single-row proof: enumerate the Redis keyspace under this test's
+        // isolated prefix and confirm exactly one opaque record key exists
+        // for this authority row's identity -- not a meta+payload(+
+        // generation) triple.
+        await using var connection =
+            await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var database = connection.GetDatabase();
+        var server = connection.GetServer(connection.GetEndPoints()[0]);
+        var recordKeys = server
+            .Keys(pattern: $"{keyPrefix}:{{zlink-location-v3}}:opaque:*")
+            .Where(key => !key.ToString().Contains(":opaque:index", StringComparison.Ordinal)
+                          && !key.ToString().Contains(":opaque:map", StringComparison.Ordinal)
+                          && !key.ToString().Contains(":opaque:cleanup", StringComparison.Ordinal)
+                          && !key.ToString().Contains(":opaque:sequence", StringComparison.Ordinal)
+                          && !key.ToString().Contains(":opaque:snapshot", StringComparison.Ordinal)
+                          && !key.ToString().Contains(":opaque:scan", StringComparison.Ordinal))
+            .ToArray();
+
+        JsonElement? authorityJson = null;
+        var matchingKeyCount = 0;
+        foreach (var recordKey in recordKeys)
+        {
+            var members = await database.SortedSetRangeByScoreWithScoresAsync(
+                recordKey);
+            var latest = members.OrderByDescending(static m => m.Score).First();
+            var bytes = (byte[])latest.Element!;
+            if (bytes[0] != 0x01) continue;
+            var offset = 1;
+            _ = ReadArrayHead(bytes, ref offset);
+            var originalKey = System.Text.Encoding.UTF8.GetString(
+                ReadStr(bytes, ref offset));
+            if (!originalKey.Contains(
+                    "authority-envelope-actor",
+                    StringComparison.Ordinal))
+                continue;
+            matchingKeyCount++;
+            var rawBytes = ReadStr(bytes, ref offset);
+            using var parsed = JsonDocument.Parse(rawBytes);
+            authorityJson = parsed.RootElement.Clone();
+        }
+
+        // Single-row proof (checklist C-2b): in the old split scheme, the
+        // meta, payload, and generation keys all embedded the actor id in
+        // their original-key string, so this count would have been 3.
+        // Collapsed to one opaque row, it's 1.
+        Assert.Equal(1, matchingKeyCount);
+        Assert.NotNull(authorityJson);
+        var json = authorityJson!.Value;
+        Assert.Equal(1, json.GetProperty("recordVersion").GetInt32());
+        Assert.Equal(
+            Convert.ToBase64String(readyPayload),
+            json.GetProperty("payload").GetString());
+        Assert.Matches("^[0-9]+$", json.GetProperty("objectGeneration").GetString()!);
+        Assert.Matches(
+            "^[0-9]+$",
+            json.GetProperty("authorityOwnerGeneration").GetString()!);
+        Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(),
+            json.GetProperty("ownerLeaseGeneration").GetString());
+        var allocation = json.GetProperty("allocation");
+        Assert.Equal("active", allocation.GetProperty("state").GetString());
+        Assert.Equal("actor", allocation.GetProperty("objectKind").GetString());
+        Assert.Equal("player", allocation.GetProperty("stableType").GetString());
+        Assert.Equal(
+            "main",
+            allocation.GetProperty("descriptor").GetProperty("meshName")
+                .GetString());
+        Assert.Equal(
+            RoutingId.From("authority-envelope-node").ToHex(),
+            allocation.GetProperty("descriptor").GetProperty("routingIdHex")
+                .GetString());
+        Assert.Equal(
+            "1",
+            allocation.GetProperty("descriptorLifecycleGeneration")
+                .GetString());
+        var capacity = allocation.GetProperty("capacity");
+        Assert.Equal(1, capacity.GetProperty("actors").GetInt32());
+        Assert.Equal(0, capacity.GetProperty("spots").GetInt32());
+        Assert.Equal(
+            JsonValueKind.Null,
+            capacity.GetProperty("spotType").ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            json.GetProperty("pendingCreation").ValueKind);
+    }
+
+    private static string Sha256Hex(string value) =>
+        Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
+
+    private static (string OriginalKey, byte[] RawBytes, string Version, ulong ExpiresAt, bool Tombstone)
+        DecodeOpaqueMember(byte[] bytes, int offset)
+    {
+        var count = ReadArrayHead(bytes, ref offset);
+        if (count != 5)
+            throw new InvalidDataException($"invalid opaque member arity: {count}");
+        var originalKey = Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
+        var rawBytes = ReadStr(bytes, ref offset);
+        var version = Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
+        var expiresAt = ReadUint(bytes, ref offset);
+        var tombstone = ReadBool(bytes, ref offset);
+        return (originalKey, rawBytes, version, expiresAt, tombstone);
+    }
+
+    private static byte NextByte(byte[] bytes, ref int offset) => bytes[offset++];
+
+    private static int ReadArrayHead(byte[] bytes, ref int offset)
+    {
+        var tag = NextByte(bytes, ref offset);
+        if ((tag & 0xf0) == 0x90) return tag & 0x0f;
+        throw new InvalidDataException($"invalid msgpack array tag: {tag}");
+    }
+
+    private static byte[] ReadStr(byte[] bytes, ref int offset)
+    {
+        var tag = NextByte(bytes, ref offset);
+        int length;
+        if ((tag & 0xe0) == 0xa0) length = tag & 0x1f;
+        else if (tag == 0xd9) length = NextByte(bytes, ref offset);
+        else if (tag == 0xda)
+            length = (NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset);
+        else
+            throw new InvalidDataException($"invalid msgpack str tag: {tag}");
+        var value = bytes[offset..(offset + length)];
+        offset += length;
+        return value;
+    }
+
+    private static ulong ReadUint(byte[] bytes, ref int offset)
+    {
+        var tag = NextByte(bytes, ref offset);
+        if ((tag & 0x80) == 0) return tag;
+        if (tag == 0xcc) return NextByte(bytes, ref offset);
+        if (tag == 0xcd)
+            return (ulong)((NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset));
+        if (tag == 0xce)
+        {
+            ulong v = 0;
+            for (var i = 0; i < 4; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            return v;
+        }
+        if (tag == 0xcf)
+        {
+            ulong v = 0;
+            for (var i = 0; i < 8; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            return v;
+        }
+        throw new InvalidDataException($"invalid msgpack uint tag: {tag}");
+    }
+
+    private static bool ReadBool(byte[] bytes, ref int offset)
+    {
+        var tag = NextByte(bytes, ref offset);
+        if (tag == 0xc2) return false;
+        if (tag == 0xc3) return true;
+        throw new InvalidDataException($"invalid msgpack bool tag: {tag}");
     }
 }

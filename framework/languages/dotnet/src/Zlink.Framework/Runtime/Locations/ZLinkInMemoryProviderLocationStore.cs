@@ -282,7 +282,12 @@ internal sealed class ZLinkInMemoryProviderLocationStore(
         foreach (var put in request.Mutations
                      .OfType<ZLinkStoreMutation.Put>())
         {
-            if (put.Bytes.Length > 1024 * 1024
+            // Mirrors ZLinkRedisLocationStore.Opaque.cs's MaximumValueBytes:
+            // the collapsed authority row (checklist C-2b) embeds its
+            // base64 payload inline, so the per-key bound must exceed the
+            // old 1 MiB to still admit a maximum-size (1 MiB, spec §6)
+            // creation/authority payload once base64-inflated.
+            if (put.Bytes.Length > 2 * 1024 * 1024
                 || put.Retention is { } retention
                 && retention <= TimeSpan.Zero)
             {

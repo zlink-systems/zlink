@@ -1,26 +1,63 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Zlink.Framework.Runtime.Messaging;
+
 namespace Zlink.Framework.Contracts.Locations;
 
 internal readonly record struct ZLinkAuthorityKey(string Value);
 
+[JsonConverter(typeof(ZLinkCamelCaseEnumJsonConverter<ZLinkPlacementAllocationState>))]
 internal enum ZLinkPlacementAllocationState
 {
     Reserved = 1,
     Active = 2
 }
 
+// Field names/types per 21-location-runtime.md#2.4's authority table:
+// descriptorLifecycleGeneration is a decimal string (64-bit value), and
+// the wire property is "capacity" (matches ZLinkCapacityVector's own
+// camelCase Actors/Spots/SpotType -> actors/spots/spotType already).
 internal sealed record ZLinkPlacementAllocation(
     ZLinkPlacementAllocationState State,
     ZLinkPlacementObjectKind ObjectKind,
     string StableType,
     ZLinkMeshNodeDescriptorKey Descriptor,
+    [property: JsonPropertyName("descriptorLifecycleGeneration")]
+    [property: JsonConverter(
+        typeof(ZLinkJsonSerializerOptions
+            .FrameworkUnsigned64JsonConverter))]
     ulong DescriptorLifecycleGeneration,
+    [property: JsonPropertyName("capacity")]
     ZLinkCapacityVector Capacity);
 
+// requestSha256 is lowercase hex on the wire (21-location-runtime.md#2.4's
+// pendingCreation table), not System.Text.Json's byte[]/ReadOnlyMemory<byte>
+// default of base64.
 internal sealed record ZLinkReservedObjectCreation(
     string ReservationId,
     string RequestContentReference,
+    [property: JsonConverter(typeof(ZLinkHexBytesJsonConverter))]
     ReadOnlyMemory<byte> RequestSha256,
     int RequestEncodedSize);
+
+internal sealed class ZLinkHexBytesJsonConverter
+    : JsonConverter<ReadOnlyMemory<byte>>
+{
+    public override ReadOnlyMemory<byte> Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options) =>
+        reader.GetString() is { } hex && hex.Length > 0
+            ? Convert.FromHexString(hex)
+            : ReadOnlyMemory<byte>.Empty;
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        ReadOnlyMemory<byte> value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(
+            Convert.ToHexString(value.Span).ToLowerInvariant());
+}
 
 internal sealed record ZLinkAuthoritySnapshot(
     string StoreVersion,

@@ -126,7 +126,8 @@ public sealed class RedisLocationStoreLifecycleTests
             relocationConfiguration!.ToString(),
             StringComparison.Ordinal);
         Assert.Equal(
-            "zlink:relocation-original:payload:snapshot-reference",
+            "zlink:relocation-original:{zlink-relocation-v1}:blob:"
+            + "snapshot-reference",
             relocationCommand.LastKeys![0].ToString());
     }
 

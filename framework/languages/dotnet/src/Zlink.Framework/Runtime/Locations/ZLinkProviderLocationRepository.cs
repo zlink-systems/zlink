@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -468,7 +469,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
         var removed = 0L;
         removed += await RemoveOwnedDescriptorsAsync(
-                $"{Prefix}mesh:",
+                "mesh-node\0",
                 owner,
                 static bytes =>
                 {
@@ -480,7 +481,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 cancellationToken)
             .ConfigureAwait(false);
         removed += await RemoveOwnedDescriptorsAsync(
-                $"{Prefix}client-server:",
+                "client-server\0",
                 owner,
                 static bytes =>
                 {
@@ -494,7 +495,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 cancellationToken)
             .ConfigureAwait(false);
         removed += await RemoveOwnedDescriptorsAsync(
-                $"{Prefix}fanout:",
+                "fanout-publisher\0",
                 owner,
                 static bytes =>
                 {
@@ -742,31 +743,58 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
     }
 
-    private static ZLinkStoreKey OwnerKey(string ownerId) =>
-        Key($"{Prefix}owner:{EncodeSegment(ownerId)}");
+    // The Redis key for these four uniform record types is a public,
+    // cross-language contract (21-location-runtime.md#2.4): the Redis
+    // provider hashes ZLinkStoreKey.Value with SHA-256 to build the actual
+    // Redis key (ZLinkRedisLocationKeys.OpaqueRecordKey), so ZLinkStoreKey
+    // .Value itself must equal the exact NUL-delimited logical key preimage
+    // the spec pins -- raw UTF-8 bytes, no percent-encoding or length
+    // framing. The record-kind segments below (mesh-node/owner-lease/
+    // client-server/fanout-publisher) double as scan prefixes: a NUL byte
+    // terminates each variable segment, so prefix scans by MeshName/
+    // ChannelName below cannot spuriously match a longer name that merely
+    // starts with the same characters.
+    // Visibility is `internal` (not `private`) on these four key builders
+    // specifically so StoreRecordGoldenTests can drive the production
+    // preimage under conformance test (checklist C-3/C-4 golden fixture),
+    // rather than reimplementing preimage construction in the test.
+    internal static ZLinkStoreKey OwnerKey(string ownerId) =>
+        Key($"owner-lease\0{ownerId}");
 
-    private static ZLinkStoreKey MeshKey(string meshName, RoutingId rid) =>
-        Key($"{MeshPrefix(meshName)}{EncodeSegment(rid.ToHex())}");
+    internal static ZLinkStoreKey MeshKey(string meshName, RoutingId rid) =>
+        Key($"{MeshPrefix(meshName)}{rid.ToHex()}");
 
     private static string MeshPrefix(string meshName) =>
-        $"{Prefix}mesh:{EncodeSegment(meshName)}";
+        $"mesh-node\0{meshName}\0";
 
-    private static ZLinkStoreKey ClientServerKey(
+    internal static ZLinkStoreKey ClientServerKey(
         string channelName,
         RoutingId rid) =>
-        Key($"{ClientServerPrefix(channelName)}{EncodeSegment(rid.ToHex())}");
+        Key($"{ClientServerPrefix(channelName)}{rid.ToHex()}");
 
     private static string ClientServerPrefix(string channelName) =>
-        $"{Prefix}client-server:{EncodeSegment(channelName)}";
+        $"client-server\0{channelName}\0";
 
-    private static ZLinkStoreKey FanoutKey(
+    internal static ZLinkStoreKey FanoutKey(
         string channelName,
         RoutingId rid) =>
-        Key($"{FanoutPrefix(channelName)}{EncodeSegment(rid.ToHex())}");
+        Key($"{FanoutPrefix(channelName)}{rid.ToHex()}");
 
     private static string FanoutPrefix(string channelName) =>
-        $"{Prefix}fanout:{EncodeSegment(channelName)}";
+        $"fanout-publisher\0{channelName}\0";
 
+    /// <summary>
+    /// Test-only accessor (StoreRecordGoldenTests) for the canonical
+    /// owner-lease JSON envelope byte encoding.
+    /// </summary>
+    internal static byte[] EncodeOwnerLeaseRecordForGoldenTest(
+        string ownerId,
+        long leaseGeneration) =>
+        Encode(new OwnerRecord(ownerId, leaseGeneration));
+
+    // Provider-private keys (capacity, reservation, aggregate, terminal,
+    // generation counter) aren't part of the public opaque-record contract
+    // (21-location-runtime.md#1.2) and keep this length-framed encoding.
     private static string EncodeSegment(string value) =>
         Encoding.UTF8.GetByteCount(value).ToString(
             CultureInfo.InvariantCulture) + ":" + value + ":";
@@ -780,9 +808,23 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ?? throw new InvalidDataException(
             "The Location Store record is invalid.");
 
+    // Canonical opaque-record envelope for the owner-lease record
+    // (21-location-runtime.md#2.4): recordVersion is currently always 1,
+    // and leaseGeneration is a decimal-string 64-bit value per the field
+    // table ("integer fields are written as JSON strings rather than JSON
+    // numbers... because 64-bit values can exceed JSON number precision").
     private sealed record OwnerRecord(
-        string OwnerId,
-        long LeaseGeneration);
+        [property: JsonPropertyName("ownerId")] string OwnerId,
+        [property: JsonPropertyName("leaseGeneration")]
+        [property: JsonConverter(
+            typeof(Messaging.ZLinkJsonSerializerOptions
+                .FrameworkSigned64JsonConverter))]
+        long LeaseGeneration)
+    {
+        [JsonPropertyName("recordVersion")]
+        [JsonPropertyOrder(-1)]
+        public int RecordVersion { get; init; } = 1;
+    }
 
     private sealed record MeshRecord(
         ulong Generation,

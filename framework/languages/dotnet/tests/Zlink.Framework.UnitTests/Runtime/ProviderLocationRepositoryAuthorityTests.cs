@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -2082,8 +2083,6 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 new byte[] { 0x69 })).Snapshot;
         var templateMeta = Assert.IsType<ZLinkStoreReadResult.Found>(
             await provider.ReadAsync(AuthorityMetaKey(templateActorId)));
-        var templateGeneration = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await provider.ReadAsync(AuthorityGenerationKey(templateActorId)));
         var participants =
             new ZLinkAggregateParticipant[participantCount];
         participants[0] = AggregateParticipant(
@@ -2109,20 +2108,15 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 var ownerGeneration = checked((ulong)index + 1);
                 var metaKey = AuthorityMetaKey(actorId);
                 metaKeys[batchIndex] = metaKey;
+                // The authority record is one opaque row (checklist C-2b):
+                // the payload already lives inside this same meta blob
+                // (inherited from the template's Committed payload, 0x69),
+                // so seeding a participant needs only this one Put -- no
+                // separate payload/generation key.
                 mutations.Add(new ZLinkStoreMutation.Put(
                     metaKey,
                     WithAuthorityOwnerGeneration(
                         templateMeta.Value.Bytes,
-                        ownerGeneration),
-                    null));
-                mutations.Add(new ZLinkStoreMutation.Put(
-                    AuthorityPayloadKey(actorId),
-                    new byte[] { 0x69 },
-                    null));
-                mutations.Add(new ZLinkStoreMutation.Put(
-                    AuthorityGenerationKey(actorId),
-                    WithAuthorityOwnerGeneration(
-                        templateGeneration.Value.Bytes,
                         ownerGeneration),
                     null));
             }
@@ -2180,11 +2174,26 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     {
         var json = JsonNode.Parse(encoded.Span)
                    ?? throw new InvalidDataException();
-        SetJsonNumber(
+        // authorityOwnerGeneration is a decimal-string field on the
+        // canonical authority envelope (21-location-runtime.md#2.4), not a
+        // JSON number.
+        SetJsonString(
             json.AsObject(),
             "authorityOwnerGeneration",
-            generation);
+            generation.ToString(CultureInfo.InvariantCulture));
         return Encoding.UTF8.GetBytes(json.ToJsonString());
+    }
+
+    private static void SetJsonString(
+        JsonObject json,
+        string propertyName,
+        string value)
+    {
+        var key = json.First(pair => string.Equals(
+            pair.Key,
+            propertyName,
+            StringComparison.OrdinalIgnoreCase)).Key;
+        json[key] = value;
     }
 
     private static void SetJsonNumber(
@@ -2213,12 +2222,6 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
     private static ZLinkStoreKey AuthorityMetaKey(string actorId) =>
         new($"zlink:v11:authority:meta:{actorId}");
-
-    private static ZLinkStoreKey AuthorityPayloadKey(string actorId) =>
-        new($"zlink:v11:authority:payload:{StoreSegment(actorId)}");
-
-    private static ZLinkStoreKey AuthorityGenerationKey(string actorId) =>
-        new($"zlink:v11:authority:generation:{StoreSegment(actorId)}");
 
     private static ZLinkStoreKey CapacityKey(
         ZLinkMeshNodeDescriptor descriptor) =>

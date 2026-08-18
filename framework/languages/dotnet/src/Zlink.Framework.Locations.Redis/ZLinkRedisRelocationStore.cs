@@ -242,8 +242,14 @@ public sealed class ZLinkRedisRelocationStore :
         }
     }
 
+    // Public, separately versioned key-space contract
+    // (23-relocation-store-redis.md#8): {prefix}:{zlink-relocation-v1}:blob:
+    // {reference}. The braces are a Redis Cluster hashtag so a multi-key
+    // Relocation Store request stays same-slot; the domain tag keeps this
+    // key space from overlapping the Location Store's opaque record
+    // namespace even when both share one Redis deployment.
     private RedisKey PayloadKey(string reference) =>
-        $"{_keyPrefix}:payload:{reference}";
+        $"{_keyPrefix}:{{zlink-relocation-v1}}:blob:{reference}";
 
     private async ValueTask<TResult> ExecuteAsync<TResult>(
         Func<IDatabase, ValueTask<TResult>> operation,

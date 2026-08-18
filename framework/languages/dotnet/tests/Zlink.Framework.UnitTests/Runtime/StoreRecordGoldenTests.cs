@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -44,9 +45,15 @@ public sealed class StoreRecordGoldenTests
         var relocationBlob = root.GetProperty("relocationBlob");
         var relocationBytes = Convert.FromHexString(relocationBlob.GetProperty("rawBytesHex").GetString()!);
         Assert.True(relocationBytes.Length > 0);
+        // zlink-location-v3 and zlink-relocation-v1 are Redis Cluster hashtags
+        // ({...}) so a multi-key EVAL script (record + sequence counter +
+        // index, 22-location-store-redis.md#7) stays same-slot atomic under
+        // Cluster; a brace-less key would let Cluster route the keys to
+        // different slots.
         Assert.Equal(
-            $"{prefix}:zlink-relocation-v1:blob:{relocationBlob.GetProperty("reference").GetString()}",
+            $"{prefix}:{{zlink-relocation-v1}}:blob:{relocationBlob.GetProperty("reference").GetString()}",
             relocationBlob.GetProperty("redisKey").GetString());
+        Assert.Equal("{zlink-location-v3}:opaque", namespaceTag);
 
         foreach (var vector in root.GetProperty("valueVectors").GetProperty("genericOpaqueRecord").EnumerateArray())
         {
@@ -80,6 +87,70 @@ public sealed class StoreRecordGoldenTests
                 Assert.Empty(decoded.RawBytes);
             }
         }
+    }
+
+    /// <summary>
+    /// Checklist C-4 (dotnet store convergence): unlike the test above,
+    /// which is a pure-function fixture self-test, this drives the actual
+    /// production key builders (ZLinkProviderLocationRepository.OwnerKey/
+    /// MeshKey/ClientServerKey/FanoutKey) and the production owner-lease
+    /// JSON envelope encoder, so a regression in the real Redis provider's
+    /// key derivation or envelope shape fails here.
+    /// </summary>
+    [Fact]
+    public void StoreRecordGolden_dotnet_production_key_builders_match_golden()
+    {
+        var fixturePath = Path.Combine(
+            Common.FrameworkTestEnvironment.GetRepoRoot(),
+            "framework/runtime/protocol/golden/store-record-v1.json");
+        using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
+        var root = fixture.RootElement;
+        var byRecord = root.GetProperty("keyDerivation").EnumerateArray()
+            .ToDictionary(
+                entry => entry.GetProperty("record").GetString()!,
+                entry => entry);
+
+        AssertPreimage(
+            byRecord["mesh-node-descriptor"],
+            ZLinkProviderLocationRepository.MeshKey(
+                "main",
+                RoutingId.FromHex("01020304")).Value);
+        AssertPreimage(
+            byRecord["owner-lease"],
+            ZLinkProviderLocationRepository.OwnerKey("owner-a").Value);
+        AssertPreimage(
+            byRecord["client-server-descriptor"],
+            ZLinkProviderLocationRepository.ClientServerKey(
+                "chat-channel",
+                RoutingId.FromHex("01020304")).Value);
+        AssertPreimage(
+            byRecord["fanout-publisher-descriptor"],
+            ZLinkProviderLocationRepository.FanoutKey(
+                "chat-channel",
+                RoutingId.FromHex("01020304")).Value);
+
+        var ownerLeaseValueVector = root.GetProperty("valueVectors")
+            .GetProperty("genericOpaqueRecord").EnumerateArray()
+            .Single(vector =>
+                vector.GetProperty("name").GetString() == "ownerLease-expired");
+        var producedJson =
+            ZLinkProviderLocationRepository.EncodeOwnerLeaseRecordForGoldenTest(
+                "owner-a",
+                5);
+        Assert.Equal(
+            ownerLeaseValueVector.GetProperty("jsonBytesHex").GetString(),
+            Convert.ToHexString(producedJson).ToLowerInvariant());
+    }
+
+    private static void AssertPreimage(JsonElement vector, string producedKeyValue)
+    {
+        var producedPreimage = Encoding.UTF8.GetBytes(producedKeyValue);
+        Assert.Equal(
+            vector.GetProperty("preimageHex").GetString(),
+            Convert.ToHexString(producedPreimage).ToLowerInvariant());
+        var sha256Hex = Convert.ToHexString(SHA256.HashData(producedPreimage))
+            .ToLowerInvariant();
+        Assert.Equal(vector.GetProperty("sha256Hex").GetString(), sha256Hex);
     }
 
     private readonly record struct OpaqueMember(
