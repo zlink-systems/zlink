@@ -393,7 +393,10 @@ internal interface IZLinkBackendCanonicalRelocation
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
-            CancellationToken cancellationToken);
+            CancellationToken cancellationToken,
+            //  Base/delta overload (spec 15 §5): sent as payloadStage=base
+            //  chunks ahead of relocationPrepare when present.
+            ZLinkRelocationTransferPayload? basePayload = null);
 
     ValueTask SendCanonicalRelocationDataAsync(
         RoutingId targetNodeRid,

@@ -320,7 +320,11 @@ internal interface ICanonicalRelocationTarget
         ZLinkRelocationEnvelope envelope,
         RoutingId authenticatedSourceNodeRid,
         ZLinkCanonicalRelocationPreparationLease lease,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        //  Base/delta overload (spec 15 §5): the base snapshot buffered
+        //  ahead of Prepare and checksum-verified against its manifest.
+        //  Empty when the manifest declared no base (ordinary relocation).
+        ReadOnlyMemory<byte> basePayload = default);
 
     void ReadySubmitted(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
@@ -733,7 +737,8 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
-            CancellationToken cancellationToken);
+            CancellationToken cancellationToken,
+            ZLinkRelocationTransferPayload? basePayload = null);
     ValueTask SendCanonicalRelocationDataAsync(
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.RelocationDataRecord data,

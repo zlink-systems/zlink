@@ -2012,7 +2012,8 @@ internal sealed class CanonicalRelocationTransportProbe
                 ZLinkRelocationEnvelope envelope,
                 RoutingId authenticatedSourceNodeRid,
                 ZLinkCanonicalRelocationPreparationLease lease,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken,
+                ReadOnlyMemory<byte> basePayload = default)
         {
             var call = Interlocked.Increment(ref probe._targetPrepareCallCount);
             probe._prepareSourceNodeRid = authenticatedSourceNodeRid;
@@ -2024,7 +2025,8 @@ internal sealed class CanonicalRelocationTransportProbe
                         envelope,
                         authenticatedSourceNodeRid,
                         lease,
-                        cancellationToken)
+                        cancellationToken,
+                        basePayload)
                     .ConfigureAwait(false);
             }
             catch (ZLinkFrameworkException exception)

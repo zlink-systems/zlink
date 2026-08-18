@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Spots;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -13,6 +15,38 @@ internal interface IZLinkRelocationAdapterInvoker
         IServiceProvider services,
         object instance,
         ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Optional capability implemented by an <see cref="IZLinkRelocationAdapterInvoker"/>
+/// whose registered adapter also implements the base/delta relocation
+/// contract (spec 15 §5). Detected once at registration time (compile-time
+/// generic constraint), not by runtime reflection on every relocation.
+/// </summary>
+internal interface IZLinkBaseDeltaRelocationAdapterInvoker
+    : IZLinkRelocationAdapterInvoker
+{
+    ValueTask<byte[]> CaptureBaseAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken);
+
+    ValueTask<byte[]> CaptureDeltaAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken);
+
+    ValueTask RestoreBaseAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken);
+
+    ValueTask ApplyDeltaAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> deltaPayload,
         CancellationToken cancellationToken);
 }
 
@@ -80,4 +114,63 @@ internal sealed class ZLinkActorRelocationAdapterInvoker<TActor>(Type adapterTyp
         return (IZLinkActorRelocationAdapter<TActor>)
             services.GetRequiredService(adapterType);
     }
+}
+
+/// <summary>
+/// Base/delta-capable Actor relocation adapter invoker (spec 15 §5): the
+/// registered adapter implements <see cref="IZLinkActorBaseDeltaRelocationAdapter{TActor}"/>.
+/// </summary>
+internal sealed class ZLinkActorBaseDeltaRelocationAdapterInvoker<TActor>(
+    Type adapterType)
+    : IZLinkBaseDeltaRelocationAdapterInvoker
+    where TActor : class, IZLinkActor
+{
+    public ValueTask<byte[]> CaptureAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken) =>
+        Resolve(services).CaptureAsync((TActor)instance, cancellationToken);
+
+    public ValueTask RestoreAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken) =>
+        Resolve(services).RestoreAsync(
+            (TActor)instance, payload, cancellationToken);
+
+    public ValueTask<byte[]> CaptureBaseAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken) =>
+        Resolve(services).CaptureBaseAsync(
+            (TActor)instance, cancellationToken);
+
+    public ValueTask<byte[]> CaptureDeltaAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken) =>
+        Resolve(services).CaptureDeltaAsync(
+            (TActor)instance, cancellationToken);
+
+    public ValueTask RestoreBaseAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken) =>
+        Resolve(services).RestoreBaseAsync(
+            (TActor)instance, basePayload, cancellationToken);
+
+    public ValueTask ApplyDeltaAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> deltaPayload,
+        CancellationToken cancellationToken) =>
+        Resolve(services).ApplyDeltaAsync(
+            (TActor)instance, deltaPayload, cancellationToken);
+
+    private IZLinkActorBaseDeltaRelocationAdapter<TActor> Resolve(
+        IServiceProvider services) =>
+        (IZLinkActorBaseDeltaRelocationAdapter<TActor>)
+            services.GetRequiredService(adapterType);
 }

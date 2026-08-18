@@ -492,10 +492,17 @@ internal sealed class ZLinkActorFactoryBuilder<TActor>
     public IZLinkActorFactoryBuilder<TActor> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkActorRelocationAdapter<TActor>
     {
-        SelectRelocation(
-            2,
-            typeof(TAdapter),
-            new ZLinkActorRelocationAdapterInvoker<TActor>(typeof(TAdapter)));
+        //  Base/delta capability (spec 15 §5) is detected once here, from the
+        //  compile-time adapter type, rather than by reflecting on every
+        //  relocation attempt.
+        IZLinkRelocationAdapterInvoker invoker =
+            typeof(TAdapter).IsAssignableTo(
+                typeof(IZLinkActorBaseDeltaRelocationAdapter<TActor>))
+                ? new ZLinkActorBaseDeltaRelocationAdapterInvoker<TActor>(
+                    typeof(TAdapter))
+                : new ZLinkActorRelocationAdapterInvoker<TActor>(
+                    typeof(TAdapter));
+        SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
 }

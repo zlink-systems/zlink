@@ -2030,4 +2030,255 @@ public sealed class StandaloneActorRelocationRuntimeTests
                 new HostedRecoveryActor(context.ActorId, context));
         }
     }
+
+    // --- Base/delta relocation (spec 15 §5) ---------------------------
+
+    [Fact]
+    public void PreserveStateWith_selects_the_base_delta_invoker_for_a_capable_adapter()
+    {
+        var builder = new ZLinkActorFactoryBuilder<TestActor>();
+        builder.PreserveStateWith<BaseDeltaCapableAdapter>();
+
+        Assert.IsType<ZLinkActorBaseDeltaRelocationAdapterInvoker<TestActor>>(
+            builder.Relocation.AdapterInvoker);
+    }
+
+    [Fact]
+    public void PreserveStateWith_keeps_the_plain_invoker_for_a_non_capable_adapter()
+    {
+        var builder = new ZLinkActorFactoryBuilder<TestActor>();
+        builder.PreserveStateWith<PlainRelocationAdapter>();
+
+        Assert.IsType<ZLinkActorRelocationAdapterInvoker<TestActor>>(
+            builder.Relocation.AdapterInvoker);
+    }
+
+    [Fact]
+    public void IsBaseDeltaCapable_reflects_the_registered_adapter()
+    {
+        Assert.True(ZLinkActorRelocationRegistry.IsBaseDeltaCapable(
+            CreateRelocation<BaseDeltaCapableAdapter>(baseDeltaCapable: true)));
+        Assert.False(ZLinkActorRelocationRegistry.IsBaseDeltaCapable(
+            CreateRelocation<PlainRelocationAdapter>(baseDeltaCapable: false)));
+    }
+
+    [Fact]
+    public async Task Base_delta_capture_and_restore_round_trip_through_the_registry()
+    {
+        var adapter = new BaseDeltaCapableAdapter();
+        var services = new ServiceCollection()
+            .AddSingleton(adapter)
+            .BuildServiceProvider();
+        var relocation = CreateRelocation<BaseDeltaCapableAdapter>(
+            baseDeltaCapable: true);
+        var actor = new TestActor("base-delta-actor-1");
+
+        var baseBytes = await ZLinkActorRelocationRegistry.CaptureBaseAsync(
+            services, relocation, actor, CancellationToken.None);
+        var deltaBytes = await ZLinkActorRelocationRegistry.CaptureDeltaAsync(
+            services, relocation, actor, CancellationToken.None);
+        await ZLinkActorRelocationRegistry.RestoreBaseAsync(
+            services, relocation, actor, baseBytes, CancellationToken.None);
+        await ZLinkActorRelocationRegistry.ApplyDeltaAsync(
+            services, relocation, actor, deltaBytes, CancellationToken.None);
+
+        Assert.Equal(
+            ["CaptureBase", "CaptureDelta", "RestoreBase:3", "ApplyDelta:2"],
+            adapter.Calls);
+    }
+
+    [Fact]
+    public async Task Base_delta_helpers_reject_a_non_capable_registration()
+    {
+        var adapter = new PlainRelocationAdapter();
+        var services = new ServiceCollection()
+            .AddSingleton(adapter)
+            .BuildServiceProvider();
+        var relocation = CreateRelocation<PlainRelocationAdapter>(
+            baseDeltaCapable: false);
+        var actor = new TestActor("plain-actor-1");
+
+        //  Non-capable adapters are unwired from the base/delta path — the
+        //  registry rejects it explicitly rather than silently falling back.
+        await Assert.ThrowsAsync<ZLinkConfigurationException>(
+            () => ZLinkActorRelocationRegistry.CaptureBaseAsync(
+                services, relocation, actor, CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public void RelocationBaseChunkBuffer_assembles_in_order_chunks()
+    {
+        var buffer = new ZLinkRelocationBaseChunkBuffer(DateTimeOffset.UtcNow);
+
+        Assert.True(buffer.Append(0, [1, 2, 3]));
+        Assert.True(buffer.Append(1, [4, 5]));
+        //  An identical re-delivery of an already-buffered ordinal is
+        //  idempotent.
+        Assert.True(buffer.Append(0, [1, 2, 3]));
+
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, buffer.Assemble());
+    }
+
+    [Fact]
+    public void RelocationBaseChunkBuffer_rejects_a_conflicting_delivery()
+    {
+        var buffer = new ZLinkRelocationBaseChunkBuffer(DateTimeOffset.UtcNow);
+        Assert.True(buffer.Append(0, [1, 2, 3]));
+
+        //  A gap (ordinal 2 before 1 arrives) is rejected.
+        Assert.False(buffer.Append(2, [9]));
+        //  A same-ordinal re-delivery with different bytes is rejected.
+        Assert.False(buffer.Append(0, [9, 9, 9]));
+    }
+
+    [Fact]
+    public void CreateRaw_chunks_a_base_snapshot_and_preserves_its_checksum()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(
+            "base-snapshot-payload");
+
+        var payload = ZLinkRelocationTransferPayload.CreateRaw(bytes, 8);
+
+        Assert.Equal(bytes.Length, payload.TotalLength);
+        Assert.Equal(ZLinkCrc32C.Compute(bytes), payload.ChecksumCrc32c);
+        var reassembled = new byte[bytes.Length];
+        for (var ordinal = 0; ordinal < payload.ChunkCount; ordinal++)
+        {
+            var chunk = payload.Chunk(ordinal);
+            chunk.Span.CopyTo(
+                reassembled.AsSpan(ordinal * payload.ChunkBytes));
+        }
+        Assert.Equal(bytes, reassembled);
+    }
+
+    [Fact]
+    public async Task SweepExpiredRelocationBaseChunks_evicts_only_entries_past_the_ttl()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var node = new ZLinkManagedMeshNode(context, "base-chunk-sweep-mesh");
+        var field = typeof(ZLinkManagedMeshNode).GetField(
+            "_pendingRelocationBaseChunks",
+            System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "_pendingRelocationBaseChunks field not found.");
+        var dictionaryType = field.FieldType;
+        var dictionary = field.GetValue(node)
+            ?? throw new InvalidOperationException(
+                "_pendingRelocationBaseChunks was not initialized.");
+        var keyType = dictionaryType.GetGenericArguments()[0];
+        var freshKey = Activator.CreateInstance(
+            keyType,
+            RoutingId.From("sweep-source-fresh"),
+            new ZLinkServiceWireCodec.RelocationWireId(1, 1),
+            1UL,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "owner", 1, RoutingId.From("sweep-source-fresh"), 1, "1"))!;
+        var staleKey = Activator.CreateInstance(
+            keyType,
+            RoutingId.From("sweep-source-stale"),
+            new ZLinkServiceWireCodec.RelocationWireId(2, 2),
+            1UL,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "owner", 1, RoutingId.From("sweep-source-stale"), 1, "1"))!;
+        var now = DateTimeOffset.UtcNow;
+        var freshBuffer = new ZLinkRelocationBaseChunkBuffer(now);
+        var staleBuffer = new ZLinkRelocationBaseChunkBuffer(
+            now - TimeSpan.FromMinutes(10));
+        var tryAdd = dictionaryType.GetMethod("TryAdd")
+            ?? throw new InvalidOperationException("TryAdd not found.");
+        Assert.True((bool)tryAdd.Invoke(
+            dictionary, [freshKey, freshBuffer])!);
+        Assert.True((bool)tryAdd.Invoke(
+            dictionary, [staleKey, staleBuffer])!);
+
+        node.SweepExpiredRelocationBaseChunks(now);
+
+        var containsKey = dictionaryType.GetMethod("ContainsKey")
+            ?? throw new InvalidOperationException("ContainsKey not found.");
+        Assert.True((bool)containsKey.Invoke(dictionary, [freshKey])!);
+        Assert.False((bool)containsKey.Invoke(dictionary, [staleKey])!);
+    }
+
+    private static ZLinkObjectRelocationRegistration CreateRelocation<TAdapter>(
+        bool baseDeltaCapable)
+        where TAdapter : class, IZLinkActorRelocationAdapter<TestActor> =>
+        new(
+            typeof(TestActor),
+            new ZLinkObjectPlacementOptions(),
+            2,
+            typeof(TAdapter),
+            baseDeltaCapable
+                ? new ZLinkActorBaseDeltaRelocationAdapterInvoker<TestActor>(
+                    typeof(TAdapter))
+                : new ZLinkActorRelocationAdapterInvoker<TestActor>(
+                    typeof(TAdapter)));
+
+    private sealed class BaseDeltaCapableAdapter
+        : IZLinkActorBaseDeltaRelocationAdapter<TestActor>
+    {
+        internal List<string> Calls { get; } = [];
+
+        public ValueTask<byte[]> CaptureAsync(
+            TestActor actor, CancellationToken cancellationToken)
+        {
+            Calls.Add("Capture");
+            return ValueTask.FromResult<byte[]>([9]);
+        }
+
+        public ValueTask RestoreAsync(
+            TestActor actor,
+            ReadOnlyMemory<byte> payload,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("Restore:" + payload.Length);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<byte[]> CaptureBaseAsync(
+            TestActor actor, CancellationToken cancellationToken)
+        {
+            Calls.Add("CaptureBase");
+            return ValueTask.FromResult<byte[]>([1, 2, 3]);
+        }
+
+        public ValueTask<byte[]> CaptureDeltaAsync(
+            TestActor actor, CancellationToken cancellationToken)
+        {
+            Calls.Add("CaptureDelta");
+            return ValueTask.FromResult<byte[]>([4, 5]);
+        }
+
+        public ValueTask RestoreBaseAsync(
+            TestActor actor,
+            ReadOnlyMemory<byte> basePayload,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("RestoreBase:" + basePayload.Length);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ApplyDeltaAsync(
+            TestActor actor,
+            ReadOnlyMemory<byte> deltaPayload,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("ApplyDelta:" + deltaPayload.Length);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class PlainRelocationAdapter
+        : IZLinkActorRelocationAdapter<TestActor>
+    {
+        public ValueTask<byte[]> CaptureAsync(
+            TestActor actor, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Array.Empty<byte>());
+
+        public ValueTask RestoreAsync(
+            TestActor actor,
+            ReadOnlyMemory<byte> payload,
+            CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+    }
 }

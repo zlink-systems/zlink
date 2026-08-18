@@ -154,24 +154,57 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 interruption = runtime.RelocationInterruption.Start(
                     ZLinkRelocationUnitKind.Actor,
                     sourceActivation is null ? "entry" : "per_actor");
-                var applicationState = await ZLinkActorRelocationRegistry.CaptureAsync(
-                        runtime.Services,
-                        relocation,
-                        actor,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (applicationState.Length
-                    > ZLinkRemoteActorJoinPackets
-                        .SnapshotApplicationStateReservationBytes)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Rejected,
-                        $"Actor '{actorState.ActorId}' relocation state exceeds 64 MiB.");
+                //  Base/delta (spec 15 §5): when the registered adapter is
+                //  base/delta capable, the base snapshot is captured here —
+                //  identity exists, the admission seal has not happened yet
+                //  — and sent ahead of relocationPrepare; only the post-seal
+                //  delta travels in the envelope's application state field. A
+                //  non-capable adapter keeps the original single full-state
+                //  capture at this exact point, unchanged.
+                var baseDeltaCapable =
+                    ZLinkActorRelocationRegistry.IsBaseDeltaCapable(relocation);
+                byte[] baseState = [];
+                byte[] applicationState = [];
+                if (baseDeltaCapable)
+                {
+                    baseState = await ZLinkActorRelocationRegistry.CaptureBaseAsync(
+                            runtime.Services,
+                            relocation,
+                            actor,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    ValidateRelocationStateBound(actorState.ActorId, baseState);
+                }
+                else
+                {
+                    applicationState = await ZLinkActorRelocationRegistry.CaptureAsync(
+                            runtime.Services,
+                            relocation,
+                            actor,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    ValidateRelocationStateBound(actorState.ActorId, applicationState);
+                }
                 // Switch ingress to the bounded final hold while the immutable
                 // journal is built. The exact commit boundary is frozen only
                 // after the source fences in the initial journal are verified.
                 var sourceNode = runtime.GetSpotNodeRuntime(
                     sourceRef.Value.NodeRid);
                 actorState.Handoff.SealCapture();
+                if (baseDeltaCapable)
+                {
+                    applicationState = await ZLinkActorRelocationRegistry.CaptureDeltaAsync(
+                            runtime.Services,
+                            relocation,
+                            actor,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    ValidateRelocationStateBound(actorState.ActorId, applicationState);
+                }
+                //  An empty base is equivalent to no base at all (spec 15
+                //  §5): the manifest's baseChecksumCrc32c stays 0 and no
+                //  base chunks are sent.
+                var hasBase = baseDeltaCapable && baseState.Length > 0;
                 var semanticSealRecords = CreateAcceptedRecords(
                     actorState.Handoff.SnapshotFrames());
                 await ZLinkActorRequestSourceFenceValidator.ValidateAsync(
@@ -231,19 +264,26 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     throw new ZLinkConfigurationException(
                         "The source MeshNode does not support canonical relocation commands.");
                 canonical = backend;
+                var basePayload = hasBase
+                    ? ZLinkRelocationTransferPayload.CreateRaw(
+                        baseState,
+                        registration.Locations.Options.RelocationPayloadChunkLimit)
+                    : null;
                 prepare = CreatePrepare(
                         precommitSnapshot,
                         sourceAuthority,
                         target,
                         initialEnvelope,
                         transferPayload,
-                        registration.ApplicationVersion);
+                        registration.ApplicationVersion,
+                        hasBase ? ZLinkCrc32C.Compute(baseState) : 0);
                 _ = await canonical.PrepareCanonicalRelocationAsync(
                         target.Rid,
                         prepare,
                         transferPayload,
                         RemainingTimeout(absoluteDeadline),
-                        cancellationToken)
+                        cancellationToken,
+                        basePayload)
                     .ConfigureAwait(false);
                 var commitBoundary = actorState.Handoff
                     .FreezeCaptureCommitBoundary();
@@ -928,6 +968,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         session.SessionOwnerId,
         session.SessionOwnerLeaseGeneration);
 
+    private static void ValidateRelocationStateBound(
+        string actorId,
+        byte[] state)
+    {
+        if (state.Length
+            > ZLinkRemoteActorJoinPackets
+                .SnapshotApplicationStateReservationBytes)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                $"Actor '{actorId}' relocation state exceeds 64 MiB.");
+    }
+
     internal static ZLinkServiceWireCodec.RelocationPrepareRecord CreatePrepare(
         ZLinkAuthoritySnapshot sourceSnapshot,
         ZLinkActorAuthorityPayload sourceAuthority,
@@ -983,7 +1035,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkRelocationEnvelope envelope,
         RoutingId authenticatedSourceNodeRid,
         ulong targetAuthorityOwnerGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> basePayload = default)
     {
         await SweepExpiredTargetStagesAsync().ConfigureAwait(false);
         var key = new AttemptKey(
@@ -1000,7 +1053,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     envelope,
                     authenticatedSourceNodeRid,
                     targetAuthorityOwnerGeneration,
-                    cancellationToken)
+                    cancellationToken,
+                    basePayload)
                 .ConfigureAwait(false);
         }
         finally
@@ -1674,7 +1728,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkRelocationEnvelope envelope,
         RoutingId authenticatedSourceNodeRid,
         ulong targetAuthorityOwnerGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> basePayload = default)
     {
         ValidatePrepare(prepare, authenticatedSourceNodeRid);
         var key = new AttemptKey(
@@ -1815,7 +1870,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     effectiveTargetAuthorityOwnerGeneration,
                     ZLinkActorClaimMode.StagedRelocation,
                     publishActorRef: false,
-                    cancellationToken)
+                    cancellationToken,
+                    basePayload)
                 .ConfigureAwait(false);
             created = creation.Created;
             if (targetActivation is not null)

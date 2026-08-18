@@ -100,7 +100,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         ulong authorityOwnerGeneration,
         ZLinkActorClaimMode claimMode,
         bool publishActorRef,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> basePayload = default)
     {
         var creation = await state.GetOrStartActorCreationAsync(
                 actorType,
@@ -115,7 +116,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                     authorityOwnerGeneration,
                     claimMode,
                     CancellationToken.None,
-                    publishActorRef).AsTask(),
+                    publishActorRef,
+                    basePayload).AsTask(),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -141,7 +143,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         ulong authorityOwnerGeneration,
         ZLinkActorClaimMode claimMode,
         CancellationToken cancellationToken,
-        bool publishActorRef)
+        bool publishActorRef,
+        ReadOnlyMemory<byte> basePayload = default)
     {
         var factoryType = ResolveActorFactory(actorType);
         if (Lifecycle is not { } lifecycle)
@@ -154,7 +157,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                     relocationState,
                     objectGeneration,
                     authorityOwnerGeneration,
-                    cancellationToken)
+                    cancellationToken,
+                    basePayload)
                 .ConfigureAwait(false);
 
         var meshName =
@@ -178,7 +182,8 @@ internal sealed class ZLinkActorCreationCoordinator(
                     relocationState,
                     objectGeneration,
                     authorityOwnerGeneration,
-                    ct),
+                    ct,
+                    basePayload),
                 cancellationToken,
                 claimMode)
             .ConfigureAwait(false);
@@ -212,7 +217,8 @@ internal sealed class ZLinkActorCreationCoordinator(
         ReadOnlyMemory<byte> relocationState,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> basePayload = default)
     {
         var activationAdmission = getActivationAdmission?.Invoke(actorType);
         activationAdmission?.Acquire($"ACTOR '{actorId}'");
@@ -228,20 +234,22 @@ internal sealed class ZLinkActorCreationCoordinator(
             var context = ensureActorContext(state);
             try
             {
-                var factory = (IZLinkActorFactory)scope.ServiceProvider.GetRequiredService(factoryType);
-                var actor = await factory.CreateAsync(context, cancellationToken)
-                    .ConfigureAwait(false);
-                if (actor is null)
-                    throw new InvalidOperationException($"Actor factory '{factoryType}' returned null.");
-                if (!ReferenceEquals(actor.Context, context))
-                    throw new InvalidOperationException(
-                        $"Actor factory '{factoryType}' must return an Actor that exposes the provided context.");
-
-                await ZLinkActorRelocationRegistry.RestoreAsync(
+                //  Base/delta (spec 15 §5): a non-empty base on a capable
+                //  adapter restores via RestoreBaseAsync + ApplyDeltaAsync,
+                //  with one discard-and-retry-from-a-fresh-instance on an
+                //  ApplyDelta failure. A non-capable adapter, or an empty
+                //  base, keeps the original single RestoreAsync call.
+                var hasBase = !basePayload.IsEmpty
+                    && ZLinkActorRelocationRegistry.IsBaseDeltaCapable(relocation);
+                var actor = await CreateAndRestoreRelocatedActorAsync(
                         scope.ServiceProvider,
+                        factoryType,
+                        context,
                         relocation,
-                        actor,
                         relocationState,
+                        basePayload,
+                        hasBase,
+                        allowRetry: hasBase,
                         cancellationToken)
                     .ConfigureAwait(false);
                 bindActorContext(actor, state);
@@ -256,6 +264,83 @@ internal sealed class ZLinkActorCreationCoordinator(
         finally
         {
             activationAdmission?.Release();
+        }
+    }
+
+    /// <summary>
+    /// Creates the Actor instance from its factory and restores it. A
+    /// base/delta restore (spec 15 §5) that fails applying the delta
+    /// discards the instance just created and retries the whole
+    /// restoreBase→applyDelta sequence exactly once on a brand-new instance
+    /// from the same factory before propagating an explicit failure — a
+    /// partially applied instance is never bound or published.
+    /// </summary>
+    private async ValueTask<IZLinkActor> CreateAndRestoreRelocatedActorAsync(
+        IServiceProvider scopedServices,
+        Type factoryType,
+        ZLinkActorContext context,
+        ZLinkObjectRelocationRegistration relocation,
+        ReadOnlyMemory<byte> relocationState,
+        ReadOnlyMemory<byte> basePayload,
+        bool hasBase,
+        bool allowRetry,
+        CancellationToken cancellationToken)
+    {
+        var factory = (IZLinkActorFactory)scopedServices.GetRequiredService(factoryType);
+        var actor = await factory.CreateAsync(context, cancellationToken)
+            .ConfigureAwait(false);
+        if (actor is null)
+            throw new InvalidOperationException($"Actor factory '{factoryType}' returned null.");
+        if (!ReferenceEquals(actor.Context, context))
+            throw new InvalidOperationException(
+                $"Actor factory '{factoryType}' must return an Actor that exposes the provided context.");
+
+        if (!hasBase)
+        {
+            await ZLinkActorRelocationRegistry.RestoreAsync(
+                    scopedServices,
+                    relocation,
+                    actor,
+                    relocationState,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return actor;
+        }
+
+        try
+        {
+            await ZLinkActorRelocationRegistry.RestoreBaseAsync(
+                    scopedServices,
+                    relocation,
+                    actor,
+                    basePayload,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await ZLinkActorRelocationRegistry.ApplyDeltaAsync(
+                    scopedServices,
+                    relocation,
+                    actor,
+                    relocationState,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return actor;
+        }
+        catch when (allowRetry)
+        {
+            //  The failed instance is discarded here (never bound, never
+            //  published) — the retry restores a fresh instance instead of
+            //  reusing this partially applied one.
+            return await CreateAndRestoreRelocatedActorAsync(
+                    scopedServices,
+                    factoryType,
+                    context,
+                    relocation,
+                    relocationState,
+                    basePayload,
+                    hasBase,
+                    allowRetry: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
