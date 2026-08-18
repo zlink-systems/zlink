@@ -1125,6 +1125,7 @@ class public_host_runtime_t :
         protocol::relocation_prepare_t prepare;
         mesh::service_mailbox_record_t request;
         stateful::relocation_state_assembly_t assembly;
+        std::vector<std::uint8_t> base_payload;
         bool principal_registered = false;
         std::chrono::steady_clock::time_point expires_at{};
     };

@@ -3411,6 +3411,26 @@ void public_host_runtime_t::complete_relocation_assembly (
         frozen = aggregate->first;
         inventory_digest = aggregate->second;
     }
+    if (!pending.base_payload.empty ()) {
+        std::vector<stateful::frozen_object_state_t> base;
+        if (const auto single = stateful::maintenance_runtime_t::decode (pending.base_payload))
+            base.push_back (single->first);
+        else if (const auto aggregate =
+                   stateful::maintenance_runtime_t::decode_aggregate (pending.base_payload))
+            base = aggregate->first;
+        if (base.empty ()) {
+            reply_failure ();
+            return;
+        }
+        for (auto &saved : frozen) {
+            const auto found = std::find_if (base.begin (), base.end (), [&saved] (const auto &candidate) {
+                return candidate.owner == saved.owner
+                       && candidate.stable_type == saved.stable_type;
+            });
+            if (found != base.end ())
+                saved.base_application_state = found->application_state;
+        }
+    }
     if (frozen.empty ()) {
         reply_failure ();
         return;
@@ -3527,15 +3547,28 @@ void public_host_runtime_t::complete_relocation_assembly (
         return;
     }
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
-    try {
+    const auto restore_once = [&] {
         restored = targets.size () == 1
                      ? _objects.restore_relocation (frozen.front (),
                                                     targets.front (),
                                                     restore_identity, {})
                      : _objects.restore_relocation_aggregate (
                          frozen, targets, restore_identity, {});
-    }
-    catch (...) {
+    };
+    try {
+        restore_once ();
+        if (restored != stateful::stateful_error_t::none
+            && restored != stateful::stateful_error_t::already_exists) {
+            if (targets.size () == 1)
+                (void) _objects.abort_relocation_restore (targets.front (), restore_identity);
+            else
+                (void) _objects.abort_relocation_restore_aggregate (targets, restore_identity);
+            /* apply_delta may have mutated the staged instance. Re-enter the
+             * factory path exactly once after abort so retry never observes
+             * that partial state. */
+            restore_once ();
+        }
+    } catch (...) {
         for (std::size_t index = 0; index != registered_count; ++index)
             (void) _relocation_wire->unregister_target (
               pending.prepare.relocation,
@@ -4005,6 +4038,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || prepare->payload_chunk_count
                              > protocol::relocationChunkCount)
                         continue;
+                    std::vector<std::uint8_t> base_payload;
                     if (prepare->base_checksum_crc32c != 0) {
                         bool base_matches = false;
                         {
@@ -4017,6 +4051,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               && stateful::maintenance_runtime_t::crc32c (
                                    base->second.payload)
                                    == prepare->base_checksum_crc32c;
+                            if (base_matches)
+                                base_payload = std::move (base->second.payload);
                             if (base != _relocation_base_buffers.end ())
                                 _relocation_base_buffers.erase (base);
                         }
@@ -4051,7 +4087,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                    prepare->coordinator, prepare->object,
                                    {prepare->payload_total_length,
                                     prepare->payload_chunk_count,
-                                    prepare->payload_checksum_crc32c}},
+                                   prepare->payload_checksum_crc32c}},
+                                 std::move (base_payload),
                                  false,
                                  std::chrono::steady_clock::now ()
                                    + relocation_assembly_retention});

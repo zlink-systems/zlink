@@ -5250,7 +5250,9 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
         if (factory.relocation.kind
             != detail::factory_relocation_kind_t::preserve_state)
             return {};
-        const auto capture = factory.relocation.capture;
+        const auto capture = factory.relocation.delta_capable ()
+                           ? factory.relocation.capture_delta
+                           : factory.relocation.capture;
         if (!capture) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
@@ -5293,7 +5295,9 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
     }
     if (relocation.kind != detail::factory_relocation_kind_t::preserve_state)
         return {};
-    const auto capture = relocation.capture;
+    const auto capture = relocation.delta_capable ()
+                       ? relocation.capture_delta
+                       : relocation.capture;
     if (!capture || !context->spot_instance) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "State-preserving Spot relocation has no capture callback");
@@ -5323,10 +5327,29 @@ spot_node_runtime_t::capture_spot_relocation_base (
   const runtime::stateful::object_ref_t &spot, const std::string &stable_type,
   std::stop_token cancellation) const
 {
-    // A missing delta capability intentionally produces no base stage; the
-    // existing whole-state capture remains the post-seal path.
-    if (spot.kind == runtime::stateful::object_kind_t::actor)
-        return {};
+    if (spot.kind == runtime::stateful::object_kind_t::actor) {
+        detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+        std::shared_ptr<void> instance;
+        {
+            std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+            const auto configured = _state->actor_factories.find (stable_type);
+            const auto materialized = _state->actor_instances.find (stable_type + ":" + spot.key);
+            if (configured == _state->actor_factories.end ()
+                || materialized == _state->actor_instances.end ()
+                || !configured->second.relocation.delta_capable ())
+                return {};
+            factory = configured->second;
+            instance = materialized->second;
+        }
+        const auto captured = factory.relocation.capture_base (instance.get (), cancellation).result ();
+        if (!captured)
+            throw framework_exception_t (captured.error_kind (), "Actor relocation base capture failed");
+        std::vector<std::uint8_t> result;
+        result.reserve (captured.value ().size ());
+        for (const auto value : captured.value ())
+            result.push_back (std::to_integer<std::uint8_t> (value));
+        return result;
+    }
     std::shared_ptr<spot_context_state_t> context;
     detail::factory_relocation_configuration_t relocation;
     {
@@ -5388,10 +5411,25 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
             payload.reserve (frozen.application_state.size ());
             for (const auto value : frozen.application_state)
                 payload.push_back (static_cast<std::byte> (value));
-            staged_restore = [relocation = std::move (relocation), payload = std::move (payload),
-                              cancellation] (void *instance) mutable {
-                return relocation.restore (instance, std::move (payload), cancellation);
-            };
+            std::vector<std::byte> base;
+            base.reserve (frozen.base_application_state.size ());
+            for (const auto value : frozen.base_application_state)
+                base.push_back (static_cast<std::byte> (value));
+            if (!base.empty ()) {
+                if (!relocation.delta_capable ())
+                    throw std::logic_error ("Relocation base requires a delta adapter");
+                staged_restore = [relocation = std::move (relocation), base = std::move (base),
+                                  payload = std::move (payload), cancellation] (void *instance) mutable
+                  -> task_t<void> {
+                    co_await relocation.restore_base (instance, std::move (base), cancellation);
+                    co_await relocation.apply_delta (instance, std::move (payload), cancellation);
+                };
+            } else {
+                staged_restore = [relocation = std::move (relocation), payload = std::move (payload),
+                                  cancellation] (void *instance) mutable {
+                    return relocation.restore (instance, std::move (payload), cancellation);
+                };
+            }
         } else if (relocation.kind == detail::factory_relocation_kind_t::recreate) {
             if (!frozen.application_state.empty ())
                 throw std::logic_error ("Recreated Spot has application state");
@@ -5488,7 +5526,8 @@ bool spot_node_runtime_t::materialize_relocation_state (
         && !frozen.application_state.empty ())
         return false;
     if (factory.relocation.kind == detail::factory_relocation_kind_t::preserve_state
-        && !factory.restore)
+        && (frozen.base_application_state.empty () ? !factory.relocation.restore
+                                                    : !factory.relocation.delta_capable ()))
         return false;
 
     const auto committed =
@@ -5514,10 +5553,25 @@ bool spot_node_runtime_t::materialize_relocation_state (
             payload.reserve (frozen.application_state.size ());
             for (const auto value : frozen.application_state)
                 payload.push_back (static_cast<std::byte> (value));
-            const auto restored =
-              factory.restore (actor.get (), std::move (payload), cancellation).result ();
-            if (!restored)
-                return false;
+            if (!frozen.base_application_state.empty ()) {
+                std::vector<std::byte> base;
+                base.reserve (frozen.base_application_state.size ());
+                for (const auto value : frozen.base_application_state)
+                    base.push_back (static_cast<std::byte> (value));
+                const auto restored = factory.relocation.restore_base (
+                  actor.get (), std::move (base), cancellation).result ();
+                if (!restored)
+                    return false;
+                const auto applied = factory.relocation.apply_delta (
+                  actor.get (), std::move (payload), cancellation).result ();
+                if (!applied)
+                    return false;
+            } else {
+                const auto restored =
+                  factory.restore (actor.get (), std::move (payload), cancellation).result ();
+                if (!restored)
+                    return false;
+            }
         }
     }
     catch (...) {

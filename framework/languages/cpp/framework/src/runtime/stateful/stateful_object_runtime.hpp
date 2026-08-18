@@ -161,6 +161,10 @@ struct frozen_object_state_t
     object_ref_t owner;
     std::string stable_type;
     std::vector<std::uint8_t> application_state;
+    /* Target-only, pre-seal base snapshot. It is deliberately not part of
+     * the final relocation envelope; public_host attaches it after the
+     * separately staged base stream has passed its CRC check. */
+    std::vector<std::uint8_t> base_application_state;
     std::vector<turn_record_t> pending_application;
     std::vector<logical_timer_t> timers;
 
