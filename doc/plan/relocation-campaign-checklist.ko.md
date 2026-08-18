@@ -63,8 +63,12 @@
       **수정 완료 — `aff9511de6`**(진짜 원인은 dangling this: 8bae89dc0f의 임시
       코루틴 래퍼가 suspension에서 소멸 — 프레임 소유로 수명 명시화, 회귀 테스트
       포함; 캠페인 유발 아님) [발견 2026-08-19]
-- [ ] cpp preset 빌드 디렉토리(linux-ninja-vcpkg-debug) 재생성: 손상 →
-      VCPKG_ROOT=/mnt/d/tools/vcpkg 완주 재설치 (e2e 에이전트 실행 중)
+- [x] cpp preset 빌드 디렉토리 재생성 완료 (2026-08-19, /mnt/d/tools/vcpkg 완주 —
+      전 타깃 컴파일 그린). 참고: 원 SIGFPE는 정상 빌드에서 미재현이나 aff9511de6의
+      수명 수정은 결정적 회귀 테스트가 증명하는 실버그로 유효 유지.
+- [ ] **ST-B1 회귀: relocation 후 구 소유 노드 경유 프록시 실패**(결정적 3/3,
+      'actor spot context is not registered' 409) — 오늘 커밋(aff9511de6/46ef4b0f03/
+      b2b1713927) 회귀 여부 bisect + 근본 원인 조사 에이전트 진행 중 [발견 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
