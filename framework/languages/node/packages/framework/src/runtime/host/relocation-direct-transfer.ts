@@ -19,6 +19,23 @@ export const RELOCATION_CONSERVATIVE_CHUNK_LIMIT_BYTES = 32 * 1024;
  */
 export const RELOCATION_PHASE1_CONSERVATIVE_BUDGET_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Effective chunk size limit for one Actor Join's relocation state chunks:
+ * min(configured, target's advertised cap, conservative floor). 0 from the
+ * target means "not advertised" and does not participate in the min (spec
+ * 15 §4.2).
+ */
+export function effectiveActorJoinChunkLimitBytes(
+  configuredChunkLimitBytes: number,
+  advertisedReceiveChunkLimitBytes: number | undefined
+): number {
+  const candidates = [configuredChunkLimitBytes, RELOCATION_CONSERVATIVE_CHUNK_LIMIT_BYTES];
+  if (advertisedReceiveChunkLimitBytes !== undefined && advertisedReceiveChunkLimitBytes > 0) {
+    candidates.push(advertisedReceiveChunkLimitBytes);
+  }
+  return Math.min(...candidates);
+}
+
 export interface ZLinkRelocationChunkPlan {
   readonly chunkBytes: number;
   readonly chunkCount: number;

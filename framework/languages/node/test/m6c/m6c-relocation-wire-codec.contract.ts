@@ -6,15 +6,24 @@ import {
   decodeSessionRelocationRoute,
   decodeSessionRelocationSeal,
   decodeSessionRelocationSealed,
+  decodeStatefulReply,
   encodeMaintenanceRelocationControl,
   encodeSessionRelocationRoute,
   encodeSessionRelocationSeal,
   encodeSessionRelocationSealed,
+  encodeStatefulReply,
   type ServiceMaintenanceRelocationControl,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import {
+  decodeRelocationBaseBundle,
+  encodeRelocationBaseBundle,
+  encodeRelocationBaseDeltaState,
+  decodeRelocationBaseDeltaState
+} from '../../packages/framework/src/runtime/host/relocation-state-adapter';
+import { effectiveActorJoinChunkLimitBytes } from '../../packages/framework/src/runtime/host/relocation-direct-transfer';
 
 interface GoldenEntry {
   readonly name: string;
@@ -295,4 +304,126 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     ...seal,
     senderRole: 'target'
   } as never), /sender role/);
+});
+
+test('actorJoin accepted reply tail round-trips receiveChunkLimitBytes and ' +
+  'decodes old-format frames as not-advertised', () => {
+  const correlation = 42n;
+  const spot = { spotId: 'spot-1', generation: 3n } as const;
+  const encoded = encodeStatefulReply(correlation, 0, 0, {
+    kind: 'actorJoin',
+    joinResult: 0,
+    spot,
+    membershipEpoch: 5n,
+    receiveChunkLimitBytes: 32768
+  });
+  const decoded = decodeStatefulReply(encoded, correlation, 'actorJoin');
+  assert.deepEqual(decoded.tail, {
+    kind: 'actorJoin',
+    joinResult: 0,
+    spot,
+    membershipEpoch: 5n,
+    receiveChunkLimitBytes: 32768
+  });
+
+  // 0 means "not advertised" and is the default when the field is omitted.
+  const encodedDefault = encodeStatefulReply(correlation, 0, 0, {
+    kind: 'actorJoin',
+    joinResult: 0,
+    spot,
+    membershipEpoch: 5n
+  });
+  const decodedDefault = decodeStatefulReply(encodedDefault, correlation, 'actorJoin');
+  assert.equal(
+    (decodedDefault.tail as { readonly receiveChunkLimitBytes?: number }).receiveChunkLimitBytes,
+    0
+  );
+
+  // An old-format frame that stops right after membershipEpoch (no trailing
+  // u32) still decodes — tolerant of an unpatched encoder.
+  const oldFormatBody = Buffer.concat([
+    Buffer.from([0x5a, 0x4d, 1, 20, 0]),
+    (() => {
+      const buffer = Buffer.alloc(8);
+      buffer.writeBigUInt64BE(correlation);
+      return buffer;
+    })(),
+    Buffer.alloc(4), // terminalResult = 0
+    Buffer.alloc(4), // failureCode = 0
+    Buffer.from([0, 0, 0, 0]), // joinResult = 0 (u32)
+    (() => {
+      // joinBodyLength covers spotRef + membershipEpoch only, no cap field.
+      const spotIdBytes = Buffer.from(spot.spotId, 'utf8');
+      const spotRef = Buffer.concat([
+        Buffer.from([spotIdBytes.byteLength]),
+        spotIdBytes,
+        (() => {
+          const value = Buffer.alloc(8);
+          value.writeBigUInt64BE(spot.generation);
+          return value;
+        })()
+      ]);
+      const epoch = Buffer.alloc(8);
+      epoch.writeBigUInt64BE(5n);
+      const body = Buffer.concat([spotRef, epoch]);
+      const length = Buffer.alloc(2);
+      length.writeUInt16BE(body.byteLength);
+      return Buffer.concat([length, body]);
+    })()
+  ]);
+  const oldFormatDecoded = decodeStatefulReply(oldFormatBody, correlation, 'actorJoin');
+  assert.deepEqual(oldFormatDecoded.tail, {
+    kind: 'actorJoin',
+    joinResult: 0,
+    spot,
+    membershipEpoch: 5n,
+    receiveChunkLimitBytes: 0
+  });
+
+  assert.throws(() => encodeStatefulReply(correlation, 0, 0, {
+    kind: 'actorJoin',
+    joinResult: 0,
+    spot,
+    membershipEpoch: 5n,
+    receiveChunkLimitBytes: 67_108_865
+  }));
+});
+
+test('relocation base bundle round-trips multiple participant snapshots by authority key', () => {
+  const bases = new Map<string, Uint8Array>([
+    ['spot:spot-1', Buffer.from('spot-base-bytes')],
+    ['actor:actor-1', Buffer.from('actor-base-bytes')],
+    ['actor:actor-2', Buffer.from([])]
+  ]);
+  const blob = encodeRelocationBaseBundle(bases);
+  const decoded = decodeRelocationBaseBundle(blob);
+  assert.equal(decoded.size, 3);
+  for (const [key, value] of bases) {
+    assert.deepEqual(decoded.get(key), Buffer.from(value));
+  }
+  assert.throws(() => decodeRelocationBaseBundle(blob.subarray(0, -1)));
+  assert.deepEqual([...decodeRelocationBaseBundle(encodeRelocationBaseBundle(new Map())).entries()], []);
+});
+
+test('relocation base/delta frame round-trips and rejects a mismatched base checksum', () => {
+  const base = Buffer.from('base-snapshot');
+  const delta = Buffer.from('delta-bytes');
+  const frame = encodeRelocationBaseDeltaState(base, delta);
+  const decoded = decodeRelocationBaseDeltaState(frame);
+  assert.deepEqual(decoded?.base, base);
+  assert.deepEqual(decoded?.delta, delta);
+  // Byte 25 is the first base byte (header is 25 bytes) — corrupting it
+  // invalidates the stored base checksum without touching the delta.
+  const corrupted = Buffer.from(frame);
+  corrupted[25] ^= 0xff;
+  assert.throws(() => decodeRelocationBaseDeltaState(corrupted), /checksum/);
+  assert.equal(decodeRelocationBaseDeltaState(Buffer.from('not-a-frame')), undefined);
+});
+
+test('effectiveActorJoinChunkLimitBytes takes the minimum of configured, advertised and the conservative floor', () => {
+  // 0 from the target means "not advertised" and must not participate in the min.
+  assert.equal(effectiveActorJoinChunkLimitBytes(1024 * 1024, 0), 32 * 1024);
+  assert.equal(effectiveActorJoinChunkLimitBytes(1024 * 1024, undefined), 32 * 1024);
+  assert.equal(effectiveActorJoinChunkLimitBytes(1024 * 1024, 4096), 4096);
+  assert.equal(effectiveActorJoinChunkLimitBytes(1024, 4096), 1024);
 });

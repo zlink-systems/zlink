@@ -68,6 +68,9 @@ import {
 } from './relocation-direct-transfer';
 import {
   captureRelocationAdapterState,
+  decodeRelocationBaseBundle,
+  encodeRelocationBaseBundle,
+  encodeRelocationBaseDeltaState,
   restoreRelocationAdapterState,
   type ZLinkRelocationStateAdapterLike
 } from './relocation-state-adapter';
@@ -148,9 +151,11 @@ import {
   type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationCutover,
   type ServiceMaintenanceRelocationData,
+  type ServiceMaintenanceRelocationFailed,
   type ServiceMaintenanceRelocationReady,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceMaintenanceRelocationState,
+  type ServiceWireRelocationPayloadStage,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed,
@@ -271,6 +276,15 @@ interface TargetRelocationOffer {
   readonly envelope: ServiceRelocationEnvelope;
   readonly restoreDeadlineAtMs: number;
   readonly reservation: TargetRelocationReservation;
+  /** Verified pre-seal base snapshots keyed by participant authority key. */
+  readonly basePayloads?: ReadonlyMap<string, Buffer>;
+}
+
+interface TargetBaseBuffer {
+  readonly chunks: Buffer[];
+  nextOrdinal: number;
+  readonly sourceNodeRid: string;
+  fingerprint?: string;
 }
 
 interface TargetPrepareOperation {
@@ -347,7 +361,24 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   private readonly sourceRelocationIds = new Set<string>();
   private readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
-  private readonly pendingTargetReadyFailures = new Map<string, unknown>();
+  /** Pre-seal base-stage chunks accumulated before their manifest (relocationPrepare) arrives. */
+  private readonly targetBaseBuffers = new Map<string, TargetBaseBuffer>();
+  /**
+   * Terminal restore failures (assembly/checksum/factory/restore error): the
+   * target already sent relocationFailed (command 53) once. An exact-identity
+   * Prepare resend replays the stored response rather than retrying the
+   * restore; a different exact identity reusing the same RelocationId+attempt
+   * key supersedes the stale entry (spec 28 §3, §9).
+   */
+  private readonly targetReadyFailures =
+    new Map<string, { readonly fingerprint: string; readonly response: ServiceMaintenanceRelocationFailed }>();
+  /**
+   * Successful restores retained across a Ready delivery retry: an
+   * exact-identity Prepare resend re-submits Ready against this retained
+   * staging instead of redoing the restore (spec 28).
+   */
+  private readonly targetReadyResponses =
+    new Map<string, { readonly fingerprint: string; readonly response: ServiceMaintenanceRelocationReady }>();
   private readonly sourceCutoverWindows = new Map<string, SourceCutoverWindow>();
   private readonly peerPayloadBudgets = new Map<string, ZLinkRelocationInFlightBudget>();
   private nodePayloadBudget?: ZLinkRelocationInFlightBudget;
@@ -447,7 +478,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       pending.assembly.fail('Relocation runtime stopped.');
     }
     this.targetAssemblies.clear();
-    this.pendingTargetReadyFailures.clear();
+    this.targetBaseBuffers.clear();
+    this.targetReadyFailures.clear();
+    this.targetReadyResponses.clear();
     for (const window of this.sourceCutoverWindows.values()) {
       if (window.windowTimer !== undefined) clearTimeout(window.windowTimer);
       if (window.retryTimer !== undefined) clearTimeout(window.retryTimer);
@@ -679,7 +712,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     const request = decodeServiceRelocationControlRequest(payload);
     if (request === undefined) return false;
-    if (request.kind === 'ready') {
+    if (request.kind === 'ready' || request.kind === 'failed') {
       this.acceptControlResponse(request, record.sourceNodeRid);
       return true;
     }
@@ -692,14 +725,36 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         throw new Error('Relocation prepare has no authenticated source node.');
       }
       const operationKey = relocationStagingId(request);
-      // A failed Ready delivery surfaces on the next identical Prepare resend
-      // so the source observes an explicit failure instead of a silent stall.
-      const readyFailure = this.pendingTargetReadyFailures.get(operationKey);
-      if (readyFailure !== undefined) {
-        this.pendingTargetReadyFailures.delete(operationKey);
-        throw readyFailure;
-      }
       const fingerprint = stringifyWire(request);
+      // A restore that failed outright is terminal: the source observes the
+      // same explicit relocationFailed on every identical Prepare resend
+      // rather than a silent stall. A different exact identity reusing the
+      // same RelocationId+attempt key supersedes the stale failure — the
+      // newer attempt wins (spec 28 §3).
+      const readyFailure = this.targetReadyFailures.get(operationKey);
+      if (readyFailure !== undefined) {
+        if (readyFailure.fingerprint === fingerprint) {
+          await Promise.resolve(this.requireMeshNode(meshName).sendToNode(
+            record.sourceNodeRid,
+            encodeServiceRelocationControlResponse(readyFailure.response)
+          )).catch(() => SubmitResult.NotConnected);
+          return true;
+        }
+        this.targetReadyFailures.delete(operationKey);
+      }
+      // Spec 28: an exact-identity Restore resend against staging that
+      // already restored successfully reuses that staging — it re-submits
+      // READY rather than restarting the restore.
+      const readyPending = this.targetReadyResponses.get(operationKey);
+      if (readyPending !== undefined) {
+        if (readyPending.fingerprint !== fingerprint) {
+          throw new Error(`Relocation '${operationKey}' repeated Prepare with different bytes.`);
+        }
+        await this.submitTargetReady(
+          meshName, operationKey, record.sourceNodeRid, readyPending.response
+        );
+        return true;
+      }
       let operation = this.targetPrepareOperations.get(operationKey);
       if (operation !== undefined && operation.fingerprint !== fingerprint) {
         throw new Error(`Relocation '${operationKey}' repeated Prepare with different bytes.`);
@@ -728,6 +783,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       void this.deliverTargetReady(
         meshName,
         operationKey,
+        request,
         record.sourceNodeRid,
         operation.promise
       );
@@ -741,6 +797,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private async deliverTargetReady(
     meshName: string,
     operationKey: string,
+    request: ServiceMaintenanceRelocationPrepare,
     sourceNodeRid: RoutingId,
     operation: Promise<ServiceMaintenanceRelocationReady>
   ): Promise<void> {
@@ -748,29 +805,83 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     try {
       response = await operation;
     } catch (error) {
-      if (!this.pendingTargetReadyFailures.has(operationKey)) {
-        this.pendingTargetReadyFailures.set(operationKey, error);
-        console.error('[zlink.runtime.relocation.restore_failed]', operationKey, error);
-      }
-      return;
-    }
-    try {
-      const submitted = await this.requireMeshNode(meshName).sendToNode(
+      // The restore itself failed (chunk assembly/checksum, factory,
+      // restore or staging): this is terminal. Send relocationFailed
+      // (command 53) once and remember it so an identical Prepare resend
+      // replays the same response instead of retrying the restore.
+      const failed = relocationFailed(request, relocationFailedFailureCode(error));
+      this.targetReadyFailures.set(operationKey, {
+        fingerprint: stringifyWire(request),
+        response: failed
+      });
+      // The stored failure replay is bounded by the same Restore validity
+      // window as everything else in this attempt — it is not kept forever
+      // (spec 28 §9).
+      const failureExpiry = setTimeout(() => {
+        this.targetReadyFailures.delete(operationKey);
+      }, RELOCATION_OPERATION_RETENTION_MS);
+      failureExpiry.unref?.();
+      console.error('[zlink.runtime.relocation.restore_failed]', operationKey, error);
+      const submitted = await Promise.resolve(this.requireMeshNode(meshName).sendToNode(
         sourceNodeRid,
-        encodeServiceRelocationControlResponse(response)
-      );
+        encodeServiceRelocationControlResponse(failed)
+      )).catch(() => SubmitResult.NotConnected);
       if (submitted !== SubmitResult.Ok) {
-        throw new Error('Relocation Ready reply was not accepted by RouteMesh.');
-      }
-    } catch (error) {
-      try {
-        await this.rollbackTargetReadyDelivery(operationKey, error);
-        this.pendingTargetReadyFailures.set(operationKey, error);
-      } catch (rollbackError) {
-        this.pendingTargetReadyFailures.set(operationKey, rollbackError);
+        console.error('[zlink.runtime.relocation.failure_reply_failed]', operationKey, error);
       }
       return;
     }
+    // Spec 28: staging that finished restoring successfully is retained
+    // across a Ready delivery retry — an identical Prepare resend re-submits
+    // Ready against this staging instead of the restore being redone or the
+    // attempt being failed outright.
+    this.targetReadyResponses.set(operationKey, {
+      fingerprint: stringifyWire(request),
+      response
+    });
+    // A Ready that never delivers within the Restore validity window is
+    // bounded, too: the retained staging, its reservation and hidden objects
+    // are cleaned up exactly once instead of being held indefinitely (spec
+    // 28 §9, finding F3). A successful submit removes the map entry first,
+    // so this fire is then a harmless no-op.
+    const readyExpiry = setTimeout(() => {
+      this.expireTargetReadyResponse(operationKey);
+    }, RELOCATION_OPERATION_RETENTION_MS);
+    readyExpiry.unref?.();
+    await this.submitTargetReady(meshName, operationKey, sourceNodeRid, response);
+  }
+
+  /** Cleans up a Ready reply that never delivered within the Restore validity window. */
+  private expireTargetReadyResponse(operationKey: string): void {
+    if (!this.targetReadyResponses.delete(operationKey)) return;
+    const stage = this.targetStages.get(operationKey);
+    if (stage === undefined) return;
+    this.targetStages.delete(operationKey);
+    void this.abortTargetStage(stage).catch(error => {
+      console.error('[zlink.runtime.relocation.ready_expired_abort_failed]', operationKey, error);
+    });
+  }
+
+  /**
+   * Submits one Ready reply. A failed submit is left for the next identical
+   * Prepare resend to retry against the retained staging (spec 28) — it is
+   * not rolled back here and does not arm the cutover fallback.
+   */
+  private async submitTargetReady(
+    meshName: string,
+    operationKey: string,
+    sourceNodeRid: RoutingId,
+    response: ServiceMaintenanceRelocationReady
+  ): Promise<void> {
+    const submitted = await Promise.resolve(this.requireMeshNode(meshName).sendToNode(
+      sourceNodeRid,
+      encodeServiceRelocationControlResponse(response)
+    )).catch(() => SubmitResult.NotConnected);
+    if (submitted !== SubmitResult.Ok) {
+      console.warn('[zlink.runtime.relocation.ready_submit_pending_resend]', operationKey);
+      return;
+    }
+    this.targetReadyResponses.delete(operationKey);
     this.armTargetCutoverFallback(meshName, operationKey);
   }
 
@@ -779,6 +890,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     request: ServiceMaintenanceRelocationState,
     sourceNodeRid: RoutingId | null
   ): void {
+    if (request.payloadStage === 'base') {
+      this.acceptBaseStageChunk(request, sourceNodeRid);
+      return;
+    }
     const operationKey = relocationStagingId(request);
     const pending = this.targetAssemblies.get(operationKey);
     if (
@@ -795,6 +910,58 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       return;
     }
     pending.assembly.accept(request.chunkOrdinal, request.chunkData);
+  }
+
+  /**
+   * Buffers one base-stage chunk ahead of its manifest. Base chunks travel on
+   * the same ordered connection before the relocationPrepare that declares
+   * baseChecksumCrc32c and finalizes (checksum-verifies) this buffer (spec 15
+   * §5). Chunks for an identity that already has a final assembly, a target
+   * stage or a terminal outcome are late — from a superseded attempt — and
+   * are discarded rather than attached.
+   */
+  private acceptBaseStageChunk(
+    request: ServiceMaintenanceRelocationState,
+    sourceNodeRid: RoutingId | null
+  ): void {
+    const operationKey = relocationStagingId(request);
+    if (sourceNodeRid === null || request.senderRole !== 'source') return;
+    if (
+      this.targetAssemblies.has(operationKey)
+      || this.targetStages.has(operationKey)
+      || this.terminalTargets.get(operationKey) !== undefined
+    ) {
+      console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
+      return;
+    }
+    const identityFingerprint = stringifyWire({
+      coordinator: request.coordinator,
+      object: request.object
+    });
+    let pending = this.targetBaseBuffers.get(operationKey);
+    if (pending === undefined) {
+      if (request.chunkOrdinal !== 0) {
+        console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
+        return;
+      }
+      pending = {
+        chunks: [],
+        nextOrdinal: 0,
+        sourceNodeRid: String(sourceNodeRid),
+        fingerprint: identityFingerprint
+      };
+      this.targetBaseBuffers.set(operationKey, pending);
+    }
+    if (
+      pending.sourceNodeRid !== String(sourceNodeRid)
+      || pending.fingerprint !== identityFingerprint
+      || request.chunkOrdinal !== pending.nextOrdinal
+    ) {
+      console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
+      return;
+    }
+    pending.chunks.push(Buffer.from(request.chunkData));
+    pending.nextOrdinal += 1;
   }
 
   private registerTargetAssembly(
@@ -1456,7 +1623,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           actorAuthorities.get(state.actorId)!
         ] as const)]),
         signal,
-        sessions
+        sessions,
+        preSealBaseMap(
+          spotKey.value,
+          spotPreSealState,
+          actorStates.map(state => [
+            encodeAuthorityKey('actor', state.actorId).value,
+            actorPreSealStates.get(state.actorId)
+          ])
+        )
       );
     } catch (error) {
       outcome = 'failed';
@@ -1574,7 +1749,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         captured,
         new Map([[measuredUnit.authorityKey, authority]]),
         signal,
-        sessions
+        sessions,
+        preSealBaseMap(undefined, undefined, [[measuredUnit.authorityKey, actorPreSealState]])
       );
     } catch (error) {
       outcome = 'failed';
@@ -1832,7 +2008,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     captured: ServiceCapturedObjectRelocation,
     _authorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>,
     signal?: AbortSignal,
-    sessions: readonly SourceActorSession[] = []
+    sessions: readonly SourceActorSession[] = [],
+    /** Pre-seal base snapshots keyed by participant authority key, when captured. */
+    preSealBases: ReadonlyMap<string, Uint8Array> = new Map()
   ): Promise<void> {
     const localStatus = this.requireMeshNode(meshName).status();
     const controlDeadlineAtMs = signal === undefined
@@ -1868,9 +2046,31 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const convergenceDeadlineAtMs = signal === undefined
       ? Date.now() + RELOCATION_OPERATION_RETENTION_MS
       : controlDeadlineAtMs;
+    // Pre-seal base snapshots travel as their own base-stage chunk stream,
+    // strictly before the Restore request, on the same ordered connection —
+    // relocationPrepare's baseChecksumCrc32c finalizes and checksum-verifies
+    // this already-transmitted buffer on the target (spec 15 §5). The
+    // manifest above (payloadTotalLength/ChunkCount/ChecksumCrc32c) only
+    // describes the delta that follows the Restore request.
+    const baseBlob = preSealBases.size === 0
+      ? undefined
+      : encodeRelocationBaseBundle(preSealBases);
+    const baseChecksumCrc32c = baseBlob === undefined ? 0 : crc32c(baseBlob);
     let readyReceived = false;
     let sourceCommitted = false;
     try {
+      if (baseBlob !== undefined) {
+        const basePlan = planRelocationChunks(baseBlob, limits.relocationPayloadChunkLimitBytes);
+        await this.sendRelocationStateChunks(
+          meshName,
+          target,
+          { relocation, targetAttemptGeneration: 1n, coordinator, object },
+          'base',
+          baseBlob,
+          basePlan,
+          signal
+        );
+      }
       const prepare = {
         kind: 'prepare',
         relocation,
@@ -1884,6 +2084,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         payloadTotalLength: BigInt(plan.totalLength),
         payloadChunkCount: plan.chunkCount,
         payloadChecksumCrc32c: plan.checksumCrc32c,
+        baseChecksumCrc32c,
         applicationVersion: target.applicationVersion
       } satisfies ServiceMaintenanceRelocationPrepare;
       // Start the Restore request first (it also registers the temporary
@@ -1902,6 +2103,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           meshName,
           target,
           prepare,
+          'final',
           encoded,
           plan,
           signal
@@ -2041,11 +2243,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  /** Streams the payload chunks under the effective in-flight budgets. */
+  /** Streams the payload chunks of one stage under the effective in-flight budgets. */
   private async sendRelocationStateChunks(
     meshName: string,
     target: ZLinkMeshNodeDescriptor,
-    prepare: ServiceMaintenanceRelocationPrepare,
+    identity: {
+      readonly relocation: ServiceWireOperationId;
+      readonly targetAttemptGeneration: bigint;
+      readonly coordinator: ServiceWireRelocationCoordinatorFence;
+      readonly object: ServiceWireRelocationObject;
+    },
+    stage: ServiceWireRelocationPayloadStage,
     encoded: Buffer,
     plan: ReturnType<typeof planRelocationChunks>,
     signal?: AbortSignal
@@ -2060,11 +2268,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       try {
         await this.sendControlOneWay(meshName, target.rid, {
           kind: 'state',
-          relocation: prepare.relocation,
-          targetAttemptGeneration: prepare.targetAttemptGeneration,
-          coordinator: prepare.coordinator,
+          relocation: identity.relocation,
+          targetAttemptGeneration: identity.targetAttemptGeneration,
+          coordinator: identity.coordinator,
           senderRole: 'source',
-          object: prepare.object,
+          object: identity.object,
+          payloadStage: stage,
           chunkOrdinal: ordinal,
           chunkData
         });
@@ -2240,6 +2449,44 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Restores the hidden object and its saved-work prefix before Ready. */
+  /**
+   * Finalizes the pre-prepare base buffer for one exact identity against the
+   * manifest's baseChecksumCrc32c and splits it back into per-participant
+   * base snapshots. A declared base with no buffered chunks, a mismatched
+   * identity or a checksum mismatch is data loss — the caller turns it into
+   * a target-side relocationFailed (command 53) reply with failureCode 35
+   * (spec 15 §5).
+   */
+  private resolveTargetBasePayloads(
+    stagingId: string,
+    request: ServiceMaintenanceRelocationPrepare
+  ): ReadonlyMap<string, Buffer> | undefined {
+    const pending = this.targetBaseBuffers.get(stagingId);
+    this.targetBaseBuffers.delete(stagingId);
+    if (request.baseChecksumCrc32c === 0) return undefined;
+    if (pending === undefined || pending.chunks.length === 0) {
+      throw new ServiceRelocationDataLostError(
+        `Relocation '${stagingId}' declared a base checksum but no base chunks arrived.`
+      );
+    }
+    const expectedFingerprint = stringifyWire({
+      coordinator: request.coordinator,
+      object: request.object
+    });
+    if (pending.fingerprint !== expectedFingerprint) {
+      throw new ServiceRelocationDataLostError(
+        `Relocation '${stagingId}' base chunks do not match the Prepare identity.`
+      );
+    }
+    const blob = Buffer.concat(pending.chunks);
+    if (crc32c(blob) !== request.baseChecksumCrc32c) {
+      throw new ServiceRelocationDataLostError(
+        `Relocation '${stagingId}' base snapshot failed its checksum.`
+      );
+    }
+    return decodeRelocationBaseBundle(blob);
+  }
+
   private async handlePrepareControl(
     meshName: string,
     stagingId: string,
@@ -2286,9 +2533,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // The directly transferred payload replaces the shared durable root: the
     // Restore starts only after every chunk arrived and the assembled bytes
     // matched the manifest checksum exactly once.
-    const payload = await pendingAssembly.assembly.payload();
+    let payload: Buffer;
+    try {
+      payload = await pendingAssembly.assembly.payload();
+    } catch (error) {
+      throw new ServiceRelocationDataLostError(String((error as Error)?.message ?? error));
+    }
     const envelope = decodeServiceRelocationEnvelope(payload);
     validatePrepareEnvelope(request, envelope);
+    const basePayloads = this.resolveTargetBasePayloads(stagingId, request);
     const reservation = await this.reserveTargetForPrepare(meshName, request, envelope, signal);
     const offer: TargetRelocationOffer = {
       prepare: request,
@@ -2296,7 +2549,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       authenticatedSourceNodeRid: String(sourceNodeRid),
       envelope,
       restoreDeadlineAtMs: Date.now() + RELOCATION_OPERATION_RETENTION_MS,
-      reservation
+      reservation,
+      ...(basePayloads === undefined ? {} : { basePayloads })
     };
     let stage: LocalStage | undefined;
     try {
@@ -2312,23 +2566,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw error;
     }
     return relocationReady(request);
-  }
-
-  private async rollbackTargetReadyDelivery(
-    stagingId: string,
-    submitError: unknown
-  ): Promise<void> {
-    const stage = this.targetStages.get(stagingId);
-    if (stage === undefined || stage.phase !== 'ready' || stage.finalize !== undefined) return;
-    this.targetStages.delete(stagingId);
-    try {
-      await this.abortTargetStage(stage);
-    } catch (rollbackError) {
-      throw new AggregateError(
-        [submitError, rollbackError],
-        'Relocation Ready delivery and target rollback both failed.'
-      );
-    }
   }
 
   private armTargetCutoverFallback(meshName: string, stagingId: string): void {
@@ -3352,7 +3589,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       target,
       value => ({ value } as ZLinkAuthorityKey)
     );
-    const staging = await owner.prepare(offer.envelope, signal);
+    const staging = await owner.prepare(offer.envelope, signal, offer.basePayloads);
     if (staging.id !== `${offer.envelope.aggregateId}:${offer.envelope.aggregateGeneration}`) {
       throw new Error('Relocation materialization returned a different staging identity.');
     }
@@ -3447,12 +3684,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (policy.kind === 'recreate') return Buffer.alloc(0);
     const adapter = preSeal?.adapter
       ?? await this.createRelocationAdapter(policy.adapterType!);
-    const captured = await captureRelocationAdapterState(
-      adapter as ZLinkRelocationStateAdapterLike<T>,
-      value,
-      preSeal?.base,
-      signal ?? new AbortController().signal
-    );
+    // When a pre-seal base was already captured, its bytes travel separately
+    // as wire base-stage chunks (spec 15 §5): only the delta is captured
+    // here and placed in the envelope's applicationState. Without a pre-seal
+    // base, the adapter's whole capture (which self-bundles base/delta when
+    // it has that capability) is used, unchanged.
+    const captured = preSeal !== undefined
+      ? Buffer.from(await (adapter as ZLinkRelocationStateAdapterLike<T>).captureDelta!(
+          value,
+          signal ?? new AbortController().signal
+        ))
+      : await captureRelocationAdapterState(
+          adapter as ZLinkRelocationStateAdapterLike<T>,
+          value,
+          undefined,
+          signal ?? new AbortController().signal
+        );
     if (captured.byteLength > RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES) {
       throw new ZLinkRelocationStateIncompatibleError(
         'Relocation application state exceeds the 64 MiB participant limit.'
@@ -3679,7 +3926,8 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   async restoreApplicationState(
     hidden: LocalHidden,
     payload: Uint8Array,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    basePayload?: Uint8Array
   ): Promise<void> {
     const registration = this.registration(hidden.participant.objectKind, hidden.participant.stableType);
     if (registration.relocation.kind === 'recreate') {
@@ -3693,14 +3941,27 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       registration.relocation.adapterType,
       this.options.providerResolver
     ) as ZLinkActorRelocationAdapter<ZLinkActor> | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
-    // Base/delta payloads restore with restoreBase then applyDelta; an
-    // applyDelta failure discards this staged instance through the stage
-    // abort — a partially applied instance is never published.
+    const instance = (hidden.actor ?? hidden.activation?.spot) as never;
+    // A wire-verified base snapshot arrives separately from the delta
+    // manifest; re-frame the two into the same base/delta envelope the
+    // adapter understands before restoring (spec 15 §5).
+    const framedPayload = basePayload === undefined
+      ? payload
+      : encodeRelocationBaseDeltaState(basePayload, payload);
+    // Base/delta payloads restore with restoreBase then applyDelta. An
+    // applyDelta failure discards the partially applied instance and retries
+    // once from restoreBase before propagating an explicit failure, which
+    // the stage abort turns into command 53 relocationFailed — a partially
+    // applied instance is never published.
     await restoreRelocationAdapterState(
       adapter as ZLinkRelocationStateAdapterLike<unknown>,
-      (hidden.actor ?? hidden.activation?.spot) as never,
-      payload,
-      signal ?? new AbortController().signal
+      instance,
+      framedPayload,
+      signal ?? new AbortController().signal,
+      // The port does not expose instance replacement, so the retry reruns
+      // restoreBase/applyDelta on the same staged instance rather than a
+      // brand-new object; restoreBase is expected to fully overwrite it.
+      () => Promise.resolve(instance)
     );
   }
 
@@ -4266,6 +4527,38 @@ function wireIdText(value: { readonly high: bigint; readonly low: bigint }): str
   return `${value.high}:${value.low}`;
 }
 
+/** Collects the pre-seal base snapshots that were actually captured, keyed by authority key. */
+function preSealBaseMap(
+  spotKey: string | undefined,
+  spotPreSeal: { readonly base: Uint8Array } | undefined,
+  actorPreSeals: ReadonlyArray<readonly [string, { readonly base: Uint8Array } | undefined]>
+): ReadonlyMap<string, Uint8Array> {
+  const map = new Map<string, Uint8Array>();
+  if (spotKey !== undefined && spotPreSeal !== undefined) map.set(spotKey, spotPreSeal.base);
+  for (const [key, preSeal] of actorPreSeals) {
+    if (preSeal !== undefined) map.set(key, preSeal.base);
+  }
+  return map;
+}
+
+/** Wire failureCode for a chunk-assembly or checksum-verification failure (spec 15 §4). */
+const RELOCATION_DATA_LOST_FAILURE_CODE = 35;
+/** Wire failureCode for a factory/restore/staging internal failure (spec 15 §4). */
+const RELOCATION_INTERNAL_FAILURE_CODE = 17;
+
+/**
+ * Tags a target-side restore failure as data loss (chunk assembly or
+ * checksum verification) so relocationFailed reports failureCode 35 rather
+ * than the generic internal-failure code (spec 15 §4).
+ */
+class ServiceRelocationDataLostError extends Error {}
+
+function relocationFailedFailureCode(error: unknown): number {
+  return error instanceof ServiceRelocationDataLostError
+    ? RELOCATION_DATA_LOST_FAILURE_CODE
+    : RELOCATION_INTERNAL_FAILURE_CODE;
+}
+
 function relocationStagingId(value: {
   readonly relocation: { readonly high: bigint; readonly low: bigint };
   readonly targetAttemptGeneration: bigint;
@@ -4335,6 +4628,22 @@ function relocationReady(
     target: request.target,
     object: request.object,
     senderRole: 'target'
+  };
+}
+
+function relocationFailed(
+  request: ServiceMaintenanceRelocationPrepare,
+  failureCode: number
+): ServiceMaintenanceRelocationFailed {
+  return {
+    kind: 'failed',
+    relocation: request.relocation,
+    targetAttemptGeneration: request.targetAttemptGeneration,
+    coordinator: request.coordinator,
+    target: request.target,
+    object: request.object,
+    senderRole: 'target',
+    failureCode
   };
 }
 

@@ -107,6 +107,12 @@ const MAX_DRAIN_RECORDS = 64;
 const MESH_BACKEND_POLL_INTERVAL_MS = 1;
 const MESH_RECEIVE_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
 const MESH_RECEIVE_BATCH_TIME_LIMIT_MS = 2;
+/**
+ * Conservative Actor Join admission cap for relocation state chunks (spec 15
+ * §4.2): a stable lower bound safe on any deployment, never lowered on
+ * recompute. Matches the source's own conservative chunk floor.
+ */
+const ACTOR_JOIN_ADVERTISED_RECEIVE_CHUNK_LIMIT_BYTES = 32 * 1024;
 
 class ZLinkMeshReceiveBatchBudget {
   private readonly peerMessages = new Map<string, number>();
@@ -2162,7 +2168,13 @@ function decodeStatefulRecord(
           kind: 'actorJoin',
           joinResult: joinResult === 0 ? 0 : 1,
           spot: stateful.targetSpot,
-          ...(membershipEpoch === undefined ? {} : { membershipEpoch })
+          ...(membershipEpoch === undefined ? {} : { membershipEpoch }),
+          // Spec 15 §4.2: the accepted admission reply carries the target's
+          // valid receive chunk cap for this join's relocation state chunks —
+          // a conservative, recompute-stable bound (never lowered).
+          ...(joinResult === 0
+            ? { receiveChunkLimitBytes: ACTOR_JOIN_ADVERTISED_RECEIVE_CHUNK_LIMIT_BYTES }
+            : {})
         }
       );
       return accepted ? SubmitResult.Ok : SubmitResult.InvalidState;

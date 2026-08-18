@@ -1023,6 +1023,35 @@ test('exact ActorJoin Prepare can restore again and arm fallback only after READ
   }
 });
 
+test('an undelivered READY expires and cleans up the retained target stage exactly once', async () => {
+  // Spec 28 §9 / finding F3: a Ready that never delivers is bounded by the
+  // Restore validity window (300,000ms), not held forever.
+  const originalSetTimeout = globalThis.setTimeout;
+  let expiryArmed = 0;
+  globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+    if (delay === 300_000) {
+      expiryArmed += 1;
+      return originalSetTimeout(callback, 0, ...args);
+    }
+    return originalSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout;
+  const harness = createActorJoinHostHarness({ readyResult: SubmitResult.NotConnected });
+  const relocatePromise = harness.relocate();
+  relocatePromise.catch(() => undefined);
+  try {
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
+    assert.ok(expiryArmed >= 1, 'the Ready delivery must arm the Restore-validity expiry timer');
+    assert.equal(
+      harness.targetStageCount(),
+      0,
+      'the expired Ready must clean up the retained target stage exactly once'
+    );
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    await harness.dispose();
+  }
+});
+
 test('ActorJoin source profile reaches the existing Message Follow terminal after leave submit failure', async () => {
   const harness = createActorJoinHostHarness({
     sourceLeaveResult: SubmitResult.NotConnected
