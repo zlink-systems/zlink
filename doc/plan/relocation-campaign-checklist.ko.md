@@ -83,10 +83,11 @@
       부재(sha256 d3f1f8b3ab…, 로그 20260819-062437-2768634). 환경 가설 기각 —
       **순서 경합 의심**(source_cleanup이 leave 명령 dispatch보다 먼저 정리하는
       fire-and-forget 창; 스케줄링 프로파일에 따라 항상 이기거나 항상 짐).
-      **근본 원인 확정: OnLeave 전송이 source Entry Spot을 mesh spot 라우팅으로
-      해석→not_found(3번째 entry-spot 주소성 갭). 판정: node 레벨 알림(send_to_node
-      패턴)으로 수정 — 진행 중. 완료 순서 race는 b55ebf12d9로 선랜딩(정직 표기:
-      전송 수정 전엔 ST-B1 미검증)** [발견 2026-08-19]
+      **수정 완료 `4437f886a8`**: OnLeave를 node 레벨 알림으로(3번째 entry-spot
+      주소성 갭 해소, exactly-once 테스트) + [H] cold-probe relay 3/4 identity 보존
+      (deadline은 30s 관례 — 절대기한 전달 메커니즘 부재, D급 후속 기록).
+      [C] reconcile 3분기(store 조회 기반)는 spot_id 조기 캡처 판정으로 진행 중
+      [발견·해소 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
