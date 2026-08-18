@@ -56,6 +56,12 @@
       실배선 통합 테스트 + 부정 테스트) [D에서 승격 2026-08-19]
 - [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
       포함) [D에서 승격 2026-08-19]
+- [ ] **[C] SIGFPE 크래시 수정**: actor Join relocation 시 소스 노드 크래시 —
+      moved-from unordered_map<string,optional<message_t>> emplace(bucket_count 0),
+      spot_runtime.cpp:3596 완료 경로 × task.hpp:259 continuation 경합, 간헐(2/4).
+      라이브 repro 확보(e2e 에이전트), terra 심층 조사 진행 중 [발견 2026-08-19]
+- [ ] cpp preset 빌드 디렉토리(linux-ninja-vcpkg-debug) 재생성: 손상 →
+      VCPKG_ROOT=/mnt/d/tools/vcpkg 완주 재설치 (e2e 에이전트 실행 중)
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
