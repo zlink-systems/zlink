@@ -116,11 +116,21 @@ public final class Program {
                 var mesh = bindEndpoint == null || bindEndpoint.isBlank()
                     ? options.addRouteMesh(channel).listen()
                     : options.addRouteMesh(channel).listen(bindEndpoint);
-                mesh.setRoutingId(
-                    RoutingId.from(args.option("node-rid", "java-spot-route-client")));
                 // RegistryMessaging e2e convention: every route mesh member
                 // exposes the channel server role, and peers connect by
-                // endpoint; the routing id is learned from admission.
+                // endpoint; the routing id is learned from admission. Tried
+                // switching to the connect(RoutingId, endpoint) overload
+                // (declaring the expected peer id up front, like the .NET
+                // spot-route-client TestHost mode) to see if it would also
+                // unblock Java<->Node/.NET admission -- it did not, and it
+                // regressed the previously-green Java<->C++ direction
+                // (stage_java_spot_route_client_cpp_host started failing
+                // with kind=unavailable "route is not connected"), so this
+                // stays a blind connect(endpoint). See the harness
+                // convergence report for the Java<->Node/.NET admission
+                // finding.
+                mesh.setRoutingId(
+                    RoutingId.from(args.option("node-rid", "java-spot-route-client")));
                 mesh.channelName(channel).server();
                 mesh.peerConnections().connect(args.require("server-endpoint"));
             }

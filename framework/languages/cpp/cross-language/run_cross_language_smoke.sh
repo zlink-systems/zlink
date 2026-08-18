@@ -39,7 +39,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -x "${CPP_HOST}" ]]; then
+# The java-cross stage exercises Java<->Node and Java<->.NET only -- it never
+# spawns the C++ host, so it does not require the C++ binary to be built.
+if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
   exit 1
@@ -557,13 +559,16 @@ stage_cpp_spot_route_client_node_host() {
 # --- spot-route wire: Node client -> C++ route host ---------------------------
 # Runs the full common scenario for real now that the reply tail dialect is
 # converged: (a) reply round trip, (b) framework not_found, (c) application
-# rejected. C++'s route-mesh reply carries no zlink.origin marker; where the
-# .NET client reports origin=application for that same marker-less reply (see
-# stage_dotnet_spot_route_client_cpp_host), the Node route surface leaves
-# `error.origin` undefined (node_peer_host.js errorOriginWireName) and both
-# failures are recorded as origin=none. That origin-classification difference
-# is a separate, pre-existing divergence from the reply tail dialect and is
-# asserted as observed rather than pinned.
+# rejected. C++'s route-mesh reply carries no zlink.origin marker for either
+# failure kind. Residual-convergence fix: the Node route surface's error
+# completion path (channel-envelope.ts decodeChannelError) now classifies
+# every error decoded from an actual remote reply as either "framework"
+# (marker present) or "application" (marker absent) -- it never leaves
+# `error.origin` unset for a reply that crossed the wire, matching .NET's
+# ZLinkErrorOriginWire.RemoteReplyOrigin (see
+# stage_dotnet_spot_route_client_cpp_host, which reports origin=application
+# against this same marker-less C++ reply). Both failures here are therefore
+# origin=application, not the previously observed origin=none.
 stage_node_spot_route_client_cpp_host() {
   local port bind_port endpoint events
   port="$(free_port)"
@@ -585,8 +590,8 @@ stage_node_spot_route_client_cpp_host() {
     --value node-to-cpp-spot
   wait_for_line "${RUN_DIR}/cpp-spotroute-host-node.events" "spot-route-server|node-to-cpp-spot|" 90
   wait_for_line "${events}" "spot-route-reply|node-to-cpp-spot|cpp" 60
-  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=none" 30
-  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=none" 30
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=application" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
   stop_all
   RESULTS+=("spot-route: Node client -> C++ host (reply + framework not_found + application rejected)")
 }
@@ -741,6 +746,150 @@ stage_cpp_spot_route_client_cpp_host() {
   RESULTS+=("spot-route: C++ client -> C++ host (reply + framework not_found + application rejected)")
 }
 
+# --- spot-route wire: Java client -> Node route host --------------------------
+# Same common (a)/(b)/(c) scenario as stage_cpp_spot_route_client_node_host,
+# with a Java client instead of a C++ one. Node's route-mesh reply carries no
+# zlink.origin marker for either failure kind (see the comment above
+# stage_cpp_spot_route_client_node_host); Java's client-side decoder
+# (Program.recordFailure) reports a framework exception with no
+# "zlink.origin"="framework" metadata entry as origin=application (not
+# "unspecified" -- that fallback only fires when no ZLinkFrameworkException was
+# attached at all, which does not happen for a decoded remote reply). Asserted
+# as observed.
+stage_java_spot_route_client_node_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/java-spotroute-client-node.events"
+  start_node node-spotroute-host-java spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --node-rid node-spot-route-java \
+    --event-file "${RUN_DIR}/node-spotroute-host-java.events"
+  wait_for_ready "${RUN_DIR}/node-spotroute-host-java.ready" 90
+  start_java java-spotroute-client-node spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --peer-rid node-spot-route-java \
+    --node-rid java-spot-route-client-node \
+    --event-file "${events}" \
+    --value java-to-node-spot
+  wait_for_line "${events}" "spot-route-reply|java-to-node-spot|node" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=application" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
+  stop_all
+  RESULTS+=("spot-route: Java client -> Node host (reply + framework not_found + application rejected)")
+}
+
+# --- spot-route wire: Node client -> Java route host ---------------------------
+# Same common (a)/(b)/(c) scenario as stage_cpp_spot_route_client_java_host,
+# with a Node client instead of a C++ one. Java's route-mesh reply carries no
+# zlink.origin marker for either failure kind (see the comment above
+# stage_cpp_spot_route_client_java_host); the Node route surface now
+# classifies every decoded remote-reply error as origin=application when
+# unmarked (see stage_node_spot_route_client_cpp_host) -- same result as
+# that stage facing the equally marker-less C++ host.
+stage_node_spot_route_client_java_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/node-spotroute-client-java.events"
+  start_java java-spotroute-host-node spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --node-rid java-spot-route-host-node \
+    --event-file "${RUN_DIR}/java-spotroute-host-node.events"
+  wait_for_ready "${RUN_DIR}/java-spotroute-host-node.ready" 90
+  start_node node-spotroute-client-java spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --bind-endpoint "tcp://127.0.0.1:${bind_port}" \
+    --peer-rid java-spot-route-host-node \
+    --event-file "${events}" \
+    --value node-to-java-spot
+  wait_for_line "${RUN_DIR}/java-spotroute-host-node.events" "spot-route-server|node-to-java-spot" 90
+  wait_for_line "${events}" "spot-route-reply|node-to-java-spot|java" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=application" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
+  stop_all
+  RESULTS+=("spot-route: Node client -> Java host (reply + framework not_found + application rejected)")
+}
+
+# --- spot-route wire: Java client -> .NET route host ---------------------------
+# Same common (a)/(b)/(c) scenario as stage_cpp_spot_route_client_dotnet_host,
+# with a Java client instead of a C++ one, against .NET's "route-server" mode
+# (fixed routing id "dotnet-route", ConfigureRouteServer in
+# TestHostScenarioConfigurator.cs -- the same mode the C++/.NET stage above
+# uses). Unlike a marker-less host, .NET's own missing-handler reply DOES
+# attach the zlink.origin=framework metadata entry
+# (ZLinkChannelRequestDispatchPipeline.cs sets Origin = ZLinkErrorOrigin.Framework
+# when no request handler is registered for the incoming packet), so Java's
+# decoder reports origin=framework for (b). The application-thrown rejected
+# exception in (c) carries no such metadata, so Java reports origin=application
+# there, same as every other marker-less direction. Asserted as observed.
+stage_java_spot_route_client_dotnet_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/java-spotroute-client-dotnet.events"
+  start_dotnet dotnet-spotroute-host-java route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/dotnet-spotroute-host-java.events"
+  wait_for_ready "${RUN_DIR}/dotnet-spotroute-host-java.ready" 180
+  start_java java-spotroute-client-dotnet spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --peer-rid dotnet-route \
+    --node-rid java-spot-route-client-dotnet \
+    --event-file "${events}" \
+    --value java-to-dotnet-spot
+  wait_for_line "${events}" "spot-route-reply|java-to-dotnet-spot|dotnet" 90
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=framework" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
+  stop_all
+  RESULTS+=("spot-route: Java client -> .NET host (reply + framework not_found[marker] + application rejected)")
+}
+
+# --- spot-route wire: .NET client -> Java route host ---------------------------
+# Same common (a)/(b)/(c) scenario as stage_dotnet_spot_route_client_cpp_host,
+# against a Java "spot-route-server" host instead of a C++ one. Java's
+# route-mesh reply carries no zlink.origin marker for either failure kind (see
+# the comment above stage_cpp_spot_route_client_java_host); .NET's client-side
+# decode (ZLinkErrorOriginWire.RemoteReplyOrigin) always classifies a decoded
+# remote-reply error as either Framework (marker present) or Application
+# (marker absent) -- it never leaves Origin unset for a reply that actually
+# crossed the wire -- so both failures read origin=application here, same as
+# stage_dotnet_spot_route_client_cpp_host facing the equally marker-less C++
+# host. Asserted as observed.
+stage_dotnet_spot_route_client_java_host() {
+  local port endpoint events
+  port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/dotnet-spotroute-client-java.events"
+  start_java java-spotroute-host-dotnet spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --node-rid java-spot-route-host-dotnet \
+    --event-file "${RUN_DIR}/java-spotroute-host-dotnet.events"
+  wait_for_ready "${RUN_DIR}/java-spotroute-host-dotnet.ready" 90
+  start_dotnet dotnet-spotroute-client-java spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --peer-rid java-spot-route-host-dotnet \
+    --event-file "${events}" \
+    --publish-value dotnet-to-java-spot
+  wait_for_line "${RUN_DIR}/java-spotroute-host-dotnet.events" "spot-route-server|dotnet-to-java-spot" 90
+  wait_for_line "${events}" "spot-route-reply|dotnet-to-java-spot|java" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=application" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
+  stop_all
+  RESULTS+=("spot-route: .NET client -> Java host (reply + framework not_found + application rejected)")
+}
+
 run_spot_route_stages() {
   stage_cpp_spot_route_client_dotnet_host
   stage_dotnet_spot_route_client_cpp_host
@@ -749,6 +898,13 @@ run_spot_route_stages() {
   stage_java_spot_route_client_cpp_host
   stage_cpp_spot_route_client_java_host
   stage_cpp_spot_route_client_cpp_host
+}
+
+run_java_cross_stages() {
+  stage_java_spot_route_client_node_host
+  stage_node_spot_route_client_java_host
+  stage_java_spot_route_client_dotnet_host
+  stage_dotnet_spot_route_client_java_host
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
@@ -763,6 +919,14 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=spot-route result=passed"
+    exit 0
+    ;;
+  java-cross)
+    run_java_cross_stages
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=java-cross result=passed"
     exit 0
     ;;
   all)
