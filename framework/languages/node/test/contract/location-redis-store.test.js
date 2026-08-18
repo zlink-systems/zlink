@@ -1,14 +1,28 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
+const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
-const { createClient } = require('redis');
+const { createClient, RESP_TYPES } = require('redis');
 const framework = require('../../packages/framework/dist');
 const redisLocations = require('../../packages/framework-locations-redis/dist');
 const frameworkInternal = require('../../packages/framework/dist/internal');
 const {
+  decodeAuthorityKey,
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+
+// Mirrors location-store-repository.ts's authorityKey(): the public opaque
+// record preimage is `authority\0{actor|spot}\0{Id}`
+// (21-location-runtime.md#2.4) -- Entry/User/Instance spot kinds share the
+// "spot" segment, so this test probes the row under the same logical key
+// the repository writes to.
+function authorityPreimage(authorityKey) {
+  const decoded = decodeAuthorityKey(authorityKey);
+  const segment = decoded.kind === 'actor' ? 'actor' : 'spot';
+  return `authority\0${segment}\0${decoded.globalId}`;
+}
 
 test('redis provider exports only the two opaque Store implementations', () => {
   assert.deepEqual(
@@ -165,7 +179,7 @@ test('redis opaque Location Store enforces TTL and fixed scan snapshots', async 
 
     const expired = await store.scan({
       prefix: 'scan/',
-      cursor: cursor('00000000-0000-0000-0000-000000000000:0'),
+      cursor: cursor('00000000-0000-0000-0000-000000000000:'),
       limit: 10
     });
     assert.deepEqual(expired, { kind: 'expired' });
@@ -444,9 +458,7 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     assert.equal(retained.ownerId, sourceOwner.token.ownerId);
     assert.equal(retained.storeVersion.value, abortSnapshot.storeVersion.value);
     const retainedRow = await providerA.read({
-      value: `zlink:v11:authority:${
-        encodeURIComponent(abortRequest.participants[0].authorityKey.value)
-      }`
+      value: authorityPreimage(abortRequest.participants[0].authorityKey)
     });
     assert.equal(retainedRow.kind, 'found');
     if (retainedRow.kind === 'found') {
@@ -563,6 +575,78 @@ test('redis Store validates exact public bounds', async () => {
   );
   await assert.rejects(location.scan({ prefix: '', limit: 0 }), /1..1000/);
   await location.dispose();
+});
+
+test('redis opaque Location Store production write path reproduces the golden authority record byte-for-byte', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const golden = JSON.parse(fs.readFileSync(
+    path.join(
+      __dirname, '..', '..', '..', '..',
+      'runtime', 'protocol', 'golden', 'store-record-v1.json'
+    ),
+    'utf8'
+  ));
+  const vector = golden.valueVectors.genericOpaqueRecord.find(
+    item => item.name === 'authority-actor-normal'
+  );
+  assert.ok(vector);
+  const keyEntry = golden.keyDerivation.find(item => item.record === 'authority-actor');
+  assert.ok(keyEntry);
+
+  const prefix = testPrefix('golden-conformance');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  try {
+    const target = key('authority\0actor\0user:42');
+    const jsonBytes = Buffer.from(vector.jsonBytesHex, 'hex');
+    assert.equal(jsonBytes.toString('utf8').length > 0, true);
+
+    // Drive the sequence counter (the ZSET score and `version`) to the
+    // fixture's exact value (9) through the real write() path -- the
+    // fixture's version numbers are provider sequence values, not
+    // caller-supplied identifiers, so this is the only way to reproduce
+    // them byte-for-byte from production code rather than poking Redis
+    // directly.
+    for (let index = 0; index < 8; index++) {
+      const padKey = key(`golden-conformance-pad-${index}`);
+      const result = await store.write({
+        conditions: [{ kind: 'missing', key: padKey }],
+        mutations: [{ kind: 'put', key: padKey, bytes: Buffer.from('pad') }]
+      });
+      assert.equal(result.kind, 'applied');
+    }
+
+    const written = await store.write({
+      conditions: [{ kind: 'missing', key: target }],
+      mutations: [{ kind: 'put', key: target, bytes: jsonBytes }]
+    });
+    assert.equal(written.kind, 'applied');
+    assert.equal(written.putVersions[0].version.value, vector.version);
+
+    // {prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}
+    // (21-location-runtime.md#2.4, 22-location-store-redis.md#7).
+    const digest = createHash('sha256').update(target.value, 'utf8').digest('hex');
+    assert.equal(digest, keyEntry.sha256Hex);
+    const rowKey = `${prefix}:{zlink-location-v3}:opaque:${digest}`;
+
+    const members = await fixture.client.sendCommand(
+      ['ZREVRANGE', rowKey, '0', '0'],
+      { typeMapping: { [RESP_TYPES.BLOB_STRING]: Buffer } }
+    );
+    assert.equal(members.length, 1);
+    const stored = Buffer.from(members[0]);
+    assert.equal(stored.toString('hex'), vector.fullValueHex);
+
+    const read = await store.read(target);
+    assert.equal(read.kind, 'found');
+    assert.equal(Buffer.from(read.value.bytes).toString('hex'), vector.jsonBytesHex);
+    assert.equal(read.value.version.value, vector.version);
+    assert.equal(read.value.expiresAt, undefined);
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
 });
 
 function aggregateDescriptor(target, limit) {

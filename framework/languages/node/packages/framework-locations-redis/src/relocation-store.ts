@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type {
   ZLinkBlobPutResult,
   ZLinkBlobReadResult,
@@ -24,7 +23,10 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
 
   constructor(options: ZLinkRedisRelocationOptions) {
     this.connection = new RedisConnection(options);
-    this.domain = `${options.keyPrefix}:{zlink-relocation-opaque-v1}`;
+    // {prefix}:{zlink-relocation-v1}:blob:{reference}
+    // (23-relocation-store-redis.md#8). Braced for Redis Cluster hash-tag
+    // co-location, matching the dotnet/java reference.
+    this.domain = `${options.keyPrefix}:{zlink-relocation-v1}`;
   }
 
   async put(
@@ -39,7 +41,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     const result = asArray(await this.connection.eval(
       BLOB_PUT_SCRIPT,
       [this.blobKey(referenceValue)],
-      [referenceValue, Buffer.from(payload), String(retention)],
+      [Buffer.from(payload), String(retention)],
       signal
     ));
     const kind = asString(result[0]);
@@ -60,7 +62,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     const result = asArray(await this.connection.eval(
       BLOB_READ_SCRIPT,
       [this.blobKey(referenceValue)],
-      [referenceValue],
+      [],
       signal
     ));
     const storeNow = fromUnixMs(toNumber(result[1]));
@@ -83,7 +85,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
     const result = asArray(await this.connection.eval(
       BLOB_RENEW_SCRIPT,
       [this.blobKey(referenceValue)],
-      [referenceValue, String(retention)],
+      [String(retention)],
       signal
     ));
     const storeNow = fromUnixMs(toNumber(result[1]));
@@ -108,7 +110,7 @@ export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
   }
 
   private blobKey(reference: string): string {
-    return `${this.domain}:blob:${digest(reference)}`;
+    return `${this.domain}:blob:${reference}`;
   }
 }
 
@@ -138,10 +140,6 @@ function asBuffer(value: unknown): Buffer {
   if (Buffer.isBuffer(value)) return Buffer.from(value);
   if (value instanceof Uint8Array) return Buffer.from(value);
   return Buffer.from(asString(value), 'utf8');
-}
-
-function digest(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 function fromUnixMs(value: number): Date {

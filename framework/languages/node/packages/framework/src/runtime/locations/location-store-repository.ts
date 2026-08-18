@@ -76,6 +76,8 @@ import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { storeKey } from './in-memory-provider-location-store';
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
+import type { RoutingId } from '../../contracts/Common/CoreTypes';
+import { encodeRoutingIdStorageHex } from '../routing-id';
 
 const PREFIX = 'zlink:v11:';
 const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
@@ -202,7 +204,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       throw new RangeError('Authority scan limit must be in 1..1000.');
     }
     const scan = await this.provider.scan({
-      prefix: `${PREFIX}authority:${encodeURIComponent(prefix)}`,
+      prefix: AUTHORITY_PREIMAGE_PREFIX,
       cursor: cursor === undefined
         ? undefined
         : ({ value: cursor.encoded } as ZLinkStoreScanCursor),
@@ -211,9 +213,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (scan.kind === 'expired') return { kind: 'scanExpired' };
     const items = [];
     for (const item of scan.value.items) {
-      const encodedKey = decodeURIComponent(
-        item.key.value.slice(`${PREFIX}authority:`.length)
-      );
+      const encodedKey = authorityContractValueFromPreimage(item.key.value);
+      if (!encodedKey.startsWith(prefix)) continue;
       const snapshot = await this.projectAuthority(
         decodeJson<AuthorityRecord>(item.value.bytes),
         item.value.version,
@@ -275,8 +276,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         }
         const descriptorKey = meshKey(
           record.snapshot.allocation.descriptor.meshName,
-          String(record.snapshot.allocation.descriptor.rid)
-        );
+          record.snapshot.allocation.descriptor.rid
+      );
         const [descriptorRead, targetLeaseRead] = await Promise.all([
           this.provider.read(descriptorKey, signal),
           this.provider.read(ownerKey(mutation.targetOwner.ownerId), signal)
@@ -493,12 +494,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
       const targetDescriptorKey = meshKey(
         request.targetDescriptor.meshName,
-        String(request.targetDescriptor.rid)
+        request.targetDescriptor.rid
       );
       const targetLeaseKey = ownerKey(request.targetOwner.ownerId);
       const targetCapacityKey = capacityKey(
         request.targetDescriptor.meshName,
-        String(request.targetDescriptor.rid)
+        request.targetDescriptor.rid
       );
       const [
         descriptorRead,
@@ -750,7 +751,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
     const targetDescriptorKey = meshKey(
       aggregate.targetDescriptor.meshName,
-      String(aggregate.targetDescriptor.rid)
+      aggregate.targetDescriptor.rid
     );
     const targetLeaseKey = ownerKey(aggregate.targetOwner.ownerId);
     const targetCapacityKey = capacityKey(
@@ -915,7 +916,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     for (;;) {
       signal?.throwIfAborted();
       const rowKey = authorityKey(encodedAuthorityKey.value);
-      const descriptorKey = meshKey(request.target.meshName, String(request.target.nodeRid));
+      const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
       const capacityRowKey = capacityKey(
         request.target.meshName,
@@ -1056,9 +1057,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       ) {
         return { kind: 'stale' };
       }
-      const descriptorKey = meshKey(request.target.meshName, String(request.target.nodeRid));
+      const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
-      const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
+      const capacityRowKey = capacityKey(request.target.meshName, request.target.nodeRid);
       const [descriptorRead, leaseRead, capacityRead] = await Promise.all([
         this.provider.read(descriptorKey, signal),
         this.provider.read(leaseKey, signal),
@@ -1207,9 +1208,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       ) {
         return { kind: 'stale' };
       }
-      const descriptorKey = meshKey(request.target.meshName, String(request.target.nodeRid));
+      const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
-      const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
+      const capacityRowKey = capacityKey(request.target.meshName, request.target.nodeRid);
       const [descriptorRead, leaseRead, capacityRead] = await Promise.all([
         this.provider.read(descriptorKey, signal),
         this.provider.read(leaseKey, signal),
@@ -1455,7 +1456,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     const leaseKey = ownerKey(descriptor.ownerId);
-    const rowKey = meshKey(descriptor.meshName, String(descriptor.rid));
+    const rowKey = meshKey(descriptor.meshName, descriptor.rid);
     const [lease, current] = await Promise.all([
       this.provider.read(leaseKey, signal),
       this.provider.read(rowKey, signal)
@@ -1525,7 +1526,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
-    const rowKey = meshKey(key.meshName, String(key.rid));
+    const rowKey = meshKey(key.meshName, key.rid);
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return WriteStatus.IgnoredStale;
     const descriptor = reviveMeshDescriptor(decodeJson<MeshRecord>(current.value.bytes).descriptor);
@@ -1611,7 +1612,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       serverRid: String(descriptor.serverRid)
     });
     return this.updateDescriptor(
-      clientServerKey(normalized.channelName, String(normalized.serverRid)),
+      clientServerKey(normalized.channelName, normalized.serverRid),
       normalized,
       intent,
       reviveClientServerDescriptor,
@@ -1627,7 +1628,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
     return this.removeDescriptor(
-      clientServerKey(key.channelName, String(key.serverRid)),
+      clientServerKey(key.channelName, key.serverRid),
       owner,
       reviveClientServerDescriptor,
       signal
@@ -1658,7 +1659,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       publisherRid: String(descriptor.publisherRid)
     });
     return this.updateDescriptor(
-      fanoutKey(normalized.channelName, String(normalized.publisherRid)),
+      fanoutKey(normalized.channelName, normalized.publisherRid),
       normalized,
       intent,
       reviveFanoutDescriptor,
@@ -1674,7 +1675,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
     return this.removeDescriptor(
-      fanoutKey(key.channelName, String(key.publisherRid)),
+      fanoutKey(key.channelName, key.publisherRid),
       owner,
       reviveFanoutDescriptor,
       signal
@@ -1905,9 +1906,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     let removed = await this.removeOwnedAuthorities(owner, signal);
     const candidates: OwnerCleanupCandidate[] = [];
     for (const prefix of [
-      `${PREFIX}mesh:`,
-      `${PREFIX}client-server:`,
-      `${PREFIX}fanout:`,
+      'mesh-node\0',
+      'client-server\0',
+      'fanout-publisher\0',
       `${PREFIX}spot:`,
       `${PREFIX}actor:`,
       `${PREFIX}route:`
@@ -1959,7 +1960,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       let expired = false;
       do {
         const result = await this.provider.scan({
-          prefix: `${PREFIX}authority:`,
+          prefix: AUTHORITY_PREIMAGE_PREFIX,
           cursor,
           limit: 1_000
         }, signal);
@@ -1992,9 +1993,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         || record.snapshot.ownerLeaseGeneration !== owner.leaseGeneration
         || record.aggregate !== undefined
       ) continue;
-      const encodedAuthority = decodeURIComponent(
-        candidate.key.value.slice(`${PREFIX}authority:`.length)
-      );
+      const encodedAuthority = authorityContractValueFromPreimage(candidate.key.value);
       const identity = decodeAuthorityKey({ value: encodedAuthority } as ZLinkAuthorityKey);
       if (record.snapshot.allocation.state === 'active') {
         const result = await this.compareExchangeAuthority(
@@ -2586,7 +2585,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     let cursor: ZLinkStoreScanCursor | undefined;
     for (;;) {
       const result = await this.provider.scan({
-        prefix: `${PREFIX}authority:`,
+        prefix: AUTHORITY_PREIMAGE_PREFIX,
         cursor,
         limit: 1_000
       }, signal);
@@ -2921,12 +2920,53 @@ function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+// Logical key preimages (21-location-runtime.md#2.4). Values are joined with
+// literal NUL bytes -- the same scheme the opaque record store hashes with
+// SHA-256 to derive the Redis key -- so a runtime in one language can read a
+// record another language wrote. Not used for framework-internal-only rows
+// (aggregate/capacity/creation-terminal/spot/actor/route), which stay on the
+// legacy PREFIX scheme since they aren't part of the public opaque contract.
 function ownerKey(ownerId: string) {
-  return storeKey(`${PREFIX}owner:${encodeURIComponent(ownerId)}`);
+  return storeKey(`owner-lease\0${requireNoNul(ownerId, 'OwnerId')}`);
 }
 
+const AUTHORITY_PREIMAGE_PREFIX = 'authority\0';
+
 function authorityKey(value: string) {
-  return storeKey(`${PREFIX}authority:${encodeURIComponent(value)}`);
+  return storeKey(authorityPreimage(value));
+}
+
+function authorityPreimage(value: string): string {
+  const decoded = decodeAuthorityKey({ value } as ZLinkAuthorityKey);
+  // §2.3: Entry|User|Instance Spot kinds share one segment ("spot") -- one
+  // Id has exactly one authority row regardless of spot kind.
+  const segment = decoded.kind === 'actor' ? 'actor' : 'spot';
+  return `${AUTHORITY_PREIMAGE_PREFIX}${segment}\0${requireNoNul(decoded.globalId, 'Authority Id')}`;
+}
+
+// Reverses authorityPreimage(): recovers the framework-internal zla1-encoded
+// ZLinkAuthorityKey contract value from a scanned opaque record's logical
+// key. Used by the authority list/cleanup scans below, which see raw
+// preimages (authority\0actor\0{id} | authority\0spot\0{id}) and must hand
+// callers back the same encodeAuthorityKey() representation authorityKey()
+// was given.
+function authorityContractValueFromPreimage(logicalKey: string): string {
+  if (!logicalKey.startsWith(AUTHORITY_PREIMAGE_PREFIX)) {
+    throw new Error('Authority scan returned a non-authority logical key.');
+  }
+  const rest = logicalKey.slice(AUTHORITY_PREIMAGE_PREFIX.length);
+  const separator = rest.indexOf('\0');
+  if (separator < 0) throw new Error('Authority logical key preimage is malformed.');
+  const segment = rest.slice(0, separator);
+  const globalId = rest.slice(separator + 1);
+  return encodeAuthorityKey(segment === 'actor' ? 'actor' : 'user_spot', globalId).value;
+}
+
+function requireNoNul(value: string, name: string): string {
+  if (value.includes('\0')) {
+    throw new TypeError(`${name} must not contain a NUL byte.`);
+  }
+  return value;
 }
 
 function authorityContractKey(value: string): ZLinkAuthorityKey {
@@ -2991,27 +3031,33 @@ function creationTerminalKey(operation: ZLinkCreationOperationIdentity) {
 }
 
 function meshPrefix(meshName: string): string {
-  return `${PREFIX}mesh:${encodeURIComponent(meshName)}:`;
+  return `mesh-node\0${requireNoNul(meshName, 'MeshName')}\0`;
 }
 
-function meshKey(meshName: string, nodeRid: string) {
-  return storeKey(`${meshPrefix(meshName)}${encodeURIComponent(nodeRid)}`);
+function meshKey(meshName: string, nodeRid: RoutingId) {
+  return storeKey(`${meshPrefix(meshName)}${routingIdHexSegment(nodeRid)}`);
 }
 
 function clientServerPrefix(channelName: string): string {
-  return `${PREFIX}client-server:${encodeURIComponent(channelName)}:`;
+  return `client-server\0${requireNoNul(channelName, 'ChannelName')}\0`;
 }
 
-function clientServerKey(channelName: string, serverRid: string) {
-  return storeKey(`${clientServerPrefix(channelName)}${encodeURIComponent(serverRid)}`);
+function clientServerKey(channelName: string, serverRid: RoutingId) {
+  return storeKey(`${clientServerPrefix(channelName)}${routingIdHexSegment(serverRid)}`);
+}
+
+// {hex(RoutingId)}: lowercase hex of the RoutingId's raw bytes
+// (21-location-runtime.md#2.4).
+function routingIdHexSegment(rid: RoutingId): string {
+  return encodeRoutingIdStorageHex(rid).toLowerCase();
 }
 
 function fanoutPrefix(channelName: string): string {
-  return `${PREFIX}fanout:${encodeURIComponent(channelName)}:`;
+  return `fanout-publisher\0${requireNoNul(channelName, 'ChannelName')}\0`;
 }
 
-function fanoutKey(channelName: string, publisherRid: string) {
-  return storeKey(`${fanoutPrefix(channelName)}${encodeURIComponent(publisherRid)}`);
+function fanoutKey(channelName: string, publisherRid: RoutingId) {
+  return storeKey(`${fanoutPrefix(channelName)}${routingIdHexSegment(publisherRid)}`);
 }
 
 function spotKey(meshName: string, spotId: string) {
