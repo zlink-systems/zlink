@@ -20,11 +20,9 @@
 - [x] java 구현 제거 — `14de957df8`
 - [x] cpp 구현 제거 — `b2b1713927`
 - [x] dotnet 구현 제거 — `5d02ef66b1` (-1643줄)
-- [ ] **wire 원자 커밋**: schema에서 40 `baseChecksumCrc32c`·52 `payloadStage` 필드
-      제거 + golden 재계산 + validator self-test + 4언어 codec 동시 정리
-      (`TODO(schema-atomic)` 마커 추적) — 4언어 게이트를 모두 돌린 뒤 한 커밋
-- [ ] draft 파일 재삭제 (`spec/draft/relocation-interruption-improvements.ko.md` —
-      사용자 지시: 제거 완료 후)
+- [x] **wire 원자 커밋** — `20b914fcec`: schema 필드 2개+stage 타입 제거, self-test
+      239→234, golden 9/7→7/3 수기 재계산, 4언어 codec 정리, 4게이트 그린
+- [x] draft 파일 재삭제 완료 (2026-08-19 — untracked 복원본 제거, git 이력으로만 접근)
 
 ## B. 원 캠페인(M9) 잔여 검증 게이트
 
