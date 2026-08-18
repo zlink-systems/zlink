@@ -152,10 +152,12 @@
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
-- [ ] C-5 cpp actorJoin 발신 연산 신설 (service-wire cross-node join 요청/응답,
+- [ ] C-5 cpp actorJoin 발신 연산 신설 — 전문 에이전트의 spots/mesh 작업 랜딩 후
+      terra 투입 예정(파일 충돌 회피) (service-wire cross-node join 요청/응답,
       binary tail 탑재 — codec은 `7ed3992ccd`로 기구현, node 발신 경로 참조)
 - [ ] C-6 dotnet actorJoin 발신 연산 신설 (BeginJoin의 local-or-NotConnected 한계 해소,
-      codec은 `327b58a3d2`로 기구현)
+      codec은 `327b58a3d2`로 기구현) — **terra 투입(2026-08-19, 파일 소유권 분리:
+      Service/Host 계열 — dotnet C-4의 Locations와 비충돌)**
 - [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 (JoinEntrySpot 경로 우선,
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
@@ -178,6 +180,8 @@
       수동 해체, ToHex 정렬 comparer, HeldRecords O(N²), 중복 participant 스캔,
       codec 삼중 복사, LINQ 재해석 캐시
 - [ ] E-2 cpp complete_relocation_assembly 구조 분해 (등가성 테스트 선행 작성 후 분해)
+      — **terra 조기 투입(2026-08-19, public_host_runtime 단독 소유 확인 — C 완료
+      대기 불필요 판단, 사용자 병렬 확대 지시 반영)**
 - [ ] E-3 dotnet StageInboundSpotAggregateAsync participant-restore 추출
 - [ ] E-4 cpp aggregate 오케스트레이션 reason 전파 (task_t<bool> → 분류 전달)
 - [ ] E-5 E 단계 전체 sol 리뷰 + 전 게이트 재확인
