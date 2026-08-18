@@ -152,7 +152,13 @@ return the same `CompletionStage` as the Java contract. A separate
 suspending Spot adapter, `TState`, `stateContractId`, state class, or
 `ZLinkMessage` relocation surface isn't provided. A state-preservation
 factory uses `preserveStateWith(SpotAdapter::class.java)`, and the
-factory target and adapter type are validated before socket bind.
+factory target and adapter type are validated before socket bind. If the
+registered adapter class also implements Java's
+`ZLinkSpotBaseDeltaRelocationAdapter<TSpot>`, the optional base/delta
+capture capability
+(`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`) is registered
+along with it; if not, the existing `capture`/`restore` behavior is kept
+unchanged. A Kotlin-only suspending capability interface isn't added.
 
 A state-preserving whole User Spot relocation uses the Spot adapter for
 the Spot itself and an Actor adapter for each member Actor. A
@@ -160,9 +166,11 @@ state-preserving Instance Spot relocation uses the Spot adapter. The
 adapter isn't called for a same-node operation, `disableRelocation()`,
 or `recreateOnRelocation()`. The capture `ByteArray` has no
 relocation-adapter-specific size cap. The Java runtime copies it at
-completion and performs any required chunking under the registered
-Relocation Store's ordinary blob and whole-payload limits. The adapter
-owns the array until completion. Restore receives a fresh defensive copy per call and doesn't
+completion and splits the payload into chunks no larger than
+`relocationPayloadChunkLimitBytes`, transferring them directly over the
+source–target ordered mesh connection. Source memory is the restore
+origin, and the handoff payload isn't stored in the Relocation Store.
+The adapter owns the array until completion. Restore receives a fresh defensive copy per call and doesn't
 keep it after completion. An empty `ByteArray` is also a valid
 preserved state. The factory creates a fresh Spot instance per target
 attempt and doesn't reuse the source or a previous attempt's instance.

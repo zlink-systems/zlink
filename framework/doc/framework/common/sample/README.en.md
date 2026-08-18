@@ -211,10 +211,10 @@ default of within 1 second. Exceeding 1 second doesn't cancel or roll back the r
 detailed standard follows [Graceful Drain And Handoff §7.1](../spec/server/30-host-relocation-flow.en.md#71-service-interruption-time-target-per-relocation-unit).
 
 A SpotWide User Spot moves Spot state and member Actor state as a single relocation unit. Multiple
-Actor payloads aren't stored to or read from the Relocation Store sequentially — they're processed
-in parallel within a configured I/O concurrency and in-flight byte limit. The queue, accepted
-journal, and logical timer are stored by the Framework and restored at the target, keeping their
-order.
+Actor payloads don't pass through the Relocation Store — they're transferred directly from source
+to target, processed in parallel within the chunk limit and the in-flight payload budget. The
+queue, accepted journal, and logical timer are preserved by the Framework and restored at the
+target, keeping their order.
 
 Entry Spot and PerActor User Spot don't move Spot application state. The Framework prepares a
 stateless shell of the same SpotId at the target and moves Actors one at a time. The Application

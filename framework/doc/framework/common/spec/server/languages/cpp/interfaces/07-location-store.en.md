@@ -33,6 +33,10 @@ struct location_options_t {
     std::chrono::milliseconds route_cache_max_age{15000};
     std::chrono::milliseconds message_follow_duration{30000};
     std::chrono::milliseconds session_relocation_seal_timeout{3000};
+    std::chrono::milliseconds relocation_cutover_wait_timeout{1000};
+    std::uint64_t relocation_payload_chunk_limit_bytes{262144};
+    std::uint64_t relocation_in_flight_payload_budget_bytes{16777216};
+    std::uint64_t relocation_node_in_flight_payload_budget_bytes{0};
 };
 
 } // namespace zlink::framework
@@ -273,11 +277,16 @@ reconcile the storage result after a timeout or connection error by
 doing an exact read of the same reference. `retention` must be
 positive.
 
-One blob is at most 64 MiB. The Framework composes a logical relocation
-stream of at most 256 GiB using at most 4,096 chunks and an immutable
-root manifest. Checksum, root/chunk relationship, participant
-inventory, and relocation phase are owned by the Framework, and the
-provider doesn't interpret the payload.
+One blob is at most 64 MiB. The state/queue/timer handoff payload of
+Actor and Spot relocation doesn't pass through this Store — the
+Framework splits the payload in source memory into chunks and sends
+them directly over the source–target ordered mesh connection. The
+normal-execution responsibilities that remain in the Store are
+recording the first message and creation information of Instance Spot
+cold activation, and recording the reply payload and terminal result
+of pending requests that complete after relocation. Checksum and
+record encoding are owned by the Framework, and the provider doesn't
+interpret the payload.
 
 The input span the provider receives is valid only until the
 asynchronous operation ends. Ownership of the returned byte vector
@@ -505,3 +514,22 @@ Redis implementation details.
 `session_relocation_seal_timeout` is a startup-only positive millisecond duration with a
 3,000 ms default. Zero, negative, infinite, or out-of-range values are configuration errors
 before socket bind.
+
+## Relocation Transfer Options
+
+`relocation_cutover_wait_timeout` is a startup-only positive millisecond duration with a
+1,000 ms default. It is the time the target waits for cutover after the relay-ready reply,
+and it equals the time the source keeps the boundary batch retransmission copy. Zero,
+negative, infinite, or out-of-range values are configuration errors before socket bind.
+
+`relocation_payload_chunk_limit_bytes` is the size cap of one encoded chunk that a
+relocation payload is split into, with a 262,144-byte (256 KiB) default. Zero and values
+exceeding the transport-negotiated frame limit are configuration errors before socket
+bind.
+
+`relocation_in_flight_payload_budget_bytes` is the cap on the accounted byte sum of
+relocation chunks concurrently in flight for one peer connection, with a 16,777,216-byte
+(16 MiB) default. `relocation_node_in_flight_payload_budget_bytes` applies the same sum
+cap node-wide, with a default of 0. For both budgets, 0 means the budget isn't applied.
+All three size options are startup-only, and the runtime doesn't adjust them
+automatically.

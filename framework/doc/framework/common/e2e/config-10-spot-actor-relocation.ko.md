@@ -5,12 +5,14 @@
 # Config 10 — Spot actor join과 relocation
 
 Actor가 다른 Spot으로 Join하면 Framework는 Actor의 membership과 current location을 바꾸고, 다른 node로
-이동하는 경우 state와 아직 처리하지 않은 message도 target runtime으로 전달한다. Application은 source와
-target의 내부 전환 시점을 알거나 message를 다시 보낼 필요가 없다.
+이동하는 경우 state와 아직 처리하지 않은 message도 target runtime으로 전달한다. State handoff payload는
+source–target ordered mesh 연결로 chunk 단위(manifest와 CRC-32C checksum 포함) 직접 전송되며 Relocation
+Store를 경유하지 않는다. Application은 source와 target의 내부 전환 시점을 알거나 message를 다시 보낼
+필요가 없다.
 
 이 config는 이 동작을 public Join·Relocate·message·binding API로 검증한다. Location Store row, relocation
-payload, temporary queue와 내부 update packet은 직접 읽지 않는다. 대신 Join result, public Actor·Spot ref,
-Application lifecycle callback·handler evidence와 bound client가 받은 push를 확인한다.
+chunk·manifest·checksum 값, temporary queue와 내부 update packet은 직접 읽지 않는다. 대신 Join result,
+public Actor·Spot ref, Application lifecycle callback·handler evidence와 bound client가 받은 push를 확인한다.
 
 ## 1. 확인 범위
 
@@ -18,6 +20,7 @@ Application lifecycle callback·handler evidence와 bound client가 받은 push�
 - `PreserveStateWith`와 `RecreateOnRelocation` state 처리
 - 이동 중 수락된 request·send의 순서와 최대 한 번 처리
 - Failure가 발생했을 때 source Actor와 binding이 유지되는 조건
+- 직접 chunk 전송의 checksum 불일치와 exact identity conflict의 명시적 실패 결과
 - Actor relocation 뒤 bound Session의 route 갱신
 - Message Follow 기간의 이전 route message와 만료 뒤 결과
 - User Spot `PerActor`·`SpotWide` relocation과 execution turn 경계
@@ -35,7 +38,7 @@ operation을 결정한다.
 | Session gateway | 2 | Stream Session을 열고 Actor를 bind하여 relay와 push를 제공한다. |
 | Relocation caller | 1 | 역할 server의 public endpoint에서 Join·Relocate·Actor message를 호출한다. |
 | Location Store | 1 | Public Actor·Spot location 조회와 routing을 제공한다. |
-| Relocation Store | 1 | Framework가 relocation state를 보존할 때 사용한다. E2E는 내부 record를 읽지 않는다. |
+| Relocation Store | 1 | Instance Spot cold activation 기록과 relocation 뒤 pending request terminal 기록을 보존한다. State handoff payload는 저장하지 않는다. E2E는 내부 record를 읽지 않는다. |
 | Network proxy | 필요할 때 1 | 연결 지연·차단을 만들며 Framework message를 생성하지 않는다. |
 | E2E client | scenario별 | 역할 server endpoint와 Stream connector만 사용한다. |
 
@@ -93,13 +96,15 @@ Join 완료 전에는 source와 target이 같은 Actor message를 동시에 처�
 
 우선순위: `P0`
 
-다른 node로 이동하는 Actor는 adapter가 저장한 Application state를 target instance에 복원한다.
+다른 node로 이동하는 Actor는 adapter가 capture한 Application state를 source에서 target으로 직접 chunk
+전송하고, target이 checksum 검증을 마친 payload로 target instance에 복원한다.
 
-**검증 질문:** Remote Join 완료 뒤 target Actor가 source의 state version을 유지하는가.
+**검증 질문:** Remote Join 완료 뒤 target Actor가 chunk 전송·checksum 검증을 거쳐 복원된 source의 state
+version을 유지하는가.
 
 - 시작 조건: `PreserveStateWith` Actor가 node A에 있고 state version을 설정했다.
 - 절차: Node B의 User Spot으로 Join하고 success 뒤 state request를 보낸다.
-- 검증: Target factory·restore·`OnJoinedActor`와 source `OnLeaveActor`가 한 번씩 실행된다. Reply의 state version과 Actor identity는 이동 전과 같다.
+- 검증: Target factory·restore·`OnJoinedActor`와 source `OnLeaveActor`가 한 번씩 실행된다. Reply의 state version과 Actor identity는 이동 전과 같다. 복원 확인은 public reply로 판정하며 chunk나 checksum 값을 직접 읽지 않는다.
 - 계약 근거: [Spot actor](../spec/server/15-spot-actor.ko.md)
 
 #### ST-B2 Moving message ordering
@@ -185,6 +190,27 @@ Admission reject와 callback exception, timeout은 서로 다른 공개 결과�
 - 절차: 각 Actor의 Join을 한 번 호출하고 terminal 뒤 public Actor request를 보낸다.
 - 검증: Reject는 Rejected result를, exception과 timeout은 계약된 failure를 반환한다. 각 Actor request는 owner 한 곳에서 최대 한 번 처리된다.
 - 계약 근거: [Framework error model](../spec/server/32-framework-error-model.ko.md)
+
+#### ST-C4 직접 전송 integrity failure
+
+우선순위: `P0`
+
+직접 chunk 전송의 checksum 불일치는 재시도 없는 명시적 실패이며 target은 부분 조립 payload로 복원하지
+않는다. 같은 exact identity에 다른 길이나 checksum이 도착하면 기존 staging을 재사용하거나 덮어쓰지 않고
+명시적 conflict 실패로 끝난다. 이 하위 항목은 checksum 불일치 variant와 exact identity conflict variant가
+들어갈 자리다. 두 variant 모두 harness가 계약된 fault 주입 지점으로 실패를 만들고, 판정은 public
+terminal과 source 복원 결과만 사용한다.
+
+**검증 질문:** Checksum 불일치와 identity conflict가 각각 terminal failure 하나로 끝나고 source Actor가
+기존 state로 request를 계속 처리하는가.
+
+- 시작 조건: Checksum 불일치 variant와 exact identity conflict variant를 fresh Actor로 각각 준비한다.
+- 절차: 각 variant의 remote Join을 한 번 호출하고 terminal 뒤 source Actor에 state request를 보낸다.
+- 검증: 각 Join은 명시적 failure 하나로 끝나고 자동 재시도나 다른 target 재전송이 없다. Target에는
+  restore·`OnJoinedActor` evidence가 없고 source request는 기존 state를 반환한다. 부분 payload로 복원된
+  evidence는 어느 node에도 없다.
+- 계약 근거: [Spot actor](../spec/server/15-spot-actor.ko.md)와
+  [Framework error model](../spec/server/32-framework-error-model.ko.md)
 
 ### Track D — current location과 stale route
 
@@ -619,11 +645,14 @@ Handler가 Yield하거나 비동기 작업을 기다려도 Join completion과 �
 
 우선순위: `P1`
 
-Relocation payload와 이동 중 message 크기가 달라도 correctness 판정은 같아야 한다.
+Relocation payload와 이동 중 message 크기가 달라도 correctness 판정은 같아야 한다. Chunk 하나로 끝나는
+payload와 `RelocationPayloadChunkLimit`를 넘어 여러 chunk로 나뉘는 payload는 같은 owner 전환 결과와 실패
+규칙을 보인다.
 
 **검증 질문:** 정의한 payload size 구간에서 accepted operation이 유실·중복 없이 처리되는가.
 
-- 시작 조건: Small·medium·large state와 message fixture를 고정한다.
+- 시작 조건: Small·medium·large state와 message fixture를 고정한다. 구간에는 단일 chunk 이하 크기와 여러
+  chunk로 나뉘는 크기를 모두 포함한다.
 - 절차: 각 구간에서 같은 Actor 수와 message 수로 remote Join을 반복한다.
 - 검증: State checksum과 handler operation ID가 입력과 일치하고 각 ID는 한 번이다. Latency와 memory는 측정 결과로 별도 기록한다.
 - 계약 근거: [Runtime metrics](../spec/server/25-runtime-metrics.ko.md)
@@ -699,7 +728,10 @@ A→B→C처럼 연속 이동해도 current route는 마지막 owner를 가리�
 
 - 모든 Join·Relocate·message·bind operation은 역할 server가 public Framework API로 시작한다.
 - Client result, public Actor·Spot ref, lifecycle callback·handler evidence와 client push만 통과 판정에 사용한다.
-- Temporary queue, Location Store row, relocation payload와 Session route update packet은 직접 검사하지 않는다.
+- Temporary queue, Location Store row, relocation chunk·manifest·checksum 값과 Session route update packet은 직접 검사하지 않는다.
+- State handoff는 store 경유 없이 source→target 직접 전송으로 일어나며, 복원 결과는 public reply·state
+  version으로만 판정한다. Checksum 불일치와 exact identity conflict는 명시적 terminal failure와 source
+  복원 결과로 확인한다.
 - Accepted operation은 terminal 하나를 가지며 handler operation ID는 최대 한 번 나타난다.
 - Fixed sleep, 정확한 scheduler 시점, 내부 retry 횟수와 작은 표본의 latency를 통과 조건으로 사용하지 않는다.
 - 지원 언어의 public API가 부족하면 scenario를 우회하지 않고 feature map에 contract gap을 기록한다.

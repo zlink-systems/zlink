@@ -222,9 +222,10 @@ maintenance or the requested target version for rolling update, as
 `effectiveTargetApplicationVersion`.
 
 If the deadline ends first before every target becomes `Prepared` and
-the relocation commit is published, the relocation reference and
+the relocation commit is published, the relocation staging and
 reservation are cleaned up in durable-abort order, source authority and
-admission are restored, and `Blocked/DeadlineExceeded` is returned.
+admission are restored from the payload kept in source memory, and
+`Blocked/DeadlineExceeded` is returned.
 There's no rollback to source after commit — the remaining stages are
 only processed while the same target process is running. If the target
 process terminates, a different runtime doesn't automatically take over

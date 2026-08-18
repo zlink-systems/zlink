@@ -6,13 +6,15 @@
 
 When an Actor Joins a different Spot, the Framework changes the Actor's membership and current
 location, and if it moves to a different node, also delivers state and not-yet-processed messages to
-the target runtime. The Application does not need to know the internal switchover moment between
+the target runtime. The state-handoff payload is transferred directly over the source–target ordered
+mesh connection in chunks (with a manifest and CRC-32C checksum), without passing through the
+Relocation Store. The Application does not need to know the internal switchover moment between
 source and target, or resend messages.
 
 This config verifies this behavior through the public Join/Relocate/message/binding API. It does not
-directly read Location Store rows, relocation payloads, temporary queues, or internal update packets.
-Instead, it confirms the Join result, public Actor/Spot ref, application lifecycle callback/handler
-evidence, and the push a bound client received.
+directly read Location Store rows, relocation chunk/manifest/checksum values, temporary queues, or
+internal update packets. Instead, it confirms the Join result, public Actor/Spot ref, application
+lifecycle callback/handler evidence, and the push a bound client received.
 
 ## 1. Verification Scope
 
@@ -20,6 +22,8 @@ evidence, and the push a bound client received.
 - `PreserveStateWith` and `RecreateOnRelocation` state handling
 - The order and at-most-once processing of requests/sends accepted while moving
 - The conditions under which the source Actor and binding are kept when a failure occurs
+- The explicit-failure results of a direct chunk transfer's checksum mismatch and exact identity
+  conflict
 - A bound Session's route update after Actor relocation
 - Old-route messages during the Message Follow period, and the result after it expires
 - User Spot `PerActor`/`SpotWide` relocation and the execution-turn boundary
@@ -37,7 +41,7 @@ failure, and the Application decides the next operation.
 | Session gateway | 2 | Opens a Stream Session and binds an Actor, providing relay and push. |
 | Relocation caller | 1 | Calls Join/Relocate/Actor messages through the role servers' public endpoints. |
 | Location Store | 1 | Provides public Actor/Spot location lookup and routing. |
-| Relocation Store | 1 | Used by the Framework to preserve relocation state. The E2E does not read internal records. |
+| Relocation Store | 1 | Preserves the Instance Spot cold-activation record and the post-relocation pending-request terminal record. It does not store the state-handoff payload. The E2E does not read internal records. |
 | Network proxy | 1 when needed | Creates connection delay/blocking; does not generate Framework messages. |
 | E2E client | per scenario | Uses only role server endpoints and the Stream connector. |
 
@@ -107,16 +111,18 @@ duplicate-processed under both memberships?
 
 Priority: `P0`
 
-An Actor moving to a different node restores the application state saved by the adapter into the
-target instance.
+An Actor moving to a different node transfers the application state the adapter captured directly
+from source to target in chunks, and the target restores the target instance from the payload after
+checksum verification.
 
 **Verification question:** After a remote Join completes, does the target Actor keep the source's
-state version?
+state version, restored through chunk transfer and checksum verification?
 
 - Starting condition: A `PreserveStateWith` Actor is on node A, with a state version set.
 - Procedure: It Joins a User Spot on node B, and after success, a state request is sent.
 - Verification: The target factory/restore/`OnJoinedActor` and source `OnLeaveActor` each run once.
-  The reply's state version and Actor identity are the same as before the move.
+  The reply's state version and Actor identity are the same as before the move. Restoration is
+  judged by the public reply — chunks and checksum values are not read directly.
 - Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md)
 
 #### ST-B2 Moving Message Ordering
@@ -224,6 +230,31 @@ without duplicating the Actor?
 - Verification: Reject returns a Rejected result, and exception and timeout return the contracted
   failure. Each Actor request is processed at most once, on one owner.
 - Contract basis: [Framework Error Model](../spec/server/32-framework-error-model.en.md)
+
+#### ST-C4 Direct-Transfer Integrity Failure
+
+Priority: `P0`
+
+A checksum mismatch in the direct chunk transfer is an explicit failure with no retry, and the
+target does not restore from a partially assembled payload. If a different length or checksum
+arrives for the same exact identity, the existing staging is neither reused nor overwritten — the
+operation ends in an explicit conflict failure. This sub-item is the place for the checksum-mismatch
+variant and the exact-identity-conflict variant. In both variants the harness produces the failure
+through the contracted fault-injection point, and judgment uses only the public terminal and the
+source-restoration result.
+
+**Verification question:** Do a checksum mismatch and an identity conflict each end in exactly one
+terminal failure, with the source Actor continuing to process requests with its existing state?
+
+- Starting condition: A checksum-mismatch variant and an exact-identity-conflict variant are each
+  prepared with a fresh Actor.
+- Procedure: Each variant's remote Join is called once, and after the terminal, a state request is
+  sent to the source Actor.
+- Verification: Each Join ends in exactly one explicit failure, with no automatic retry or resend to
+  a different target. The target has no restore/`OnJoinedActor` evidence, and the source request
+  returns the existing state. No node has evidence of restoration from a partial payload.
+- Contract basis: [Spot Actor](../spec/server/15-spot-actor.en.md) and
+  [Framework Error Model](../spec/server/32-framework-error-model.en.md)
 
 ### Track D — Current Location And Stale Route
 
@@ -741,12 +772,14 @@ values?
 Priority: `P1`
 
 Even if the relocation payload and in-move message size differ, the correctness judgment must be the
-same.
+same. A payload that fits in one chunk and a payload split into several chunks past
+`RelocationPayloadChunkLimit` show the same owner-transition result and failure rules.
 
 **Verification question:** Within the defined payload-size ranges, are accepted operations processed
 with no loss or duplication?
 
-- Starting condition: Small, medium, and large state and message fixtures are fixed.
+- Starting condition: Small, medium, and large state and message fixtures are fixed. The ranges
+  include both a size at or below a single chunk and sizes split into several chunks.
 - Procedure: Remote Join is repeated with the same Actor count and message count in each range.
 - Verification: The state checksum and handler operation ID match the input, and each ID appears
   exactly once. Latency and memory are recorded separately as measurement results.
@@ -840,8 +873,12 @@ duplicated, and is the global request processed at C?
   Framework API.
 - Pass/fail judgment uses only the client result, public Actor/Spot ref, lifecycle
   callback/handler evidence, and client push.
-- Temporary queues, Location Store rows, relocation payloads, and Session route-update packets are
-  not inspected directly.
+- Temporary queues, Location Store rows, relocation chunk/manifest/checksum values, and Session
+  route-update packets are not inspected directly.
+- The state handoff happens as a direct source→target transfer without passing through a store, and
+  restoration is judged only through the public reply and state version. A checksum mismatch and an
+  exact identity conflict are confirmed through the explicit terminal failure and the
+  source-restoration result.
 - An accepted operation has exactly one terminal, and a handler operation ID appears at most once.
 - Fixed sleep, exact scheduler timing, internal retry counts, and small-sample latency are not used
   as pass conditions.

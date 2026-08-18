@@ -18,6 +18,7 @@ relocation manifest, Core peer table과 private counter는 판정에 사용하�
 - STREAM에서 Actor와 Spot으로 이어지는 flow correlation
 - 실패, fanout, timer와 runtime tracing level 변경
 - Stream connection, relocation, request와 owner lease metric
+- Relocation 구간 지표(S0→S1·S2→S3·S1→S4), `cutover_timeout` counter와 `SafeToShutdown` 관찰 상태
 - Actor·User Spot handoff, rolling update와 planned maintenance
 - Relocate blocker, concurrent call, Shutdown 경쟁과 지원 언어의 waiter cancellation
 
@@ -26,7 +27,7 @@ relocation manifest, Core peer table과 private counter는 판정에 사용하�
 | 역할 | 수 | 하는 일과 분리 이유 |
 |---|---:|---|
 | Location Store | 1 | Global object 위치와 automatic topology를 제공한다. |
-| Relocation Store | 1 | `PreserveStateWith` Actor·Spot relocation payload를 보존한다. |
+| Relocation Store | 1 | Instance Spot cold activation 기록과 relocation 뒤 pending request terminal 기록을 보존한다. State handoff payload는 source에서 target으로 직접 전송된다. |
 | Session gateway | 1 | Stream Session, Actor binding과 Session relay를 제공한다. |
 | Play node | 2~4 | Actor, `SpotWide` User Spot과 Instance Spot factory·adapter를 제공한다. Version·capacity와 maintenance state가 다른 target variant를 구성한다. |
 | Order workflow | 2 | Fanout projection과 timer-origin flow를 만든다. Play relocation target에는 참여하지 않는다. |
@@ -151,7 +152,10 @@ Active connection gauge와 reconnect counter는 실제 connector lifecycle과 �
 우선순위: `P0`
 
 Relocation counter와 duration은 실제 Actor 이동 terminal과 일치해야 한다. Interruption 목표 초과를
-relocation 실패로 바꾸지는 않는다.
+relocation 실패로 바꾸지는 않는다. 구간 지표는 source 정지(S0→S1, 기존
+`zlink.relocation.interruption` 구간), target 재개(S2→S3)와 route 수렴(S1→S4)으로 분리 게시되며 각
+node가 자기 local clock으로 측정한다. 순서 미보장 fallback의 실제 사용 빈도는 `cutover_timeout`
+counter가 보여준다. 이 구간 지표와 counter를 대조하는 scenario는 이 Track에 하위 항목으로 추가한다.
 
 **검증 질문:** Actor 이동 한 번이 relocation 완료·duration·interruption metric에 한 번 반영되는가.
 
@@ -204,7 +208,10 @@ Metric reader와 exporter는 Application이 선택하는 수집 경계다. Reade
 우선순위: `P0`
 
 Relocate를 시작한 Host는 기존 accepted work와 infrastructure를 유지하지만 신규 placement 후보에서는
-빠져야 한다. 완료 뒤에는 process를 종료하지 않고 `Relocated` 상태로 남는다.
+빠져야 한다. 완료 뒤에는 process를 종료하지 않고 `Relocated` 상태로 남는다. 모든 unit이 S4(Message
+Follow route 제거 가능)에 도달하고 각 unit의 cutover 재전송 창이 끝나면 source runtime은
+`SafeToShutdown` 관찰 상태를 게시하며, orchestrator는 이 상태를 확인한 뒤 `Shutdown`을 호출할 수 있다.
+`SafeToShutdown` 게시 순서를 확인하는 scenario는 이 Track에 하위 항목으로 추가한다.
 
 **검증 질문:** Host status와 placement 결과가 `Serving→Relocating→Relocated` 전이를 함께 반영하는가.
 

@@ -18,6 +18,9 @@ Java 계약의 다음 경계를 Kotlin에서도 그대로 적용한다.
   snapshot scan만 제공한다.
 - Key·version·cursor, value·batch·scan 범위와 provider clock 기반 TTL 의미를 바꾸지 않는다.
 - Relocation Store는 Framework가 미리 발급한 reference에 immutable blob을 저장한다.
+- Actor·Spot relocation의 state handoff payload는 이 Store에 저장하지 않고 source에서 target으로
+  직접 chunk 전송한다. Store에 남는 정상 실행 책임은 Instance Spot cold activation 기록과
+  relocation 뒤 완료되는 pending request의 terminal 기록이다.
 - 같은 reference와 같은 bytes의 재시도는 AlreadyStored, 다른 bytes는 Conflict다.
 - Blob 하나는 최대 64 MiB이며 Framework가 최대 4,096개 chunk로 최대 256 GiB logical stream을
   구성한다.

@@ -37,6 +37,14 @@ public sealed class ZLinkLocationOptions
         = TimeSpan.FromSeconds(30);
     public TimeSpan SessionRelocationSealTimeout { get; set; }
         = TimeSpan.FromSeconds(3);
+    public long RelocationPayloadChunkLimit { get; set; }
+        = 256 * 1024;
+    public long RelocationInFlightPayloadBudget { get; set; }
+        = 16 * 1024 * 1024;
+    public long RelocationNodeInFlightPayloadBudget { get; set; }
+        = 0;
+    public TimeSpan RelocationCutoverWaitTimeout { get; set; }
+        = TimeSpan.FromSeconds(1);
 }
 ```
 
@@ -61,6 +69,17 @@ Message Follow duration. 0 turns that feature off.
 `SessionRelocationSealTimeout` is a startup-only positive duration with a three-second
 default. Zero, negative, infinite, or a value not representable as finite milliseconds is
 a configuration error before socket bind.
+
+`RelocationPayloadChunkLimit` is the maximum size in bytes of one encoded chunk of a
+relocation payload, defaulting to 256 KiB. Setting it above the frame limit the
+transport negotiated is a startup configuration error before socket bind.
+`RelocationInFlightPayloadBudget` caps the sum of relocation chunk bytes concurrently
+in flight per peer connection, defaulting to 16 MiB; `0` disables the budget.
+`RelocationNodeInFlightPayloadBudget` applies the same accounting rule to the
+node-wide sum and defaults to `0`, meaning not applied. `RelocationCutoverWaitTimeout`
+is both the time the target waits for cutover and the time the source keeps its
+boundary batch copy for retransmission, defaulting to one second. All four values are
+startup-only, and negative values are a configuration error before socket bind.
 
 ## 3. Readiness And Operational Queries
 

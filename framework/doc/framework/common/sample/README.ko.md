@@ -196,9 +196,9 @@ rollback하지 않는다. 자세한 기준은
 따른다.
 
 SpotWide User Spot은 Spot state와 member Actor state를 하나의 relocation unit으로 옮긴다.
-여러 Actor payload는 Relocation Store에 순차로 저장하거나 읽지 않고 설정된 I/O concurrency와
-in-flight byte 제한 안에서 병렬 처리한다. Queue, accepted journal과 logical timer는 Framework가
-저장하고 target에서 순서를 유지해 복원한다.
+여러 Actor payload는 Relocation Store를 경유하지 않고 source에서 target으로 직접 전송되며, chunk
+상한과 in-flight payload 예산 안에서 병렬 처리한다. Queue, accepted journal과 logical timer는
+Framework가 보존하고 target에서 순서를 유지해 복원한다.
 
 Entry Spot과 PerActor User Spot은 Spot application state를 옮기지 않는다. Framework는 target에
 같은 SpotId의 stateless shell을 준비하고 Actor를 하나씩 옮긴다. Application은 Actor adapter의

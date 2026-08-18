@@ -73,6 +73,14 @@ ends the initial reservation scope. A backlog item that is not runnable holds no
 permit. After CAS and target lifecycle make the item runnable, each handler turn obtains a new job
 permit in FIFO order and starts a new structured job scope.
 
+Ingress of a relocation state chunk the source transmits directly to the target uses a boundary
+different from this durable staging. A state chunk is also received under a shared receive
+reservation, but the target runtime releases the Core retained lease immediately after copying the
+payload into a Framework-owned assembly buffer — unlike the relocation record above, which
+transfers retained-byte ownership to the durable backlog, the lease does not follow the assembly
+buffer's lifetime. A state chunk holds no application job permit and creates no handler, and the
+reservation is returned immediately after the finite copy handoff into the assembly buffer.
+
 When downstream has no permit, upstream receive or child materialization suspends. A runtime does
 not replace this behavior with any of the following:
 

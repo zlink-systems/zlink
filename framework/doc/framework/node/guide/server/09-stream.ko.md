@@ -187,6 +187,14 @@ while (running) {
 게임 loop나 UI thread에서 callback을 실행해야 하면 `Manual`을 사용한다. `Immediate`는 connector의
 worker에서 callback을 실행하므로 thread affinity가 필요한 client에는 적합하지 않다.
 
+### 5.1 Diagnostics level
+
+Connector는 server runtime과 같은 네 값(`off`/`errors`/`Normal`/`Detailed`)의 diagnostics
+level 옵션을 받는다. 기본값은 `errors`로 기존 동작과 같고, `off`로 낮추면 connector가
+outbound frame에 flow 식별자를 만들거나 부착하지 않아 관측 전용 비용이 사라진다
+([Stream Connector 공통 스펙 §13](../../../common/spec/stream-connector/32-stream-connector.ko.md#13-diagnostics-level)).
+Request/response 매칭에 쓰는 correlation은 protocol 정보라 `off`에서도 그대로 동작한다.
+
 ## 6. Client send와 request
 
 ```typescript

@@ -105,6 +105,26 @@ public interface IZLinkActorRelocationAdapter<TActor>
         CancellationToken cancellationToken);
 }
 
+public interface IZLinkActorBaseDeltaRelocationAdapter<TActor>
+    : IZLinkActorRelocationAdapter<TActor>
+    where TActor : class, IZLinkActor
+{
+    ValueTask<byte[]> CaptureBaseAsync(
+        TActor actor,
+        CancellationToken cancellationToken);
+    ValueTask<byte[]> CaptureDeltaAsync(
+        TActor actor,
+        CancellationToken cancellationToken);
+    ValueTask RestoreBaseAsync(
+        TActor actor,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken);
+    ValueTask ApplyDeltaAsync(
+        TActor actor,
+        ReadOnlyMemory<byte> deltaPayload,
+        CancellationToken cancellationToken);
+}
+
 public interface IZLinkActorClient
 {
     IZLinkActorSendCall SendToActor<TMessage>(
@@ -262,13 +282,28 @@ Relocation policy is owned by the Actor factory registration.
 cross-node materialization. `RecreateOnRelocation` creates the same
 logical identity again with the target
 [factory](../../../01-glossary.en.md#factory), without restoring
-application state. `PreserveStateWith<TAdapter>()` stores the byte array
-`IZLinkActorRelocationAdapter<TActor>` returns as an opaque application
+application state. `PreserveStateWith<TAdapter>()` transfers the byte array
+`IZLinkActorRelocationAdapter<TActor>` returns directly from the source to
+the target as an opaque application
 payload and restores it to the target Actor instance. It doesn't take a
 separate application state generic or a stable state contract ID, and
 doesn't use a Framework message wrapper as the payload. The adapter isn't
 given a relocation reference, accepted journal, relocation phase,
 source/target owner, or Store CAS version.
+
+`IZLinkActorBaseDeltaRelocationAdapter<TActor>` is an optional capability.
+When the adapter type registered with `PreserveStateWith<TAdapter>()`
+implements this interface, the framework creates a base snapshot with
+`CaptureBaseAsync(...)` at a turn boundary before the seal and transfers
+it ahead of time, and after the seal it transfers only the changes
+produced by `CaptureDeltaAsync(...)`. The target restores the base
+snapshot in advance with `RestoreBaseAsync(...)` and applies the changes
+with `ApplyDeltaAsync(...)` to build the final state. The meaning of a
+delta is owned by the application. If `ApplyDeltaAsync(...)` fails, the
+instance is discarded and a new instance repeats from
+`RestoreBaseAsync(...)`; a partially applied instance is never reused. An
+adapter that doesn't implement this interface keeps the existing
+`CaptureAsync(...)`/`RestoreAsync(...)` behavior unchanged.
 
 For maintenance that materializes an Actor instance on a different node,
 cross-node User Spot/[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)
@@ -299,9 +334,11 @@ retry-safe, producing the same result for the same logical relocation,
 and must not depend on exactly-once execution of an external side
 effect. A capture exception restores admission after a durable abort and
 source normalization. `CaptureAsync(...)`'s result has no
-relocation-adapter-specific size cap; the framework performs any chunking
-required by the registered Relocation Store's ordinary blob and
-whole-payload limits. An empty array is valid, and null is a contract
+relocation-adapter-specific size cap; the framework splits the payload
+into chunks no larger than `RelocationPayloadChunkLimit` and transfers
+them directly over the source–target ordered mesh connection. Source
+memory is the restore origin, and the handoff payload isn't stored in the
+Relocation Store. An empty array is valid, and null is a contract
 violation. The framework immediately copies the completed array. `RestoreAsync(...)`'s
 `ReadOnlyMemory<byte>` is only valid until the callback completes. If a
 restore exception occurs, the instance is discarded and the same

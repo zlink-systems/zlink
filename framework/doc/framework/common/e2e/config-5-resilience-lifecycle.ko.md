@@ -25,7 +25,7 @@ relocation queue는 사용하지 않는다.
 | 역할 | 수 | 하는 일과 분리 이유 |
 |---|---:|---|
 | Location Store | 1 | Automatic provider discovery와 object 위치를 제공한다. |
-| Relocation Store | 1 | `PreserveStateWith` Actor·User Spot relocation state를 보존한다. |
+| Relocation Store | 1 | Instance Spot cold activation 기록과 relocation 뒤 pending request terminal 기록을 보존한다. State handoff payload는 source에서 target으로 직접 전송된다. |
 | Channel provider | 2~3 | Weighted Channel handler와 runtime status를 제공한다. Version과 endpoint가 다른 replacement를 시작할 수 있다. |
 | Object Server | 2~3 | Actor, Entry·User·Instance Spot factory와 relocation adapter를 제공한다. |
 | Session gateway | 1 | Stream Session과 Actor binding을 제공한다. |
@@ -604,19 +604,20 @@ SpotWide User Spot 또는 Instance Spot relocation은 queued messages와 logical
 
 우선순위: `P0`
 
-Internal permit count는 E2E contract가 아니다. Public E2E는 많은 units와 provider data-chunk 경계에서 Host operation이
-bounded하게 끝나고 source admission을 너무 일찍 막지 않는지 확인한다.
+Internal permit count는 E2E contract가 아니다. Public E2E는 많은 units와 relocation chunk·in-flight 예산
+경계에서 Host operation이 bounded하게 끝나고 source admission을 너무 일찍 막지 않는지 확인한다.
 
 **검증 질문:** 80 units와 두 large-state variants가 각각 success terminal 하나를 가지는가.
 
-- 시작 조건: 1 MiB state units 80개, encoded participant state가 정확히 64 MiB인 unit과 한 byte 초과한
-  unit을 separate fixtures로 만든다.
+- 시작 조건: 1 MiB state units 80개, encoded participant state가 설정한 `RelocationPayloadChunkLimit`와
+  정확히 같은 unit과 한 byte 초과한 unit을 separate fixtures로 만든다.
 - 절차: 각 fixture에서 Host Relocate를 실행하고 current locations와 operation results를 수집한다.
-- 검증: 64 MiB unit과 한 byte 초과 unit 모두 target에서 checksum과 logical length를 보존한다. 한 byte
+- 검증: Chunk 경계 unit과 한 byte 초과 unit 모두 target에서 checksum과 logical length를 보존한다. 한 byte
   초과 unit은 adapter 전용 size 상한을 이유로 `StateIncompatible`로 분류되지 않으며, 모든 units와
-  Host operation은 bounded success terminal을 가진다.
+  Host operation은 bounded success terminal을 가진다. In-flight payload 예산은 unit 시작을 seal 전에
+  늦출 수 있을 뿐 이미 시작한 unit을 실패시키지 않는다.
 - 세부 동작: [Host maintenance §7](../spec/server/30-host-relocation-flow.ko.md)과
-  [Relocation Store Redis — Reference와 저장 크기](../spec/server/23-relocation-store-redis.ko.md#3-reference와-저장-크기)를 검증한다.
+  [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)의 chunk·예산 경계를 검증한다.
 
 #### RL-F14 RelayReady 승인 전 명시 abort 뒤 source queue 순서를 복원한다
 

@@ -141,6 +141,26 @@ value the exact language interface cannot represent as finite milliseconds is a
 configuration error before socket bind. It bounds how long a Session owner waits for
 terminal cutover/abort of a relocation seal and is not changed at runtime.
 
+The root Location options also own the following server settings applied to the direct
+transmission of Actor/Spot relocation payloads. The source runtime splits a relocation
+payload into chunks and transmits them directly over the source–target mesh connection;
+the scope each number applies to is as follows.
+
+| Setting | Default | Scope and meaning |
+|---|---|---|
+| `RelocationPayloadChunkLimit` | 256 KiB | Upper bound on the size of one encoded chunk a relocation payload is split into. Configuring it above the frame limit the transport negotiated is a startup configuration error before socket bind. |
+| `RelocationInFlightPayloadBudget` | 16 MiB | Upper bound on the sum of relocation chunk bytes one source node is concurrently transmitting on one peer connection. `0` means this budget is not applied. |
+| `RelocationNodeInFlightPayloadBudget` | 0 (not applied) | Upper bound limiting the same sum for the whole source node instead of one peer connection. When positive, a chunk submission must satisfy both the peer budget and this budget. |
+| `RelocationCutoverWaitTimeout` | 1,000 ms | How long the target waits for cutover after sending the relay-ready reply, and also how long the source keeps the copy of the boundary batch and cutover for retransmission. |
+
+The sums for the two budgets are based not on encoded payload bytes but on the accounted
+charge (including the per-frame metadata charge) of chunks Core is still accounting. All
+four settings can be changed per deployment, and the runtime does not adjust them
+automatically by observing round-trip time or load. The behavioral contract for chunk
+splitting and negotiation, budget accounting and waiting, and the cutover fallback and
+retransmission window is owned by
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md).
+
 ## 3. RouteMesh Registration
 
 RouteMesh registration takes one MeshName and returns a MeshNode builder. The MeshNode
@@ -790,6 +810,16 @@ format, version, and migration; the framework doesn't provide a state contract I
 type, or relocation codec registration API. Relocation policy doesn't apply to a same-node
 Actor join. Relocation ID, target RID, relocation reference, journal cursor, and authority
 revision aren't exposed to the application callback.
+
+A `PreserveStateWith` adapter can also register, in addition to the basic
+`Capture`/`Restore`, an optional capability that makes only the changes transmit after
+seal. The registration form is one set of four callbacks — `CaptureBase`, building a base
+snapshot at a turn boundary before seal; `CaptureDelta`, building only the changes since
+the base snapshot after seal; `RestoreBase`, letting the target restore the base snapshot
+in advance; and `ApplyDelta`, applying the changes to build the final state. It is used
+only by a factory that registered all four callbacks; a factory that didn't keeps the
+existing `Capture`/`Restore` behavior as is. The exact signatures are owned by each
+language's exact interface document.
 
 Create and lookup return an immutable `ActorRef` or `SpotRef`. A ref is a location snapshot
 holding the global ID, a non-zero unsigned 63-bit `ObjectGeneration`, and the MeshName and

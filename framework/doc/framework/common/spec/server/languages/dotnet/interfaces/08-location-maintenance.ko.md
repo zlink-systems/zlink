@@ -34,6 +34,14 @@ public sealed class ZLinkLocationOptions
         = TimeSpan.FromSeconds(30);
     public TimeSpan SessionRelocationSealTimeout { get; set; }
         = TimeSpan.FromSeconds(3);
+    public long RelocationPayloadChunkLimit { get; set; }
+        = 256 * 1024;
+    public long RelocationInFlightPayloadBudget { get; set; }
+        = 16 * 1024 * 1024;
+    public long RelocationNodeInFlightPayloadBudget { get; set; }
+        = 0;
+    public TimeSpan RelocationCutoverWaitTimeout { get; set; }
+        = TimeSpan.FromSeconds(1);
 }
 ```
 
@@ -54,6 +62,15 @@ duration보다 최소 5초 작아야 한다. 0은 해당 기능을 끈다.
 
 `SessionRelocationSealTimeout`은 startup-only 양수 duration이고 기본값은 3초다. 0, 음수, 무한대와
 `TimeSpan`을 유한 millisecond로 표현할 수 없는 값은 socket bind 전에 configuration error다.
+
+`RelocationPayloadChunkLimit`은 relocation payload를 나눈 encoded chunk 하나의 최대 크기(byte)이고
+기본값은 256 KiB다. Transport가 협상한 frame 한도를 넘게 설정하면 socket bind 전에 startup
+configuration error다. `RelocationInFlightPayloadBudget`은 peer 연결 하나에 대해 동시에 전송 중인
+relocation chunk byte 합계의 상한이고 기본값은 16 MiB이며 `0`은 예산을 적용하지 않는다.
+`RelocationNodeInFlightPayloadBudget`은 같은 계상 규칙을 node 전체 합계에 적용하며 기본값 `0`은
+미적용이다. `RelocationCutoverWaitTimeout`은 target이 cutover를 기다리는 시간이자 source가 재전송용
+boundary batch 사본을 유지하는 시간이고 기본값은 1초다. 네 값 모두 startup-only이며 음수는 socket
+bind 전에 configuration error다.
 
 ## 3. Readiness와 운영 query
 

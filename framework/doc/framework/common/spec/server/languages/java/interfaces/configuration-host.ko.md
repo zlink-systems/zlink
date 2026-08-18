@@ -83,6 +83,14 @@ public interface ZLinkLocationOptions {
     void setMessageFollowDuration(Duration value);
     Duration sessionRelocationSealTimeout();
     void setSessionRelocationSealTimeout(Duration value);
+    long relocationPayloadChunkLimitBytes();
+    void setRelocationPayloadChunkLimitBytes(long value);
+    long relocationInFlightPayloadBudgetBytes();
+    void setRelocationInFlightPayloadBudgetBytes(long value);
+    long relocationNodeInFlightPayloadBudgetBytes();
+    void setRelocationNodeInFlightPayloadBudgetBytes(long value);
+    Duration relocationCutoverWaitTimeout();
+    void setRelocationCutoverWaitTimeout(Duration value);
 }
 
 public interface ZLinkNetworkOptions {
@@ -290,7 +298,9 @@ Object Client에도 RouteMesh Channel Server를 등록할 수 있다. Applicatio
 Configure callback은 `disableRelocation()`, `recreateOnRelocation()`, `preserveStateWith(...)` 중 정확히 하나를
 호출해야 한다. 누락하거나 둘 이상 호출하면 socket bind 전에 startup configuration error다. Actor builder는
 같은 Actor type의 `ZLinkActorRelocationAdapter`, User·Instance Spot builder는 같은 Spot type의
-`ZLinkSpotRelocationAdapter`만 받는다.
+`ZLinkSpotRelocationAdapter`만 받는다. 등록한 adapter class가 `ZLinkActorBaseDeltaRelocationAdapter`
+또는 `ZLinkSpotBaseDeltaRelocationAdapter`도 구현하면 base/delta capture 선택 capability가 함께
+등록되며, 구현하지 않으면 기존 `capture`/`restore` 동작이 그대로 유지된다. 별도 등록 API는 없다.
 
 Framework는 configure callback을 등록 호출 안에서 동기적으로 한 번만 실행한다. Callback이 반환된 뒤
 보관한 builder를 다시 호출하면 configuration error다. Callback이 예외를 던지면 해당 factory를 등록하지
@@ -616,6 +626,14 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract void setMessageFollowDuration(java.time.Duration);
   public abstract java.time.Duration sessionRelocationSealTimeout();
   public abstract void setSessionRelocationSealTimeout(java.time.Duration);
+  public abstract long relocationPayloadChunkLimitBytes();
+  public abstract void setRelocationPayloadChunkLimitBytes(long);
+  public abstract long relocationInFlightPayloadBudgetBytes();
+  public abstract void setRelocationInFlightPayloadBudgetBytes(long);
+  public abstract long relocationNodeInFlightPayloadBudgetBytes();
+  public abstract void setRelocationNodeInFlightPayloadBudgetBytes(long);
+  public abstract java.time.Duration relocationCutoverWaitTimeout();
+  public abstract void setRelocationCutoverWaitTimeout(java.time.Duration);
 }
 public final class systems.zlink.framework.configuration.ZLinkLogLevel extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkLogLevel> {
   public static final systems.zlink.framework.configuration.ZLinkLogLevel TRACE;
@@ -730,3 +748,12 @@ common startup CPU snapshot과 32/64/128/256 계수를 사용한다. 범위 위�
 runtime 중 다시 계산하지 않는다.
 `sessionRelocationSealTimeout`은 startup-only 양수 `Duration`, 기본값 3초다. Millisecond로 유한하게
 표현할 수 없는 값도 bind 전에 실패한다.
+
+`relocationPayloadChunkLimitBytes`은 relocation payload를 나눈 encoded chunk 하나의 최대 크기(byte)이고
+기본값은 256 KiB다. Transport가 협상한 frame 한도를 넘게 설정하면 socket bind 전에 startup
+configuration error다. `relocationInFlightPayloadBudgetBytes`은 peer 연결 하나에 대해 동시에 전송 중인
+relocation chunk byte 합계의 상한이고 기본값은 16 MiB이며 `0`은 예산을 적용하지 않는다.
+`relocationNodeInFlightPayloadBudgetBytes`은 같은 계상 규칙을 node 전체 합계에 적용하며 기본값 `0`은
+미적용이다. `relocationCutoverWaitTimeout`은 target이 cutover를 기다리는 시간이자 source가 재전송용
+boundary batch 사본을 유지하는 시간이고 기본값은 1초다. 네 값 모두 startup-only이며 음수는 socket
+bind 전에 configuration error다.

@@ -485,7 +485,10 @@ Factory configure callback은 option과 relocation policy를 한 builder에서 �
 `DisableRelocation()`, `RecreateOnRelocation()`, `PreserveStateWith<TAdapter>()` 중 정확히 하나를 호출해야 한다.
 하나도 선택하지 않거나 둘 이상 선택하면 socket bind 전에 startup configuration error다. Actor builder는
 `IZLinkActorRelocationAdapter<TActor>`, User·Instance Spot builder는 `IZLinkSpotRelocationAdapter<TSpot>`만
-받는다. Factory 대상과 adapter 종류가 맞지 않아도 같은 오류로 실패한다.
+받는다. Factory 대상과 adapter 종류가 맞지 않아도 같은 오류로 실패한다. 등록한 adapter type이
+`IZLinkActorBaseDeltaRelocationAdapter<TActor>` 또는 `IZLinkSpotBaseDeltaRelocationAdapter<TSpot>`도
+구현하면 base/delta capture 선택 capability가 함께 등록되며, 구현하지 않으면 기존
+`CaptureAsync(...)`/`RestoreAsync(...)` 동작이 그대로 유지된다. 별도 등록 API는 없다.
 
 Framework는 등록 호출 안에서 callback을 동기적으로 한 번 실행한다. Callback이 반환되면 builder 구성을
 고정한다. Application이 callback 밖에 builder를 보관했다가 다시 호출하면 configuration error다.

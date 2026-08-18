@@ -576,7 +576,13 @@ none or more than one is a startup configuration error before socket
 bind. The Actor builder only takes
 `IZLinkActorRelocationAdapter<TActor>`, and the User/Instance Spot
 builder only takes `IZLinkSpotRelocationAdapter<TSpot>`. If the factory
-target and adapter kind don't match, it fails with the same error.
+target and adapter kind don't match, it fails with the same error. If the
+registered adapter type also implements
+`IZLinkActorBaseDeltaRelocationAdapter<TActor>` or
+`IZLinkSpotBaseDeltaRelocationAdapter<TSpot>`, the optional base/delta
+capture capability is registered along with it; if not, the existing
+`CaptureAsync(...)`/`RestoreAsync(...)` behavior is kept unchanged. There
+is no separate registration API.
 
 The framework synchronously runs the callback exactly once inside the
 registration call. Once the callback returns, the builder configuration

@@ -231,11 +231,16 @@ the same bytes returns `alreadyStored`; putting different bytes returns
 result after a timeout or connection error by doing an exact read of
 the same reference. `retentionMs` must be a positive safe integer.
 
-One blob is at most 64 MiB. The framework composes a logical relocation
-stream of at most 256 GiB using at most 4,096 chunks and an immutable
-root manifest. Checksum, root/chunk relationship, participant inventory,
-and relocation phase are owned by the framework, and the provider
-doesn't interpret the payload.
+One blob is at most 64 MiB. The state/queue/timer handoff payload of
+Actor and Spot relocation doesn't pass through this Store — the
+framework splits the payload in source memory into chunks and sends
+them directly over the source–target ordered mesh connection. The
+normal-execution responsibilities that remain in the Store are
+recording the first message and creation information of Instance Spot
+cold activation, and recording the reply payload and terminal result
+of pending requests that complete after relocation. Checksum and
+record encoding are owned by the framework, and the provider doesn't
+interpret the payload.
 
 ## 3. Registration And Lifetime
 

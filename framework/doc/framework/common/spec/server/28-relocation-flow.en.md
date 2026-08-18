@@ -37,11 +37,11 @@ failure and automatic-reselection boundary.
 | Participant | Responsibility |
 |---|---|
 | Application | Requests host relocation or registers an Actor Join. Provides a relocation adapter for the object kind when application state must be preserved. |
-| Source runtime | Finishes the current application turn and stops new dispatch. Stores existing work and keeps relaying messages arriving at the old address to the target. Doesn't change Location Store owner. |
-| Target runtime | Prepares the temporary queue first, then creates and restores the object. After receiving cutover or waiting 1,000ms from the relay-ready reply, runs the Location Store CAS and opens the target queue only on success. For a bound Actor, then tells the Session owner to apply the target route and release the seal. |
+| Source runtime | Finishes the current application turn and stops new dispatch. Sends the captured application state, not-yet-executed existing work, and timers directly to the target, and keeps the whole payload in memory until the cutover submit terminal and the retransmission window (§4.4) end. Keeps relaying messages arriving at the old address to the target. Doesn't change Location Store owner. |
+| Target runtime | Prepares the temporary queue first, then creates and restores the object. After receiving cutover or waiting the cutover wait setting duration (§4.4) from the relay-ready reply, runs the Location Store CAS and opens the target queue only on success. For a bound Actor, then tells the Session owner to apply the target route and release the seal. |
 | Session owner | Keeps the bound Actor's physical Session. Seals that binding before relocation, changes its route after target cutover, then releases the seal. Doesn't select the target or change the Location Store. |
 | Location Store | Stores current owner, object generation, and membership. Applies all requested target values only when expected source values still match. |
-| Relocation Store | Holds application state, not-yet-executed existing work, and timer information until the target restores them. Doesn't decide owner. |
+| Relocation Store | Doesn't hold the Actor/Spot relocation handoff payload of state, existing work, and timers. Holds only the first message and creation information of Instance Spot cold activation and the reply payload and terminal result of a pending request completed after relocation. Doesn't decide owner. |
 | Transport | Validates authenticated peer, node run generation, and frame shape. Preserves the order of relay and cutover boundary sent on the same TCP connection. |
 
 One participant doesn't repeat another participant's decision. Transport peer
@@ -68,8 +68,13 @@ operation.
 
 Relocation isn't object deletion and recreation, so `ObjectGeneration` is preserved.
 `AuthorityOwnerGeneration` distinguishes owner changes. A non-zero relocation identity
-made by the runtime distinguishes control messages belonging to the same move. The
-application neither creates nor interprets this identity.
+made by the runtime distinguishes control messages belonging to the same move. This
+identity consists of the `RelocationId`, the `targetAttemptGeneration` distinguishing
+target attempts, and the coordinator fence — the current-owner values the coordinator
+that started the move expects. This document calls that combination the exact identity.
+The Restore request, state chunks (§4.2), and the target's Location Store CAS are bound
+to one move by the same exact identity. The application neither creates nor interprets
+this identity.
 
 ## 4. Normal Processing Order
 
@@ -87,13 +92,37 @@ affected.
 ### 4.2 Stop Source Execution, Not Message Reception
 
 The source finishes the running handler and timer callback, then starts no new
-application turn. It stores already-accepted but not-yet-executed work, timer
-information, and application state in the Relocation Store.
+application turn. Before that, it captures already-accepted but not-yet-executed work,
+timer information, and application state into one relocation payload. This payload is
+not written to any store. The source sends it directly to the target while keeping the
+whole payload in memory, and until the cutover submit reaches a terminal result and the
+retransmission window (§4.4) ends, this in-memory copy is the only handoff source of
+truth.
 
-Once storage is confirmed, the saved queue prefix and timers have one handoff source of
-truth: the Relocation Store payload. The source doesn't put that prefix on the relay
-lane again. An explicit failure before the relay-ready reply reaches its accepted state
-also restores source from that payload in the original queue order.
+The source sends the target a Restore request carrying the payload's total encoded
+length, chunk count, and total checksum. A piece of the payload no larger than a
+configured size is called a chunk, and the checksum is computed over the entire encoded
+bytes of the assembled payload with a single CRC-32C convention — the convention
+constants and the byte representation of the header are fixed once by a
+language-neutral wire definition shared by every language runtime. After the Restore
+request, the source sends each chunk as `[send]` on the same ordered mesh connection
+that relay uses. Each chunk carries the `RelocationId`, `targetAttemptGeneration`,
+chunk ordinal, and encoded length. Messages of other objects using the same connection
+may be interleaved between chunks.
+
+The effective size of one transmitted chunk is the smallest of three values — the
+server setting `RelocationPayloadChunkLimit` (encoded size of one chunk, default
+256 KiB), the effective receive chunk limit the target advertised in a reply that
+already exists before the seal, and the effective in-flight budget of §5.3. On a path
+where no such negotiation reply exists (such as `JoinEntrySpot`, which has no approval
+round trip), the source uses a conservative 32 KiB chunk size that is safe in any
+deployment.
+
+The source doesn't put the queue prefix and timers fixed by capture on the relay lane
+again. Only an explicit failure reply from the target before the relay-ready reply
+reaches its accepted state restores the source, and the restoration origin is not a
+store but the payload kept in memory — the source returns that payload to the original
+queue order.
 
 The source doesn't wait for its mailbox to become empty because messages can keep
 arriving on the mailbox or previous route. After sending Restore, it keeps placing new
@@ -102,10 +131,31 @@ ready. Transport reception continues while target preparation is pending.
 
 ### 4.3 Restore The Target Without Running It
 
-The target registers a temporary queue for the relocation target before looking up the
-real application instance. It then runs the factory and restores application state,
-existing queue work, and timers. A message arriving directly at the target during
-Restore enters the temporary queue and isn't delivered to an application handler.
+The target registers a temporary queue for the relocation target as soon as it receives
+the Restore request, before any state chunk arrives. This registration comes before
+looking up the real application instance. A message arriving directly at the target
+during Restore enters the temporary queue and isn't delivered to an application
+handler.
+
+The target copies each arriving chunk into an assembly buffer owned by the Framework
+and releases that chunk's Core retained lease immediately after the copy. Because the
+lease is released immediately, the relocation footprint remaining on the pipe is
+bounded to a few in-flight chunks regardless of payload size. After assembling every
+chunk, the target compares the result against the total checksum carried by the Restore
+request, and only on a match runs the factory and restores application state, existing
+queue work, and timers. On a checksum mismatch, the target doesn't start restoration
+and sends an explicit failure reply instead of the relay-ready reply — over TCP a
+checksum mismatch signals an implementation defect or memory corruption rather than a
+transient transmission error, so there is no retry, and a partially assembled payload
+is never restored.
+
+Which move a chunk or Restore request belongs to is decided only by the connection it
+arrived on and the exact identity (§3) the message carries. A chunk or Restore request
+with a different exact identity is discarded without being linked to an in-progress
+assembly. If a Restore request with the same exact identity arrives with a length or
+checksum different from the first declared values, the target neither reuses nor
+overwrites the existing assembly and ends with an explicit conflict failure.
+
 Restored queue work and timers remain in a dispatch-closed saved-work span and aren't
 mixed with source relay.
 
@@ -122,40 +172,61 @@ the source and the target doesn't run an application handler. The target doesn't
 this reply until target-side retained-byte ownership exists for every staged payload.
 
 The Restore request does more than ask the target to restore state. It asks the target
-to **install the temporary queue first, restore saved state, existing queue work, and
-timers, and finish relay preparation without opening application dispatch**. Its
+to **install the temporary queue first, assemble, verify, and restore the directly
+transferred state, existing queue work, and timers, and finish relay preparation
+without opening application dispatch**. Its
 `relay reception ready` reply confirms only that preparation. It doesn't confirm an
 owner change or an open queue.
 
 ### 4.4 Ordered Relay And One-Way Cutover
 
 After the target's relay-ready reply, the source relays only messages accepted by the
-post-capture ingress hold on the same TCP connection. It doesn't relay saved queue work
-or timers again because the target already restored them from the Relocation Store. At
-the serialized relay point, it inserts a one-way
+post-capture ingress hold on the same TCP connection. It doesn't relay the queue work
+or timers fixed by capture again because the target already restored them from the
+directly transferred payload. At the serialized relay point, it inserts a one-way
 cutover control as `[send]` after every message accepted so far. Cutover tells the target
 that **all pre-boundary relay was sent, so it may run the Location Store owner CAS, merge
-queues, and open application dispatch**. The target sends no cutover reply. Messages
+queues, and open application dispatch**. The cutover control carries the `RelocationId`,
+the count of relay records sent before the boundary, and the CRC-32C checksum of that
+whole relay. The target sends no cutover reply. Messages
 accepted during this work enter the post-boundary span, so cutover doesn't wait for
 mailbox drain.
 
 The relay-ready reply reaching its accepted state is the irreversible boundary after
 which source restoration is forbidden. The source then submits cutover once as
-`[send]`. It retains its queued-job permit and retained-byte owner for the source payload
-until that submit reaches a terminal result, then permanently closes source dispatch
-and releases both owners exactly once regardless of success or failure. A target
-completion reply is not added as a condition for this cleanup. Only an explicit failure
-before relay-ready preserves source ownership and removes the target staged owner by
-abort cleanup. A cutover-submit failure after relay-ready doesn't restore source; the
-target proceeds through the existing 1,000ms fallback.
+`[send]`. It retains its queued-job permit until that submit reaches a terminal result,
+then permanently closes source dispatch regardless of success or failure. The
+retained-byte owner of the source payload and the pre-boundary relay batch is kept even
+after the submit terminal, until the retransmission window — a duration equal to the
+cutover wait setting — ends, and is then released exactly once. This copy is Framework
+memory that occupies no pipe, so it isn't counted against the in-flight budget of §5.3.
+A target completion reply is not added as a condition for this cleanup. Only an
+explicit failure before relay-ready preserves source ownership and removes the target
+staged owner by abort cleanup. A cutover-submit failure after relay-ready doesn't
+restore source; the target proceeds through the cutover wait fallback below.
 
 Receiving cutover means the ingress-hold relay preceding its boundary on that
-connection have all arrived. The target starts CAS and queue opening immediately.
+connection have all arrived. The target compares the record count and checksum carried
+by the cutover against the received relay, then starts CAS and queue opening
+immediately. When cutover arrives on the ordered connection, all preceding relay has
+also arrived, so this comparison always succeeds on the normal path; a comparison
+failure is an Error signaling an implementation defect.
 
-The target waits 1,000ms for cutover from the time it sends the relay-ready reply. If
-cutover doesn't arrive, it records a `cutover_timeout` Warning and proceeds with CAS and
-queue opening. A cutover arriving after that fallback, or a duplicate cutover, changes no
-state and records only a `late_cutover` Warning.
+The target waits for cutover for the server setting `RelocationCutoverWaitTimeout` (the
+wait from the relay-ready reply until cutover arrival, default 1,000ms) from the time
+it sends the relay-ready reply. If the connection breaks and the cutover is lost while
+the source process is still running, the source resends the whole pre-boundary relay
+batch and the cutover over a new connection. The target discards its partially received
+pre-boundary relay span and replaces it with the retransmitted batch in one step — a
+whole replacement rather than per-record deduplication or partial merge, so the order
+inside the span is fixed by the batch order even on the new connection. When the
+verification values match, the target proceeds with CAS and queue opening.
+
+If the wait ends without cutover or retransmission, the target records a
+`cutover_timeout` Warning and proceeds with CAS and queue opening. This fallback
+remains an order-unguaranteed path, but retransmission absorbs most connection
+failures, so the path is entered less often. A cutover arriving after that fallback, or
+a duplicate cutover, changes no state and records only a `late_cutover` Warning.
 
 The source can still receive a late message at the old address after this boundary.
 Before owner change it relays that message to the temporary queue; after owner change it
@@ -167,7 +238,7 @@ The target runs the Location Store CAS only after all these conditions hold:
 
 - Factory and Restore completed.
 - The temporary queue is registered.
-- Cutover was received, or 1,000ms elapsed after the relay-ready reply.
+- Cutover was received, or the cutover wait setting duration (§4.4) elapsed after the relay-ready reply.
 - Current owner, `ObjectGeneration`, owner generation, and membership still match the
   source values first read.
 
@@ -178,8 +249,8 @@ and the target queue doesn't open.
 
 If the Store returns a retryable error or an indeterminate response, the target retries
 with the same expected source fence and `RelocationId`. This doesn't add another timeout:
-the retry deadline is the absolute validity deadline already carried by the relocation
-payload and Restore operation. A retry neither restarts nor extends it. After a missing
+the retry deadline is the absolute deadline already carried by the Restore operation. A
+retry neither restarts nor extends it. After a missing
 response, the target first reads the Store to
 determine whether the exact target owner was already recorded.
 
@@ -256,14 +327,14 @@ Normal relocation requests and replies mean the following.
 | Request | Requested operation | What the normal reply confirms |
 |---|---|---|
 | Session binding seal | Freeze route change for the current binding and hold later Session messages. | The seal was installed on the exact binding. |
-| Store relocation payload | Store application state, unexecuted queue work, and timers. | A readable payload location and content checksum are fixed. |
-| Restore and prepare relay | Install the temporary queue and restore the payload without opening dispatch. | Target is ready for pre-boundary relay while source remains owner. |
+| Restore and prepare relay | Carries the payload's total length, chunk count, and checksum; asks the target to install the temporary queue first, then assemble, verify, and restore the directly transferred payload without opening dispatch. | Target is ready for pre-boundary relay while source remains owner. |
 
 Relocation control sends wait for no reply.
 
 | Send | Meaning | Receiver processing |
 |---|---|---|
-| Cutover | Reports that all pre-boundary relay was sent on the same connection. | Target starts CAS and queue opening. A late or duplicate control after the 1,000ms fallback records only a Warning. |
+| State chunk | Delivers one piece of the relocation payload on the same ordered connection. | Target validates the exact identity, copies the chunk into the assembly buffer, and releases the chunk lease immediately. A chunk with a different identity is discarded without joining the assembly. |
+| Cutover | Reports that all pre-boundary relay was sent on the same connection, carrying the relay record count and checksum. | Target compares the verification values, then starts CAS and queue opening. A late or duplicate control after the cutover wait fallback records only a Warning. |
 | Session route update | Reports that target owner and queue are ready. | Session owner changes the exact binding route, submits held messages, and releases the seal. |
 | Session seal abort | Reports that source queue was restored after an explicit failure before relay-ready was accepted. | Session owner submits held messages to the source route and releases only the matching seal. |
 
@@ -273,7 +344,6 @@ sequenceDiagram
     participant A as Source runtime
     participant S as Session owner
     participant B as Target runtime
-    participant R as Relocation Store
     participant L as Location Store
 
     opt Actor is bound to a Session
@@ -281,10 +351,15 @@ sequenceDiagram
         S-->>A: [reply] exact binding seal installed
     end
     A->>A: [local] stop application dispatch after current turn
-    A->>R: [request] store state, unexecuted queue/timers, and create checksum
-    R-->>A: [reply] payload location and content checksum fixed
-    A->>B: [request] install temporary queue, Restore, prepare relay without dispatch
-    B->>B: [local] register temporary queue and Restore
+    A->>A: [local] capture state, unexecuted queue/timers · keep payload in memory
+    A->>B: [request] Restore request · includes total length, chunk count, checksum
+    B->>B: [local] register temporary queue before chunks arrive
+    loop payload sent chunk by chunk
+        A->>B: [send] state chunk · same ordered connection
+        Note over A,B: messages of other objects may interleave between chunks
+        B->>B: [local] copy into assembly buffer, release chunk lease immediately
+    end
+    B->>B: [local] verify checksum, then Restore
     B-->>A: [reply] temporary queue and Restore ready · source still owner
     Note over A,B: this isn't relocation completion
     loop post-capture ingress hold before the boundary
@@ -297,10 +372,10 @@ sequenceDiagram
         end
         B->>B: [local] hold in the pre-boundary relay span
     end
-    alt cutover arrives within 1,000ms
-        A->>B: [send] cutover · pre-boundary relay sent
-        B->>B: [local] confirm pre-boundary relay receipt
-    else no cutover for 1,000ms after relay-ready reply
+    alt cutover arrives within the wait
+        A->>B: [send] cutover · includes record count and checksum
+        B->>B: [local] compare verification values with received relay
+    else no cutover or retransmission during the cutover wait setting
         B->>B: [local] cutover_timeout Warning · proceed by fallback
     end
     loop until exact target owner is confirmed or Restore validity expires
@@ -336,7 +411,8 @@ sequenceDiagram
     end
 ```
 
-This diagram shows both normal cutover and the cutover-timeout fallback. §9 defines an
+This diagram shows both normal cutover and the cutover-timeout fallback. §4.4 defines
+the path that retransmits the batch and cutover after a broken connection; §9 defines an
 explicit failure before relay-ready is accepted and a missing Store response.
 
 ## 5. Message Order And Completion Meaning
@@ -369,14 +445,38 @@ request, not a new request.
 
 ### 5.3 No Relocation-Specific Capacity Limit
 
-Relocation adds no correctness cap on concurrent units, participant count, relay-queue
-records, or in-flight bytes. Limits that also apply outside relocation — runtime memory,
-negotiated frame size, Location Store record/page size, and Relocation Store payload
-limits — still apply.
+Relocation adds no correctness cap on concurrent units, participant count, or
+relay-queue records. Limits that also apply outside relocation — runtime memory,
+negotiated frame size, and Location Store record/page size — still apply. If a resource
+isn't immediately ready, the runtime waits before blocking source dispatch, and an
+already-started relocation is never failed because a capacity was reached.
 
-If a resource isn't immediately ready, the runtime waits before blocking source
-dispatch. It doesn't fail an already-started relocation because a
-relocation-specific capacity was reached.
+So that directly transferred relocation payloads don't monopolize the bandwidth of a
+shared mesh connection, the source node limits the sum of relocation chunk bytes in
+flight with an in-flight payload budget.
+
+| Setting | Scope | Default |
+|---|---|---|
+| `RelocationInFlightPayloadBudget` | Sum of relocation chunk bytes one source node has in flight on one peer connection | 16 MiB. 0 disables the budget. |
+| `RelocationNodeInFlightPayloadBudget` | Sum of relocation chunk bytes in flight across the whole source node | 0 = not applied |
+
+When the sum fills the budget, a new relocation unit waits before applying its source
+admission seal, and the next chunk submission of an already-started unit waits until
+room is available. Because the wait happens before the seal, a waiting Actor or Spot
+keeps processing messages normally, and this wait isn't included in service-interruption
+measurement. The budget limits bytes concurrently in flight, not total payload size, so
+a payload larger than the budget still starts and completes as its chunks flow in order
+— no payload size is prevented from starting by the budget. An already-started
+relocation is never failed because the budget was reached.
+
+The accounting target is not encoded payload bytes but the Core accounted charge
+including frame metadata charge — added when a chunk is submitted, subtracted when the
+Core is observed to release that chunk's charge. Until the Core provides a public
+observation API for per-pipe applied HWM and accounted charge, the effective budget is
+operated as the smaller of the configured value and a fixed conservative value based on
+per-role pipe lower bounds. The boundary batch copy kept during the retransmission
+window is Framework memory occupying no pipe and isn't counted against this budget
+(§4.4).
 
 The application job queue's shared permit capacity isn't a relocation-specific capacity. Ordinary target
 staging ingress uses a shared reservation before receive and returns it after durable
@@ -449,11 +549,14 @@ are defined by [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 | Timing | Owner and queue retained | Result and follow-up |
 |---|---|---|
 | Target selection or pre-preparation failure | Source | Doesn't block source dispatch and fails the operation. |
-| Explicit failure after Session seal but before relay-ready is accepted | Source | Doesn't execute the target temporary queue. Restores source queue and matching Session seal. |
+| Explicit failure after Session seal but before relay-ready is accepted | Source | Doesn't execute the target temporary queue. Restores source queue and matching Session seal from the payload kept in memory. |
+| Assembled chunks don't match the Restore request checksum | Source | Target doesn't start restoration, sends an explicit failure reply, and removes the chunks being assembled. Source restores its queue from the in-memory payload and fails the operation. No retry. |
+| A Restore request with the same exact identity arrives with a different length or checksum | Source | Target neither reuses nor overwrites the existing assembly and ends with an explicit conflict failure. Source restores as for the explicit failure above. |
 | Target CAS condition differs after relay-ready | Owner last confirmed in Store | Target removes the object and queue and sends no Session update. Source dispatch doesn't reopen. |
 | Target receives no CAS response | Owner confirmed by re-reading the Store | Target reads and retries until Restore validity expires. It doesn't open its queue before confirming target ownership. |
 | Location Store retry fails until Restore validity expires | Last owner confirmed in the Store | Records `location_update_failed`, removes the prepared target Actor or Spot, queue, and relocation state, and sends no Session update. |
-| Cutover doesn't arrive for 1,000ms after relay-ready reply | Target | Target records a Warning and proceeds with CAS and queue opening. A late cutover is ignored. This fallback doesn't guarantee order between late relay and a new direct target message. |
+| Connection breaks and cutover is lost while the source process is running | Follows the target's outcome | Source resends the whole pre-boundary batch and the cutover over a new connection. Target replaces the partially received span with the whole retransmitted batch and proceeds with CAS when the verification values match. |
+| Neither cutover nor retransmission arrives during the cutover wait setting (default 1,000ms) after the relay-ready reply | Target | Target records a Warning and proceeds with CAS and queue opening. A late cutover is ignored. This fallback doesn't guarantee order between late relay and a new direct target message. |
 | Target process terminates after successful CAS | Target authority remains, but object is unavailable | Doesn't roll back to source or automatically resume on another target. |
 | No route update arrives within `SessionRelocationSealTimeout` | Target owner, Session connection closed | Session owner closes the physical connection and cleans bindings, held messages, and seal. A late update is ignored with a Warning. |
 | Caller cancellation | Shared relocation continues under its current phase rule | Ends only that waiter. A safe abort starts only on an explicit failure before relay-ready is accepted; source isn't restored afterward. |
@@ -464,10 +567,11 @@ relay-ready is accepted, source dispatch doesn't reopen regardless of cutover-su
 success or failure. A later target-CAS failure removes prepared target state, while the
 Session cleans under its own timeout.
 
-The 1,000ms cutover fallback isn't a loss-recovery protocol replacing TCP retransmission.
-Without cutover, target can't confirm every pre-boundary relay arrived. This path favors
-relocation progress and doesn't guarantee order between late relay and a new direct
-target message.
+The cutover wait fallback reached after failed retransmission isn't a loss-recovery
+protocol replacing TCP retransmission. Without cutover, target can't confirm every
+pre-boundary relay arrived. This path favors relocation progress and doesn't guarantee
+order between late relay and a new direct target message. The retransmission of §4.4
+only reduces how often this path is entered; it doesn't remove the order gap itself.
 
 When Store failure continues until Restore validity expires, the Session may close under
 its independent seal timeout. After Store recovery, a new Session connection doesn't
@@ -490,8 +594,10 @@ A late cutover or Session route update doesn't extend Message Follow
 indefinitely. Conversely, applying the Session route first doesn't immediately discard
 server messages already sent to the old address.
 
-The source cleans up its instance, temporary state, and Relocation Store reference except
-for the route needed by Message Follow. The target keeps owner and application dispatch.
+The source cleans up its instance and temporary state except for the route needed by
+Message Follow, and cleans the relocation payload and boundary batch copy kept in memory
+after the retransmission window ends (§4.4). The target keeps owner and application
+dispatch.
 A cleanup failure isn't a condition for changing owner back to source.
 
 ## 11. Guarantees And Non-Guarantees
@@ -499,23 +605,48 @@ A cleanup failure isn't a condition for changing owner back to source.
 | Guarantee | Scope |
 |---|---|
 | Owner isn't simultaneously source and target. | Before target-only Location Store CAS succeeds, source is owner; afterward, target is owner. |
-| Target doesn't execute a message before preparation. | Factory, Restore, and temporary queue must be ready; then cutover receipt or the 1,000ms fallback and successful CAS precede dispatch opening. |
+| Target doesn't execute a message before preparation. | Factory, Restore, and temporary queue must be ready; then cutover receipt or the cutover wait fallback and successful CAS precede dispatch opening. |
 | Relocation backlog doesn't bypass the live-job limit. | Ordinary staging receive uses a shared reservation and returns it after durable handoff; runnable post-CAS turns acquire live permits in order. |
 | Normal cutover preserves order on one relay connection. | Cutover arrives after pre-boundary relay on the same TCP connection. |
 | A bound Session's physical connection is conditionally kept. | An exact route update within `SessionRelocationSealTimeout` changes only the route. Timeout closes the connection. |
 | Global order across connections isn't guaranteed. | Relative order of Message Follow relay and direct target message is unspecified. |
 | Exactly-once across process crash isn't guaranteed. | Application callbacks or external side effects can run more than once even during same-process retry. |
-| No cutover or Session-update ACK is awaited. | Both controls are one-way. Cutover has a 1,000ms fallback; Session seal has a configurable 3,000ms default timeout. |
+| No cutover or Session-update ACK is awaited. | Both controls are one-way. Cutover has the `RelocationCutoverWaitTimeout` (default 1,000ms) fallback; Session seal has a configurable 3,000ms default timeout. |
 
 ## 12. Implementation And Contract-Test Verification Requirements
 
 - Actor, `PerActor`/`SpotWide` User Spot, and Instance Spot use the same target-only CAS boundary.
 - Source keeps relaying old-address messages to target without waiting for an empty queue.
 - Source sends no ingress-hold relay before the target reports relay reception ready.
-- Source relay never resends the saved queue prefix and timers owned by the Relocation Store.
-- Relay-ready is the only reply; cutover and Session route update are one-way controls.
+- Source relay never resends the saved queue prefix and timers fixed in the source memory payload.
+- Relay-ready is the only reply; state chunk, cutover, and Session route update are one-way controls.
+- A payload that fits in one chunk and a payload split into multiple chunks show the same
+  owner-transition result, the same failure rules, and the same Message Follow behavior.
+- Messages of other objects on the same connection are delivered between chunks during
+  chunk transmission.
+- The target releases the Core retained lease immediately after receiving each chunk, and
+  the relocation footprint remaining on the pipe never exceeds the in-flight chunk range
+  regardless of payload size.
+- A chunk or Restore request with a different exact identity is discarded without being
+  linked to an in-progress assembly.
+- A Restore request with the same exact identity but a different length or checksum
+  doesn't overwrite the existing assembly and ends with an explicit conflict failure.
+- On a checksum mismatch, the target doesn't proceed to CAS, doesn't restore from a
+  partially assembled payload, and responds with an explicit failure reply.
+- A payload larger than the budget still starts and completes; when the in-flight budget
+  is full, a new relocation unit waits before its seal and the waiting Actor or Spot keeps
+  processing messages.
+- A retransmitted batch wholly replaces the partially received staging, the span order
+  after replacement matches the batch order, and each record is staged only once.
+- When the retransmission window ends, the source's payload and boundary batch copy are
+  cleaned exactly once and no retransmission occurs afterward. The batch copy kept during
+  the window isn't counted against the in-flight budget.
+- The wire representation of chunk headers, checksums, and cutover verification values is
+  validated by language-neutral golden fixtures, and a relocation whose source and target
+  are different language runtimes passes chunk transfer, checksum verification, and owner
+  transition with the same results.
 - Target records no relocation Location Store record, including `Prepared`, before preparing the temporary queue and Restore.
-- Target neither changes Location Store owner/membership/authority nor opens application dispatch before receiving cutover or waiting 1,000ms after relay-ready. A post-Restore `Prepared` record that retains source ownership is not such a change.
+- Target neither changes Location Store owner/membership/authority nor opens application dispatch before receiving cutover or waiting the cutover wait setting duration after relay-ready. A post-Restore `Prepared` record that retains source ownership is not such a change.
 - Source and Session owner don't change Location Store owner.
 - On CAS conflict, target doesn't run a queued message or one-way handler.
 - A retryable Store error or indeterminate response retries the same CAS until Restore
@@ -523,16 +654,16 @@ A cleanup failure isn't a condition for changing owner back to source.
 - If owner transition isn't confirmed before Restore validity expires, target removes
   the prepared Actor or Spot and queue and sends no Session route update.
 - A late Store response for a terminal `RelocationId` doesn't reactivate an object or queue.
-- Saved existing work enters the target queue before relay preceding the cutover boundary.
+- Existing work transferred in the payload enters the target queue before relay preceding the cutover boundary.
 - A target backlog larger than the live-job limit progressively runs ordered turns without reserving every permit first.
-- Target retained-byte ownership exists before relay-ready. Source permits and byte ownership remain until the post-acceptance cutover submit reaches a terminal result, and each owner cleans exactly once regardless of submit success or failure.
+- Target retained-byte ownership exists before relay-ready. Source permits remain until the post-acceptance cutover submit reaches a terminal result, source payload/batch retained-byte ownership remains until the retransmission window ends, and each owner cleans exactly once regardless of submit success or failure.
 - `send` is handled without an application response, while `request` retains operation identity, reply route, and deadline.
 - Relocation requires no numeric high-water, per-message ACK journal, or separate capacity gate.
 - Bound Session messages are held during seal, submitted after target route change, then the seal is released.
 - A late or duplicate cutover records only a Warning and doesn't mutate owner or queue again.
 - Without a Session route update, the default 3,000ms seal timeout closes the physical Session and cleans state.
 - A route update after timeout records only a Warning and doesn't mutate route or seal again.
-- Only an explicit failure before relay-ready is accepted restores source. A later failure
+- Only an explicit failure before relay-ready is accepted restores source from the payload kept in memory. A later failure
   doesn't reopen source dispatch regardless of cutover-submit result and removes prepared target state.
 - A bound-Session abort before relay-ready is accepted is one-way, releases only the matching seal, and awaits no application reply.
 - Contract tests and operational logs distinguish the absence of global cross-connection order and exactly-once behavior across process crash.

@@ -184,7 +184,10 @@ held in the ingress hold. The target uses the relocation temporary queue in
 the following order.
 
 1. On receiving a Restore request, registers the temporary queue before
-   creating the Actor instance.
+   creating the Actor instance. A cross-node Actor Join's User Spot target
+   uses the temporary queue already registered during `OnActorJoin` approval
+   processing
+   ([15 §4.2](15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node)).
 2. Relays the source ingress hold's messages to this queue, preserving
    original operation identity and reply route.
 3. Once Restore finishes, runs the owner CAS. The source keeps the ingress
@@ -342,11 +345,15 @@ the Session owner.
 
 1. After the source Actor's current handler ends and target preflight succeeds, a bound
    Actor installs the exact binding seal using command 42 `sessionRelocationSeal` request
-   and command 43 reply. It then blocks new Actor application dispatch and stores already
-   accepted queue work/timers and application state in the Relocation Store.
+   and command 43 reply. It then blocks new Actor application dispatch, captures already
+   accepted queue work/timers and application state, and keeps them in source memory.
 2. Target registers the temporary queue group before Actor lookup and factory, then
-   Restores saved queue/timers and state. Once ready, it sends source the relay-reception-
-   ready reply.
+   Restores the queue/timer and state payload the source transferred directly on the
+   same ordered connection as the Restore request — the payload delivery path and the
+   rules for the [relocation state chunk](01-glossary.en.md#relocation-state-chunk),
+   the transfer unit, and checksum are defined by
+   [Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md). Once ready, it
+   sends source the relay-reception-ready reply.
 3. Only Actor messages arriving at source after Capture enter ingress hold and are relayed
    on the same ordered connection into the pre-boundary relay span. Saved queue work and
    timers aren't relayed. Source sends cutover one-way after the current relay prefix.

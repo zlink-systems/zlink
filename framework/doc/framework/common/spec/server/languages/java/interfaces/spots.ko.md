@@ -116,6 +116,18 @@ public interface ZLinkSpotRelocationAdapter<TSpot> {
         TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
+public interface ZLinkSpotBaseDeltaRelocationAdapter<TSpot>
+    extends ZLinkSpotRelocationAdapter<TSpot> {
+    CompletionStage<byte[]> captureBase(
+        TSpot spot, ZLinkRelocationCancellation cancellation);
+    CompletionStage<byte[]> captureDelta(
+        TSpot spot, ZLinkRelocationCancellation cancellation);
+    CompletionStage<Void> restoreBase(
+        TSpot spot, byte[] base, ZLinkRelocationCancellation cancellation);
+    CompletionStage<Void> applyDelta(
+        TSpot spot, byte[] delta, ZLinkRelocationCancellation cancellation);
+}
+
 public interface ZLinkSpotContext {
     String meshName();
     String spotId();
@@ -211,15 +223,24 @@ Instance marker는 한 번만 설정할 수 있고 terminal `submit`도 한 번�
 User·Instance Spot factory의 `preserveStateWith` 등록은 factory type에 맞는
 `ZLinkSpotRelocationAdapter<TSpot>` class를 받는다. Adapter는 application state를 opaque
 `byte[]`로 capture·restore하며 relocation adapter 전용 size 상한을 두지 않는다. Framework는
-등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을 수행한다.
+payload를 `relocationPayloadChunkLimitBytes` 이하의 chunk로 나눠 source–target ordered mesh 연결로
+직접 전송한다. Source memory가 복원 원본이며 handoff payload를 Relocation Store에 저장하지 않는다.
 `TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. Framework는 capture
-결과를 즉시 복사한다. Capture 배열은 adapter가 계속 소유하며 completion 뒤 변경해도 저장 payload가
+결과를 즉시 복사한다. Capture 배열은 adapter가 계속 소유하며 completion 뒤 변경해도 보존한 payload가
 바뀌지 않는다. Restore에는 호출마다 fresh defensive copy를 전달하고 adapter는 stage가 끝난 뒤 배열을 보관하지
 않는다. 길이가 0인 배열도 유효한 application state이며 Restore를 생략하거나 `recreateOnRelocation`으로 해석하지 않는다.
 Whole User Spot relocation에서는 Spot 자체에 Spot adapter를 사용하고 각 Actor participant에는 해당 Actor type의
 `ZLinkActorRelocationAdapter`를 사용한다.
 Instance Spot relocation에는 Spot adapter를 사용한다. Same-node operation과 `disableRelocation()`을 선택한 factory에서는 adapter를
 호출하지 않고 `recreateOnRelocation()`을 선택한 factory에는 application state adapter가 없다.
+
+`ZLinkSpotBaseDeltaRelocationAdapter<TSpot>`는 선택 capability다. `preserveStateWith(...)`에 등록한
+adapter class가 이 interface를 구현하면 Framework는 seal 전 turn 경계에서 `captureBase(...)`로 기준
+snapshot을 만들어 미리 전송하고, seal 뒤에는 `captureDelta(...)`가 만든 변경분만 전송한다. Target은
+`restoreBase(...)`로 기준 snapshot을 미리 복원하고 `applyDelta(...)`로 변경분을 적용해 최종 state를
+만든다. 변경분의 의미는 application이 소유한다. `applyDelta(...)`가 실패하면 그 instance를 폐기하고 새
+instance에 `restoreBase(...)`부터 반복하며, 부분 적용된 instance를 재사용하지 않는다. 이 interface를
+구현하지 않은 adapter는 기존 `capture`/`restore` 동작이 그대로 유지된다.
 
 Capture exception은 authority publication 전에 relocation을 abort하고 source admission을 유지한다. Restore
 exception은 target admission을 sealed 상태로 유지한 채 같은 immutable payload를 retry하거나 target을 교체한다.
@@ -444,6 +465,12 @@ public interface systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry 
 public interface systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot> {
   public abstract java.util.concurrent.CompletionStage<byte[]> capture(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> restore(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
+}
+public interface systems.zlink.framework.spots.ZLinkSpotBaseDeltaRelocationAdapter<TSpot> extends systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot> {
+  public abstract java.util.concurrent.CompletionStage<byte[]> captureBase(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
+  public abstract java.util.concurrent.CompletionStage<byte[]> captureDelta(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
+  public abstract java.util.concurrent.CompletionStage<java.lang.Void> restoreBase(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
+  public abstract java.util.concurrent.CompletionStage<java.lang.Void> applyDelta(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
 }
 public interface systems.zlink.framework.spots.ZLinkEntrySpot<TActor extends systems.zlink.framework.actors.ZLinkActor> extends systems.zlink.framework.spots.ZLinkSpotActorMembershipLifecycle<TActor> {
   public abstract systems.zlink.framework.spots.ZLinkEntrySpotContext context();

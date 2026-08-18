@@ -1095,6 +1095,24 @@ framework-managed queue, unfinished work, and timers move along with it.
 
 The factory configure callback's `PreserveStateWith` also specifies the adapter.
 
+<a id="base-delta-capture"></a>
+### Base/Delta Capture
+
+An optional capability of the relocation adapter. It sends a base snapshot
+(`CaptureBase`/`RestoreBase`) before the seal and, after the seal, sends only the
+delta (`CaptureDelta`/`ApplyDelta`), reducing the amount transferred inside the
+interruption window to the delta size for objects with large state. A factory that
+doesn't register it keeps the current `Capture`/`Restore` behavior.
+
+| Item | Content |
+|---|---|
+| Shape | Optional capability of the relocation adapter. The name refers to the declarations on the adapter surface; no independent public type. |
+| Public composition | The four operations `CaptureBase`, `CaptureDelta`, `RestoreBase`, and `ApplyDelta`. The base snapshot contains only application state, and a delta includes the checksum of the base snapshot it refers to. The meaning of a delta is owned by the application. |
+| Creation/management | Used only by factories that registered it. Base snapshot transfer also uses the relocation state chunk rules and the in-flight payload budget as they are. |
+| Delivery | The base snapshot is sent ahead of the seal while the source keeps processing; after the seal only the delta is sent. |
+| Lifetime | If `ApplyDelta` fails, the instance is discarded and the process repeats from `RestoreBase` on a new instance. A partially applied instance isn't reused. If the relocation fails after the base snapshot transfer, the target removes the base snapshot. |
+| Application authority | The application implements the capture/restore operations through the adapter. Whether it's used is fixed at factory registration. |
+
 <a id="classic-fanout"></a>
 ### Classic Fanout
 
@@ -1241,9 +1259,84 @@ that unit's contract.
 | Shape | Either a single Actor, or a Spot bundled with the Actors that must move together. No independent public type. |
 | Public composition | One of: a single Entry Spot Actor, a single Actor of a `PerActor` User Spot, a `PerActor` Spot message target, a `SpotWide` User Spot with all of its member Actors, or a single Instance Spot. |
 | Creation/management | Built by the framework handling the host `Relocate`, based on the currently processing node and the Spot execution mode. The application doesn't add or remove members of the unit. |
-| Delivery | The Relocation Store records the unit's identity, its saved state/queue/timer, and target restore information. Not exposed in application messages. |
+| Delivery | The unit's identity, captured state/queue/timer, and target restore information are sent directly from the source to the target as [relocation state chunks](#relocation-state-chunk). Not exposed in application messages. |
 | Lifetime | Created when the source blocks new work and starts the move; ends when the target starts processing after the location change, or the move is canceled before the location change. |
 | Application authority | The application doesn't directly create or change a unit. Only when `ApplicationSignaled` is chosen under `SpotWide` can it signal a safe turn to start the move. |
+
+<a id="relocation-state-chunk"></a>
+### Relocation State Chunk
+
+A piece of the relocation payload, split to at most a configured size and sent
+directly from the source to the target. The payload doesn't pass through a store;
+it crosses the network exactly once, on the same source–target ordered mesh
+connection that relay uses. Messages of other objects can interleave on the same
+connection, so which assembly a chunk belongs to is decided only by the arriving
+connection and the exact identity the chunk carries.
+
+| Item | Content |
+|---|---|
+| Shape | Framework-internal wire record. No independent public type. |
+| Public composition | Carries the `RelocationId`, target attempt, chunk ordinal, and encoded length. The whole-payload checksum that validates the assembled result is carried by the Restore request, not by chunks. |
+| Creation/management | The source runtime splits the captured payload into pieces no larger than the effective chunk size. The effective size is the smallest of the server setting `RelocationPayloadChunkLimit` (default 256 KiB), the effective receive chunk bound announced by the target, and the effective [in-flight payload budget](#in-flight-payload-budget). |
+| Delivery | Sent with `[send]` on the same ordered mesh connection after the Restore request. Not exposed in application messages. |
+| Lifetime | The target releases the chunk's Core retained lease immediately after copying it into the assembly buffer. A missing or duplicate ordinal, a chunk of an already-ended attempt, or exceeding the declared length isn't added to the assembly and is treated as an explicit failure. |
+| Application authority | The application doesn't create, interpret, or change chunks. |
+
+<a id="in-flight-payload-budget"></a>
+### In-Flight Payload Budget
+
+The ceiling on the sum of relocation chunk bytes a source node is sending
+concurrently on one peer connection. Keeps a large payload from monopolizing the
+bandwidth of ordinary messages on the same connection. It limits concurrently
+in-flight bytes, not the total payload size, so a payload larger than the budget
+still starts and completes as its chunks flow in order.
+
+| Item | Content |
+|---|---|
+| Shape | Byte ceiling set by server settings. No independent public type. |
+| Public composition | The per-connection ceiling is set by `RelocationInFlightPayloadBudget` (default 16 MiB; `0` means not applied), and the node-wide ceiling by `RelocationNodeInFlightPayloadBudget` (default `0`, not applied). |
+| Creation/management | The source runtime applies it per peer connection by observing the sum of relocation chunk charges the Core still accounts. |
+| Delivery | A source-local value; not carried on the wire. |
+| Lifetime | While the sum fills the budget, a new relocation unit waits before the source admission seal is applied, and the next chunk submission of an already-started unit waits until room opens. Because the wait is before the seal, a waiting Actor or Spot keeps processing messages normally, and this wait isn't included in interruption-time measurement. |
+| Application authority | The application sets the values only through settings and doesn't change them per relocation. |
+
+<a id="cutover-retransmission-window"></a>
+### Cutover Retransmission Window
+
+The period after the cutover submit terminal during which the source keeps a copy
+of the pre-boundary relay batch and the cutover, and retransmits them on a new
+connection if the connection dropped and the cutover was lost. The target discards
+the partially received pre-boundary relay segment and atomically replaces it with
+the whole retransmitted batch. The window's length equals the server setting
+`RelocationCutoverWaitTimeout` (default 1,000 ms).
+
+| Item | Content |
+|---|---|
+| Shape | A framework-managed source-local period. No independent public type. |
+| Public composition | Its length is the single value equal to `RelocationCutoverWaitTimeout`. |
+| Creation/management | The source runtime starts it at the cutover submit terminal; the kept copy is framework memory that doesn't occupy the pipe, so it isn't counted against the in-flight payload budget. |
+| Delivery | Retransmission resends one batch; it isn't a per-message journal or ACK. |
+| Lifetime | Starts at the cutover submit terminal; when the window ends, the copy is cleaned up exactly once. Once the source is already cleaned up or terminated, retransmission is impossible. |
+| Application authority | The application doesn't observe or change the window. An orchestrator uses [SafeToShutdown](#safe-to-shutdown) to confirm the shutdown-safe point, which includes the window's end. |
+
+<a id="safe-to-shutdown"></a>
+### SafeToShutdown
+
+An observation value the source runtime publishes in its own host status for the
+relocation operations it started, after every unit has reached the point where its
+Message Follow route can be removed and each unit's retransmission window has
+ended. It isn't a completion ACK sent by the target or any other party. Both
+conditions are source-local events, so the decision doesn't use another node's
+clock.
+
+| Item | Content |
+|---|---|
+| Shape | A source-local observation value in host status. No independent public type. |
+| Public composition | Exposed through the host status query and change observation of [Runtime monitoring](24-runtime-monitoring.en.md). |
+| Creation/management | The source runtime publishes it after confirming that every relocation unit reached the point where its Message Follow route can be removed and that each unit's [retransmission window](#cutover-retransmission-window) ended. It's never published earlier. |
+| Delivery | Delivered only through the host status observation surface; not carried in relocation wire messages. |
+| Lifetime | After publication, a deployment orchestrator uses it to decide when to call `Shutdown`. Calling `Shutdown` before publication is still allowed; in that case the remaining Message Follow routes disappear with the transport, and requests from senders that cached the previous route can end with `Unavailable`. |
+| Application authority | The application only observes the value; it doesn't publish or change it. |
 
 <a id="maintenance-wave"></a>
 ### Maintenance Wave

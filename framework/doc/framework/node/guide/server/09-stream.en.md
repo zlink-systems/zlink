@@ -196,6 +196,16 @@ Use `Manual` when the callback needs to run on a game loop or UI thread. `Immedi
 the callback on the connector's own worker, so it doesn't fit a client that needs thread
 affinity.
 
+### 5.1 Diagnostics Level
+
+The connector takes a diagnostics level option with the same four values as the server
+runtime (`off`/`errors`/`Normal`/`Detailed`). The default is `errors`, which keeps the
+existing behavior; lowering it to `off` stops the connector from creating or attaching
+flow identifiers on outbound frames, removing the observation-only cost
+([Stream Connector common spec §13](../../../common/spec/stream-connector/32-stream-connector.en.md#13-diagnostics-level)).
+The correlation used for request/response matching is protocol information and keeps
+working at `off`.
+
 ## 6. Client Send And Request
 
 ```typescript

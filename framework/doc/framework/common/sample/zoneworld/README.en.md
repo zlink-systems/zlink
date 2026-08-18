@@ -124,7 +124,7 @@ flowchart LR
 | Resource | Responsibility | Preparation |
 |---|---|---|
 | Location Store | Peer descriptor, ZoneId Spot authority, and Actor location | Shared Redis, per run |
-| Relocation Store | Player Actor relocation payloads and operation recovery records | A per-run Redis keyspace with a provider and key prefix separate from the Location Store |
+| Relocation Store | Operation recovery records for Player Actor relocation (post-relocation pending-request terminal records) | A per-run Redis keyspace with a provider and key prefix separate from the Location Store |
 | Maintenance store | Desired state per NodeId | Shared Redis keyspace, per run |
 | Zone state | Actor coordinate copy, border snapshot, and tick | Zone Spot |
 | Player actor state | Coordinates, zone, and bot direction | Player Actor relocation adapter |

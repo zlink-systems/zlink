@@ -162,6 +162,10 @@ export interface ZLinkLocationOptions {
     routeCacheMaxAgeMs(value: number): this;
     messageFollowDurationMs(value: number): this;
     sessionRelocationSealTimeoutMs(value: number): this;
+    relocationCutoverWaitTimeoutMs(value: number): this;
+    relocationPayloadChunkLimitBytes(value: number): this;
+    relocationInFlightPayloadBudgetBytes(value: number): this;
+    relocationNodeInFlightPayloadBudgetBytes(value: number): this;
 }
 
 export interface ZLinkNestFrameworkOptionsBuilder {
@@ -433,8 +437,33 @@ with no
 [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 factory where every factory is `DisableRelocation` can omit the
 Relocation Store. A missing or duplicate registration is a
-configuration error before socket bind.
+configuration error before socket bind. The Relocation Store doesn't
+hold the state/queue/timer handoff payload of Actor and Spot
+relocation — the handoff payload is sent directly from source memory
+to the target. The Store owns recording the first message and creation
+information of Instance Spot cold activation, and recording the
+terminal result of pending requests that complete after relocation, so
+this registration requirement remains as is.
 
 `sessionRelocationSealTimeoutMs(value)` is a startup-only positive finite millisecond value
 with a 3,000 default. Zero, negative, `NaN`, infinity, non-integer, or a value outside the
 safe-integer range is a configuration error before socket bind.
+
+`relocationCutoverWaitTimeoutMs(value)` is a startup-only positive finite millisecond value
+with a 1,000 default. It is the time the target waits for cutover after the relay-ready
+reply, and it equals the time the source keeps the boundary batch retransmission copy.
+Zero, negative, `NaN`, infinity, non-integer, or a value outside the safe-integer range is
+a configuration error before socket bind.
+
+`relocationPayloadChunkLimitBytes(value)` is the size cap of one encoded chunk that a
+relocation payload is split into, with a 262,144 (256 KiB) default. Zero, a value
+exceeding the transport-negotiated frame limit, negative, `NaN`, infinity, non-integer, or
+a value outside the safe-integer range is a configuration error before socket bind.
+
+`relocationInFlightPayloadBudgetBytes(value)` is the cap on the accounted byte sum of
+relocation chunks concurrently in flight for one peer connection, with a 16,777,216
+(16 MiB) default. `relocationNodeInFlightPayloadBudgetBytes(value)` applies the same sum
+cap node-wide, with a default of 0. For both budgets, 0 means the budget isn't applied.
+Negative, `NaN`, infinity, non-integer, or a value outside the safe-integer range is a
+configuration error before socket bind. All three size options are startup-only, and the
+runtime doesn't adjust them automatically.

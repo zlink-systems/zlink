@@ -181,7 +181,7 @@ maintenance이면 source version, rolling update이면 요청한 target version�
 `effectiveTargetApplicationVersion`으로 기록한다.
 
 모든 target을 `Prepared`로 만들고 relocation commit을 publish하기 전에 deadline이 먼저 끝나면 relocation
-reference와 reservation을 durable abort 순서로 정리하고 source authority와 admission을 복원한 뒤
+staging과 reservation을 durable abort 순서로 정리하고 source memory에 유지한 payload로 source authority와 admission을 복원한 뒤
 `Blocked/DeadlineExceeded`를 반환한다. Commit 뒤에는 source로 rollback하지 않으며 같은 target
 process가 실행 중일 때만 남은 단계를 처리한다. Target process가 종료되면
 다른 runtime이 relocation을 자동으로 이어받지 않으며 `RELOCATED`를 반환하지 않는다.

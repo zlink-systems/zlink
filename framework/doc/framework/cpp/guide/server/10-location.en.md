@@ -43,7 +43,10 @@ the selected MeshNode.
 
 The official Redis extension provides the Location Store and Relocation Store as separate
 classes. The Location Store handles atomic changes to a small location record. The
-Relocation Store stores the immutable payload an object needs to move.
+Relocation Store keeps relocation's residual records — Instance Spot cold-activation records
+and the terminal records of pending requests that complete after a relocation. The moving
+state, queue, and timers themselves never pass through the store; they travel directly from
+the source to the target over the mesh connection.
 
 ```cpp
 // Register the Store that decides the current owner and location.
@@ -53,7 +56,7 @@ options.add_location_store (
       .connection_string = "redis-host:6379",
       .key_prefix = "game:location"}));
 
-// Register a separate Store that stores the state/queue/timer payload to move.
+// Register a separate Store that keeps residual relocation records (Instance Spot activation, pending-request terminals).
 options.add_relocation_store (
   std::make_shared<framework::redis::redis_relocation_store_t> (
     framework::redis::redis_relocation_options_t{
@@ -132,11 +135,14 @@ location.message_follow_duration = std::chrono::seconds (30);
 | `route_cache_max_age` | 15s | The max time before a cached route is re-checked |
 | `message_follow_duration` | 30s | How long the previous owner relays messages to the new owner before the move |
 
-Relocation has no separate participant, record, concurrency, or in-flight-byte capacity
-setting. Target staging uses the host's shared Application Job Queue reservation and runs a
-backlog larger than the live-job limit progressively. Core memory accounting, negotiated
-frame size, and Store limits still apply; see
-[Relocation Flow §5.3](../../../common/spec/server/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
+Relocation has no separate participant or record setting. How much of the mesh connection
+the moving state's transfer may occupy is tuned with the chunk-size and in-flight-budget
+server settings; the setting list and tuning criteria are covered by
+[12-operations §2](12-operations.en.md#2-relocate--moving-to-another-host-while-keeping-state).
+Target staging uses the host's shared Application Job Queue reservation and runs a backlog
+larger than the live-job limit progressively. Core memory accounting and the negotiated
+frame size still apply; see
+[Relocation Flow](../../../common/spec/server/28-relocation-flow.en.md).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.

@@ -37,9 +37,11 @@ factory가 하나라도 있으면 Relocation Store를 정확히 하나 등록해
 socket bind 전에 configuration error다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
 `disableRelocation()`만 선택한 same-node 구성에는 Relocation Store가 필수가 아니다. 두 capability를 묶는
 Kotlin DSL이나 Redis 전용 registration helper는 제공하지 않는다.
-완료 가능한 모든 cross-node Actor·[Spot](../../../01-glossary.ko.md#spot) 이동은 Relocation Store를 사용한다.
-`recreateOnRelocation()`도 accepted journal과 recovery payload를 저장하고 `preserveStateWith(...)`는 application
-state를 추가로 저장한다. Same-node Actor join은 Relocation payload를 만들지 않고,
+Cross-node Actor·[Spot](../../../01-glossary.ko.md#spot) 이동의 application state·queue·timer handoff
+payload는 Relocation Store에 저장하지 않는다. Source가 payload를 memory에 유지한 채 source–target
+ordered mesh 연결로 직접 chunk 전송하며, source memory가 복원 원본이다. Relocation Store는 Instance
+Spot cold activation 기록과 relocation 뒤 완료되는 pending request의 terminal 기록을 계속 소유하므로
+위 등록 요구는 유지된다. Same-node Actor join은 relocation payload를 만들지 않고,
 `disableRelocation()`을 선택한 cross-node 이동은 capture 전에 거부한다.
 
 다음 Java builder member는 Kotlin에서 property 변환 없이 같은 JVM signature로 직접 호출한다.
@@ -93,6 +95,14 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract void setMessageFollowDuration(java.time.Duration);
   public abstract java.time.Duration sessionRelocationSealTimeout();
   public abstract void setSessionRelocationSealTimeout(java.time.Duration);
+  public abstract long relocationPayloadChunkLimitBytes();
+  public abstract void setRelocationPayloadChunkLimitBytes(long);
+  public abstract long relocationInFlightPayloadBudgetBytes();
+  public abstract void setRelocationInFlightPayloadBudgetBytes(long);
+  public abstract long relocationNodeInFlightPayloadBudgetBytes();
+  public abstract void setRelocationNodeInFlightPayloadBudgetBytes(long);
+  public abstract java.time.Duration relocationCutoverWaitTimeout();
+  public abstract void setRelocationCutoverWaitTimeout(java.time.Duration);
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
   public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setRoutingIdPrefix(java.lang.String);
@@ -118,6 +128,15 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
 
 `sessionRelocationSealTimeout()`은 Java와 같은 startup-only 양수 `Duration`이고 기본값은 3초다.
 Millisecond 변환 불가, 0, 음수와 무한대는 socket bind 전에 configuration error다.
+
+`relocationPayloadChunkLimitBytes()`, `relocationInFlightPayloadBudgetBytes()`,
+`relocationNodeInFlightPayloadBudgetBytes()`과 `relocationCutoverWaitTimeout()`도 Java 공개 계약을 그대로
+사용한다. Chunk limit은 relocation payload를 나눈 encoded chunk 하나의 최대 크기(byte)로 기본값
+256 KiB이며 transport가 협상한 frame 한도를 넘게 설정하면 socket bind 전에 startup configuration
+error다. In-flight budget은 peer 연결당 동시 전송 chunk byte 합계 상한으로 기본값 16 MiB, `0`은
+미적용이다. Node in-flight budget은 같은 규칙의 node 전체 합계이고 기본값 `0`은 미적용이다.
+Cutover wait timeout은 target의 cutover 대기이자 source의 재전송용 boundary batch 사본 유지 시간으로
+기본값 1초다. 네 값 모두 startup-only이며 음수는 socket bind 전에 configuration error다.
 
 Kotlin은 Java `ZLinkStreamNodeBuilder.configureSocket()`와
 `ZLinkStreamSocketConfig.setMaxMessageSize(...)`를 그대로 사용한다. 기본값은 `64 KiB`이며,
@@ -181,7 +200,9 @@ startup configuration error로 거부한다.
 모든 factory는 Java builder를 Kotlin receiver callback으로 구성한다. Callback은
 `disableRelocation()`, `recreateOnRelocation()`, `preserveStateWith(...)` 중 정확히 하나를 호출한다. 누락하거나
 둘 이상 호출하면 socket bind 전에 startup configuration error다. Kotlin 전용 policy value와 suspending
-adapter는 추가하지 않는다.
+adapter는 추가하지 않는다. 등록한 adapter class가 Java `ZLinkActorBaseDeltaRelocationAdapter` 또는
+`ZLinkSpotBaseDeltaRelocationAdapter`도 구현하면 base/delta capture 선택 capability가 함께 등록되며,
+구현하지 않으면 기존 `capture`/`restore` 동작이 그대로 유지된다. 별도 등록 API는 없다.
 
 Framework는 receiver callback을 등록 호출 안에서 동기적으로 한 번만 실행한다. Callback이 반환된 뒤 보관한
 builder를 다시 호출하면 configuration error다. Callback이 예외를 던지면 해당 factory를 등록하지 않고 같은

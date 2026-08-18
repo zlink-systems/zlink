@@ -22,8 +22,10 @@ Store는 위치를 찾을 때만 사용한다. 실제 application message는 선
 ## 1. Store 등록
 
 공식 Redis extension은 Location Store와 Relocation Store를 별도 class로 제공한다. Location Store는
-작은 위치 record의 원자적 변경을 담당한다. Relocation Store는 object 이동에 필요한 immutable payload를
-저장한다.
+작은 위치 record의 원자적 변경을 담당한다. Relocation Store는 relocation의 잔존 기록 — Instance Spot
+cold activation 기록과 relocation 뒤에 완료되는 pending request의 terminal 기록 — 을 저장한다.
+이동하는 state·queue·timer 자체는 저장소를 거치지 않고 source에서 target으로 mesh 연결을 통해
+직접 전송된다.
 
 === "C#/.NET"
 
@@ -44,7 +46,7 @@ Store는 위치를 찾을 때만 사용한다. 실제 application message는 선
                 ConnectionString = "redis-host:6379",
                 KeyPrefix = "game:relocation"
             }));
-            // 이동할 state·queue·timer payload를 저장하는 Store를 별도로 등록한다.
+            // relocation 잔존 기록(Instance Spot activation, pending request terminal)을 저장하는 Store를 별도로 등록한다.
     });
     ```
 
@@ -58,7 +60,7 @@ Store는 위치를 찾을 때만 사용한다. 실제 application message는 선
           .connection_string = "redis-host:6379",
           .key_prefix = "game:location"}));
 
-    // 이동할 state·queue·timer payload를 저장하는 Store를 별도로 등록한다.
+    // relocation 잔존 기록(Instance Spot activation, pending request terminal)을 저장하는 Store를 별도로 등록한다.
     options.add_relocation_store (
       std::make_shared<framework::redis::redis_relocation_store_t> (
         framework::redis::redis_relocation_options_t{
@@ -75,7 +77,7 @@ Store는 위치를 찾을 때만 사용한다. 실제 application message는 선
             .setConnectionString("redis-host:6379")
             .setKeyPrefix("game:location")));
 
-    // 이동할 state·queue·timer payload를 저장하는 Store를 별도로 등록한다.
+    // relocation 잔존 기록(Instance Spot activation, pending request terminal)을 저장하는 Store를 별도로 등록한다.
     options.addRelocationStore(new ZLinkRedisRelocationStore(
         new ZLinkRedisRelocationOptions()
             .setConnectionString("redis-host:6379")
@@ -92,7 +94,7 @@ Store는 위치를 찾을 때만 사용한다. 실제 application message는 선
                 .setConnectionString("redis-host:6379")
                 .setKeyPrefix("game:location")))
 
-    // 이동할 state·queue·timer payload를 저장하는 Store를 별도로 등록한다.
+    // relocation 잔존 기록(Instance Spot activation, pending request terminal)을 저장하는 Store를 별도로 등록한다.
     options.addRelocationStore(
         ZLinkRedisRelocationStore(
             ZLinkRedisRelocationOptions()
@@ -109,7 +111,7 @@ Store는 위치를 찾을 때만 사용한다. 실제 application message는 선
       keyPrefix: 'game:location'
     }));
 
-    // 이동할 state·queue·timer payload를 저장하는 Store를 별도로 등록한다.
+    // relocation 잔존 기록(Instance Spot activation, pending request terminal)을 저장하는 Store를 별도로 등록한다.
     builder.addRelocationStore(new ZLinkRedisRelocationStore({
       url: 'redis://redis-host:6379',
       keyPrefix: 'game:relocation'
@@ -284,11 +286,12 @@ Manual peer를 하나라도 사용한 host에서는 host relocation을 지원하
 | `RouteCacheMaxAge` | 15초 | cached route를 다시 확인하기 전 최대 시간 |
 | `MessageFollowDuration` | 30초 | 이동 전 owner가 새 owner로 메시지를 relay하는 기간 |
 
-Relocation에는 별도 participant·record·동시성·in-flight byte capacity 설정이 없다. Target
-staging은 host의 공유 Application Job Queue reservation을 사용하고, live-job limit보다 큰 backlog도
-점진적으로 실행한다. Core memory accounting, negotiated frame size와 Store limit은 그대로 적용한다.
-[Relocation Flow §5.3](../../../common/spec/server/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
-참고한다.
+Relocation에는 별도 participant나 record 설정이 없다. 이동 state 전송이 mesh 연결에서 차지하는
+몫은 chunk 크기와 in-flight 예산 server 설정으로 조정하며, 설정 목록과 조정 기준은
+[12-operations §2](12-operations.ko.md#2-relocate--상태를-유지한-채-다른-host로-옮기기)가 다룬다.
+Target staging은 host의 공유 Application Job Queue reservation을 사용하고, live-job limit보다 큰
+backlog도 점진적으로 실행한다. Core memory accounting과 negotiated frame size는 그대로 적용한다.
+[Relocation Flow](../../../common/spec/server/28-relocation-flow.ko.md)를 참고한다.
 
 **lease 값 넷은 서로 묶여 있다.** 다음 관계를 어기면 startup error다. 값을 바꿀 때는
 넷을 함께 본다.

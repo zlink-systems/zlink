@@ -156,7 +156,7 @@ connection-bound work wasn't terminal drained within the pre-`Captured`
 [deadline](../../../01-glossary.en.md#deadline). A bound-session
 request is not drained; it follows the same frozen-journal and
 ingress-hold rules as any other Actor request. The Framework
-cleans up the relocation reference and reservation, releases the
+cleans up the relocation staging and reservation, releases the
 reversible seal, and restores host state and admission. If every
 target is `Prepared` and `Relocating` publication succeeds, it
 completes every relocation unit and switches to `relocated`.
@@ -769,6 +769,13 @@ factory and only `DisableRelocation` factories doesn't need a
 Relocation Store. If a needed Store is missing, or the same capability
 is duplicate-registered, the Framework terminates with a configuration
 error before socket bind.
+The Relocation Store doesn't hold the state/queue/timer handoff
+payload of Actor and Spot relocation — the handoff payload is sent
+directly from source memory to the target. The Store owns recording
+the first message and creation information of Instance Spot cold
+activation, and recording the terminal result of pending requests that
+complete after relocation, so this registration requirement remains as
+is.
 
 `configure_network()` returns the process-wide BindHost and
 AdvertiseHost default, and a per-listener setting overrides this value.

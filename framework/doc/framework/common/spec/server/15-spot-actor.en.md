@@ -335,9 +335,9 @@ to the target Actor by the source's Message Follow route.
 
 The completion, `OperationId`, optional reply, and retry cursor of a same-node and
 cross-node Join are preserved only while the current source and target processes are
-running. The Relocation Store payload is used to deliver state and queue to the
-target during a normal handoff, and isn't used as the basis to automatically replay
-completion after process termination.
+running. The relocation payload is kept in source memory and used to deliver state and
+queue directly to the target during a normal handoff, and isn't used as the basis to
+automatically replay completion after process termination.
 
 `OperationId` is the idempotency ID the application uses to distinguish completion
 callback retries as the same work. It's a different value from `RelocationId`, which
@@ -369,7 +369,7 @@ it's `Rejected`, not `Failed`.
 | The Actor's relocation policy forbids cross-node moves. | `Rejected` |
 | The location change wasn't committed by the deadline. | `DeadlineExceeded` |
 | Capture/factory/restore/staging fails with an internal error. | `InternalFailure` |
-| The durable relocation payload is missing or fails verification. | `DataLost` |
+| Chunk assembly or checksum verification of the transferred relocation payload fails. | `DataLost` |
 | The Actor generation differs from the current value. | `InvalidOperation` |
 | The owner or membership fence differs, or the Actor is moving. | `Unavailable` |
 | Runtime shutdown started first and interrupted before relay-ready was accepted. | `ShuttingDown` |
@@ -477,19 +477,37 @@ order after the handler ends normally.
    created and no message is sent.
 2. Once the handler ends normally, the framework confirms the target. If the target
    is a User Spot, it passes `ActorId` and the join request to the target's
-   `OnActorJoin`. If `Accepted`, it continues; if `Rejected`, it ends while keeping
-   source membership. If the target is an Entry Spot, `OnActorJoin` isn't called.
+   `OnActorJoin`. While processing this approval request, and before returning
+   `Accepted`, the target also finishes registering the
+   [relocation temporary queue](01-glossary.en.md#relocation-temporary-queue) for the
+   ActorId and `ObjectGeneration` and preparing factory execution. The later Restore
+   request doesn't repeat this preparation, so the number of round trips stays the
+   same and only the post-seal processing time shrinks. The approval reply also
+   carries the target's effective receive limit for the
+   [relocation state chunk](01-glossary.en.md#relocation-state-chunk) — the unit the
+   relocation payload is split into for transfer — a conservative
+   value based on a stable lower bound that doesn't drop on recomputation. If
+   `Accepted`, it continues; if `Rejected`, the target removes the temporary queue it
+   registered and the prepared factory resources within the same processing, and it
+   ends while keeping source membership. If the target is an Entry Spot,
+   `OnActorJoin` isn't called.
 3. The framework checks the relocation policy and target capacity. If the move can
-   proceed, it briefly blocks new message processing on the source Actor and stores
-   application state and the current Actor queue in `RelocationStore`. If it's
-   `DisableRelocation`, it's rejected at this stage.
+   proceed, it briefly blocks new message processing on the source Actor, captures
+   application state and the current Actor queue, and keeps them in source memory.
+   The relocation payload is delivered directly from source to target without going
+   through a store. If it's `DisableRelocation`, it's rejected at this stage.
 4. The source runtime **sends the Actor Restore request to the target runtime
-   first**. Before dispatching the next packet, the target dispatcher registers a
-   [relocation temporary queue](01-glossary.en.md#relocation-temporary-queue) for
-   the ActorId and `ObjectGeneration`. Afterward, a message arriving for the same
-   Actor goes into the temporary queue without looking up the application instance.
-   The target creates the Actor and reads application state and the saved existing
-   queue, but doesn't run application work yet.
+   first**. The Restore request includes a manifest carrying the total payload size,
+   chunk count, and checksum, and the payload follows in chunks on the same ordered
+   connection — chunk size and checksum rules are defined by
+   [Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md). The target
+   dispatcher uses the relocation temporary queue registered during approval
+   processing; on an Entry Spot join, which has no approval round trip, it registers
+   the temporary queue before dispatching the next packet. Afterward, a message
+   arriving for the same Actor goes into the temporary queue without looking up the
+   application instance. After verifying the assembled payload's checksum, the target
+   creates the Actor and restores application state and the existing queue, but
+   doesn't run application work yet.
 5. A message arriving after the source seal is held in the source runtime's
    `ingress hold`. The hold has no record-count or byte bound defined specifically
    for relocation. Once target reports the temporary queue and Restore ready, source
@@ -499,7 +517,7 @@ order after the handler ends normally.
    connection. Later arrivals enter the post-boundary span, so mailbox drain isn't
    required. After Actor Restore, target runs the
    target CAS membership, owner, capacity, and generation together in `LocationStore`.
-   It does so on cutover, or after a 1,000ms wait from the relay-ready reply while
+   It does so on cutover, or, when neither the cutover nor a retransmission arrives within the cutover wait time (`RelocationCutoverWaitTimeout`, default 1,000ms) from the relay-ready reply, while
    recording a Warning. Only target performs this CAS. On success target becomes owner; on failure
    the target queue doesn't open.
 7. After CAS, saved Actor work, pre-boundary relay, and remaining temporary work enter the
@@ -513,6 +531,25 @@ order after the handler ends normally.
    and releases the seal. On timeout it closes the physical STREAM connection and cleans
    Session state.
 
+Even after an `Accepted` approval, the move may not start due to the later relocation
+policy check (`DisableRelocation`), a capacity conflict, or a state compatibility
+failure. Prepared resources are identified by an exact identity including
+`RelocationId` and target attempt, and if the move doesn't start, the target removes
+them once the preparation validity period passes. There's no path where a
+merely-prepared target becomes owner, and even with the temporary queue registered, no
+application handler runs before the Location Store CAS.
+
+Only one relocation temporary queue exists per object. If an approval or Restore with
+a different exact identity arrives before the existing preparation is cleaned up, the
+target first aborts and cleans up the existing preparation state, then builds the
+preparation for the new identity — the later attempt wins, and late chunks and
+Restores of the previous identity are discarded without being linked to assembly.
+
+`JoinEntrySpot` doesn't call `OnActorJoin` on the target, so there's no approval round
+trip to carry this preparation. An Entry Spot join performs preparation on the Restore
+request, and since there's no negotiated chunk limit, it transfers with a conservative
+chunk size of 32 KiB (the encoded size of one chunk) guaranteed in any deployment.
+
 Since `Accepted` and `Rejected` are mutually exclusive results that don't happen at
 the same time, they're split with `alt` in the diagram. Whether a bound Session
 exists is optional, so only that part is marked `opt`.
@@ -523,7 +560,6 @@ sequenceDiagram
     participant SourceRuntime as Source runtime
     participant SourceActor as Source Actor
     participant SourceSpot as Source Spot
-    participant RelocationStore as Relocation Store
     participant TargetRuntime as Target runtime
     participant TargetTemp as Actor temporary queue
     participant TargetQueue as Target Actor queue
@@ -537,19 +573,21 @@ sequenceDiagram
     Note over SourceRuntime,TargetSpot: the flow below is for a User Spot target
     SourceRuntime->>TargetSpot: [request] OnActorJoin · decide whether target Spot accepts Actor
     alt Accepted
-        TargetSpot-->>SourceRuntime: [reply] Actor admission Accepted with optional application reply
+        TargetRuntime->>TargetTemp: [local] register relocation temporary queue and prepare factory during approval
+        TargetSpot-->>SourceRuntime: [reply] Actor admission Accepted · optional reply and effective receive chunk limit
         SourceRuntime->>SourceActor: [local] block new messages on the source Actor
-        SourceRuntime->>RelocationStore: [request] store Actor state, unexecuted queue, and timers
-        RelocationStore-->>SourceRuntime: [reply] payload location and content checksum fixed
-        SourceRuntime->>TargetRuntime: [request] install temporary queue, Restore Actor, prepare relay
-        TargetRuntime->>TargetTemp: [local] register the Actor relocation temporary queue
-        TargetRuntime->>TargetActor: [local] create the Actor and Restore application state
-        TargetRuntime-->>SourceRuntime: [reply] Actor Restore and temporary queue ready · source still owner
+        SourceRuntime->>SourceRuntime: [local] run Capture · keep payload in source memory
+        SourceRuntime->>TargetRuntime: [request] Actor Restore request · includes payload size, chunk count, checksum
+        loop transfer payload in chunks
+            SourceRuntime->>TargetRuntime: [send] payload chunk · same ordered connection
+        end
+        TargetRuntime->>TargetActor: [local] assemble chunks, verify checksum · create Actor and Restore application state
+        TargetRuntime-->>SourceRuntime: [reply] Actor Restore and relay-reception ready · source still owner
         SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
         TargetRuntime->>TargetTemp: [local] add message to the pre-boundary relay span
-        alt cutover arrives within 1,000ms
+        alt cutover arrives within the wait time
             SourceRuntime->>TargetRuntime: [send] cutover · pre-boundary relay sent
-        else no cutover for 1,000ms after relay-ready reply
+        else no cutover within the wait time after relay-ready reply
             TargetRuntime->>TargetRuntime: [local] cutover_timeout Warning · proceed by fallback
         end
         TargetRuntime->>LocationStore: [request] CAS membership/owner if source fence still matches
@@ -574,8 +612,10 @@ sequenceDiagram
 
 This diagram shows only the path that ends normally. If `OnActorJoin` returns
 `Rejected` or explicitly fails before relay-ready is accepted, source membership is kept.
-`OnLeaveActor` is only sent after owner commit, so it isn't called on this source-restoration path. A target that received
-the Restore request first registers a relocation temporary queue. Messages and
+`OnLeaveActor` is only sent after owner commit, so it isn't called on this source-restoration path. A User Spot target uses the
+relocation temporary queue registered during approval processing; on an Entry Spot
+join, the target that received the Restore request registers the temporary queue
+first. Messages and
 requests arriving in that time wait in the temporary queue and aren't run before
 moving to the real Actor queue. If it fails after target commit, it isn't rolled back
 to the source. Only while
@@ -590,8 +630,9 @@ one-way messages to the original Actor queue in arrival order. Once the queue is
 that temporary queue registration is removed. Source owner, state, and membership are
 kept unchanged throughout. A timeout, aggregate commit conflict, or cutover-submit
 failure after relay-ready doesn't roll back to source. If the same target process is running, it
-can retry within the deadline using the confirmed location information and stored
-payload. If the target process terminates, a different runtime doesn't automatically
+can retry within the deadline using the confirmed location information and a resend of
+the payload the source keeps in memory. If the target process terminates, a different
+runtime doesn't automatically
 recover it.
 
 [ObjectGeneration](01-glossary.en.md#objectgeneration) is kept unchanged. Since the
@@ -600,8 +641,9 @@ target Context uses the existing `ObjectGeneration` and the new owner generation
 Once the Location Store CAS succeeds, it blocks the source Context from
 executing any further operations.
 
-A message arriving after `Defer()` but before the source seal is stored in
-`RelocationStore` together with the current Actor queue. A message arriving after the
+A message arriving after `Defer()` but before the source seal is captured together
+with the current Actor queue and included in the relocation payload kept in source
+memory. A message arriving after the
 source seal is temporarily held in a relocation ingress hold. This hold has no
 relocation-specific record-count or byte bound.
 
@@ -690,17 +732,62 @@ instance.
 
 The application manages byte format, version, compatibility, and migration. The
 framework doesn't add a state contract ID, generic state type, serialization
-profile, or message codec to the relocation adapter contract. The Relocation Store
-stores application bytes as-is as an opaque payload, and the framework only verifies
-its own root manifest/chunk/checksum.
+profile, or message codec to the relocation adapter contract. The framework transfers
+application bytes as-is, as an opaque payload, directly from source to target, and
+only verifies the chunks the payload was split into and the whole-payload checksum.
+Chunk size and checksum rules and the
+[in-flight payload budget](01-glossary.en.md#in-flight-payload-budget), which limits
+concurrent transfer volume, are defined by
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md).
 
 Relocation adds no separate size bound to the byte sequence returned by `Capture`.
-The size limits the Relocation Store and transport apply to ordinary payload still
-apply. An empty byte sequence is valid application state, and a null result is an
+Connection occupancy during transfer is limited by the chunk size and in-flight
+budget, and even a payload larger than the budget can start and complete as chunks
+flow through in order. An empty byte sequence is valid application state, and a null result is an
 adapter contract violation. Once the callback succeeds, the framework immediately copies the result or
 takes ownership of it, so the application doesn't change the result afterward. Bytes
 passed to `Restore` are only valid until the callback completes — the callback must
 copy them itself to keep them.
+
+A `PreserveStateWith` adapter can additionally register
+[base/delta capture](01-glossary.en.md#basedelta-capture) as an optional
+capability. In a factory that registers it, the full baseline state snapshot is
+transferred ahead of time, before the seal, while the source keeps processing; after
+the seal, only the changes since the baseline snapshot are transferred, shrinking the
+amount sent during the interruption window. A factory that doesn't register it uses
+the `Capture`/`Restore` behavior above as-is. When application state is just one
+indistinguishable opaque byte sequence, the framework can't compute the changes on
+the application's behalf, so the meaning of a delta is owned by the application.
+
+```text
+This is contract pseudocode, not an actual API.
+
+CaptureBase()   // builds the baseline snapshot at a turn boundary before the seal. The source keeps processing afterward.
+CaptureDelta()  // after the seal, builds only the changes since the baseline snapshot.
+RestoreBase()   // the target restores the baseline snapshot ahead of time.
+ApplyDelta()    // applies the changes arriving after the seal to build the final state.
+```
+
+The baseline snapshot carries only application state. Framework queue and timers are
+confirmed once at the seal boundary, even in the delta scheme. The baseline snapshot
+transfer also uses the same chunk and budget rules as a regular relocation payload,
+so a pre-seal transfer competing for the budget with other relocations on the same
+connection is the intended result of total-channel control.
+
+The failure rules of the delta scheme are as follows.
+
+- If `ApplyDelta` fails, that instance is discarded and it repeats from
+  `RestoreBase` on a new instance. A partially applied instance isn't reused.
+- A delta includes the checksum of the baseline snapshot it references. If it
+  differs from the target's baseline snapshot, it isn't applied, and transfer
+  restarts from the baseline snapshot.
+- A `CaptureDelta` failure is an explicit post-seal failure, so the source queue is
+  restored from the payload in source memory and the operation ends as failed.
+- If relocation fails after the baseline snapshot transfer, the target removes the
+  baseline snapshot and doesn't restore from a partially applied state.
+- Multiple baseline snapshot transfer attempts are distinguished by the
+  relocation's exact identity, and a delta isn't applied to a baseline snapshot of
+  a different identity.
 
 Join and host maintenance use the same factory relocation configuration and adapter
 registration. The Actor adapter is called when an Actor that chose
@@ -745,7 +832,7 @@ following values.
 | `AggregateId` and generation | Identifies the same User Spot move and its commit generation. |
 | Participant count | The total number of Spot and Actors in the tree. |
 | Inventory root and digest | Points to the whole list the Location Store uses as authority. |
-| Owner and relocation root | Points to the current owner and the payload to restore. |
+| Owner | Points to the current owner. The payload to restore originates from source memory, not a store, so authority doesn't point to it. |
 
 ```mermaid
 flowchart LR
@@ -793,8 +880,8 @@ Spot lifecycle callback finish before target admission.
 Before commit, the new inventory tree and target staging aren't visible to the resolver.
 If even one participant fails before relay-ready is accepted, target staging is discarded
 and the whole aggregate's source state is kept. Afterward, it doesn't roll back
-just some participants to the source — it keeps the same aggregate identity,
-inventory root, and relocation root. Only while the same target process is running
+just some participants to the source — it keeps the same aggregate identity and
+inventory root. Only while the same target process is running
 is the whole aggregate continued; if the process terminates, a different runtime
 doesn't take over.
 
@@ -831,7 +918,8 @@ application that overrides the callback can start the next round or match here.
 ## 7. Failure-Handling Scope
 
 A failure before relay-ready is accepted finishes an `Aborted` CAS, confirms route and
-source location snapshot cancellation, cleans up relocation root/reservation, and restores
+source location snapshot cancellation, cleans up the relocation reservation and target
+staging, and restores
 source state before reopening source admission. After that boundary, source isn't restored
 regardless of cutover-submit result. After cutover, if a Location Store
 change result isn't received, target doesn't guess; it re-reads the same authority. If
@@ -839,10 +927,12 @@ the exact target isn't owner, it retries with the same fence until Restore valid
 expires. Failure to confirm owner transition by then records `location_update_failed`,
 removes the target Actor or Spot and temporary queue, and sends no Session route update.
 
-If `Capture` fails, the relocation payload isn't linked to the current authority. If
+If `Capture` fails, no Restore request is sent and the source is kept. If
 `Restore` fails, the target staging instance and temporary queue are discarded. If
 the same source and target processes are still running and the deadline remains, a
-new instance can be created to retry Restore with the same payload. A different
+new instance can be created to retry Restore with the same payload. The re-Restore's
+payload origin is source memory, not a store — the source transfers the same payload
+again. A different
 target isn't automatically selected — if it doesn't succeed by the deadline, the
 source is kept and it ends with `StateIncompatible` or a `Failed` result matching
 the cause.
@@ -883,7 +973,7 @@ Actor moves. Before relocation starts, the Session owner seals that Actor bindin
 holds Session requests and pushes.
 
 After Actor/Spot preparation, target performs the Location Store CAS on cutover or after
-the 1,000ms fallback. Once CAS, target queue opening, and lifecycle finish, target runtime
+the cutover-wait fallback. Once CAS, target queue opening, and lifecycle finish, target runtime
 sends Session owner a one-way route update. On an exact update, Session owner changes the
 binding route and current `ActorRef` location snapshot to target, submits held Session
 messages, and releases the seal. `SessionRelocationSealTimeout` defaults to 3,000ms; on
@@ -960,9 +1050,22 @@ affected. The exact Session route contract is defined by
 - A message after `Defer()` but before the source seal goes in the Actor queue
   behind the barrier; only a post-seal message is held in the
   [relocation ingress hold](01-glossary.en.md#relocation-ingress-hold).
-- A cross-node Join's target dispatcher registers the relocation temporary queue
-  before the Actor instance. A message in this queue during Restore doesn't run an
-  application handler.
+- A cross-node Join's target registers the relocation temporary queue before the
+  Actor instance — on a User Spot join, during `OnActorJoin` approval processing; on
+  an Entry Spot join, while processing the Restore request. A message in this queue
+  during Restore doesn't run an application handler.
+- If Join approval is `Rejected`, no temporary queue or prepared factory resources
+  remain on the target.
+- Even a target that finished preparation in the approval round trip doesn't run an
+  application handler before the Location Store CAS, and if the move doesn't start,
+  the prepared resources are removed after the preparation validity period.
+- If an approval or Restore with a different exact identity arrives while an
+  existing preparation remains, the existing preparation is cleaned up first and
+  the later attempt wins.
+- The approval reply carries the target's effective receive chunk limit, and
+  `JoinEntrySpot`, which has no approval round trip, uses the conservative 32 KiB
+  chunk size.
+- A `Restore` retry's payload origin is a resend from source memory, not a store.
 - Saved existing Actor work is put into the real Actor queue first, then the
   temporary queue's work moves in behind it, then it atomically switches to the
   existing dispatch path.
@@ -977,6 +1080,13 @@ affected. The exact Session route contract is defined by
 - `PreserveStateWith` restores application state at the handler-end boundary along
   with framework queue/timer; `RecreateOnRelocation` restores only framework
   queue/timer, without application state.
+- In a factory registering the delta capture capability, only changes are
+  transferred after the seal, and a factory that doesn't register it behaves the
+  same as the existing `Capture`/`Restore`.
+- An `ApplyDelta` failure doesn't reuse a partially applied instance — it repeats
+  from `RestoreBase` on a new instance.
+- If relocation fails after the baseline snapshot transfer, no baseline snapshot
+  remains on the target.
 - A User Spot and member Actors switch together in one Location Store conditional
   batch CAS performed by the target.
 - A post-commit failure doesn't roll back just some participants to the source.

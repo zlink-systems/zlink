@@ -93,7 +93,7 @@ services.AddZLinkFramework(options =>
     options.AddLocationStore(
         new ZLinkRedisLocationStore(redisOptions)); // Opaque location record의 atomic batch를 제공한다.
     options.AddRelocationStore(
-        new ZLinkRedisRelocationStore(relocationOptions)); // immutable relocation payload를 별도 capability로 보관한다.
+        new ZLinkRedisRelocationStore(relocationOptions)); // Instance Spot cold activation과 pending request terminal 기록을 별도 capability로 보관한다.
 });
 ```
 

@@ -108,7 +108,7 @@ services.AddZLinkFramework(options =>
     options.AddLocationStore(
         new ZLinkRedisLocationStore(redisOptions)); // provides atomic batch on opaque location records.
     options.AddRelocationStore(
-        new ZLinkRedisRelocationStore(relocationOptions)); // holds immutable relocation payload as a separate capability.
+        new ZLinkRedisRelocationStore(relocationOptions)); // holds Instance Spot cold activation and pending-request terminal records as a separate capability.
 });
 ```
 

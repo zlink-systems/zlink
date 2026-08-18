@@ -22,6 +22,8 @@ judgment.
 - Flow correlation continuing from STREAM to Actor to Spot
 - Failure, fanout, timer, and runtime tracing-level change
 - Stream connection, relocation, request, and owner lease metrics
+- Relocation phase metrics (S0→S1, S2→S3, S1→S4), the `cutover_timeout` counter, and the
+  `SafeToShutdown` observation state
 - Actor/User Spot handoff, rolling update, and planned maintenance
 - Relocate blocker, concurrent call, Shutdown, and waiter cancellation only in supporting languages
   contention
@@ -31,7 +33,7 @@ judgment.
 | Role | Count | What it does and why it's separate |
 |---|---:|---|
 | Location Store | 1 | Provides global object location and automatic topology. |
-| Relocation Store | 1 | Preserves `PreserveStateWith` Actor/Spot relocation payload. |
+| Relocation Store | 1 | Preserves the Instance Spot cold-activation record and the post-relocation pending-request terminal record. The state-handoff payload is transferred directly from source to target. |
 | Session gateway | 1 | Provides Stream Session, Actor binding, and Session relay. |
 | Play node | 2–4 | Provides Actor, `SpotWide` User Spot, and Instance Spot factory/adapter. Configures target variants differing in version/capacity/maintenance state. |
 | Order workflow | 2 | Creates fanout projection and a timer-origin flow. Doesn't participate as a Play relocation target. |
@@ -199,7 +201,13 @@ Priority: `P0`
 
 The relocation counter and duration must match the actual Actor move
 terminal. Exceeding the interruption target doesn't turn it into a
-relocation failure.
+relocation failure. The phase metrics are published separately as
+source-stop time (S0→S1, the existing `zlink.relocation.interruption`
+window), target-resume time (S2→S3), and route-convergence time
+(S1→S4), each measured by its own node on its local clock. The
+`cutover_timeout` counter shows how often the order-unguaranteed
+fallback path is actually used. Scenarios cross-checking these phase
+metrics and the counter are added as sub-items of this Track.
 
 **Verification question:** Does one Actor move get reflected exactly
 once in the relocation-completed/duration/interruption metrics?
@@ -275,6 +283,12 @@ Priority: `P0`
 A Host that started Relocate keeps existing accepted work and
 infrastructure, but must drop out of new-placement candidates. After
 completion, the process doesn't stop and stays in `Relocated` state.
+Once every unit reaches S4 (the Message Follow route can be removed)
+and each unit's cutover-retransmission window has ended, the source
+runtime publishes the `SafeToShutdown` observation state, and an
+orchestrator can call `Shutdown` after confirming it. A scenario
+confirming the `SafeToShutdown` publication order is added as a
+sub-item of this Track.
 
 **Verification question:** Do Host status and placement result
 together reflect the `Serving→Relocating→Relocated` transition?

@@ -301,9 +301,9 @@ Session owner는 binding route와 current `ActorRef` 위치 snapshot을 target�
 도착한 message는 source의 Message Follow route가 target Actor에 전달한다.
 
 Same-node와 cross-node Join의 completion, `OperationId`, optional reply와 retry cursor는
-현재 source와 target process가 실행되는 동안만 보존한다. Relocation Store payload는 정상
-handoff에서 state와 queue를 target으로 전달하는 데 사용하며, process 종료 뒤 completion을
-자동 replay하는 근거로 사용하지 않는다.
+현재 source와 target process가 실행되는 동안만 보존한다. Relocation payload는 source가
+memory에 유지해 정상 handoff에서 state와 queue를 target으로 직접 전달하는 데 사용하며,
+process 종료 뒤 completion을 자동 replay하는 근거로 사용하지 않는다.
 
 `OperationId`는 application이 completion callback 재시도를 같은 작업으로 구분할 때
 사용하는 idempotency ID다. Relocation 전체를 식별하는 `RelocationId`, placement
@@ -332,7 +332,7 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 | Actor의 relocation policy가 cross-node 이동을 금지한다. | `Rejected` |
 | Deadline까지 위치 변경을 commit하지 못한다. | `DeadlineExceeded` |
 | Capture·factory·restore·staging이 내부 오류로 실패한다. | `InternalFailure` |
-| Durable relocation payload가 없거나 검증에 실패한다. | `DataLost` |
+| 전송한 relocation payload의 chunk 조립 또는 checksum 검증이 실패한다. | `DataLost` |
 | Actor generation이 현재 값과 다르다. | `InvalidOperation` |
 | Owner 또는 membership fence가 다르거나 Actor가 이동 중이다. | `Unavailable` |
 | Runtime shutdown이 먼저 시작되어 relay-ready accepted 전에 중단한다. | `ShuttingDown` |
@@ -431,18 +431,29 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    `Defer()`는 Join을 등록할 뿐이다. Handler가 정상적으로 끝나기 전에는 Actor를 만들거나
    message를 보내지 않는다.
 2. Handler가 정상적으로 끝나면 Framework가 target을 확인한다. Target이 User Spot이면
-   target의 `OnActorJoin`에 `ActorId`와 join request를 전달한다. `Accepted`이면 계속하고,
-   `Rejected`이면 source membership을 유지한 채 끝낸다. Target이 Entry Spot이면
-   `OnActorJoin`을 호출하지 않는다.
+   target의 `OnActorJoin`에 `ActorId`와 join request를 전달한다. Target은 이 승인 request를
+   처리하면서 `Accepted`를 반환하기 전에 해당 ActorId와 `ObjectGeneration`의
+   [relocation temporary queue](01-glossary.ko.md#relocation-temporary-queue) 등록과 factory
+   실행 준비를 함께 끝낸다. 이후 Restore 요청에서 이 준비를 반복하지 않으므로 왕복 수는
+   그대로이고 seal 뒤 처리 시간만 줄어든다. 승인 reply에는 relocation payload를 나눠 보내는
+   단위인 [relocation state chunk](01-glossary.ko.md#relocation-state-chunk)의 target 유효
+   수신 상한을 함께 싣는다 — 이 값은 재계산에도 낮아지지 않는 안정 하한 기반의 보수값이다.
+   `Accepted`이면 계속하고, `Rejected`이면 target이 같은 처리 안에서 등록한 temporary
+   queue와 준비한 factory 자원을 제거하며 source membership을 유지한 채 끝낸다. Target이
+   Entry Spot이면 `OnActorJoin`을 호출하지 않는다.
 3. Framework가 relocation policy와 target capacity를 확인한다. 이동을 진행할 수 있으면
    source Actor의 새 message 처리를 잠시 막고, application state와 현재 Actor queue를
-   `RelocationStore`에 저장한다. `DisableRelocation`이면 이 단계에서 거부한다.
-4. Source runtime이 target runtime에 **Actor Restore 요청을 먼저 보낸다**. Target dispatcher는
-   다음 packet을 dispatch하기 전에 ActorId와 `ObjectGeneration`에 대한
-   [relocation temporary queue](01-glossary.ko.md#relocation-temporary-queue)를 등록한다. 이후 같은
-   Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에 넣는다.
-   Target은 Actor를 만들고 application state와 저장된 기존 queue를 읽지만 아직 application
-   작업을 실행하지 않는다.
+   capture해 source memory에 유지한다. Relocation payload는 저장소를 거치지 않고
+   source에서 target으로 직접 전달한다. `DisableRelocation`이면 이 단계에서 거부한다.
+4. Source runtime이 target runtime에 **Actor Restore 요청을 먼저 보낸다**. Restore 요청에는
+   payload 전체 크기, chunk 수와 checksum을 담은 manifest가 포함되고, payload는 같은
+   ordered 연결로 chunk 단위로 뒤따라 전송된다 — chunk 크기·checksum 규칙은
+   [Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 정의한다. Target
+   dispatcher는 승인 처리에서 등록한 relocation temporary queue를 사용하고, 승인 왕복이
+   없는 Entry Spot join에서는 다음 packet을 dispatch하기 전에 temporary queue를 등록한다.
+   이후 같은 Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에
+   넣는다. Target은 조립한 payload의 checksum을 확인한 뒤 Actor를 만들고 application
+   state와 기존 queue를 복원하지만 아직 application 작업을 실행하지 않는다.
 5. Source seal 뒤에 도착한 message는 source runtime의 `ingress hold`에 보관한다. 이
    hold에는 relocation 자체가 정하는 record 수나 byte 상한이 없다. Target이 temporary queue와
    Restore 준비 완료를 알리면 source runtime은 hold의 message를 같은 ordered TCP connection으로
@@ -451,7 +462,7 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    보낸다. 이후 도착한 message는 boundary 뒤 구간에 넣으므로 mailbox가 비기를 기다리지 않는다.
    Target은 Actor Restore 뒤 cutover를 받으면 membership, owner,
    capacity와 generation을 `LocationStore`에서 한 번에 CAS한다. 이 CAS는 target만 수행한다.
-   Relay 준비 reply 뒤 1,000ms 동안 cutover가 오지 않아도 Warning을 기록하고 CAS를 진행한다.
+   Relay 준비 reply 뒤 cutover 대기 시간(`RelocationCutoverWaitTimeout`, 기본 1,000ms) 동안 cutover와 재전송이 모두 오지 않아도 Warning을 기록하고 CAS를 진행한다.
    성공하면 target이 새 owner가 되고, 실패하면 target queue를 열지 않는다.
 7. CAS 뒤 저장된 기존 Actor 작업, boundary 전 relay와 나머지 temporary 작업을 실제 Actor
    queue에 순서대로 넣고 regular route로 전환하되 dispatch는 닫아 둔다. 그다음 Target Spot의
@@ -463,6 +474,23 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    `SessionRelocationSealTimeout` 안에 exact update를 받으면 route를 바꾸고 held message를 제출한
    뒤 seal을 해제한다. Timeout이면 physical STREAM connection을 종료하고 Session state를 정리한다.
 
+승인이 `Accepted`여도 그 뒤의 relocation policy 검사(`DisableRelocation`), capacity
+충돌이나 state 호환성 실패로 이동이 시작되지 않을 수 있다. 준비 자원은 `RelocationId`와
+target attempt를 포함한 exact identity로 식별하며, 이동이 시작되지 않으면 준비
+유효시간이 지난 뒤 target이 제거한다. 준비만 된 target이 owner가 되는 경로는 없고,
+temporary queue가 등록되어 있어도 Location Store CAS 전에는 application handler를
+실행하지 않는다.
+
+같은 object의 relocation temporary queue는 하나만 존재한다. 기존 준비가 정리되기 전에
+다른 exact identity의 승인이나 Restore가 도착하면 target은 기존 준비 상태를 먼저
+abort·정리한 뒤 새 identity의 준비를 만든다 — 나중 attempt가 유효하며, 이전 identity의
+늦은 chunk와 Restore는 조립에 연결하지 않고 폐기한다.
+
+`JoinEntrySpot`은 target에서 `OnActorJoin`을 호출하지 않아 승인 왕복 자체가 없으므로 이
+준비 동승이 없다. Entry Spot join은 Restore 요청에서 준비를 수행하고, 협상한 chunk
+상한이 없으므로 어느 배치에서도 보장되는 32 KiB의 보수 chunk 크기(chunk 하나의 encoded
+크기)로 전송한다.
+
 `Accepted`와 `Rejected`는 동시에 발생하지 않는 서로 다른 결과이므로 다이어그램에서
 `alt`로 나눈다. Bound Session이 있는지는 선택 사항이므로 그 부분만 `opt`로 표시한다.
 
@@ -472,7 +500,6 @@ sequenceDiagram
     participant SourceRuntime as Source runtime
     participant SourceActor as Source Actor
     participant SourceSpot as Source Spot
-    participant RelocationStore as Relocation Store
     participant TargetRuntime as Target runtime
     participant TargetTemp as Actor temporary queue
     participant TargetQueue as Target Actor queue
@@ -486,19 +513,21 @@ sequenceDiagram
     Note over SourceRuntime,TargetSpot: 아래 흐름은 target이 User Spot인 경우
     SourceRuntime->>TargetSpot: [request] OnActorJoin · target Spot에 Actor 수용 여부 결정 요청
     alt Accepted
-        TargetSpot-->>SourceRuntime: [reply] Actor 수용 Accepted와 optional application reply
+        TargetRuntime->>TargetTemp: [local] 승인 처리에서 relocation temporary queue 등록·factory 준비
+        TargetSpot-->>SourceRuntime: [reply] Actor 수용 Accepted · optional reply와 유효 수신 chunk 상한
         SourceRuntime->>SourceActor: [local] source Actor 새 message 차단
-        SourceRuntime->>RelocationStore: [request] Actor state·미실행 queue·timer 저장
-        RelocationStore-->>SourceRuntime: [reply] payload 위치와 내용 확인값 확정
-        SourceRuntime->>TargetRuntime: [request] temporary queue 설치·Actor Restore 후 relay 준비
-        TargetRuntime->>TargetTemp: [local] Actor relocation temporary queue 등록
-        TargetRuntime->>TargetActor: [local] Actor 생성과 application state Restore
-        TargetRuntime-->>SourceRuntime: [reply] Actor Restore·temporary queue 준비 완료 · source owner 유지
+        SourceRuntime->>SourceRuntime: [local] Capture 실행 · payload를 source memory에 유지
+        SourceRuntime->>TargetRuntime: [request] Actor Restore 요청 · payload 크기, chunk 수와 checksum 포함
+        loop payload를 chunk 단위로 전송
+            SourceRuntime->>TargetRuntime: [send] payload chunk · 같은 ordered 연결
+        end
+        TargetRuntime->>TargetActor: [local] chunk 조립·checksum 확인 · Actor 생성과 application state Restore
+        TargetRuntime-->>SourceRuntime: [reply] Actor Restore·relay 수신 준비 완료 · source owner 유지
         SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
         TargetRuntime->>TargetTemp: [local] boundary 전 relay 구간에 message 추가
-        alt cutover가 1,000ms 안에 도착
+        alt cutover가 대기 시간 안에 도착
             SourceRuntime->>TargetRuntime: [send] cutover · boundary 전 relay 전송 완료
-        else relay 준비 reply 뒤 1,000ms 동안 cutover 없음
+        else 대기 시간 동안 cutover 없음
             TargetRuntime->>TargetRuntime: [local] cutover_timeout Warning · fallback 진행
         end
         TargetRuntime->>LocationStore: [request] source fence가 같으면 membership·owner를 target으로 CAS
@@ -523,8 +552,9 @@ sequenceDiagram
 
 이 다이어그램은 정상적으로 끝나는 경로만 보여준다. `OnActorJoin`이 `Rejected`를
 반환하거나 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 source membership을
-유지한다. `OnLeaveActor`는 owner commit 뒤에만 보내므로 이 source 복구 경로에서는 호출하지 않는다. Restore 요청을 받은 target은 relocation
-temporary queue를 먼저 등록한다. 그동안 도착한 message와 request는 temporary queue에서
+유지한다. `OnLeaveActor`는 owner commit 뒤에만 보내므로 이 source 복구 경로에서는 호출하지 않는다. User Spot target은 승인 처리에서
+등록한 relocation temporary queue를 사용하고, Entry Spot join에서는 Restore 요청을 받은
+target이 temporary queue를 먼저 등록한다. 그동안 도착한 message와 request는 temporary queue에서
 기다리며 실제 Actor queue로 옮기기 전에는 실행하지 않는다. Target commit 뒤에 실패하면
 source로 rollback하지 않는다. 같은 target process가
 실행 중일 때만 deadline 안에서 다시 시도하며, process가 종료되면 relocation을 자동으로
@@ -537,7 +567,8 @@ ingress hold의 request와 one-way message를 원래 Actor queue에 도착 순�
 비면 해당 temporary queue 등록을 제거한다. 이때 source owner, state와 membership을 그대로 유지한다.
 Relay-ready 뒤 timeout, aggregate commit conflict 또는 cutover submit failure는 source rollback
 조건이 아니다. 같은 target process가 실행
-중이면 확정된 위치정보와 저장한 payload로 deadline 안에서 다시 시도할 수 있다. Target
+중이면 확정된 위치정보와 source가 memory에 유지한 payload의 재전송으로 deadline 안에서
+다시 시도할 수 있다. Target
 process가 종료되면 다른 runtime이 자동 복구하지 않는다.
 
 [ObjectGeneration](01-glossary.ko.md#objectgeneration)은 그대로 유지한다. Cross-node 이동으로
@@ -545,8 +576,9 @@ owner가 바뀌므로 `AuthorityOwnerGeneration`만 증가한다. Target Context
 `ObjectGeneration`과 새 owner generation을 사용한다. Location Store CAS가 성공하면
 Source Context가 더 이상 operation을 실행하지 못하도록 차단한다.
 
-`Defer()` 뒤 source seal 전에 도착한 message는 현재 Actor queue와 함께
-`RelocationStore`에 저장한다. Source seal 뒤 도착한 message는 ingress hold에 임시로
+`Defer()` 뒤 source seal 전에 도착한 message는 현재 Actor queue와 함께 capture하여
+source memory에 유지한 relocation payload에 포함한다. Source seal 뒤 도착한 message는
+ingress hold에 임시로
 보관한다. 이 hold에는 relocation 전용 record 수나 byte 상한이 없다.
 
 Source runtime은 hold의 record와 이후 이전 route로 들어오는 record를 target temporary
@@ -620,15 +652,55 @@ instance를 받아 byte sequence를 반환하고, `Restore`는 target factory가
 instance와 byte sequence를 받아 상태를 적용한다. Instance를 반환하지 않는다.
 
 Application은 byte format, version, compatibility와 migration을 관리한다. Framework는 state contract ID,
-generic state type, serialization profile과 message codec을 relocation adapter 계약에 추가하지 않는다. Relocation
-Store에는 application bytes를 그대로 opaque payload로 저장하고 Framework root manifest·chunk·checksum만
-Framework가 검증한다.
+generic state type, serialization profile과 message codec을 relocation adapter 계약에 추가하지 않는다.
+Framework는 application bytes를 그대로 opaque payload로 source에서 target으로 직접 전송하고,
+payload를 나눈 chunk와 전체 checksum만 Framework가 검증한다. Chunk 크기·checksum 규칙과
+동시 전송량을 제한하는
+[in-flight payload budget](01-glossary.ko.md#in-flight-payload-budget)은
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 정의한다.
 
 `Capture`가 반환하는 byte sequence에는 relocation이 별도 크기 상한을 추가하지 않는다.
-Relocation Store와 transport가 일반 payload에 적용하는 크기 제한은 그대로 적용한다. 빈 byte
+전송 중 연결 점유는 chunk 크기와 in-flight 예산이 제한하며, 예산보다 큰 payload도
+chunk가 순서대로 흘러가며 시작하고 완료할 수 있다. 빈 byte
 sequence는 유효한 application state이고 null result는 adapter contract 위반이다. Callback이 성공하면 Framework가 결과를 즉시
 복사하거나 소유권을 넘겨받으므로 application은 그 뒤 결과를 바꾸지 않는다. `Restore`에 전달한 bytes는 callback이
 완료될 때까지만 유효하고 callback이 보관하려면 직접 복사해야 한다.
+
+`PreserveStateWith` adapter는
+[변경분 capture](01-glossary.ko.md#변경분-capture-basedelta-capture)를 선택 capability로
+함께 등록할 수 있다.
+등록한 factory에서는 기준이 되는 전체 state snapshot을 source가 처리를 계속하는 seal
+전에 미리 전송하고, seal 뒤에는 기준 snapshot 이후의 변경분만 전송해 중단 구간의
+전송량을 줄인다. 등록하지 않은 factory는 위의 `Capture`/`Restore` 동작을 그대로
+사용한다. Application state가 구분할 수 없는 opaque byte sequence 하나뿐이면 Framework가
+변경분을 대신 계산할 수 없으므로, 변경분의 의미는 application이 소유한다.
+
+```text
+contract pseudocode이며 실제 API가 아니다.
+
+CaptureBase()   // seal 전 turn 경계에서 기준 snapshot을 만든다. 만든 뒤 source는 처리를 계속한다.
+CaptureDelta()  // seal 뒤, 기준 snapshot 이후의 변경분만 만든다.
+RestoreBase()   // target이 기준 snapshot을 미리 복원한다.
+ApplyDelta()    // seal 뒤 도착한 변경분을 적용해 최종 state를 만든다.
+```
+
+기준 snapshot에는 application state만 담는다. Framework queue와 timer는 변경분
+방식에서도 seal 경계에서 한 번만 확정한다. 기준 snapshot 전송도 일반 relocation
+payload와 같은 chunk·예산 규칙을 사용하므로, seal 전 전송이 같은 연결의 다른
+relocation과 예산을 경쟁하는 것은 통로 총량 제어의 의도된 결과다.
+
+변경분 방식의 실패 규칙은 다음과 같다.
+
+- `ApplyDelta`가 실패하면 그 instance를 폐기하고 새 instance에 `RestoreBase`부터
+  반복한다. 부분 적용된 instance를 재사용하지 않는다.
+- 변경분은 자신이 참조하는 기준 snapshot의 checksum을 포함한다. Target의 기준
+  snapshot과 다르면 적용하지 않고 기준 snapshot부터 다시 전송한다.
+- `CaptureDelta` 실패는 seal 뒤의 명시적 실패이므로 source memory의 payload로 source
+  queue를 복원하고 operation을 실패로 끝낸다.
+- 기준 snapshot 전송 뒤 relocation이 실패하면 target은 기준 snapshot을 제거하며, 부분
+  적용된 state로 복원하지 않는다.
+- 여러 번의 기준 snapshot 전송 attempt는 relocation의 exact identity로 구분하며,
+  identity가 다른 기준 snapshot에 변경분을 적용하지 않는다.
 
 Join과 host maintenance는 같은 factory relocation 구성과 adapter registration을 사용한다.
 `PreserveStateWith`를 선택한 Actor가 다른
@@ -668,7 +740,7 @@ inventory chunk로 저장한다. Leaf chunk 하나에는 최대 1,024개를 저�
 | `AggregateId`와 generation | 같은 User Spot 이동과 그 commit 세대를 식별한다. |
 | Participant count | Tree에 들어 있는 Spot과 Actor의 전체 수다. |
 | Inventory root와 digest | Location Store가 authority로 사용하는 전체 목록을 가리킨다. |
-| Owner와 relocation root | 현재 owner와 복원할 payload를 가리킨다. |
+| Owner | 현재 owner를 가리킨다. 복원할 payload는 저장소가 아니라 source memory가 원본이므로 authority가 가리키지 않는다. |
 
 ```mermaid
 flowchart LR
@@ -710,7 +782,7 @@ Commit 전 새 inventory tree와 target staging은 resolver에 보이지 않는�
 relay-ready reply가 accepted 상태가 되기 전에 실패하면 target staging을 폐기하고 aggregate 전체
 source 상태를 유지한다. 그 뒤에는 cutover submit 결과와 관계없이 일부 participant도 source로
 되돌리지 않고 같은 aggregate
-identity, inventory root와 relocation root를 유지한다. 같은 target process가 실행 중일
+identity와 inventory root를 유지한다. 같은 target process가 실행 중일
 때만 aggregate 전체를 계속 처리하며, process가 종료되면 다른 runtime이 이어받지 않는다.
 
 `PerActor` User Spot은 aggregate owner 변경을 사용하지 않는다. Framework는 target에
@@ -744,17 +816,18 @@ application은 다음 round나 match를 여기서 시작할 수 있다.
 ## 7. 실패 처리 범위
 
 Relay-ready reply가 accepted 상태가 되기 전 명시적 failure는 `Aborted` CAS, route와 source location
-snapshot 취소 확인, relocation root·reservation 정리와 source 상태 복원을 끝낸 뒤 source admission을
+snapshot 취소 확인, relocation reservation·target staging 정리와 source 상태 복원을 끝낸 뒤 source admission을
 다시 연다. 이 경계 뒤에는 cutover submit 성공·실패와 관계없이 source를 복원하지 않는다. Cutover 뒤
 Location Store 변경 결과를 받지 못하면 target은 성공이나 실패를 추측하지 않고 같은 authority를
 다시 읽는다. Exact target owner가 아니면 Restore 유효시간까지 같은 fence로 retry한다. 그 안에
 owner 변경을 확인하지 못하면 `location_update_failed`를 기록하고 target Actor 또는 Spot과
 temporary queue를 제거하며 Session route update를 보내지 않는다.
 
-`Capture`가 실패하면 relocation payload를 현재 authority에 연결하지 않는다. `Restore`가
+`Capture`가 실패하면 Restore 요청을 보내지 않고 source를 유지한다. `Restore`가
 실패하면 target staging instance와 temporary queue를 폐기한다. 같은 source와 target process가
 계속 실행 중이고 deadline이 남아 있으면 새 instance를 만들어 같은 payload의 Restore를 다시
-시도할 수 있다. 다른 target을 자동 선택하지 않으며, deadline까지 성공하지 못하면 source를
+시도할 수 있다. 재-Restore의 payload 원본은 저장소가 아니라 source memory이며, source가
+같은 payload를 다시 전송한다. 다른 target을 자동 선택하지 않으며, deadline까지 성공하지 못하면 source를
 유지하고 `StateIncompatible` 또는 원인에 맞는 `Failed` 결과로 끝낸다.
 
 Owner와 membership commit 뒤 failure는 source rollback 조건이 아니다. 같은 target process가
@@ -788,7 +861,7 @@ Actor가 이동해도 physical STREAM connection, Session identity와 ObjectGene
 Relocation을 시작하기 전에 Session owner가 해당 Actor binding을 seal하고 Session request와
 push를 보관한다.
 
-Target은 Actor·Spot 준비 뒤 cutover를 받거나 1,000ms fallback이 끝나면 Location Store CAS를
+Target은 Actor·Spot 준비 뒤 cutover를 받거나 cutover 대기 시간 fallback이 끝나면 Location Store CAS를
 수행한다. CAS, target queue 개방과 lifecycle 완료 뒤 target runtime이 Session owner에 one-way
 route update를 보낸다. Session owner는 exact update를 받으면 binding route와 current `ActorRef`
 location snapshot을 target으로 바꾸고, 보관한 Session message를 제출한 뒤 seal을 해제한다.
@@ -853,8 +926,17 @@ Late·duplicate cutover 또는 Session route update는 Warning만 남기고 rout
   reservation ID와 aggregate commit ID를 재사용하지 않는다.
 - `Defer()` 뒤 source seal 전 message는 barrier 뒤 Actor queue에 두고, seal 뒤
   message만 [relocation ingress hold](01-glossary.ko.md#relocation-ingress-hold)에 보관한다.
-- Cross-node Join의 Target dispatcher가 Actor instance보다 먼저 relocation temporary queue를
-  등록한다. Restore 중 message는 이 queue에서 application handler를 실행하지 않는다.
+- Cross-node Join의 target이 Actor instance보다 먼저 relocation temporary queue를
+  등록한다 — User Spot join은 `OnActorJoin` 승인 처리에서, Entry Spot join은 Restore 요청
+  처리에서 등록한다. Restore 중 message는 이 queue에서 application handler를 실행하지 않는다.
+- Join 승인이 `Rejected`이면 target에 temporary queue와 준비한 factory 자원이 남지 않는다.
+- 승인 왕복에서 준비를 마친 target도 Location Store CAS 전에는 application handler를
+  실행하지 않으며, 이동이 시작되지 않으면 준비 유효시간 뒤 준비 자원이 제거된다.
+- 기존 준비가 남은 상태에서 다른 exact identity의 승인·Restore가 도착하면 기존 준비가
+  먼저 정리되고 나중 attempt가 유효하다.
+- 승인 reply가 target의 유효 수신 chunk 상한을 실어 보내고, 승인 왕복이 없는
+  `JoinEntrySpot`은 32 KiB의 보수 chunk 크기를 사용한다.
+- `Restore` 재시도의 payload 원본이 저장소가 아니라 source memory 재전송이다.
 - 저장한 기존 Actor 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그 뒤에
   옮긴 다음 기존 dispatch 경로로 atomic하게 전환한다.
 - Relay-ready reply가 accepted 상태가 되기 전 abort에서만 target temporary queue를 실행하지 않고
@@ -865,6 +947,11 @@ Late·duplicate cutover 또는 Session route update는 Warning만 남기고 rout
   지키고 completion callback 뒤에 일반 message를 실행한다.
 - `PreserveStateWith`는 handler 종료 경계의 application state와 Framework queue·timer를
   복원하고, `RecreateOnRelocation`은 application state 없이 Framework queue·timer만 복원한다.
+- 변경분 capture capability를 등록한 factory에서 seal 뒤에는 변경분만 전송되고, 등록하지
+  않은 factory는 기존 `Capture`/`Restore` 동작과 같다.
+- `ApplyDelta` 실패가 부분 적용된 instance를 재사용하지 않고 새 instance에
+  `RestoreBase`부터 반복한다.
+- 기준 snapshot 전송 뒤 relocation이 실패하면 target에 기준 snapshot이 남지 않는다.
 - User Spot과 member Actor는 target이 실행하는 Location Store conditional batch CAS 한 번으로
   함께 전환된다.
 - Commit 뒤 failure가 participant 일부를 source로 rollback하지 않는다.

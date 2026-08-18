@@ -108,7 +108,7 @@ instruments by
 | `zlink.relocation.started` | Cumulative Actor/User/Instance Spot relocations started |
 | `zlink.relocation.completed` | Cumulative relocation terminal results |
 | `zlink.relocation.duration` | Time from prepare to the terminal phase |
-| `zlink.relocation.bytes` | Size of the immutable relocation envelope |
+| `zlink.relocation.bytes` | Encoded size of the moved relocation payload |
 | `zlink.instance_spot.activations` | Cumulative Instance Spot activation results |
 | `zlink.instance_spot.activation.duration` | Time from first address resolution to Ready or terminal failure |
 | `zlink.instance_spot.pending.messages` | Number of messages waiting at the activation barrier |
@@ -183,9 +183,8 @@ it was after the move.
 
 The procedure:
 
-1. Preflight confirms every stateful object, target capability/capacity, and the Relocation
-   Store. If there's no eligible target, it ends in `Blocked` without changing source
-   admission.
+1. Preflight confirms every stateful object and target capability/capacity. If there's no
+   eligible target, it ends in `Blocked` without changing source admission.
 2. Publishes the host as `Relocating` and schedules an infrastructure notification on the
    standalone Actor's, Instance Spot's, and User Spot aggregate's execution queue.
 3. Target kind/version eligibility is confirmed before source dispatch stops. When the
@@ -193,12 +192,14 @@ The procedure:
    source; it starts no new application turn. Transport reception remains open and later
    messages enter the source ingress hold while target preparation is pending.
 4. At seal time, the message that didn't run, the accepted journal, the logical timer
-   registration/pending tick, and the optional Snapshot bytes are saved to the immutable
-   relocation root. The target installs its temporary queue before factory/`Restore`, and
+   registration/pending tick, and the optional Snapshot bytes are sent by the source directly
+   to the target over the mesh connection. The moving state never passes through the
+   Relocation Store, and the transfer stays within §2.2's chunk-size and in-flight-budget
+   settings. The target installs its temporary queue before factory/`Restore`, and
    finishes journal staging before the owner/membership commit. Ordinary target staging uses
    the shared Application Job Queue reservation before receive and returns it after finite
-   durable handoff to the retained-byte backlog. Relocation adds no outbound/inbound,
-   `Capture`/`Restore`, or encoded-payload capacity gate of its own; a backlog larger than the
+   durable handoff to the retained-byte backlog. Relocation adds no outbound/inbound or
+   `Capture`/`Restore` capacity gate of its own; a backlog larger than the
    live-job limit later acquires runnable-turn permits progressively.
 5. A `SpotWide` User Spot and its member Actors change owner/membership together in one
    aggregate commit. An Entry Spot's and a `PerActor` User Spot's Actors are each moved
@@ -257,6 +258,45 @@ So a `PerActor` User Spot's factory can only use `RecreateOnRelocation()` as its
 approach. Each member Actor's factory decides its own policy separately. An Instance Spot has
 no Actor, so one Spot is directly the move unit.
 
+### 2.2 Moving-State Transfer Settings
+
+The moving state travels over the source–target mesh connection in chunks, and four server
+settings keep it from crowding out ordinary messages on the same connection. The defaults
+are fine to start with; the runtime never adjusts them on its own, so change them based on
+what you observe in your deployment.
+
+| Setting | Default | Purpose and tuning criterion |
+| --- | --- | --- |
+| `RelocationPayloadChunkLimit` | 256 KiB | Size of one chunk. Lower it if chunk transfers intrude on the latency target of ordinary messages sharing the connection |
+| `RelocationInFlightPayloadBudget` | 16 MiB | Total relocation bytes that may be in flight at once on one peer connection. 0 disables it. Lower it if relocation transfers eat into ordinary message bandwidth; raise it if host move throughput is capped by this budget |
+| `RelocationNodeInFlightPayloadBudget` | 0 (disabled) | Node-wide cap on concurrent transfers. Set it only when a node with many peer connections needs its total occupancy bounded |
+| `RelocationCutoverWaitTimeout` | 1,000ms | How long the target waits for a cutover retransmission. If the `cutover_timeout` counter is nonzero, adjust it to your deployment's round-trip time |
+
+When the budget is full, a new relocation unit waits before its seal, and the Actor/Spot
+keeps processing messages normally while it waits — no payload size is ever too large to
+start because of the budget. Internal protocol details such as the chunk format and
+verification rules are covered by
+[Relocation Flow](../../../common/spec/server/28-relocation-flow.en.md).
+
+### 2.3 SafeToShutdown — When It's Safe To Terminate
+
+`Relocated` means the source finished sending its cutovers, not that every caller caching
+the old route now points at the new owner. The source runtime publishes the
+`SafeToShutdown` state in its own runtime status once every unit's Message Follow can end
+and the cutover retransmission window has closed. A deployment orchestrator is recommended
+to confirm `Relocated`, then observe this state before calling `Shutdown` — terminating
+before it's published is allowed, but the remaining follow routes disappear and requests
+from callers still caching the old route can end in `Unavailable`. State queries and change
+observation follow
+[Runtime Status Queries And Operational Diagnostics](../../../common/spec/server/24-runtime-monitoring.en.md).
+
+The relocation window is observed as three separate segments — source stop (from seal to
+cutover submission), target resume (from the target's owner confirmation to dispatch
+opening), and route convergence (from cutover submission until the Message Follow route can
+be removed). The number of fallbacks that proceeded unverified after waiting for a cutover
+is published as the `cutover_timeout` counter. Metric names, units, and labels are owned by
+[Runtime Metrics](../../../common/spec/server/25-runtime-metrics.en.md).
+
 ## 3. Shutdown — Terminating Without Moving
 
 `Shutdown(...)` terminates this host. Unlike §2, **it doesn't move state to another node.**
@@ -269,6 +309,7 @@ scope, authority, session, and topology resources. If no deadline is given, it's
 The state of any Spot cleaned up here doesn't survive. If your deployment automation needs to
 keep state alive while taking a host down, call `Relocate(...)` first before shutting down,
 confirm the result is `Relocated`, and only then move on to this call (the example in §4).
+When possible, also confirm the `SafeToShutdown` publication (§2.3).
 
 A Spot's lifetime is independent of any request. A User/Instance Spot isn't closed just
 because an ordinary request finished. Likewise, preparing a nonexistent Instance Spot never
@@ -280,7 +321,9 @@ SpotId direct call ([06-spot](06-spot.en.md) §5).
 The two operations above don't happen automatically. The application calls them directly on
 the framework runtime. This interface is a DI singleton that owns host maintenance.
 
-The order used in deployment is "move first, and shut down only if it succeeded."
+The order used in deployment is "move first, and shut down only if it succeeded." Confirming
+`Relocated` and then observing the `SafeToShutdown` publication (§2.3) before terminating
+avoids failures for callers still caching the old route.
 
 === "C#/.NET"
 

@@ -101,11 +101,19 @@ permit 하나를 얻었다가 반환한다. 포화 시 reject·drop·busy spin·
 export interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
     capture(actor: TActor, signal: AbortSignal): Promise<Uint8Array>;
     restore(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
+    captureBase?(actor: TActor, signal: AbortSignal): Promise<Uint8Array>;
+    captureDelta?(actor: TActor, signal: AbortSignal): Promise<Uint8Array>;
+    restoreBase?(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
+    applyDelta?(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkSpotRelocationAdapter<TSpot extends ZLinkSpot | ZLinkInstanceSpot> {
     capture(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
     restore(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
+    captureBase?(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
+    captureDelta?(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
+    restoreBase?(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
+    applyDelta?(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
@@ -362,6 +370,17 @@ Actor adapter를 사용한다. Whole User Spot의 Spot root와 cross-node User·
 adapter를 사용한다. Same-node join·relocation에서는 adapter를 호출하지 않으며 `DisableRelocation` cross-node operation은
 `capture(...)` 전에 거부한다. `RecreateOnRelocation` policy도 application payload를 capture·restore하지 않는다.
 
+Optional method `captureBase(...)`, `captureDelta(...)`, `restoreBase(...)`, `applyDelta(...)`는
+변경분 capture capability를 선언한다. Adapter는 네 method를 모두 구현하거나 모두 생략해야 하며
+일부만 구현하면 socket bind 전에 configuration error다. Capability를 선언한 factory의 cross-node
+materialization에서 Framework는 seal 전 turn 경계에서 `captureBase(...)`로 기준 snapshot을 만들어
+미리 전송하고, seal 뒤에는 `captureDelta(...)` 결과만 전송한다. Target은 `restoreBase(...)`로 기준
+snapshot을 미리 복원하고 `applyDelta(...)`로 최종 state를 만든다. `applyDelta(...)`가 실패하면 그
+instance를 폐기하고 새 instance에 `restoreBase(...)`부터 반복하며 부분 적용된 instance를 재사용하지
+않는다. 기준 snapshot 전송 뒤 relocation이 실패하면 target은 기준 snapshot을 제거한다. 변경분의
+의미는 application이 소유하고, Framework queue와 timer는 seal 경계에서 한 번만 확정한다.
+Capability를 선언하지 않은 adapter는 기존 `capture(...)`/`restore(...)` 동작이 그대로 유지된다.
+
 Target은 owner commit 전에 restore와 accepted journal staging을 완료하며 application handler를 실행하지
 않는다. Owner commit과 lifecycle callback 뒤 저장된 기존 작업을 실제 queue에 먼저 넣고 relocation
 temporary queue 작업을 그 뒤에 옮긴다. Temporary queue 등록을 제거하고 dispatch를 atomic하게 전환한 뒤
@@ -372,8 +391,8 @@ replay하지 않는다. 이 barrier를 조작하는 public phase API는 제공�
 
 Target의 relay-ready reply가 accepted 상태가 되는 `RelayReady`가 source 복원의 비가역 경계다. 이 경계 전
 명시적인 failure만 source dispatch와 matching Session seal을 복원한다. 경계 뒤에는 cutover submit의
-성공·실패와 관계없이 source dispatch를 다시 열지 않는다. Target은 cutover를 받거나 기존 1,000ms
-fallback이 끝나면 owner CAS와 queue 개방을 진행한다.
+성공·실패와 관계없이 source dispatch를 다시 열지 않는다. Target은 cutover를 받거나 cutover 대기
+설정(`relocationCutoverWaitTimeoutMs`, 기본 1,000 ms)이 끝나면 owner CAS와 queue 개방을 진행한다.
 
 같은 source와 target process 안의 재시도에서 factory와 `restore(...)`를 두 번 이상 호출할 수 있다.
 `capture(...)`도 [authority](../../../01-glossary.ko.md#authority) commit 전에 반복될 수 있다. Current owner와 attempt fence만 completion을 commit하고
@@ -386,8 +405,9 @@ Framework는 capture 결과를 즉시 복사하고 restore마다 독립된 `Uint
 Adapter가 비동기 호출 뒤 payload를 보관하려면 직접 복사해야 한다.
 
 `capture(...)`가 반환한 `Uint8Array`에는 relocation adapter 전용 size 상한이 없으며 길이가 0인 것은 유효한
-application payload다. Framework는 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한
-chunking을 수행한다. JavaScript runtime에서
+application payload다. Framework는 payload를 Relocation Store에 기록하지 않고, source memory에서
+`relocationPayloadChunkLimitBytes` 이하의 chunk로 나눠 source–target ordered mesh 연결로 직접
+전송한다. JavaScript runtime에서
 `null`, `undefined` 또는 `Uint8Array`가 아닌 값을 반환하면 adapter failure로 처리하며 빈 payload로 바꾸지 않는다.
 Framework는 resolved array를 callback 완료 직후 복사하므로 adapter는 완료 뒤 그 배열을 변경해도 저장된 payload에
 영향을 주지 않는다. 각 restore attempt는 factory가 새로 만든 instance와 독립된 새 `Uint8Array` copy를 받는다.

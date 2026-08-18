@@ -591,7 +591,7 @@ The connector takes a diagnostics level option with the same four values as the 
 runtime (`Off`/`Errors`/`Normal`/`Detailed`). The default is `Errors`, which keeps the
 existing behavior; lowering it to `Off` stops the connector from creating or attaching
 flow identifiers on outbound frames, removing the observation-only cost
-([Stream Connector common spec §13](../../spec/stream-connector/32-stream-connector.en.md#13-diagnostics-level)).
+([Stream Connector common spec §13](../../../common/spec/stream-connector/32-stream-connector.en.md#13-diagnostics-level)).
 The correlation used for request/response matching is protocol information and keeps
 working at `Off`.
 

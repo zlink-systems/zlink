@@ -101,6 +101,26 @@ public interface IZLinkActorRelocationAdapter<TActor>
         CancellationToken cancellationToken);
 }
 
+public interface IZLinkActorBaseDeltaRelocationAdapter<TActor>
+    : IZLinkActorRelocationAdapter<TActor>
+    where TActor : class, IZLinkActor
+{
+    ValueTask<byte[]> CaptureBaseAsync(
+        TActor actor,
+        CancellationToken cancellationToken);
+    ValueTask<byte[]> CaptureDeltaAsync(
+        TActor actor,
+        CancellationToken cancellationToken);
+    ValueTask RestoreBaseAsync(
+        TActor actor,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken);
+    ValueTask ApplyDeltaAsync(
+        TActor actor,
+        ReadOnlyMemory<byte> deltaPayload,
+        CancellationToken cancellationToken);
+}
+
 public interface IZLinkActorClient
 {
     IZLinkActorSendCall SendToActor<TMessage>(
@@ -248,9 +268,18 @@ monotonic absolute deadline을 고정한다.
 Relocation policy는 Actor factory registration이 소유한다. `DisableRelocation`은 cross-node materialization이 필요한
 이동을 capture 전에 거부한다. `RecreateOnRelocation`은 target [factory](../../../01-glossary.ko.md#factory)로 같은 logical identity를 다시 만들고 application
 state를 복구하지 않는다. `PreserveStateWith<TAdapter>()`는 `IZLinkActorRelocationAdapter<TActor>`가 반환한 byte 배열을
-opaque application payload로 저장하고 target Actor instance에 복원한다. 별도 application state generic과 stable
+opaque application payload로 source에서 target으로 직접 전송하고 target Actor instance에 복원한다. 별도 application state generic과 stable
 state contract ID를 받지 않으며 Framework message wrapper를 payload로 사용하지 않는다. Adapter는 relocation
 reference, accepted journal, relocation phase, source·target owner와 Store CAS version을 받지 않는다.
+
+`IZLinkActorBaseDeltaRelocationAdapter<TActor>`는 선택 capability다. `PreserveStateWith<TAdapter>()`에
+등록한 adapter type이 이 interface를 구현하면 Framework는 seal 전 turn 경계에서 `CaptureBaseAsync(...)`로
+기준 snapshot을 만들어 미리 전송하고, seal 뒤에는 `CaptureDeltaAsync(...)`가 만든 변경분만 전송한다.
+Target은 `RestoreBaseAsync(...)`로 기준 snapshot을 미리 복원하고 `ApplyDeltaAsync(...)`로 변경분을
+적용해 최종 state를 만든다. 변경분의 의미는 application이 소유한다. `ApplyDeltaAsync(...)`가 실패하면
+그 instance를 폐기하고 새 instance에 `RestoreBaseAsync(...)`부터 반복하며, 부분 적용된 instance를
+재사용하지 않는다. 이 interface를 구현하지 않은 adapter는 기존 `CaptureAsync(...)`/`RestoreAsync(...)`
+동작이 그대로 유지된다.
 
 다른 node에서 Actor instance를 materialize하는 maintenance, cross-node User Spot·[Entry Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User
 Spot relocation의 모든 Actor participant는 같은 Actor factory policy를 사용한다. `PreserveStateWith`일 때만 Actor adapter의
@@ -269,8 +298,9 @@ phase API는 제공하지 않는다.
 호출할 수 있다. `CaptureAsync(...)`도 authority commit 전에 다시 호출될 수 있다. 두 callback은 같은 logical relocation에 대해 같은
 결과를 내도록 retry-safe해야 하며 외부 side effect의 exactly-once 실행에 의존하면 안 된다. Capture exception은
 durable abort와 source normalization 뒤 admission을 복원한다. `CaptureAsync(...)` 결과에는 relocation
-adapter 전용 size 상한이 없으며, Framework는 등록한 Relocation Store의 일반 blob·whole-payload
-제한에 맞춰 필요한 chunking을 수행한다. 빈 배열은 유효하고 null은 contract 위반이다. Framework는
+adapter 전용 size 상한이 없으며, Framework는 payload를 `RelocationPayloadChunkLimit` 이하의 chunk로
+나눠 source–target ordered mesh 연결로 직접 전송한다. Source memory가 복원 원본이며 handoff
+payload를 Relocation Store에 저장하지 않는다. 빈 배열은 유효하고 null은 contract 위반이다. Framework는
 완료된 배열을 즉시 복사한다. `RestoreAsync(...)`의
 `ReadOnlyMemory<byte>`는 callback 완료까지만 유효하다. Restore exception이 발생한 instance는 폐기하고 새
 instance에 같은 immutable payload를 적용한다. 다른 target을 자동 선택하지 않는다. Framework가 operation deadline 때문에

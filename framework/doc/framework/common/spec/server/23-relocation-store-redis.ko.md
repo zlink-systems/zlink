@@ -6,16 +6,23 @@ title: "Relocation Store provider SPI와 공식 Redis 구현"
 
 [스펙 목차](README.ko.md) · [이전: Location Store provider SPI와 공식 Redis 구현](22-location-store-redis.ko.md) · [다음: Runtime 상태 조회와 운영 진단](24-runtime-monitoring.ko.md)
 
-> **이 장이 정의하는 것** — relocation과 복구에 필요한 byte payload를 보관하는
-> Relocation Store의 공개 provider interface(SPI).
+> **이 장이 정의하는 것** — Instance Spot cold activation 기록과 relocation 뒤
+> 완료되는 request의 완료 기록에 필요한 byte payload를 보관하는 Relocation Store의
+> 공개 provider interface(SPI).
 
 
 ## 1. 이 문서가 정하는 계약
 
-이 문서는 Framework의 relocation과 복구에 필요한 byte payload를 보관하는 Relocation Store의
+이 문서는 Instance Spot cold activation 기록과 relocation 뒤 완료되는 request의 완료 기록에
+필요한 byte payload를 보관하는 Relocation Store의
 공개 provider interface를 정의한다. 이처럼 Framework가 호출하고 외부 provider가 구현하는
 interface를 SPI라고 한다. Provider 개발자는 Framework가 만든 reference를 그대로 key로 사용하여
 payload를 저장하고, 같은 reference로 읽기·보존 기간 연장·삭제를 수행해야 한다.
+
+Actor·Spot relocation의 handoff payload — application state, 실행하지 않은 queue와
+timer — 는 이 provider를 거치지 않는다. Source가 target에 mesh 연결로 직접
+전송하며, 그 전달·검증 규칙은
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 정의한다.
 
 Application은 이 SPI를 직접 호출하지 않는다. Provider package가 SPI를 구현하고, Framework가 등록된
 provider instance를 사용한다.
@@ -24,11 +31,11 @@ provider instance를 사용한다.
 [owner](01-glossary.ko.md#owner)라고 한다. 이 owner와 lifecycle 상태를 보관하고 생성 권한을 조정하는
 저장소가 [Location Store](01-glossary.ko.md#location-store)다. Relocation Store는 이 authority를 관리하지
 않고, Location Store에 게시하기 전의 payload와 이미 게시된 payload만 reference로 보관한다. 두 Store를
-연결하여 relocation과 복구를 진행하는 순서는 [Location runtime](21-location-runtime.ko.md)이 정한다.
+연결하여 복구와 완료 기록을 진행하는 순서는 [Location runtime](21-location-runtime.ko.md)이 정한다.
 
-Provider는 저장할 bytes의 업무 의미를 해석하지 않는다. Application state, 처리 수락 기록, timer,
-이동 대상과 payload reference 목록, relocation 단계뿐 아니라 최초 application message와 생성
-정보를 묶은 [activation envelope](01-glossary.ko.md#activation-envelope)도 해석하지 않은 bytes로
+Provider는 저장할 bytes의 업무 의미를 해석하지 않는다. 최초 application message와 생성
+정보를 묶은 [activation envelope](01-glossary.ko.md#activation-envelope), relocation 뒤 완료된
+request의 reply payload와 완료 결과, 그리고 그 payload들의 reference 목록도 해석하지 않은 bytes로
 저장한다. 최초
 message를 계기로 필요한 시점에 만들 수 있는 [Instance Spot](01-glossary.ko.md#entry-spot-user-spot과-instance-spot)이
 아직 실행 중이 아닐 때 새 instance를 만들고 그 message를 처리할 수 있게 준비하는
@@ -51,7 +58,10 @@ SPI type과 interface는 기본 Framework API와 분리된 provider abstraction 
 구현할 수 있어야 한다.
 
 Relocation 단계, manifest, participant, replay cursor와 completion마다 별도 public method나 DTO를
-추가하지 않는다. Redis key 배치, chunk 저장 구조, script와 cleanup index도 공개 SPI에 노출하지 않는다.
+추가하지 않는다. Actor·Spot 이동 이력을 조회하는 operation도 추가하지 않는다 — 이동 관찰은
+[Runtime metrics](25-runtime-metrics.ko.md)의 지표와
+[Message flow tracing](26-message-flow-tracing.ko.md)이 담당한다. Redis key 배치, chunk 저장 구조,
+script와 cleanup index도 공개 SPI에 노출하지 않는다.
 
 다음 .NET 발췌는 공통 SPI의 최소 형태를 보여준다. 정식 선언은
 [.NET exact interface](languages/dotnet/interfaces/08-authority-relocation.ko.md)에 있다.
@@ -102,8 +112,11 @@ Provider가 해석해야 하는 값은 reference, payload, retention뿐이다.
 | Redis encoded blob | Data chunk와 Framework가 붙이는 immutable envelope를 합친 provider 입력이다. 공식 Redis provider의 최대 크기는 `64 MiB + 23 bytes`다. |
 | 여러 blob으로 나눈 payload | Framework가 여러 blob으로 구성할 수 있는 전체 payload다. 최대 크기는 256 GiB다. |
 | Chunk 수 | 전체 payload의 맨 앞 목록이 가리키는 data chunk의 합계는 최대 4,096개다. |
-| Ordered stripe 수 | 하나의 relocation root를 병렬로 저장하고 읽기 위해 나누는 연속 구간은 최대 64개다. |
 | `StoreNow` | Provider가 `Put`·`Read`·`Renew` 결과에 넣는 현재 시각이다. 만료 여부는 이 시각과 provider clock으로 판단한다. |
+
+이 chunk와 맨 앞 목록 형식은 저장하는 payload 종류와 무관한 공통 blob 형식이다.
+Actor·Spot relocation의 handoff payload는 이 provider를 거치지 않으므로, 위 수치는
+activation envelope와 완료 기록 payload에 적용된다.
 
 Provider는 reference를 만들거나 바꾸지 않는다. 같은 content라도 Framework가 서로 다른 reference를
 지정하면 별개의 value로 저장한다. 삭제되거나 만료된 reference를 다른 bytes에 다시 사용해서는 안 된다.
@@ -116,33 +129,16 @@ Redis provider에 전달한다. 따라서 application data 제한과 provider가
 reference·길이·checksum을 기록한다. Provider는 이 목록도 일반 bytes로 저장한다. 목록의
 내용이나 chunk 관계는 Framework가 확인한다.
 
-Framework는 participant 수와 payload 크기를 보고 relocation root 전체를 최대 64개의
-연속 구간으로 균등하게 나눈다. 이 구간을 ordered stripe라고 한다. Stripe는 특정 Actor나
-Spot의 payload를 뜻하지 않는다. Relocation Store는 stripe의 내용을 해석하지 않고 opaque
-bytes로 저장한다.
-
-Stripe가 64 MiB보다 크면 최대 64 MiB인 data chunk로 다시 나눈다. 모든 stripe가 가리키는
-data chunk의 합계는 4,096개를 넘을 수 없다. SpotWide User Spot에 Actor가 100개 있어도
-participant마다 blob 하나를 만들지 않고 최대 64개 stripe를 병렬로 처리한다. 한 process가
-병렬 I/O 결과로 보관하는 encoded chunk bytes 합계는 기본 256 MiB를 넘지 않는다.
-
 저장할 때는 모든 data chunk를 다시 읽어 bytes와 checksum을 확인한 뒤에만 맨 앞 목록을
 저장한다. 일부 chunk의 저장이나 확인이 실패하면 맨 앞 목록을 저장하지 않는다. 이때 남은
 chunk는 어떤 Location Store record도 가리키지 않으므로 retention 만료로 정리한다.
 
-복원할 때는 data chunk를 병렬로 읽고 각각의 checksum을 확인한다. I/O 완료 순서와 관계없이
-맨 앞 목록에 기록된 stripe와 chunk 순서로 합친다. 합친 bytes의 전체 checksum도 일치해야
-Spot state와 Actor state를 복원한다. Stripe 하나라도 없거나 checksum이 다르면 전체
-relocation unit을 `DataLost`로 처리한다. 일부 participant만 복원하지 않는다. 보관 기간을
-연장할 때도 각 data chunk의 존재와 checksum을 병렬로 확인하고, 모두 성공한 뒤 맨 앞
+읽을 때는 data chunk를 읽어 각각의 checksum을 확인하고, I/O 완료 순서와 관계없이
+맨 앞 목록에 기록된 chunk 순서로 합친다. 합친 bytes의 전체 checksum도 일치해야
+그 payload를 사용한다. Chunk 하나라도 없거나 checksum이 다르면 그 payload 전체를
+`DataLost`로 처리하며 일부 chunk만으로 사용하지 않는다. 보관 기간을
+연장할 때도 각 data chunk의 존재와 checksum을 확인하고, 모두 성공한 뒤 맨 앞
 목록의 보관 기간을 연장한다.
-
-Application state adapter가 반환한 bytes에는 별도의 64 MiB 상한을 두지 않는다. Framework는
-등록한 Relocation Store의 일반 blob 계약에 맞춰 더 큰 adapter payload를 최대 64 MiB data
-chunk로 나누며, 전체 payload에는 위 256 GiB logical stream 제한을 적용한다. Process 하나에서
-relocation payload를 동시에 처리할 때 적용하는 기본 256 MiB 제한은 Framework coordinator의
-실행 중 memory 제한이다. 이 제한에 도달하면 추가 I/O를 기다리며 adapter payload를 거부하지
-않는다. 이 값은 blob 하나나 여러 blob으로 나눈 전체 payload의 저장 크기 제한을 바꾸지 않는다.
 
 각 data chunk와 맨 앞 목록의 기본 retention은 24시간이고, Framework는 남은 retention이 12시간이 되는
 시점을 기본 renew threshold로 사용한다. Provider는 자신의 clock으로 expiry를 계산해야 한다.
@@ -249,8 +245,8 @@ Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다�
 - 같은 reference와 같은 bytes를 다시 `Put`하면 `AlreadyStored`, 다른 bytes를 저장하면 `Conflict`다.
 - 64 MiB application data와 23-byte envelope로 구성한 encoded blob, 최대 4,096개
   data chunk와 256 GiB 전체 payload 계약을 지원한다.
-- Participant 수와 관계없이 relocation root를 최대 64개의 ordered opaque stripe로
-  균등하게 나누고, 원래 순서와 전체 checksum을 보존한다.
+- 여러 chunk로 나눈 payload를 맨 앞 목록의 순서와 전체 checksum으로 복원하고,
+  chunk 하나라도 없거나 checksum이 다르면 그 payload 전체를 `DataLost`로 처리한다.
 - `Put` 결과를 받지 못한 뒤 exact `Read`나 같은 입력의 `Put`으로 저장 여부를 재구성할 수 있다.
 - Redis operation timeout은 connection 획득과 실제 command를 제한하며, timeout 뒤 완료된
   write는 같은 reference와 bytes를 사용한 retry로 `AlreadyStored`임을 확인할 수 있다.
@@ -260,3 +256,4 @@ Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다�
 - Location Store 게시 전에 실패한 payload는 retention 만료 뒤 orphan cleanup 대상이 된다.
 - Location Store와 Relocation Store를 같은 Redis와 서로 다른 Redis 구성에 각각 등록할 수 있다.
 - Redis provider의 public declaration에는 relocation 단계·manifest DTO, script와 key 배치 type이 없다.
+- SPI에 Actor·Spot 이동 이력을 조회하는 operation이 없다.

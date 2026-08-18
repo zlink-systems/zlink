@@ -818,6 +818,14 @@ task_t<void> game_room_t::on_relocation_ready_completed (
 - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
   `AnyTurnBoundary` 모드에서는 호출할 수 없다.
 
+**State가 큰 Spot은 base/delta capture를 선택할 수 있다.** Relocation adapter에 선택
+capability인 base/delta capture(`capture_base`/`capture_delta`/`restore_base`/`apply_delta`)를
+함께 등록하면, 기준 snapshot은 Spot이 message를 계속 처리하는 동안 미리 target으로 옮겨
+두고 정지 구간에는 변경분만 전송한다 — 중단 시간이 state 전체 크기가 아니라 변경분
+크기에 비례하게 된다. 등록하지 않으면 기존 `capture`/`Restore` 동작이 그대로 유지된다.
+정식 계약은 [Spot과 Actor membership](../../../common/spec/server/15-spot-actor.ko.md)이
+다룬다.
+
 ## 8. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §3 — 검증 클래스 `SpotContracts`

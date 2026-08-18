@@ -209,12 +209,28 @@ Host가 새 작업 수락을 중단하고 이미 받은 작업과 resource를 �
 | `zlink.host.relocation.duration` | histogram | `s` | `mode`, `outcome` | Host `Relocate` 시작부터 `Relocated` 또는 `Blocked` result까지 걸린 시간을 기록한다. |
 | `zlink.host.relocation.blocked` | counter | `{operation}` | `mode`, `reason` | `Blocked`로 끝난 host `Relocate` 수를 누적한다. |
 | `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, 선택형 `execution_mode` | Actor, Instance Spot 또는 User Spot 한 unit의 admission seal부터 one-way cutover submit의 성공 또는 실패 terminal까지 걸린 source-local 시간을 기록한다. `unit_kind`는 `actor`, `instance_spot`, `user_spot`이다. 1초 초과를 relocation failure로 바꾸지 않는다. |
+| `zlink.relocation.target_resume` | histogram | `s` | `unit_kind` | Target이 한 unit의 Location Store CAS를 확인한 시점부터 그 unit의 application dispatch를 연 시점까지 걸린 target-local 시간을 기록한다. |
+| `zlink.relocation.route_convergence` | histogram | `s` | `unit_kind` | 한 unit의 cutover submit terminal부터 그 unit의 Message Follow route를 제거할 수 있는 시점(follow 기간 만료 기준)까지 걸린 source-local 시간을 기록한다. Source가 Message Follow route를 유지해야 하는 기간의 근거다. |
+| `zlink.relocation.cutover_timeout` | counter | `{fallback}` | `unit_kind` | Cutover 대기 시간이 끝나 target이 완전성 확인 값 검증 없이 fallback으로 Location Store CAS를 진행한 횟수를 누적한다. |
 | `zlink.host.shutdown.duration` | histogram | `s` | `outcome` | Host `Shutdown` 시작부터 terminal result까지 걸린 시간을 기록한다. |
 | `zlink.host.shutdown.forced` | counter | `{operation}` | `reason` | 제한 시간 안에 정리를 끝내려고 남은 작업을 강제로 종료한 host `Shutdown` 수를 누적한다. |
 
 `state`는 `preparing|serving|relocating|relocated|draining|stopped|error`다. Relocation
 `outcome`은 `relocated|blocked`다. Shutdown `outcome`은 `stopped|force_stopped`다. Reason은
 [Host relocation와 shutdown](30-host-relocation-flow.ko.md)의 식별자를 사용한다.
+
+Relocation 구간 지표는 세 구간을 나눠 기록한다. Source가 멈춰 있는 admission seal부터
+cutover submit terminal까지의 구간은 기존 `zlink.relocation.interruption`이 기록하는
+구간과 같으며 별도 계기를 추가하지 않는다. Target 재개 구간(`zlink.relocation.target_resume`)과
+route 수렴 구간(`zlink.relocation.route_convergence`)은 각 node가 자기 clock으로 측정해
+자기 지표로 게시한다. 서로 다른 node의 시각을 직접 빼는 지표는 만들지 않는다 —
+source seal부터 target dispatch 개방까지처럼 node를 가로지르는 전체 중단 구간은
+[Message flow tracing](26-message-flow-tracing.ko.md)의 같은 flow 상관으로 관찰한다.
+개별 relocation을 label로 구분하지 않는 §7의 규칙도 이 지표에 그대로 적용된다.
+`zlink.relocation.cutover_timeout`이 0이 아니면 그 배치에서 relay 순서를 보장하지 않는
+fallback 경로가 실제로 사용되고 있다는 뜻이므로, 운영자는 cutover 대기 설정
+([Framework API](06-framework-api.ko.md)의 `RelocationCutoverWaitTimeout`)을 조정하는
+판단 기준으로 사용한다.
 
 ## 6. Location과 telemetry
 
@@ -271,6 +287,9 @@ histogram bucket을 구성하지 않는다.
 - topic, Actor ID, Spot ID, RID, endpoint, correlation ID와 flow ID가 어떤 metric label에도 나타나지 않는다.
 - Telemetry queue overflow와 provider failure가 dispatch와 host lifecycle 결과를 바꾸지 않는다.
 - Host 계기와 label은 [Host relocation과 shutdown](30-host-relocation-flow.ko.md)의 result와 일치한다.
+- Relocation 구간 지표는 각 node가 자기 local clock으로 측정하며, 서로 다른 node의 시각을
+  직접 뺀 지표가 없다. `zlink.relocation.cutover_timeout`은 검증 없이 진행한 fallback CAS
+  횟수와 일치한다.
 - Instance activation은 등록된 type 단위로 관찰하며 Spot ID·owner ID·generation은 label에서 제외한다.
 - Instance one-way activation 실패는 `surface=instance_spot` drop이며 reply나 replay를 만들지 않는다.
 - Public Framework interface에 exporter, reader, storage, bucket과 metric event DTO가 나타나지 않는다.

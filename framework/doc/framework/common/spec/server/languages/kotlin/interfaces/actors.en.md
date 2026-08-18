@@ -66,7 +66,12 @@ isn't created. The state-preservation policy is configured with
 `preserveStateWith(ActorAdapter::class.java)`, and the match between
 factory and adapter target is validated before socket bind. A policy
 passing a null adapter class through Java interop is also rejected as a
-startup configuration error before bind.
+startup configuration error before bind. If the registered adapter class
+also implements Java's `ZLinkActorBaseDeltaRelocationAdapter<TActor>`,
+the optional base/delta capture capability
+(`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`) is registered
+along with it; if not, the existing `capture`/`restore` behavior is kept
+unchanged. A Kotlin-only suspending capability interface isn't added.
 
 An Actor adapter registered with `preserveStateWith(...)` is used for
 maintenance cross-node materialization, remote User/Entry Spot join, and
@@ -75,9 +80,11 @@ each Actor participant of a whole
 relocation. It isn't called on a same-node join or on a factory that
 selected `disableRelocation()` or `recreateOnRelocation()`. The `ByteArray`
 capture returns has no relocation-adapter-specific size cap. The Java
-runtime copies it at completion and performs any chunking required by the
-registered Relocation Store's ordinary blob and whole-payload limits. The
-adapter owns the array until completion. Restore
+runtime copies it at completion and splits the payload into chunks no
+larger than `relocationPayloadChunkLimitBytes`, transferring them directly
+over the source–target ordered mesh connection. Source memory is the
+restore origin, and the handoff payload isn't stored in the Relocation
+Store. The adapter owns the array until completion. Restore
 receives a fresh defensive copy per call and doesn't keep it after
 completion. An empty `ByteArray` is also a valid preserved state. The
 [factory](../../../01-glossary.en.md#factory) creates a fresh Actor

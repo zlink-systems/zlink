@@ -113,13 +113,17 @@ Kotlin은 Java `ZLinkSpotRelocationAdapter<TSpot>`를 그대로 구현한다. Op
 `capture`와 `restore`는 Java 계약과 같은 `CompletionStage`를 반환한다. 별도 suspending Spot adapter,
 `TState`, `stateContractId`, state class와 `ZLinkMessage` relocation surface는 제공하지 않는다. State 보존 factory는
 `preserveStateWith(SpotAdapter::class.java)`를 사용하고 factory target과 adapter type은 socket bind
-전에 검증한다.
+전에 검증한다. 등록한 adapter class가 Java `ZLinkSpotBaseDeltaRelocationAdapter<TSpot>`도 구현하면
+base/delta capture 선택 capability(`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`)가 함께
+등록되며, 구현하지 않으면 기존 `capture`/`restore` 동작이 그대로 유지된다. Kotlin 전용 suspending
+capability interface는 추가하지 않는다.
 
 State를 보존하는 whole User Spot relocation은 Spot 자체에 Spot adapter를, member Actor마다 Actor adapter를 사용한다.
 State를 보존하는 Instance Spot relocation은 Spot adapter를 사용한다. Same-node operation, `disableRelocation()`과 `recreateOnRelocation()`에서는
 adapter를 호출하지 않는다. Capture `ByteArray`에는 relocation adapter 전용 size 상한이 없다. Java runtime은
-completion에서 복사하고, 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을
-수행한다. Adapter는 completion까지 배열을 소유한다.
+completion에서 복사하고, payload를 `relocationPayloadChunkLimitBytes` 이하의 chunk로 나눠 source–target
+ordered mesh 연결로 직접 전송한다. Source memory가 복원 원본이며 handoff payload를 Relocation
+Store에 저장하지 않는다. Adapter는 completion까지 배열을 소유한다.
 Restore는 호출마다 fresh defensive copy를 받고 completion 뒤 보관하지 않는다. Empty `ByteArray`도 유효한
 보존 state다. Factory는 target attempt마다 fresh Spot instance를 만들며 source나 이전 attempt instance를
 재사용하지 않는다. 같은 attempt의 restore는 반복될 수 있다. Capture exception은 source authority와 admission을

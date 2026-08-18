@@ -166,6 +166,8 @@ Actor queue를 seal하기 전에 수락한 작업은 이전 queue와 accepted jo
 순서로 relocation temporary queue를 사용한다.
 
 1. Restore 요청을 받으면 Actor instance를 만들기 전에 temporary queue를 등록한다.
+   Cross-node Actor Join의 User Spot target은 `OnActorJoin` 승인 처리에서 이미 등록한
+   temporary queue를 사용한다([15 §4.2](15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)).
 2. Source ingress hold의 message를 original operation identity와 reply route를 유지해 이
    queue로 relay한다.
 3. Restore가 끝나면 owner CAS를 실행한다. Source는 target dispatch 전환이 끝날 때까지 ingress
@@ -305,10 +307,14 @@ Session owner에 새 route를 전달한다.
 
 1. Source Actor의 현재 handler가 끝나고 target preflight가 성공하면, bound Actor는 command 42
    `sessionRelocationSeal` request와 command 43 reply로 exact binding seal을 설치한다. 그다음 새
-   Actor application dispatch를 막고 이미 수락한 queue·timer와 application state를 Relocation
-   Store에 저장한다.
-2. Target은 Actor lookup과 factory보다 먼저 temporary queue group을 등록하고 saved queue·timer와
-   state를 Restore한다. 준비가 끝나면 source에 relay 수신 준비 reply를 보낸다.
+   Actor application dispatch를 막고 이미 수락한 queue·timer와 application state를 capture해
+   source memory에 유지한다.
+2. Target은 Actor lookup과 factory보다 먼저 temporary queue group을 등록하고, source가 Restore
+   요청과 같은 ordered 연결로 직접 전송한 queue·timer와 state payload를 Restore한다 — payload
+   전달 경로와 전송 단위인
+   [relocation state chunk](01-glossary.ko.md#relocation-state-chunk)·checksum 규칙은
+   [Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 정의한다. 준비가 끝나면
+   source에 relay 수신 준비 reply를 보낸다.
 3. Capture 뒤 source로 들어온 Actor message만 ingress hold에 보관했다가 같은 ordered connection으로
    boundary 전 relay 구간에 전달한다. Saved queue와 timer는 relay하지 않는다. Source는 현재 relay
    prefix 뒤에 cutover를 one-way로 보낸다.

@@ -88,6 +88,14 @@ public interface ZLinkLocationOptions {
     void setMessageFollowDuration(Duration value);
     Duration sessionRelocationSealTimeout();
     void setSessionRelocationSealTimeout(Duration value);
+    long relocationPayloadChunkLimitBytes();
+    void setRelocationPayloadChunkLimitBytes(long value);
+    long relocationInFlightPayloadBudgetBytes();
+    void setRelocationInFlightPayloadBudgetBytes(long value);
+    long relocationNodeInFlightPayloadBudgetBytes();
+    void setRelocationNodeInFlightPayloadBudgetBytes(long value);
+    Duration relocationCutoverWaitTimeout();
+    void setRelocationCutoverWaitTimeout(Duration value);
 }
 
 public interface ZLinkNetworkOptions {
@@ -328,7 +336,12 @@ The configure callback must call exactly one of `disableRelocation()`,
 calling more than one is a startup configuration error before socket
 bind. The Actor builder only takes a `ZLinkActorRelocationAdapter` of
 the same Actor type, and the User/Instance Spot builder only takes a
-`ZLinkSpotRelocationAdapter` of the same Spot type.
+`ZLinkSpotRelocationAdapter` of the same Spot type. If the registered
+adapter class also implements `ZLinkActorBaseDeltaRelocationAdapter` or
+`ZLinkSpotBaseDeltaRelocationAdapter`, the optional base/delta capture
+capability is registered along with it; if not, the existing
+`capture`/`restore` behavior is kept unchanged. There is no separate
+registration API.
 
 The framework runs the configure callback synchronously exactly once
 inside the registration call. Calling the retained builder again after
@@ -698,6 +711,14 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract void setMessageFollowDuration(java.time.Duration);
   public abstract java.time.Duration sessionRelocationSealTimeout();
   public abstract void setSessionRelocationSealTimeout(java.time.Duration);
+  public abstract long relocationPayloadChunkLimitBytes();
+  public abstract void setRelocationPayloadChunkLimitBytes(long);
+  public abstract long relocationInFlightPayloadBudgetBytes();
+  public abstract void setRelocationInFlightPayloadBudgetBytes(long);
+  public abstract long relocationNodeInFlightPayloadBudgetBytes();
+  public abstract void setRelocationNodeInFlightPayloadBudgetBytes(long);
+  public abstract java.time.Duration relocationCutoverWaitTimeout();
+  public abstract void setRelocationCutoverWaitTimeout(java.time.Duration);
 }
 public final class systems.zlink.framework.configuration.ZLinkLogLevel extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkLogLevel> {
   public static final systems.zlink.framework.configuration.ZLinkLogLevel TRACE;
@@ -824,3 +845,14 @@ Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snaps
 not recompute the result.
 `sessionRelocationSealTimeout` is a startup-only positive `Duration` defaulting to three
 seconds; a value not finitely representable in milliseconds also fails before bind.
+
+`relocationPayloadChunkLimitBytes` is the maximum size in bytes of one encoded chunk of a
+relocation payload, defaulting to 256 KiB. Setting it above the frame limit the
+transport negotiated is a startup configuration error before socket bind.
+`relocationInFlightPayloadBudgetBytes` caps the sum of relocation chunk bytes concurrently
+in flight per peer connection, defaulting to 16 MiB; `0` disables the budget.
+`relocationNodeInFlightPayloadBudgetBytes` applies the same accounting rule to the
+node-wide sum and defaults to `0`, meaning not applied. `relocationCutoverWaitTimeout`
+is both the time the target waits for cutover and the time the source keeps its
+boundary batch copy for retransmission, defaulting to one second. All four values are
+startup-only, and negative values are a configuration error before socket bind.

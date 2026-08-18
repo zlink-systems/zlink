@@ -118,7 +118,7 @@ flowchart LR
 | Resource | 책임 | 준비 |
 |---|---|---|
 | Location Store | peer descriptor, ZoneId Spot authority와 Actor location | 실행별 공유 Redis |
-| Relocation Store | Player Actor relocation payload와 operation recovery record | Location Store와 분리한 provider·key prefix를 사용하는 실행별 Redis keyspace |
+| Relocation Store | Player Actor relocation의 operation recovery record(relocation 뒤 pending request terminal 기록) | Location Store와 분리한 provider·key prefix를 사용하는 실행별 Redis keyspace |
 | Maintenance store | NodeId별 desired state | 실행별 공유 Redis keyspace |
 | Zone state | actor 좌표 사본, border snapshot과 tick | Zone Spot |
 | Player actor state | 좌표, zone, bot 방향 | Player Actor relocation adapter |

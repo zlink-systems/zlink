@@ -221,7 +221,12 @@ Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes�
 재시도하면 `AlreadyStored`, 다른 bytes면 `Conflict`다. 삭제되거나 만료된 reference도 다른 content에
 재사용하지 않는다.
 
-Application state를 나눈 data chunk는 최대 64 MiB다. Framework는 각 chunk 앞에 23-byte immutable
+Actor·Spot relocation의 application state·queue·timer handoff payload는 이 Store에 저장하지 않는다.
+Source가 payload를 memory에 유지한 채 source–target ordered mesh 연결로 직접 chunk 전송하며, source
+memory가 복원 원본이다. 이 Store에 남는 정상 실행 책임은 Instance Spot cold activation의 최초
+message·생성 정보 기록과 relocation 뒤 완료되는 pending request의 reply payload·terminal 결과 기록이다.
+
+Framework가 저장하는 payload를 나눈 data chunk는 최대 64 MiB다. Framework는 각 chunk 앞에 23-byte immutable
 envelope를 붙인다. 따라서 `IZLinkRelocationStore.PutAsync(...)`가 받는 encoded blob은 최대
 `64 MiB + 23 bytes`다. Framework는 최대 256 GiB logical stream을 최대 4,096개의 data chunk와 immutable
 root manifest로 구성한다. Payload checksum과 root·chunk 관계는 Framework가 계산하고 검증한다.

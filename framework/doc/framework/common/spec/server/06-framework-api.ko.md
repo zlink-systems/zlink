@@ -130,6 +130,23 @@ finite positive duration만 허용한다. 0, 음수, 무한대와 exact language
 표현할 수 없는 값은 socket bind 전에 configuration error다. Session owner가 relocation seal의 terminal
 cutover/abort를 기다리는 상한이며 runtime 중 변경하지 않는다.
 
+Root Location option은 Actor·Spot relocation payload의 직접 전송에 적용하는 다음 server 설정도
+소유한다. Source runtime은 relocation payload를 chunk로 나눠 source–target mesh 연결로 직접 전송하며,
+각 수치가 적용되는 범위는 다음 표와 같다.
+
+| 설정 | 기본값 | 적용 범위와 의미 |
+|---|---|---|
+| `RelocationPayloadChunkLimit` | 256 KiB | Relocation payload를 나눈 encoded chunk 하나의 크기 상한이다. Transport가 협상한 frame 한도를 넘게 설정하면 socket bind 전에 startup configuration error다. |
+| `RelocationInFlightPayloadBudget` | 16 MiB | Source 노드 하나가 peer 연결 하나에 대해 동시에 전송 중인 relocation chunk byte 합계의 상한이다. `0`은 이 예산을 적용하지 않는다는 뜻이다. |
+| `RelocationNodeInFlightPayloadBudget` | 0 (미적용) | 같은 합계를 peer 연결 하나가 아니라 source 노드 전체에 대해 제한하는 상한이다. 양수이면 chunk 제출은 peer 예산과 이 예산을 모두 만족해야 한다. |
+| `RelocationCutoverWaitTimeout` | 1,000 ms | Target이 relay 수신 준비 reply를 보낸 뒤 cutover를 기다리는 시간이며, source가 재전송을 위해 boundary batch와 cutover 사본을 유지하는 시간이기도 하다. |
+
+두 예산의 합계는 encoded payload byte가 아니라 Core가 아직 계상 중인 chunk의 accounted
+charge(frame별 metadata charge 포함) 기준이다. 네 설정 모두 배치별로 변경할 수 있고, runtime이 왕복
+시간이나 부하를 관찰해 자동으로 조정하지 않는다. Chunk 분할·협상, 예산 계상과 대기, cutover
+fallback과 재전송 창의 동작 계약은
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 소유한다.
+
 ## 3. RouteMesh 등록
 
 RouteMesh 등록은 MeshName 하나를 받고 MeshNode builder를 반환한다. MeshNode builder는 다음 설정을
@@ -679,6 +696,13 @@ Framework는 state contract ID, state type, relocation codec 등록 API를 제�
 relocation policy를 적용하지 않는다.
 Relocation ID, target RID, relocation reference, journal cursor와 authority revision은 application callback에
 노출하지 않는다.
+
+`PreserveStateWith` adapter는 기본 `Capture`/`Restore`에 더해, seal 뒤에는 변경분만 전송하도록 만드는
+선택 capability를 함께 등록할 수 있다. 등록 형태는 네 callback 한 벌이다 — seal 전 turn 경계에서 기준
+snapshot을 만드는 `CaptureBase`, seal 뒤 기준 snapshot 이후의 변경분만 만드는 `CaptureDelta`, target이
+기준 snapshot을 미리 복원하는 `RestoreBase`, 변경분을 적용해 최종 state를 만드는 `ApplyDelta`. 네
+callback을 모두 등록한 factory에서만 사용하며, 등록하지 않은 factory는 기존 `Capture`/`Restore` 동작을
+그대로 유지한다. 정확한 signature는 언어별 exact interface 문서가 소유한다.
 
 Create와 lookup은 immutable `ActorRef` 또는 `SpotRef`를 반환한다. Ref는 global ID, non-zero unsigned 63-bit
 `ObjectGeneration`, 조회 시점의 MeshName과 NodeRid를 담은 location snapshot이다. JSON generation은 decimal

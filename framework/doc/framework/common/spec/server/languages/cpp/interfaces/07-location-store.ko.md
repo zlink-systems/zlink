@@ -29,6 +29,10 @@ struct location_options_t {
     std::chrono::milliseconds route_cache_max_age{15000};
     std::chrono::milliseconds message_follow_duration{30000};
     std::chrono::milliseconds session_relocation_seal_timeout{3000};
+    std::chrono::milliseconds relocation_cutover_wait_timeout{1000};
+    std::uint64_t relocation_payload_chunk_limit_bytes{262144};
+    std::uint64_t relocation_in_flight_payload_budget_bytes{16777216};
+    std::uint64_t relocation_node_in_flight_payload_budget_bytes{0};
 };
 
 } // namespace zlink::framework
@@ -253,9 +257,11 @@ bytes를 다시 put하면 `blob_already_stored_t`, 다른 bytes를 put하면 `bl
 Framework는 timeout이나 연결 오류 뒤에 같은 reference를 exact read하여 저장 결과를 재조정할 수 있다.
 `retention`은 양수여야 한다.
 
-Blob 하나는 최대 64 MiB다. Framework는 최대 4,096개의 chunk와 immutable root manifest를 사용해
-최대 256 GiB의 logical relocation stream을 구성한다. Checksum, root·chunk 관계, participant
-inventory와 relocation phase는 Framework가 소유하며 provider는 payload를 해석하지 않는다.
+Blob 하나는 최대 64 MiB다. Actor·Spot relocation의 state·queue·timer handoff payload는 이 Store를
+지나지 않는다 — Framework는 source memory의 payload를 chunk로 나눠 source–target ordered mesh
+연결로 직접 전송한다. Store에 남는 정상 실행 책임은 Instance Spot cold activation의 최초
+message·생성 정보 기록과, relocation 뒤 완료되는 pending request의 reply payload·terminal 결과
+기록이다. Checksum과 record encoding은 Framework가 소유하며 provider는 payload를 해석하지 않는다.
 
 Provider가 받은 input span은 asynchronous operation이 끝날 때까지만 유효하다. 반환한 byte vector의
 ownership은 caller에게 이전된다.
@@ -465,3 +471,20 @@ Store는 같은 Redis deployment를 사용하거나 물리적으로 분리할 �
 
 `session_relocation_seal_timeout`은 startup-only 양수 millisecond duration이며 기본값은 3,000 ms다.
 0, 음수, 무한대와 표현 범위 초과는 socket bind 전에 configuration error다.
+
+## Relocation 전송 설정
+
+`relocation_cutover_wait_timeout`은 startup-only 양수 millisecond duration이며 기본값은 1,000 ms다.
+Target이 relay 수신 준비 reply 뒤 cutover를 기다리는 시간이며, source가 boundary batch 재전송
+사본을 유지하는 시간과 같다. 0, 음수, 무한대와 표현 범위 초과는 socket bind 전에
+configuration error다.
+
+`relocation_payload_chunk_limit_bytes`는 relocation payload를 나눈 encoded chunk 하나의 크기
+상한이며 기본값은 262,144 bytes(256 KiB)다. 0과 transport가 협상한 frame 한도를 넘는 값은 socket
+bind 전에 configuration error다.
+
+`relocation_in_flight_payload_budget_bytes`는 peer 연결 하나에 대해 동시에 전송 중인 relocation
+chunk의 accounted byte 합계 상한이며 기본값은 16,777,216 bytes(16 MiB)다.
+`relocation_node_in_flight_payload_budget_bytes`는 node 전체에 같은 합계 상한을 적용하며 기본값은
+0이다. 두 예산 모두 0은 예산을 적용하지 않는다는 뜻이다. 세 크기 설정 모두 startup-only이며
+runtime이 자동으로 조정하지 않는다.

@@ -22,6 +22,11 @@ The following boundaries of the Java contract apply to Kotlin unchanged.
   based TTL semantics aren't changed.
 - The Relocation Store stores an immutable blob at a reference the
   framework issued in advance.
+- The state handoff payload of an Actor/Spot relocation isn't stored in
+  this Store — it is transferred as chunks directly from source to
+  target. The steady-state responsibilities remaining with the Store are
+  the Instance Spot cold activation record and the terminal record of a
+  pending request completed after relocation.
 - Retrying with the same reference and same bytes is AlreadyStored;
   different bytes is Conflict.
 - One blob is at most 64 MiB, and the framework composes a logical

@@ -109,7 +109,7 @@ prefix, and the API request server is registered as an independent ClientServer 
 | Session | 2 | STREAM connection, pre-auth packet handling, Actor binding and relay | Separates connection and binding lifetime from game logic. The Session owner keeps the binding route. |
 | Play | 2 | Player Actor, room state, timer, push, and reward publish | `BingoRoom` owns player, card, draw, and winner state. |
 | Location Store | 1 logical store | Peer discovery, Actor/Spot authority, and generation | Keeps the Application from selecting a physical node or guessing the current owner. |
-| Relocation Store | 1 logical store | Instance activation envelopes and room/Actor relocation payloads | Uses a provider and key prefix separate from the Location Store. It doesn't share a keyspace even when both use the same Redis deployment. |
+| Relocation Store | 1 logical store | Instance activation envelopes and post-relocation pending-request recovery records | Uses a provider and key prefix separate from the Location Store. It doesn't share a keyspace even when both use the same Redis deployment. |
 | Reservation Redis | 1 isolated instance | Waiting room and reserved Actor ID | Shares matching decisions even if the Matchmaker process changes. Doesn't store object-owner information. |
 
 Session doesn't interpret game rules. Matchmaking doesn't select the Play node. Play doesn't handle

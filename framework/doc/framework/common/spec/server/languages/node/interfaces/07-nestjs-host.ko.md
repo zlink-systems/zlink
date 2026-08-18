@@ -160,6 +160,10 @@ export interface ZLinkLocationOptions {
     routeCacheMaxAgeMs(value: number): this;
     messageFollowDurationMs(value: number): this;
     sessionRelocationSealTimeoutMs(value: number): this;
+    relocationCutoverWaitTimeoutMs(value: number): this;
+    relocationPayloadChunkLimitBytes(value: number): this;
+    relocationInFlightPayloadBudgetBytes(value: number): this;
+    relocationNodeInFlightPayloadBudgetBytes(value: number): this;
 }
 
 export interface ZLinkNestFrameworkOptionsBuilder {
@@ -417,8 +421,27 @@ NestJS builder도 Entry Spot 구현 type만 등록한다. Entry Spot의 `SpotId`
 `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot [factory](../../../01-glossary.ko.md#factory)가 하나라도 등록된 Object Server는
 `addRelocationStore(...)`를 정확히 한 번 호출해야 한다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고 모든 factory가
 `DisableRelocation`인 same-node 구성만 Relocation Store를 생략할 수 있다. 누락과 중복은 socket bind 전에 configuration
-error다.
+error다. Relocation Store는 Actor·Spot relocation의 state·queue·timer handoff payload를 보관하지
+않는다 — handoff payload는 source memory에서 target으로 직접 전송한다. Store는 Instance Spot cold
+activation의 최초 message·생성 정보 기록과, relocation 뒤 완료되는 pending request의 terminal 결과
+기록을 소유하므로 이 등록 요구는 그대로 유지된다.
 
 `sessionRelocationSealTimeoutMs(value)`는 startup-only 양수 finite millisecond 값이고 기본값은
 3,000이다. 0, 음수, `NaN`, infinity, 정수가 아닌 값과 safe-integer 범위 초과는 socket bind 전에
 configuration error다.
+
+`relocationCutoverWaitTimeoutMs(value)`는 startup-only 양수 finite millisecond 값이고 기본값은
+1,000이다. Target이 relay 수신 준비 reply 뒤 cutover를 기다리는 시간이며, source가 boundary batch
+재전송 사본을 유지하는 시간과 같다. 0, 음수, `NaN`, infinity, 정수가 아닌 값과 safe-integer 범위
+초과는 socket bind 전에 configuration error다.
+
+`relocationPayloadChunkLimitBytes(value)`는 relocation payload를 나눈 encoded chunk 하나의 크기
+상한이고 기본값은 262,144(256 KiB)다. 0, transport가 협상한 frame 한도를 넘는 값, 음수, `NaN`,
+infinity, 정수가 아닌 값과 safe-integer 범위 초과는 socket bind 전에 configuration error다.
+
+`relocationInFlightPayloadBudgetBytes(value)`는 peer 연결 하나에 대해 동시에 전송 중인 relocation
+chunk의 accounted byte 합계 상한이고 기본값은 16,777,216(16 MiB)이다.
+`relocationNodeInFlightPayloadBudgetBytes(value)`는 node 전체에 같은 합계 상한을 적용하고 기본값은
+0이다. 두 예산 모두 0은 예산을 적용하지 않는다는 뜻이다. 음수, `NaN`, infinity, 정수가 아닌 값과
+safe-integer 범위 초과는 socket bind 전에 configuration error다. 세 크기 설정 모두 startup-only이며
+runtime이 자동으로 조정하지 않는다.

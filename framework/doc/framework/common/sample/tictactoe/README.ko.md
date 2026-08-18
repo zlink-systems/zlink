@@ -16,8 +16,9 @@ User Spot을 함께 제공하는 scale-out 게임을 다룬다. API A/B는 HTTP 
 
 Framework는 User Spot을 만들고 global RoomId의 current owner를 찾으며 Actor lifecycle과 stream
 binding을 관리한다. Player Actor가 다른 Play의 Room Spot으로 join하면 Actor의 application state를
-보존해 새 owner로 이동시키고, Logical Multicast로 milestone을 전달한다. Location Store는 current
-owner를 기록하고 Relocation Store는 이동 중 복원할 payload를 보관한다. Application은 level
+보존해 새 owner로 이동시키고, Logical Multicast로 milestone을 전달한다. 보존한 state는 source에서
+새 owner node로 직접 전송된다. Location Store는 current owner를 기록하고 Relocation Store는
+relocation 뒤 완료되는 pending request의 recovery record를 보관한다. Application은 level
 admission, board, turn, win/draw 판정과 actor destroy 정책을 소유한다.
 
 범위는 room creation부터 시작한다. Host와 guest가 한 판을 완료하고 observer가 Wins 100 milestone을
@@ -34,9 +35,9 @@ destroy되었음을 확인하면 끝난다. 다음 기능은 제외한다.
 이 제외 항목은 remote Room join에 필요한 Actor relocation을 뜻하지 않는다. Player Actor와 Room
 Spot의 owner가 다르면 Framework가 join operation 안에서 Player Actor를 이동한다. 이때 Player Actor
 factory는 `PreserveStateWith`와 relocation adapter를 사용해 application state를 보존한다. Room Spot
-factory는 `DisableRelocation`을 사용한다. Play runtime에는 Player Actor 이동 payload를 보관할
-Relocation Store를 하나 등록한다. Actor와 Room Spot이 같은 node에 있으면 relocation adapter를
-호출하지 않는다.
+factory는 `DisableRelocation`을 사용한다. Play runtime에는 relocatable factory가 요구하는
+Relocation Store를 하나 등록한다. State handoff payload는 store를 경유하지 않고 source에서 target으로
+직접 전송된다. Actor와 Room Spot이 같은 node에 있으면 relocation adapter를 호출하지 않는다.
 
 수동 endpoint는 object placement를 정하는 값이 아니다. API가 특정 Play process나 NodeRid를
 선택하지 않고, Framework가 Location Store에서 RoomId current owner를 resolve한다.
@@ -138,13 +139,14 @@ flowchart LR
 - CreateGameHttpRes의 PlayEndpoints는 ingress 선택용이다. Room placement나 owner 증거가 아니다.
 - Location Store는 RoomId와 ActorId의 current owner를 기록한다. Application은 API response에
   NodeRid, ActorRef와 private route를 넣지 않는다.
-- Relocation Store는 Player Actor가 다른 node의 Room Spot으로 join할 때 복원할 application state와
-  Framework payload를 보관한다. Room state persistence나 crash failover를 제공하지 않는다.
+- Player Actor가 다른 node의 Room Spot으로 join할 때 복원할 application state와 Framework payload는
+  source에서 새 owner로 직접 전송된다. Relocation Store는 relocation 뒤 완료되는 pending request의
+  recovery record만 보관하며 room state persistence나 crash failover를 제공하지 않는다.
 
 | Resource | 책임 | 준비 |
 |---|---|---|
 | Redis Location Store | peer descriptor와 global RoomId·ActorId authority | 실행별 Redis와 location key namespace |
-| Redis Relocation Store | Player Actor의 state와 Framework 복원 payload | 같은 Redis의 별도 relocation key namespace |
+| Redis Relocation Store | Player Actor relocation의 operation recovery record | 같은 Redis의 별도 relocation key namespace |
 | Fake user source | access token, PlayerInfo와 Wins | Api application seed |
 | Room state | board, turn, player membership | room Spot domain |
 | Milestone topic | observer subscription과 publish target | Play Entry Spot |
@@ -160,7 +162,7 @@ flowchart LR
 | Entry Spot | Play별 1 | player Actor admission과 observer milestone handler | actor의 최초 logical 위치를 제공한다. |
 | Room Spot | RoomId별 1 | PlayerInfo admission, board, turn, win/draw | 게임 state의 단일 소유자다. |
 | Location Store | logical 1 | peer discovery와 global object authority | physical owner 선택을 숨긴다. |
-| Relocation Store | logical 1 | Player Actor를 새 owner에서 복원할 payload 보관 | object authority를 결정하지 않는다. |
+| Relocation Store | logical 1 | relocation 뒤 pending request recovery record 보관 | object authority를 결정하지 않는다. |
 
 Observer는 room member가 아니다. Observer의 local Entry Spot handler가 milestone topic을
 구독하고 WinMilestoneNotify를 현재 observer session에 보낸다. 별도 observer Spot type을
@@ -680,8 +682,9 @@ observer subscription과 milestone 결과를 확인한다. Self-check assertion�
   `tictactoe.api` channel은 Api A/B 중 하나를 선택해 authentication request를 보낸다.
 - 기본 topology가 Client와 server component 및 구조적 연결만 보여 준다.
 - Redis Location Store가 RoomId와 ActorId의 current owner를 관리한다.
-- Player Actor는 `PreserveStateWith`와 relocation adapter를 사용하고, Redis Relocation Store는
-  cross-node join의 복원 payload를 보관한다. Room Spot은 `DisableRelocation`을 사용한다.
+- Player Actor는 `PreserveStateWith`와 relocation adapter를 사용하고, cross-node join의 복원
+  payload는 source에서 target으로 직접 전송된다. Redis Relocation Store는 relocation operation
+  recovery record를 보관한다. Room Spot은 `DisableRelocation`을 사용한다.
 - client는 API response의 endpoint를 사용해 host를 Play A에, guest와 observer를 Play B에 연결하며
   owner NodeRid를 받지 않는다.
 - room Spot이 level admission, board, turn, win과 draw를 단일 state owner로 판정한다.

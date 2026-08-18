@@ -68,6 +68,13 @@ ownership을 유한하게 handoff하고 initial reservation scope를 끝낸다. 
 item은 Framework job permit을 유지하지 않는다. CAS와 target lifecycle이 완료되어 item이 runnable해지면
 각 handler turn이 FIFO로 새 job permit을 하나씩 얻고 새 structured job scope를 시작한다.
 
+Source가 target으로 직접 전송하는 relocation state chunk의 ingress는 이 durable staging과 다른 경계를
+사용한다. State chunk도 shared receive reservation으로 receive하지만, target runtime은 payload를
+Framework가 소유하는 조립 buffer로 복사한 직후 Core retained lease를 반환한다 — durable backlog로
+retained-byte ownership을 이전하는 위의 relocation record와 달리 lease가 조립 buffer 수명을 따라가지
+않는다. State chunk는 application job permit을 유지하지 않고 handler를 만들지 않으며, 조립 buffer로의
+유한한 복사·handoff 직후 reservation을 반환한다.
+
 Downstream에 permit이 없으면 upstream receive 또는 child materialization이 suspend한다. 다음 방식으로
 대체하지 않는다.
 

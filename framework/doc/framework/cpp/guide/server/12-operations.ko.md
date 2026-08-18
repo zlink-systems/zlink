@@ -80,7 +80,7 @@ auto status = runtime.status ();
 | `zlink.relocation.started` | Actor·User·Instance Spot relocation 시작 누계 |
 | `zlink.relocation.completed` | relocation terminal 결과 누계 |
 | `zlink.relocation.duration` | prepare부터 terminal phase까지의 시간 |
-| `zlink.relocation.bytes` | immutable relocation envelope 크기 |
+| `zlink.relocation.bytes` | 이동한 relocation payload의 encoded 크기 |
 | `zlink.instance_spot.activations` | Instance Spot activation 결과 누계 |
 | `zlink.instance_spot.activation.duration` | 첫 주소 확인부터 Ready 또는 terminal 실패까지의 시간 |
 | `zlink.instance_spot.pending.messages` | activation barrier 앞에서 기다리는 message 수 |
@@ -151,7 +151,7 @@ metric 이름·단위·label은
 
 절차는 다음과 같다.
 
-1. Preflight에서 모든 stateful object, target capability·capacity와 Relocation Store를 확인한다. Eligible
+1. Preflight에서 모든 stateful object와 target capability·capacity를 확인한다. Eligible
    target이 없으면 source admission을 바꾸지 않고 `Blocked`로 끝난다.
 2. Host를 `Relocating`으로 게시하고 standalone Actor, Instance Spot과 User Spot aggregate execution queue에
    infrastructure notification을 예약한다.
@@ -159,11 +159,13 @@ metric 이름·단위·label은
    도달하면 현재 실행 중인 turn만 source에서 완료하고 새 application turn은 시작하지 않는다. Target
    준비 중에도 transport receive는 열어 두고 이후 message는 source ingress hold에 넣는다.
 4. Seal 시점에 실행하지 않은 message, accepted journal, logical timer registration·pending tick과 optional
-   Snapshot bytes를 immutable relocation root에 저장한다. Target은 factory·`Restore`보다 temporary queue를
-   먼저 설치하고 owner·membership commit 전에 journal staging을 끝낸다. 일반 target staging은 receive
-   전에 공유 Application Job Queue reservation을 얻고 retained-byte backlog로 유한한 durable handoff를 한
-   뒤 반환한다. Relocation 전용 outbound·inbound, `capture`·`Restore`, encoded payload capacity gate는
-   없으며 live-job limit보다 큰 backlog는 이후 runnable-turn permit을 점진적으로 얻는다.
+   Snapshot bytes를 source가 target으로 mesh 연결을 통해 직접 전송한다. 이동 state는 Relocation
+   Store를 거치지 않으며, 전송은 §2.2의 chunk 크기·in-flight 예산 설정 안에서 진행한다. Target은
+   factory·`Restore`보다 temporary queue를 먼저 설치하고 owner·membership commit 전에 journal staging을
+   끝낸다. 일반 target staging은 receive 전에 공유 Application Job Queue reservation을 얻고
+   retained-byte backlog로 유한한 durable handoff를 한 뒤 반환한다. Relocation 전용 outbound·inbound와
+   `capture`·`Restore` capacity gate는 없으며 live-job limit보다 큰 backlog는 이후 runnable-turn
+   permit을 점진적으로 얻는다.
 5. `SpotWide` User Spot과 member Actor는 하나의 aggregate commit으로 owner·membership을 함께 바꾼다.
    Entry Spot과 `PerActor` User Spot의 Actor는 각각 이전한다. Infrastructure relocation은 application의
    join·leave callback을 호출하지 않는다.
@@ -216,6 +218,41 @@ flowchart LR
 사용할 수 있다. Member Actor의 policy는 각 Actor factory가 따로 정한다. Instance Spot은
 Actor가 없으므로 Spot 하나가 그대로 이전 단위다.
 
+### 2.2 이동 state 전송 설정
+
+이동 state는 source–target mesh 연결로 chunk 단위로 전송되며, 같은 연결의 일반
+message를 밀어내지 않도록 네 가지 server 설정으로 조정한다. 기본값으로 시작해도
+되고, runtime이 자동으로 조정하지 않으므로 배치별로 관측한 값을 기준으로 바꾼다.
+
+| 설정 | 기본값 | 목적과 조정 기준 |
+| --- | --- | --- |
+| `RelocationPayloadChunkLimit` | 256 KiB | chunk 하나의 크기. chunk 전송이 같은 연결의 일반 message 지연 목표를 침범하면 낮춘다 |
+| `RelocationInFlightPayloadBudget` | 16 MiB | peer 연결 하나에서 동시에 전송 중일 수 있는 relocation byte 총량. 0은 미적용. relocation 전송이 일반 message 대역폭을 잠식하면 낮추고, host 이전 처리량이 이 예산에 막히면 올린다 |
+| `RelocationNodeInFlightPayloadBudget` | 0(미적용) | 노드 전체의 동시 전송 상한. peer 연결이 많은 노드에서 총 점유를 제한해야 할 때만 설정한다 |
+| `RelocationCutoverWaitTimeout` | 1,000ms | target이 cutover 재전송을 기다리는 상한. `cutover_timeout` counter가 0이 아니면 배치의 왕복 시간에 맞게 조정한다 |
+
+예산이 차 있으면 새 relocation unit은 seal 전에 대기하고, 대기하는 동안 그
+Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시작하지 못하는 payload
+크기는 없다. Chunk 형식·검증 규약 같은 내부 protocol은
+[Relocation Flow](../../../common/spec/server/28-relocation-flow.ko.md)가 다룬다.
+
+### 2.3 SafeToShutdown — 종료해도 안전한 시점
+
+`Relocated`는 source가 cutover 전송을 마쳤다는 뜻이지, 이전 route를 cache한 호출자가
+모두 새 owner를 향하게 됐다는 뜻이 아니다. Source runtime은 모든 unit의 Message Follow를
+끝낼 수 있고 cutover 재전송 창이 닫힌 뒤 `SafeToShutdown` 상태를 자기 runtime status에
+게시한다. Deployment orchestrator는 `Relocated`를 확인한 뒤 이 상태까지 관찰하고 나서
+`shutdown`을 호출하는 것을 권장한다 — 게시 전에 종료해도 되지만, 남아 있던 follow
+route가 사라져 이전 route를 cache한 호출자의 request가 `Unavailable`로 끝날 수 있다.
+상태 조회·변화 관찰 방법은
+[Runtime 상태 조회와 운영 진단](../../../common/spec/server/24-runtime-monitoring.ko.md)을 따른다.
+
+Relocation 구간은 세 지표로 나눠 관찰한다 — source 정지(seal부터 cutover 전송까지),
+target 재개(target의 owner 확정부터 dispatch 개방까지), route 수렴(cutover 전송부터
+Message Follow route를 제거할 수 있을 때까지). Cutover를 기다리다 검증 없이 진행한
+fallback 횟수는 `cutover_timeout` counter로 게시된다. 지표 이름·단위·label은
+[런타임 메트릭](../../../common/spec/server/25-runtime-metrics.ko.md)이 소유한다.
+
 ## 3. Shutdown — 옮기지 않고 종료하기
 
 `shutdown(...)`는 이 host를 종료한다. §2와 달리 **상태를 다른 node로 옮기지 않는다.**
@@ -227,7 +264,7 @@ Actor가 없으므로 Spot 하나가 그대로 이전 단위다.
 
 여기서 정리되는 Spot의 state는 남지 않는다. 배포 자동화가 상태를 살려서 내려야 한다면 종료
 전에 `relocate(...)`를 먼저 호출하고 그 결과가 `Relocated`인지 확인한 뒤 이 호출로
-넘어간다(§4의 예제).
+넘어간다(§4의 예제). 가능하면 `SafeToShutdown` 게시까지 확인한다(§2.3).
 
 Spot의 수명은 request와 무관하다. 일반 request가 끝났다는 이유만으로 User·Instance Spot을 닫지
 않는다. 없는 Instance Spot을 준비시키는 것도 마찬가지로 별도 address나 manager create가 아니라,
@@ -238,7 +275,9 @@ SpotId direct 호출에 Instance intent를 붙였을 때만 시작한다([06-spo
 앞의 두 operation은 자동으로 일어나지 않는다. Application이 framework runtime으로 직접
 호출한다. 이 interface는 host maintenance를 소유하는 DI singleton이다.
 
-배포에서 쓰는 순서는 "먼저 옮기고, 성공했으면 종료한다"다.
+배포에서 쓰는 순서는 "먼저 옮기고, 성공했으면 종료한다"다. `Relocated`를 확인한 뒤
+`SafeToShutdown` 게시(§2.3)까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
+피할 수 있다.
 
 ```cpp
 relocation_options_t relocation;

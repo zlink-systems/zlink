@@ -459,6 +459,14 @@ public sealed class PlayerActorRelocationAdapter
 Capture와 restore는 같은 relocation에서 다시 호출될 수 있다. Adapter는 retry-safe해야 하며,
 payload memory를 callback 밖에서 보관하려면 복사해야 한다.
 
+State가 큰 Actor는 선택 capability인 base/delta capture를 adapter에 함께 등록할 수 있다.
+기준 snapshot(`CaptureBaseAsync`/`RestoreBaseAsync`)은 Actor가 message를 계속 처리하는 동안 미리
+target으로 옮겨 두고, 정지 구간에는 그 이후의 변경분(`CaptureDeltaAsync`/`ApplyDeltaAsync`)만
+전송한다 — 정지 시간이 state 전체 크기가 아니라 변경분 크기에 비례하게 된다. 변경분의
+의미는 application이 정의하며, 등록하지 않으면 위의 `Capture`/`Restore` 동작이 그대로
+유지된다. 정식 계약은
+[Spot과 Actor membership](../../../common/spec/server/15-spot-actor.ko.md)이 다룬다.
+
 ## 8. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §4 — 검증 클래스 `ActorContracts`

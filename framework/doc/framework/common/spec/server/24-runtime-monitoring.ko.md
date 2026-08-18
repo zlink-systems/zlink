@@ -107,6 +107,19 @@ application operation을 수락하는지를 나타낸다. 두 값을 별개의 �
 않는다. Relocation option, deadline과 result의 정확한 의미는
 [Host relocation와 shutdown](30-host-relocation-flow.ko.md)이 정한다.
 
+Host status는 relocation 뒤 source runtime을 안전하게 종료할 수 있는 시점을 나타내는
+[`SafeToShutdown`](01-glossary.ko.md#safe-to-shutdown) 관찰 상태를 함께 제공한다. Source runtime은 자기가 시작한 relocation
+operation에 대해 두 조건이 모두 끝난 뒤에만 이 값을 자기 host status에 게시한다 —
+모든 relocation unit이 Message Follow route를 제거할 수 있는 시점(follow 기간 만료
+기준)에 도달했고, 각 unit의 cutover 재전송 창이 끝났다. 두 조건 모두 source에서
+일어나는 사건이므로 이 판정에 다른 node의 시각을 사용하지 않는다. 이 값은 target이나
+다른 주체가 보내는 완료 ACK가 아니라, source가 게시하고 deployment orchestrator가
+§3의 상태 조회·변화 관찰로 확인하는 값이다. 게시 전에 `Shutdown`을 호출하는 것도
+허용되며, 그 경우 남은 Message Follow route가 transport와 함께 사라져 이전 route를
+cache한 sender의 request는 `Unavailable`로 끝날 수 있다. Message Follow와 cutover
+재전송 창의 정의는
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 소유한다.
+
 Host status의 capacity 항목은 같은 measurement epoch에서 Core HWM snapshot과 Application job
 queue snapshot을 coherent하게 읽는다. Queue를 순회해서 snapshot을 만들지 않는다.
 
@@ -367,5 +380,8 @@ source로 ACK하지 않으며 target-local status와 trace에서 관찰한다.
 - 느린 관찰자, 관찰 취소와 logger provider 실패가 dispatch, reply와 lifecycle terminal
   result를 바꾸면 안 된다.
 - `Sequence` gap 뒤 현재 status를 다시 조회하여 모든 상태를 복원할 수 있어야 한다.
+- `SafeToShutdown`은 모든 relocation unit의 Message Follow route 제거 가능 시점 도달과
+  각 unit의 cutover 재전송 창 종료보다 먼저 게시되지 않아야 하며, 두 판정에 다른
+  node의 시각을 사용하면 안 된다.
 - Placement weight `0`, capacity exhaustion과 recovery가 public status와 일치해야 한다.
 - Object 위치 조회는 Location runtime의 page와 cache 계약을 지켜야 한다.

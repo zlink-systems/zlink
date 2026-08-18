@@ -124,6 +124,26 @@ public interface IZLinkSpotRelocationAdapter<TSpot>
         CancellationToken cancellationToken);
 }
 
+public interface IZLinkSpotBaseDeltaRelocationAdapter<TSpot>
+    : IZLinkSpotRelocationAdapter<TSpot>
+    where TSpot : class
+{
+    ValueTask<byte[]> CaptureBaseAsync(
+        TSpot spot,
+        CancellationToken cancellationToken);
+    ValueTask<byte[]> CaptureDeltaAsync(
+        TSpot spot,
+        CancellationToken cancellationToken);
+    ValueTask RestoreBaseAsync(
+        TSpot spot,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken);
+    ValueTask ApplyDeltaAsync(
+        TSpot spot,
+        ReadOnlyMemory<byte> deltaPayload,
+        CancellationToken cancellationToken);
+}
+
 public readonly record struct ZLinkSpotCreateResponse(
     bool Accepted,
     ZLinkMessage? Reply)
@@ -391,11 +411,28 @@ separately by the Actor adapter registered on the Actor factory.
 instance with no application state, and `DisableRelocation()` rejects a
 cross-node move before capture.
 
+`IZLinkSpotBaseDeltaRelocationAdapter<TSpot>` is an optional capability.
+When the adapter type registered with `PreserveStateWith<TAdapter>()`
+implements this interface, the framework creates a base snapshot with
+`CaptureBaseAsync(...)` at a turn boundary before the seal and transfers
+it ahead of time, and after the seal it transfers only the changes
+produced by `CaptureDeltaAsync(...)`. The target restores the base
+snapshot in advance with `RestoreBaseAsync(...)` and applies the changes
+with `ApplyDeltaAsync(...)` to build the final state. The meaning of a
+delta is owned by the application. If `ApplyDeltaAsync(...)` fails, the
+instance is discarded and a new instance repeats from
+`RestoreBaseAsync(...)`; a partially applied instance is never reused. An
+adapter that doesn't implement this interface keeps the existing
+`CaptureAsync(...)`/`RestoreAsync(...)` behavior unchanged.
+
 The Spot adapter's capture and restore can be called at-least-once within
 a stable relocation attempt, so they must be retry-safe.
 `CaptureAsync(...)`'s result has no relocation-adapter-specific size cap;
-the framework performs any chunking required by the registered Relocation
-Store's ordinary blob and whole-payload limits. An empty array is valid,
+the framework splits the payload into chunks no larger than
+`RelocationPayloadChunkLimit` and transfers them directly over the
+source–target ordered mesh connection. Source memory is the restore
+origin, and the handoff payload isn't stored in the Relocation Store. An
+empty array is valid,
 and null is a contract violation. The framework immediately copies the
 completed array and doesn't observe subsequent application mutation.
 `RestoreAsync(...)`'s `ReadOnlyMemory<byte>` is only valid until the

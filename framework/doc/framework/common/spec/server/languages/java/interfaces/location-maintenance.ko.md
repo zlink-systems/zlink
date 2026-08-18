@@ -230,7 +230,12 @@ Reference는 Framework가 put 전에 발급하는 opaque UTF-8 `1..4096` bytes�
 match다. 같은 reference와 같은 bytes를 다시 put하면 `ZLinkBlobAlreadyStored`, 다른 bytes면
 `ZLinkBlobConflict`다. 삭제되거나 만료된 reference도 다른 content에 재사용하지 않는다.
 
-Blob 하나는 최대 64 MiB다. Framework는 최대 256 GiB logical relocation stream을 최대 4,096개의
+Actor·Spot relocation의 application state·queue·timer handoff payload는 이 Store에 저장하지 않는다.
+Source가 payload를 memory에 유지한 채 source–target ordered mesh 연결로 직접 chunk 전송하며, source
+memory가 복원 원본이다. 이 Store에 남는 정상 실행 책임은 Instance Spot cold activation의 최초
+message·생성 정보 기록과 relocation 뒤 완료되는 pending request의 reply payload·terminal 결과 기록이다.
+
+Blob 하나는 최대 64 MiB다. Framework는 저장하는 최대 256 GiB logical stream을 최대 4,096개의
 64 MiB chunk와 immutable root manifest로 나눈다. Checksum과 root·chunk 관계는 Framework가 계산하고
 검증하며 provider는 manifest를 해석하지 않는다.
 

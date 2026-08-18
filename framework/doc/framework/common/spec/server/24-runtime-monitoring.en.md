@@ -115,6 +115,21 @@ the current host accepts new application operations. Don't reinterpret the two v
 as separate conditions. The exact meaning of relocation option, deadline, and result is
 set by [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
+Host status also provides the [`SafeToShutdown`](01-glossary.en.md#safe-to-shutdown) observation value, indicating when the
+source runtime can be shut down safely after relocation. The source runtime publishes
+this value to its own host status, for a relocation operation it started, only after
+both conditions have finished — every relocation unit has reached the point where its
+Message Follow route can be removed (based on follow-duration expiry), and each
+unit's cutover retransmission window has ended. Both conditions are events occurring
+on the source, so this judgment uses no other node's clock. This value isn't a
+completion ACK sent by the target or any other party — the source publishes it and a
+deployment orchestrator confirms it through the status query and change observation
+in §3. Calling `Shutdown` before it is published is still allowed; in that case the
+remaining Message Follow routes disappear with the transport, and a request from a
+sender still caching the previous route can end with `Unavailable`. Message Follow
+and the cutover retransmission window are defined by
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md).
+
 Host status's capacity item coherently reads the Core HWM snapshot and application
 job queue snapshot from one measurement epoch. It does not walk queues to build a snapshot.
 
@@ -404,5 +419,8 @@ observed through target-local status and tracing.
 - A slow observer, observation cancellation, and logger provider failure must not
   change dispatch, reply, or lifecycle terminal results.
 - Re-querying the current status after a `Sequence` gap must restore every state.
+- `SafeToShutdown` must not be published before every relocation unit reaches the
+  point where its Message Follow route can be removed and each unit's cutover
+  retransmission window ends, and neither judgment may use another node's clock.
 - Placement weight `0`, capacity exhaustion, and recovery must match public status.
 - Object location lookup must follow Location Runtime's page and cache contract.

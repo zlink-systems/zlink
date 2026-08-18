@@ -104,7 +104,7 @@ Object Client는 MeshName과 prefix를 각각 유지하며, API request server�
 | Session | 2 | STREAM 연결, 인증 전 packet 처리, Actor binding과 relay | Connection과 binding 수명을 game logic에서 분리한다. Session owner가 binding route를 보관한다. |
 | Play | 2 | Player Actor, room state, timer, push와 reward publish | `BingoRoom`이 player, card, draw와 winner 상태를 소유한다. |
 | Location Store | 1 logical store | Peer discovery, Actor·Spot authority와 generation | Application이 physical node를 선택하거나 현재 owner를 추측하지 않게 한다. |
-| Relocation Store | 1 logical store | Instance activation envelope와 room·Actor relocation payload | Location Store와 provider·key prefix를 분리한다. 같은 Redis deployment를 사용해도 keyspace를 공유하지 않는다. |
+| Relocation Store | 1 logical store | Instance activation envelope와 relocation 뒤 pending request recovery record | Location Store와 provider·key prefix를 분리한다. 같은 Redis deployment를 사용해도 keyspace를 공유하지 않는다. |
 | Reservation Redis | 1 isolated instance | Waiting room과 reserved Actor ID | Matchmaker process가 바뀌어도 matching 결정을 공유한다. Object owner 정보는 저장하지 않는다. |
 
 Session은 game rule을 해석하지 않는다. Matchmaking은 Play node를 선택하지 않는다. Play는 access

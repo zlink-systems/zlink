@@ -5,10 +5,12 @@
 # Config 6 — Location Store And Relocation Store Failure
 
 The Location Store provides the current location of services and stateful objects, and the
-Relocation Store preserves the application state of an Actor or Spot that is mid-move. If the Store
-stops responding briefly, an already-ready transport connection is not immediately dropped. On the
-other hand, a stateful owner must not keep accepting new messages once it passes the last-confirmed
-owner lease deadline.
+Relocation Store preserves the Instance Spot cold-activation record and the terminal record of a
+pending request that completes after relocation. An Actor/Spot state-handoff payload is transferred
+directly from source to target and does not pass through the Relocation Store. If the Store stops
+responding briefly, an already-ready transport connection is not immediately dropped. On the other
+hand, a stateful owner must not keep accepting new messages once it passes the last-confirmed owner
+lease deadline.
 
 This config builds Store outages, delays, recovery, and provider crashes as real processes, and
 confirms public status, operation results, and application handler evidence. The E2E client does not
@@ -21,7 +23,7 @@ directly read or interpret descriptors, owner leases, authority rows, or relocat
 - Excluding a stale provider and replacing it after the owner lease expires
 - Recovery from short and long Store outages
 - Isolation of application processing that has nothing to do with a slow Store response
-- Relocation Store failure, long-running relocation, and owner replacement
+- The Relocation Store's remaining responsibilities and failure boundary, long-running relocation, and owner replacement
 - Public operational query pagination and capacity results
 
 ## 2. Deployment Configuration
@@ -29,7 +31,7 @@ directly read or interpret descriptors, owner leases, authority rows, or relocat
 | Role | Count | Purpose and reason for separation |
 |---|---:|---|
 | Location Store | 1 | Provides automatic topology, object location, and owner leases. The harness can stop or delay only this Store. |
-| Relocation Store | 1 | Provides the `PreserveStateWith` relocation payload. Its failures are controlled from a separate instance/namespace from the Location Store. |
+| Relocation Store | 1 | Provides the Instance Spot cold-activation record and the post-relocation pending-request terminal record. It does not store the state-handoff payload. Its failures are controlled from a separate instance/namespace from the Location Store. |
 | Provider | 2 | Provides Channel handlers, Actor/User Spot/Instance Spot factories, and the relocation adapter. |
 | Consumer | 1 | Is the Object Client and Channel caller. Provides the public RouteMesh/Host status and object operation endpoints. |
 | E2E client | 1 | Calls only the role servers' public application endpoints. |
@@ -352,40 +354,50 @@ obtained after create/request/relocation?
   values match in every direction.
 - Detailed behavior: verifies interop in [Public Contract Governance](../spec/server/00-public-contract-governance.en.md).
 
-#### SF-F2 A Long-Running Relocation Keeps Its Store Lease, And A New Call Is Allowed After A Failure
+#### SF-F2 A Long-Running Relocation Completes Within The Operation Deadline, And A New Call Is Allowed After A Failure
 
 Priority: `P0`
 
-Even if capture/restore takes a long time, it must be able to finish as long as the current relocation
-stays valid. A mid-way-failed operation is not auto-resumed — it is retried with a new call the
-Application starts.
+Even if capture/restore takes a long time, it must be able to finish within the current relocation
+operation's absolute deadline. A mid-way-failed operation is not auto-resumed — it is retried with a
+new call the Application starts.
 
 **Verification question:** Does a long-running relocation succeed, and does only a new relocation
 succeed after a failed variant?
 
 - Starting condition: Adapter capture can be held for a long time on an application signal.
-- Procedure: The first relocation is kept running past several renew intervals, but for less than the
-  Store retention, then released. A fresh object's second relocation is made to fail via a Store
-  fault, and a new call is started after recovery.
+- Procedure: The first relocation is kept running past several owner-lease renew intervals, but for
+  less than the operation deadline, then released. A fresh object's second relocation is made to fail
+  through an explicit target failure before the relay-ready reply, and a new call is started.
 - Verification: The first operation succeeds, preserving state. The failed operation keeps its source
-  location and state, and after recovery only the new operation ID's call completes at the target.
-- Detailed behavior: verifies [Relocation Store §5](../spec/server/23-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction).
+  location and state, and only the new operation ID's call completes at the target.
+- Detailed behavior: verifies [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
 
-#### SF-F3 A Relocation Store Failure Blocks Only New Relocations
+#### SF-F3 Distinguish What A Relocation Store Failure Blocks And Does Not Block
 
 Priority: `P1`
 
-If the Relocation Store is unavailable, the payload cannot be preserved, so the operation must finish
-before the source is changed.
+The state-handoff payload is transferred directly from source to target, so a Relocation Store
+failure does not block the Actor/Spot move itself. What the Store still blocks are its remaining
+responsibilities — the terminal record of a pending request that completes after relocation and the
+Instance Spot cold-activation record require the store, so results that depend on those records
+cannot be reconstructed during the outage.
 
-**Verification question:** Does Relocate fail during a Store outage while the source keeps processing
-requests?
+**Verification question:** Does Relocate still succeed through direct transfer during a Store
+outage, with only results that need the store's remaining responsibilities — like the
+pending-request terminal record — reconstructed after recovery?
 
-- Starting condition: A stateful object is ready on the source, and the Location Store is normal.
+- Starting condition: A stateful object is ready on the source, and the Location Store is normal. A
+  pending request that completes after relocation can be produced with an application gate.
 - Procedure: Only the Relocation Store is stopped, and public Relocate is called. After the terminal,
-  a source request is sent, and after the Store recovers, a new Relocate is called.
-- Verification: The first call is a Store-unavailable result, and the source request succeeds. The
-  second call restores state at the target, without auto-resuming the first operation.
+  a target request is sent. In a separate variant, a pending request that completes across the
+  relocation is produced, and the caller results before and after the Store outage/recovery are
+  collected.
+- Verification: Relocate succeeds regardless of the Store outage, state is restored at the target
+  through direct transfer, and the target request succeeds. The pending-request variant's caller
+  receives exactly one terminal, and result reconstruction that depends on the store record holds
+  only after Store recovery. Neither variant auto-resumes an operation or produces a duplicate
+  terminal.
 - Detailed behavior: verifies [Relocation Store Cancellation, Errors, And Result Reconstruction](../spec/server/23-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction).
 
 #### SF-F4 Distinguish ObjectGeneration And Owner Replacement Through The Public Ref
@@ -444,24 +456,28 @@ pages and unique IDs?
   reflects the mutations completed by that point. The client does not modify the continuation token.
 - Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/server/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
 
-#### SF-F7 Large-State Relocation Restores Across The Provider Data-Chunk Boundary
+#### SF-F7 Large-State Relocation Restores Across The Chunk Boundary
 
 Priority: `P0`
 
-The Framework does not impose a relocation-adapter-specific 64 MiB cap. It splits participant state
-under the provider's ordinary data-chunk contract, stores it, and restores it at the target.
+The Framework does not impose a relocation-adapter-specific size cap. It splits participant state
+into chunks no larger than `RelocationPayloadChunkLimit`, transfers them directly from source to
+target, and restores after checksum verification. A payload larger than
+`RelocationInFlightPayloadBudget` still starts and completes as chunks flow in order.
 
-**Verification question:** Are both the 64 MiB data-chunk boundary and a state one byte larger
-preserved and restored?
+**Verification question:** Are the chunk boundary, a state one byte larger, and a state larger than
+the in-flight budget all preserved and restored?
 
-- Starting condition: Separate fixtures contain deterministic encoded participant state of exactly
-  64 MiB and one byte over.
+- Starting condition: Separate fixtures contain deterministic participant state exactly matching the
+  configured chunk limit, one byte over, and larger than the in-flight payload budget, built through
+  the public application API.
 - Procedure: Each object is relocated to a target node, and its state checksum/length is queried
   through a public request.
-- Verification: Both states have the same checksum/logical length at the target and process
-  requests. The one-byte-larger state does not end in `Blocked/StateIncompatible` solely because of
-  an adapter-specific size cap.
-- Detailed behavior: verifies [Relocation Store Redis — Reference And Storage Size](../spec/server/23-relocation-store-redis.en.md#3-reference-and-storage-size).
+- Verification: Every state has the same checksum/logical length at the target and processes
+  requests. The one-byte-larger state and the larger-than-budget state do not end in
+  `Blocked/StateIncompatible` because of a size cap.
+- Detailed behavior: verifies the chunk split and in-flight budget boundary in
+  [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
 
 #### SF-F8 The Source Is Kept If The Target Owner's Lease Expires
 
@@ -518,24 +534,25 @@ operation get exactly one terminal?
   The Relocate terminal is also single, and the follow-up is processed once at the current target.
 - Detailed behavior: verifies [Host Maintenance §7](../spec/server/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
 
-#### SF-F11 Preserve Payload Values After Waiter Termination And Response Loss
+#### SF-F11 Preserve Payload Values After Waiter Termination And Transfer Failure
 
 Priority: `P0`
 
-Even if a Store response is lost or a supported language cancels its relocation waiter, a mutable
-application payload must not be reused for another operation. The cancellation variant runs only
-where the exact interface supports it.
+Even if the direct transfer fails explicitly before the relay-ready reply or a supported language
+cancels its relocation waiter, a mutable application payload must not be reused for another
+operation. The cancellation variant runs only where the exact interface supports it.
 
-**Verification question:** After common response loss and supported-language cancellation, does a
-new relocation restore only its own payload checksum at the target?
+**Verification question:** After a common transfer failure and supported-language cancellation, does
+a new relocation restore only its own payload checksum at the target?
 
 - Starting condition: Two fresh objects with distinct deterministic payloads A and B are prepared.
-- Procedure: The common variant loses A's Store response; supported languages additionally cancel a
-  pending waiter. The Store is normalized, and B's relocation is run.
-- Verification: A's awaitable keeps its response-loss or supported cancellation result. B's target-state checksum exactly
-  matches B, with no mixing of A's bytes. Each operation has exactly one terminal.
-- Detailed behavior: verifies [Cancellation, Errors, And Result Reconstruction](../spec/server/23-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction)
-  and [Payload Publication And Cleanup](../spec/server/23-relocation-store-redis.en.md#6-payload-publication-and-cleanup).
+- Procedure: The common variant makes A's direct transfer fail explicitly before the relay-ready
+  reply; supported languages additionally cancel a pending waiter. B's relocation is then run.
+- Verification: A's awaitable keeps its transfer-failure or supported cancellation result, and A is
+  restored from source memory. B's target-state checksum exactly matches B, with no mixing of A's
+  bytes. Each operation has exactly one terminal.
+- Detailed behavior: verifies the payload identity binding and failure rules in
+  [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
 
 ### Track G — Verify Capacity Results Through Public Create/Relocation
 

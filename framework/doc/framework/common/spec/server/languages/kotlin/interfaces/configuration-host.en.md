@@ -57,10 +57,14 @@ required for a same-node configuration with no
 [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 factory that only selected `disableRelocation()`. A Kotlin DSL or
 Redis-specific registration helper bundling both capabilities isn't
-provided. Every cross-node Actor/[Spot](../../../01-glossary.en.md#spot)
-move that can complete uses the Relocation Store. `recreateOnRelocation()`
-also stores the accepted journal and recovery payload, and
-`preserveStateWith(...)` additionally stores application state. A
+provided. The application state/queue/timer handoff payload of a
+cross-node Actor/[Spot](../../../01-glossary.en.md#spot) move isn't
+stored in the Relocation Store. The source keeps the payload in memory
+and transfers it as chunks directly over the source–target ordered mesh
+connection, and source memory is the restore origin. The Relocation
+Store keeps owning the Instance Spot cold activation record and the
+terminal record of a pending request completed after relocation, so the
+registration requirement above is kept. A
 same-node Actor join doesn't create a relocation payload, and a
 cross-node move on a factory that selected `disableRelocation()` is
 rejected before capture.
@@ -117,6 +121,14 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract void setMessageFollowDuration(java.time.Duration);
   public abstract java.time.Duration sessionRelocationSealTimeout();
   public abstract void setSessionRelocationSealTimeout(java.time.Duration);
+  public abstract long relocationPayloadChunkLimitBytes();
+  public abstract void setRelocationPayloadChunkLimitBytes(long);
+  public abstract long relocationInFlightPayloadBudgetBytes();
+  public abstract void setRelocationInFlightPayloadBudgetBytes(long);
+  public abstract long relocationNodeInFlightPayloadBudgetBytes();
+  public abstract void setRelocationNodeInFlightPayloadBudgetBytes(long);
+  public abstract java.time.Duration relocationCutoverWaitTimeout();
+  public abstract void setRelocationCutoverWaitTimeout(java.time.Duration);
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
   public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setRoutingIdPrefix(java.lang.String);
@@ -143,6 +155,19 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
 `sessionRelocationSealTimeout()` is the same startup-only positive `Duration` as Java,
 defaulting to three seconds. A non-millisecond-representable, zero, negative, or infinite
 value is a configuration error before socket bind.
+
+`relocationPayloadChunkLimitBytes()`, `relocationInFlightPayloadBudgetBytes()`,
+`relocationNodeInFlightPayloadBudgetBytes()`, and `relocationCutoverWaitTimeout()` also use
+the Java public contract unchanged. The chunk limit is the maximum size in bytes of one
+encoded chunk of a relocation payload, defaulting to 256 KiB; setting it above the frame
+limit the transport negotiated is a startup configuration error before socket bind. The
+in-flight budget caps the sum of relocation chunk bytes concurrently in flight per peer
+connection, defaulting to 16 MiB, with `0` meaning not applied. The node in-flight
+budget applies the same rule to the node-wide sum and defaults to `0`, meaning not
+applied. The cutover wait timeout is both the target's wait for cutover and the time
+the source keeps its boundary batch copy for retransmission, defaulting to one second.
+All four values are startup-only, and negative values are a configuration error before
+socket bind.
 
 Kotlin uses Java's `ZLinkStreamNodeBuilder.configureSocket()` and
 `ZLinkStreamSocketConfig.setMaxMessageSize(...)` unchanged. The default is
@@ -223,7 +248,13 @@ Every factory configures the Java builder with a Kotlin receiver
 callback. The callback calls exactly one of `disableRelocation()`,
 `recreateOnRelocation()`, `preserveStateWith(...)`. Omitting it or
 calling more than one is a startup configuration error before socket
-bind. A Kotlin-only policy value or suspending adapter isn't added.
+bind. A Kotlin-only policy value or suspending adapter isn't added. If
+the registered adapter class also implements Java's
+`ZLinkActorBaseDeltaRelocationAdapter` or
+`ZLinkSpotBaseDeltaRelocationAdapter`, the optional base/delta capture
+capability is registered along with it; if not, the existing
+`capture`/`restore` behavior is kept unchanged. There is no separate
+registration API.
 
 The framework runs the receiver callback synchronously exactly once
 inside the registration call. Calling the retained builder again after

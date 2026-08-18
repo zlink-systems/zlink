@@ -4,10 +4,11 @@
 
 # Config 6 — Location Store와 Relocation Store 장애
 
-Location Store는 service와 stateful object의 current 위치를 제공하고, Relocation Store는 이동 중인
-Actor·Spot의 application state를 보존한다. Store가 잠시 응답하지 않아도 이미 ready인 transport connection을
-즉시 끊지는 않는다. 반면 stateful owner는 마지막으로 확인한 owner lease deadline을 넘긴 뒤 신규 message를
-계속 받아서는 안 된다.
+Location Store는 service와 stateful object의 current 위치를 제공하고, Relocation Store는 Instance Spot
+cold activation 기록과 relocation 뒤 완료되는 pending request의 terminal 기록을 보존한다. Actor·Spot의
+state handoff payload는 source에서 target으로 직접 전송되며 Relocation Store를 경유하지 않는다. Store가
+잠시 응답하지 않아도 이미 ready인 transport connection을 즉시 끊지는 않는다. 반면 stateful owner는
+마지막으로 확인한 owner lease deadline을 넘긴 뒤 신규 message를 계속 받아서는 안 된다.
 
 이 config는 Store 중단·지연·복구와 provider crash를 실제 process로 만들고 public status, operation result와
 application handler evidence를 확인한다. E2E client가 descriptor, owner lease, authority row와 relocation
@@ -20,7 +21,7 @@ chunk를 직접 읽거나 해석하지 않는다.
 - Owner lease 만료 뒤 stale provider 제외와 replacement
 - 짧고 긴 Store 장애의 복구
 - Store 응답 지연과 무관한 application 처리의 격리
-- Relocation Store 장애, 장기 relocation과 owner replacement
+- Relocation Store 잔존 책임과 장애 경계, 장기 relocation과 owner replacement
 - Public operational query pagination과 capacity 결과
 
 ## 2. 배포 구성
@@ -28,7 +29,7 @@ chunk를 직접 읽거나 해석하지 않는다.
 | 역할 | 수 | 하는 일과 분리 이유 |
 |---|---:|---|
 | Location Store | 1 | Automatic topology, object location과 owner lease를 제공한다. Harness가 이 Store만 중지·지연할 수 있다. |
-| Relocation Store | 1 | `PreserveStateWith` relocation payload를 제공한다. Location Store와 별도 instance·namespace로 장애를 제어한다. |
+| Relocation Store | 1 | Instance Spot cold activation 기록과 relocation 뒤 pending request terminal 기록을 제공한다. State handoff payload는 저장하지 않는다. Location Store와 별도 instance·namespace로 장애를 제어한다. |
 | Provider | 2 | Channel handler, Actor·User Spot·Instance Spot factory와 relocation adapter를 제공한다. |
 | Consumer | 1 | Object Client와 Channel caller다. Public RouteMesh·Host status와 object operation endpoint를 제공한다. |
 | E2E client | 1 | 역할 server의 public application endpoint만 호출한다. |
@@ -324,36 +325,44 @@ state로 사용해야 한다.
 - 검증: Public ID와 ObjectGeneration은 유지되고 payload·reply와 state 값이 모든 방향에서 같다.
 - 세부 동작: [Public contract governance](../spec/server/00-public-contract-governance.ko.md)의 interop을 검증한다.
 
-#### SF-F2 장기 relocation은 Store lease를 유지하고 실패 뒤 새 call을 허용한다
+#### SF-F2 장기 relocation은 operation deadline 안에서 완료하고 실패 뒤 새 call을 허용한다
 
 우선순위: `P0`
 
-Capture·restore가 오래 걸려도 current relocation이 유효한 동안 완료할 수 있어야 한다. 중간 실패한
-operation을 자동으로 재개하지 않고 Application이 시작한 새 call로 다시 시도한다.
+Capture·restore가 오래 걸려도 current relocation operation의 absolute deadline 안에서는 완료할 수 있어야
+한다. 중간 실패한 operation을 자동으로 재개하지 않고 Application이 시작한 새 call로 다시 시도한다.
 
 **검증 질문:** Long-running relocation은 성공하고 실패 variant 뒤 새 relocation만 성공하는가.
 
 - 시작 조건: Adapter capture를 application signal에서 장시간 보류할 수 있다.
-- 절차: 첫 relocation을 Store retention보다 짧지만 여러 renew interval을 넘도록 유지한 뒤 해제한다.
-  Fresh object의 second relocation은 Store fault로 실패시키고 복구 뒤 새 call을 시작한다.
+- 절차: 첫 relocation을 operation deadline보다 짧지만 여러 owner lease renew interval을 넘도록 유지한 뒤
+  해제한다. Fresh object의 second relocation은 relay 수신 준비 reply 전의 명시적 target 실패로 실패시키고
+  새 call을 시작한다.
 - 검증: 첫 operation은 state를 보존하여 성공한다. Failed operation은 source location과 state를 유지하고
-  복구 뒤 새 operation ID의 call만 target에서 완료한다.
-- 세부 동작: [Relocation Store §5](../spec/server/23-relocation-store-redis.ko.md)를 검증한다.
+  새 operation ID의 call만 target에서 완료한다.
+- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)을 검증한다.
 
-#### SF-F3 Relocation Store 장애는 새 relocation만 막는다
+#### SF-F3 Relocation Store 장애가 막는 것과 막지 않는 것을 구분한다
 
 우선순위: `P1`
 
-Relocation Store를 사용할 수 없으면 payload를 보존할 수 없으므로 source를 변경하기 전에 operation을
-끝내야 한다.
+State handoff payload는 source에서 target으로 직접 전송되므로 Relocation Store 장애는 Actor·Spot 이동
+자체를 막지 않는다. Store가 여전히 막는 것은 잔존 책임이다 — relocation 뒤 완료되는 pending request의
+terminal 기록과 Instance Spot cold activation 기록은 store를 요구하므로, 장애 구간에는 그 기록에 의존하는
+결과를 재구성할 수 없다.
 
-**검증 질문:** Store 장애 중 Relocate가 실패하고 source가 계속 request를 처리하는가.
+**검증 질문:** Store 장애 중에도 Relocate가 직접 전송으로 성공하고, pending request terminal 기록처럼
+store 잔존 책임이 필요한 결과만 복구 뒤 재구성되는가.
 
-- 시작 조건: Stateful object가 source에 ready이고 Location Store는 정상이다.
-- 절차: Relocation Store만 중지하고 public Relocate를 호출한다. Terminal 뒤 source request를 보내고 Store
-  복구 뒤 새 Relocate를 호출한다.
-- 검증: 첫 call은 Store unavailable result이고 source request가 성공한다. 두 번째 call은 target에서
-  state를 복원하며 첫 operation을 자동 재개하지 않는다.
+- 시작 조건: Stateful object가 source에 ready이고 Location Store는 정상이다. Relocation 뒤 완료되는
+  pending request를 application gate로 만들 수 있다.
+- 절차: Relocation Store만 중지하고 public Relocate를 호출한다. Terminal 뒤 target request를 보낸다. 별도
+  variant에서 relocation을 넘겨 완료되는 pending request를 만들고 store 장애·복구 전후의 caller 결과를
+  수집한다.
+- 검증: Relocate는 store 장애와 무관하게 성공하고 state는 직접 전송으로 target에서 복원되어 target
+  request가 성공한다. Pending request variant의 caller는 terminal 하나를 받으며, store 기록에 의존하는
+  결과 재구성은 store 복구 뒤에만 성립한다. 어느 variant도 operation을 자동 재개하거나 중복 terminal을
+  만들지 않는다.
 - 세부 동작: [Relocation Store의 취소, 오류와 결과 재구성](../spec/server/23-relocation-store-redis.ko.md#5-취소-오류와-결과-재구성)을 검증한다.
 
 #### SF-F4 ObjectGeneration과 owner replacement를 public ref로 구분한다
@@ -408,21 +417,24 @@ Paged query 중 object가 추가·제거되어도 한 scan에서 duplicate ID를
   반영한다. Client는 continuation token을 수정하지 않는다.
 - 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/server/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
-#### SF-F7 Large state relocation은 provider data-chunk 경계를 넘어도 복원한다
+#### SF-F7 Large state relocation은 chunk 경계를 넘어도 복원한다
 
 우선순위: `P0`
 
-Framework는 relocation adapter 전용 64 MiB 상한을 두지 않고, provider의 일반 data-chunk 계약에 맞춰
-participant state를 나눠 저장하고 target에 복원한다.
+Framework는 relocation adapter 전용 크기 상한을 두지 않고, participant state를
+`RelocationPayloadChunkLimit` 이하의 chunk로 나눠 source에서 target으로 직접 전송하고 checksum 검증 뒤
+복원한다. `RelocationInFlightPayloadBudget`보다 큰 payload도 chunk가 순서대로 흘러가며 시작하고 완료한다.
 
-**검증 질문:** 64 MiB data-chunk 경계와 그보다 한 byte 큰 state를 모두 보존하여 복원하는가.
+**검증 질문:** Chunk 경계와 그보다 한 byte 큰 state, in-flight 예산보다 큰 state를 모두 보존하여
+복원하는가.
 
-- 시작 조건: Public application API로 정확히 64 MiB인 deterministic participant state와 한 byte 초과한
-  state를 separate fixtures로 만든다.
+- 시작 조건: Public application API로 설정한 chunk limit와 정확히 같은 deterministic participant state,
+  한 byte 초과한 state와 in-flight payload 예산보다 큰 state를 separate fixtures로 만든다.
 - 절차: 각 object를 target node로 Relocate하고 public request로 state checksum·length를 조회한다.
-- 검증: 두 state 모두 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 큰 state는
-  adapter 전용 size 상한을 이유로 `Blocked/StateIncompatible`로 끝나지 않는다.
-- 세부 동작: [Relocation Store Redis — Reference와 저장 크기](../spec/server/23-relocation-store-redis.ko.md#3-reference와-저장-크기)를 검증한다.
+- 검증: 모든 state가 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 큰 state와
+  예산보다 큰 state는 크기 상한을 이유로 `Blocked/StateIncompatible`로 끝나지 않는다.
+- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)의 chunk 분할과
+  in-flight 예산 경계를 검증한다.
 
 #### SF-F8 Target owner lease가 만료되면 source를 유지한다
 
@@ -475,24 +487,25 @@ Accepted request가 많은 object를 이동해도 각 request의 reply와 reloca
 - 세부 동작: [Host maintenance §7](../spec/server/30-host-relocation-flow.ko.md)을
   검증한다.
 
-#### SF-F11 Waiter 종료와 response loss 뒤 payload 값을 보존한다
+#### SF-F11 Waiter 종료와 전송 실패 뒤 payload 값을 보존한다
 
 우선순위: `P0`
 
-Store response가 유실되거나 지원 언어의 relocation waiter가 취소되어도 mutable application payload를 다른
-operation 값으로 재사용해서는 안 된다. Cancellation variant는 exact interface가 지원하는 언어에서만
-실행한다.
+직접 전송이 relay 수신 준비 reply 전에 명시적으로 실패하거나 지원 언어의 relocation waiter가 취소되어도
+mutable application payload를 다른 operation 값으로 재사용해서는 안 된다. Cancellation variant는 exact
+interface가 지원하는 언어에서만 실행한다.
 
-**검증 질문:** 공통 response loss와 지원 언어 cancellation 뒤 새 relocation이 자기 payload checksum만
+**검증 질문:** 공통 전송 실패와 지원 언어 cancellation 뒤 새 relocation이 자기 payload checksum만
 target에 복원하는가.
 
 - 시작 조건: 서로 다른 deterministic payload A와 B를 가진 two fresh objects를 준비한다.
-- 절차: 공통 variant에서는 A의 Store response를 유실시키고, 지원 언어에서는 pending waiter cancellation도
-  실행한다. Store를 정상화하고 B relocation을 실행한다.
-- 검증: A awaitable은 response-loss 또는 지원 언어의 cancellation 결과를 유지한다. B target state checksum은 B와 정확히 같고 A bytes가
-  섞이지 않는다. 각 operation은 terminal 하나를 가진다.
-- 세부 동작: [취소, 오류와 결과 재구성](../spec/server/23-relocation-store-redis.ko.md#5-취소-오류와-결과-재구성)과
-  [Payload 게시와 정리](../spec/server/23-relocation-store-redis.ko.md#6-payload-게시와-정리)를 검증한다.
+- 절차: 공통 variant에서는 A의 직접 전송을 relay 수신 준비 reply 전에 명시적으로 실패시키고, 지원
+  언어에서는 pending waiter cancellation도 실행한다. 이어서 B relocation을 실행한다.
+- 검증: A awaitable은 전송 실패 또는 지원 언어의 cancellation 결과를 유지하고 A는 source memory에서
+  복원된다. B target state checksum은 B와 정확히 같고 A bytes가 섞이지 않는다. 각 operation은 terminal
+  하나를 가진다.
+- 세부 동작: [Actor와 Spot relocation 전체 흐름](../spec/server/28-relocation-flow.ko.md)의 payload
+  identity 결합과 실패 규칙을 검증한다.
 
 ### Track G — Capacity 결과를 public create·relocation으로 검증
 

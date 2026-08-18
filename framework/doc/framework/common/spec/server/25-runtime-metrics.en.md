@@ -224,6 +224,9 @@ finishes this cleanup and terminates the runtime and infrastructure.
 | `zlink.host.relocation.duration` | histogram | `s` | `mode`, `outcome` | Records the time from host `Relocate` start to a `Relocated` or `Blocked` result. |
 | `zlink.host.relocation.blocked` | counter | `{operation}` | `mode`, `reason` | Accumulates the count of host `Relocate`s that ended `Blocked`. |
 | `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, optional `execution_mode` | Records the source-local time from one Actor/Instance Spot/User Spot unit's admission seal to the one-way cutover submit's success or failure terminal. `unit_kind` is `actor`, `instance_spot`, `user_spot`. Exceeding 1 second isn't turned into a relocation failure. |
+| `zlink.relocation.target_resume` | histogram | `s` | `unit_kind` | Records the target-local time from the point the target confirmed one unit's Location Store CAS to the point it opened that unit's application dispatch. |
+| `zlink.relocation.route_convergence` | histogram | `s` | `unit_kind` | Records the source-local time from one unit's cutover submit terminal to the point that unit's Message Follow route can be removed (based on follow-duration expiry). It is the basis for how long the source must keep the Message Follow route. |
+| `zlink.relocation.cutover_timeout` | counter | `{fallback}` | `unit_kind` | Accumulates the count of times the cutover wait ran out and the target proceeded with the fallback Location Store CAS without verifying the completeness confirmation values. |
 | `zlink.host.shutdown.duration` | histogram | `s` | `outcome` | Records the time from host `Shutdown` start to terminal result. |
 | `zlink.host.shutdown.forced` | counter | `{operation}` | `reason` | Accumulates the count of host `Shutdown`s that forcibly ended remaining work to finish cleanup within the time limit. |
 
@@ -231,6 +234,22 @@ finishes this cleanup and terminates the runtime and infrastructure.
 Relocation `outcome` is `relocated|blocked`. Shutdown `outcome` is
 `stopped|force_stopped`. Reason uses the identifiers from
 [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
+
+The relocation interval instruments record three separate intervals. The interval
+during which the source is stopped — from admission seal to cutover submit terminal —
+is the same interval the existing `zlink.relocation.interruption` records; no
+separate instrument is added for it. The target resume interval
+(`zlink.relocation.target_resume`) and the route convergence interval
+(`zlink.relocation.route_convergence`) are each measured with that node's own clock
+and published as that node's own instrument. No metric directly subtracts clocks of
+different nodes — an interval crossing nodes, such as the full outage from source
+seal to target dispatch opening, is observed via same-flow correlation in
+[Message Flow Tracing](26-message-flow-tracing.en.md). The §7 rule of not
+distinguishing individual relocations by label also applies to these instruments as
+is. A non-zero `zlink.relocation.cutover_timeout` means the fallback path that
+doesn't guarantee relay ordering is actually being used in that deployment, so an
+operator uses it as the basis for adjusting the cutover wait setting
+(`RelocationCutoverWaitTimeout` in [Framework API](06-framework-api.en.md)).
 
 ## 6. Location And Telemetry
 
@@ -297,6 +316,10 @@ exporter, reader, storage, or histogram bucket.
   lifecycle results.
 - Host instruments and labels match the results in
   [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
+- Relocation interval instruments are measured with each node's own local clock, and
+  no metric directly subtracts clocks of different nodes.
+  `zlink.relocation.cutover_timeout` matches the count of fallback CAS proceedings
+  without verification.
 - Instance activation is observed per registered type, excluding Spot ID/owner ID/
   generation from labels.
 - An Instance one-way activation failure is a `surface=instance_spot` drop, and

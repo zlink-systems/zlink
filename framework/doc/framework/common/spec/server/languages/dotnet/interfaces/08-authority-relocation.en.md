@@ -230,7 +230,16 @@ put. Retrying with the same reference and same bytes returns
 `AlreadyStored`; different bytes returns `Conflict`. A deleted or expired
 reference also isn't reused for different content.
 
-A data chunk splitting application state is at most 64 MiB. The
+The application state/queue/timer handoff payload of an Actor/Spot
+relocation isn't stored in this Store. The source keeps the payload in
+memory and transfers it as chunks directly over the source–target ordered
+mesh connection, and source memory is the restore origin. The
+steady-state responsibilities remaining with this Store are recording the
+first message and creation information of an Instance Spot cold
+activation, and recording the reply payload and terminal result of a
+pending request completed after relocation.
+
+A data chunk splitting a stored payload is at most 64 MiB. The
 framework attaches a 23-byte immutable envelope in front of each chunk.
 So the encoded blob `IZLinkRelocationStore.PutAsync(...)` receives is at
 most `64 MiB + 23 bytes`. The framework composes a logical stream of at

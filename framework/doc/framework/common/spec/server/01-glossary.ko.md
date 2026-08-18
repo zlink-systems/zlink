@@ -1039,6 +1039,23 @@ Actor나 Spot을 다른 node로 옮길 때 application state를 bytes로 저장�
 
 Factory configure callback의 `PreserveStateWith`가 adapter를 함께 지정한다.
 
+<a id="base-delta-capture"></a>
+### 변경분 capture (base/delta capture)
+
+Relocation adapter의 선택 capability다. 기준 snapshot(`CaptureBase`/`RestoreBase`)을
+seal 전에 전송하고 seal 뒤에는 변경분(`CaptureDelta`/`ApplyDelta`)만 전송해, state가
+큰 object의 중단 구간 전송량을 변경분 크기로 줄인다. 등록하지 않은 factory는 현재
+`Capture`/`Restore` 동작을 그대로 유지한다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태 | Relocation adapter의 선택 capability. 이름은 adapter surface의 선언을 가리키며 독립 public type은 없다. |
+| 공개 구성 | `CaptureBase`, `CaptureDelta`, `RestoreBase`, `ApplyDelta` 네 동작이다. 기준 snapshot에는 application state만 담고, 변경분은 자신이 참조하는 기준 snapshot의 checksum을 포함한다. 변경분의 의미는 application이 소유한다. |
+| 생성·관리 | 등록한 factory에서만 사용한다. 기준 snapshot 전송도 relocation state chunk 규칙과 in-flight payload 예산을 그대로 사용한다. |
+| 전달 | 기준 snapshot은 source가 처리를 계속하는 동안 seal 전에 미리 전송하고, seal 뒤에는 변경분만 전송한다. |
+| 수명 | `ApplyDelta`가 실패하면 그 instance를 폐기하고 새 instance에 `RestoreBase`부터 반복한다. 부분 적용된 instance를 재사용하지 않는다. 기준 snapshot 전송 뒤 relocation이 실패하면 target은 기준 snapshot을 제거한다. |
+| Application 권한 | Application이 adapter로 capture·restore 동작을 구현한다. 사용 여부는 factory registration에서 고정한다. |
+
 <a id="classic-fanout"></a>
 ### Classic fanout
 
@@ -1177,9 +1194,80 @@ node와 Actor가 속한 Spot을 해당 unit의 계약에 따라 함께 변경한
 | 형태 | Actor 하나 또는 함께 이동해야 하는 Spot과 Actor의 묶음이다. 독립 public type은 없다. |
 | 공개 구성 | Entry Spot Actor 하나, `PerActor` User Spot의 Actor 하나, `PerActor` Spot message target, `SpotWide` User Spot과 모든 member Actor, Instance Spot 하나 중 하나다. |
 | 생성·관리 | Host `Relocate`를 처리하는 Framework가 현재 처리 node와 Spot execution mode를 기준으로 만든다. Application은 unit의 구성원을 추가하거나 제외하지 않는다. |
-| 전달 | Relocation Store에는 unit의 identity, 저장한 state·queue·timer와 target 복원 정보를 기록한다. Application message에는 노출하지 않는다. |
+| 전달 | Unit의 identity, capture한 state·queue·timer와 target 복원 정보는 source가 [relocation state chunk](#relocation-state-chunk)로 target에 직접 전송한다. Application message에는 노출하지 않는다. |
 | 수명 | Source가 새 작업을 막고 이동을 시작할 때 생성되며 위치 변경 후 target이 처리를 시작하거나 위치 변경 전 이동을 취소하면 끝난다. |
 | Application 권한 | Application은 unit을 직접 만들거나 변경하지 않는다. `SpotWide`에서 `ApplicationSignaled`를 선택한 경우에만 이동을 시작할 안전한 turn을 알릴 수 있다. |
+
+<a id="relocation-state-chunk"></a>
+### Relocation state chunk
+
+Relocation payload를 정해진 크기 이하로 나눠 source에서 target으로 직접 전송하는
+조각이다. Payload는 저장소를 거치지 않고 relay가 사용하는 같은 source–target
+ordered mesh connection으로 한 번만 network를 지나간다. 같은 connection에는 다른
+object의 message가 섞여 흐를 수 있으므로, chunk가 어느 조립에 속하는지는 도착한
+connection과 chunk가 실은 exact identity로만 판정한다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태 | Framework 내부 wire record. 독립 public type은 없다. |
+| 공개 구성 | `RelocationId`, target attempt, chunk 순번과 encoded 길이를 가진다. 조립 결과를 검증하는 전체 payload checksum은 chunk가 아니라 Restore 요청이 싣는다. |
+| 생성·관리 | Source runtime이 capture한 payload를 유효 chunk 크기 이하로 나눠 만든다. 유효 크기는 server 설정 `RelocationPayloadChunkLimit`(기본 256 KiB), target이 알린 유효 수신 chunk 상한과 유효 [in-flight payload 예산](#in-flight-payload-budget) 중 가장 작은 값이다. |
+| 전달 | Restore 요청 뒤 같은 ordered mesh connection으로 `[send]`한다. Application message에는 노출하지 않는다. |
+| 수명 | Target이 조립 buffer로 복사한 직후 chunk의 Core retained lease를 해제한다. 순번 누락·중복, 이미 종료한 attempt의 chunk와 선언한 길이 초과는 조립에 넣지 않고 명시적 실패로 처리한다. |
+| Application 권한 | Application은 chunk를 생성·해석·변경하지 않는다. |
+
+<a id="in-flight-payload-budget"></a>
+### In-flight payload budget
+
+Source node가 peer 연결 하나에 동시에 전송 중인 relocation chunk byte 합계의
+상한이다. 큰 payload가 같은 연결을 쓰는 일반 message의 대역폭을 독점하지 않게
+한다. Payload 전체 크기가 아니라 동시에 전송 중인 byte를 제한하므로, 예산보다 큰
+payload도 chunk가 순서대로 흘러가며 시작하고 완료할 수 있다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태 | Server 설정이 정하는 byte 상한. 독립 public type은 없다. |
+| 공개 구성 | 연결별 상한은 `RelocationInFlightPayloadBudget`(기본 16 MiB, `0`은 미적용), node 전체 상한은 `RelocationNodeInFlightPayloadBudget`(기본 `0` 미적용)이 정한다. |
+| 생성·관리 | Source runtime이 peer 연결별로, Core가 아직 계상 중인 relocation chunk charge의 합계를 관찰해 적용한다. |
+| 전달 | Wire로 전달하지 않는 source-local 값이다. |
+| 수명 | 합계가 예산에 차 있으면 새 relocation unit은 source admission seal을 적용하기 전에 대기하고, 이미 시작한 unit의 다음 chunk 제출은 여유가 생길 때까지 기다린다. Seal 전 대기이므로 대기하는 Actor·Spot은 그동안 message를 정상적으로 처리하며, 이 대기는 중단 시간 측정에 포함되지 않는다. |
+| Application 권한 | Application은 설정으로만 값을 정하며 개별 relocation에서 바꾸지 않는다. |
+
+<a id="cutover-retransmission-window"></a>
+### 재전송 창 (Cutover retransmission window)
+
+Cutover submit terminal 뒤에도 source가 boundary 전 relay batch와 cutover의 사본을
+유지하고, connection이 끊겨 cutover가 유실된 경우 새 connection으로 재전송하는
+기간이다. Target은 부분 수신한 boundary 전 relay 구간을 폐기하고 재전송 batch
+전체로 원자적으로 교체한다. 창의 길이는 server 설정
+`RelocationCutoverWaitTimeout`(기본 1,000 ms)과 같다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태 | Framework가 관리하는 source-local 기간. 독립 public type은 없다. |
+| 공개 구성 | 길이는 `RelocationCutoverWaitTimeout`과 같은 값 하나다. |
+| 생성·관리 | Source runtime이 cutover submit terminal에서 시작하며, 유지하는 사본은 pipe를 점유하지 않는 Framework memory이므로 in-flight payload 예산에 계상하지 않는다. |
+| 전달 | 재전송은 batch 하나를 다시 보내는 것이며 message별 journal이나 ACK가 아니다. |
+| 수명 | Cutover submit terminal에서 시작해 창이 끝나면 사본을 정확히 한 번 정리한다. Source가 이미 정리되거나 종료된 뒤에는 재전송이 불가능하다. |
+| Application 권한 | Application은 창을 관찰하거나 바꾸지 않는다. Orchestrator는 [SafeToShutdown](#safe-to-shutdown)으로 창 종료를 포함한 종료 가능 시점을 확인한다. |
+
+<a id="safe-to-shutdown"></a>
+### SafeToShutdown
+
+Source runtime이 자기가 시작한 relocation operation에 대해, 모든 unit이 Message
+Follow route 제거 가능 시점에 도달하고 각 unit의 재전송 창이 끝난 뒤 자기 host
+status에 게시하는 관찰 상태다. Target이나 다른 주체가 보내는 완료 ACK가 아니다.
+두 조건 모두 source에서 일어나는 사건이므로 판정에 다른 node의 시각을 사용하지
+않는다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태 | Host status의 source-local 관찰 상태. 독립 public type은 없다. |
+| 공개 구성 | [Runtime monitoring](24-runtime-monitoring.ko.md)의 host status 조회·변화 관찰로 노출한다. |
+| 생성·관리 | Source runtime이 모든 relocation unit의 Message Follow route 제거 가능 시점 도달과 각 unit의 [재전송 창](#cutover-retransmission-window) 종료를 확인한 뒤 게시한다. 그보다 먼저 게시하지 않는다. |
+| 전달 | Host status 관찰 표면으로만 전달하며 relocation wire message에는 싣지 않는다. |
+| 수명 | 게시 뒤 deployment orchestrator가 `Shutdown` 호출 판단에 사용한다. 게시 전에 `Shutdown`을 호출하는 것도 허용되며, 그 경우 남은 Message Follow route가 transport와 함께 사라져 이전 route를 cache한 sender의 request는 `Unavailable`로 끝날 수 있다. |
+| Application 권한 | Application은 값을 게시하거나 바꾸지 않고 관찰만 한다. |
 
 <a id="maintenance-wave"></a>
 ### Maintenance wave

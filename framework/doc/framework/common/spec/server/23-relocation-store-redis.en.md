@@ -7,19 +7,27 @@ title: "Relocation Store Provider SPI And The Official Redis Implementation"
 [Spec table of contents](README.en.md) · [Previous: Location Store Provider SPI And The Official Redis Implementation](22-location-store-redis.en.md) · [Next: Runtime Status Query And Operational Diagnostics](24-runtime-monitoring.en.md)
 
 > **What this chapter defines** — the public provider interface (SPI) of
-> the Relocation Store, which holds the byte payload needed for
-> relocation and recovery.
+> the Relocation Store, which holds the byte payload needed for the
+> Instance Spot cold-activation record and the completion records of
+> requests that finish after relocation.
 
 
 ## 1. The Contract This Document Fixes
 
 This document defines the public provider interface of the Relocation
-Store, which holds the byte payload needed for the Framework's relocation
-and recovery. An interface the framework calls and an external provider
+Store, which holds the byte payload needed for the Instance Spot
+cold-activation record and the completion records of requests that finish
+after relocation. An interface the framework calls and an external provider
 implements, like this one, is called an SPI. A provider developer must
 use the reference the framework created, unchanged, as the key to store
 the payload, and must use that same reference to perform read, retention
 extension, and delete.
+
+The Actor/Spot relocation handoff payload — application state,
+unexecuted queue, and timers — doesn't pass through this provider. The
+source sends it to the target directly over the mesh connection, and its
+delivery and verification rules are defined by
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md).
 
 The application doesn't call this SPI directly. A provider package
 implements the SPI, and the framework uses the registered provider
@@ -33,15 +41,15 @@ is the [Location Store](01-glossary.en.md#location-store). The
 Relocation Store doesn't manage this authority — it only holds, by
 reference, the payload before it's published to the Location Store and
 the payload that's already published. The order in which the two stores
-are linked to carry out relocation and recovery is defined by
+are linked to carry out recovery and completion recording is defined by
 [Location Runtime](21-location-runtime.en.md).
 
 The provider doesn't interpret the business meaning of the bytes it
-stores. It stores, as uninterpreted bytes, application state, admission
-records, timers, the move target and payload reference list, the
-relocation phase, and even the
+stores. It stores, as uninterpreted bytes, the
 [activation envelope](01-glossary.en.md#activation-envelope) bundling the
-first application message and creation information. The execution
+first application message and creation information, the reply payload and
+completion result of requests that finished after relocation, and the
+reference list of those payloads. The execution
 procedure of [cold activation](01-glossary.en.md#cold-activation) — which
 creates a new instance and prepares it to process the first message when
 an [Instance Spot](01-glossary.en.md#entry-user-instance-spot) that could
@@ -67,7 +75,10 @@ application API. An external provider must be able to implement only the
 abstraction, without depending on the application/Actor/Spot package.
 
 A separate public method or DTO isn't added per relocation phase,
-manifest, participant, replay cursor, or completion. Redis key layout,
+manifest, participant, replay cursor, or completion. No operation for
+querying Actor/Spot move history is added either — move observation is
+handled by [Runtime Metrics](25-runtime-metrics.en.md) and
+[Message Flow Tracing](26-message-flow-tracing.en.md). Redis key layout,
 chunk storage structure, scripts, and cleanup index aren't exposed in the
 public SPI either.
 
@@ -124,8 +135,12 @@ and retention.
 | Redis-encoded blob | The provider input combining the data chunk and the immutable envelope the framework attaches. The official Redis provider's maximum size is `64 MiB + 23 bytes`. |
 | Payload split across multiple blobs | The whole payload the framework can compose from multiple blobs. Maximum size is 256 GiB. |
 | Chunk count | The sum of data chunks the whole payload's leading index points to is at most 4,096. |
-| Ordered stripe count | The contiguous segments splitting one relocation root for parallel storage and reading are at most 64. |
 | `StoreNow` | The current time the provider includes in `Put`/`Read`/`Renew` results. Expiry is judged using this time and the provider clock. |
+
+This chunk-and-leading-index format is a common blob format independent
+of the kind of payload stored. Since the Actor/Spot relocation handoff
+payload doesn't pass through this provider, the figures above apply to
+the activation envelope and completion-record payloads.
 
 The provider doesn't create or change the reference. Even for the same
 content, if the framework specifies different references, they're stored
@@ -142,44 +157,20 @@ order, and each chunk's reference/length/checksum. The provider also
 stores this index as plain bytes. The framework confirms the index's
 content and the chunk relationships.
 
-The framework looks at participant count and payload size and evenly
-splits the whole relocation root into at most 64 contiguous segments.
-These segments are called ordered stripes. A stripe doesn't mean the
-payload of a specific Actor or Spot. The Relocation Store doesn't
-interpret a stripe's content — it stores it as opaque bytes.
-
-If a stripe is larger than 64 MiB, it's split again into data chunks of
-at most 64 MiB. The sum of data chunks pointed to by every stripe can't
-exceed 4,096. Even if a SpotWide User Spot has 100 Actors, it doesn't
-create one blob per participant — it processes up to 64 stripes in
-parallel. The sum of encoded chunk bytes one process holds as a result of
-parallel I/O doesn't exceed 256 MiB by default.
-
 When storing, all data chunks are re-read to confirm bytes and checksum,
 and only then is the leading index stored. If storing or confirming any
 chunk fails, the leading index isn't stored. In this case, the remaining
 chunks don't point to any Location Store record, so they're cleaned up
 on retention expiry.
 
-When restoring, data chunks are read in parallel and each checksum is
-confirmed. Regardless of I/O completion order, they're combined in the
-stripe and chunk order recorded in the leading index. The combined
-bytes' overall checksum must also match before Spot state and Actor state
-are restored. If even one stripe is missing or its checksum differs, the
-whole relocation unit is treated as `DataLost`. Only some participants
-aren't restored. When extending the retention period too, the existence
-and checksum of each data chunk are confirmed in parallel, and only after
-all succeed is the leading index's retention extended.
-
-The bytes returned by one application state adapter have no separate
-64-MiB cap. The framework splits a larger adapter payload into data chunks
-of at most 64 MiB under the registered Relocation Store's ordinary blob
-contract, and applies the 256-GiB logical-stream limit above to the whole
-payload. The default 256-MiB limit applied when one process concurrently
-processes relocation payloads is the Framework coordinator's in-flight
-memory limit. Reaching that limit waits for additional I/O capacity rather
-than rejecting the adapter payload. This value doesn't change the storage
-size limit of one blob or of the whole payload split across multiple blobs.
+When reading, data chunks are read and each checksum is confirmed.
+Regardless of I/O completion order, they're combined in the chunk order
+recorded in the leading index. The combined bytes' overall checksum must
+also match before that payload is used. If even one chunk is missing or
+its checksum differs, the whole payload is treated as `DataLost` — it's
+never used from only some chunks. When extending the retention period
+too, the existence and checksum of each data chunk are confirmed, and
+only after all succeed is the leading index's retention extended.
 
 The default retention for each data chunk and the leading index is 24
 hours, and the framework uses the point where 12 hours of retention
@@ -322,9 +313,9 @@ following results.
 - Supports the encoded blob contract of 64 MiB application data plus a
   23-byte envelope, at most 4,096 data chunks, and a 256 GiB whole
   payload.
-- Regardless of participant count, evenly splits the relocation root into
-  at most 64 ordered opaque stripes, preserving original order and
-  overall checksum.
+- Restores a payload split across multiple chunks using the leading
+  index's order and overall checksum, and treats the whole payload as
+  `DataLost` if even one chunk is missing or its checksum differs.
 - After not receiving a `Put` result, storage state can be reconstructed
   by an exact `Read` or by `Put` with the same input.
 - The Redis operation timeout limits both connection acquisition and the
@@ -342,3 +333,4 @@ following results.
   Redis and on different Redis configurations.
 - The Redis provider's public declarations don't include relocation
   phase/manifest DTOs, or script and key layout types.
+- The SPI has no operation for querying Actor/Spot move history.

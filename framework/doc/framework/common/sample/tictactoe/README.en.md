@@ -18,8 +18,9 @@ and observer connect to Play B.
 The Framework creates User Spots, finds the current owner of a global RoomId, and manages Actor
 lifecycle and stream binding. When a Player Actor joins a Room Spot on another Play, the Framework
 moves it to the new owner while preserving its application state. It also delivers milestones with
-Logical Multicast. The Location Store records current owners, while the Relocation Store holds the
-payload needed to restore an Actor during a move. The Application owns level admission, board,
+Logical Multicast. The preserved state is transferred directly from the source to the new owner
+node. The Location Store records current owners, while the Relocation Store holds the recovery
+record of a pending request that completes after relocation. The Application owns level admission, board,
 turn, win/draw judgment, and the actor-destroy policy.
 
 The scope starts with room creation. It ends after the host and guest complete a game, the observer
@@ -36,9 +37,10 @@ that both Actors were destroyed at their Entry Spots. The following features are
 This exclusion doesn't include Actor relocation required by a remote Room join. When the Player
 Actor and Room Spot have different owners, the Framework moves the Player Actor within the join
 operation. The Player Actor factory uses `PreserveStateWith` and a relocation adapter to preserve
-application state. The Room Spot factory uses `DisableRelocation`. The Play runtime registers one
-Relocation Store for Player Actor movement payloads. The relocation adapter isn't called when the
-Actor and Room Spot are on the same node.
+application state. The Room Spot factory uses `DisableRelocation`. The Play runtime registers the
+one Relocation Store the relocatable factory requires. The state-handoff payload doesn't pass
+through the store — it's transferred directly from source to target. The relocation adapter isn't
+called when the Actor and Room Spot are on the same node.
 
 The manual endpoint isn't a value that decides object placement. The API doesn't choose a specific
 Play process or NodeRid — the Framework resolves the RoomId's current owner from the Location
@@ -144,14 +146,15 @@ flowchart LR
   evidence.
 - The Location Store records the current owner of the RoomId and ActorId. The Application doesn't
   put a NodeRid, ActorRef, or private route into an API response.
-- The Relocation Store holds application state and Framework restoration payloads when a Player
-  Actor joins a Room Spot on another node. It doesn't provide room-state persistence or crash
-  failover.
+- When a Player Actor joins a Room Spot on another node, the application state and Framework
+  restoration payload are transferred directly from the source to the new owner. The Relocation
+  Store holds only the recovery record of a pending request that completes after relocation, and
+  doesn't provide room-state persistence or crash failover.
 
 | Resource | Responsibility | Preparation |
 |---|---|---|
 | Redis Location Store | Peer descriptors and global RoomId/ActorId authority | per-run Redis and location key namespace |
-| Redis Relocation Store | Player Actor state and Framework restoration payloads | a separate relocation key namespace in the same Redis |
+| Redis Relocation Store | Operation recovery records for Player Actor relocation | a separate relocation key namespace in the same Redis |
 | Fake user source | Access token, PlayerInfo, and Wins | Api application seed |
 | Room state | Board, turn, player membership | room Spot domain |
 | Milestone topic | Observer subscription and publish target | Play Entry Spot |
@@ -167,7 +170,7 @@ flowchart LR
 | Entry Spot | 1 per Play | Player Actor admission and the observer milestone handler | Provides the actor's initial logical location. |
 | Room Spot | 1 per RoomId | PlayerInfo admission, board, turn, win/draw | The single owner of game state. |
 | Location Store | 1 logical | Peer discovery and global object authority | Hides physical owner selection. |
-| Relocation Store | 1 logical | Holds the payload needed to restore a Player Actor at its new owner. | Doesn't decide object authority. |
+| Relocation Store | 1 logical | Holds post-relocation pending-request recovery records. | Doesn't decide object authority. |
 
 The observer isn't a room member. The observer's local Entry Spot handler subscribes to the
 milestone topic and sends `WinMilestoneNotify` to the current observer session. No separate
@@ -706,8 +709,9 @@ per language isn't added to the common contract.
   `tictactoe.api` channel selects either Api A or Api B for an authentication request.
 - The basic topology shows only the Client, server components, and their structural connections.
 - The Redis Location Store manages the current owner of the RoomId and ActorId.
-- The Player Actor uses `PreserveStateWith` and a relocation adapter, and the Redis Relocation Store
-  holds restoration payloads for a cross-node join. The Room Spot uses `DisableRelocation`.
+- The Player Actor uses `PreserveStateWith` and a relocation adapter, and the restoration payload
+  for a cross-node join is transferred directly from source to target. The Redis Relocation Store
+  holds relocation operation recovery records. The Room Spot uses `DisableRelocation`.
 - The client uses endpoints from the API response to connect the host to Play A and the guest and
   observer to Play B, without receiving the owner NodeRid.
 - The room Spot judges level admission, board, turn, win, and draw as a single state owner.

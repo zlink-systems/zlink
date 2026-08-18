@@ -26,7 +26,7 @@ commands, private connection IDs, Store records, and internal relocation queues 
 | Role | Count | Purpose and reason for separation |
 |---|---:|---|
 | Location Store | 1 | Provides automatic provider discovery and object location. |
-| Relocation Store | 1 | Preserves `PreserveStateWith` Actor/User Spot relocation state. |
+| Relocation Store | 1 | Preserves the Instance Spot cold-activation record and the post-relocation pending-request terminal record. The state-handoff payload is transferred directly from source to target. |
 | Channel provider | 2–3 | Provides a weighted Channel handler and runtime status. Can start a replacement with a different version and endpoint. |
 | Object Server | 2–3 | Provides an Actor, Entry/User/Instance Spot factory, and relocation adapter. |
 | Session gateway | 1 | Provides Stream Session and Actor binding. |
@@ -666,21 +666,24 @@ original order, at the target?
 Priority: `P0`
 
 Internal permit counts are not an E2E contract. The public E2E confirms that Host operations finish
-within a bound across many units and a provider data-chunk boundary, and do not block source
-admission too early.
+within a bound across many units and the relocation chunk/in-flight budget boundary, and do not
+block source admission too early.
 
 **Verification question:** Do 80 units and both large-state variants each have exactly one
 successful terminal?
 
-- Starting condition: 80 units of 1 MiB state, a unit with exactly 64 MiB of encoded participant
-  state, and a unit one byte over are built as separate fixtures.
+- Starting condition: 80 units of 1 MiB state, a unit whose encoded participant state exactly
+  matches the configured `RelocationPayloadChunkLimit`, and a unit one byte over are built as
+  separate fixtures.
 - Procedure: Host Relocate is run on each fixture, collecting current locations and operation
   results.
-- Verification: Both the 64 MiB unit and the one-byte-over unit preserve checksum and logical length
-  at the target. The one-byte-over unit is not `StateIncompatible` because of an adapter-specific
-  size cap. Every unit and Host operation has a bounded successful terminal.
+- Verification: Both the chunk-boundary unit and the one-byte-over unit preserve checksum and
+  logical length at the target. The one-byte-over unit is not `StateIncompatible` because of an
+  adapter-specific size cap. Every unit and Host operation has a bounded successful terminal. The
+  in-flight payload budget may only delay a unit's start before the seal — it does not fail a unit
+  that already started.
 - Detailed behavior: verifies [Host Maintenance §7](../spec/server/30-host-relocation-flow.en.md) and
-  [Relocation Store Redis — Reference And Storage Size](../spec/server/23-relocation-store-redis.en.md#3-reference-and-storage-size).
+  the chunk/budget boundary in [The Complete Actor And Spot Relocation Flow](../spec/server/28-relocation-flow.en.md).
 
 #### RL-F14 Restore The Source Queue Order After An Explicit Abort Before RelayReady Acceptance
 

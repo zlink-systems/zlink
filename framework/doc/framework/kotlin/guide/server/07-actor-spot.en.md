@@ -425,6 +425,15 @@ class PlayerActorRelocationAdapter : ZLinkActorRelocationAdapter<PlayerActor> {
 Capture and restore can be called again within the same relocation. The adapter must be
 retry-safe, and must copy the payload memory if it's kept around outside the callback.
 
+An Actor with large state can additionally register the optional base/delta capture
+capability on its adapter. The base snapshot (`captureBase`/`restoreBase`) is moved to the
+target ahead of time while the Actor keeps processing messages, and during the stop window
+only the changes since then (`captureDelta`/`applyDelta`) are transferred — so the stop time
+scales with the size of the changes, not the whole state. What counts as a change is defined
+by the application, and without this registration the `capture`/`Restore` behavior above is
+kept as-is. The formal contract is covered by
+[Spot And Actor Membership](../../../common/spec/server/15-spot-actor.en.md).
+
 ## 8. Related Documents
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`

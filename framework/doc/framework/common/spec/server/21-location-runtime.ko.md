@@ -31,8 +31,10 @@ call 없이 최초 message로 만드는 Spot은
 [Instance Spot](01-glossary.ko.md#entry-spot-user-spot과-instance-spot)이다.
 
 현재 owner와 위치를 여러 node가 함께 확인하도록 보관하는 저장소를
-[Location Store](01-glossary.ko.md#location-store)라고 한다. 실제 복원 데이터를
-보관하는 저장소는 Relocation Store라고 한다.
+[Location Store](01-glossary.ko.md#location-store)라고 한다. Instance Spot cold
+activation 기록과 relocation 뒤 완료되는 request의 완료 기록을 보관하는 저장소는
+Relocation Store라고 한다. Actor·Spot relocation의 application state·queue·timer
+handoff payload는 저장소를 거치지 않고 source가 target에 직접 전송한다.
 
 저장소 구현자가 제공해야 하는 정확한 함수는
 [Location Store provider](22-location-store-redis.ko.md)와
@@ -61,16 +63,20 @@ Core transport는 byte를 전달할 뿐 Actor·Spot의 위치, 생성과 relocat
 
 ### 1.2 두 Store의 책임
 
-Framework는 위치를 판단하는 정보와 실제 복원 데이터를 서로 다른 Store에 저장한다.
+Framework는 위치를 판단하는 정보와 복구용 payload를 서로 다른 Store에 저장한다.
 
 | Store | 저장하는 정보 | Framework가 사용하는 방법 |
 |---|---|---|
-| Location Store | 현재 owner와 위치, 세대 번호, Spot membership, 확보한 수용 공간, relocation 진행 상태와 복원 데이터의 위치 | 어떤 node를 현재 owner로 인정할지 최종 결정한다. |
-| Relocation Store | Application state, 수락했지만 아직 끝나지 않은 작업, 실행 전 message, timer와 복구 데이터 | 새 owner가 application 처리를 이어 갈 때 필요한 실제 데이터를 제공한다. |
+| Location Store | 현재 owner와 위치, 세대 번호, Spot membership, 확보한 수용 공간과 relocation 진행 상태 | 어떤 node를 현재 owner로 인정할지 최종 결정한다. |
+| Relocation Store | Instance Spot cold activation의 생성 정보와 최초 message, relocation 뒤 완료되는 pending request의 reply payload와 완료 결과 | Cold activation 복구와 이전 owner를 통한 reply 전달에 필요한 데이터를 제공한다. |
+
+Actor·Spot relocation에서 새 owner가 복원할 application state, 실행하지 않은
+queue와 timer는 어느 Store에도 저장하지 않는다. Source가 memory에 유지하다가
+target에 직접 전송한다(§1.4).
 
 어떤 Actor가 User Spot에 속하는 관계를
 [Actor membership](01-glossary.ko.md#actor-membership)이라고 한다. Location Store에 저장한
-이동 대상 목록이 membership의 기준이다. Relocation Store의 payload 목록은 이
+이동 대상 목록이 membership의 기준이다. Restore 대화가 전달하는 payload는 이
 관계를 바꾸지 못한다.
 
 Actor가 많아도 목록 전체를 record 하나에 넣지 않는다. Framework는 이동 대상
@@ -85,10 +91,9 @@ Actor가 많아도 목록 전체를 record 하나에 넣지 않는다. Framework
 목록의 항목 하나는 “어떤 object를 옮겨야 하는가”만 나타낸다. Object identity,
 generation, membership과 relocation 때 적용할 변경 정보를 기록한다. 여기서
 generation은 같은 ID로 다시 만든 object나 이전 owner의 늦은 요청을 구분하는 세대
-번호다. Actor state나 message payload는 넣지 않는다. 실제 application state·queue·
-완료되지 않은 작업 기록은
-[Relocation Store](23-relocation-store-redis.ko.md#3-reference와-저장-크기)에
-별도로 저장한다.
+번호다. Actor state나 message payload는 넣지 않는다. 실제 application state와
+실행하지 않은 작업은 source가 memory에 유지하다가 Restore 대화로 target에 직접
+전송한다(§1.4).
 
 예를 들어 User Spot에 Actor가 10,000개 있으면 약 10개의 목록 페이지를 만든다.
 마지막 페이지에는 남은 항목만 들어간다.
@@ -106,9 +111,10 @@ User Spot object list
 전체 목록의 시작 위치, 전체 항목 수와 내용 확인값을 보관한다. Framework는 이 세
 값으로 페이지가 빠지거나 바뀌지 않았는지 확인한다.
 
-Relocation Store도 실제 복원 데이터의 목록에 같은 전체 항목 수와 내용 확인값을
-기록한다. 두 Store의 값이 모두 같아야 복원을 시작한다. Actor용 Store와 Spot용
-Store를 따로 만들지 않는다.
+복원 데이터 자체는 저장소를 거치지 않는다. Target은 Restore 요청이 선언한 전체
+길이, chunk 수와 checksum으로 직접 전송받은 payload를 검증하고, 이동 대상 목록은
+Location Store의 전체 항목 수와 내용 확인값으로 검증한다. 두 검증이 모두 성공해야
+복원을 시작한다. Actor용 Store와 Spot용 Store를 따로 만들지 않는다.
 
 외부 Store provider는 Location Store interface와 Relocation Store interface만 구현한다.
 Framework의 Actor·Spot 규칙을 provider가 직접 구현하지 않는다.
@@ -116,7 +122,7 @@ Framework의 Actor·Spot 규칙을 provider가 직접 구현하지 않는다.
 | 책임 | 담당 |
 |---|---|
 | 의미를 해석하지 않는 key와 bytes를 읽고, 지정한 버전이 그대로일 때만 함께 변경한다. | Location Store provider |
-| 한 번 저장하면 바꾸지 않는 relocation payload를 저장하고 읽고 삭제한다. | Relocation Store provider |
+| 한 번 저장하면 바꾸지 않는 payload를 저장하고 읽고 삭제한다. | Relocation Store provider |
 | 실행 중인 node 정보, owner 사용 기한과 현재 위치 record의 의미를 해석한다. | Framework |
 | 남은 수용 공간을 계산하고 여러 object를 함께 옮기며 실패 결과를 정리한다. | Framework |
 
@@ -185,12 +191,15 @@ Actor나 Spot을 다른 node로 이전할 때는 다음 순서를 따른다.
 1. Framework가 현재 실행 중인 node 정보, owner의 사용 기한과 위치 record를
    확인한다.
 2. Location Store에서 target node가 사용할 수용 공간을 확보한다.
-3. Source는 application state와 아직 실행하지 않은 작업을 Relocation Store에 먼저
-   저장한다. 저장 위치, 내용 확인값과 보관 기한을 다시 읽어 확인한다.
-4. Location Store의 `Captured` record가 이 payload를 가리키게 한 뒤 Source가 Target에
-   Restore 요청을 보낸다.
-5. Target은 요청을 받으면 relocation temporary queue를 먼저 등록하고 Location Store가 가리키는
-   payload만 읽어 외부에 아직 공개하지 않은 instance에 복원한다. Restore가 끝나면 source에
+3. Source는 현재 application turn을 끝낸 뒤 application state와 아직 실행하지 않은
+   작업을 capture하여 memory에 유지한다. Location Store에는 capture 완료를
+   `Captured`로 기록한다.
+4. Source가 Target에 Restore 요청을 보낸다. 요청에는 payload의 전체 길이, chunk
+   수와 checksum이 들어가고, source는 같은 ordered connection으로 payload를 chunk로
+   나눠 직접 전송한다.
+5. Target은 요청을 받으면 relocation temporary queue를 먼저 등록하고, 전송받은
+   chunk를 조립해 checksum을 확인한 뒤 외부에 아직 공개하지 않은 instance에
+   복원한다. Restore가 끝나면 source에
    relay 수신 준비를 알린다. Source는 이 통지 뒤 ingress hold를 relay하고 같은 ordered
    connection으로 cutover를 one-way로 보낸다.
 6. Target은 cutover를 받거나 relay 준비 reply 뒤 1,000ms가 지나면 Location Store의 처음 읽은 version이 그대로일
@@ -199,31 +208,26 @@ Actor나 Spot을 다른 node로 이전할 때는 다음 순서를 따른다.
 7. Owner 변경 뒤 저장된 기존 작업, cutover 전 relay와 나머지 temporary 작업을 실제 object
    queue에 순서대로 넣는다. Temporary queue 등록을 제거하고 regular route로 전환하되 dispatch는
    닫아 둔다. 필요한 lifecycle callback을 끝낸 뒤 application message 처리를 시작한다.
-8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다. Source
-   정리가 끝나면 Location Store에서
-   해당 데이터의 사용 종료를 먼저 기록한다. 그 뒤 Relocation Store에서 데이터를
-   삭제한다.
+8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다.
+   Memory에 유지한 payload 원본은 cutover submit이 끝난 뒤 정리한다.
 
 ```mermaid
 sequenceDiagram
     participant S as Source runtime
-    participant B as Relocation Store
     participant L as Location Store
     participant T as Target runtime
 
     S->>L: [request] 현재 owner·membership·record version 조회
     L-->>S: [reply] source fence와 current record version
-    S->>B: [request] state와 queue payload 저장
-    B-->>S: [reply] 저장 위치와 checksum
-    S->>L: [request] payload 위치와 확인값을 Captured로 기록
+    S->>S: [local] 현재 turn 완료 뒤 state와 queue를 memory에 capture
+    S->>L: [request] capture 완료를 Captured로 기록
     L-->>S: [reply] Captured 결과
-    S->>T: [request] temporary queue 설치·payload Restore 후 dispatch 없이 relay 준비
+    S->>T: [request] Restore 요청 · payload 전체 길이·chunk 수·checksum 포함
     T->>T: [local] relocation temporary queue 등록
-    T->>L: [request] Captured payload 위치 조회
-    L-->>T: [reply] payload 위치
-    T->>B: [request] payload 읽기
-    B-->>T: [reply] payload
-    T->>T: [local] 외부에 공개하지 않은 instance에 Restore
+    loop payload를 chunk 단위로 전송
+        S->>T: [send] payload chunk · 같은 ordered 연결
+    end
+    T->>T: [local] chunk 조립과 checksum 확인 · 외부에 공개하지 않은 instance에 Restore
     T->>L: [request] target attempt와 Prepared 기록
     L-->>T: [reply] Prepared 결과
     T-->>S: [reply] temporary queue·Restore·Prepared 완료 · source owner 유지
@@ -234,28 +238,26 @@ sequenceDiagram
     L-->>T: [reply] target owner·membership CAS 결과
     T->>T: [local] saved work·boundary 전 relay·나머지 temporary 순서로 병합
     T->>T: [local] regular route 전환 · lifecycle 완료 · dispatch 개방
-    S->>S: [local] target queue가 수락한 ingress hold 원본 제거
-    T->>L: [request] 저장 데이터 사용 종료 기록
-    L-->>T: [reply] 기록 결과
-    T->>B: [request] relocation payload 삭제
-    B-->>T: [reply] 삭제 결과
+    S->>S: [local] cutover submit 뒤 memory payload와 ingress hold 원본 정리
 ```
 
-두 Store를 하나의 distributed transaction이나 2PC로 묶지 않는다. Relocation
-Store에 데이터를 먼저 준비하고 Location Store의 owner CAS 한 번으로 새 owner에게
+Handoff payload와 owner 변경을 하나의 distributed transaction이나 2PC로 묶지
+않는다. Restore 요청, 각 chunk와 target의 owner CAS는 같은 `RelocationId`, target
+attempt와 source fence로 결합되고, Location Store의 owner CAS 한 번으로 새 owner를
 공개한다.
 
-Relocation Store 사용 여부는 다음과 같다.
+Relocation Store 사용 여부는 다음과 같다. Actor·Spot relocation의 handoff
+payload는 이 Store를 거치지 않는다.
 
 | 작업 | Framework 동작 |
 |---|---|
-| Same-node Actor join | Location Store에서 membership만 변경하며 Relocation payload를 만들지 않는다. |
+| Same-node Actor join | Location Store에서 membership만 변경하며 payload를 만들지 않는다. |
 | `DisableRelocation` cross-node 이동 | Capture 전에 거부한다. |
-| `RecreateOnRelocation` cross-node Actor·Spot 이동 | Application state 없이 실행 전 queue·timer와 recovery payload를 저장한다. |
-| `PreserveStateWith` cross-node Actor·Spot 이동 | Application state, 실행 전 queue·timer와 recovery payload를 저장한다. |
-| Host maintenance의 Actor·User Spot 이동 | 이동 대상별 state와 완료되지 않은 작업을 저장한다. |
-| Cross-node Actor `JoinSpot`·`JoinEntrySpot` | 이동하는 Actor의 policy에 맞는 payload를 저장한다. |
-| Instance Spot을 처음 만들면서 message 처리 | 생성 정보와 최초 message를 함께 저장한다. Policy가 `DisableRelocation`이어도 사용한다. |
+| `RecreateOnRelocation` cross-node Actor·Spot 이동 | Application state 없이 실행 전 queue·timer를 capture하여 target에 직접 전송한다. Relocation Store에는 저장하지 않는다. |
+| `PreserveStateWith` cross-node Actor·Spot 이동 | Application state와 실행 전 queue·timer를 capture하여 target에 직접 전송한다. Relocation Store에는 저장하지 않는다. |
+| Host maintenance의 Actor·User Spot 이동 | 이동 대상별 state와 완료되지 않은 작업을 target에 직접 전송한다. Relocation 뒤 완료되는 pending request의 완료 기록만 Relocation Store에 저장한다(§7.5). |
+| Cross-node Actor `JoinSpot`·`JoinEntrySpot` | 이동하는 Actor의 policy에 맞는 payload를 target에 직접 전송한다. |
+| Instance Spot을 처음 만들면서 message 처리 | 생성 정보와 최초 message를 Relocation Store에 함께 저장한다. Policy가 `DisableRelocation`이어도 사용한다. |
 
 실행 중인 node를 알리는 정보는 해당 host의 owner 사용 기한이 끝나면 더 이상
 사용하지 않는다. Actor·Spot의 현재 위치 record는 정해진 조건으로 삭제할 때까지
@@ -492,7 +494,7 @@ lease와 해당 relocation이 미리 확보한 수용 공간을 검증한다. Re
 잘못됐으면 Store를 호출하기 전에 Framework 내부 오류로 끝낸다.
 
 일반 `Preserve`에는 relocation reservation 정보가 없다. Standalone relocation에서
-저장 데이터 위치를 갱신하거나 target 준비 완료를 기록할 때만 미리 확보한
+완료 기록 payload의 위치를 갱신하거나 target 준비 완료를 기록할 때만 미리 확보한
 reservation 정보를 함께 전달할 수 있다. Framework는 authority key, 처음 읽은
 `StoreVersion`, source·target owner와 현재 수용 공간을 모두 확인한다. 성공하면
 reservation이 기대하는 `StoreVersion`도 같은 요청에서 갱신한다. Owner, 수용 공간과
@@ -767,16 +769,19 @@ Framework는 이동 대상 하나마다 다음 순서를 지킨다.
 
 1. 현재 owner와 이동 대상 목록을 확인한다.
 2. Source queue가 실행 중인 작업 하나를 끝낸 뒤 새 작업 시작을 막는다.
-3. 아직 실행하지 않은 message, timer와 application state를 Relocation Store에
-   저장한다.
-4. Target 수용 공간을 확보하고 Restore 요청을 보낸다. Target은 relocation temporary
-   queue를 먼저 등록한 뒤 application state를 복원한다. 이때 들어오는 message는
+3. 아직 실행하지 않은 message, timer와 application state를 capture하여 source
+   memory에 유지한다.
+4. Target 수용 공간을 확보하고, payload의 전체 길이, chunk 수와 checksum을 실은
+   Restore 요청을 보낸 뒤 같은 ordered TCP connection으로 payload를 chunk로 나눠
+   직접 전송한다. Target은 relocation temporary
+   queue를 먼저 등록한 뒤 조립한 payload의 checksum을 확인하고 application state를
+   복원한다. 이때 들어오는 message는
    temporary queue에 보관하고 handler를 실행하지 않는다. Target이 relay 수신 준비를 알리면
    source는 ingress hold를 같은 ordered TCP connection으로 relay하고 현재 prefix 뒤에 cutover
    marker를 넣는다. Source relay는 temporary queue group의 boundary 전 relay 구간에, direct와
    marker 뒤 작업은 나머지 temporary 구간에 보관한다.
 5. Target은 Restore 뒤 cutover를 받거나 relay 준비 reply 뒤 1,000ms가 지나면 Location Store 요청 하나로 owner,
-   membership, 수용 공간과 복원 데이터 위치를 함께 CAS한다. Source는 이 CAS를 실행하지 않는다.
+   membership과 수용 공간을 함께 CAS한다. Source는 이 CAS를 실행하지 않는다.
 6. CAS가 성공한 target은 저장된 기존 작업, cutover 전 relay와 나머지 temporary 작업을 실제
    queue에 순서대로 넣고 regular route로 전환한다. 필요한 lifecycle callback을 끝낸 뒤 dispatch를
    열며 source에는 완료 reply를 보내지 않는다.
@@ -795,18 +800,19 @@ submit이 실패해도 Source를 다시 owner로 추측하여 되돌리지 않�
 | `TargetAttemptGeneration` | 같은 target에 보낸 중복 또는 이전 Restore 요청을 구분하는 0이 아닌 값이다. 다른 target 선택에 사용하지 않는다. |
 | [Reservation ID](01-glossary.ko.md#reservation-id) | Target 수용 공간을 확보한 요청을 식별하는 0이 아닌 128-bit 값이다. 생성용 ID와 별개다. |
 
-Location Store의 object별 위치 record는 최대 1 MiB다. 큰 목록과 실제 복원 데이터는
-다른 record에 나누어 저장한다.
+Location Store의 object별 위치 record는 최대 1 MiB다. 큰 목록은 여러 record로
+나누고, 완료 기록 payload는 Relocation Store에 저장한다.
 
 | 저장 위치 | 저장 내용 |
 |---|---|
-| Object별 위치 record | Source와 target, 현재 단계, application version, 복원 데이터 위치와 확인값, 완료 수 |
+| Object별 위치 record | Source와 target, 현재 단계, application version, 완료 기록 payload의 위치와 확인값, 완료 수 |
 | Location Store의 이동 대상 목록 | 정렬된 object ID, generation, membership과 이동할 때 적용할 변경 |
 | `SpotWide` User Spot 전체 이동 record | Owner, 전체 변경 세대, 전체 항목 수, 목록 시작 위치와 내용 확인값 |
 | `PerActor` User Spot 이동 record | Spot authority source·target, relocation operation ID, 전체 Actor 수와 source·target Actor 수 |
-| Relocation Store | Application state, 미완료 작업, reply payload와 object별 완료 결과 |
+| Relocation Store | Relocation 뒤 완료되는 pending request의 reply payload와 object별 완료 결과 |
 
-Relocation Store의 목록은 payload를 찾는 데 사용한다. 어떤 Actor가 User Spot에
+복원할 application state·queue·timer는 source memory에만 있으며 어느 Store에도
+저장하지 않는다. 어떤 Actor가 User Spot에
 속하는지는 Location Store의 전체 항목 수와 목록 내용 확인값으로 판단한다.
 
 Target 공간을 확보할 때는 object ID, `StoreVersion`, 종류와 stable type, source와
@@ -861,9 +867,9 @@ Target은 Restore와 temporary queue 등록을 마치고 cutover를 받거나 1,
 
 | 단계 | 인정하는 owner와 target 조건 |
 |---|---|
-| `Preparing`, `Captured` | Source가 owner다. 최초 `Captured`에는 target 정보가 없다. 복원 데이터 저장을 마친 뒤에는 normal host admission을 통과한 target 정보를 같은 이동에 연결할 수 있다. |
-| `Prepared` | Source가 owner다. Target 시도 번호, target owner lease, target node와 복원 데이터 위치가 모두 있어야 한다. 별도 relocation capacity reservation은 기록하지 않는다. |
-| `Committed`부터 `Completed`까지 | 정확히 기록된 target이 owner다. 같은 target 시도 번호와 복원 데이터를 유지한다. |
+| `Preparing`, `Captured` | Source가 owner다. 최초 `Captured`에는 target 정보가 없다. Capture를 마친 뒤에는 normal host admission을 통과한 target 정보를 같은 이동에 연결할 수 있다. |
+| `Prepared` | Source가 owner다. Target 시도 번호, target owner lease와 target node가 모두 있어야 한다. 별도 relocation capacity reservation은 기록하지 않는다. |
+| `Committed`부터 `Completed`까지 | 정확히 기록된 target이 owner다. 같은 target 시도 번호를 유지한다. |
 
 User Spot membership을 바꾸지 않는 Actor 이동은 `NewOwner` CAS 한 번으로 owner를
 바꾼다. 같은 target process에서 준비를 다시 하면 target 시도 번호와 준비 정보만
@@ -893,43 +899,48 @@ Target factory와 `Restore`는 `Prepared`를 기록하기 전에 끝낸다. Queu
 [Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)이
 정의한다.
 
-### 7.3 저장한 복원 데이터가 공식 데이터가 되는 시점
+### 7.3 복원 데이터가 공식 데이터가 되는 시점
 
 Queue 중지, 동시 이동 수, payload 구성, timer와 Session 처리는
 [Host relocation §§7~9](30-host-relocation-flow.ko.md#7-relocation-unit과-실행-순서)이
-정의한다. Payload 크기, 분할과 보관 기한은
-[Relocation Store](23-relocation-store-redis.ko.md#3-reference와-저장-크기)가
-정의한다. 이 절은 Location Store가 어느 데이터를 복원 근거로 인정하는지만
-정의한다.
+정의한다. Payload의 chunk 분할, 전송 예산과 전송 실패 규칙은
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 정의한다. 이 절은
+Location Store가 어느 데이터를 복원 근거로 인정하는지만 정의한다.
+
+"이 bytes가 이 이동의 공식 snapshot"임은 Restore 대화가 확정한다. Restore 요청은
+payload의 전체 길이, chunk 수와 CRC-32C checksum을 선언하고, 이 요청과 각 chunk,
+target의 Location Store CAS는 같은 `RelocationId`, target attempt와 source fence로
+결합된다. Target은 이 값들이 정확히 같지 않은 Restore와 chunk를 조립에 연결하지
+않고 폐기하므로, 늦게 도착한 이전 attempt의 payload가 현재 이동에 섞이지 않는다.
+Location Store는 payload의 위치나 checksum을 가리키지 않는다.
 
 | 단계 | Location Store에 기록하는 값 | 다음 단계 조건 |
 |---|---|---|
 | `Preparing` | Source owner 정보와 이동 대상 목록의 내용 확인값 | 현재 source와 모두 같아야 한다. |
-| `Captured` | Relocation Store의 데이터 위치, checksum과 목록 내용 확인값 | 전체 데이터가 존재하고 남은 보관 기간이 충분해야 한다. |
-| `Prepared` | Target 시도 번호, target owner 정보와 복원 데이터 위치 | Target의 Restore 준비와 relocation temporary queue 등록을 끝내야 한다. |
-| Owner 변경 | Target owner, membership과 같은 복원 데이터 위치 | Restore를 끝내고 Object 하나 또는 User Spot 전체의 CAS가 성공해야 한다. 일반 host capacity accounting은 같은 authority CAS가 소유하지만 relocation 전용 reservation handshake는 없다. |
+| `Captured` | Capture 완료와 목록 내용 확인값. Payload 위치는 기록하지 않는다. | Source가 payload 전체를 memory에 유지하고 있어야 한다. |
+| `Prepared` | Target 시도 번호와 target owner 정보 | Target이 payload 조립과 checksum 확인, Restore와 relocation temporary queue 등록을 끝내야 한다. |
+| Owner 변경 | Target owner와 membership | Restore를 끝내고 Object 하나 또는 User Spot 전체의 CAS가 성공해야 한다. 일반 host capacity accounting은 같은 authority CAS가 소유하지만 relocation 전용 reservation handshake는 없다. |
 | `Completed` | Target dispatch와 필요한 lifecycle을 열고 필요한 Session route update를 보냈다는 상태 | 별도 target completion reply는 없으며 이전 주소를 통한 모든 relay 종료를 기다리지 않는다. 늦은 relay는 Message Follow가 처리한다. |
 
 ```mermaid
 sequenceDiagram
     participant S as Source
-    participant B as Relocation Store
     participant L as Location Store
     participant T as Target
 
     S->>L: [request] Preparing 기록
     L-->>S: [reply] Preparing 결과
-    S->>B: [request] 복원 데이터 저장과 확인
-    B-->>S: [reply] 저장 위치와 checksum
-    S->>L: [request] 데이터 위치와 checksum을 Captured로 기록
+    S->>S: [local] state·queue·timer를 memory에 capture
+    S->>L: [request] capture 완료를 Captured로 기록
     L-->>S: [reply] Captured 결과
-    S->>T: [request] temporary queue 설치·지정 payload Restore 후 dispatch 없이 relay 준비
+    S->>T: [request] Restore 요청 · 전체 길이·chunk 수·checksum 선언
     T->>T: [local] relocation temporary queue 등록
-    T->>L: [request] 현재 owner와 데이터 위치 조회
+    loop payload를 chunk 단위로 전송
+        S->>T: [send] payload chunk · 같은 ordered 연결
+    end
+    T->>L: [request] 현재 owner와 record 조회
     L-->>T: [reply] current record
-    T->>B: [request] 지정된 데이터 읽기
-    B-->>T: [reply] 복원 데이터
-    T->>T: [local] Restore
+    T->>T: [local] chunk 조립·checksum 확인·Restore
     T->>L: [request] target 정보와 Prepared 기록
     L-->>T: [reply] Prepared 결과
     T-->>S: [reply] temporary queue·Restore·Prepared 완료 · source owner 유지
@@ -942,20 +953,25 @@ sequenceDiagram
     L-->>T: [reply] 기록 결과
 ```
 
-Target은 Location Store가 가리키는 데이터만 사용한다. Payload checksum이나 이동 대상 목록의
-내용 확인값이 다르면 Restore와 owner 변경을 시작하지 않는다. 같은 `RelocationId`라도 target
-attempt가 다르면 이전 attempt의 temporary queue를 사용하지 않는다.
+Target은 Restore 요청과 결합 값이 같은 chunk만 조립에 넣는다. 조립한 payload의
+checksum이 선언한 값과 다르거나 이동 대상 목록의 내용 확인값이 다르면 복원과
+owner 변경을 시작하지 않고 명시적 실패로 응답하며, 부분 조립 payload로 복원하지
+않는다. 같은 `RelocationId`라도 target attempt가 다르면 이전 attempt의 temporary
+queue와 조립 상태를 사용하지 않는다. 결합 값이 같은 Restore 재전송은 선언한
+길이와 checksum이 처음 값과 같을 때만 기존 조립 상태를 재사용한다. 같은 결합 값에
+다른 길이나 checksum이 도착하면 기존 조립 상태를 재사용하지도 덮어쓰지도 않고
+명시적 conflict 실패로 끝낸다.
 
 | 실패 시점 | 처리 |
 |---|---|
-| `Preparing` 또는 payload 저장 중 source 종료 | 현재 source owner를 확인한 뒤 이동을 취소한다. 어떤 위치 record도 가리키지 않는 payload는 보관 기한 뒤 삭제한다. |
-| `Captured` 뒤 relay-ready reply가 accepted되기 전 target의 명시 실패 | 이동을 취소하고 source owner를 유지한다. 다른 target을 자동 선택하지 않는다. |
-| `Captured` 또는 `Prepared` 직전에 필수 정보가 사라짐 | Owner를 바꾸지 않고 이동을 취소한다. Payload 위치도 Location Store에 연결하지 않는다. |
-| Location Store가 가리키는 payload가 영구적으로 없거나 확인값이 다름 | 다시 시도해도 고칠 수 없는 `DataLost`로 기록한다. |
+| `Preparing` 또는 capture 중 source 종료 | 현재 source owner를 확인한 뒤 이동을 취소한다. |
+| `Captured` 뒤 relay-ready reply가 accepted되기 전 target의 명시 실패 | 이동을 취소하고 source owner를 유지한다. Source는 memory에 유지한 payload로 source queue를 복원한다. 다른 target을 자동 선택하지 않는다. |
+| 조립한 payload의 checksum 불일치 | Target은 복원을 시작하지 않고 명시적 실패로 응답한다. 재시도하지 않으며, source는 위와 같이 복원한다. |
+| `Captured` 또는 `Prepared` 직전에 필수 정보가 사라짐 | Owner를 바꾸지 않고 이동을 취소한다. |
 
 `Captured` 전의 요청 실패는 일반 connection failure, timeout 또는 cancellation으로
 처리한다. 이미 받았던 작업을 다른 node에서 자동 실행한다고 보장하지 않는다.
-`Captured` 뒤에는 Location Store가 가리키는 payload를 현재 source와 target process가
+`Captured` 뒤에는 source memory의 payload를 현재 source와 target process가
 정상 handoff를 계속하는 근거로 사용한다. Process 재시작 뒤 자동 복구에는 사용하지 않는다.
 
 Target은 object ID와 예상 `AuthorityOwnerGeneration`으로 현재 위치를 직접 읽는다.
@@ -985,7 +1001,7 @@ update 적용은 target application message 처리를 막지 않는다. 실행 �
 이 후속 작업을 각자 계속한다.
 
 Resolver는 위 `Ready` 조건을 모두 만족하기 전에는 이동 중인 object를 `Ready`로 반환하지
-않는다. Target dispatch 전환 뒤 이전 owner를 통한 reply 전달과 `Completed` 기록을 위해 relocation payload
+않는다. Target dispatch 전환 뒤 이전 owner를 통한 reply 전달과 `Completed` 기록을 위해 완료 기록 payload
 위치를 유지하는 것은 `Ready`를 막지 않는다.
 
 `PerActor` User Spot의 target shell은 Spot authority CAS, source Spot queue relay와
@@ -1033,7 +1049,7 @@ Relay-ready reply가 accepted 상태가 되기 전 명시적으로 취소할 때
 2. Target temporary queue의 작업을 실행하지 않고 폐기한다. Source ingress hold 원본과
    저장해 둔 기존 작업은 원래 순서대로 source queue에 되돌린다.
 3. Bound Session seal이 있으면 command 44 abort를 one-way로 보낸다. 적용 reply는 기다리지 않는다.
-4. 확보한 target 공간과 어떤 위치 record도 가리키지 않는 payload를 정리한다.
+4. 확보한 target 공간과 target의 조립 중인 chunk staging을 정리한다.
 5. Location Store를 읽거나 쓰지 않고 source owner, generation과 사용 중인 공간을 유지하며 이동 진행 정보만 제거한다.
 6. Source가 새 작업을 다시 받는다.
 
@@ -1053,7 +1069,8 @@ Location Store CAS에 적용한다. Cutover와 Session route update는 one-way�
 반환값과 입력 제한은 [Location Store](22-location-store-redis.ko.md)와
 [Relocation Store](23-relocation-store-redis.ko.md)가 정의한다.
 
-Relocation CAS의 retry deadline은 relocation payload와 Restore operation이 가진 유효시간이다.
+Relocation CAS의 retry deadline은 Restore operation의 absolute deadline이다.
+저장 payload의 보관 기간을 별도 기준으로 사용하지 않는다.
 Retry 가능한 failure 또는 불확정 응답이면 target이 같은 source fence와 `RelocationId`로
 read/CAS를 반복한다. Exact target owner를 확인하면 성공으로 수렴한다. 다른 valid owner나
 generation이면 stale relocation으로 즉시 종료한다.
@@ -1083,7 +1100,8 @@ Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시
 삭제한다. Provider가 비동기 요청이 끝난 뒤에도 입력 bytes를 보관하면 복사본을
 만들어야 한다. 성공 결과로 반환한 bytes는 이후 바뀌지 않아야 한다.
 
-복원 데이터는 Relocation Store에 먼저 저장하고 다시 확인한다. 그 뒤에만 Location
+Relocation Store에 저장하는 payload — Instance Spot cold activation 기록과 pending
+request 완료 기록 — 는 먼저 저장하고 다시 확인한다. 그 뒤에만 Location
 Store가 해당 reference를 가리키도록 CAS한다. Payload를 교체할 때도 새 payload를
 먼저 저장하고 확인한 뒤 reference, checksum과 항목 수를 함께 바꾼다. 삭제할 때는
 Location Store에서 reference 사용 종료를 먼저 기록하고 payload를 삭제한다. 두
@@ -1091,8 +1109,8 @@ Store를 distributed transaction이나 2PC로 묶을 필요는 없으며 서로 
 둘 수 있다.
 
 Location Store가 가리키는 payload가 일시적으로 보이지 않으면 제한된 횟수만 다시
-읽고 현재 위치 record도 다시 확인한다. Payload가 영구적으로 없거나 checksum 또는
-두 Store의 이동 대상 목록 내용 확인값이 다르면 `DataLost`다. Runtime은
+읽고 현재 위치 record도 다시 확인한다. Payload가 영구적으로 없거나 checksum이
+다르면 `DataLost`다. Runtime은
 오류를 현재 위치 record에 기록한다. 이미 변경한 owner와 membership을 source로
 되돌리거나 다른 payload를 추측해서 사용하지 않는다.
 
@@ -1135,8 +1153,8 @@ Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, S
 | Owner 변경 전 relay | Target이 현재 target attempt의 temporary queue를 등록한 뒤 source message를 계속 받는다. Relay-ready reply가 accepted 상태가 되기 전 abort에서만 temporary queue를 폐기하고 source 원본을 유지한다. Source는 cutover submit terminal 뒤 hold를 Message Follow로 전환하고 정해진 기간 뒤 원본을 제거한다. |
 | Membership | Entry Spot member Actor와 User Spot 전체 이동은 각각 필요한 owner와 membership을 한 번에 바꾼다. |
 | 완료 결과 | `OperationId`와 `ReplyRouteId`를 구분한다. 저장한 항목 수가 Location Store의 항목 수와 같아야 하며 이전 owner를 통한 reply 전달 또는 owner lease 종료 전에는 payload 사용을 끝내지 않는다. |
-| 두 Store의 순서 | Payload 저장과 확인이 Location Store CAS보다 먼저다. Location Store의 reference 사용 종료가 payload 삭제보다 먼저다. |
-| 데이터 손실 | Payload가 영구적으로 없거나 checksum·목록 확인값이 다르면 `DataLost`다. Source로 되돌리지 않는다. |
+| 두 Store의 순서 | Relocation Store에 저장하는 payload는 저장과 확인이 Location Store CAS보다 먼저다. Location Store의 reference 사용 종료가 payload 삭제보다 먼저다. |
+| 데이터 손실 | Relocation Store에 저장한 payload가 영구적으로 없거나 checksum이 다르면 `DataLost`다. 직접 전송한 handoff payload의 checksum 불일치는 복원 전 명시적 실패이며 부분 조립 payload로 복원하지 않는다. 이미 변경한 owner를 source로 되돌리지 않는다. |
 | 이동 취소 | Relay-ready reply가 accepted 상태가 되기 전 명시적 취소에서 Location Store를 변경하지 않고 target temporary queue를 폐기한다. Bound Session seal이 있으면 command 44 abort를 one-way로 보낸 뒤 source queue를 다시 열며 적용 reply는 기다리지 않는다. 그 뒤에는 cutover submit 결과와 관계없이 source queue를 다시 열지 않는다. |
 | Store 장애 | 유예 시간에는 새 discovery connection만 막으며 owner deadline은 연장하지 않는다. Relocation CAS는 같은 key·version·fence로 Restore 유효시간까지 retry한다. 만료되면 target object와 queue를 제거하고 Session update를 보내지 않는다. |
 

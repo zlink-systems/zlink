@@ -130,7 +130,7 @@ source의 Core peer table에서 descriptor와 같은 RID·lifecycle generation�
 `blocked/deadline_exceeded`는 모든 target의 `Prepared` 완료와 host `Relocating` descriptor publication 전에
 deadline이 끝난 결과다. Connection-bound work가 pre-`Captured` [deadline](../../../01-glossary.ko.md#deadline) 안에 terminal
 drain되지 않은 경우도 `relocation_disabled`가 아니라 이 결과를 사용한다. Bound-session request는 drain 대상이
-아니며 다른 Actor request와 같이 frozen journal과 ingress hold 규칙을 따른다. Framework는 relocation reference와
+아니며 다른 Actor request와 같이 frozen journal과 ingress hold 규칙을 따른다. Framework는 relocation staging과
 reservation을 정리하고 reversible seal을 해제한 뒤 host state와 admission을 복원한다. 모든 target이
 `Prepared`이고 `Relocating` publication이 성공하면 모든 relocation unit을 완료하고 `relocated`로 전환한다.
 
@@ -664,6 +664,10 @@ Location runtime을 사용하는 application은 `add_location_store(...)`로 Loc
 `add_relocation_store(...)`로 Relocation Store도 정확히 하나 등록한다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
 `DisableRelocation` factory만 있는 same-node 구성에는 Relocation Store가 필요하지 않다. 필요한 Store가 없거나
 같은 capability가 중복 등록되면 Framework는 socket bind 전에 configuration error로 종료한다.
+Relocation Store는 Actor·Spot relocation의 state·queue·timer handoff payload를 보관하지 않는다 —
+handoff payload는 source memory에서 target으로 직접 전송한다. Store는 Instance Spot cold activation의
+최초 message·생성 정보 기록과, relocation 뒤 완료되는 pending request의 terminal 결과 기록을
+소유하므로 이 등록 요구는 그대로 유지된다.
 
 `configure_network()`는 process 전체의 BindHost와 AdvertiseHost 기본값을 반환하며 listener별 설정이 이 값을
 재정의한다. `worker()`는 bounded worker pool의 최소·최대 thread 수, idle timeout과 queue 상한을 반환한다.

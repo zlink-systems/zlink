@@ -235,6 +235,24 @@ Use `Manual` when the callback needs to run on a game loop or UI thread. `Immedi
 the callback on the connector's own worker, so it doesn't fit a client that needs thread
 affinity.
 
+### 5.1 Diagnostics Level
+
+The connector takes a diagnostics level option with the same four values as the server
+runtime (`Off`/`Errors`/`Normal`/`Detailed`). The default is `Errors`, which keeps the
+existing behavior; lowering it to `Off` stops the connector from creating or attaching
+flow identifiers on outbound frames, removing the observation-only cost
+([Stream Connector common spec §13](../../../common/spec/stream-connector/32-stream-connector.en.md#13-diagnostics-level)).
+The correlation used for request/response matching is protocol information and keeps
+working at `Off`.
+
+```csharp
+new ZlinkStreamConnectorOptions
+{
+    Endpoint = new Uri("tcp://game.example.com:9100"),
+    DiagnosticsLevel = ZlinkStreamDiagnosticsLevel.Off
+};
+```
+
 ## 6. Client Send And Request
 
 ```csharp

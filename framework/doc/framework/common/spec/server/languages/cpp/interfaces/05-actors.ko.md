@@ -97,6 +97,25 @@ public:
 };
 
 template <typename TActor>
+class actor_relocation_delta_adapter_t : public actor_relocation_adapter_t<TActor> {
+public:
+    virtual task_t<std::vector<std::byte>> capture_base(
+      TActor &actor,
+      std::stop_token operation_cancellation) = 0;
+    virtual task_t<std::vector<std::byte>> capture_delta(
+      TActor &actor,
+      std::stop_token operation_cancellation) = 0;
+    virtual task_t<void> restore_base(
+      TActor &actor,
+      std::vector<std::byte> payload,
+      std::stop_token operation_cancellation) = 0;
+    virtual task_t<void> apply_delta(
+      TActor &actor,
+      std::vector<std::byte> payload,
+      std::stop_token operation_cancellation) = 0;
+};
+
+template <typename TActor>
 class actor_factory_builder_t {
 public:
     void disable_relocation();
@@ -138,9 +157,20 @@ relocation에서는 adapter를 호출하지 않으며 `DisableRelocation` cross-
 `RecreateOnRelocation` policy도 application payload를 capture하거나 restore하지 않는다. Whole User Spot relocation에서는 Spot root에
 `spot_relocation_adapter_t<TSpot>`를 사용하고 각 Actor participant에는 이 Actor adapter를 사용한다.
 
+`TAdapter`가 `actor_relocation_delta_adapter_t<TActor>`를 상속하면 변경분 capture capability를 함께
+등록한다. Capability를 등록한 factory의 cross-node materialization에서 Framework는 seal 전 turn
+경계에서 `capture_base(...)`로 기준 snapshot을 만들어 미리 전송하고, seal 뒤에는 `capture_delta(...)`
+결과만 전송한다. Target은 `restore_base(...)`로 기준 snapshot을 미리 복원하고 `apply_delta(...)`로
+최종 state를 만든다. `apply_delta(...)`가 실패하면 그 instance를 폐기하고 새 instance에
+`restore_base(...)`부터 반복하며 부분 적용된 instance를 재사용하지 않는다. 기준 snapshot 전송 뒤
+relocation이 실패하면 target은 기준 snapshot을 제거한다. 변경분의 의미는 application이 소유하고,
+Framework queue와 timer는 seal 경계에서 한 번만 확정한다. Capability를 등록하지 않은 adapter는
+기존 `capture(...)`/`restore(...)` 동작이 그대로 유지된다.
+
 `capture(...)` 결과에는 relocation adapter 전용 size 상한이 없으며 빈 vector는 유효하다.
-Framework는 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을
-수행한다. 반환한 byte vector의 소유권은 Framework로 이동하고, `restore(...)`에 전달한 byte
+Framework는 payload를 Relocation Store에 기록하지 않고, source memory에서
+`relocation_payload_chunk_limit_bytes` 이하의 chunk로 나눠 source–target ordered mesh 연결로 직접
+전송한다. 반환한 byte vector의 소유권은 Framework로 이동하고, `restore(...)`에 전달한 byte
 vector는 해당 비동기 호출이 소유한다. Capture가 throw하거나 failed task로 끝나면
 durable abort와 source normalization 뒤 admission을 복원한다. Restore가 실패한 instance는 폐기하고 새 attempt의
 factory가 만든 instance에 같은 immutable payload를 적용한다. Framework가 operation deadline 때문에 callback을
