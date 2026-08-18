@@ -137,9 +137,12 @@
       키는 맞으나 타 언어가 파싱 불가, location-store-repository.ts 3591줄 CAS 재작성),
       ② objectGeneration을 identity별 카운터→store 전역 시퀀스로(reserve() ~:965 —
       기존 감사의 "node는 이미 전역" 기록은 오류였음) [node 1차 eb3d74f6cc에서 이월]
-- [ ] C-4c dotnet Lua byte 정합 확인: 기준 Lua의 expiresAtMs -1 센티널·정수 tombstone이
-      golden(0·bool)과 상이할 가능성 — dotnet encode conformance에서 검증·수정
-      [node 발견 2026-08-19]
+- [x] C-4c dotnet Lua byte 정합 — **확정·수정 `d55d568e6b`**: 무태그 cmsgpack,
+      -1 센티널, 정수 tombstone, 빈 tombstone version 전부 실재 → 수정·라이브 byte
+      검증 [node 예측 적중]
+- [ ] C-4e dotnet store 마감 유닛(2026-08-19 신설, d55d568e6b 이월): ① authority
+      키를 canonical preimage로(대량 테스트 fixture가 raw 키 직생성 — 이관 범위 산정
+      필요), ② descriptor 하위 객체 전-필드 표 정렬(중첩 레코드 다수·공개 enum 위험)
 - [ ] C-4d cpp store 마감 유닛(2026-08-19 신설 — 앞선 'cpp 완료' 판정 정정):
       cpp의 mesh/authority 실제 writer가 golden 비정합(여분 storeVersion이
       public_host_runtime의 wire-echo 펜스로 load-bearing, target/bundle/mesh
