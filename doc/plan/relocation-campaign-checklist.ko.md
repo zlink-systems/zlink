@@ -69,6 +69,11 @@
       Aug-12/15 커밋 기원, Entry Spot 수정으로 노출). 릴레이 합성 + current_actor_ref
       라우트 기반 보고 + disabled-fallback 증명 테스트. ST-B1 3/3·ST-A1 그린
       [발견·해소 2026-08-19]
+- [ ] **[신규 결함 후보] 명시적 relocation 실패 후 source actor 영구 hang**:
+      target restore() 실패(join_completion_failed|12·transfer_in_failed) 직후 같은
+      actor로의 source 경유 요청이 무한 대기(24분+, timeout 미발화) — 스펙 28
+      명시적 실패 계약(소스 복원·서빙 지속) 위반 후보. SF-F2 variant 2가 재현기;
+      테스트 우회 금지 판정, 전문 에이전트 조사 중 [발견 2026-08-19]
 - [ ] **ST-A3 결정적 실패**(기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
       이슈, 원인 조사 필요 [발견 2026-08-19]
 - [ ] **ST-B1 후속: 소스 Entry Spot on_leave_actor 미발화** — 동일 HEAD·동일 머신
