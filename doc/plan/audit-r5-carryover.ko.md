@@ -27,15 +27,49 @@ C++ df6fa9de6d, .NET 0aef8fd295, 문서(스펙 32 §13·언어별 커넥터 문�
   .NET spot 거절 경로 live 게이트, .NET ConfiguredLevel volatile, Java actor packet header
   flow 검증, C++ filter-chain/core-error-frame 값 전달 수명 수정.
 
+## 교차 언어 wire 수렴 라운드 (2026-08-18 후속)
+
+언어 간 메시징이 지원 요구사항으로 확정되어 진행. 커밋: Node 15c36b3cde, .NET dcc0e4238d,
+Java 26dcab2f09, 하네스 e19a79b482·9b0f2e7c95, wire tail 4973582867, C++ mesh f1784b39de,
+Java accept c80e517d9a.
+
+해소:
+- **Java가 유일하게 raw-parts wire를 쓰던 문제** — 공유 2-part JSON envelope(formatMarker
+  0xF2)로 이식. 이전에는 Java↔타언어 spot route가 정상 요청부터 상호 불가였다.
+- **errorCode 표현 3원화**(C++ snake_case / Node 숫자 / .NET PascalCase) → snake_case 13종
+  1:1로 통일, 4개 언어 golden 테스트.
+- **.NET reply envelope의 metadata 필드 부재** → 추가, `zlink.origin=framework` 마커와
+  stale 판정 협소화까지 C++와 동일 규칙으로 수렴(이전 잔존 항목 해소).
+- **reply 헤더 tail 방언 분리** — 스키마 `request-specific-tail`은 `bodyLengthType`이 없는
+  인라인 union(같은 파일 `actor-join-reply-tail`은 u16을 명시)이므로 C++/Java의 21바이트가
+  정본. u16 길이를 쓰던 Node/.NET을 정정.
+- **C++ `classify_node_direct_target`의 Location Store 단락** — route-only peer가 Store에
+  없다고 무조건 `not_found`를 반환해 토폴로지 체크가 실행되지 않던 버그(C++↔C++에서도 재현).
+- **Java listen-only 서버의 admission 전면 거부**(unconfigured-inbound fallback이
+  security identity를 transport identity로 계산) 및 **핸들러 미등록 응답 kind**(INTERNAL_FAILURE
+  → NOT_FOUND). 둘 다 Java↔Java에서는 우연히 성립해 자체 테스트로는 드러나지 않던 결함.
+- 하네스: 4개 언어 모두 `framework/languages/<lang>/cross-language/`로 통일, Java peer host
+  신설, spot route 7개 방향 전부 실단언 그린(정상 왕복 / framework not_found + 마커 /
+  application rejected + 마커 없음).
+
 ## 잔존 (구조/설계 결정 필요 — 코드 강제 불가)
 
-- **[.NET] spot route error origin 마커 미구현** — .NET reply envelope(JSON 단일 헤더)에
-  metadata 필드가 없어 wire 계약 변경 필요. kind는 이미 전면 보존 중이며 stale 판정
-  (NotFound|Unavailable) 협소화만 보류. 교차 언어 envelope 필드 추가 창구에서 처리.
-  (Node spot-direct 단일 JSON reply도 동일 사유로 마커 미적용 — 별도 구조.)
-- **[C++] core error frame 경로의 pre-suspension 예외 시 mutex self-deadlock 가능성** —
-  `observe_task_completion` 인라인 완료가 `begin_core_session_close`와 같은 비재귀 mutex를
-  재획득할 수 있음(stream_host_service.cpp 2621→1605→2519→2442). error/close 순서 재배치 필요.
+- **[교차] never-admitted 타깃의 오류 라벨 차이** — C++는 `not_connected`, Java는
+  `TARGET_NOT_FOUND`. 각 언어의 판정 구조(Location Store 스냅샷 vs 라이브 peer 목록)상
+  둘 다 타당하나 라벨이 갈린다. spec 32 kind 계약으로 통일할지 결정 필요.
+- **[교차] C++/Java `decodeReplyHeader`가 tail이 붙은 reply를 거부** — 스키마상 tail은
+  허용되므로 디코더를 넓혀야 하나, 두 언어가 클라이언트일 때만 노출되고 현재 경로에서
+  미실행. `actor-create-terminal` 내부 u16도 .NET은 쓰고 C++은 쓰지 않는다(스키마상 .NET이
+  맞음, 현재 미노출).
+- **[Node] route surface가 `error.origin`을 채우지 않음** — 마커 없는 reply에 origin=none을
+  보고(.NET은 같은 reply에 application). 하네스는 관측대로 단언 중.
+- **[하네스] Java↔Node, Java↔.NET 방향 미구현** — Java peer host가 있어 확장 마찰은 낮음
+  (Node peer host에 스테이지 1쌍 추가 수준). 반나절 규모로 추정.
+- **[.NET] spot route error origin 마커** — 해소됨(위 참조). Node spot-direct 단일 JSON
+  reply만 별도 구조라 미적용 유지.
+- **[C++] core error frame 경로의 pre-suspension 예외 시 mutex self-deadlock** — 해소됨
+  (커밋 647d214b51: 락 안은 상태 기록만, 완료·close는 lane 제출 순서로 시퀀싱, close 멱등화,
+  fault 주입 회귀 테스트).
 - **[C++] request_erased 50ms 폴링** — awaitable delay/notification 프리미티브가 없어 최소
   수정 불가. 프레임워크 async 프리미티브 추가 시 전환.
 - **[C++] authority-version 관측 헬퍼 unwired** — `observe_spot/actor_authority_version`의
