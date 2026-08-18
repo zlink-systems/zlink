@@ -103,8 +103,15 @@
       PayloadSha256(분할 읽기 보정용)도 함께 제거. §2.4 authority 절 확장은 C-3에
       포함(golden에 authority 스키마 필요).
 - [x] C-3 store 레코드 golden fixture — `bdc3e8a8c5`: 6키/5값 벡터(redis Lua cmsgpack 실검증), 21 §2.4 authority 스키마·22 §7 확장, 4언어 소비 테스트 즉시 그린. C-4 명시 이월: cpp authority payload hex→base64, encode측 스탠딩 테스트
-- [ ] C-4 4언어 store 구현 수렴 (기준 후보: dotnet/java 공유 {zlink-location-v3}+SHA256;
-      cpp = 키공간+인코딩 전면 이동, node = 키공간 이동, dotnet↔java = 값 인코딩 통일)
+- [ ] C-4 4언어 store 구현 수렴 — 진행: **키 브레이스 판정(2026-08-19): Cluster
+      hashtag 리터럴 유지** — golden이 오독으로 brace-less 고정했던 것 정정
+      `8a3804a110`. **java 슬라이스 1차 `326833810b`**(base64 제거=Lettuce codec
+      문제였음·0x01 태그·PSETEX blob·프로덕션 encode conformance, 모듈 그린).
+      dotnet/node/cpp 슬라이스 에이전트 진행 중.
+- [ ] C-4a java 전용 Lua 경로 붕괴(descriptor:mesh:*, owner-lease:* 등 →
+      canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
+      감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
+      언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
 - [ ] C-5 cpp actorJoin 발신 연산 신설 (service-wire cross-node join 요청/응답,
       binary tail 탑재 — codec은 `7ed3992ccd`로 기구현, node 발신 경로 참조)
 - [ ] C-6 dotnet actorJoin 발신 연산 신설 (BeginJoin의 local-or-NotConnected 한계 해소,
