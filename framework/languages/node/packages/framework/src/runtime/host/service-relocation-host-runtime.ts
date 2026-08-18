@@ -944,9 +944,35 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       pending = new ZLinkRelocationBaseStageBuffer(sourceNodeRidKey, identityFingerprint);
       this.targetBaseBuffers.set(operationKey, pending);
+      // A source that crashes (or never sends) its relocationPrepare after
+      // base-stage chunks leaves this buffer orphaned — nothing else touches
+      // it without further traffic. Bound its retention the same way an
+      // undelivered Ready is bounded (spec 28 §9, finding F3): reuse the
+      // Restore validity window as a one-shot deadline. A resolved buffer is
+      // deleted by resolveTargetBasePayloads before this fires, and the
+      // reference check below leaves a newer buffer under the same key
+      // (a superseding attempt) untouched.
+      const armedBuffer = pending;
+      const baseBufferExpiry = setTimeout(() => {
+        this.expireTargetBaseBuffer(operationKey, armedBuffer);
+      }, RELOCATION_OPERATION_RETENTION_MS);
+      baseBufferExpiry.unref?.();
     }
     if (!pending.accept(request.chunkOrdinal, request.chunkData, sourceNodeRidKey, identityFingerprint)) {
       console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
+    }
+  }
+
+  /**
+   * Reclaims one orphaned pre-Prepare base buffer that never resolved within
+   * the Restore validity window. Only the exact instance this timer was
+   * armed for is removed — a buffer already consumed by
+   * resolveTargetBasePayloads, or replaced by a newer attempt reusing the
+   * same key, is left alone.
+   */
+  private expireTargetBaseBuffer(operationKey: string, armedBuffer: ZLinkRelocationBaseStageBuffer): void {
+    if (this.targetBaseBuffers.get(operationKey) === armedBuffer) {
+      this.targetBaseBuffers.delete(operationKey);
     }
   }
 

@@ -22,6 +22,7 @@ import {
   type ServiceMaintenanceRelocationData,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceMaintenanceRelocationReady,
+  type ServiceMaintenanceRelocationState,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
@@ -35,6 +36,7 @@ import { createInitialActorMessageFollowContext } from '../../packages/framework
 import { ReceiveKind } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
+import { encodeRelocationBaseBundleFramed } from '../../packages/framework/src/runtime/host/relocation-state-adapter';
 
 const coordinator = {
   ownerId: 'source-owner',
@@ -1071,6 +1073,159 @@ test('an undelivered READY expires and cleans up the retained target stage exact
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     await harness.dispose();
+  }
+});
+
+test('an orphaned pre-Prepare base buffer expires without a Prepare ever arriving', async () => {
+  // Spec 15 §5, finding F3 pattern: base-stage chunks travel ahead of the
+  // relocationPrepare manifest that finalizes them. If the source crashes
+  // before sending Prepare, nothing else touches the staged buffer — it must
+  // still be bounded by the same Restore validity window (300,000ms) as
+  // every other pre-restore target state, not retained forever.
+  const originalSetTimeout = globalThis.setTimeout;
+  let expiryArmed = 0;
+  globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+    if (delay === 300_000) {
+      expiryArmed += 1;
+      return originalSetTimeout(callback, 0, ...args);
+    }
+    return originalSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({ sendToNode: () => SubmitResult.Ok })
+  } as never);
+  const internals = runtime as unknown as { targetBaseBuffers: Map<string, unknown> };
+  const state: ServiceMaintenanceRelocationState = {
+    kind: 'state',
+    relocation: { high: 41n, low: 43n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    senderRole: 'source',
+    object,
+    payloadStage: 'base',
+    chunkOrdinal: 0,
+    chunkData: Buffer.from('base-snapshot-bytes')
+  };
+  const part = Message.from(encodeServiceRelocationControlRequest(state));
+  try {
+    await runtime.tryHandleControl('mesh-a', {
+      sourceNodeRid: 'source',
+      parts: [part]
+    } as never);
+    assert.equal(internals.targetBaseBuffers.size, 1, 'the base chunk must stage a pending buffer');
+    await new Promise<void>(resolve => setTimeout(resolve, 200));
+    assert.ok(expiryArmed >= 1, 'staging the base chunk must arm the Restore-validity expiry timer');
+    assert.equal(
+      internals.targetBaseBuffers.size,
+      0,
+      'an orphaned base buffer must be reclaimed without a Prepare ever arriving'
+    );
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    part.close();
+    await runtime.dispose();
+  }
+});
+
+test('a Prepare that resolves a base buffer consumes it exactly once and a later timer never clobbers ' +
+  'a newer buffer under the same key', async () => {
+  const armedBaseTimers: Array<() => void> = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+    if (delay === 300_000) {
+      armedBaseTimers.push(() => callback(...args));
+      return { unref: () => undefined } as unknown as ReturnType<typeof setTimeout>;
+    }
+    return originalSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({ sendToNode: () => SubmitResult.Ok })
+  } as never);
+  const internals = runtime as unknown as {
+    targetBaseBuffers: Map<string, unknown>;
+    resolveTargetBasePayloads: (
+      stagingId: string,
+      request: ServiceMaintenanceRelocationPrepare
+    ) => ReadonlyMap<string, Buffer> | undefined;
+  };
+  const stagingId = '41:43:1';
+  const framed = encodeRelocationBaseBundleFramed(new Map([['authority-1', Buffer.from('base-authority-1')]]));
+  const prepare: ServiceMaintenanceRelocationPrepare = {
+    kind: 'prepare',
+    relocation: { high: 41n, low: 43n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    target,
+    initiatorRole: 'source',
+    object,
+    sourceNodeRid: 'source',
+    sourceNodeGeneration: 2n,
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 123,
+    baseChecksumCrc32c: framed.checksumCrc32c,
+    applicationVersion: 4n
+  };
+  const sendBaseChunk = async (chunkData: Buffer) => {
+    const state: ServiceMaintenanceRelocationState = {
+      kind: 'state',
+      relocation: prepare.relocation,
+      targetAttemptGeneration: prepare.targetAttemptGeneration,
+      coordinator,
+      senderRole: 'source',
+      object,
+      payloadStage: 'base',
+      chunkOrdinal: 0,
+      chunkData
+    };
+    const part = Message.from(encodeServiceRelocationControlRequest(state));
+    try {
+      await runtime.tryHandleControl('mesh-a', {
+        sourceNodeRid: 'source',
+        parts: [part]
+      } as never);
+    } finally {
+      part.close();
+    }
+  };
+  try {
+    await sendBaseChunk(framed.blob);
+    assert.equal(internals.targetBaseBuffers.size, 1, 'the base chunk must stage a pending buffer');
+    assert.equal(armedBaseTimers.length, 1, 'staging the base chunk must arm exactly one expiry timer');
+
+    const resolved = internals.resolveTargetBasePayloads(stagingId, prepare);
+    assert.deepEqual(
+      [...(resolved ?? new Map())].map(([key, value]) => [key, value.toString()]),
+      [['authority-1', 'base-authority-1']],
+      'a Prepare arriving before the TTL must consume the staged base buffer exactly once'
+    );
+    assert.equal(
+      internals.targetBaseBuffers.size, 0, 'a resolved base buffer must be removed immediately'
+    );
+
+    // A later attempt reusing the same relocation/attempt key stages a
+    // genuinely newer buffer under the same operation key.
+    await sendBaseChunk(Buffer.from('unrelated-newer-buffer'));
+    assert.equal(internals.targetBaseBuffers.size, 1, 'the newer attempt must stage its own buffer');
+    const newerBuffer = internals.targetBaseBuffers.get(stagingId);
+    assert.equal(armedBaseTimers.length, 2, 'the newer attempt must arm its own expiry timer');
+
+    // The first (now-stale) buffer's timer fires late: it must be a no-op
+    // and must never clobber the newer buffer staged under the same key.
+    armedBaseTimers[0]!();
+    assert.equal(
+      internals.targetBaseBuffers.get(stagingId), newerBuffer,
+      'a late timer for a consumed/superseded buffer must never clobber a newer same-fence buffer'
+    );
+
+    // The newer buffer's own timer still reclaims it normally.
+    armedBaseTimers[1]!();
+    assert.equal(
+      internals.targetBaseBuffers.size, 0, 'the newer buffer must still be reclaimed by its own timer'
+    );
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    await runtime.dispose();
   }
 });
 
