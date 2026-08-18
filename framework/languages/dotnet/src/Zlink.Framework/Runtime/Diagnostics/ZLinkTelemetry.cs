@@ -15,44 +15,6 @@ internal static class ZLinkTelemetry
     public static void SetDiagnosticsLevel(ZLinkDiagnosticsLevel level) =>
         Volatile.Write(ref _diagnosticsLevel, (int)level);
 
-    public static string CaptureSubmitOperationId()
-    {
-        if (Volatile.Read(ref _diagnosticsLevel) == (int)ZLinkDiagnosticsLevel.Off
-            || !ActivitySource.HasListeners())
-            return string.Empty;
-        return Activity.Current?.Id ?? Guid.NewGuid().ToString("N");
-    }
-
-    public static bool IsSubmitAdmissionTracingEnabled(string operationId) =>
-        !string.IsNullOrEmpty(operationId)
-        && Volatile.Read(ref _diagnosticsLevel) != (int)ZLinkDiagnosticsLevel.Off
-        && ActivitySource.HasListeners();
-
-    public static void TraceSubmitAdmission(
-        string operationId,
-        string eventName,
-        int pendingWaiterCount,
-        bool retry = false)
-    {
-        if (string.IsNullOrEmpty(operationId)
-            || Volatile.Read(ref _diagnosticsLevel) == (int)ZLinkDiagnosticsLevel.Off
-            || !ActivitySource.HasListeners())
-            return;
-
-        using var activity = ActivitySource.StartActivity(
-            "zlink.submit.admission",
-            ActivityKind.Internal);
-        if (activity is null) return;
-
-        activity.SetTag("zlink.submit.operation_id", operationId);
-        activity.SetTag("zlink.submit.event", eventName);
-        activity.SetTag("zlink.submit.retry", retry);
-        activity.SetTag("zlink.submit.pending_waiters", pendingWaiterCount);
-        activity.SetTag("zlink.submit.reservations", pendingWaiterCount);
-        activity.SetTag("zlink.submit.callbacks", 0);
-        activity.AddEvent(new ActivityEvent(eventName));
-    }
-
     public static void TraceMessageFlow(ZLinkMessageFlowEvent flow)
     {
         if (!ActivitySource.HasListeners())

@@ -24,40 +24,6 @@ public sealed class ExactMessageFlowRuntimeTests
     }
 
     [Fact]
-    public void OffLevelDoesNotCreateSubmitOperationIdentityEvenWithListener()
-    {
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded
-        };
-        ActivitySource.AddActivityListener(listener);
-        var options = new ZLinkDiagnosticsOptionsModel();
-        var runtime = new ZLinkDiagnosticsRuntimeService(options);
-
-        runtime.Level = ZLinkDiagnosticsLevel.Off;
-
-        Assert.Equal(string.Empty, ZLinkTelemetry.CaptureSubmitOperationId());
-    }
-
-    [Fact]
-    public void EnabledLevelCreatesSubmitOperationIdentityWhenListenerExists()
-    {
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded
-        };
-        ActivitySource.AddActivityListener(listener);
-        var runtime = new ZLinkDiagnosticsRuntimeService(new ZLinkDiagnosticsOptionsModel());
-        runtime.Level = ZLinkDiagnosticsLevel.Normal;
-
-        Assert.NotEmpty(ZLinkTelemetry.CaptureSubmitOperationId());
-    }
-
-    [Fact]
     public void OffLevelSkipsDispatchLoggerAndActivityBeforeEventConstruction()
     {
         var activities = new List<Activity>();
