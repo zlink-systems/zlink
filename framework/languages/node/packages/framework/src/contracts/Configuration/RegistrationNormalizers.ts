@@ -20,6 +20,7 @@ import type {
   ZLinkWorkerOptions
 } from './RegistrationTypes';
 import type { ZLinkNetworkOptions } from './Builders';
+import { normalizeEndpoint, parseEndpointHostPort } from './EndpointNotation';
 import {
   defaultWorkerMaxThreads,
   DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE,
@@ -61,6 +62,11 @@ export function toChannelMap(
     const publisher = channel.publisher === undefined
       ? undefined
       : normalizeListener(channel.publisher, network);
+    // In-place: channel.client/subscriber.manualConnections can be the same
+    // array a live RuntimeEndpointConnections handle mutates, so this must
+    // not replace the array or the containing client/subscriber object.
+    normalizeEndpointList(channel.client?.manualConnections);
+    normalizeEndpointList(channel.subscriber?.manualConnections);
     return [name, {
       ...channel,
       ...(server === undefined ? {} : { server }),
@@ -94,6 +100,7 @@ export function toRouteChannelOptions(
     }
     const normalized = {
       ...routeChannel,
+      manualConnections: normalizeEndpointList(routeChannel.manualConnections),
       requestTimeoutMs: normalizeOptionalPositiveInteger(
         routeChannel.requestTimeoutMs,
         `${routeChannel.routerChannelId}.requestTimeoutMs`
@@ -112,6 +119,7 @@ export function toRouteChannelOptions(
     const routeChannel = {
       routerChannelId: channelName,
       ...channel.routeMesh,
+      manualConnections: normalizeEndpointList(channel.routeMesh.manualConnections),
       requestTimeoutMs: normalizeOptionalPositiveInteger(
         channel.routeMesh.requestTimeoutMs,
         `${channelName}.routeMesh.requestTimeoutMs`
@@ -230,11 +238,17 @@ function normalizeSpotNodeOptions(
       ? undefined
       : {
           ...router,
-          routingId: router.routingId ?? spotNode.routingId
+          routingId: router.routingId ?? spotNode.routingId,
+          manualConnections: normalizeEndpointList(router.manualConnections),
+          manualPeerConnections: normalizeManualPeerConnections(router.manualPeerConnections)
         },
     pubSub: spotNode.pubSub === undefined
       ? undefined
-      : { ...spotNode.pubSub, routingId: spotNode.pubSub.routingId ?? spotNode.routingId }
+      : {
+          ...spotNode.pubSub,
+          routingId: spotNode.pubSub.routingId ?? spotNode.routingId,
+          manualConnections: normalizeEndpointList(spotNode.pubSub.manualConnections)
+        }
   };
 }
 
@@ -254,7 +268,9 @@ function normalizeListener<
   const port = listener.port ?? (usesConfiguredEndpoint ? endpointPort(listener.bind!) : 0);
   const bindHost = listener.bindHost
     ?? (usesConfiguredEndpoint ? endpointHost(listener.bind!) : network.bindHost);
-  const bind = usesConfiguredEndpoint ? listener.bind! : tcpEndpoint(bindHost ?? network.bindHost, port);
+  const bind = usesConfiguredEndpoint
+    ? normalizeEndpoint(listener.bind!)
+    : tcpEndpoint(bindHost ?? network.bindHost, port);
   return {
     ...listener,
     bind,
@@ -268,29 +284,50 @@ function normalizeListener<
   };
 }
 
+/**
+ * Normalizes a declaratively-configured list of manual-connection endpoints
+ * (e.g. `channel.client.manualConnections`, `routeChannel.manualConnections`,
+ * `spotNode.router.manualConnections`) at the point the application hands
+ * them to the framework, so every later comparison/dedup can use plain
+ * string equality.
+ *
+ * Normalizes in place and preserves array identity when possible: this
+ * array can be the very array `RuntimeEndpointConnections`/builder handles
+ * mutate at runtime (see its constructor comment), so returning a copy
+ * would silently detach live `connect()`/`disconnect()` calls from the
+ * registered configuration. Only builds a new array when the input isn't a
+ * plain extensible array (frozen/sealed/external readonly).
+ */
+function normalizeEndpointList<T extends readonly string[] | undefined>(endpoints: T): T {
+  if (endpoints === undefined) return endpoints;
+  if (Array.isArray(endpoints) && Object.isExtensible(endpoints)) {
+    const mutable = endpoints as string[];
+    for (let index = 0; index < mutable.length; index += 1) {
+      mutable[index] = normalizeEndpoint(mutable[index]);
+    }
+    return endpoints;
+  }
+  return endpoints.map(normalizeEndpoint) as unknown as T;
+}
+
+function normalizeManualPeerConnections<T extends { readonly endpoint: string }>(
+  peers: readonly T[] | undefined
+): readonly T[] | undefined {
+  if (peers === undefined) return undefined;
+  return peers.map((peer) => ({ ...peer, endpoint: normalizeEndpoint(peer.endpoint) }));
+}
+
 function tcpEndpoint(host: string, port: number): string {
   const endpointHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  return `tcp://${endpointHost}:${port}`;
+  return normalizeEndpoint(`tcp://${endpointHost}:${port}`);
 }
 
 function endpointHost(endpoint: string): string | undefined {
-  try {
-    const parsed = new URL(endpoint);
-    if (parsed.protocol !== 'tcp:') return undefined;
-    return parsed.hostname.replace(/^\[|\]$/g, '');
-  } catch {
-    return undefined;
-  }
+  return parseEndpointHostPort(endpoint, 'tcp')?.host;
 }
 
 function endpointPort(endpoint: string): number {
-  try {
-    const parsed = new URL(endpoint);
-    if (parsed.port.length === 0) return 0;
-    return Number(parsed.port);
-  } catch {
-    return 0;
-  }
+  return parseEndpointHostPort(endpoint, 'tcp')?.port ?? 0;
 }
 
 export function toSpotFactorySet(

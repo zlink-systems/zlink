@@ -32,6 +32,7 @@ import type {
 export * from './RegistrationTypes';
 import { validateFrameworkRegistration } from './RegistrationValidators';
 export { validateFrameworkRegistration };
+export { normalizeEndpoint, buildAdvertisedEndpoint, parseEndpointHostPort } from './EndpointNotation';
 
 const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
 

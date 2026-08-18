@@ -12,7 +12,7 @@ import {
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
 import type { ZLinkFrameworkRegistration } from '../configuration';
-import { ZLinkConfigurationException } from '../configuration';
+import { buildAdvertisedEndpoint, ZLinkConfigurationException } from '../configuration';
 import type {
   ZLinkLocationRuntime,
   ZLinkLocationRuntimeStores
@@ -388,17 +388,13 @@ export class ZLinkFanoutLocationRuntime {
 }
 
 function advertisedEndpoint(boundEndpoint: string, advertiseHost: string | undefined): string {
-  if (advertiseHost === undefined) return boundEndpoint;
-  const match = /^([a-z][a-z0-9+.-]*):\/\/(?:\[[^\]]+\]|[^:]+):(\d+)$/i.exec(boundEndpoint);
-  if (match === null) {
+  const result = buildAdvertisedEndpoint(boundEndpoint, advertiseHost);
+  if (result === undefined) {
     throw new ZLinkConfigurationException(
       `Fanout publisher bound endpoint '${boundEndpoint}' cannot be advertised.`
     );
   }
-  const host = advertiseHost.includes(':') && !advertiseHost.startsWith('[')
-    ? `[${advertiseHost}]`
-    : advertiseHost;
-  return `${match[1]}://${host}:${match[2]}`;
+  return result;
 }
 
 function fanoutConnectionId(

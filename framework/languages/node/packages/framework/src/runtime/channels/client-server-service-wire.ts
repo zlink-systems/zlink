@@ -6,6 +6,7 @@ import {
   encodeCanonicalServiceWireText,
   encodeServiceWireRoutingId
 } from '../foundation/service-wire-binary-primitives';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 
 const MAGIC_0 = 0x5a;
 const MAGIC_1 = 0x4d;
@@ -230,7 +231,7 @@ function decodeServerAdmission(reader: Reader): ZLinkClientServerAdmission {
     normalizedEffectiveMaxMessageBytes: reader.nonZeroU32(
       'normalizedEffectiveMaxMessageBytes'
     ),
-    advertisedEndpoint: reader.text16('advertisedEndpoint')
+    advertisedEndpoint: normalizeEndpoint(reader.text16('advertisedEndpoint'))
   };
 }
 

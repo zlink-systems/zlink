@@ -75,6 +75,7 @@ import {
   normalizeOptionalPositiveInteger,
   typeMapToRecord
 } from './RegistrationNormalizers';
+import { normalizeEndpoint } from './EndpointNotation';
 import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
 import type {
   ZLinkChannelPublishHandlerRegistration,
@@ -1303,25 +1304,32 @@ class DefaultMeshPeerConnections implements ZLinkMeshPeerConnections {
   connect(expectedRoutingIdOrEndpoint: RoutingId | string, endpoint?: string): void {
     if (endpoint === undefined) {
       requireRegistrationName(expectedRoutingIdOrEndpoint, 'Mesh peer endpoint');
+      const normalizedEndpoint = normalizeEndpoint(expectedRoutingIdOrEndpoint);
       this.router.manualConnections ??= [];
-      if (!this.router.manualConnections.includes(expectedRoutingIdOrEndpoint)) {
-        this.router.manualConnections.push(expectedRoutingIdOrEndpoint);
+      if (!this.router.manualConnections.includes(normalizedEndpoint)) {
+        this.router.manualConnections.push(normalizedEndpoint);
       }
       return;
     }
     requireRegistrationName(endpoint, 'Mesh peer endpoint');
+    const normalizedEndpoint = normalizeEndpoint(endpoint);
     this.router.manualPeerConnections ??= [];
     if (!this.router.manualPeerConnections.some(
-      (peer) => peer.endpoint === endpoint && peer.peerRid === expectedRoutingIdOrEndpoint
+      (peer) => peer.endpoint === normalizedEndpoint && peer.peerRid === expectedRoutingIdOrEndpoint
     )) {
-      this.router.manualPeerConnections.push({ peerRid: expectedRoutingIdOrEndpoint, endpoint });
+      this.router.manualPeerConnections.push({ peerRid: expectedRoutingIdOrEndpoint, endpoint: normalizedEndpoint });
     }
   }
 
   disconnect(endpoint: string): void {
-    this.router.manualConnections = this.router.manualConnections?.filter((value) => value !== endpoint);
+    // The public connect/disconnect-by-endpoint API accepts any equivalent
+    // notation for an endpoint already connected under its canonical form
+    // (see connect() above); without normalizing here, disconnect() with a
+    // differently-cased or -formatted endpoint would silently no-op.
+    const normalizedEndpoint = normalizeEndpoint(endpoint);
+    this.router.manualConnections = this.router.manualConnections?.filter((value) => value !== normalizedEndpoint);
     this.router.manualPeerConnections = this.router.manualPeerConnections?.filter(
-      (value) => value.endpoint !== endpoint
+      (value) => value.endpoint !== normalizedEndpoint
     );
   }
 

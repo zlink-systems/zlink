@@ -4,6 +4,7 @@ import {
   type ServiceNodeState,
   type ServiceObjectRole
 } from './service-topology-registry';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
@@ -310,7 +311,7 @@ export function decodeRouteMeshAdmission(
   const securityIdentity = reader.text8('securityIdentity');
   const lifecycleGeneration = reader.nonZeroU64('lifecycleGeneration');
   const descriptorRevision = reader.nonZeroU64('descriptorRevision');
-  const advertisedEndpoint = reader.text16('advertisedEndpoint');
+  const advertisedEndpoint = normalizeEndpoint(reader.text16('advertisedEndpoint'));
   const channelCount = reader.u16('channelCount');
   const channels: Array<{ name: string; weight: number }> = [];
   for (let index = 0; index < channelCount; index++) {

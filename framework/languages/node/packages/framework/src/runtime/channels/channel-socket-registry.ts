@@ -6,6 +6,7 @@ import {
 } from '../../contracts';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
 import {
+  buildAdvertisedEndpoint,
   ZLinkConfigurationException,
   type ZLinkFrameworkRegistration
 } from '../configuration';
@@ -1727,17 +1728,13 @@ function newLifecycleGeneration(): bigint {
 }
 
 function advertisedEndpoint(boundEndpoint: string, advertiseHost: string | undefined): string {
-  if (advertiseHost === undefined) return boundEndpoint;
-  const match = /^tcp:\/\/(?:\[[^\]]+\]|[^:]+):(\d+)$/.exec(boundEndpoint);
-  if (match === null) {
+  const result = buildAdvertisedEndpoint(boundEndpoint, advertiseHost, 'tcp');
+  if (result === undefined) {
     throw new ZLinkConfigurationException(
       `ClientServer advertised host requires a TCP endpoint, received '${boundEndpoint}'.`
     );
   }
-  const host = advertiseHost.includes(':') && !advertiseHost.startsWith('[')
-    ? `[${advertiseHost}]`
-    : advertiseHost;
-  return `tcp://${host}:${match[1]}`;
+  return result;
 }
 
 function normalizedMessageLimit(value: number): number {

@@ -2,6 +2,7 @@ import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
 } from '../../contracts/Locations/Options';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import { randomUUID } from 'node:crypto';
 import type { RoutingId } from '../../contracts/Common';
 import {
@@ -579,14 +580,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   ): Promise<ZLinkLocationWriteResult> {
     zlinkLocationAutoConnectTypeName(peer.autoConnectType);
     zlinkLocationRoleName(peer.role);
-    const stamped = { ...peer, ownerId: this.ownerId };
+    // Normalize on write, not just on listPeerLocations()'s read: the row
+    // key is derived from this same endpoint, and a caller round-tripping a
+    // row it just read (e.g. to remove it) must compute the same key the
+    // row was stored under.
+    const normalizedEndpoint = normalizeEndpoint(peer.endpoint);
+    const stamped = { ...peer, endpoint: normalizedEndpoint, ownerId: this.ownerId };
     const result = await this.guardWrite(() => this.stores.peerStore.updatePeer(stamped, intent, signal));
     const key: ZLinkPeerLocationKey = {
       autoConnectType: peer.autoConnectType,
       meshName: peer.meshName,
       role: peer.role,
       nodeRid: peer.nodeRid,
-      endpoint: peer.endpoint
+      endpoint: normalizedEndpoint
     };
     const rowKey = ZLinkLocationKeyCodec.encodePeerKey(key);
     if (result.status === ZLinkLocationWriteStatus.Stored) {
@@ -713,7 +719,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   async listPeerLocations(filter: ZLinkPeerLocationFilter, signal?: AbortSignal): Promise<readonly ZLinkPeerLocation[]> {
     const rows = await this.stores.peerStore.listPeers(filter, signal);
     const live = await this.filterLive(rows, (row) => row.ownerId, signal);
-    return live;
+    // Location Store rows may have been written before this process adopted
+    // the endpoint-notation policy, or by another language/version's writer.
+    // Normalize on read so every comparison downstream sees the canonical
+    // form regardless of what the store actually holds.
+    return live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) }));
   }
 
   async listLiveMeshNodes(
@@ -721,7 +731,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     signal?: AbortSignal
   ): Promise<readonly ZLinkMeshNodeDescriptor[]> {
     const rows = (await this.stores.locationStore.listMeshNodes(meshName, undefined, signal)).items;
-    return this.filterLive(rows, (row) => row.ownerId, signal);
+    const live = await this.filterLive(rows, (row) => row.ownerId, signal);
+    return live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) }));
   }
 
   async listMeshNodeDescriptors(
@@ -730,8 +741,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> {
     const rows = await this.stores.locationStore.listMeshNodes(meshName, this.pageRequest(page), signal);
+    const live = await this.filterLive(rows.items, (row) => row.ownerId, signal);
     return {
-      items: await this.filterLive(rows.items, (row) => row.ownerId, signal),
+      items: live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) })),
       continuationToken: rows.continuationToken
     };
   }

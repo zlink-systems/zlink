@@ -10,6 +10,7 @@ import {
   type ZLinkPeerLocation
 } from './internal-location-contracts';
 import { ZLinkLocationKeyCodec } from './key-codec';
+import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import {
   ZLinkAutoConnectPlanner
 } from './auto-connect-planner';
@@ -58,7 +59,12 @@ export class ZLinkAutoConnectReconciler {
 
   constructor(options: ZLinkAutoConnectReconcilerOptions) {
     this.local = options.local;
-    this.localRow = options.localRow;
+    // Normalized once here so writePeer() and the removePeer() key built in
+    // unpublishLocal() below always agree on the same row identity, even
+    // though writePeer() itself also normalizes on write.
+    this.localRow = options.localRow === undefined
+      ? undefined
+      : { ...options.localRow, endpoint: normalizeEndpoint(options.localRow.endpoint) };
     this.runtime = options.runtime;
     this.peerResolver = options.peerResolver;
     this.executor = options.executor;

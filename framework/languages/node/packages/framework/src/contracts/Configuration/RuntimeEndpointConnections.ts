@@ -1,4 +1,5 @@
 import type { ZLinkEndpointConnections } from './Connections';
+import { normalizeEndpoint } from './EndpointNotation';
 
 interface ConnectableEndpointSocket {
   connect(endpoint: string): void;
@@ -17,6 +18,11 @@ class RuntimeEndpointConnections implements ZLinkEndpointConnections {
       // endpoint set. A frozen, sealed or external readonly array uses a
       // private snapshot because it cannot safely be updated in place.
       this.endpoints = endpoints as string[];
+      // Normalize in place -- callers (and the builder that shares this
+      // array) must keep observing the same array identity.
+      for (let index = 0; index < this.endpoints.length; index += 1) {
+        this.endpoints[index] = normalizeEndpoint(this.endpoints[index]);
+      }
       for (let index = this.endpoints.length - 1; index >= 0; index -= 1) {
         if (this.endpoints.indexOf(this.endpoints[index]) !== index) {
           this.endpoints.splice(index, 1);
@@ -25,25 +31,31 @@ class RuntimeEndpointConnections implements ZLinkEndpointConnections {
     } else {
       this.endpoints = [];
       for (const endpoint of endpoints) {
-        if (!this.endpoints.includes(endpoint)) {
-          this.endpoints.push(endpoint);
+        const normalizedEndpoint = normalizeEndpoint(endpoint);
+        if (!this.endpoints.includes(normalizedEndpoint)) {
+          this.endpoints.push(normalizedEndpoint);
         }
       }
     }
   }
 
   connect(endpoint: string): void {
-    if (!this.endpoints.includes(endpoint)) {
-      this.endpoints.push(endpoint);
-      this.socket?.connect(endpoint);
+    const normalizedEndpoint = normalizeEndpoint(endpoint);
+    if (!this.endpoints.includes(normalizedEndpoint)) {
+      this.endpoints.push(normalizedEndpoint);
+      this.socket?.connect(normalizedEndpoint);
     }
   }
 
   disconnect(endpoint: string): void {
-    const index = this.endpoints.indexOf(endpoint);
+    // Normalize so a caller using a different (but equivalent) notation than
+    // the one recorded at connect() time still matches -- otherwise this is
+    // a silent no-op from the caller's perspective.
+    const normalizedEndpoint = normalizeEndpoint(endpoint);
+    const index = this.endpoints.indexOf(normalizedEndpoint);
     if (index >= 0) {
       this.endpoints.splice(index, 1);
-      this.socket?.disconnect(endpoint);
+      this.socket?.disconnect(normalizedEndpoint);
     }
   }
 

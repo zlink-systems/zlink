@@ -45,6 +45,7 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import {
+  buildAdvertisedEndpoint,
   ZLinkConfigurationException,
   type ZLinkFrameworkRegistration,
   type ZLinkSpotNodeOptions
@@ -1399,17 +1400,13 @@ function advertisedMeshEndpoint(
   boundEndpoint: string,
   advertiseHost: string | undefined
 ): string {
-  if (advertiseHost === undefined) return boundEndpoint;
-  const match = /^tcp:\/\/(?:\[[^\]]+\]|[^:]+):(\d+)$/.exec(boundEndpoint);
-  if (match === null) {
+  const result = buildAdvertisedEndpoint(boundEndpoint, advertiseHost, 'tcp');
+  if (result === undefined) {
     throw new ZLinkConfigurationException(
       `RouteMesh advertise host requires a TCP endpoint, received '${boundEndpoint}'.`
     );
   }
-  const host = advertiseHost.includes(':') && !advertiseHost.startsWith('[')
-    ? `[${advertiseHost}]`
-    : advertiseHost;
-  return `tcp://${host}:${match[1]}`;
+  return result;
 }
 
 function runtimeShutdownError(): ZLinkFrameworkException {
