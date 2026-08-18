@@ -282,8 +282,6 @@ message와 seal을 정리한다. Late update는 `late_session_route_update` Warn
 - Target에서 부분 조립한 payload stage를 명시적 실패 대신 복구해 계속 쓰는 방식 — checksum이나
   길이 불일치는 항상 명시적 `relocationFailed` reply로 끝나며, target이 부분 조립을 스스로
   수선하지 않는다
-- Payload checksum 불일치 뒤 투명하게 재시도하는 방식 — retry-from-a-fresh-instance 규칙은
-  base·delta capture 실패에만 적용하며 raw chunk checksum 불일치에는 적용하지 않는다
 - Prepare·chunk·CAS를 도착 순서나 가장 최근 시각 같은 신호로 relocation에 귀속시키는 방식 —
   귀속은 오직 exact `RelocationId`·`targetAttemptGeneration`·coordinator fence와 그 값을
   실어 온 connection으로만 판정한다

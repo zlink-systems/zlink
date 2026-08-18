@@ -249,7 +249,7 @@ what you observe in your deployment.
 | `RelocationPayloadChunkLimit` | 256 KiB | Size of one chunk. Lower it if chunk transfers intrude on the latency target of ordinary messages sharing the connection |
 | `RelocationInFlightPayloadBudget` | 16 MiB | Total relocation bytes that may be in flight at once on one peer connection. 0 disables it. Lower it if relocation transfers eat into ordinary message bandwidth; raise it if host move throughput is capped by this budget |
 | `RelocationNodeInFlightPayloadBudget` | 0 (disabled) | Node-wide cap on concurrent transfers. Set it only when a node with many peer connections needs its total occupancy bounded |
-| `RelocationCutoverWaitTimeout` | 1,000ms | How long the target waits for a cutover retransmission. If the `cutover_timeout` counter is nonzero, adjust it to your deployment's round-trip time |
+| `relocationCutoverWaitTimeout` | 1,000ms | How long the target waits for a cutover retransmission. If the `cutover_timeout` counter is nonzero, adjust it to your deployment's round-trip time |
 
 When the budget is full, a new relocation unit waits before its seal, and the Actor/Spot
 keeps processing messages normally while it waits — no payload size is ever too large to
@@ -261,7 +261,7 @@ verification rules are covered by
 
 `Relocated` means the source finished sending its cutovers, not that every caller caching
 the old route now points at the new owner. The source runtime publishes the
-`SafeToShutdown` state in its own runtime status once every unit's Message Follow can end
+`safeToShutdown` state in its own runtime status once every unit's Message Follow can end
 and the cutover retransmission window has closed. A deployment orchestrator is recommended
 to confirm `Relocated`, then observe this state before calling `shutdown` — terminating
 before it's published is allowed, but the remaining follow routes disappear and requests
@@ -288,7 +288,7 @@ scope, authority, session, and topology resources. If no deadline is given, it's
 The state of any Spot cleaned up here doesn't survive. If your deployment automation needs to
 keep state alive while taking a host down, call `relocate(...)` first before shutting down,
 confirm the result is `Relocated`, and only then move on to this call (the example in §4).
-When possible, also confirm the `SafeToShutdown` publication (§2.3).
+When possible, also confirm the `safeToShutdown` publication (§2.3).
 
 A Spot's lifetime is independent of any request. A User/Instance Spot isn't closed just
 because an ordinary request finished. Likewise, preparing a nonexistent Instance Spot never
@@ -301,7 +301,7 @@ The two operations above don't happen automatically. The application calls them 
 the framework runtime. This interface is a DI singleton that owns host maintenance.
 
 The order used in deployment is "move first, and shut down only if it succeeded." Confirming
-`Relocated` and then observing the `SafeToShutdown` publication (§2.3) before terminating
+`Relocated` and then observing the `safeToShutdown` publication (§2.3) before terminating
 avoids failures for callers still caching the old route.
 
 ```kotlin

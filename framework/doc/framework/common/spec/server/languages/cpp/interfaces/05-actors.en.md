@@ -101,25 +101,6 @@ public:
 };
 
 template <typename TActor>
-class actor_relocation_delta_adapter_t : public actor_relocation_adapter_t<TActor> {
-public:
-    virtual task_t<std::vector<std::byte>> capture_base(
-      TActor &actor,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<std::vector<std::byte>> capture_delta(
-      TActor &actor,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> restore_base(
-      TActor &actor,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> apply_delta(
-      TActor &actor,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
-};
-
-template <typename TActor>
 class actor_factory_builder_t {
 public:
     void disable_relocation();
@@ -174,22 +155,6 @@ call the adapter on a same-node join/relocation, and a
 capture/restore the application payload. A whole User Spot relocation
 uses `spot_relocation_adapter_t<TSpot>` for the Spot root, and this
 Actor adapter for each Actor participant.
-
-If `TAdapter` inherits `actor_relocation_delta_adapter_t<TActor>`, it
-also registers the delta capture capability. In the cross-node
-materialization of a factory that registered the capability, the
-Framework builds a base snapshot with `capture_base(...)` at a turn
-boundary before the seal and sends it ahead of time, and after the
-seal sends only the `capture_delta(...)` result. The target restores
-the base snapshot ahead of time with `restore_base(...)` and builds
-the final state with `apply_delta(...)`. If `apply_delta(...)` fails,
-that instance is discarded and a new instance repeats from
-`restore_base(...)`; a partially applied instance is never reused. If
-the relocation fails after the base snapshot was sent, the target
-removes the base snapshot. The meaning of the delta is owned by the
-application, and Framework queues and timers are confirmed only once
-at the seal boundary. An adapter that doesn't register the capability
-keeps the existing `capture(...)`/`restore(...)` behavior as is.
 
 `capture(...)`'s result has no relocation-adapter-specific size cap, and
 an empty vector is valid. The Framework doesn't record the payload in

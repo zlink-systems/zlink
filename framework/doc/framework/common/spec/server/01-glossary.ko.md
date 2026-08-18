@@ -1039,23 +1039,6 @@ Actor나 Spot을 다른 node로 옮길 때 application state를 bytes로 저장�
 
 Factory configure callback의 `PreserveStateWith`가 adapter를 함께 지정한다.
 
-<a id="base-delta-capture"></a>
-### 변경분 capture (base/delta capture)
-
-Relocation adapter의 선택 capability다. 기준 snapshot(`CaptureBase`/`RestoreBase`)을
-seal 전에 전송하고 seal 뒤에는 변경분(`CaptureDelta`/`ApplyDelta`)만 전송해, state가
-큰 object의 중단 구간 전송량을 변경분 크기로 줄인다. 등록하지 않은 factory는 현재
-`Capture`/`Restore` 동작을 그대로 유지한다.
-
-| 항목 | 내용 |
-|---|---|
-| 형태 | Relocation adapter의 선택 capability. 이름은 adapter surface의 선언을 가리키며 독립 public type은 없다. |
-| 공개 구성 | `CaptureBase`, `CaptureDelta`, `RestoreBase`, `ApplyDelta` 네 동작이다. 기준 snapshot에는 application state만 담고, 변경분은 자신이 참조하는 기준 snapshot의 checksum을 포함한다. 변경분의 의미는 application이 소유한다. |
-| 생성·관리 | 등록한 factory에서만 사용한다. 기준 snapshot 전송도 relocation state chunk 규칙과 in-flight payload 예산을 그대로 사용한다. |
-| 전달 | 기준 snapshot은 source가 처리를 계속하는 동안 seal 전에 미리 전송하고, seal 뒤에는 변경분만 전송한다. |
-| 수명 | `ApplyDelta`가 실패하면 그 instance를 폐기하고 새 instance에 `RestoreBase`부터 반복한다. 부분 적용된 instance를 재사용하지 않는다. 기준 snapshot 전송 뒤 relocation이 실패하면 target은 기준 snapshot을 제거한다. |
-| Application 권한 | Application이 adapter로 capture·restore 동작을 구현한다. 사용 여부는 factory registration에서 고정한다. |
-
 <a id="classic-fanout"></a>
 ### Classic fanout
 

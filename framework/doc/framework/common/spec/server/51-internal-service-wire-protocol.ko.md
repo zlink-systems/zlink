@@ -443,19 +443,18 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 - Source는 command 40 `relocationPrepare`을 `[request]`로 보내 temporary queue 설치와 뒤이을
   전송의 payload manifest 선언을 요청한다. Body에는 object identity, source node RID·generation과
-  final stage를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`,
-  그리고 base stage가 final stage 앞에 올 때만 non-zero인 `baseChecksumCrc32c`(아래 base·delta
-  capture 참고)가 들어간다. relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
+  payload를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`가
+  들어간다. relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
   Prepare 하나로 이어질 direct transfer(source memory 원본)를 완전히 설명한다. Target은 temporary
   queue가 수신 준비되었을 때만 command 30 `relocationReady`를 `[reply]`로 보낸다. 이 pair는
   선언한 manifest 외의 message·byte allowance나 participant reservation을 협상하지 않는다.
 - Source는 payload를 같은 ordered connection 위에서 하나 이상의 command 52 `relocationState`
   `[send]` record로 보낸다. 각 record는 relocation·targetAttemptGeneration·coordinator fence,
-  object identity, `senderRole`, `payloadStage`(`base` 또는 `final`)와 stage별로 독립된 번호
-  공간을 갖는 0-base `chunkOrdinal`을 담는다. chunk bytes는 기존 `relocation-data-chunk-v1`
-  format을 재사용한다. Target은 각 chunk를 assembly buffer로 즉시 복사하고 Core receive
-  lease를 곧바로 반환한다 — state chunk를 backlog queue에 보관하거나 lease를 이전하지 않는다.
-- Target은 각 stage를 조립한 뒤 그 길이와 CRC-32C를 Prepare가 선언한 값과 비교한다. 불일치는
+  object identity, `senderRole`과 0-base `chunkOrdinal`을 담는다. chunk bytes는 기존
+  `relocation-data-chunk-v1` format을 재사용한다. Target은 각 chunk를 assembly buffer로 즉시
+  복사하고 Core receive lease를 곧바로 반환한다 — state chunk를 backlog queue에 보관하거나
+  lease를 이전하지 않는다.
+- Target은 payload를 조립한 뒤 그 길이와 CRC-32C를 Prepare가 선언한 값과 비교한다. 불일치는
   명시적 실패이며, target은 부분 조립 복원을 시도하지 않고 checksum 불일치에서 투명하게
   재시도하지 않는다. 실패하면 target은 자신의 부분 chunk와 준비 자원을 정리한 뒤 대응하는
   Prepare에 command 53 `relocationFailed`를 reply로 보낸다. source memory에서 capture한
@@ -487,7 +486,7 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 ### CRC-32C 규약과 capability
 
 - `relocationTransferChecksumProfile`이 나열하는 모든 checksum(`payloadChecksumCrc32c`,
-  `baseChecksumCrc32c`, `boundaryChecksumCrc32c`, 그리고 아래 남은 Store 경로가 쓰는
+  `boundaryChecksumCrc32c`, 그리고 아래 남은 Store 경로가 쓰는
   chunk·manifest checksum)은 같은 CRC-32C(Castagnoli) 규약을 사용한다: polynomial
   `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input·output, XOR output
   `0xFFFFFFFF`, `check("123456789") == 0xE3069283`.

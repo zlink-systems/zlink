@@ -116,18 +116,6 @@ public interface ZLinkSpotRelocationAdapter<TSpot> {
         TSpot spot, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
-public interface ZLinkSpotBaseDeltaRelocationAdapter<TSpot>
-    extends ZLinkSpotRelocationAdapter<TSpot> {
-    CompletionStage<byte[]> captureBase(
-        TSpot spot, ZLinkRelocationCancellation cancellation);
-    CompletionStage<byte[]> captureDelta(
-        TSpot spot, ZLinkRelocationCancellation cancellation);
-    CompletionStage<Void> restoreBase(
-        TSpot spot, byte[] base, ZLinkRelocationCancellation cancellation);
-    CompletionStage<Void> applyDelta(
-        TSpot spot, byte[] delta, ZLinkRelocationCancellation cancellation);
-}
-
 public interface ZLinkSpotContext {
     String meshName();
     String spotId();
@@ -233,14 +221,6 @@ Whole User Spot relocation에서는 Spot 자체에 Spot adapter를 사용하고 
 `ZLinkActorRelocationAdapter`를 사용한다.
 Instance Spot relocation에는 Spot adapter를 사용한다. Same-node operation과 `disableRelocation()`을 선택한 factory에서는 adapter를
 호출하지 않고 `recreateOnRelocation()`을 선택한 factory에는 application state adapter가 없다.
-
-`ZLinkSpotBaseDeltaRelocationAdapter<TSpot>`는 선택 capability다. `preserveStateWith(...)`에 등록한
-adapter class가 이 interface를 구현하면 Framework는 seal 전 turn 경계에서 `captureBase(...)`로 기준
-snapshot을 만들어 미리 전송하고, seal 뒤에는 `captureDelta(...)`가 만든 변경분만 전송한다. Target은
-`restoreBase(...)`로 기준 snapshot을 미리 복원하고 `applyDelta(...)`로 변경분을 적용해 최종 state를
-만든다. 변경분의 의미는 application이 소유한다. `applyDelta(...)`가 실패하면 그 instance를 폐기하고 새
-instance에 `restoreBase(...)`부터 반복하며, 부분 적용된 instance를 재사용하지 않는다. 이 interface를
-구현하지 않은 adapter는 기존 `capture`/`restore` 동작이 그대로 유지된다.
 
 Capture exception은 authority publication 전에 relocation을 abort하고 source admission을 유지한다. Restore
 exception은 target admission을 sealed 상태로 유지한 채 같은 immutable payload를 retry하거나 target을 교체한다.
@@ -465,12 +445,6 @@ public interface systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry 
 public interface systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot> {
   public abstract java.util.concurrent.CompletionStage<byte[]> capture(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> restore(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
-}
-public interface systems.zlink.framework.spots.ZLinkSpotBaseDeltaRelocationAdapter<TSpot> extends systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot> {
-  public abstract java.util.concurrent.CompletionStage<byte[]> captureBase(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<byte[]> captureDelta(TSpot, systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> restoreBase(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> applyDelta(TSpot, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
 }
 public interface systems.zlink.framework.spots.ZLinkEntrySpot<TActor extends systems.zlink.framework.actors.ZLinkActor> extends systems.zlink.framework.spots.ZLinkSpotActorMembershipLifecycle<TActor> {
   public abstract systems.zlink.framework.spots.ZLinkEntrySpotContext context();

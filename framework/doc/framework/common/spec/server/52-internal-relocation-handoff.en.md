@@ -300,8 +300,6 @@ The following aren't part of this handoff:
 - restoring a target's partially assembled payload stage instead of failing explicitly — a
   checksum or length mismatch always ends in an explicit `relocationFailed` reply, never a
   target-side repair of the partial assembly;
-- a blind or transparent retry after a payload checksum mismatch — the retry-from-a-fresh-instance
-  rule applies only to a base/delta capture failure, never to a raw chunk checksum mismatch;
 - attributing a Prepare, a chunk, or a CAS to a relocation by arrival order, most-recent
   timestamp, or any signal other than the exact `RelocationId`/`targetAttemptGeneration`/
   coordinator fence together with the connection that carried it; or

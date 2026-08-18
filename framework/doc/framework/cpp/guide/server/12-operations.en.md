@@ -250,7 +250,7 @@ what you observe in your deployment.
 | `RelocationPayloadChunkLimit` | 256 KiB | Size of one chunk. Lower it if chunk transfers intrude on the latency target of ordinary messages sharing the connection |
 | `RelocationInFlightPayloadBudget` | 16 MiB | Total relocation bytes that may be in flight at once on one peer connection. 0 disables it. Lower it if relocation transfers eat into ordinary message bandwidth; raise it if host move throughput is capped by this budget |
 | `RelocationNodeInFlightPayloadBudget` | 0 (disabled) | Node-wide cap on concurrent transfers. Set it only when a node with many peer connections needs its total occupancy bounded |
-| `RelocationCutoverWaitTimeout` | 1,000ms | How long the target waits for a cutover retransmission. If the `cutover_timeout` counter is nonzero, adjust it to your deployment's round-trip time |
+| `relocation_cutover_wait_timeout` | 1,000ms | How long the target waits for a cutover retransmission. If the `cutover_timeout` counter is nonzero, adjust it to your deployment's round-trip time |
 
 When the budget is full, a new relocation unit waits before its seal, and the Actor/Spot
 keeps processing messages normally while it waits — no payload size is ever too large to

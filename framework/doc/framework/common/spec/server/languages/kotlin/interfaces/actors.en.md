@@ -66,12 +66,7 @@ isn't created. The state-preservation policy is configured with
 `preserveStateWith(ActorAdapter::class.java)`, and the match between
 factory and adapter target is validated before socket bind. A policy
 passing a null adapter class through Java interop is also rejected as a
-startup configuration error before bind. If the registered adapter class
-also implements Java's `ZLinkActorBaseDeltaRelocationAdapter<TActor>`,
-the optional base/delta capture capability
-(`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`) is registered
-along with it; if not, the existing `capture`/`restore` behavior is kept
-unchanged. A Kotlin-only suspending capability interface isn't added.
+startup configuration error before bind.
 
 An Actor adapter registered with `preserveStateWith(...)` is used for
 maintenance cross-node materialization, remote User/Entry Spot join, and

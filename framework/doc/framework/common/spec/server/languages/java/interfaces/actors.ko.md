@@ -34,18 +34,6 @@ public interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
         TActor actor, byte[] state, ZLinkRelocationCancellation cancellation);
 }
 
-public interface ZLinkActorBaseDeltaRelocationAdapter<TActor extends ZLinkActor>
-    extends ZLinkActorRelocationAdapter<TActor> {
-    CompletionStage<byte[]> captureBase(
-        TActor actor, ZLinkRelocationCancellation cancellation);
-    CompletionStage<byte[]> captureDelta(
-        TActor actor, ZLinkRelocationCancellation cancellation);
-    CompletionStage<Void> restoreBase(
-        TActor actor, byte[] base, ZLinkRelocationCancellation cancellation);
-    CompletionStage<Void> applyDelta(
-        TActor actor, byte[] delta, ZLinkRelocationCancellation cancellation);
-}
-
 ```
 
 [Factory](../../../01-glossary.ko.md#factory) registration의 정확한 builder member는
@@ -74,14 +62,6 @@ Cross-node materialization에서 Actor factory가 `preserveStateWith(...)`를 �
 remote User·[Entry Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User Spot relocation의 각 Actor participant에 같은 Actor adapter를 사용한다.
 Same-node join과 `disableRelocation()` 또는 `recreateOnRelocation()`을 선택한 factory에서는 adapter를 호출하지
 않는다. `recreateOnRelocation()`은 application state를 capture하지 않으므로 adapter가 없다.
-
-`ZLinkActorBaseDeltaRelocationAdapter<TActor>`는 선택 capability다. `preserveStateWith(...)`에 등록한
-adapter class가 이 interface를 구현하면 Framework는 seal 전 turn 경계에서 `captureBase(...)`로 기준
-snapshot을 만들어 미리 전송하고, seal 뒤에는 `captureDelta(...)`가 만든 변경분만 전송한다. Target은
-`restoreBase(...)`로 기준 snapshot을 미리 복원하고 `applyDelta(...)`로 변경분을 적용해 최종 state를
-만든다. 변경분의 의미는 application이 소유한다. `applyDelta(...)`가 실패하면 그 instance를 폐기하고 새
-instance에 `restoreBase(...)`부터 반복하며, 부분 적용된 instance를 재사용하지 않는다. 이 interface를
-구현하지 않은 adapter는 기존 `capture`/`restore` 동작이 그대로 유지된다.
 
 Target은 restore와 accepted journal staging을 끝낸 뒤 owner를 commit한다. Lifecycle callback 뒤 저장된 기존
 작업을 실제 Actor queue에 먼저 넣고 relocation temporary queue 작업을 그 뒤에 옮긴다. Temporary queue
@@ -167,12 +147,6 @@ public interface systems.zlink.framework.actors.ZLinkRelocationCancellation {
 public interface systems.zlink.framework.actors.ZLinkActorRelocationAdapter<TActor extends systems.zlink.framework.actors.ZLinkActor> {
   public abstract java.util.concurrent.CompletionStage<byte[]> capture(TActor, systems.zlink.framework.actors.ZLinkRelocationCancellation);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> restore(TActor, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
-}
-public interface systems.zlink.framework.actors.ZLinkActorBaseDeltaRelocationAdapter<TActor extends systems.zlink.framework.actors.ZLinkActor> extends systems.zlink.framework.actors.ZLinkActorRelocationAdapter<TActor> {
-  public abstract java.util.concurrent.CompletionStage<byte[]> captureBase(TActor, systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<byte[]> captureDelta(TActor, systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> restoreBase(TActor, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> applyDelta(TActor, byte[], systems.zlink.framework.actors.ZLinkRelocationCancellation);
 }
 public interface systems.zlink.framework.actors.ZLinkActorHandlerRegistry {
   public abstract void addHandler(java.lang.Class<?>);

@@ -824,14 +824,6 @@ Follow these rules.
 - **It's exclusive to a `SpotWide` User Spot.** It can't be called from an Entry Spot, a
   `PerActor` User Spot, an Instance Spot, or under the default `AnyTurnBoundary` mode.
 
-**A Spot with large state can opt into base/delta capture.** Registering the optional
-base/delta capture capability (`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`)
-alongside the relocation adapter moves the base snapshot to the target ahead of time while
-the Spot keeps processing messages, and transfers only the changes during the stop window —
-so the interruption scales with the size of the changes, not the whole state. Without this
-registration the existing `capture`/`Restore` behavior is kept as-is. The formal contract is
-covered by [Spot And Actor Membership](../../../common/spec/server/15-spot-actor.en.md).
-
 ## 8. Related Documents
 
 - A runnable verification example for this chapter's contract: chapter `13. Interface

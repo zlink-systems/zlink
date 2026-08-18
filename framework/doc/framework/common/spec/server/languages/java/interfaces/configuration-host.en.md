@@ -336,11 +336,7 @@ The configure callback must call exactly one of `disableRelocation()`,
 calling more than one is a startup configuration error before socket
 bind. The Actor builder only takes a `ZLinkActorRelocationAdapter` of
 the same Actor type, and the User/Instance Spot builder only takes a
-`ZLinkSpotRelocationAdapter` of the same Spot type. If the registered
-adapter class also implements `ZLinkActorBaseDeltaRelocationAdapter` or
-`ZLinkSpotBaseDeltaRelocationAdapter`, the optional base/delta capture
-capability is registered along with it; if not, the existing
-`capture`/`restore` behavior is kept unchanged. There is no separate
+`ZLinkSpotRelocationAdapter` of the same Spot type. There is no separate
 registration API.
 
 The framework runs the configure callback synchronously exactly once

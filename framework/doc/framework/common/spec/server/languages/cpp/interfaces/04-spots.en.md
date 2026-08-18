@@ -36,25 +36,6 @@ public:
 };
 
 template <typename TSpot>
-class spot_relocation_delta_adapter_t : public spot_relocation_adapter_t<TSpot> {
-public:
-    virtual task_t<std::vector<std::byte>> capture_base(
-      TSpot &spot,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<std::vector<std::byte>> capture_delta(
-      TSpot &spot,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> restore_base(
-      TSpot &spot,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> apply_delta(
-      TSpot &spot,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
-};
-
-template <typename TSpot>
 class user_spot_factory_builder_t {
 public:
     user_spot_factory_builder_t &set_stable_type_limit(std::int32_t limit);
@@ -89,22 +70,6 @@ factory, fails as a configuration error before socket bind. The
 adapter exchanges application state only as an opaque byte vector, and
 doesn't expose typed state, a separate contract identifier, or a
 message wrapper.
-
-If `TAdapter` inherits `spot_relocation_delta_adapter_t<TSpot>`, it
-also registers the delta capture capability. In the cross-node
-materialization of a factory that registered the capability, the
-Framework builds a base snapshot with `capture_base(...)` at a turn
-boundary before the seal and sends it ahead of time, and after the
-seal sends only the `capture_delta(...)` result. The target restores
-the base snapshot ahead of time with `restore_base(...)` and builds
-the final state with `apply_delta(...)`. If `apply_delta(...)` fails,
-that instance is discarded and a new instance repeats from
-`restore_base(...)`; a partially applied instance is never reused. If
-the relocation fails after the base snapshot was sent, the target
-removes the base snapshot. The meaning of the delta is owned by the
-application, and Framework queues and timers are confirmed only once
-at the seal boundary. An adapter that doesn't register the capability
-keeps the existing `capture(...)`/`restore(...)` behavior as is.
 
 The exact declaration of the factory registration member is owned by
 [Channel messaging](03-channel-messaging.en.md)'s

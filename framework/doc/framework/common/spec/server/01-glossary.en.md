@@ -1095,24 +1095,6 @@ framework-managed queue, unfinished work, and timers move along with it.
 
 The factory configure callback's `PreserveStateWith` also specifies the adapter.
 
-<a id="base-delta-capture"></a>
-### Base/Delta Capture
-
-An optional capability of the relocation adapter. It sends a base snapshot
-(`CaptureBase`/`RestoreBase`) before the seal and, after the seal, sends only the
-delta (`CaptureDelta`/`ApplyDelta`), reducing the amount transferred inside the
-interruption window to the delta size for objects with large state. A factory that
-doesn't register it keeps the current `Capture`/`Restore` behavior.
-
-| Item | Content |
-|---|---|
-| Shape | Optional capability of the relocation adapter. The name refers to the declarations on the adapter surface; no independent public type. |
-| Public composition | The four operations `CaptureBase`, `CaptureDelta`, `RestoreBase`, and `ApplyDelta`. The base snapshot contains only application state, and a delta includes the checksum of the base snapshot it refers to. The meaning of a delta is owned by the application. |
-| Creation/management | Used only by factories that registered it. Base snapshot transfer also uses the relocation state chunk rules and the in-flight payload budget as they are. |
-| Delivery | The base snapshot is sent ahead of the seal while the source keeps processing; after the seal only the delta is sent. |
-| Lifetime | If `ApplyDelta` fails, the instance is discarded and the process repeats from `RestoreBase` on a new instance. A partially applied instance isn't reused. If the relocation fails after the base snapshot transfer, the target removes the base snapshot. |
-| Application authority | The application implements the capture/restore operations through the adapter. Whether it's used is fixed at factory registration. |
-
 <a id="classic-fanout"></a>
 ### Classic Fanout
 

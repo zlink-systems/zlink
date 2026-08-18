@@ -229,7 +229,7 @@ message를 밀어내지 않도록 네 가지 server 설정으로 조정한다. �
 | `RelocationPayloadChunkLimit` | 256 KiB | chunk 하나의 크기. chunk 전송이 같은 연결의 일반 message 지연 목표를 침범하면 낮춘다 |
 | `RelocationInFlightPayloadBudget` | 16 MiB | peer 연결 하나에서 동시에 전송 중일 수 있는 relocation byte 총량. 0은 미적용. relocation 전송이 일반 message 대역폭을 잠식하면 낮추고, host 이전 처리량이 이 예산에 막히면 올린다 |
 | `RelocationNodeInFlightPayloadBudget` | 0(미적용) | 노드 전체의 동시 전송 상한. peer 연결이 많은 노드에서 총 점유를 제한해야 할 때만 설정한다 |
-| `RelocationCutoverWaitTimeout` | 1,000ms | target이 cutover 재전송을 기다리는 상한. `cutover_timeout` counter가 0이 아니면 배치의 왕복 시간에 맞게 조정한다 |
+| `relocation_cutover_wait_timeout` | 1,000ms | target이 cutover 재전송을 기다리는 상한. `cutover_timeout` counter가 0이 아니면 배치의 왕복 시간에 맞게 조정한다 |
 
 예산이 차 있으면 새 relocation unit은 seal 전에 대기하고, 대기하는 동안 그
 Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시작하지 못하는 payload

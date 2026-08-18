@@ -248,13 +248,8 @@ Every factory configures the Java builder with a Kotlin receiver
 callback. The callback calls exactly one of `disableRelocation()`,
 `recreateOnRelocation()`, `preserveStateWith(...)`. Omitting it or
 calling more than one is a startup configuration error before socket
-bind. A Kotlin-only policy value or suspending adapter isn't added. If
-the registered adapter class also implements Java's
-`ZLinkActorBaseDeltaRelocationAdapter` or
-`ZLinkSpotBaseDeltaRelocationAdapter`, the optional base/delta capture
-capability is registered along with it; if not, the existing
-`capture`/`restore` behavior is kept unchanged. There is no separate
-registration API.
+bind. A Kotlin-only policy value or suspending adapter isn't added. There
+is no separate registration API.
 
 The framework runs the receiver callback synchronously exactly once
 inside the registration call. Calling the retained builder again after

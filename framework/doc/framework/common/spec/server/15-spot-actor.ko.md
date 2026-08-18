@@ -666,42 +666,6 @@ sequence는 유효한 application state이고 null result는 adapter contract �
 복사하거나 소유권을 넘겨받으므로 application은 그 뒤 결과를 바꾸지 않는다. `Restore`에 전달한 bytes는 callback이
 완료될 때까지만 유효하고 callback이 보관하려면 직접 복사해야 한다.
 
-`PreserveStateWith` adapter는
-[변경분 capture](01-glossary.ko.md#변경분-capture-basedelta-capture)를 선택 capability로
-함께 등록할 수 있다.
-등록한 factory에서는 기준이 되는 전체 state snapshot을 source가 처리를 계속하는 seal
-전에 미리 전송하고, seal 뒤에는 기준 snapshot 이후의 변경분만 전송해 중단 구간의
-전송량을 줄인다. 등록하지 않은 factory는 위의 `Capture`/`Restore` 동작을 그대로
-사용한다. Application state가 구분할 수 없는 opaque byte sequence 하나뿐이면 Framework가
-변경분을 대신 계산할 수 없으므로, 변경분의 의미는 application이 소유한다.
-
-```text
-contract pseudocode이며 실제 API가 아니다.
-
-CaptureBase()   // seal 전 turn 경계에서 기준 snapshot을 만든다. 만든 뒤 source는 처리를 계속한다.
-CaptureDelta()  // seal 뒤, 기준 snapshot 이후의 변경분만 만든다.
-RestoreBase()   // target이 기준 snapshot을 미리 복원한다.
-ApplyDelta()    // seal 뒤 도착한 변경분을 적용해 최종 state를 만든다.
-```
-
-기준 snapshot에는 application state만 담는다. Framework queue와 timer는 변경분
-방식에서도 seal 경계에서 한 번만 확정한다. 기준 snapshot 전송도 일반 relocation
-payload와 같은 chunk·예산 규칙을 사용하므로, seal 전 전송이 같은 연결의 다른
-relocation과 예산을 경쟁하는 것은 통로 총량 제어의 의도된 결과다.
-
-변경분 방식의 실패 규칙은 다음과 같다.
-
-- `ApplyDelta`가 실패하면 그 instance를 폐기하고 새 instance에 `RestoreBase`부터
-  반복한다. 부분 적용된 instance를 재사용하지 않는다.
-- 변경분은 자신이 참조하는 기준 snapshot의 checksum을 포함한다. Target의 기준
-  snapshot과 다르면 적용하지 않고 기준 snapshot부터 다시 전송한다.
-- `CaptureDelta` 실패는 seal 뒤의 명시적 실패이므로 source memory의 payload로 source
-  queue를 복원하고 operation을 실패로 끝낸다.
-- 기준 snapshot 전송 뒤 relocation이 실패하면 target은 기준 snapshot을 제거하며, 부분
-  적용된 state로 복원하지 않는다.
-- 여러 번의 기준 snapshot 전송 attempt는 relocation의 exact identity로 구분하며,
-  identity가 다른 기준 snapshot에 변경분을 적용하지 않는다.
-
 Join과 host maintenance는 같은 factory relocation 구성과 adapter registration을 사용한다.
 `PreserveStateWith`를 선택한 Actor가 다른
 node의 User Spot·Entry Spot으로 join하거나 maintenance로 이동할 때 Actor adapter를 호출한다.
@@ -947,11 +911,6 @@ Late·duplicate cutover 또는 Session route update는 Warning만 남기고 rout
   지키고 completion callback 뒤에 일반 message를 실행한다.
 - `PreserveStateWith`는 handler 종료 경계의 application state와 Framework queue·timer를
   복원하고, `RecreateOnRelocation`은 application state 없이 Framework queue·timer만 복원한다.
-- 변경분 capture capability를 등록한 factory에서 seal 뒤에는 변경분만 전송되고, 등록하지
-  않은 factory는 기존 `Capture`/`Restore` 동작과 같다.
-- `ApplyDelta` 실패가 부분 적용된 instance를 재사용하지 않고 새 instance에
-  `RestoreBase`부터 반복한다.
-- 기준 snapshot 전송 뒤 relocation이 실패하면 target에 기준 snapshot이 남지 않는다.
 - User Spot과 member Actor는 target이 실행하는 Location Store conditional batch CAS 한 번으로
   함께 전환된다.
 - Commit 뒤 failure가 participant 일부를 source로 rollback하지 않는다.

@@ -121,26 +121,6 @@ public interface IZLinkSpotRelocationAdapter<TSpot>
         CancellationToken cancellationToken);
 }
 
-public interface IZLinkSpotBaseDeltaRelocationAdapter<TSpot>
-    : IZLinkSpotRelocationAdapter<TSpot>
-    where TSpot : class
-{
-    ValueTask<byte[]> CaptureBaseAsync(
-        TSpot spot,
-        CancellationToken cancellationToken);
-    ValueTask<byte[]> CaptureDeltaAsync(
-        TSpot spot,
-        CancellationToken cancellationToken);
-    ValueTask RestoreBaseAsync(
-        TSpot spot,
-        ReadOnlyMemory<byte> basePayload,
-        CancellationToken cancellationToken);
-    ValueTask ApplyDeltaAsync(
-        TSpot spot,
-        ReadOnlyMemory<byte> deltaPayload,
-        CancellationToken cancellationToken);
-}
-
 public readonly record struct ZLinkSpotCreateResponse(
     bool Accepted,
     ZLinkMessage? Reply)
@@ -390,15 +370,6 @@ Actor membership과 local instance가 유효한 상태에서 callback을 실행�
 materialize할 때만 호출한다. Whole User Spot relocation에서는 [Spot](../../../01-glossary.ko.md#spot) adapter가 Spot application payload를 처리하고,
 각 member Actor의 payload는 Actor factory에 등록한 Actor adapter가 각각 처리한다. `RecreateOnRelocation()`은 adapter를 호출하지
 않고 application state 없이 instance를 다시 만들며 `DisableRelocation()`은 capture 전에 cross-node 이동을 거부한다.
-
-`IZLinkSpotBaseDeltaRelocationAdapter<TSpot>`는 선택 capability다. `PreserveStateWith<TAdapter>()`에
-등록한 adapter type이 이 interface를 구현하면 Framework는 seal 전 turn 경계에서 `CaptureBaseAsync(...)`로
-기준 snapshot을 만들어 미리 전송하고, seal 뒤에는 `CaptureDeltaAsync(...)`가 만든 변경분만 전송한다.
-Target은 `RestoreBaseAsync(...)`로 기준 snapshot을 미리 복원하고 `ApplyDeltaAsync(...)`로 변경분을
-적용해 최종 state를 만든다. 변경분의 의미는 application이 소유한다. `ApplyDeltaAsync(...)`가 실패하면
-그 instance를 폐기하고 새 instance에 `RestoreBaseAsync(...)`부터 반복하며, 부분 적용된 instance를
-재사용하지 않는다. 이 interface를 구현하지 않은 adapter는 기존 `CaptureAsync(...)`/`RestoreAsync(...)`
-동작이 그대로 유지된다.
 
 Spot adapter의 capture와 restore는 stable relocation attempt에서 at-least-once 호출될 수 있으므로 retry-safe해야
 한다. `CaptureAsync(...)` 결과에는 relocation adapter 전용 size 상한이 없으며, Framework는 payload를

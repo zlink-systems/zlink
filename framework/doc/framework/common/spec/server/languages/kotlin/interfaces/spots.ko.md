@@ -113,10 +113,7 @@ Kotlin은 Java `ZLinkSpotRelocationAdapter<TSpot>`를 그대로 구현한다. Op
 `capture`와 `restore`는 Java 계약과 같은 `CompletionStage`를 반환한다. 별도 suspending Spot adapter,
 `TState`, `stateContractId`, state class와 `ZLinkMessage` relocation surface는 제공하지 않는다. State 보존 factory는
 `preserveStateWith(SpotAdapter::class.java)`를 사용하고 factory target과 adapter type은 socket bind
-전에 검증한다. 등록한 adapter class가 Java `ZLinkSpotBaseDeltaRelocationAdapter<TSpot>`도 구현하면
-base/delta capture 선택 capability(`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`)가 함께
-등록되며, 구현하지 않으면 기존 `capture`/`restore` 동작이 그대로 유지된다. Kotlin 전용 suspending
-capability interface는 추가하지 않는다.
+전에 검증한다.
 
 State를 보존하는 whole User Spot relocation은 Spot 자체에 Spot adapter를, member Actor마다 Actor adapter를 사용한다.
 State를 보존하는 Instance Spot relocation은 Spot adapter를 사용한다. Same-node operation, `disableRelocation()`과 `recreateOnRelocation()`에서는

@@ -749,46 +749,6 @@ takes ownership of it, so the application doesn't change the result afterward. B
 passed to `Restore` are only valid until the callback completes — the callback must
 copy them itself to keep them.
 
-A `PreserveStateWith` adapter can additionally register
-[base/delta capture](01-glossary.en.md#basedelta-capture) as an optional
-capability. In a factory that registers it, the full baseline state snapshot is
-transferred ahead of time, before the seal, while the source keeps processing; after
-the seal, only the changes since the baseline snapshot are transferred, shrinking the
-amount sent during the interruption window. A factory that doesn't register it uses
-the `Capture`/`Restore` behavior above as-is. When application state is just one
-indistinguishable opaque byte sequence, the framework can't compute the changes on
-the application's behalf, so the meaning of a delta is owned by the application.
-
-```text
-This is contract pseudocode, not an actual API.
-
-CaptureBase()   // builds the baseline snapshot at a turn boundary before the seal. The source keeps processing afterward.
-CaptureDelta()  // after the seal, builds only the changes since the baseline snapshot.
-RestoreBase()   // the target restores the baseline snapshot ahead of time.
-ApplyDelta()    // applies the changes arriving after the seal to build the final state.
-```
-
-The baseline snapshot carries only application state. Framework queue and timers are
-confirmed once at the seal boundary, even in the delta scheme. The baseline snapshot
-transfer also uses the same chunk and budget rules as a regular relocation payload,
-so a pre-seal transfer competing for the budget with other relocations on the same
-connection is the intended result of total-channel control.
-
-The failure rules of the delta scheme are as follows.
-
-- If `ApplyDelta` fails, that instance is discarded and it repeats from
-  `RestoreBase` on a new instance. A partially applied instance isn't reused.
-- A delta includes the checksum of the baseline snapshot it references. If it
-  differs from the target's baseline snapshot, it isn't applied, and transfer
-  restarts from the baseline snapshot.
-- A `CaptureDelta` failure is an explicit post-seal failure, so the source queue is
-  restored from the payload in source memory and the operation ends as failed.
-- If relocation fails after the baseline snapshot transfer, the target removes the
-  baseline snapshot and doesn't restore from a partially applied state.
-- Multiple baseline snapshot transfer attempts are distinguished by the
-  relocation's exact identity, and a delta isn't applied to a baseline snapshot of
-  a different identity.
-
 Join and host maintenance use the same factory relocation configuration and adapter
 registration. The Actor adapter is called when an Actor that chose
 `PreserveStateWith` joins a User Spot/Entry Spot on a different node, or moves via
@@ -1080,13 +1040,6 @@ affected. The exact Session route contract is defined by
 - `PreserveStateWith` restores application state at the handler-end boundary along
   with framework queue/timer; `RecreateOnRelocation` restores only framework
   queue/timer, without application state.
-- In a factory registering the delta capture capability, only changes are
-  transferred after the seal, and a factory that doesn't register it behaves the
-  same as the existing `Capture`/`Restore`.
-- An `ApplyDelta` failure doesn't reuse a partially applied instance — it repeats
-  from `RestoreBase` on a new instance.
-- If relocation fails after the baseline snapshot transfer, no baseline snapshot
-  remains on the target.
 - A User Spot and member Actors switch together in one Location Store conditional
   batch CAS performed by the target.
 - A post-commit failure doesn't roll back just some participants to the source.

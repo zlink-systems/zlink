@@ -32,25 +32,6 @@ public:
 };
 
 template <typename TSpot>
-class spot_relocation_delta_adapter_t : public spot_relocation_adapter_t<TSpot> {
-public:
-    virtual task_t<std::vector<std::byte>> capture_base(
-      TSpot &spot,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<std::vector<std::byte>> capture_delta(
-      TSpot &spot,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> restore_base(
-      TSpot &spot,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
-    virtual task_t<void> apply_delta(
-      TSpot &spot,
-      std::vector<std::byte> payload,
-      std::stop_token operation_cancellation) = 0;
-};
-
-template <typename TSpot>
 class user_spot_factory_builder_t {
 public:
     user_spot_factory_builder_t &set_stable_type_limit(std::int32_t limit);
@@ -82,16 +63,6 @@ public:
 `spot_relocation_adapter_t<TSpot>`를 구현해야 한다. Actor adapter를 전달하거나 [Spot](../../../01-glossary.ko.md#spot) factory에 맞지 않는 adapter를
 전달하면 socket bind 전에 configuration error로 실패한다. Adapter는 application state를 opaque byte vector로만
 주고받으며 typed state, 별도 contract identifier와 message wrapper를 노출하지 않는다.
-
-`TAdapter`가 `spot_relocation_delta_adapter_t<TSpot>`를 상속하면 변경분 capture capability를 함께
-등록한다. Capability를 등록한 factory의 cross-node materialization에서 Framework는 seal 전 turn
-경계에서 `capture_base(...)`로 기준 snapshot을 만들어 미리 전송하고, seal 뒤에는 `capture_delta(...)`
-결과만 전송한다. Target은 `restore_base(...)`로 기준 snapshot을 미리 복원하고 `apply_delta(...)`로
-최종 state를 만든다. `apply_delta(...)`가 실패하면 그 instance를 폐기하고 새 instance에
-`restore_base(...)`부터 반복하며 부분 적용된 instance를 재사용하지 않는다. 기준 snapshot 전송 뒤
-relocation이 실패하면 target은 기준 snapshot을 제거한다. 변경분의 의미는 application이 소유하고,
-Framework queue와 timer는 seal 경계에서 한 번만 확정한다. Capability를 등록하지 않은 adapter는
-기존 `capture(...)`/`restore(...)` 동작이 그대로 유지된다.
 
 Factory 등록 member의 exact declaration은
 [Channel messaging](03-channel-messaging.ko.md)의 `mesh_node_builder_t`가 소유한다.

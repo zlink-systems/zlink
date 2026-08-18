@@ -200,9 +200,7 @@ startup configuration error로 거부한다.
 모든 factory는 Java builder를 Kotlin receiver callback으로 구성한다. Callback은
 `disableRelocation()`, `recreateOnRelocation()`, `preserveStateWith(...)` 중 정확히 하나를 호출한다. 누락하거나
 둘 이상 호출하면 socket bind 전에 startup configuration error다. Kotlin 전용 policy value와 suspending
-adapter는 추가하지 않는다. 등록한 adapter class가 Java `ZLinkActorBaseDeltaRelocationAdapter` 또는
-`ZLinkSpotBaseDeltaRelocationAdapter`도 구현하면 base/delta capture 선택 capability가 함께 등록되며,
-구현하지 않으면 기존 `capture`/`restore` 동작이 그대로 유지된다. 별도 등록 API는 없다.
+adapter는 추가하지 않는다. 별도 등록 API는 없다.
 
 Framework는 receiver callback을 등록 호출 안에서 동기적으로 한 번만 실행한다. Callback이 반환된 뒤 보관한
 builder를 다시 호출하면 configuration error다. Callback이 예외를 던지면 해당 factory를 등록하지 않고 같은

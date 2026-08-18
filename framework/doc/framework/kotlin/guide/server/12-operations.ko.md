@@ -228,7 +228,7 @@ message를 밀어내지 않도록 네 가지 server 설정으로 조정한다. �
 | `RelocationPayloadChunkLimit` | 256 KiB | chunk 하나의 크기. chunk 전송이 같은 연결의 일반 message 지연 목표를 침범하면 낮춘다 |
 | `RelocationInFlightPayloadBudget` | 16 MiB | peer 연결 하나에서 동시에 전송 중일 수 있는 relocation byte 총량. 0은 미적용. relocation 전송이 일반 message 대역폭을 잠식하면 낮추고, host 이전 처리량이 이 예산에 막히면 올린다 |
 | `RelocationNodeInFlightPayloadBudget` | 0(미적용) | 노드 전체의 동시 전송 상한. peer 연결이 많은 노드에서 총 점유를 제한해야 할 때만 설정한다 |
-| `RelocationCutoverWaitTimeout` | 1,000ms | target이 cutover 재전송을 기다리는 상한. `cutover_timeout` counter가 0이 아니면 배치의 왕복 시간에 맞게 조정한다 |
+| `relocationCutoverWaitTimeout` | 1,000ms | target이 cutover 재전송을 기다리는 상한. `cutover_timeout` counter가 0이 아니면 배치의 왕복 시간에 맞게 조정한다 |
 
 예산이 차 있으면 새 relocation unit은 seal 전에 대기하고, 대기하는 동안 그
 Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시작하지 못하는 payload
@@ -239,7 +239,7 @@ Actor·Spot은 message를 정상적으로 처리한다 — 예산 때문에 시�
 
 `Relocated`는 source가 cutover 전송을 마쳤다는 뜻이지, 이전 route를 cache한 호출자가
 모두 새 owner를 향하게 됐다는 뜻이 아니다. Source runtime은 모든 unit의 Message Follow를
-끝낼 수 있고 cutover 재전송 창이 닫힌 뒤 `SafeToShutdown` 상태를 자기 runtime status에
+끝낼 수 있고 cutover 재전송 창이 닫힌 뒤 `safeToShutdown` 상태를 자기 runtime status에
 게시한다. Deployment orchestrator는 `Relocated`를 확인한 뒤 이 상태까지 관찰하고 나서
 `shutdown`을 호출하는 것을 권장한다 — 게시 전에 종료해도 되지만, 남아 있던 follow
 route가 사라져 이전 route를 cache한 호출자의 request가 `Unavailable`로 끝날 수 있다.
@@ -263,7 +263,7 @@ fallback 횟수는 `cutover_timeout` counter로 게시된다. 지표 이름·단
 
 여기서 정리되는 Spot의 state는 남지 않는다. 배포 자동화가 상태를 살려서 내려야 한다면 종료
 전에 `relocate(...)`를 먼저 호출하고 그 결과가 `Relocated`인지 확인한 뒤 이 호출로
-넘어간다(§4의 예제). 가능하면 `SafeToShutdown` 게시까지 확인한다(§2.3).
+넘어간다(§4의 예제). 가능하면 `safeToShutdown` 게시까지 확인한다(§2.3).
 
 Spot의 수명은 request와 무관하다. 일반 request가 끝났다는 이유만으로 User·Instance Spot을 닫지
 않는다. 없는 Instance Spot을 준비시키는 것도 마찬가지로 별도 address나 manager create가 아니라,
@@ -275,7 +275,7 @@ SpotId direct 호출에 Instance intent를 붙였을 때만 시작한다([06-spo
 호출한다. 이 interface는 host maintenance를 소유하는 DI singleton이다.
 
 배포에서 쓰는 순서는 "먼저 옮기고, 성공했으면 종료한다"다. `Relocated`를 확인한 뒤
-`SafeToShutdown` 게시(§2.3)까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
+`safeToShutdown` 게시(§2.3)까지 관찰하고 종료하면 이전 route를 cache한 호출자의 실패를
 피할 수 있다.
 
 ```kotlin

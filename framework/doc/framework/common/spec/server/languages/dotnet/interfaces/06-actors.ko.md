@@ -101,26 +101,6 @@ public interface IZLinkActorRelocationAdapter<TActor>
         CancellationToken cancellationToken);
 }
 
-public interface IZLinkActorBaseDeltaRelocationAdapter<TActor>
-    : IZLinkActorRelocationAdapter<TActor>
-    where TActor : class, IZLinkActor
-{
-    ValueTask<byte[]> CaptureBaseAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
-    ValueTask<byte[]> CaptureDeltaAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
-    ValueTask RestoreBaseAsync(
-        TActor actor,
-        ReadOnlyMemory<byte> basePayload,
-        CancellationToken cancellationToken);
-    ValueTask ApplyDeltaAsync(
-        TActor actor,
-        ReadOnlyMemory<byte> deltaPayload,
-        CancellationToken cancellationToken);
-}
-
 public interface IZLinkActorClient
 {
     IZLinkActorSendCall SendToActor<TMessage>(
@@ -271,15 +251,6 @@ state를 복구하지 않는다. `PreserveStateWith<TAdapter>()`는 `IZLinkActor
 opaque application payload로 source에서 target으로 직접 전송하고 target Actor instance에 복원한다. 별도 application state generic과 stable
 state contract ID를 받지 않으며 Framework message wrapper를 payload로 사용하지 않는다. Adapter는 relocation
 reference, accepted journal, relocation phase, source·target owner와 Store CAS version을 받지 않는다.
-
-`IZLinkActorBaseDeltaRelocationAdapter<TActor>`는 선택 capability다. `PreserveStateWith<TAdapter>()`에
-등록한 adapter type이 이 interface를 구현하면 Framework는 seal 전 turn 경계에서 `CaptureBaseAsync(...)`로
-기준 snapshot을 만들어 미리 전송하고, seal 뒤에는 `CaptureDeltaAsync(...)`가 만든 변경분만 전송한다.
-Target은 `RestoreBaseAsync(...)`로 기준 snapshot을 미리 복원하고 `ApplyDeltaAsync(...)`로 변경분을
-적용해 최종 state를 만든다. 변경분의 의미는 application이 소유한다. `ApplyDeltaAsync(...)`가 실패하면
-그 instance를 폐기하고 새 instance에 `RestoreBaseAsync(...)`부터 반복하며, 부분 적용된 instance를
-재사용하지 않는다. 이 interface를 구현하지 않은 adapter는 기존 `CaptureAsync(...)`/`RestoreAsync(...)`
-동작이 그대로 유지된다.
 
 다른 node에서 Actor instance를 materialize하는 maintenance, cross-node User Spot·[Entry Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User
 Spot relocation의 모든 Actor participant는 같은 Actor factory policy를 사용한다. `PreserveStateWith`일 때만 Actor adapter의

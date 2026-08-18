@@ -152,13 +152,7 @@ return the same `CompletionStage` as the Java contract. A separate
 suspending Spot adapter, `TState`, `stateContractId`, state class, or
 `ZLinkMessage` relocation surface isn't provided. A state-preservation
 factory uses `preserveStateWith(SpotAdapter::class.java)`, and the
-factory target and adapter type are validated before socket bind. If the
-registered adapter class also implements Java's
-`ZLinkSpotBaseDeltaRelocationAdapter<TSpot>`, the optional base/delta
-capture capability
-(`captureBase`/`captureDelta`/`restoreBase`/`applyDelta`) is registered
-along with it; if not, the existing `capture`/`restore` behavior is kept
-unchanged. A Kotlin-only suspending capability interface isn't added.
+factory target and adapter type are validated before socket bind.
 
 A state-preserving whole User Spot relocation uses the Spot adapter for
 the Spot itself and an Actor adapter for each member Actor. A

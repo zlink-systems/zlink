@@ -811,16 +811,6 @@ type, or relocation codec registration API. Relocation policy doesn't apply to a
 Actor join. Relocation ID, target RID, relocation reference, journal cursor, and authority
 revision aren't exposed to the application callback.
 
-A `PreserveStateWith` adapter can also register, in addition to the basic
-`Capture`/`Restore`, an optional capability that makes only the changes transmit after
-seal. The registration form is one set of four callbacks — `CaptureBase`, building a base
-snapshot at a turn boundary before seal; `CaptureDelta`, building only the changes since
-the base snapshot after seal; `RestoreBase`, letting the target restore the base snapshot
-in advance; and `ApplyDelta`, applying the changes to build the final state. It is used
-only by a factory that registered all four callbacks; a factory that didn't keeps the
-existing `Capture`/`Restore` behavior as is. The exact signatures are owned by each
-language's exact interface document.
-
 Create and lookup return an immutable `ActorRef` or `SpotRef`. A ref is a location snapshot
 holding the global ID, a non-zero unsigned 63-bit `ObjectGeneration`, and the MeshName and
 NodeRid at lookup time. JSON encodes generation as a decimal string. A ref doesn't own a

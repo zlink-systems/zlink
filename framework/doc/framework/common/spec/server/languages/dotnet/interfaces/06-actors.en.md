@@ -105,26 +105,6 @@ public interface IZLinkActorRelocationAdapter<TActor>
         CancellationToken cancellationToken);
 }
 
-public interface IZLinkActorBaseDeltaRelocationAdapter<TActor>
-    : IZLinkActorRelocationAdapter<TActor>
-    where TActor : class, IZLinkActor
-{
-    ValueTask<byte[]> CaptureBaseAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
-    ValueTask<byte[]> CaptureDeltaAsync(
-        TActor actor,
-        CancellationToken cancellationToken);
-    ValueTask RestoreBaseAsync(
-        TActor actor,
-        ReadOnlyMemory<byte> basePayload,
-        CancellationToken cancellationToken);
-    ValueTask ApplyDeltaAsync(
-        TActor actor,
-        ReadOnlyMemory<byte> deltaPayload,
-        CancellationToken cancellationToken);
-}
-
 public interface IZLinkActorClient
 {
     IZLinkActorSendCall SendToActor<TMessage>(
@@ -290,20 +270,6 @@ separate application state generic or a stable state contract ID, and
 doesn't use a Framework message wrapper as the payload. The adapter isn't
 given a relocation reference, accepted journal, relocation phase,
 source/target owner, or Store CAS version.
-
-`IZLinkActorBaseDeltaRelocationAdapter<TActor>` is an optional capability.
-When the adapter type registered with `PreserveStateWith<TAdapter>()`
-implements this interface, the framework creates a base snapshot with
-`CaptureBaseAsync(...)` at a turn boundary before the seal and transfers
-it ahead of time, and after the seal it transfers only the changes
-produced by `CaptureDeltaAsync(...)`. The target restores the base
-snapshot in advance with `RestoreBaseAsync(...)` and applies the changes
-with `ApplyDeltaAsync(...)` to build the final state. The meaning of a
-delta is owned by the application. If `ApplyDeltaAsync(...)` fails, the
-instance is discarded and a new instance repeats from
-`RestoreBaseAsync(...)`; a partially applied instance is never reused. An
-adapter that doesn't implement this interface keeps the existing
-`CaptureAsync(...)`/`RestoreAsync(...)` behavior unchanged.
 
 For maintenance that materializes an Actor instance on a different node,
 cross-node User Spot/[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)

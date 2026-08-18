@@ -298,9 +298,7 @@ Object Client에도 RouteMesh Channel Server를 등록할 수 있다. Applicatio
 Configure callback은 `disableRelocation()`, `recreateOnRelocation()`, `preserveStateWith(...)` 중 정확히 하나를
 호출해야 한다. 누락하거나 둘 이상 호출하면 socket bind 전에 startup configuration error다. Actor builder는
 같은 Actor type의 `ZLinkActorRelocationAdapter`, User·Instance Spot builder는 같은 Spot type의
-`ZLinkSpotRelocationAdapter`만 받는다. 등록한 adapter class가 `ZLinkActorBaseDeltaRelocationAdapter`
-또는 `ZLinkSpotBaseDeltaRelocationAdapter`도 구현하면 base/delta capture 선택 capability가 함께
-등록되며, 구현하지 않으면 기존 `capture`/`restore` 동작이 그대로 유지된다. 별도 등록 API는 없다.
+`ZLinkSpotRelocationAdapter`만 받는다. 별도 등록 API는 없다.
 
 Framework는 configure callback을 등록 호출 안에서 동기적으로 한 번만 실행한다. Callback이 반환된 뒤
 보관한 builder를 다시 호출하면 configuration error다. Callback이 예외를 던지면 해당 factory를 등록하지

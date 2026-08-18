@@ -480,23 +480,21 @@ Both operations return their results in the command 20 reply envelope.
 
 - Source sends command 40, `relocationPrepare`, as `[request]` to request temporary-queue
   installation and declare the payload manifest for the transfer that follows. Its body
-  carries the object identity, source node RID/generation, `payloadTotalLength`,
-  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the final stage, plus
-  `baseChecksumCrc32c` (nonzero only when a base stage precedes the final stage — see
-  base/delta capture below). No relocation-root pointer or Relocation Store lookup key is
+  carries the object identity, source node RID/generation, and `payloadTotalLength`,
+  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the payload. No
+  relocation-root pointer or Relocation Store lookup key is
   carried; Prepare fully describes the direct transfer that follows, sourced from source
   memory. Target sends command 30, `relocationReady`, as `[reply]` only after
   temporary-queue installation is ready to receive. This pair negotiates no
   message/byte allowance or participant reservation beyond the declared manifest.
 - Source sends the payload as one or more command 52, `relocationState`, `[send]` records
   on the same ordered connection. Each record carries the relocation/target-attempt/
-  coordinator fence, the object identity, `senderRole`, a `payloadStage` (`base` or
-  `final`), and a zero-based `chunkOrdinal` whose numbering is independent per stage. The
+  coordinator fence, the object identity, `senderRole`, and a zero-based `chunkOrdinal`. The
   chunk bytes reuse the existing `relocation-data-chunk-v1` format. The target copies each
   chunk into its assembly buffer and releases the Core receive lease immediately after
   copying — a state chunk is never held on a backlog queue or lease-transferred.
-- The target compares each assembled stage's length and CRC-32C against the value Prepare
-  declared for that stage. A mismatch is an explicit failure; the target never attempts
+- The target compares the assembled payload's length and CRC-32C against the value Prepare
+  declared. A mismatch is an explicit failure; the target never attempts
   partial-assembly restore and never retries transparently on checksum mismatch. On
   failure the target sends command 53, `relocationFailed`, as a reply to the matching
   Prepare, after cleaning its own partial chunks and prepared resources. Only receipt of
@@ -535,7 +533,7 @@ Both operations return their results in the command 20 reply envelope.
 ### CRC-32C Convention And Capability
 
 - Every checksum listed in `relocationTransferChecksumProfile` (`payloadChecksumCrc32c`,
-  `baseChecksumCrc32c`, `boundaryChecksumCrc32c`, and the chunk/manifest checksums used by
+  `boundaryChecksumCrc32c`, and the chunk/manifest checksums used by
   the retained store paths below) uses the same CRC-32C (Castagnoli) convention:
   polynomial `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input and output, XOR
   output `0xFFFFFFFF`, and `check("123456789") == 0xE3069283`.

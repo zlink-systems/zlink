@@ -104,19 +104,11 @@ no language-specific fixed raw-receive reservation count.
 export interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
     capture(actor: TActor, signal: AbortSignal): Promise<Uint8Array>;
     restore(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
-    captureBase?(actor: TActor, signal: AbortSignal): Promise<Uint8Array>;
-    captureDelta?(actor: TActor, signal: AbortSignal): Promise<Uint8Array>;
-    restoreBase?(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
-    applyDelta?(actor: TActor, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkSpotRelocationAdapter<TSpot extends ZLinkSpot | ZLinkInstanceSpot> {
     capture(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
     restore(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
-    captureBase?(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
-    captureDelta?(spot: TSpot, signal: AbortSignal): Promise<Uint8Array>;
-    restoreBase?(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
-    applyDelta?(spot: TSpot, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
@@ -410,25 +402,6 @@ materialization. The adapter isn't called on a same-node join/
 relocation, and a `DisableRelocation` cross-node operation is rejected
 before `capture(...)`. A `RecreateOnRelocation` policy also doesn't
 capture/restore the application payload.
-
-The optional methods `captureBase(...)`, `captureDelta(...)`,
-`restoreBase(...)`, and `applyDelta(...)` declare the delta capture
-capability. An adapter must implement all four methods or omit all
-four; implementing only some of them is a configuration error before
-socket bind. In the cross-node materialization of a factory that
-declared the capability, the framework builds a base snapshot with
-`captureBase(...)` at a turn boundary before the seal and sends it
-ahead of time, and after the seal sends only the `captureDelta(...)`
-result. The target restores the base snapshot ahead of time with
-`restoreBase(...)` and builds the final state with `applyDelta(...)`.
-If `applyDelta(...)` fails, that instance is discarded and a new
-instance repeats from `restoreBase(...)`; a partially applied instance
-is never reused. If the relocation fails after the base snapshot was
-sent, the target removes the base snapshot. The meaning of the delta
-is owned by the application, and framework queues and timers are
-confirmed only once at the seal boundary. An adapter that doesn't
-declare the capability keeps the existing `capture(...)`/`restore(...)`
-behavior as is.
 
 The target finishes restore and accepted journal staging before the
 owner commit, without running an application handler. After the owner

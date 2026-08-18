@@ -697,13 +697,6 @@ relocation policy를 적용하지 않는다.
 Relocation ID, target RID, relocation reference, journal cursor와 authority revision은 application callback에
 노출하지 않는다.
 
-`PreserveStateWith` adapter는 기본 `Capture`/`Restore`에 더해, seal 뒤에는 변경분만 전송하도록 만드는
-선택 capability를 함께 등록할 수 있다. 등록 형태는 네 callback 한 벌이다 — seal 전 turn 경계에서 기준
-snapshot을 만드는 `CaptureBase`, seal 뒤 기준 snapshot 이후의 변경분만 만드는 `CaptureDelta`, target이
-기준 snapshot을 미리 복원하는 `RestoreBase`, 변경분을 적용해 최종 state를 만드는 `ApplyDelta`. 네
-callback을 모두 등록한 factory에서만 사용하며, 등록하지 않은 factory는 기존 `Capture`/`Restore` 동작을
-그대로 유지한다. 정확한 signature는 언어별 exact interface 문서가 소유한다.
-
 Create와 lookup은 immutable `ActorRef` 또는 `SpotRef`를 반환한다. Ref는 global ID, non-zero unsigned 63-bit
 `ObjectGeneration`, 조회 시점의 MeshName과 NodeRid를 담은 location snapshot이다. JSON generation은 decimal
 string으로 encode한다. Ref는 runtime resource나 local object를 소유하지 않는다. Bound session accessor는
