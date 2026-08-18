@@ -193,6 +193,15 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
     bool has_message_follow_route (const std::string &actor_key) const;
+    // A cold hit (no incoming follow fence, e.g. a client probing the old
+    // owner directly) has no fence to match against. It does carry the
+    // ObjectGeneration it believes the Actor is still at, which relocation
+    // preserves; find the retained route's own source fence for that
+    // generation so the caller can drive the normal fence-validated relay
+    // path with it.
+    std::optional<runtime::protocol::actor_route_fence_t>
+    message_follow_source_for_generation (const std::string &actor_key,
+                                          std::uint64_t generation) const;
     result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_message_follow (const std::string &actor_key,
                                 std::uint64_t generation,

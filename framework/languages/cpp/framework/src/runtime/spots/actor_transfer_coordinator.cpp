@@ -347,6 +347,25 @@ bool actor_transfer_coordinator_t::has_message_follow_route (
     });
 }
 
+std::optional<runtime::protocol::actor_route_fence_t>
+actor_transfer_coordinator_t::message_follow_source_for_generation (
+  const std::string &actor_key, std::uint64_t generation) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _message_follow_routes.find (actor_key);
+    if (found == _message_follow_routes.end ())
+        return std::nullopt;
+    const auto now = std::chrono::steady_clock::now ();
+    const auto route = std::find_if (
+      found->second.begin (), found->second.end (), [&] (const auto &candidate) {
+          return candidate.remove_at > now
+                 && candidate.source_fence.object_generation == generation;
+      });
+    if (route == found->second.end ())
+        return std::nullopt;
+    return route->source_fence;
+}
+
 result_t<std::optional<actor_message_follow_target_t>>
 actor_transfer_coordinator_t::try_acquire_message_follow (
   const std::string &actor_key,

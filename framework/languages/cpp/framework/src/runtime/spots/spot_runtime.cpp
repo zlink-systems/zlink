@@ -7787,6 +7787,23 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
               framework_error_kind_t::not_found, "actor destruction is pending");
         }
     }
+    // A cold hit carries no follow fence (e.g. a client probing the actor's
+    // former owner directly, unaware it already relocated). Relocation
+    // preserves ObjectGeneration, so a retained Message Follow route for this
+    // key at the actor's believed generation is this node's own source fence
+    // for that route; borrow it so the fence-validated relay path below
+    // (which normally only runs for an already-fenced hop) also covers the
+    // very first hop instead of falling through to a local spot lookup that
+    // can never resolve (the route points at the remote target's spot).
+    runtime::protocol::actor_route_fence_t synthesized_follow_fence;
+    if (admitted_message_follow_target == nullptr) {
+        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        if (const auto found = _state->actor_transfer_coordinator
+              .message_follow_source_for_generation (key, actor_ref.object_generation ())) {
+            synthesized_follow_fence = *found;
+            admitted_message_follow_target = &synthesized_follow_fence;
+        }
+    }
     if (admitted_message_follow_target != nullptr) {
         bool targets_current_authority = false;
         {
@@ -9249,12 +9266,22 @@ std::optional<actor_ref_t>
 spot_node_runtime_t::current_actor_ref (const actor_ref_t &actor_ref) const
 {
     std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-    const auto found = _state->actor_generations.find (actor_key (actor_ref));
+    const auto key = actor_key (actor_ref);
+    const auto found = _state->actor_generations.find (key);
     if (found == _state->actor_generations.end ()) {
         return std::nullopt;
     }
+    // The recorded location can be this node's own local spot, or (after a
+    // relocation this node followed away, e.g. a Message Follow route) a
+    // route naming the remote current owner; report whichever this node
+    // actually knows rather than always claiming local ownership.
+    auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
+    if (const auto routed = _state->actor_routes.find (key);
+        routed != _state->actor_routes.end ()) {
+        node_rid_value = std::string (routed->second.node_rid.value ());
+    }
     return ::zlink::framework::detail::actor_ref_access_t::make (
-      node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
+      node_rid_t::from_string (node_rid_value),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
       std::string (actor_ref.actor_id ().value ()), found->second);
 }

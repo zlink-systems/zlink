@@ -2106,6 +2106,99 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
            : 6;
 }
 
+int old_owner_forwards_cold_probe_via_active_message_follow_route ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    // Regression pin: a client that probes an Actor's former owner directly
+    // (no Message Follow fence on the wire, hop_count 0 -- e.g. a stale
+    // cached location) must be forwarded to the real current owner instead
+    // of failing with "actor spot context is not registered" and, worse,
+    // materializing a duplicate local Actor instance on the old owner.
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 16, "actor-a-worker");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    std::atomic_int local_materializations{0};
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [&local_materializations] (std::string) {
+        local_materializations.fetch_add (1, std::memory_order_acq_rel);
+        return std::make_shared<int> (7);
+    };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "actor-remote-ok", 21);
+    const auto key = std::string ("player:actor-remote-ok");
+
+    const auto source_fence = runtime::protocol::actor_route_fence_t{
+      "actor-remote-ok", 21, zlink::routing_id_t::from ("actor-a").to_bytes (), 1, 1, 1};
+    const auto target_fence = runtime::protocol::actor_route_fence_t{
+      "actor-remote-ok", 21, zlink::routing_id_t::from ("actor-b").to_bytes (), 1, 1, 1};
+    const auto target_actor = test_actor_ref ("actor-b", "player", "actor-remote-ok", 21);
+    const spot_route_t target_route{
+      node_rid_t::from_string ("actor-b"), spot_id_t ("spot-remote-ok-0"), "game"};
+
+    // Mirrors spot_node_runtime_t::complete_remote_actor_transfer: it retains
+    // the Message Follow route for the old source fence and (via
+    // record_actor_route_unlocked) records the remote target's location,
+    // which is not a locally registered Spot on this node.
+    node->actor_transfer_coordinator.activate_message_follow (
+      key, source_fence, target_actor, target_route, target_fence,
+      std::chrono::steady_clock::now () + std::chrono::seconds (30),
+      "relocation-1");
+    record_actor_route_unlocked (*node, key, target_route,
+                                 target_actor.object_generation ());
+
+    std::atomic_int relay_calls{0};
+    spot_node_runtime_t spots (node);
+    spots.on_actor_message_follow (
+      [&] (const actor_ref_t &relayed_actor,
+           const runtime::messaging::envelope_header_t &header,
+           const zlink::message_t &, std::chrono::milliseconds,
+           const zlink::routing_id_t &,
+           const runtime::protocol::actor_route_fence_t &route,
+           std::uint8_t hop_count,
+           const runtime::protocol::wire_operation_id_t &,
+           std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+          relay_calls.fetch_add (1, std::memory_order_acq_rel);
+          if (relayed_actor.actor_id ().value () != "actor-remote-ok"
+              || route != source_fence || hop_count != 0
+              || header.message_name != "after-transfer") {
+              co_return result_t<std::optional<zlink::message_t>>::failure (
+                framework_error_kind_t::internal_failure,
+                "unexpected relay arguments");
+          }
+          co_return result_t<std::optional<zlink::message_t>>::success (
+            std::make_optional (zlink::message_t::from (std::string ("relayed"))));
+      });
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    actor_gateway_runtime_t gateway;
+    spot_inbound_message_t metadata;
+
+    auto relayed = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::request,
+      "after-transfer", zlink::message_t::from (std::string ("probe")), provider,
+      serializers, std::move (metadata), nullptr);
+
+    const auto outcome = finite_task_result (std::move (relayed));
+    if (!outcome || !*outcome)
+        return 1;
+    if (relay_calls.load (std::memory_order_acquire) != 1)
+        return 2;
+    if (local_materializations.load (std::memory_order_acquire) != 0)
+        return 3;
+    return 0;
+}
+
 int rebound_session_keeps_prior_ingress_exact_fence ()
 {
     using namespace zlink::framework::runtime::stateful;
@@ -2930,6 +3023,11 @@ int main ()
           actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwinds ();
         admission != 0) {
         return 200 + admission;
+    }
+    if (const auto cold_forward =
+          old_owner_forwards_cold_probe_via_active_message_follow_route ();
+        cold_forward != 0) {
+        return 300 + cold_forward;
     }
     if (const auto pending =
           disconnect_notification_survives_pending_dispatcher_completion ();
