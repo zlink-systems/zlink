@@ -2255,31 +2255,9 @@ internal abstract partial class ZLinkSpotActivation
             cancellationToken);
 
     /// <summary>
-    /// Restores the Spot's own instance state. When <paramref name="hasBase"/>
-    /// is set (spec 15 §5), does RestoreBase→ApplyDelta; a failure discards
-    /// the partially-applied instance instead of reusing it. Unlike the
-    /// Actor path (<see cref="ZLinkActorCreationCoordinator"/>), this cannot
-    /// retry from RestoreBase on a fresh instance and goes straight to an
-    /// explicit InternalFailure (spec 15 failure table — apply/restore
-    /// failures are InternalFailure, not DataLost). The structural
-    /// obstacle to a fresh-instance retry: <c>AttachUserSpotCore</c> /
-    /// <c>AttachInstanceSpotCore</c> (ZLinkSpotActivationConfiguration.cs
-    /// ~52-53, ~76-77) throw once <c>_spot</c> is non-null — an
-    /// activation accepts exactly one Spot instance for its lifetime — and
-    /// even bypassing that guard would not be enough:
-    /// <c>ZLinkSpotHandlerInvoker</c> (ZLinkSpotHandlerInvoker.cs
-    /// constructor, ~lines 7-14) captures the specific Spot instance by
-    /// value into a private field used for every subsequent packet/handler
-    /// dispatch, so swapping <c>_spot</c> alone would leave live dispatch
-    /// bound to the discarded, failed instance. A correct rebind would
-    /// need to reconstruct the handler invoker (and re-verify
-    /// <c>BindDescriptorsAsync</c>'s subscription/actor-join binding is
-    /// safe to run twice) — i.e. redo most of
-    /// <c>ZLinkSpotActivationFactory.CreateUserSpotAsync</c>'s
-    /// construction+bind portion, not just swap the POCO. This is a real
-    /// gap versus java/cpp/node parity, tracked as follow-up rather than
-    /// implemented here given the risk of a worse bug (dispatch routed to
-    /// a discarded instance) from a partial rebind.
+    /// Restores the Spot's own instance state. For base/delta relocation,
+    /// failure classification happens here; the unpublished-staging owner
+    /// performs the spec 15 fresh-activation retry.
     /// </summary>
     internal ValueTask RestoreSpotRelocationStateAsync(
         ReadOnlyMemory<byte> state,

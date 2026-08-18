@@ -76,41 +76,101 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task RestoreSpotRelocationStateAsync_BaseDeltaApplyFailure_ThrowsExplicitRelocationDataLost()
+    public async Task RestorePreparedSpotStateAsync_BaseDeltaApplyFailure_RetriesOnAFreshActivation()
     {
-        //  The dotnet Spot activation factory always constructs its POCO
-        //  instance eagerly when staging a relocation target (invokeCreate
-        //  only gates the app-level create callback) and exposes no hook
-        //  to rebind a fresh instance onto an already-staged activation —
-        //  unlike the Actor path, an apply failure cannot retry from
-        //  RestoreBase on a fresh instance without redoing the whole
-        //  reservation/staging pipeline. It must fail fast instead of
-        //  reusing the partially-applied instance. Spec 15 failure table:
-        //  an apply/restore failure is InternalFailure, not DataLost —
-        //  DataLost is reserved for verified checksum/assembly/digest
-        //  integrity failures.
-        var adapter = new FailingApplyDeltaSpotAdapter();
-        var activation = CreateSpotActivation(
+        var adapter = new RetryOnceApplyDeltaSpotAdapter();
+        var firstActivation = CreateSpotActivation(
             "base-delta-restore-fail",
-            typeof(FailingApplyDeltaSpotAdapter),
+            typeof(RetryOnceApplyDeltaSpotAdapter),
             new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TestBaseDeltaSpot>(
-                typeof(FailingApplyDeltaSpotAdapter)),
+                typeof(RetryOnceApplyDeltaSpotAdapter)),
             adapter,
-            out var spot);
-        activation.AttachSpot(spot);
-        await using var cleanup = activation;
-
-        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-            () => activation.RestoreSpotRelocationStateAsync(
+            out var firstSpot);
+        firstActivation.AttachSpot(firstSpot);
+        var secondActivation = CreateSpotActivation(
+            "base-delta-restore-fail",
+            typeof(RetryOnceApplyDeltaSpotAdapter),
+            new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TestBaseDeltaSpot>(
+                typeof(RetryOnceApplyDeltaSpotAdapter)),
+            adapter,
+            out var secondSpot);
+        secondActivation.AttachSpot(secondSpot);
+        var freshPrepareCalls = 0;
+        var discarded = false;
+        try
+        {
+            var restored = await ZLinkFrameworkRuntime
+                .RestorePreparedSpotStateAsync(
+                    new PreparedReservedSpot(firstActivation, false, null),
+                    _ =>
+                    {
+                        freshPrepareCalls++;
+                        return ValueTask.FromResult(new PreparedReservedSpot(
+                            secondActivation, false, null));
+                    },
+                    async prepared =>
+                    {
+                        discarded = true;
+                        await prepared.Activation.DisposeAsync();
+                    },
+                    _ => { },
                     state: new byte[] { 4, 5 },
                     basePayload: new byte[] { 1, 2, 3 },
                     hasBase: true,
-                    CancellationToken.None)
-                .AsTask());
+                    CancellationToken.None);
 
-        Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, failure.Kind);
-        Assert.Contains("apply failed", failure.Message);
-        Assert.Equal(["RestoreBase:3"], adapter.Calls);
+            Assert.Same(secondActivation, restored.Activation);
+            Assert.NotSame(firstSpot, secondSpot);
+            Assert.True(discarded);
+            Assert.Equal(1, freshPrepareCalls);
+            Assert.Equal(["RestoreBase:3", "ApplyDelta:2", "RestoreBase:3", "ApplyDelta:2"], adapter.Calls);
+            Assert.Equal(2, adapter.RestoredInstances.Count);
+            Assert.NotSame(adapter.RestoredInstances[0], adapter.RestoredInstances[1]);
+        }
+        finally
+        {
+            await secondActivation.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RestorePreparedSpotStateAsync_SecondBaseDeltaFailure_IsExplicitInternalFailure()
+    {
+        var adapter = new FailingApplyDeltaSpotAdapter();
+        var firstActivation = CreateAttachedActivation(adapter, out var firstSpot);
+        var secondActivation = CreateAttachedActivation(adapter, out var secondSpot);
+        var discarded = 0;
+        try
+        {
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+                () => ZLinkFrameworkRuntime.RestorePreparedSpotStateAsync(
+                        new PreparedReservedSpot(firstActivation, false, null),
+                        _ => ValueTask.FromResult(new PreparedReservedSpot(
+                            secondActivation, false, null)),
+                        async prepared =>
+                        {
+                            discarded++;
+                            await prepared.Activation.DisposeAsync();
+                        },
+                        _ => { },
+                        state: new byte[] { 4, 5 },
+                        basePayload: new byte[] { 1, 2, 3 },
+                        hasBase: true,
+                        CancellationToken.None)
+                    .AsTask());
+
+            Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, failure.Kind);
+            Assert.Contains("apply failed", failure.Message);
+            Assert.NotSame(firstSpot, secondSpot);
+            Assert.Equal(
+                ["RestoreBase:3", "ApplyDelta:2", "RestoreBase:3", "ApplyDelta:2"],
+                adapter.Calls);
+            Assert.Equal(1, discarded);
+        }
+        finally
+        {
+            await secondActivation.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -131,11 +191,39 @@ public sealed partial class EntrySpotActorDispatchTests
         activation.AttachSpot(spot);
         await using var cleanup = activation;
 
-        await activation.RestoreSpotRelocationStateAsync(
-            new byte[] { 9, 9 },
+        var freshPrepareCalls = 0;
+        var restored = await ZLinkFrameworkRuntime.RestorePreparedSpotStateAsync(
+            new PreparedReservedSpot(activation, false, null),
+            _ =>
+            {
+                freshPrepareCalls++;
+                throw new InvalidOperationException("legacy restore must not retry");
+            },
+            _ => throw new InvalidOperationException("legacy restore must not discard"),
+            _ => throw new InvalidOperationException("legacy restore must not replace"),
+            state: new byte[] { 9, 9 },
+            basePayload: default,
+            hasBase: false,
             CancellationToken.None);
 
+        Assert.Same(activation, restored.Activation);
+        Assert.Equal(0, freshPrepareCalls);
         Assert.Equal(new byte[] { 9, 9 }, adapter.RestoredPayload);
+    }
+
+    private static ZLinkUserSpotActivation CreateAttachedActivation(
+        FailingApplyDeltaSpotAdapter adapter,
+        out TestBaseDeltaSpot spot)
+    {
+        var activation = CreateSpotActivation(
+            "base-delta-restore-fail",
+            typeof(FailingApplyDeltaSpotAdapter),
+            new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TestBaseDeltaSpot>(
+                typeof(FailingApplyDeltaSpotAdapter)),
+            adapter,
+            out spot);
+        activation.AttachSpot(spot);
+        return activation;
     }
 
     private static ZLinkUserSpotActivation CreateSpotActivation(
@@ -276,8 +364,59 @@ public sealed partial class EntrySpotActorDispatchTests
         public ValueTask ApplyDeltaAsync(
             TestBaseDeltaSpot spot,
             ReadOnlyMemory<byte> deltaPayload,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("ApplyDelta:" + deltaPayload.Length);
             throw new InvalidOperationException("apply-delta boom");
+        }
+    }
+
+    private sealed class RetryOnceApplyDeltaSpotAdapter
+        : IZLinkSpotBaseDeltaRelocationAdapter<TestBaseDeltaSpot>
+    {
+        private int _applyAttempts;
+
+        internal List<string> Calls { get; } = [];
+
+        internal List<TestBaseDeltaSpot> RestoredInstances { get; } = [];
+
+        public ValueTask<byte[]> CaptureAsync(
+            TestBaseDeltaSpot spot, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Array.Empty<byte>());
+
+        public ValueTask RestoreAsync(
+            TestBaseDeltaSpot spot,
+            ReadOnlyMemory<byte> payload,
+            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public ValueTask<byte[]> CaptureBaseAsync(
+            TestBaseDeltaSpot spot, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Array.Empty<byte>());
+
+        public ValueTask<byte[]> CaptureDeltaAsync(
+            TestBaseDeltaSpot spot, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Array.Empty<byte>());
+
+        public ValueTask RestoreBaseAsync(
+            TestBaseDeltaSpot spot,
+            ReadOnlyMemory<byte> basePayload,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("RestoreBase:" + basePayload.Length);
+            RestoredInstances.Add(spot);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ApplyDeltaAsync(
+            TestBaseDeltaSpot spot,
+            ReadOnlyMemory<byte> deltaPayload,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add("ApplyDelta:" + deltaPayload.Length);
+            if (Interlocked.Increment(ref _applyAttempts) == 1)
+                throw new InvalidOperationException("apply-delta boom");
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class PlainSpotRelocationAdapter

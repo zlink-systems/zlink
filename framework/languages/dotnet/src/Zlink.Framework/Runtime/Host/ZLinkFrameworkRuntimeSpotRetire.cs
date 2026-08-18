@@ -67,27 +67,27 @@ internal sealed partial class ZLinkFrameworkRuntime
                         : reservedTargetAuthorityOwnerGeneration,
                     cancellationToken)
                 .ConfigureAwait(false);
-        PreparedReservedSpot preparedSpot;
-        if (request.InstanceSpot)
+        async ValueTask<PreparedReservedSpot> PrepareTargetSpotAsync()
         {
-            preparedSpot = await node.Catalog.PrepareInstanceReservedAsync(
-                    request.StableType,
-                    request.SpotId,
-                    spotParticipant.ObjectGeneration,
-                    targetOwnerGeneration,
-                    cancellationToken,
-                    restoreLogicalTimers: true)
-                .ConfigureAwait(false);
-        }
-        else
-        {
+            if (request.InstanceSpot)
+            {
+                return await node.Catalog.PrepareInstanceReservedAsync(
+                        request.StableType,
+                        request.SpotId,
+                        spotParticipant.ObjectGeneration,
+                        targetOwnerGeneration,
+                        cancellationToken,
+                        restoreLogicalTimers: true)
+                    .ConfigureAwait(false);
+            }
+
             if (!node.Registration.SpotRelocations.TryGetValue(
                     request.StableType,
                     out var spotRegistration))
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.TypeMismatch,
                     $"User SPOT type '{request.StableType}' is not registered on target node.");
-            preparedSpot = await node.Catalog.PrepareReservedAsync(
+            return await node.Catalog.PrepareReservedAsync(
                     spotRegistration.InstanceType,
                     request.SpotId,
                     spotParticipant.ObjectGeneration,
@@ -97,6 +97,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     invokeCreate: false)
                 .ConfigureAwait(false);
         }
+
+        var preparedSpot = await PrepareTargetSpotAsync().ConfigureAwait(false);
 
         var actorStates = new List<ZLinkActorRuntimeState>();
         var actorTargetAuthorityOwnerGenerations =
@@ -108,7 +110,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkSpotRelocationSeal? targetAdmissionSeal = null;
         try
         {
-            await preparedSpot.Activation.RestoreSpotRelocationStateAsync(
+            preparedSpot = await RestorePreparedSpotStateAsync(
+                    preparedSpot,
+                    _ => PrepareTargetSpotAsync(),
+                    node.Catalog.DiscardReservedAsync,
+                    fresh => preparedSpot = fresh,
                     spotParticipant.ApplicationState,
                     basePayload,
                     hasBase,
@@ -333,6 +339,56 @@ internal sealed partial class ZLinkFrameworkRuntime
             await node.Catalog.DiscardReservedAsync(preparedSpot)
                 .ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Restores an unpublished relocation target. Spec 15 requires a single
+    /// base/delta retry on a wholly fresh Spot activation: disposing the
+    /// prepared activation also disposes its native reservation, then the
+    /// catalog constructs and binds a new activation for the same identity.
+    /// Existing (published) activations are never replaced here.
+    /// </summary>
+    internal static async ValueTask<PreparedReservedSpot>
+        RestorePreparedSpotStateAsync(
+            PreparedReservedSpot preparedSpot,
+            Func<CancellationToken, ValueTask<PreparedReservedSpot>>
+                prepareFreshAsync,
+            Func<PreparedReservedSpot, ValueTask> discardAsync,
+            Action<PreparedReservedSpot> freshPrepared,
+            ReadOnlyMemory<byte> state,
+            ReadOnlyMemory<byte> basePayload,
+            bool hasBase,
+            CancellationToken cancellationToken)
+    {
+        try
+        {
+            await preparedSpot.Activation.RestoreSpotRelocationStateAsync(
+                    state,
+                    basePayload,
+                    hasBase,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return preparedSpot;
+        }
+        catch when (hasBase
+            && !preparedSpot.Existing
+            && !cancellationToken.IsCancellationRequested)
+        {
+            await discardAsync(preparedSpot).ConfigureAwait(false);
+            preparedSpot = await prepareFreshAsync(cancellationToken)
+                .ConfigureAwait(false);
+            // Publish the replacement to the staging owner before its
+            // restore begins, so its normal failure cleanup owns this
+            // attempt if the second restore fails.
+            freshPrepared(preparedSpot);
+            await preparedSpot.Activation.RestoreSpotRelocationStateAsync(
+                    state,
+                    basePayload,
+                    hasBase,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return preparedSpot;
         }
     }
 
