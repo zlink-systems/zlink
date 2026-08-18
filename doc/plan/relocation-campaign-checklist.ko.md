@@ -108,6 +108,13 @@
       `8a3804a110`. **java 슬라이스 1차 `326833810b`**(base64 제거=Lettuce codec
       문제였음·0x01 태그·PSETEX blob·프로덕션 encode conformance, 모듈 그린).
       dotnet/node/cpp 슬라이스 에이전트 진행 중.
+- [ ] C-4b node 마감: ① canonical JSON envelope 전환(값이 아직 구 필드 형태 —
+      키는 맞으나 타 언어가 파싱 불가, location-store-repository.ts 3591줄 CAS 재작성),
+      ② objectGeneration을 identity별 카운터→store 전역 시퀀스로(reserve() ~:965 —
+      기존 감사의 "node는 이미 전역" 기록은 오류였음) [node 1차 eb3d74f6cc에서 이월]
+- [ ] C-4c dotnet Lua byte 정합 확인: 기준 Lua의 expiresAtMs -1 센티널·정수 tombstone이
+      golden(0·bool)과 상이할 가능성 — dotnet encode conformance에서 검증·수정
+      [node 발견 2026-08-19]
 - [ ] C-4a java 전용 Lua 경로 붕괴(descriptor:mesh:*, owner-lease:* 등 →
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
