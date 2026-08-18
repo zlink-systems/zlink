@@ -30,7 +30,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final ScheduledExecutorService timeouts =
         Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
 
-    private final ZLinkStreamConnectorOptions options;
     private final ZLinkStreamConnectorConfiguration configuration;
     private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers =
         new ConcurrentHashMap<>();
@@ -54,7 +53,6 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
-        this.options = this.configuration.publicOptions();
         this.dispatchQueue = new ZLinkStreamDispatchQueue(
             this.configuration.limits().receivedMessages(),
             this::publishError);
@@ -98,7 +96,17 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     @Override
     public ZLinkStreamConnectorOptions options() {
-        return options;
+        return configuration.publicOptions();
+    }
+
+    @Override
+    public ZLinkStreamDiagnosticsLevel diagnosticsLevel() {
+        return configuration.diagnosticsLevel();
+    }
+
+    @Override
+    public void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
+        configuration.diagnosticsLevel(level);
     }
 
     @Override
@@ -227,7 +235,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
      * preserved or a new application flow starts on the first outbound call.
      */
     private ZLinkConnectorFlowContext.State outboundFlow() {
-        return configuration.flowCaptureEnabled()
+        //  Single atomic read of the level for this one outbound processing
+        //  point; the boolean derived from it is used for every decision
+        //  this submit/submitRequest call makes, never re-read mid-call.
+        return ZLinkStreamConnectorConfiguration.flowCaptureEnabled(configuration.diagnosticsLevel())
             ? ZLinkConnectorFlowContext.currentOrApplication()
             : null;
     }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import java.time.Duration
 import java.util.concurrent.CompletionStage
 import systems.zlink.stream.connector.ZLinkStreamConnector
+import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
 import systems.zlink.stream.connector.ZLinkStreamError
 import systems.zlink.stream.connector.ZLinkStreamLifecycleCall
@@ -92,6 +93,14 @@ class ZLinkKotlinStreamConnector(
 
     val options: ZLinkStreamConnectorOptions
         get() = inner.options()
+
+    //  Runtime-mutable diagnostics level (server spec 26 §4.1 / common
+    //  connector spec §13). `inner.diagnosticsLevel()` / `setDiagnosticsLevel`
+    //  do not follow the `getX`/`setX` naming Kotlin needs to synthesize a
+    //  property automatically, so this wrapper exposes the pair explicitly.
+    var diagnosticsLevel: ZLinkStreamDiagnosticsLevel
+        get() = inner.diagnosticsLevel()
+        set(value) = inner.setDiagnosticsLevel(value)
 
     val pendingDispatchCount: Int
         get() = inner.pendingDispatchCount()

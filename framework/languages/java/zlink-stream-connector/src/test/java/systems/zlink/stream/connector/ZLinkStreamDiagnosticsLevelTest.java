@@ -30,6 +30,227 @@ final class ZLinkStreamDiagnosticsLevelTest {
         }
     }
 
+    //  Server spec 26 §4.1 / common connector spec §13: a connector starts at
+    //  the option-supplied default (Errors) and exposes it through the live
+    //  read API without requiring the caller to inspect options().
+    @Test
+    void connectorDefaultsToErrorsThroughLiveReadApi() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.MANUAL));
+            try {
+                assertEquals(ZLinkStreamDiagnosticsLevel.ERRORS, connector.diagnosticsLevel());
+                assertEquals(
+                    ZLinkStreamDiagnosticsLevel.ERRORS, connector.options().diagnosticsLevel());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    @Test
+    void setDiagnosticsLevelRejectsNull() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.MANUAL));
+            try {
+                assertThrows(NullPointerException.class, () -> connector.setDiagnosticsLevel(null));
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    //  Server spec 26 §4.1: application reads/changes the level without
+    //  recreating the connector, and the change applies to processing points
+    //  read after the call, not retroactively to already-built frames.
+    @Test
+    void liveOnToOffHidesFlowOnNextOutboundFrame() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            try {
+                ConnectorTestAwait.await(connector.connect());
+                assertEquals(ZLinkStreamDiagnosticsLevel.ERRORS, connector.diagnosticsLevel());
+
+                var beforeOutbound = server.readFrameAsync();
+                connector.send(new ZLinkStreamEncodedPayload(
+                        "Before", Message.from("payload"), Map.of()))
+                    .submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                TcpStreamConnectorTestServer.ReceivedFrame before =
+                    beforeOutbound.get(5, TimeUnit.SECONDS);
+                assertNotNull(before.header().flowId());
+
+                connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel());
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.options().diagnosticsLevel());
+
+                var afterOutbound = server.readFrameAsync();
+                connector.send(new ZLinkStreamEncodedPayload(
+                        "After", Message.from("payload"), Map.of()))
+                    .submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                TcpStreamConnectorTestServer.ReceivedFrame after =
+                    afterOutbound.get(5, TimeUnit.SECONDS);
+                assertNull(after.header().flowId());
+                assertEquals(
+                    0,
+                    after.header().flags() & ZLinkStreamWireProtocol.FLAG_HAS_FLOW_ID);
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    @Test
+    void liveOffToOnRestoresFlowOnNextOutboundFrame() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.IMMEDIATE)
+                    .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF));
+            try {
+                ConnectorTestAwait.await(connector.connect());
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel());
+
+                var beforeOutbound = server.readFrameAsync();
+                connector.send(new ZLinkStreamEncodedPayload(
+                        "Before", Message.from("payload"), Map.of()))
+                    .submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                TcpStreamConnectorTestServer.ReceivedFrame before =
+                    beforeOutbound.get(5, TimeUnit.SECONDS);
+                assertNull(before.header().flowId());
+
+                connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.ERRORS);
+                assertEquals(ZLinkStreamDiagnosticsLevel.ERRORS, connector.diagnosticsLevel());
+                assertEquals(
+                    ZLinkStreamDiagnosticsLevel.ERRORS, connector.options().diagnosticsLevel());
+
+                var afterOutbound = server.readFrameAsync();
+                connector.send(new ZLinkStreamEncodedPayload(
+                        "After", Message.from("payload"), Map.of()))
+                    .submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                TcpStreamConnectorTestServer.ReceivedFrame after =
+                    afterOutbound.get(5, TimeUnit.SECONDS);
+                assertNotNull(after.header().flowId());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    //  Common connector spec §13: "each processing point reads the current
+    //  level once." Flipping the level from inside the handler must not
+    //  retroactively change the flow fields of the message already decoded
+    //  and dispatched for this frame; only the *next* frame observes the
+    //  new level.
+    @Test
+    void inFlightInboundDispatchIsUnaffectedByLevelFlipInsideHandler() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            try {
+                CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> first =
+                    new CompletableFuture<>();
+                CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> second =
+                    new CompletableFuture<>();
+                connector.on("Flip", message -> {
+                    message.payload().payload().close();
+                    if (!first.isDone()) {
+                        first.complete(message);
+                        //  Flip mid-handler; must not retroactively affect the
+                        //  already-decoded/dispatched message above.
+                        connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+                    } else {
+                        second.complete(message);
+                    }
+                    return CompletableFuture.completedFuture(null);
+                });
+                ConnectorTestAwait.await(connector.connect());
+                assertEquals(ZLinkStreamDiagnosticsLevel.ERRORS, connector.diagnosticsLevel());
+
+                server.sendAsync(new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_SEND,
+                        ZLinkStreamWireProtocol.CODEC_RAW,
+                        0,
+                        null,
+                        "Flip",
+                        Map.of(),
+                        null,
+                        ZLinkConnectorFlowIds.next(),
+                        1),
+                    TcpStreamConnectorTestServer.bytes("first")).join();
+                ZLinkStreamMessage<ZLinkStreamEncodedPayload> firstMessage =
+                    first.get(5, TimeUnit.SECONDS);
+                assertNotNull(firstMessage.flowId());
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel());
+
+                server.sendAsync(new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_SEND,
+                        ZLinkStreamWireProtocol.CODEC_RAW,
+                        0,
+                        null,
+                        "Flip",
+                        Map.of(),
+                        null,
+                        ZLinkConnectorFlowIds.next(),
+                        1),
+                    TcpStreamConnectorTestServer.bytes("second")).join();
+                ZLinkStreamMessage<ZLinkStreamEncodedPayload> secondMessage =
+                    second.get(5, TimeUnit.SECONDS);
+                assertNull(secondMessage.flowId());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    //  Regression guard for the single-read refactor: decodeHeader's
+    //  validate-flow gate and dispatchToHandlers' flow-install gate must
+    //  agree for a single frame. If they read the level independently, a
+    //  live flip landing between the two reads could make one gate validate
+    //  a corrupted flow id (throwing) while the other skips it, or vice
+    //  versa. This sends a structurally valid but value-corrupted flow id
+    //  frame once the level has already settled at Off.
+    @Test
+    void liveOffSkipsInboundFlowValidationConsistentlyAfterFlip() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            try {
+                CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> seen =
+                    new CompletableFuture<>();
+                connector.on("Corrupt", message -> {
+                    message.payload().payload().close();
+                    seen.complete(message);
+                    return CompletableFuture.completedFuture(null);
+                });
+                ConnectorTestAwait.await(connector.connect());
+                connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+
+                ZLinkStreamWireProtocol.Header header = new ZLinkStreamWireProtocol.Header(
+                    ZLinkStreamWireProtocol.KIND_SEND,
+                    ZLinkStreamWireProtocol.CODEC_RAW,
+                    0,
+                    null,
+                    "Corrupt",
+                    Map.of(),
+                    null,
+                    ZLinkConnectorFlowIds.next(),
+                    1);
+                byte[] encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
+                //  Corrupt the UUIDv7 version nibble inside the 36-byte flow id.
+                encodedHeader[encodedHeader.length - 23] = 'z';
+                server.sendRawAsync(encodedHeader, TcpStreamConnectorTestServer.bytes("payload"))
+                    .join();
+
+                ZLinkStreamMessage<ZLinkStreamEncodedPayload> message =
+                    seen.get(5, TimeUnit.SECONDS);
+                assertNull(message.flowId());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
     //  Spec 27 §2 (D2): a one-way Send has no reply, so the connector creates
     //  no correlation_id and leaves flag 0x08 clear; the flow pair is still
     //  attached at the default (Errors) level.

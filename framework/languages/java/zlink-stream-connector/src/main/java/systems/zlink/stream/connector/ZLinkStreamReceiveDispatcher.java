@@ -48,10 +48,17 @@ final class ZLinkStreamReceiveDispatcher {
     }
 
     void dispatch(byte[] encodedHeader, byte[] payload) {
+        //  Single atomic read of the diagnostics level for this one inbound
+        //  frame. The derived boolean is threaded through header decode and
+        //  handler dispatch below instead of re-reading the level, so a
+        //  level flip mid-dispatch cannot desynchronize the two decisions
+        //  (server spec 26 §4.1 / common connector spec §13).
+        boolean captureFlow = ZLinkStreamConnectorConfiguration.flowCaptureEnabled(
+            configuration.diagnosticsLevel());
         //  Spec 27 §4 Off rule: skip the trace-only inbound flow validation
         //  while keeping every structural length check.
         ZLinkStreamWireProtocol.Header header = ZLinkStreamWireProtocol.decodeHeader(
-            encodedHeader, configuration.flowCaptureEnabled());
+            encodedHeader, captureFlow);
         byte[] decodedPayload = payloadCodec.decode(header, payload);
         DefaultZLinkStreamConnector.trace("connector read-frame endpoint=" + configuration.endpoint()
             + " kind=" + header.kind()
@@ -76,7 +83,7 @@ final class ZLinkStreamReceiveDispatcher {
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_SEND
             || header.kind() == ZLinkStreamWireProtocol.KIND_REQUEST) {
-            dispatchToHandlers(header, decodedPayload);
+            dispatchToHandlers(header, decodedPayload, captureFlow);
         }
     }
 
@@ -158,10 +165,15 @@ final class ZLinkStreamReceiveDispatcher {
 
     private record RemoteErrorPayload(String code, String message) { }
 
-    private void dispatchToHandlers(ZLinkStreamWireProtocol.Header header, byte[] payload) {
+    private void dispatchToHandlers(
+        ZLinkStreamWireProtocol.Header header,
+        byte[] payload,
+        boolean captureFlow) {
         //  Spec 27 §4: at Off no inbound flow context is read, created or
-        //  installed; handlers observe no flow pair.
-        ZLinkConnectorFlowContext.State flow = configuration.flowCaptureEnabled()
+        //  installed; handlers observe no flow pair. `captureFlow` is the
+        //  single level read taken at the top of dispatch(), not a fresh
+        //  read of the level.
+        ZLinkConnectorFlowContext.State flow = captureFlow
             ? ZLinkConnectorFlowContext.inbound(header.flowId(), header.flowOrigin())
             : null;
         ZLinkFlowOrigin flowOrigin = flow == null

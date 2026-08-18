@@ -227,6 +227,7 @@ final class ZLinkStreamJsonTest {
 
     private static final class FakeConnector implements ZLinkStreamConnector {
         private final ZLinkStreamConnectorOptions options;
+        private ZLinkStreamDiagnosticsLevel diagnosticsLevel;
         private ZLinkStreamEncodedPayload sent;
         private ZLinkStreamEncodedPayload requested;
         private String handlerName;
@@ -234,6 +235,7 @@ final class ZLinkStreamJsonTest {
 
         FakeConnector(ZLinkStreamConnectorOptions options) {
             this.options = options;
+            this.diagnosticsLevel = options.diagnosticsLevel();
         }
 
         @Override
@@ -249,6 +251,16 @@ final class ZLinkStreamJsonTest {
         @Override
         public ZLinkStreamConnectorOptions options() {
             return options;
+        }
+
+        @Override
+        public ZLinkStreamDiagnosticsLevel diagnosticsLevel() {
+            return diagnosticsLevel;
+        }
+
+        @Override
+        public void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
+            this.diagnosticsLevel = java.util.Objects.requireNonNull(level, "diagnosticsLevel");
         }
 
         @Override

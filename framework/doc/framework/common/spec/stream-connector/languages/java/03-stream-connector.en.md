@@ -64,6 +64,13 @@ public interface ZLinkStreamConnector {
     boolean isConnected();
     ZLinkStreamConnectionState state();
     ZLinkStreamConnectorOptions options();
+
+    // Runtime read/write of the diagnostics level (§4.1, server spec 26 §4.1).
+    // Changes the level without recreating the connector. options().diagnosticsLevel()
+    // always agrees with this value.
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+
     int pendingDispatchCount();
     int receivedCount(String name);
 
@@ -193,7 +200,8 @@ The Java surface is:
 ```java
 public enum ZLinkStreamDiagnosticsLevel { OFF, ERRORS, NORMAL, DETAILED }
 
-// record component. The compact constructor normalizes null to ERRORS.
+// record component. The compact constructor normalizes null to ERRORS. This is only
+// the construction-time initial value.
 public ZLinkStreamDiagnosticsLevel diagnosticsLevel();
 public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
 ```
@@ -201,6 +209,30 @@ public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLe
 At `OFF`, outbound frames create no flow pair (0x10 not set), and inbound flow fields keep
 only the structural length check — value validation and handler delivery are skipped. The
 request correlation is kept regardless of the level.
+
+**Runtime change.** Per the rule required by
+[Common spec §13](../../32-stream-connector.en.md#13-diagnostics-level), which follows
+[server spec 26 §4.1](../../../server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime),
+`ZLinkStreamConnectorOptions.diagnosticsLevel()` is only the construction-time initial
+value; the connector itself owns a runtime read/write API.
+
+```java
+// Declared on ZLinkStreamConnector (§3). The application reads and changes the level
+// without recreating the connector.
+ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+```
+
+Internally, the current level is held in an atomic cell (`AtomicReference`).
+`options().diagnosticsLevel()` always agrees with the cell's current value. Each
+processing point (one outbound submit, one inbound frame dispatch) reads the cell
+**exactly once** when it starts processing, and uses that single value consistently
+throughout that processing (header encode/decode, whether the flow pair is attached or
+validated, the flow fields delivered to a handler). The cell is never re-read mid-processing,
+so a level change landing in the middle of one processing does not desynchronize that
+processing — it runs to completion using the value it read at the start. A change applies
+starting with processing points that begin after the change; frames already built are never
+retroactively changed.
 
 `skipServerCertificateValidation` is used only for a test's self-signed
 certificate. The production default is `false`. Setting this value to

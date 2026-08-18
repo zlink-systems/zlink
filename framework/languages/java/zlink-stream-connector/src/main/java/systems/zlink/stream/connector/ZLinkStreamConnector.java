@@ -9,6 +9,25 @@ public interface ZLinkStreamConnector {
 
     ZLinkStreamConnectorOptions options();
 
+    /**
+     * Current diagnostics level. Application can read this without
+     * recreating the connector: server spec 26 §4.1 runtime-control
+     * requirement, applied to the STREAM connector via common connector
+     * spec §13. The value returned by {@link #options()}{@code
+     * .diagnosticsLevel()} always agrees with this method.
+     */
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+
+    /**
+     * Atomically installs a new diagnostics level without recreating the
+     * connector (server spec 26 §4.1). The change applies to processing
+     * points that read the level after this call returns; frames already
+     * built under the previous level are never retroactively changed, and
+     * each processing point reads the level exactly once so a flip mid-way
+     * through one send/receive never produces an inconsistent decision.
+     */
+    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+
     int pendingDispatchCount();
 
     int receivedCount(String name);

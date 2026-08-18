@@ -501,6 +501,7 @@ class KotlinPublicSurfaceContractTest {
             "ZLinkKotlinStreamConnector",
             mapOf(
                 "isConnected" to 1, "getState" to 1, "getOptions" to 1,
+                "getDiagnosticsLevel" to 1, "setDiagnosticsLevel" to 1,
                 "getPendingDispatchCount" to 1, "receivedCount" to 1,
                 "observeInbound" to 1, "on" to 2, "onErrorReceived" to 1,
                 "onDisconnected" to 1, "onConnectionStateChanged" to 1,
@@ -560,7 +561,7 @@ class KotlinPublicSurfaceContractTest {
             "ZLinkLocationExtensionsKt" to "6b50002598f83c1e5d7a0054b758dc3ad5711645fcc64cd46c67807d13f08563",
             "ZLinkMessageExtensionsKt" to "77ec5d78879dc243678140f1f99b9046f58b035ebf72a838f1f691e15c8673a7",
             "ZLinkSpotHandlerRegistryExtensionsKt" to "6a6300a0e8b2591d92c9192e8cae9e17dcfee43cdda3f5188ac60173175754ea",
-            "ZLinkKotlinStreamConnector" to "eaf3cd7485e7e0a2bbf9d4db7ff5268422637947f00718083684002034c00993",
+            "ZLinkKotlinStreamConnector" to "bb7a7623b61ee8874e7f4196ece9ffe4960c09c962267d65504a880417cc36e8",
             "ZLinkKotlinLifecycleCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
             "ZLinkKotlinSendCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
             "ZLinkStreamTypedWaitCall" to "6385a73bc528712e6d0f31512ba8f29c1951b2c347c48b6001f03c34e80d84f4",

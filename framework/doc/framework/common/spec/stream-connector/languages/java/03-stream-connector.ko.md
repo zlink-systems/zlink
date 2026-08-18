@@ -54,6 +54,12 @@ public interface ZLinkStreamConnector {
     boolean isConnected();
     ZLinkStreamConnectionState state();
     ZLinkStreamConnectorOptions options();
+
+    // 실행 중 diagnostics level 읽기/쓰기(§4.1, 서버 스펙 26 §4.1). connector를 다시
+    // 만들지 않고 level을 바꾼다. options().diagnosticsLevel()은 항상 이 값과 같다.
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+
     int pendingDispatchCount();
     int receivedCount(String name);
 
@@ -170,7 +176,7 @@ Java 표면은 다음과 같다.
 ```java
 public enum ZLinkStreamDiagnosticsLevel { OFF, ERRORS, NORMAL, DETAILED }
 
-// record component. compact 생성자가 null을 ERRORS로 정규화한다.
+// record component. compact 생성자가 null을 ERRORS로 정규화한다. 생성 시점의 초기값이다.
 public ZLinkStreamDiagnosticsLevel diagnosticsLevel();
 public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
 ```
@@ -178,6 +184,26 @@ public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLe
 `OFF`이면 outbound frame에 flow pair를 만들지 않고(0x10 미설정), inbound flow 필드는 구조
 길이 검사만 유지한 채 값 검증과 handler 전달을 생략한다. Request correlation은 level과
 무관하게 유지된다.
+
+**실행 중 변경.** [공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 요구하는
+[서버 스펙 26 §4.1](../../../server/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경) 규칙에
+따라, `ZLinkStreamConnectorOptions.diagnosticsLevel()`은 생성 시점 초기값일 뿐이고 connector
+자신이 실행 중 read/write API를 갖는다.
+
+```java
+// ZLinkStreamConnector에 선언된다(§3). Application은 connector를 다시 만들지 않고
+// level을 읽고 바꾼다.
+ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+```
+
+내부는 원자적 셀(`AtomicReference`)로 현재 level을 보관한다. `options()`가 반환하는
+`diagnosticsLevel()`은 항상 이 셀의 현재 값과 일치한다. 각 처리 지점(하나의 outbound
+submit, 하나의 inbound frame dispatch)은 그 처리를 시작할 때 셀을 **정확히 한 번** 읽고,
+읽은 값을 그 처리 전체(header 인코딩/디코드, flow 부착·검증 여부, handler에 전달하는 flow
+필드)에 일관되게 사용한다. 처리 도중 셀을 다시 읽지 않으므로, 처리 중간에 level이 바뀌어도
+그 처리는 시작 시점의 값으로 끝까지 일관되게 동작한다. 변경은 그 뒤에 시작하는 처리 지점부터
+적용되며, 이미 만들어진 frame에는 소급 적용되지 않는다.
 
 `skipServerCertificateValidation`은 테스트용 자체 서명 인증서에만 사용한다. 운영
 기본값은 `false`다. 이 값을 `true`로 바꾸면 TLS transport와 WSS transport 모두 서버
