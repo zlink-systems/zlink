@@ -2504,6 +2504,13 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                 .restore_spot_relocation_state (
                   frozen, target, cancellation);
           });
+        node->native_node ().objects ().configure_relocation_base_capture (
+          [registration] (const stateful::object_ref_t &spot,
+                          const std::string &stable_type,
+                          std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (registration->spot_state)
+                .capture_spot_relocation_base (spot, stable_type, cancellation);
+          });
         node->native_node ().objects ().configure_relocation_materialization (
           [registration] (
             const stateful::frozen_object_state_t &frozen,

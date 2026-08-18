@@ -5250,12 +5250,13 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
         if (factory.relocation.kind
             != detail::factory_relocation_kind_t::preserve_state)
             return {};
-        if (!factory.capture) {
+        const auto capture = factory.relocation.capture;
+        if (!capture) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "State-preserving Actor relocation has no capture callback");
         }
-        const auto captured = factory.capture (instance.get (), cancellation).result ();
+        const auto captured = capture (instance.get (), cancellation).result ();
         if (!captured) {
             throw framework_exception_t (
               captured.error_kind (), captured.error () != nullptr
@@ -5292,14 +5293,15 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
     }
     if (relocation.kind != detail::factory_relocation_kind_t::preserve_state)
         return {};
-    if (!relocation.capture || !context->spot_instance) {
+    const auto capture = relocation.capture;
+    if (!capture || !context->spot_instance) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "State-preserving Spot relocation has no capture callback");
     }
     std::vector<std::byte> payload;
     const auto captured =
       context->run_serial_task ("spot-relocation-capture", [&] () -> task_t<void> {
-          payload = co_await relocation.capture (context->spot_instance.get (), cancellation);
+          payload = co_await capture (context->spot_instance.get (), cancellation);
       });
     if (!captured)
         throw framework_exception_t (captured.error_kind (), captured.error () != nullptr
@@ -5314,6 +5316,39 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
     for (const auto value : payload)
         output.push_back (std::to_integer<std::uint8_t> (value));
     return output;
+}
+
+std::vector<std::uint8_t>
+spot_node_runtime_t::capture_spot_relocation_base (
+  const runtime::stateful::object_ref_t &spot, const std::string &stable_type,
+  std::stop_token cancellation) const
+{
+    // A missing delta capability intentionally produces no base stage; the
+    // existing whole-state capture remains the post-seal path.
+    if (spot.kind == runtime::stateful::object_kind_t::actor)
+        return {};
+    std::shared_ptr<spot_context_state_t> context;
+    detail::factory_relocation_configuration_t relocation;
+    {
+        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        const auto found = _state->spot_contexts_by_id.find (spot.key);
+        const auto configured = _state->spot_factory_relocations.find (stable_type);
+        if (found == _state->spot_contexts_by_id.end ()
+            || configured == _state->spot_factory_relocations.end ()
+            || !configured->second.delta_capable () || !found->second._state->spot_instance)
+            return {};
+        context = found->second._state;
+        relocation = configured->second;
+    }
+    std::vector<std::byte> payload;
+    const auto captured = context->run_serial_task (
+      "spot-relocation-capture-base", [&] () -> task_t<void> {
+          payload = co_await relocation.capture_base (context->spot_instance.get (), cancellation);
+      });
+    if (!captured)
+        throw framework_exception_t (captured.error_kind (), "Spot relocation base capture failed");
+    return {reinterpret_cast<const std::uint8_t *> (payload.data ()),
+            reinterpret_cast<const std::uint8_t *> (payload.data ()) + payload.size ()};
 }
 
 bool spot_node_runtime_t::restore_spot_relocation_state (

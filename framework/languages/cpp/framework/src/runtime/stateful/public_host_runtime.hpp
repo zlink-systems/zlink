@@ -1130,6 +1130,16 @@ class public_host_runtime_t :
     };
     std::map<relocation_attempt_key_t, pending_relocation_assembly_t>
       _relocation_assemblies;
+    struct pending_relocation_base_t
+    {
+        protocol::relocation_coordinator_fence_t coordinator;
+        protocol::relocation_object_t object;
+        std::vector<std::uint8_t> payload;
+        std::uint32_t next_ordinal = 0;
+        std::chrono::steady_clock::time_point expires_at{};
+    };
+    std::map<relocation_attempt_key_t, pending_relocation_base_t>
+      _relocation_base_buffers;
     static constexpr auto relocation_assembly_retention =
       std::chrono::seconds (10);
     void fail_relocation_assembly_locked (

@@ -3776,6 +3776,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
             static_cast<std::uint32_t> (
               protocol::framework_error_code::relocationDataLost)});
     }
+    {
+        const auto now = std::chrono::steady_clock::now ();
+        std::lock_guard lock (_mutex);
+        for (auto pending = _relocation_base_buffers.begin ();
+             pending != _relocation_base_buffers.end ();) {
+            if (pending->second.expires_at <= now)
+                pending = _relocation_base_buffers.erase (pending);
+            else
+                ++pending;
+        }
+    }
     poll_relocation_target_attempts ();
     flush_pending_session_relocation_seals ();
     std::size_t count = 0;
@@ -3994,6 +4005,32 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || prepare->payload_chunk_count
                              > protocol::relocationChunkCount)
                         continue;
+                    if (prepare->base_checksum_crc32c != 0) {
+                        bool base_matches = false;
+                        {
+                            std::lock_guard lock (_mutex);
+                            const auto base = _relocation_base_buffers.find (key);
+                            base_matches = base != _relocation_base_buffers.end ()
+                              && base->second.coordinator == prepare->coordinator
+                              && base->second.object == prepare->object
+                              && !base->second.payload.empty ()
+                              && stateful::maintenance_runtime_t::crc32c (
+                                   base->second.payload)
+                                   == prepare->base_checksum_crc32c;
+                            if (base != _relocation_base_buffers.end ())
+                                _relocation_base_buffers.erase (base);
+                        }
+                        if (!base_matches) {
+                            (void) _transport->reply_relocation_failed (
+                              mailbox_record, protocol::relocation_failed_t{
+                                prepare->relocation, prepare->target_attempt_generation,
+                                prepare->coordinator, prepare->target, prepare->object,
+                                protocol::relocation_role_t::target,
+                                static_cast<std::uint32_t> (
+                                  protocol::framework_error_code::relocationDataLost)});
+                            continue;
+                        }
+                    }
                     {
                         std::lock_guard lock (_mutex);
                         const auto found = _relocation_assemblies.find (key);
@@ -4037,6 +4074,29 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const relocation_attempt_key_t key{
                       state->relocation.high, state->relocation.low,
                       state->target_attempt_generation};
+                    if (state->payload_stage
+                        == protocol::relocation_payload_stage_t::base) {
+                        std::lock_guard lock (_mutex);
+                        auto &base = _relocation_base_buffers[key];
+                        if (base.payload.empty ()) {
+                            base.coordinator = state->coordinator;
+                            base.object = state->object;
+                            base.expires_at = std::chrono::steady_clock::now ()
+                                              + relocation_assembly_retention;
+                        }
+                        if (base.coordinator != state->coordinator
+                            || base.object != state->object
+                            || state->chunk_ordinal != base.next_ordinal
+                            || base.payload.size () + state->chunk_data.size ()
+                                 > protocol::relocationLogicalBytes) {
+                            _relocation_base_buffers.erase (key);
+                        } else {
+                            base.payload.insert (base.payload.end (),
+                              state->chunk_data.begin (), state->chunk_data.end ());
+                            ++base.next_ordinal;
+                        }
+                        continue;
+                    }
                     std::optional<pending_relocation_assembly_t> completed;
                     std::optional<pending_relocation_assembly_t> failed;
                     {

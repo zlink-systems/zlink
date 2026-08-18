@@ -1087,6 +1087,10 @@ class spot_node_runtime_t
       const runtime::stateful::object_ref_t &spot,
       const std::string &stable_type,
       std::stop_token cancellation = {}) const;
+    std::vector<std::uint8_t> capture_spot_relocation_base (
+      const runtime::stateful::object_ref_t &spot,
+      const std::string &stable_type,
+      std::stop_token cancellation = {}) const;
     bool restore_spot_relocation_state (
       const runtime::stateful::frozen_object_state_t &frozen,
       const runtime::stateful::object_ref_t &target,
