@@ -995,7 +995,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_store_record_golden PRIVATE
     ZLINK_STORE_RECORD_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/store-record-v1.json")
   target_link_libraries(test_cpp_framework_store_record_golden PRIVATE
-    nlohmann_json::nlohmann_json)
+    nlohmann_json::nlohmann_json
+    zlink::framework
+    Threads::Threads)
   add_test(NAME test_cpp_framework_store_record_golden
     COMMAND test_cpp_framework_store_record_golden)
   set_tests_properties(test_cpp_framework_store_record_golden PROPERTIES

@@ -757,6 +757,9 @@ local nowMs = tonumber(time[1]) * 1000
   + math.floor(tonumber(time[2]) / 1000)
 local members = redis.call('ZREVRANGE', KEYS[1], 0, 0)
 if #members == 0 then return {'missing', tostring(nowMs)} end
+if string.byte(members[1], 1) ~= 1 then
+  error('unrecognized opaque record format tag')
+end
 local record = cmsgpack.unpack(string.sub(members[1], 2))
 local expiresAt = tonumber(record[4])
 if record[5] == true or (expiresAt > 0 and expiresAt <= nowMs) then
@@ -777,6 +780,9 @@ local nowMs = tonumber(time[1]) * 1000
 local function currentVersion(keyIndex)
   local members = redis.call('ZREVRANGE', KEYS[keyIndex], 0, 0)
   if #members == 0 then return nil end
+  if string.byte(members[1], 1) ~= 1 then
+    error('unrecognized opaque record format tag')
+  end
   local record = cmsgpack.unpack(string.sub(members[1], 2))
   local expiresAt = tonumber(record[4])
   if record[5] == true or (expiresAt > 0 and expiresAt <= nowMs) then

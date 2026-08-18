@@ -2,18 +2,19 @@
 
 // Target-contract pin for checklist C-3 (store record golden fixture:
 // 21-location-runtime.md#2.4, 22-location-store-redis.md#7). This test
-// consumes golden/store-record-v1.json directly, independent of any
-// production opaque-record store codec -- no language has implemented the
-// zlink-location-v3 opaque record write path yet (checklist C-4). It stays
-// green today because sha256 key derivation and cmsgpack value decoding
-// need nothing from C-4. Both the SHA-256 and the cmsgpack member decoder
-// below are written from scratch (this test target links neither OpenSSL
-// nor a msgpack library) against, respectively, FIPS 180-4 and the
-// MessagePack type table in 22-location-store-redis.md#7 (str family for
-// strings/bytes, unsigned int family for expiresAtMs, bool for tombstone),
-// so this is a fourth independent cross-check alongside the node/java/dotnet
-// decoders and the golden's own generation script (verified against real
-// Redis Lua cmsgpack.pack output).
+// consumes golden/store-record-v1.json directly. Both the SHA-256 and the
+// cmsgpack member decoder below are written from scratch against,
+// respectively, FIPS 180-4 and the MessagePack type table in
+// 22-location-store-redis.md#7 (str family for strings/bytes, unsigned int
+// family for expiresAtMs, bool for tombstone), so this is a fourth
+// independent cross-check alongside the node/java/dotnet decoders and the
+// golden's own generation script (verified against real Redis Lua
+// cmsgpack.pack output).
+//
+// The sol-review finding-3 block near the end of main() also drives a
+// record through the real production writer (provider_location_repository_t
+// over a fake in-memory store), which is why this target links zlink::framework
+// unlike the rest of the file's from-scratch/no-link-library checks above it.
 
 #include <array>
 #include <cassert>
@@ -28,15 +29,20 @@
 
 // Checklist C-4 (cpp store-record convergence): reuse the production
 // SHA-256 and base64 codecs here (POSDDD) instead of hand-rolling a fourth
-// copy of either. Both headers are self-contained (no OpenSSL/framework
-// runtime linkage), matching this test target's existing no-link-library
-// design. zlink/locations/redis.hpp's format-tag/cmsgpack decode helpers
-// (zlink::framework::redis::detail::*) are likewise header-only outside the
+// copy of either. zlink/locations/redis.hpp's format-tag/cmsgpack decode
+// helpers (zlink::framework::redis::detail::*) are header-only outside the
 // ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT guard, so they link here
-// with no redis++ dependency either.
+// with no redis++ dependency. in_memory_store_providers.hpp and
+// provider_location_repository.hpp (below) are the real production writer
+// driven by the finding-3 block near the end of main(); unlike the headers
+// above, that does pull in zlink::framework (see the CMakeLists.txt target).
 #include "runtime/locations/base64.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/sha256.hpp"
 #include <zlink/locations/redis.hpp>
+
+#include <chrono>
 
 namespace
 {
@@ -390,6 +396,102 @@ int main ()
             threw = true;
         }
         assert (threw && "unrecognized format tag must fail explicitly, not be guessed at");
+    }
+
+    // Sol review [M] (cpp-store-record-convergence e14bce0297, finding 3):
+    // every check above drives a standalone or production *decoder*, but
+    // nothing drives a record through the production *writer*
+    // (provider_location_repository_t) and compares the result against the
+    // golden. Do that for the owner-lease record against a fake in-memory
+    // store, field-compared (order-independent) against the golden's
+    // "decoded" object per notes.jsonByteLayering.
+    //
+    // NOT byte-exact: driving this test surfaced that
+    // provider_location_repository.hpp's owner-lease payload is built with
+    // plain `nlohmann::json{...}` (claim_owner_lease, near the top of the
+    // class), whose default ObjectType is std::map -- so `.dump()` emits
+    // keys in *alphabetical* order ({"leaseGeneration",...,"ownerId",...,
+    // "recordVersion",...}) while the golden's jsonBytesHex pins *insertion*
+    // order ({"recordVersion",...,"ownerId",...,"leaseGeneration",...}, see
+    // notes.jsonByteLayering: "the byte-compare step pins one exact
+    // serialization"). The same alphabetical-vs-insertion mismatch applies
+    // to json_t (= plain nlohmann::json, provider_location_repository.hpp)
+    // and therefore to every other encode_* function in the file, including
+    // encode_authority.
+    //
+    // This is one of five confirmed divergences between the current cpp
+    // encoders and the golden's canonical §2.4 schema, none of them fixed
+    // by this pass (the authority "storeVersion" extra field was
+    // investigated and found genuinely load-bearing -- a production
+    // consumer at framework/src/runtime/stateful/public_host_runtime.cpp
+    // compares a freshly re-read `authority_snapshot_t::store_version`
+    // against a wire-echoed "expected_store_version" that only stays valid
+    // because storeVersion round-trips through the record body today;
+    // removing it broke that check and is reported, not fixed, see the
+    // handoff notes for this finding). The other four:
+    // encode_mesh_record's "generation" field, encode_target's
+    // "owner"/"nodeLifecycleGeneration" fields, encode_bundle's "slots" vs
+    // golden's "count" (plus int vs string objectKind), and mesh descriptor
+    // encode()'s ~12 additional fields. All five plus this json_t ordering
+    // defect are recommended as a single follow-up unit of work -- fixing
+    // storeVersion alone (or the ordering alone) does not move the golden
+    // byte-compare goal forward, so they should land together with the
+    // production consumer(s) each one touches audited in the same pass.
+    // Until then this block stays a field-compare, not a byte-compare.
+    {
+        using namespace zlink::framework;
+        using namespace zlink::framework::runtime;
+
+        in_memory_location_store_t store;
+        provider_location_repository_t repository (store);
+
+        // provider_location_repository_t's private owner-generation counter
+        // key (framework/src/runtime/locations/provider_location_repository
+        // .hpp, `counter_key`: "zlink:v11:owner-counter"). It is
+        // provider-private, not part of the cross-language contract --
+        // pre-seeding it here is test setup (to reach the golden vector's
+        // leaseGeneration "5" deterministically), not a protocol
+        // assumption.
+        const store_key_t counter_key{"zlink:v11:owner-counter"};
+        const std::string five = "5";
+        std::vector<std::byte> counter_bytes (five.size ());
+        for (std::size_t index = 0; index < five.size (); ++index)
+            counter_bytes[index] = static_cast<std::byte> (five[index]);
+        const auto seeded =
+          store
+            .write ({.conditions = {store_missing_condition_t{counter_key}},
+                     .mutations = {store_put_t{counter_key, counter_bytes, std::nullopt}}})
+            .result ()
+            .value ();
+        assert (std::holds_alternative<store_write_applied_t> (seeded));
+
+        const auto claimed =
+          repository.claim_owner_lease ("owner-a", std::chrono::seconds (30)).result ().value ();
+        const auto *claim = std::get_if<owner_lease_claimed_t> (&claimed);
+        assert (claim != nullptr);
+        assert (claim->token.owner_id == "owner-a");
+        assert (claim->token.lease_generation == 5);
+
+        // key_owner(owner_id) == preimage2("owner-lease", owner_id) ==
+        // "owner-lease\0" + owner_id -- exactly the golden's own "owner-lease"
+        // keyDerivation preimage, so this is not a guess at the provider's
+        // private key scheme.
+        const std::string owner_key_value = std::string ("owner-lease") + '\0' + "owner-a";
+        const auto stored = store.read ({owner_key_value}).result ().value ();
+        const auto *found = std::get_if<store_found_t> (&stored);
+        assert (found != nullptr);
+
+        const auto &owner_lease_vector =
+          root.at ("valueVectors").at ("genericOpaqueRecord").at (4);
+        assert (owner_lease_vector.at ("name").get<std::string> () == "ownerLease-expired");
+
+        // Field-compare (order-independent) against the golden's "decoded"
+        // object -- see the block comment above for why this is not yet a
+        // byte-exact compare.
+        const auto produced_json = nlohmann::json::parse (
+          std::string (reinterpret_cast<const char *> (found->value.bytes.data ()),
+                       found->value.bytes.size ()));
+        assert (produced_json == owner_lease_vector.at ("decoded"));
     }
 
     return 0;

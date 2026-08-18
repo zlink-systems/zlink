@@ -192,6 +192,61 @@ TEST (ZLinkFrameworkLocationsRedis,
         provider.read (key).result ().value ()));
 }
 
+// Sol review [M] (cpp-store-record-convergence e14bce0297): the production
+// Lua point-read/CAS scripts must reject a member whose format tag isn't
+// 0x01 explicitly (22-location-store-redis.md#7's clean-break requirement --
+// see the C++-side equivalent check in test_cpp_framework_store_record_
+// golden.cpp), not silently decode it as if it were tag-0x01. This drives
+// that check against real Redis Lua (cmsgpack.unpack, string.byte), not just
+// the C++ decode_opaque_value helper -- the two are independent decoders
+// over the same wire format.
+TEST (ZLinkFrameworkLocationsRedis,
+      PointReadRejectsCorruptedFormatTag)
+{
+#if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP ()
+          << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    redis_location_store_t store (*options);
+    location_store_t &provider = store;
+    const store_key_t key{"authority:corrupted-tag"};
+
+    // Establish the row through the real write path first (tag 0x01,
+    // well-formed cmsgpack), then corrupt only the format-tag byte directly
+    // in Redis -- exactly what a bit-flip or a foreign writer would produce.
+    const auto put =
+      provider
+        .write ({.conditions = {store_missing_condition_t{key}},
+                 .mutations = {store_put_t{key, bytes ("payload"), std::nullopt}}})
+        .result ()
+        .value ();
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put));
+
+    sw::redis::Redis raw (
+      zlink::framework::redis::detail::normalize_connection_string (
+        options->connection_string));
+    const auto physical_key = options->key_prefix + ":{zlink-location-v3}:opaque:"
+      + zlink::framework::redis::detail::sha256_hex (key.value);
+    std::vector<std::pair<std::string, double>> scored;
+    raw.zrevrange (physical_key, 0, 0, std::back_inserter (scored));
+    ASSERT_EQ (scored.size (), 1u);
+    ASSERT_EQ (static_cast<std::uint8_t> (scored[0].first[0]), 0x01u);
+    std::string corrupted = scored[0].first;
+    corrupted[0] = static_cast<char> (0x02);
+    raw.zrem (physical_key, scored[0].first);
+    raw.zadd (physical_key, corrupted, scored[0].second + 1.0);
+
+    const auto reread = provider.read (key).result ();
+    EXPECT_FALSE (reread.has_value ())
+      << "a corrupted (non-0x01) format tag must fail explicitly, not be "
+         "silently decoded";
+#else
+    GTEST_SKIP () << "built without the async redis client";
+#endif
+}
+
 TEST (ZLinkFrameworkLocationsRedis,
       OpaqueRelocationStoreKeepsPayloadImmutable)
 {
