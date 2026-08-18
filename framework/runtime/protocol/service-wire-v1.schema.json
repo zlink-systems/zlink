@@ -2272,6 +2272,10 @@
               "$ref": "spot-ref"
             },
             {
+              "name": "membershipEpoch",
+              "$ref": "nonzero-u64"
+            },
+            {
               "name": "receiveChunkLimitBytes",
               "$ref": "u32"
             }
@@ -5368,6 +5372,10 @@
             },
             {
               "name": "spotGeneration",
+              "$ref": "nonzero-u64"
+            },
+            {
+              "name": "membershipEpoch",
               "$ref": "nonzero-u64"
             },
             {

@@ -3885,7 +3885,7 @@ function validateServiceInvariants(schema, types, fail) {
     fail("$.reservedCommandRanges", "must reserve removed relocation command IDs 32, 35, 41 and 45 as singletons");
   }
   const obsoleteFenceNames = new Set([
-    "transactionGeneration", "authorityTransactionGeneration", "membershipEpoch",
+    "transactionGeneration", "authorityTransactionGeneration",
     "activationEpoch", "locationGeneration", "sourceConnectionClosed", "ownerGeneration",
   ]);
   walk(schema, "$", (value, location) => {
@@ -4228,6 +4228,7 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "actor", $ref: "actor-ref" },
       { name: "spotId", $ref: "text8" },
       { name: "spotGeneration", $ref: "nonzero-u64" },
+      { name: "membershipEpoch", $ref: "nonzero-u64" },
       { name: "authorityOwnerGeneration", $ref: "nonzero-u64" },
     ]],
     ["actorJoin:ok", [{ name: "join", $ref: "actor-join-reply-tail" }]],
@@ -4666,10 +4667,11 @@ function validateServiceInvariants(schema, types, fail) {
     actorJoinReplyTail?.cases?.find((entry) => entry.when?.joinResult === "accepted")?.fields,
     [
       { name: "spot", $ref: "spot-ref" },
+      { name: "membershipEpoch", $ref: "nonzero-u64" },
       { name: "receiveChunkLimitBytes", $ref: "u32" },
     ],
     "$.types",
-    "actor-join-reply-tail accepted case must carry the target spot and the receive chunk limit as its last field",
+    "actor-join-reply-tail accepted case must carry the target spot, the membership epoch, and the receive chunk limit as its last field",
   );
   const sessionCommandFields = {
     sessionRelocationSeal: [
@@ -6738,6 +6740,18 @@ function runSelfTests(schema) {
       const tail = candidate.types.find((type) => type.name === "actor-join-reply-tail");
       const accepted = tail.cases.find((entry) => entry.when.joinResult === "accepted");
       accepted.fields = accepted.fields.filter((field) => field.name !== "receiveChunkLimitBytes");
+    }],
+    ["actor-join-reply-tail membershipEpoch field removed", (candidate) => {
+      const tail = candidate.types.find((type) => type.name === "actor-join-reply-tail");
+      const accepted = tail.cases.find((entry) => entry.when.joinResult === "accepted");
+      accepted.fields = accepted.fields.filter((field) => field.name !== "membershipEpoch");
+    }],
+    ["actorLookup reply tail membershipEpoch field removed", (candidate) => {
+      const requestTail = candidate.types.find((type) => type.name === "request-specific-tail");
+      const actorLookupOk = requestTail.cases.find(
+        (entry) => entry.when.originalOperationKind === "actorLookup" && entry.when.terminalResult === "ok",
+      );
+      actorLookupOk.fields = actorLookupOk.fields.filter((field) => field.name !== "membershipEpoch");
     }],
     ["liveness permits two outstanding probes", (candidate) => {
       candidate.livenessProfile.outstandingProbeMaximum = 2;
