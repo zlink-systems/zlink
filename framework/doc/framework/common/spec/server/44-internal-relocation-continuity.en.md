@@ -115,7 +115,8 @@ optimization.
 
 Even after stopping application dispatch, the source keeps relaying messages arriving at
 the old address to the target. The target restores queue work and timers accepted before
-Capture exactly once from the Relocation Store; source doesn't relay them. Post-capture
+Capture exactly once from the direct chunk transfer (command 52, sourced from source
+memory); source doesn't relay them. Post-capture
 relay preserves order within the same TCP connection.
 After sending every message received before cutover, the source puts cutover as a
 `[send]` on the same connection, letting the target know every earlier relay has arrived. Relocation
@@ -137,7 +138,7 @@ Failure handling changes across this one CAS.
 
 | Timing | On failure |
 |---|---|
-| Explicit failure before relay-ready is accepted | The source remains owner. The target queue doesn't execute, and source restores its queue from the stored payload and ingress-hold original. |
+| Explicit failure before relay-ready is accepted | The source remains owner. The target queue doesn't execute, and source restores its queue from its retained source-memory payload and ingress-hold original. |
 | After relay-ready is accepted, before successful CAS | Removes the target object and queue without reopening source dispatch. Cutover-submit success or failure doesn't change this handling; Session cleans under its own seal timeout. |
 | After CAS | It isn't rolled back to the source. The target queue opens, and Message Follow delivers messages arriving late at the old address. |
 

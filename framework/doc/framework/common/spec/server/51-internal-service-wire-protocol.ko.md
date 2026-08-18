@@ -24,7 +24,7 @@ title: "51. Service wire protocol"
 |---|---|
 | [1. Schema와 생성 경계](#1-schema와-생성-경계) | schema 단일 생성 입력, validator, Location Store authority key 형식 |
 | [2. Record framing과 decode](#2-record-framing과-decode) | multipart frame 구성, decode 검증, payload 크기 상한 |
-| [3. Command space](#3-command-space) | 42개 command 목록과 역할, Message Follow와 session 교체 notification |
+| [3. Command space](#3-command-space) | 40개 command 목록과 역할, Message Follow와 session 교체 notification |
 | [4. Admission과 connection fence](#4-admission과-connection-fence) | hello/admit/reject 절차, DescriptorRevision ordering, ClientServer 방향 |
 | [5. Service liveness](#5-service-liveness) | livenessProbe/Ack 주기, Classic fanout beacon, subscriber ready 판정 |
 | [6. Typed application message JSON](#6-typed-application-message-json) | `framework-json-v1` profile 규칙 |
@@ -53,7 +53,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-Wire major는 `1`이고 required capability는 `framework-service-v12`이다. Schema와 golden fixture가 다르거나
+Wire major는 `1`이고 required capability는 `framework-service-v13`이다. Schema와 golden fixture가 다르거나
 validator가 undefined type, 중복 ID, 잘못된 enum·bound·conditional field를 발견하면 build를 중단한다.
 
 ### Location Store authority key 형식
@@ -138,7 +138,7 @@ payload 소유권이 끝날 때까지 byte backpressure를 유지한다.
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `52..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
@@ -174,7 +174,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `52..25
 | 37 | `actorJoined` | Actor join commit |
 | 38 | `boundSessionBind` | session binding commit |
 | 39 | `instanceSpot` | logical Instance Spot operation |
-| 40 | `relocationPrepare` | temporary queue 설치·Relocation Store payload Restore·relay 준비 request |
+| 40 | `relocationPrepare` | temporary queue 설치·final-stage(과 선택적 base-stage) payload manifest 선언·relay 준비 request |
 | 41 | reserved (`relocationReserved`) | 제거된 relocation별 capacity reservation ACK |
 | 42 | `sessionRelocationSeal` | session ingress seal 요청 |
 | 43 | `sessionRelocationSealed` | Session seal 응답 |
@@ -186,6 +186,8 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `52..25
 | 49 | `actorCreate` | 미리 확보한 자리에 remote Actor를 만든다 |
 | 50 | `messageFollow` | relay 성공 뒤 source runtime에 보내는 위치 cache 무효화 통지 |
 | 51 | `boundSessionReplaced` | 새 binding 확정 뒤 이전 exact session에 보내는 교체 통지 |
+| 52 | `relocationState` | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
+| 53 | `relocationFailed` | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
 
 Command별 body, metadata·payload 허용 여부와 direction은 schema의 closed definition을 따른다. 알 수 없는 command,
 반대 direction의 infrastructure command와 topology에서 허용하지 않은 command는 application queue에 넣지 않는다.
@@ -437,21 +439,44 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
   같은 TCP connection의 순서와 재전송을 사용하며 message별 ACK나 durable journal을 추가하지
   않는다.
 
-### Relocation envelope와 cutover
+### Relocation manifest와 direct chunk transfer
 
-- Source는 command 40 `relocationPrepare`을 `[request]`로 보내 temporary queue 설치와
-  Relocation Store payload Restore를 요청한다. Target은 이 준비를 끝낸 뒤 command 30
-  `relocationReady`를 `[reply]`로 보낸다. 이 pair는 message·byte allowance나 participant
-  reservation을 협상하지 않는다.
+- Source는 command 40 `relocationPrepare`을 `[request]`로 보내 temporary queue 설치와 뒤이을
+  전송의 payload manifest 선언을 요청한다. Body에는 object identity, source node RID·generation과
+  final stage를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`,
+  그리고 base stage가 final stage 앞에 올 때만 non-zero인 `baseChecksumCrc32c`(아래 base·delta
+  capture 참고)가 들어간다. relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
+  Prepare 하나로 이어질 direct transfer(source memory 원본)를 완전히 설명한다. Target은 temporary
+  queue가 수신 준비되었을 때만 command 30 `relocationReady`를 `[reply]`로 보낸다. 이 pair는
+  선언한 manifest 외의 message·byte allowance나 participant reservation을 협상하지 않는다.
+- Source는 payload를 같은 ordered connection 위에서 하나 이상의 command 52 `relocationState`
+  `[send]` record로 보낸다. 각 record는 relocation·targetAttemptGeneration·coordinator fence,
+  object identity, `senderRole`, `payloadStage`(`base` 또는 `final`)와 stage별로 독립된 번호
+  공간을 갖는 0-base `chunkOrdinal`을 담는다. chunk bytes는 기존 `relocation-data-chunk-v1`
+  format을 재사용한다. Target은 각 chunk를 assembly buffer로 즉시 복사하고 Core receive
+  lease를 곧바로 반환한다 — state chunk를 backlog queue에 보관하거나 lease를 이전하지 않는다.
+- Target은 각 stage를 조립한 뒤 그 길이와 CRC-32C를 Prepare가 선언한 값과 비교한다. 불일치는
+  명시적 실패이며, target은 부분 조립 복원을 시도하지 않고 checksum 불일치에서 투명하게
+  재시도하지 않는다. 실패하면 target은 자신의 부분 chunk와 준비 자원을 정리한 뒤 대응하는
+  Prepare에 command 53 `relocationFailed`를 reply로 보낸다. source memory에서 capture한
+  payload를 복원하고 operation을 실패로 끝내는 조건은 이 명시적 실패 수신뿐이다 — 연결
+  단절 같은 불확정 결과는 source 관점에서 비가역이다.
 - Command 31 `relocationData`는 capture 뒤 ingress hold의 application record만 같은 ordered
-  connection으로 운반한다. Saved queue prefix와 timer를 포함하지 않으며 record별 ACK나
+  connection으로 운반한다. Saved queue 작업이나 timer는 결코 담지 않으며 그것들은 오직 command
+  52 chunk로만 이동한다. Saved queue prefix와 timer를 포함하지 않으며 record별 ACK나
   numeric high-water를 만들지 않는다.
 - Source는 현재 ingress-hold relay prefix 뒤에 command 34 `relocationCutover`를 `[send]`로
-  넣는다. Target은 response를 보내지 않는다. Reserved ID 32, 35와 41은 보내거나 accept하지
-  않는다.
-- Source는 application state, relocation 시작 전에 실행하지 않은 queue와 timer 정보를
-  relocation envelope로 저장한다. Native timer handle과 callback continuation은 encode하지 않는다.
-- Target은 temporary queue를 등록한 뒤 factory와 Restore를 실행한다. 이 작업을 마칠 때까지
+  넣는다. Body에는 그 boundary가 마감하는 정확한 relay batch를 설명하는 `boundaryRecordCount`와
+  `boundaryChecksumCrc32c`가 추가된다. Target은 response를 보내지 않는다. Reserved ID 32, 35와
+  41은 보내거나 accept하지 않는다.
+- Source가 이미 보낸 cutover가 target에 도달하지 못했음을(연결 단절) 확인하고 source instance가
+  여전히 살아 있으면, 새 connection을 열어 pending batch 전체와 새 cutover를 함께 재전송한다 —
+  꼬리만 보내지 않는다. Target은 부분적으로 staging된 batch를 이어붙이지 않고 통째로 교체한다.
+  재전송 창은 `RelocationCutoverWaitTimeout`(기본 1,000 ms, 설정 가능)과 같다. 이 창이 지나면
+  다음 항의 CAS fallback이 적용되며 Warning과 counter 증가 외의 추가 blind retry는 없다.
+- Source는 application state, relocation 시작 전에 실행하지 않은 queue와 timer 정보를 direct
+  transfer용으로 저장한다. Native timer handle과 callback continuation은 encode하지 않는다.
+- Target은 temporary queue를 등록한 뒤 factory와 chunk 조립을 실행한다. 이 작업을 마칠 때까지
   application handler를 실행하지 않는다.
 - Source는 cutover 전에 받은 message를 모두 relay한 뒤 같은 ordered connection에 cutover를
   `[send]`로 보낸다. 이 message는 그 connection에서 앞선 relay가 모두 target에 도착했다는
@@ -459,20 +484,43 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 - 일반 server 간 `send`에는 relocation 전용 application ACK를 추가하지 않는다. `request`는
   기존 operation identity, correlation, deadline과 caller retry를 유지한다.
 
-### Store CAS와 manifest
+### CRC-32C 규약과 capability
 
-- Target은 Restore와 temporary queue 등록을 마친 뒤 cutover를 받으면 Location Store owner와
-  membership을 source에서 target으로 CAS한다. Restore 준비 reply를 보낸 뒤 1,000 ms 안에
-  cutover가 오지 않아도 `cutover_timeout` Warning을 기록하고 같은 CAS를 시작한다. 이 CAS는
-  target만 실행한다.
+- `relocationTransferChecksumProfile`이 나열하는 모든 checksum(`payloadChecksumCrc32c`,
+  `baseChecksumCrc32c`, `boundaryChecksumCrc32c`, 그리고 아래 남은 Store 경로가 쓰는
+  chunk·manifest checksum)은 같은 CRC-32C(Castagnoli) 규약을 사용한다: polynomial
+  `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input·output, XOR output
+  `0xFFFFFFFF`, `check("123456789") == 0xE3069283`.
+- Wire major는 `1`이고 required capability는 `framework-service-v13`이다 — command 52·53과
+  Prepare·Cutover manifest field 때문에 v12에서 올렸으며 네 runtime을 동시에 승급했다.
+- Target의 유효 수신 chunk-byte 상한은 admission-accept reply의 `receiveChunkLimitBytes`
+  field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 협상 경로가 없는
+  `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 쓴다. 이 형태와 상한은
+  `actor-join-reply-tail` golden fixture
+  (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
+  dotnet, java, node) 모두 동일하게 decode한다. Java와 Node는 오늘 `receiveChunkLimitBytes`를
+  실제 cross-node `actorJoin` admission reply에 실어 보낸다. C++과 .NET은 같은 conformant wire
+  codec을 갖지만 cross-node `actorJoin` operation을 originate하지 않으므로, 이 field는 두
+  runtime에서 live admission 경로 없이 codec으로만 decode·검증된다.
+
+### Target CAS와 남은 Store 역할
+
+- Chunk 조립과 temporary queue 등록을 마친 뒤 cutover를 받으면 target은 Location Store owner와
+  membership을 source에서 target으로 CAS한다. Restore 준비 reply를 보낸 뒤
+  `RelocationCutoverWaitTimeout`(기본 1,000 ms) 안에 cutover가 오지 않아도 `cutover_timeout`
+  Warning을 기록하고 같은 CAS를 시작한다. 이 CAS는 target만 실행한다.
 - Source와 Session owner는 timeout, local mirror 또는 Session route 결과로 Location Store를
   변경하지 않는다.
-- Relocation Store manifest는 application state와 저장한 queue를 찾는 projection이며 owner와
-  membership authority가 아니다. 두 Store는 distributed transaction이나 2PC를 사용하지 않는다.
-- CAS가 실패하면 target queue를 열지 않고 Restore operation이 가진 유효시간까지 같은 CAS를
-  retry한다. 응답이 불확정이면 Store를 다시 읽어 exact target owner인지 먼저 확인한다. 다른
-  valid owner나 generation이 확인되면 stale relocation으로 즉시 종료한다.
-- Restore 유효시간까지 target owner를 확인하지 못하면 `location_update_failed` Error를 기록하고
+- Relocation Store는 더 이상 Actor·Spot relocation payload를 보관하지 않는다 — 위 direct chunk
+  transfer가 유일한 handoff 경로이며 두 Store는 이를 위해 distributed transaction이나 2PC를
+  사용한 적이 없다. Relocation Store에 남은 책임은 Instance Spot cold activation envelope(§8)와
+  relocation 후 pending request terminal record뿐이며, 이 두 경로는 이 절과 무관하게 Store 자체의
+  `relocation-manifest-v1`·`relocation-root-pointer` format과 CAS 규율을 그대로 사용한다.
+- CAS가 실패하면 target queue를 열지 않고 Restore operation이 가진 유효시간(Relocation Store
+  보존과 무관한, target의 absolute deadline)까지 같은 CAS를 retry한다. 응답이 불확정이면 Store를
+  다시 읽어 exact target owner인지 먼저 확인한다. 다른 valid owner나 generation이 확인되면 stale
+  relocation으로 즉시 종료한다.
+- 그 deadline까지 target owner를 확인하지 못하면 `location_update_failed` Error를 기록하고
   target에 준비한 Actor 또는 Spot, temporary queue와 relocation state를 제거한다. Session route는
   갱신하지 않는다. 늦은 Store 응답은 종료한 `RelocationId`를 다시 활성화하지 않는다.
 - CAS가 성공하면 source로 rollback하지 않는다.
@@ -578,8 +626,11 @@ lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation roo
 - Manual lifecycle token을 숫자 순서로 비교하지 않고 `DescriptorRevision`만 ordering에 사용한다.
 - Application traffic이 probe round-trip deadline을 연장하지 않는다.
 - Connection-bound accepted work가 relocation envelope에 들어가지 않는다.
-- `Captured` CAS 전 crash를 durable replay로 처리하지 않는다.
-- 최상위 record를 쓰고 검증하는 일이 authority CAS보다 먼저이고, authority가 그 참조를 놓는 일이 record 삭제보다 먼저다.
+- 조립한 `relocationState` stage의 checksum 불일치는 명시적 실패다 — blind retry나 부분 조립
+  복원은 하지 않는다.
+- 남은 pending request terminal record 경로(§11 Root replacement)에서는 `Captured` CAS 전
+  crash를 durable replay로 처리하지 않는다. 최상위 record를 쓰고 검증하는 일이 authority CAS보다
+  먼저이고, authority가 그 참조를 놓는 일이 record 삭제보다 먼저다.
 - 저장소가 아는 참여 대상 목록과 relocation이 기록한 목록의 digest가 다르면 `RelocationDataLost`로 끝난다.
 - Actor relocation commit이 owner와 target Entry Spot membership을 atomic하게 바꾼다.
 - Owner commit, restore·replay와 timer 복원, queue 병합과 dispatch 전환을 마치기 전에는 Ready를 publish하지 않는다.

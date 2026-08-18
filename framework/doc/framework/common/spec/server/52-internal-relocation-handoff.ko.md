@@ -61,7 +61,7 @@ Relocation unit마다 handoff state 하나가 다음 값을 소유한다.
 | Source fence | Source node RID·node generation과 처음 읽은 owner generation을 고정한다. |
 | Target fence | Target node RID·node generation과 요청할 새 owner generation을 고정한다. |
 | Relocation identity | Retry와 late completion이 같은 handoff에 속하는지 구분한다. |
-| Saved-work reference | Relocation Store의 state·기존 queue·timer를 가리킨다. |
+| Saved-work reference | Capture한 state·기존 queue·timer가 direct payload chunk transfer를 기다리며 source memory에 머무는 것을 가리킨다. |
 | Relay connection | Source relay와 cutover boundary의 TCP 순서를 고정한다. |
 | Temporary queue | Target dispatch가 열리기 전 도착한 작업을 보관한다. |
 
@@ -82,7 +82,9 @@ Relocation unit마다 handoff state 하나가 다음 값을 소유한다.
 5. Target Restore를 시작하고, 그동안 이전 주소의 새 message를 ingress hold에 넣는다.
 6. Target의 relay 수신 준비 통지를 기다린다.
 7. Ingress hold만 같은 target relay connection으로 보낸다. Capture한 queue와 timer는
-   Relocation Store payload에서 target이 복원하며 relay하지 않는다.
+   direct payload chunk transfer(command 40 `relocationPrepare` manifest와 command 52
+   `relocationState` chunk, source memory가 원본)로 target이 복원하며, relay하지 않고
+   Relocation Store를 거치지도 않는다.
 8. Relay lane에 cutover를 one-way로 넣는다. Cutover는 boundary 전 relay를 모두 보냈다고
    target에 알린다. 그 뒤 도착한 message는
    boundary 뒤 구간으로 보낸다.
@@ -135,7 +137,9 @@ temporary queue를 등록한다. Restore 중 들어온 direct message와 source 
 않고 이 queue에 넣는다.
 
 Temporary queue group은 cutover 전 source relay 구간과 그 밖의 temporary 구간을 분리해
-보관한다. Saved work는 이 group에 복사하지 않고 Relocation Store payload에서 별도 복원한다.
+보관한다. Saved work는 이 group에 복사하지 않는다.
+[51. Service wire protocol §9](51-internal-service-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope)이
+설명하는 direct payload chunk transfer로 별도 도착하며 Relocation Store를 거치지 않는다.
 
 이 group과 saved work는 dispatch 전 ordered durable backlog다. Ordinary record를 receive할 때는
 Application Job Queue shared reservation을 사용하고, record와 retained-byte ownership을 backlog에
@@ -275,6 +279,16 @@ message와 seal을 정리한다. Late update는 `late_session_route_update` Warn
 - Source나 Session owner가 수행하는 Location Store owner 변경
 - ACK timeout 뒤 source owner로 되돌리는 추측성 rollback
 - 서로 다른 TCP connection의 message에 전역 순서를 부여하는 방식
+- Target에서 부분 조립한 payload stage를 명시적 실패 대신 복구해 계속 쓰는 방식 — checksum이나
+  길이 불일치는 항상 명시적 `relocationFailed` reply로 끝나며, target이 부분 조립을 스스로
+  수선하지 않는다
+- Payload checksum 불일치 뒤 투명하게 재시도하는 방식 — retry-from-a-fresh-instance 규칙은
+  base·delta capture 실패에만 적용하며 raw chunk checksum 불일치에는 적용하지 않는다
+- Prepare·chunk·CAS를 도착 순서나 가장 최근 시각 같은 신호로 relocation에 귀속시키는 방식 —
+  귀속은 오직 exact `RelocationId`·`targetAttemptGeneration`·coordinator fence와 그 값을
+  실어 온 connection으로만 판정한다
+- 같은 target queue에 대해 Actor Join prewarm prepare 두 개를 동시에 살려 두는 방식 — 새
+  identity가 도착하면 기존 prepare를 abort하며, 가장 최근 시도가 항상 이긴다
 
 Runtime memory, frame size, Store page와 payload처럼 모든 기능에 적용되는 기존 resource 제한은
 그대로 적용한다. 이 제한을 relocation 전용 상태나 새로운 공개 설정으로 복제하지 않는다.
@@ -300,7 +314,7 @@ Session 책임을 adapter별로 다시 구현하지 않는다.
 
 - Source mailbox가 계속 증가해도 cutover boundary가 도착하고 relocation이 끝난다.
 - Target의 relay 수신 준비 통지 전에는 ingress-hold relay가 0건이다.
-- Saved queue prefix와 timer는 Relocation Store에서 한 번만 복원하며 relay record로 만들지 않는다.
+- Saved queue prefix와 timer는 direct payload chunk transfer로 한 번만 전달하며(Relocation Store를 거치지 않는다) relay record로 만들지 않는다.
 - Relay 수신 준비와 최종 relocation 완료가 같은 state나 callback으로 합쳐지지 않는다.
 - Restore 전에 relocation Location Store write가 0회이고, boundary 전 owner·membership·authority 변경은 0회다. Restore 뒤 source owner를 유지한 `Prepared` write는 허용한다.
 - CAS 시도는 target에서만 실행되고 source와 Session에서는 0회다. Retry도 같은 fence와
@@ -310,6 +324,7 @@ Session 책임을 adapter별로 다시 구현하지 않는다.
 - Staging receive reservation은 durable handoff 뒤 반환되고 post-CAS backlog가 live permit을 순서대로 얻는다.
 - Backlog가 live job limit보다 커도 모든 permit을 선예약하지 않고 terminal까지 진행한다.
 - Relay-ready 전 target byte owner가 존재하고, accepted 상태 뒤 cutover submit이 성공 또는 실패 terminal에 도달할 때까지 source permit·byte owner가 유지되며 각 owner를 한 번만 정리한다.
+- Target dispatch가 열리기 전 조립한 모든 payload stage의 길이와 CRC-32C가 manifest와 일치하며, 불일치는 명시적 `relocationFailed` reply로 끝나고 부분 조립 복원은 0회다.
 - 같은 queue에서 `send`는 response 0회, `request`는 original reply route response 1회를 유지한다.
 - Relocation 중 request의 operation identity와 deadline이 바뀌지 않는다.
 - Bound Session message는 seal 중 보관되고 target route 적용 뒤 제출된다.

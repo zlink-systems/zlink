@@ -63,7 +63,7 @@ One handoff state per relocation unit owns these values.
 | Source fence | Fixes source node RID/node generation and the initially read owner generation. |
 | Target fence | Fixes target node RID/node generation and the requested new owner generation. |
 | Relocation identity | Distinguishes retries and late completions belonging to the same handoff. |
-| Saved-work reference | Refers to state, existing queue, and timers in the Relocation Store. |
+| Saved-work reference | Refers to captured state, existing queue, and timers held in source memory pending the direct payload chunk transfer. |
 | Relay connection | Fixes TCP order between source relay and the cutover boundary. |
 | Temporary queue | Holds work arriving before target dispatch opens. |
 
@@ -84,7 +84,9 @@ the transport or request contract already provides a distinct operation identity
 5. Start target Restore and hold new old-address messages in the ingress hold.
 6. Wait for the target's relay-ready notification.
 7. Send only ingress hold over the same target relay connection. The target restores the
-   captured queue and timers from the Relocation Store payload; they aren't relayed.
+   captured queue and timers from the direct payload chunk transfer (command 40
+   `relocationPrepare` manifest plus command 52 `relocationState` chunks, sourced from
+   source memory); they aren't relayed and never pass through the Relocation Store.
 8. Insert cutover one-way into the relay lane. Cutover tells target that all
    pre-boundary relay was sent. Place later arrivals after its boundary.
 
@@ -140,8 +142,10 @@ registers a temporary queue for the object identity. A direct message or source 
 arriving during Restore enters this queue without finding a handler.
 
 The temporary queue group keeps the pre-cutover source-relay span separate from the
-remaining temporary span. Saved work isn't copied into this group and is restored
-separately from the Relocation Store payload.
+remaining temporary span. Saved work isn't copied into this group; it arrives separately
+through the direct payload chunk transfer described in
+[51. Service Wire Protocol §9](51-internal-service-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope)
+and is never staged through the Relocation Store.
 
 This group and saved work form an ordered durable backlog before dispatch. Receiving an
 ordinary record uses a shared Application Job Queue reservation, which is returned after
@@ -291,8 +295,18 @@ The following aren't part of this handoff:
 - a record-count, byte-count, or concurrent-unit capacity gate specific to relocation;
 - reserving Application Job Queue permits for the entire pre-dispatch backlog;
 - Location Store owner changes performed by source or Session owner;
-- guessed rollback to source after an ACK timeout; or
-- global ordering across different TCP connections.
+- guessed rollback to source after an ACK timeout;
+- global ordering across different TCP connections;
+- restoring a target's partially assembled payload stage instead of failing explicitly — a
+  checksum or length mismatch always ends in an explicit `relocationFailed` reply, never a
+  target-side repair of the partial assembly;
+- a blind or transparent retry after a payload checksum mismatch — the retry-from-a-fresh-instance
+  rule applies only to a base/delta capture failure, never to a raw chunk checksum mismatch;
+- attributing a Prepare, a chunk, or a CAS to a relocation by arrival order, most-recent
+  timestamp, or any signal other than the exact `RelocationId`/`targetAttemptGeneration`/
+  coordinator fence together with the connection that carried it; or
+- keeping two concurrent Actor Join prewarm prepares open for the same target queue — a
+  newer identity aborts the older prepare, and the newest attempt always wins.
 
 Existing resource limits that apply to all features — runtime memory, frame size, Store
 page size, and payload size — still apply. They aren't duplicated as relocation state or
@@ -320,7 +334,7 @@ Each runtime verifies the same scenario table through its production path.
 
 - Cutover completes while source mailbox input continues.
 - Ingress-hold relay count is zero before target reports relay reception ready.
-- The saved queue prefix and timers are restored once from the Relocation Store and never made into relay records.
+- The saved queue prefix and timers are transferred once through the direct payload chunk transfer (never through the Relocation Store) and never made into relay records.
 - Relay-ready and final relocation completion aren't merged into one state or callback.
 - Relocation Location Store write count is zero before Restore, and owner/membership/authority change count is zero before the cutover boundary. A post-Restore `Prepared` write that retains source ownership is allowed.
 - CAS attempts run only at target and zero times at source and Session. Retries keep the
@@ -330,6 +344,7 @@ Each runtime verifies the same scenario table through its production path.
 - A staging receive reservation returns after durable handoff, and the post-CAS backlog acquires live permits in order.
 - A backlog larger than the live-job limit reaches terminal without reserving every permit first.
 - Target byte ownership exists before relay-ready. Source permits and byte ownership remain until the post-acceptance cutover submit reaches a success or failure terminal, and each owner cleans once.
+- Every assembled payload stage's length and CRC-32C match the manifest before target dispatch opens; a mismatch produces an explicit `relocationFailed` reply and zero partial-assembly restore.
 - In the same queue, `send` produces zero responses and `request` produces one response through the original reply route.
 - Request operation identity and deadline don't change during relocation.
 - Bound Session work is held during seal and submitted after target route application.

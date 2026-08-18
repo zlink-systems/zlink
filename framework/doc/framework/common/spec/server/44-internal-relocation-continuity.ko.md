@@ -96,8 +96,9 @@ Follow는 선택적인 성능 최적화가 아니라 session의 동작에 필요
 ## 4. ③ 구간 — owner 교체 전후의 비대칭
 
 Source는 application dispatch를 멈춘 뒤에도 이전 주소로 들어오는 message를 target에 계속
-relay한다. Capture 전에 수락한 queue와 timer는 Relocation Store에서 target이 한 번만 복원하며
-relay하지 않는다. Capture 뒤 relay는 같은 TCP connection 안에서 순서를 유지한다. Source가 cutover 전까지
+relay한다. Capture 전에 수락한 queue와 timer는 direct chunk transfer(command 52, source
+memory 원본)에서 target이 한 번만 복원하며 relay하지 않는다. Capture 뒤 relay는 같은 TCP
+connection 안에서 순서를 유지한다. Source가 cutover 전까지
 받은 message를 모두 보낸 뒤 같은 connection에 cutover를 `[send]`로 넣으므로 target은
 cutover보다 앞선 relay가 모두 도착했음을 알 수 있다. Relocation은 이 구간에 message별 ACK, 숫자
 high-water, 별도 journal이나 capacity 제한을 추가하지 않는다.
@@ -117,7 +118,7 @@ CAS 한 번을 기준으로 실패 처리가 달라진다.
 
 | 시점 | 실패하면 |
 |---|---|
-| Relay-ready reply가 accepted 상태가 되기 전 명시적인 실패 | Source가 그대로 owner다. Target queue를 실행하지 않고 저장한 payload와 ingress-hold 원본으로 source queue를 복원한다. |
+| Relay-ready reply가 accepted 상태가 되기 전 명시적인 실패 | Source가 그대로 owner다. Target queue를 실행하지 않고 source memory에 보관해 둔 payload와 ingress-hold 원본으로 source queue를 복원한다. |
 | Relay-ready reply가 accepted 상태가 된 뒤, CAS 성공 전 | Target object와 queue를 제거하고 source dispatch를 다시 열지 않는다. Cutover submit 성공·실패는 이 처리를 바꾸지 않으며 Session은 자체 seal timeout으로 정리한다. |
 | CAS 후 | Source로 되돌리지 않는다. Target queue를 열고 Message Follow가 이전 주소로 늦게 도착한 message를 전달한다. |
 

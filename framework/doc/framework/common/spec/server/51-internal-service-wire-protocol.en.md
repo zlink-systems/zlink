@@ -25,7 +25,7 @@ title: "51. Service wire protocol"
 |---|---|
 | [1. Schema and generation boundary](#1-schema-and-generation-boundary) | The schema as single source of generation, the validator, the Location Store authority key format |
 | [2. Record framing and decode](#2-record-framing-and-decode) | Multipart frame layout, decode validation, payload size limits |
-| [3. Command space](#3-command-space) | The list of 42 commands and their roles, Message Follow and session-replacement notifications |
+| [3. Command space](#3-command-space) | The list of 40 commands and their roles, Message Follow and session-replacement notifications |
 | [4. Admission and connection fence](#4-admission-and-connection-fence) | The hello/admit/reject procedure, DescriptorRevision ordering, ClientServer direction |
 | [5. Service liveness](#5-service-liveness) | The livenessProbe/Ack cycle, the Classic fanout beacon, subscriber-ready determination |
 | [6. Typed application message JSON](#6-typed-application-message-json) | The `framework-json-v1` profile rules |
@@ -55,7 +55,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-The wire major is `1` and the required capability is `framework-service-v12`.
+The wire major is `1` and the required capability is `framework-service-v13`.
 The build stops if the schema and golden fixtures diverge, or if the
 validator finds an undefined type, a duplicate ID, or an invalid
 enum/bound/conditional field.
@@ -152,7 +152,7 @@ from Core receive maintains byte backpressure until payload ownership ends.
 
 ## 3. Command space
 
-Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `52..255` are
+Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `54..255` are
 reserved and never reused for another meaning. A previous command name in parentheses
 is diagnostic compatibility text, not a command that is decoded or sent.
 
@@ -188,7 +188,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 37 | `actorJoined` | Actor join commit |
 | 38 | `boundSessionBind` | Session binding commit |
 | 39 | `instanceSpot` | Logical Instance Spot operation |
-| 40 | `relocationPrepare` | Request to install temporary queue, Restore the Relocation Store payload, and prepare relay |
+| 40 | `relocationPrepare` | Request to install temporary queue, declare the final-stage (and optional base-stage) payload manifest, and prepare relay |
 | 41 | reserved (`relocationReserved`) | Removed relocation-specific capacity-reservation ACK |
 | 42 | `sessionRelocationSeal` | Session ingress seal request |
 | 43 | `sessionRelocationSealed` | Session seal response |
@@ -200,6 +200,8 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 49 | `actorCreate` | Creates a remote Actor in an already-reserved slot |
 | 50 | `messageFollow` | The location-cache invalidation notice sent to the source runtime after a successful relay |
 | 51 | `boundSessionReplaced` | Notifies the previous exact session after the new binding becomes current |
+| 52 | `relocationState` | Direct source-memory-to-target payload chunk transfer (base/final stage) |
+| 53 | `relocationFailed` | Explicit reply to a matching `relocationPrepare` reporting assembly or preparation failure |
 
 Each command's body, whether it allows metadata/payload, and its direction
 follow the schema's closed definition. An unknown command, an
@@ -474,23 +476,55 @@ Both operations return their results in the command 20 reply envelope.
   target temporary queue. This uses ordering and retransmission of the same TCP
   connection, without a per-message ACK or durable journal.
 
-### Relocation Envelope And Cutover
+### Relocation Manifest And Direct Chunk Transfer
 
 - Source sends command 40, `relocationPrepare`, as `[request]` to request temporary-queue
-  installation and Restore from the Relocation Store payload. Target sends command 30,
-  `relocationReady`, as `[reply]` only after that preparation. This pair negotiates no
-  message/byte allowance or participant reservation.
+  installation and declare the payload manifest for the transfer that follows. Its body
+  carries the object identity, source node RID/generation, `payloadTotalLength`,
+  `payloadChunkCount`, and `payloadChecksumCrc32c` describing the final stage, plus
+  `baseChecksumCrc32c` (nonzero only when a base stage precedes the final stage — see
+  base/delta capture below). No relocation-root pointer or Relocation Store lookup key is
+  carried; Prepare fully describes the direct transfer that follows, sourced from source
+  memory. Target sends command 30, `relocationReady`, as `[reply]` only after
+  temporary-queue installation is ready to receive. This pair negotiates no
+  message/byte allowance or participant reservation beyond the declared manifest.
+- Source sends the payload as one or more command 52, `relocationState`, `[send]` records
+  on the same ordered connection. Each record carries the relocation/target-attempt/
+  coordinator fence, the object identity, `senderRole`, a `payloadStage` (`base` or
+  `final`), and a zero-based `chunkOrdinal` whose numbering is independent per stage. The
+  chunk bytes reuse the existing `relocation-data-chunk-v1` format. The target copies each
+  chunk into its assembly buffer and releases the Core receive lease immediately after
+  copying — a state chunk is never held on a backlog queue or lease-transferred.
+- The target compares each assembled stage's length and CRC-32C against the value Prepare
+  declared for that stage. A mismatch is an explicit failure; the target never attempts
+  partial-assembly restore and never retries transparently on checksum mismatch. On
+  failure the target sends command 53, `relocationFailed`, as a reply to the matching
+  Prepare, after cleaning its own partial chunks and prepared resources. Only receipt of
+  this explicit failure — never a dropped or indeterminate connection — causes the source
+  to restore the captured payload from source memory and finish the operation as a
+  failure; an indeterminate outcome is not reversible from the source's perspective.
 - Command 31, `relocationData`, carries only post-capture ingress-hold application records
-  on the same ordered connection. It contains no saved queue prefix or timers and creates
-  no per-record ACK or numeric high-water.
+  on the same ordered connection. It never carries saved queue work or timers, which
+  travel only in command 52 chunks. It contains no saved queue prefix or timers and
+  creates no per-record ACK or numeric high-water.
 - Source inserts command 34, `relocationCutover`, as `[send]` after the current
-  ingress-hold relay prefix. Target sends no response. Reserved IDs 32, 35, and 41 are
-  neither sent nor accepted.
+  ingress-hold relay prefix. Its body adds `boundaryRecordCount` and
+  `boundaryChecksumCrc32c`, describing the exact relayed-record batch the boundary closes
+  over. Target sends no response. Reserved IDs 32, 35, and 41 are neither sent nor
+  accepted.
+- If the source observes that a previously sent cutover did not reach the target
+  (connection loss) and the source instance is still live, it opens a new connection and
+  retransmits the full pending batch plus a fresh cutover — never only the tail — and the
+  target replaces any partial staged batch wholesale rather than appending. The
+  retransmission window equals `RelocationCutoverWaitTimeout` (default 1,000 ms,
+  configurable). After the window elapses, the existing CAS fallback in the next
+  subsection applies with no further blind retry beyond a Warning and a counter
+  increment.
 - The source stores application state, queue work not yet executed before relocation,
-  and timer information in the relocation envelope. Native timer handles and callback
+  and timer information for direct transfer. Native timer handles and callback
   continuations aren't encoded.
-- The target registers a temporary queue, then runs factory and Restore. It doesn't run
-  application handlers until this work finishes.
+- The target registers a temporary queue, then runs factory and chunk assembly. It doesn't
+  run application handlers until this work finishes.
 - After relaying every message received before cutover, the source sends cutover as a
   `[send]` on the same ordered connection. It is the boundary proving that every earlier
   relay on that connection reached the target. It has no reply.
@@ -498,22 +532,50 @@ Both operations return their results in the command 20 reply envelope.
   `request` keeps its existing operation identity, correlation, deadline, and caller
   retry.
 
-### Store CAS And Manifest
+### CRC-32C Convention And Capability
 
-- After Restore and temporary queue registration finish, receipt of cutover starts the
-  target CAS of Location Store owner and membership from source to target. If cutover
-  doesn't arrive within 1,000 ms after the Restore-ready reply, the target records a
-  `cutover_timeout` Warning and starts the same CAS. Only the target performs this CAS.
+- Every checksum listed in `relocationTransferChecksumProfile` (`payloadChecksumCrc32c`,
+  `baseChecksumCrc32c`, `boundaryChecksumCrc32c`, and the chunk/manifest checksums used by
+  the retained store paths below) uses the same CRC-32C (Castagnoli) convention:
+  polynomial `0x1EDC6F41`, initial value `0xFFFFFFFF`, reflected input and output, XOR
+  output `0xFFFFFFFF`, and `check("123456789") == 0xE3069283`.
+- The wire major is `1` and the required capability is `framework-service-v13` — bumped
+  from v12 for commands 52/53 and the Prepare/Cutover manifest fields, with all four
+  runtimes bumped together.
+- A target's effective inbound chunk-byte limit is negotiated in the admission-accept
+  reply's `receiveChunkLimitBytes` field, or via host preflight where that reply is
+  unavailable. Where no negotiation path exists (`JoinEntrySpot`), the effective limit is
+  32 KiB — the general Compact data lower bound. This shape and its bounds are pinned by
+  the `actor-join-reply-tail` golden fixture
+  (`framework/runtime/protocol/golden/actor-join-reply-v1.json`), which all four runtimes
+  (cpp, dotnet, java, node) decode identically. Java and Node wire
+  `receiveChunkLimitBytes` into their live cross-node `actorJoin` admission reply today;
+  C++ and .NET carry the same conformant wire codec for this reply tail but do not
+  originate a cross-node `actorJoin` operation, so the field is decoded and validated by
+  their codecs without being produced on a live admission path in those two runtimes.
+
+### Target CAS And Retained Store Roles
+
+- After chunk assembly and temporary queue registration finish, receipt of cutover starts
+  the target CAS of Location Store owner and membership from source to target. If cutover
+  doesn't arrive within `RelocationCutoverWaitTimeout` (default 1,000 ms) after the
+  Restore-ready reply, the target records a `cutover_timeout` Warning and starts the same
+  CAS. Only the target performs this CAS.
 - Neither the source nor the Session owner changes the Location Store based on a timeout,
   local mirror, or Session route result.
-- The Relocation Store manifest is a projection used to find application state and saved
-  queue work; it isn't owner or membership authority. The two Stores don't use a
-  distributed transaction or 2PC.
+- The Relocation Store no longer holds the Actor/Spot relocation payload — the direct
+  chunk transfer above is the single handoff path, and the two Stores never used a
+  distributed transaction or 2PC for it. The Relocation Store's remaining
+  responsibilities are the Instance Spot cold-activation envelope (§8) and the
+  relocation-scoped pending-request terminal record; those two paths keep using the
+  store's own `relocation-manifest-v1`/`relocation-root-pointer` formats and CAS
+  discipline, unchanged by this section.
 - If CAS fails, the target doesn't open its queue and retries the same CAS until the
-  Restore operation's validity deadline. After an indeterminate response, it first reads
-  the Store to determine whether the exact target is already owner. A different valid
-  owner or generation makes the relocation stale immediately.
-- If the target owner isn't confirmed before Restore validity expires, the target records
+  Restore operation's validity deadline (an absolute deadline on the target, unrelated to
+  Relocation Store retention). After an indeterminate response, it first reads the Store
+  to determine whether the exact target is already owner. A different valid owner or
+  generation makes the relocation stale immediately.
+- If the target owner isn't confirmed before that deadline expires, the target records
   a `location_update_failed` Error and removes the prepared Actor or Spot, temporary
   queue, and relocation state. It doesn't update the Session route. A late Store response
   cannot reactivate the terminal `RelocationId`.
@@ -627,8 +689,8 @@ retention period.
 - A manual lifecycle token is never compared by numeric order — only `DescriptorRevision` is used for ordering.
 - Application traffic does not extend the probe round-trip deadline.
 - Connection-bound accepted work never ends up in a relocation envelope.
-- A crash before the `Captured` CAS is not treated as durable replay.
-- Writing and verifying the top-level record happens before the authority CAS, and the authority releasing that reference happens before the record is deleted.
+- A checksum mismatch on an assembled `relocationState` stage is an explicit failure — never a blind retry and never a partial-assembly restore.
+- For the retained pending-request terminal record path (§11 Root replacement), a crash before the `Captured` CAS is not treated as durable replay; writing and verifying the top-level record happens before the authority CAS, and the authority releasing that reference happens before the record is deleted.
 - If the digest of the participant list the store knows about differs from the list relocation recorded, it ends as `RelocationDataLost`.
 - Actor relocation commit changes the owner and the target Entry Spot membership atomically.
 - Ready is never published before the owner commit, the restore/replay and timer restoration, the queue merge, and the dispatch switch have finished.
