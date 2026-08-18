@@ -116,7 +116,8 @@
       차단 해소)**: golden의 descriptor는 예시 최소형 — node/dotnet/java가 각자 형태
       발명 중이던 것을 java 정찰이 적발. 스펙 21 §2.3 논리 계약+4언어 실제 타입에서
       규범 필드 도출→§2.4 JSON 스키마 명문화→golden 전-필드 벡터→4언어 골든 갱신.
-      진행 중(최우선)
+      **완료 `74a0ed04da`**(§2.4 전-필드 표+golden 6키/7값, 중복 generation 규범
+      제외 판정, 4언어 골든 무변경 그린)
 - [x] C-3 store 레코드 golden fixture — `bdc3e8a8c5`: 6키/5값 벡터(redis Lua cmsgpack 실검증), 21 §2.4 authority 스키마·22 §7 확장, 4언어 소비 테스트 즉시 그린. C-4 명시 이월: cpp authority payload hex→base64, encode측 스탠딩 테스트
 - [ ] C-4 4언어 store 구현 수렴 — 진행: **키 브레이스 판정(2026-08-19): Cluster
       hashtag 리터럴 유지** — golden이 오독으로 brace-less 고정했던 것 정정
@@ -141,8 +142,11 @@
       — 자체 비규범 스킴(zlink:v11: 프리픽스, PascalCase JSON, 이진 generation 접두,
       recordVersion 부재). **재범위**: ① provider 저장소를 §2.4로 포팅(node 참조
       구현, 타입별 단계·게이트·커밋), ② 죽은 Lua 스택은 oracle 커버리지 확인 후
-      일괄 삭제(POSDDD), ③ 골든은 실제 writer 구동. sonnet 진행 중(커버리지 확인→
-      mesh 포팅 순)(descriptor:mesh:*, owner-lease:* 등 →
+      일괄 삭제(POSDDD), ③ 골든은 실제 writer 구동. **진행: oracle 구축+잔해 정리
+      커밋(라이브 경로 최초 redis 커버리지 3종) — mesh 포팅 착수(스키마 74a0ed04da
+      기준)**. 라이브 경로 동작 사실 3건 스펙 판정 후보로 기록: 동일 revision RENEW
+      =IGNORED_STALE, authority commit이 대상 lifecycleGeneration 미펜스,
+      removeAllByOwner가 descriptor 미회수(descriptor:mesh:*, owner-lease:* 등 →
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
