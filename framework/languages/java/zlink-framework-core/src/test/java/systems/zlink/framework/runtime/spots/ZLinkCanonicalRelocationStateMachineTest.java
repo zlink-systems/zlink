@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
 import java.lang.reflect.InvocationTargetException;
@@ -228,6 +229,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     fixture.sourceSnapshot.objectGeneration(),
                     fixture.sourceSnapshot.authorityOwnerGeneration()),
                 base,
+                0L,
                 Duration.ofSeconds(2))
             .toCompletableFuture().join();
         fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
@@ -237,6 +239,51 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             .baseApplicationState());
         assertArrayEquals(fixture.root(delta), fixture.endpoint.lastStaged.get()
             .relocationPayload());
+    }
+
+    /**
+     * Item 3 of the base/delta transfer pipeline (spec 15 §4.2): the
+     * target's advertised relocation state chunk receive limit additionally
+     * bounds this relocation's chunk size — proven the same way node does,
+     * by observing more command 52 chunks for a small advertised limit than
+     * for the unadvertised (node-budget-only) baseline over an identical
+     * payload.
+     */
+    @Test
+    void advertisedReceiveChunkLimitIsAppliedAsAMinimumOnTheSourceChunkPlan() {
+        byte[] payload = new byte[20];
+        java.util.Arrays.fill(payload, (byte) 7);
+
+        Fixture unadvertised = fixture();
+        var baselineRequest = unadvertised.requestWithAdvertisedLimit(payload, 0L);
+        unadvertised.source.stage(
+                unadvertised.targetRid, baselineRequest, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        long baselineChunks = unadvertised.sourceCommands.stream()
+            .filter(command -> command
+                == ServiceWireConstants.COMMAND_RELOCATION_STATE)
+            .count();
+
+        Fixture advertised = fixture();
+        var boundedRequest = advertised.requestWithAdvertisedLimit(payload, 4L);
+        advertised.source.stage(
+                advertised.targetRid, boundedRequest, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        long boundedChunks = advertised.sourceCommands.stream()
+            .filter(command -> command
+                == ServiceWireConstants.COMMAND_RELOCATION_STATE)
+            .count();
+
+        int rootLength = unadvertised.root(payload).length;
+        long expectedBoundedChunks = (rootLength + 3) / 4;
+        assertEquals(1, baselineChunks,
+            "the encoded relocation root fits in one chunk under the node"
+                + " budget alone");
+        assertEquals(expectedBoundedChunks, boundedChunks,
+            "a 4-byte advertised limit splits the same root into ceil(len/4)"
+                + " chunks");
+        assertTrue(boundedChunks > baselineChunks,
+            "the advertised limit measurably increases the chunk count");
     }
 
     @Test
@@ -264,6 +311,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     fixture.sourceSnapshot.objectGeneration(),
                     fixture.sourceSnapshot.authorityOwnerGeneration()),
                 wrongBase,
+                0L,
                 Duration.ofSeconds(2))
             .toCompletableFuture().join();
 
@@ -318,6 +366,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     fixture.sourceSnapshot.objectGeneration(),
                     fixture.sourceSnapshot.authorityOwnerGeneration()),
                 base,
+                0L,
                 Duration.ofSeconds(2))
             .toCompletableFuture().join();
         assertEquals(1, scheduled.size(),
@@ -497,6 +546,30 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     sourceSnapshot.objectGeneration(),
                     sourceSnapshot.authorityOwnerGeneration())),
                 List.of());
+        }
+
+        ZLinkSpotRetireControl.StageRequest requestWithAdvertisedLimit(
+            byte[] applicationState,
+            long advertisedReceiveChunkLimitBytes) {
+            return new ZLinkSpotRetireControl.StageRequest(
+                new ZLinkSpotRetireControl.Fence(relocationId, 1),
+                sourceRid, 11, sourceOwner.ownerId(),
+                sourceOwner.leaseGeneration(),
+                targetRid, 12, targetOwner.ownerId(),
+                targetOwner.leaseGeneration(),
+                "mesh", "target-entry", "actor-type", false, true,
+                root(applicationState),
+                List.of(new ZLinkSpotRetireControl.ParticipantFence(
+                    authorityKey,
+                    1,
+                    actorId,
+                    "actor-type",
+                    true,
+                    sourceSnapshot.objectGeneration(),
+                    sourceSnapshot.authorityOwnerGeneration())),
+                List.of(),
+                new byte[0],
+                advertisedReceiveChunkLimitBytes);
         }
     }
 

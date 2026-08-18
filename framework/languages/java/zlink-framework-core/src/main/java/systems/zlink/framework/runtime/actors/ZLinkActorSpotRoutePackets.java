@@ -90,131 +90,6 @@ public final class ZLinkActorSpotRoutePackets {
             Message.from(joinPayload));
     }
 
-    public static List<Message> createCommitRequestParts(
-        String transferId,
-        Duration timeout,
-        String actorId,
-        String actorType,
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceEntrySpotNodeRid,
-        String sourceEntrySpotId,
-        String sourceEntryRouterChannelId,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        String adapterKey,
-        Message transferState,
-        List<ZLinkActorHandoffPacket> backlog) {
-        return createCommitRequestParts(
-            transferId, timeout, actorId, actorType, actorRef,
-            sourceEntrySpotNodeRid, sourceEntrySpotId, sourceEntryRouterChannelId,
-            sourceNodeRid, sourceSessionRid, adapterKey, transferState, backlog, null, null);
-    }
-
-    public static List<Message> createCommitRequestParts(
-        String transferId,
-        Duration timeout,
-        String actorId,
-        String actorType,
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceEntrySpotNodeRid,
-        String sourceEntrySpotId,
-        String sourceEntryRouterChannelId,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        String adapterKey,
-        Message transferState,
-        List<ZLinkActorHandoffPacket> backlog,
-        CoreTransfer coreTransfer) {
-        return createCommitRequestParts(
-            transferId, timeout, actorId, actorType, actorRef,
-            sourceEntrySpotNodeRid, sourceEntrySpotId, sourceEntryRouterChannelId,
-            sourceNodeRid, sourceSessionRid, adapterKey, transferState, backlog,
-            coreTransfer, null);
-    }
-
-    public static List<Message> createCommitRequestParts(
-        String transferId,
-        Duration timeout,
-        String actorId,
-        String actorType,
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceEntrySpotNodeRid,
-        String sourceEntrySpotId,
-        String sourceEntryRouterChannelId,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        String adapterKey,
-        Message transferState,
-        List<ZLinkActorHandoffPacket> backlog,
-        CoreTransfer coreTransfer,
-        ZLinkDirectJoinRelocation.Manifest relocationManifest) {
-        return createCommitRequestParts(
-            transferId,
-            timeout,
-            actorId,
-            actorType,
-            actorRef,
-            sourceEntrySpotNodeRid,
-            sourceEntrySpotId,
-            sourceEntryRouterChannelId,
-            sourceNodeRid,
-            sourceSessionRid,
-            adapterKey,
-            transferState,
-            backlog,
-            coreTransfer,
-            relocationManifest,
-            new byte[0]);
-    }
-
-    public static List<Message> createCommitRequestParts(
-        String transferId,
-        Duration timeout,
-        String actorId,
-        String actorType,
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceEntrySpotNodeRid,
-        String sourceEntrySpotId,
-        String sourceEntryRouterChannelId,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        String adapterKey,
-        Message transferState,
-        List<ZLinkActorHandoffPacket> backlog,
-        CoreTransfer coreTransfer,
-        ZLinkDirectJoinRelocation.Manifest relocationManifest,
-        byte[] sessionRouteCommand44) {
-        List<Message> parts = new ArrayList<>();
-        parts.add(Message.from(JOIN_SPOT_PACKET_NAME.getBytes(StandardCharsets.UTF_8)));
-        parts.add(
-            encodeTransferRequest(
-                COMMIT_PHASE,
-                transferId,
-                timeout,
-                actorId,
-                actorType,
-                actorRef,
-                sourceEntrySpotNodeRid,
-                sourceEntrySpotId,
-                sourceEntryRouterChannelId,
-                sourceNodeRid,
-                sourceSessionRid,
-                adapterKey == null ? "" : adapterKey,
-                backlog.size(),
-                coreTransfer,
-                relocationManifest,
-                sessionRouteCommand44));
-        parts.add(Message.from(transferState));
-        for (ZLinkActorHandoffPacket packet : backlog) {
-            parts.add(Message.from(Long.toString(packet.arrivalIndex()).getBytes(StandardCharsets.UTF_8)));
-            parts.add(encodeReplyRoute(packet.replyRoute()));
-            parts.add(Message.from(ZLinkStreamHeaderCodec.encode(packet.header())));
-            parts.add(Message.from(packet.payload()));
-            parts.add(Message.from(packet.acceptedJournalRecord()));
-        }
-        return List.copyOf(parts);
-    }
-
     private static Message encodeTransferRequest(
         String phase,
         String transferId,
@@ -434,27 +309,45 @@ public final class ZLinkActorSpotRoutePackets {
         return List.copyOf(backlog);
     }
 
-    public static Message encodeAdmissionReply(boolean accepted, Message reply) {
+    public static Message encodeAdmissionReply(
+        boolean accepted, long receiveChunkLimitBytes, Message reply) {
         String encodedReply = reply == null
             ? ""
             : Base64.getEncoder().encodeToString(reply.toByteArray());
         return Message.from(String.join(
             "\n",
             Boolean.toString(accepted),
+            Long.toUnsignedString(receiveChunkLimitBytes),
             encodedReply).getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * {@code receiveChunkLimitBytes} is the target's advertised relocation
+     * state chunk receive limit (spec 15 §4.2), added to this reply after
+     * {@code accepted}. Decode tolerates the pre-existing two-field wire
+     * shape (no advertised limit) for a mixed-version peer — absent means
+     * not advertised (0), never a protocol error.
+     */
     public static AdmissionReply decodeAdmissionReply(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 2) {
+        if (fields.length == 2) {
+            return new AdmissionReply(
+                Boolean.parseBoolean(fields[0]),
+                0L,
+                fields[1].isBlank()
+                    ? Message.from(new byte[0])
+                    : Message.from(Base64.getDecoder().decode(fields[1])));
+        }
+        if (fields.length != 3) {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot admission reply");
         }
         return new AdmissionReply(
             Boolean.parseBoolean(fields[0]),
-            fields[1].isBlank()
+            Long.parseUnsignedLong(fields[1]),
+            fields[2].isBlank()
                 ? Message.from(new byte[0])
-                : Message.from(Base64.getDecoder().decode(fields[1])));
+                : Message.from(Base64.getDecoder().decode(fields[2])));
     }
 
     public static List<Message> createBoundSessionSendParts(
@@ -618,26 +511,6 @@ public final class ZLinkActorSpotRoutePackets {
             encodedReply).getBytes(StandardCharsets.UTF_8));
     }
 
-    public static JoinReply decodeJoinReply(Message message) {
-        String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 5
-            || fields[1].isBlank()
-            || fields[2].isBlank()) {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot route join reply");
-        }
-        Message reply = fields[4].isBlank()
-            ? Message.from(new byte[0])
-            : Message.from(Base64.getDecoder().decode(fields[4]));
-        return new JoinReply(
-            Boolean.parseBoolean(fields[0]),
-            new ZLinkBackendActorRef(
-                RoutingId.from(fields[1]),
-                fields[2],
-                Long.parseUnsignedLong(fields[3])),
-            reply);
-    }
-
     public record TransferRequest(
         String phase,
         String transferId,
@@ -769,17 +642,14 @@ public final class ZLinkActorSpotRoutePackets {
         }
     }
 
-    public record AdmissionReply(boolean accepted, Message reply) implements AutoCloseable {
+    public record AdmissionReply(
+        boolean accepted,
+        long receiveChunkLimitBytes,
+        Message reply) implements AutoCloseable {
         @Override
         public void close() {
             reply.close();
         }
-    }
-
-    public record JoinReply(
-        boolean accepted,
-        ZLinkBackendActorRef actorRef,
-        Message reply) {
     }
 
     public record BoundSessionSend(

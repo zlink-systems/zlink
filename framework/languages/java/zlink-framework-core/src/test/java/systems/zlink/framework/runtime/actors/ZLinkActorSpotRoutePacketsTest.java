@@ -16,66 +16,6 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
 final class ZLinkActorSpotRoutePacketsTest {
     @Test
-    void commitTransferRoundTripsBoundSessionRouteAndCoreAuthority() {
-        ZLinkBackendActorRef actor =
-            new ZLinkBackendActorRef(RoutingId.from("actor-source"), "actor-1", 17);
-        try (Message state = Message.from("state")) {
-            List<Message> parts = ZLinkActorSpotRoutePackets.createCommitRequestParts(
-                "00000000-0000-0000-0000-000000000041",
-                Duration.ofSeconds(12),
-                actor.actorId(),
-                "stateful",
-                actor,
-                RoutingId.from("entry-source"),
-                "entry-spot",
-                "entry-channel",
-                RoutingId.from("session-source"),
-                RoutingId.from("session-41"),
-                "stateful",
-                state,
-                List.of(),
-                new ZLinkActorSpotRoutePackets.CoreTransfer(
-                    true, 31L, 41L, 7L, 3L, 5L, 1024L),
-                new ZLinkDirectJoinRelocation.Manifest(
-                    new byte[] {4, 1},
-                    91L,
-                    31L,
-                    41L,
-                    51L,
-                    61L,
-                    1L,
-                    new byte[] {7, 8}));
-            try {
-                ZLinkActorSpotRoutePackets.TransferRequest decoded =
-                    ZLinkActorSpotRoutePackets.decodeTransferRequest(parts.get(1));
-
-                assertTrue(decoded.commit());
-                assertEquals(actor.nodeRid(), decoded.actorNodeRid());
-                assertEquals(actor.generation(), decoded.actorGeneration());
-                assertEquals(RoutingId.from("session-source"), decoded.sourceNodeRid());
-                assertEquals(RoutingId.from("session-41"), decoded.sourceSessionRid());
-                assertTrue(decoded.hasSourceSessionRoute());
-                assertTrue(decoded.coreTransfer());
-                assertEquals(31L, decoded.coreTransferIdHigh());
-                assertEquals(41L, decoded.coreTransferIdLow());
-                assertEquals(7L, decoded.coreMembershipEpoch());
-                assertEquals(3L, decoded.coreFinalSequence());
-                assertEquals(5L, decoded.coreReserveMessageCount());
-                assertEquals(1024L, decoded.coreReserveByteCount());
-                assertArrayEquals(
-                    new byte[] {4, 1},
-                    decoded.relocationManifest().root());
-                assertEquals(91L, decoded.relocationManifest().checksumCrc32c());
-                assertArrayEquals(
-                    new byte[] {7, 8},
-                    decoded.relocationManifest().rawReply());
-            } finally {
-                parts.forEach(Message::close);
-            }
-        }
-    }
-
-    @Test
     void actorPacketAllowsEmptyNativeSourceSessionRoutingId() {
         ZLinkBackendActorRef actor =
             new ZLinkBackendActorRef(RoutingId.from("source"), "actor-1", 3);
@@ -132,6 +72,43 @@ final class ZLinkActorSpotRoutePacketsTest {
                 }
             } finally {
                 parts.forEach(Message::close);
+            }
+        }
+    }
+
+    /**
+     * Item 3 of the base/delta transfer pipeline (spec 15 §4.2): the Join
+     * Accepted admission reply carries the target's advertised relocation
+     * state chunk receive limit alongside {@code accepted}.
+     */
+    @Test
+    void admissionReplyRoundTripsAcceptedAndAdvertisedChunkLimit() {
+        try (Message reply = Message.from("payload")) {
+            Message encoded = ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                true, 32_768L, reply);
+            try (ZLinkActorSpotRoutePackets.AdmissionReply decoded =
+                ZLinkActorSpotRoutePackets.decodeAdmissionReply(encoded)) {
+                assertTrue(decoded.accepted());
+                assertEquals(32_768L, decoded.receiveChunkLimitBytes());
+                assertArrayEquals(
+                    "payload".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    decoded.reply().toByteArray());
+            } finally {
+                encoded.close();
+            }
+        }
+    }
+
+    @Test
+    void admissionReplyDecodeToleratesTheLegacyTwoFieldShape() {
+        try (Message legacy = Message.from(
+                "true\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            try (ZLinkActorSpotRoutePackets.AdmissionReply decoded =
+                ZLinkActorSpotRoutePackets.decodeAdmissionReply(legacy)) {
+                assertTrue(decoded.accepted());
+                assertEquals(0L, decoded.receiveChunkLimitBytes(),
+                    "absent means not advertised, never a protocol error");
+                assertEquals(0, decoded.reply().toByteArray().length);
             }
         }
     }

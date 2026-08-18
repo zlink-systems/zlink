@@ -229,12 +229,13 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkCanonicalRelocationProtocol.Coordinator coordinator,
         ZLinkCanonicalRelocationProtocol.ObjectFence object,
         byte[] base,
+        long advertisedReceiveChunkLimitBytes,
         Duration timeout) {
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         Objects.requireNonNull(base, "base");
         requireTimeout(timeout);
         List<byte[]> chunks = ZLinkRelocationPayloadTransfer.chunks(
-            base, budget.effectiveChunkBytes());
+            base, budget.effectiveChunkBytes(advertisedReceiveChunkLimitBytes));
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (int index = 0; index < chunks.size(); index++) {
             byte[] chunk = chunks.get(index);
@@ -989,7 +990,9 @@ final class ZLinkCanonicalRelocationStateMachine
                 request.sourceNodeRid(),
                 request.sourceNodeGeneration(),
                 ZLinkRelocationPayloadTransfer.manifest(
-                    payload, budget.effectiveChunkBytes(),
+                    payload,
+                    budget.effectiveChunkBytes(
+                        request.advertisedReceiveChunkLimitBytes()),
                     request.baseApplicationState()),
                 envelope.applicationVersion());
         });
@@ -1404,7 +1407,8 @@ final class ZLinkCanonicalRelocationStateMachine
         var prepare = attempt.prepare();
         List<byte[]> chunks = ZLinkRelocationPayloadTransfer.chunks(
             attempt.request().relocationPayload(),
-            budget.effectiveChunkBytes());
+            budget.effectiveChunkBytes(
+                attempt.request().advertisedReceiveChunkLimitBytes()));
         CompletionStage<Void> chain =
             CompletableFuture.completedFuture(null);
         for (int index = 0; index < chunks.size(); index++) {

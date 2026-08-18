@@ -156,7 +156,7 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
             if (decoded.admission()) {
                 return CompletableFuture.completedFuture(List.of(
                     ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                        true, Message.from(new byte[0]))));
+                        true, 0L, Message.from(new byte[0]))));
             }
             return CompletableFuture.failedFuture(
                 new IllegalStateException("legacy commit must not be sent"));
@@ -285,7 +285,7 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
             }
             return CompletableFuture.completedFuture(List.of(
                 ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                    true, Message.from(new byte[0]))));
+                    true, 0L, Message.from(new byte[0]))));
         });
 
         ProbeActor actor = (ProbeActor) runtime.getOrCreateLocalActor(

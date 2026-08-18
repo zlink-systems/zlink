@@ -34,7 +34,40 @@ public interface ZLinkActorJoinRelocationPort {
         //  actor queue's active turn: source preparation must seal that
         //  exact active turn instead of reserving a new lifecycle boundary
         //  that would queue behind the barrier itself and never activate.
-        ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal) {
+        ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
+        //  The target's advertised relocation state chunk receive limit
+        //  from the Join Accepted reply (spec 15 §4.2); 0 means not
+        //  advertised (a mixed-version peer, or a legacy admission reply).
+        long advertisedReceiveChunkLimitBytes) {
+        public Goal(
+            UUID relocationId,
+            ZLinkActorJoinOperationId operationId,
+            ZLinkBackendActorRef sourceActor,
+            String actorType,
+            String targetSpotId,
+            long targetSpotGeneration,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            long targetSpotAuthorityOwnerGeneration,
+            long targetOwnerLeaseGeneration,
+            byte[] rawReply,
+            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal) {
+            this(
+                relocationId,
+                operationId,
+                sourceActor,
+                actorType,
+                targetSpotId,
+                targetSpotGeneration,
+                targetNodeRid,
+                targetNodeGeneration,
+                targetSpotAuthorityOwnerGeneration,
+                targetOwnerLeaseGeneration,
+                rawReply,
+                activeTurnSeal,
+                0L);
+        }
+
         public Goal {
             Objects.requireNonNull(relocationId, "relocationId");
             Objects.requireNonNull(operationId, "operationId");
@@ -47,7 +80,8 @@ public interface ZLinkActorJoinRelocationPort {
                 || targetSpotGeneration <= 0
                 || targetNodeGeneration <= 0
                 || targetSpotAuthorityOwnerGeneration <= 0
-                || targetOwnerLeaseGeneration <= 0) {
+                || targetOwnerLeaseGeneration <= 0
+                || advertisedReceiveChunkLimitBytes < 0) {
                 throw new IllegalArgumentException(
                     "direct Join relocation target fence is invalid");
             }

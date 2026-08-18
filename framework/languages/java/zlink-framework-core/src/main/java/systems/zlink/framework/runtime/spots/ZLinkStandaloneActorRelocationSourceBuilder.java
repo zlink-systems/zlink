@@ -331,10 +331,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     //  The captured payload lives only in source memory and
                     //  travels directly with the stage request; nothing is
                     //  written to a relocation store (spec 28 §4.2).
+                    long advertisedReceiveChunkLimitBytes = directJoin == null
+                        ? 0L
+                        : directJoin.advertisedReceiveChunkLimitBytes();
                     return sealSessionRoute(
                             admission.owned(), relocationId, capturedRoute)
                         .thenCompose(sessionRoute -> sendBaseIfCaptured(
-                                client, admission, relocationId, base)
+                                client, admission, relocationId, base,
+                                advertisedReceiveChunkLimitBytes)
                             .thenApply(ignored -> new PreparedSource(
                                 locations,
                                 actors,
@@ -354,7 +358,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     sessionRoute.map(
                                         SealedSessionRoute::route),
                                     targetSpotId,
-                                    base),
+                                    base,
+                                    advertisedReceiveChunkLimitBytes),
                                 targetSpotId)));
                 }).exceptionallyCompose(failure -> {
                     relocationReplies.resumeActorTimersAfterRelocationAbort(
@@ -375,7 +380,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         ZLinkRelocationTransitionClient client,
         Admission admission,
         UUID relocationId,
-        byte[] base) {
+        byte[] base,
+        long advertisedReceiveChunkLimitBytes) {
         if (base == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -399,6 +405,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             coordinator,
             object,
             base,
+            advertisedReceiveChunkLimitBytes,
             sessionRelocationSealTimeout);
     }
 
@@ -662,7 +669,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         byte[] relocationPayload,
         Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
         String targetSpotId,
-        byte[] base) {
+        byte[] base,
+        long advertisedReceiveChunkLimitBytes) {
         Owned actor = admission.owned();
         ZLinkMeshNodeDescriptor target = admission.target();
         return new ZLinkSpotRetireControl.StageRequest(
@@ -690,7 +698,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 actor.snapshot().objectGeneration(),
                 actor.snapshot().authorityOwnerGeneration())),
             sessionRoute.stream().toList(),
-            base == null ? new byte[0] : base);
+            base == null ? new byte[0] : base,
+            advertisedReceiveChunkLimitBytes);
     }
 
     /**

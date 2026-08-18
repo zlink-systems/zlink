@@ -736,7 +736,10 @@ final class SpotActivation
             ? Message.from(new byte[0])
             : ZLinkMessagePayloads.message(response.reply(), host.serializerForSpot());
         try {
-            return ZLinkActorSpotRoutePackets.encodeAdmissionReply(response.accepted(), reply);
+            return ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                response.accepted(),
+                ZLinkActorJoinAdvertisedChunkLimit.conservativeReceiveChunkLimitBytes(),
+                reply);
         } finally {
             reply.close();
         }

@@ -66,7 +66,7 @@ public final class ZLinkActorRelocationRuntimePortFixture {
                         .completedFuture(ZLinkSpotActorJoinResult.accept()))
                 .thenApply(response -> List.of(
                     ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                        response.accepted(), Message.from(new byte[0]))));
+                        response.accepted(), 0L, Message.from(new byte[0]))));
         }
         ZLinkMessage transferState = ZLinkMessage.fromEncoded(
             systems.zlink.framework.ZLinkEncodedPayload.from(

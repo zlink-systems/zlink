@@ -45,6 +45,8 @@ interface ZLinkRelocationTransitionClient {
      * Streams a captured base snapshot ahead of the eventual PREPARE for the
      * given exact relocation identity (spec 15 §5, spec 28 §4.2). Only
      * called when {@link #supportsBaseTransfer()} is true.
+     * {@code advertisedReceiveChunkLimitBytes} additionally bounds this
+     * relocation's chunk size (0 = not advertised, node budget only).
      */
     default CompletionStage<Void> sendBase(
         RoutingId targetNodeRid,
@@ -52,6 +54,7 @@ interface ZLinkRelocationTransitionClient {
         ZLinkCanonicalRelocationProtocol.Coordinator coordinator,
         ZLinkCanonicalRelocationProtocol.ObjectFence object,
         byte[] base,
+        long advertisedReceiveChunkLimitBytes,
         Duration timeout) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException(
             "this relocation transition client cannot stream a base snapshot"));

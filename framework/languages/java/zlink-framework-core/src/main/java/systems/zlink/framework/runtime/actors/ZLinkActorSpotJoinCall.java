@@ -657,6 +657,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                     actorType,
                                     currentActorRef,
                                     admission.reply(),
+                                    admission.receiveChunkLimitBytes(),
                                     operationId,
                                     deadlineNanos);
                             } finally {
@@ -679,6 +680,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             String actorType,
             ZLinkBackendActorRef sourceActor,
             Message admissionReply,
+            long advertisedReceiveChunkLimitBytes,
             ZLinkActorJoinOperationId operationId,
             long deadlineNanos) {
         Duration remaining = remainingTimeout(deadlineNanos);
@@ -706,7 +708,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 address.authorityOwnerGeneration(),
                 address.ownerLeaseGeneration(),
                 rawReply,
-                deferredActiveTurnSeal);
+                deferredActiveTurnSeal,
+                Math.max(0L, advertisedReceiveChunkLimitBytes));
         return services.actors().relocateActorJoin(goal, remaining)
             .thenApply(submission -> {
                 acceptedCallbackDeliveredOnTarget.set(true);

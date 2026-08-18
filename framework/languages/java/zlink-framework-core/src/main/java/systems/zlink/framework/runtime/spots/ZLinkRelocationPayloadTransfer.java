@@ -139,6 +139,19 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         /**
+         * The effective chunk size additionally bounded by one relocation's
+         * advertised receive limit (spec 15 §4.2) — {@code 0} means not
+         * advertised, so only the node-local budget bound applies.
+         */
+        int effectiveChunkBytes(long advertisedReceiveChunkLimitBytes) {
+            if (advertisedReceiveChunkLimitBytes <= 0) {
+                return effectiveChunkBytes;
+            }
+            return (int) Math.min(
+                effectiveChunkBytes, advertisedReceiveChunkLimitBytes);
+        }
+
+        /**
          * Waits until a new relocation unit may apply its source admission
          * seal — the seal-side wait of spec 28 §5.3. The unit keeps handling
          * messages while it waits.
