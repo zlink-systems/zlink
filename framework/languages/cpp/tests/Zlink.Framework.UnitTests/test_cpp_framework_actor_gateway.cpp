@@ -1979,7 +1979,7 @@ int relay_send_survives_pending_dispatcher_completion ()
     return relayed.result () ? 0 : 2;
 }
 
-int actor_send_reports_fifo_admission_before_handler_terminal ()
+int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwinds ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -2035,7 +2035,7 @@ int actor_send_reports_fifo_admission_before_handler_terminal ()
       std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool handler_started{false};
     spot->handlers.push_back (spot_handler_descriptor_t{
-      spot_handler_kind_t::actor_send, "JoinGameMsg", "",
+      spot_handler_kind_t::actor_request, "JoinGameMsg", "",
       std::type_index (typeid (int)), std::type_index (typeid (void)),
       std::type_index (typeid (int)), std::type_index (typeid (void))});
     spot->handler_invokers.push_back (
@@ -2052,10 +2052,15 @@ int actor_send_reports_fifo_admission_before_handler_terminal ()
     auto provider = services.build_provider ();
     actor_gateway_runtime_t gateway;
     std::atomic_int admitted{0};
+    spot_inbound_message_t request_metadata;
+    request_metadata.values.emplace ("__zlink.actorRequestId", "relocating-join-request");
+    // The temporary runtime wrapper has already unwound when handler_terminal
+    // resumes this coroutine. The terminal path must still complete the node
+    // owned exactly-once map, rather than dereferencing the dead wrapper.
     auto relayed = spot_node_runtime_t (node).relay_actor_packet (
-      actor, gateway.actor_context (actor), stream_message_kind_t::send,
+      actor, gateway.actor_context (actor), stream_message_kind_t::request,
       "JoinGameMsg", zlink::message_t::from ("join"), provider,
-      serializers, {}, nullptr, {},
+      serializers, std::move (request_metadata), nullptr, {},
       [&admitted] {
           admitted.fetch_add (1, std::memory_order_acq_rel);
       });
@@ -2086,15 +2091,19 @@ int actor_send_reports_fifo_admission_before_handler_terminal ()
     handler_terminal->complete (result_t<void>::success ());
     if (!relayed.result ())
         return 3;
+    const auto dedup = node->dispatched_request_replies.claim (
+      "23:player:reconnect-playerrelocating-join-request");
+    if (dedup.state != runtime::exactly_once_claim_state::completed || !dedup.value)
+        return 4;
     if (disconnected.wait_for (std::chrono::seconds (1))
           != std::future_status::ready) {
-        return 4;
+        return 5;
     }
     const auto disconnected_result = disconnected.get ();
     return disconnected_result
              && disconnected_started.load (std::memory_order_acquire)
            ? 0
-           : 5;
+           : 6;
 }
 
 int rebound_session_keeps_prior_ingress_exact_fence ()
@@ -2918,7 +2927,7 @@ int main ()
         return 210 + fence;
     }
     if (const auto admission =
-          actor_send_reports_fifo_admission_before_handler_terminal ();
+          actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwinds ();
         admission != 0) {
         return 200 + admission;
     }

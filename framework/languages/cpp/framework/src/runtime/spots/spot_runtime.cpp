@@ -4187,7 +4187,14 @@ spot_manager_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                            std::move (metadata),
                                            admitted_message_follow_target);
     }
-    co_return co_await detail::spot_node_runtime_t (_state).relay_actor_packet (
+    // `relay_actor_packet` is a coroutine.  Do not invoke that member on a
+    // temporary: after its first suspension the coroutine frame retains the
+    // receiver (`this`), not the temporary object.  In particular, a Join can
+    // relocate the Actor before the handler task completes, so its completion
+    // resumes this call after the full handler turn has unwound.  Keep the
+    // runtime wrapper in this coroutine frame until that resume is finished.
+    auto runtime = detail::spot_node_runtime_t (_state);
+    co_return co_await runtime.relay_actor_packet (
       actor_ref, std::move (actor_context), message_kind, packet_name, message, services,
       serializers, std::move (metadata), admitted_message_follow_target);
 }
@@ -5421,18 +5428,50 @@ bool spot_node_runtime_t::materialize_relocation_state (
 {
     if (target.kind != runtime::stateful::object_kind_t::actor)
         return restore_spot_relocation_state (frozen, target, cancellation);
-    if (!target_spot
-        || target_spot->kind != runtime::stateful::object_kind_t::user_spot)
-        return false;
 
     detail::spot_node_builder_state_t::actor_factory_registration_t factory;
     std::shared_ptr<spot_context_state_t> context;
     actor_gateway_runtime_t *actor_gateway = nullptr;
+    runtime::stateful::object_ref_t resolved_target_spot;
     {
         std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        // A single-Actor relocation unit (e.g. an Entry Spot Actor moving
+        // alone) never carries a Spot on the wire (spec 28: the Entry Spot
+        // is already present on the target node). Resolve this node's own
+        // local Entry Spot as the target Spot in that case, the same way
+        // the join path does.
+        if (target_spot) {
+            if (target_spot->kind != runtime::stateful::object_kind_t::user_spot)
+                return false;
+            resolved_target_spot = *target_spot;
+        } else {
+            if (!_state->snapshot.entry_spot_name)
+                return false;
+            const auto entry_id = _state->spot_ids_by_name.find (
+              *_state->snapshot.entry_spot_name);
+            if (entry_id == _state->spot_ids_by_name.end ())
+                return false;
+            const auto entry_context =
+              _state->spot_contexts_by_id.find (entry_id->second);
+            if (entry_context == _state->spot_contexts_by_id.end ()
+                || !entry_context->second._state
+                || !entry_context->second._state->spot_instance)
+                return false;
+            const auto &entry_state = *entry_context->second._state;
+            resolved_target_spot = runtime::stateful::object_ref_t{
+              entry_state.is_instance_spot ()
+                ? runtime::stateful::object_kind_t::instance_spot
+                : runtime::stateful::object_kind_t::user_spot,
+              std::string (entry_state.spot_id), entry_state.object_generation,
+              entry_state.authority_owner_generation, entry_state.mesh_name,
+              std::string (entry_state.node_rid.value ())};
+            if (resolved_target_spot.kind
+                != runtime::stateful::object_kind_t::user_spot)
+                return false;
+        }
         const auto configured = _state->actor_factories.find (frozen.stable_type);
         const auto found_context =
-          _state->spot_contexts_by_id.find (target_spot->key);
+          _state->spot_contexts_by_id.find (resolved_target_spot.key);
         if (configured == _state->actor_factories.end ()
             || found_context == _state->spot_contexts_by_id.end ()
             || !found_context->second._state
@@ -5497,7 +5536,7 @@ bool spot_node_runtime_t::materialize_relocation_state (
     {
         std::lock_guard<std::recursive_mutex> lock (_state->mutex);
         const auto found_context =
-          _state->spot_contexts_by_id.find (target_spot->key);
+          _state->spot_contexts_by_id.find (resolved_target_spot.key);
         if (found_context == _state->spot_contexts_by_id.end ()
             || found_context->second._state.get () != context.get ()
             || _state->actor_instances.contains (key)
@@ -7721,6 +7760,11 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                          std::function<void ()>
                                            after_application_admission)
 {
+    // This member coroutine can be entered through a short-lived runtime
+    // wrapper. Keep the node state in the frame for the terminal path below:
+    // a handler may suspend for a relocating Join, after which completion
+    // updates the request deduplication table.
+    const auto state_owner = _state;
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::not_found, "actor ref is empty");
@@ -8233,7 +8277,7 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
     }
     catch (const framework_exception_t &error) {
         if (!dedup_request_id.empty ()) {
-            (void) _state->dispatched_request_replies.erase (
+            (void) state_owner->dispatched_request_replies.erase (
               actor_request_dedup_key (key, dedup_request_id));
         }
         co_return detail::result_access_t::failure<
@@ -8241,14 +8285,14 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
     }
     catch (const std::exception &error) {
         if (!dedup_request_id.empty ()) {
-            (void) _state->dispatched_request_replies.erase (
+            (void) state_owner->dispatched_request_replies.erase (
               actor_request_dedup_key (key, dedup_request_id));
         }
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::internal_failure, error.what ());
     }
     if (!dedup_request_id.empty ()) {
-        (void) _state->dispatched_request_replies.complete (
+        (void) state_owner->dispatched_request_replies.complete (
           actor_request_dedup_key (key, dedup_request_id), reply);
     }
     co_return result_t<std::optional<zlink::message_t>>::success (std::move (reply));

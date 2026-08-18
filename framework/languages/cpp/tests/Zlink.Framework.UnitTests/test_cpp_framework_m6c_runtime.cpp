@@ -3967,6 +3967,303 @@ void test_relocation_adapter_single_capture_restore_path (test_context_t &test)
     runtime.release_native_handles ();
 }
 
+struct entry_relocation_test_payload_t
+{
+    int value = 0;
+};
+
+void to_json (
+  nlohmann::json &json,
+  const entry_relocation_test_payload_t &payload)
+{
+    json = nlohmann::json{{"value", payload.value}};
+}
+
+void from_json (
+  const nlohmann::json &json,
+  entry_relocation_test_payload_t &payload)
+{
+    payload.value = json.at ("value").get<int> ();
+}
+
+class entry_relocation_test_actor_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit entry_relocation_test_actor_t (
+      zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+        ++create_count;
+    }
+    zlink::framework::actor_context_t &context () noexcept override
+    {
+        return _context;
+    }
+    const zlink::framework::actor_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+
+    static inline int create_count = 0;
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+class entry_relocation_test_actor_factory_t final
+    : public zlink::framework::actor_factory_t<
+        entry_relocation_test_actor_t>
+{
+  public:
+    zlink::framework::task_t<
+      std::shared_ptr<entry_relocation_test_actor_t>>
+    create (zlink::framework::actor_context_t context,
+            std::stop_token) override
+    {
+        co_return std::make_shared<entry_relocation_test_actor_t> (
+          std::move (context));
+    }
+};
+
+/* An Entry Spot Actor moving as a single-Actor relocation unit never carries
+ * a Spot on the wire (spec 28: the Entry Spot is already present on the
+ * target node). This fixture proves the target-local Entry Spot is resolved
+ * during materialize_relocation_state, the relocated Actor is joined into
+ * it, and the Actor immediately serves an application message through it. */
+class entry_relocation_test_entry_spot_t final
+    : public zlink::framework::entry_spot_t<entry_relocation_test_actor_t>
+{
+  public:
+    explicit entry_relocation_test_entry_spot_t (
+      zlink::framework::entry_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::entry_spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+    const zlink::framework::entry_spot_context_t &
+    context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override
+    {
+        _context.handlers ()
+          .add_actor_send<
+            &entry_relocation_test_entry_spot_t::on_message> (
+            "entry-relocation-test-message");
+    }
+
+    zlink::framework::task_t<void> on_message (
+      entry_relocation_test_actor_t &,
+      zlink::framework::message_context_t &,
+      const entry_relocation_test_payload_t &payload)
+    {
+        ++message_served_count;
+        last_message_value = payload.value;
+        co_return;
+    }
+
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (
+      std::string_view,
+      const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::reject ();
+    }
+    zlink::framework::task_t<void> on_actor_joined (
+      entry_relocation_test_actor_t &actor) override
+    {
+        ++joined_count;
+        joined_spot = this;
+        joined_actor = &actor;
+        co_return;
+    }
+    zlink::framework::task_t<void> on_leave_actor (
+      entry_relocation_test_actor_t &) override
+    {
+        co_return;
+    }
+
+    static inline int joined_count = 0;
+    static inline int message_served_count = 0;
+    static inline int last_message_value = 0;
+    static inline entry_relocation_test_entry_spot_t *joined_spot = nullptr;
+    static inline entry_relocation_test_actor_t *joined_actor = nullptr;
+
+  private:
+    zlink::framework::entry_spot_context_t _context;
+};
+
+/* checklist B: cpp's standalone Entry Spot Actor direct-relocation restore
+ * previously always failed in the real wired path because the target-side
+ * Entry Spot was never resolved (restore_relocation always passed
+ * target_spot=std::nullopt, and materialize_relocation_state unconditionally
+ * rejected actor targets without one). This test exercises the exact
+ * function mesh_node_host_service.cpp wires into production
+ * (configure_relocation_materialization -> materialize_relocation_state)
+ * and proves the fix: it resolves this node's own local Entry Spot. */
+void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (
+  test_context_t &test)
+{
+    entry_relocation_test_actor_t::create_count = 0;
+    entry_relocation_test_entry_spot_t::joined_count = 0;
+    entry_relocation_test_entry_spot_t::message_served_count = 0;
+    entry_relocation_test_entry_spot_t::last_message_value = 0;
+    entry_relocation_test_entry_spot_t::joined_spot = nullptr;
+    entry_relocation_test_entry_spot_t::joined_actor = nullptr;
+
+    zlink::framework::zlink_builder_t builder;
+    auto mesh = builder.add_route_mesh (
+      "entry-relocation-restore-mesh");
+    mesh.add_entry_spot<entry_relocation_test_entry_spot_t> (
+      [] (zlink::framework::entry_spot_context_t context) {
+          return std::make_shared<entry_relocation_test_entry_spot_t> (
+            std::move (context));
+      });
+    mesh.add_actor_factory<
+      entry_relocation_test_actor_t,
+      entry_relocation_test_actor_factory_t> (
+      "entry-relocation-test-actor",
+      std::make_shared<entry_relocation_test_actor_factory_t> (),
+      [] (auto &factory) { factory.recreate_on_relocation (); });
+
+    auto found_runtime =
+      zlink::framework::detail::spot_node_runtime_t::from (
+        builder, "entry-relocation-restore-mesh");
+    test.require (
+      found_runtime.has_value (),
+      "entry Spot relocation restore test must resolve its Spot runtime");
+    if (!found_runtime)
+        return;
+    auto runtime = *found_runtime;
+    const auto entry_created = runtime.create_spot ("entry");
+    test.require (
+      entry_created.state
+        == zlink::framework::spot_create_state_t::created,
+      "the fixture must create its own local Entry Spot before restore");
+
+    const object_ref_t source_actor{
+      .kind = object_kind_t::actor,
+      .key = "entry-relocation-test-actor-id",
+      .object_generation = 1,
+      .authority_owner_generation = 1,
+      .mesh_name = "mesh",
+      .node_id = "source"};
+    const frozen_object_state_t frozen{
+      .owner = source_actor,
+      .stable_type = "entry-relocation-test-actor",
+      .application_state = {},
+      .pending_application = {},
+      .timers = {}};
+    const object_ref_t target_actor{
+      .kind = object_kind_t::actor,
+      .key = "entry-relocation-test-actor-id",
+      .object_generation = 1,
+      .authority_owner_generation = 2,
+      .mesh_name = "mesh",
+      .node_id = "target"};
+
+    const auto materialized = runtime.materialize_relocation_state (
+      frozen, target_actor, std::nullopt, {});
+    test.require (
+      materialized && entry_relocation_test_actor_t::create_count == 1
+        && entry_relocation_test_entry_spot_t::joined_count == 1,
+      "a standalone Actor relocation unit (target_spot=nullopt) must "
+      "resolve the target node's own local Entry Spot and join the "
+      "relocated Actor into it, per spec 28");
+
+    test.require (
+      entry_relocation_test_entry_spot_t::joined_spot != nullptr
+        && entry_relocation_test_entry_spot_t::joined_actor != nullptr,
+      "the relocated Actor must be reachable through the target Entry "
+      "Spot instance");
+    if (entry_relocation_test_entry_spot_t::joined_spot
+        && entry_relocation_test_entry_spot_t::joined_actor) {
+        zlink::framework::service_provider_t services;
+        zlink::framework::serializer_registry_t serializers;
+        const auto served =
+          entry_relocation_test_entry_spot_t::joined_spot->context ()
+            .handlers ()
+            .invoke_actor_packet (
+              "entry-relocation-test-message",
+              *entry_relocation_test_entry_spot_t::joined_spot,
+              *entry_relocation_test_entry_spot_t::joined_actor, services,
+              serializers,
+              zlink::message_t::from (R"({"value":42})"));
+        test.require (
+          served
+            && entry_relocation_test_entry_spot_t::message_served_count
+                 == 1
+            && entry_relocation_test_entry_spot_t::last_message_value
+                 == 42,
+          "the relocated Actor must serve an application message through "
+          "its target Entry Spot immediately after restore");
+    }
+
+    runtime.request_stop ();
+    runtime.cancel_pending_dispatch ();
+    runtime.cancel_pending_work ();
+    runtime.release_native_handles ();
+}
+
+/* Negative counterpart: a genuinely spot-less arrival (no local Entry Spot
+ * resolvable on the target node) must still fail explicitly, never crash. */
+void test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (
+  test_context_t &test)
+{
+    entry_relocation_test_actor_t::create_count = 0;
+
+    zlink::framework::spot_node_builder_t builder;
+    builder.add_actor_factory<
+      entry_relocation_test_actor_t,
+      entry_relocation_test_actor_factory_t> (
+      "entry-relocation-test-actor",
+      std::make_shared<entry_relocation_test_actor_factory_t> (),
+      [] (auto &factory) { factory.recreate_on_relocation (); });
+
+    auto runtime =
+      zlink::framework::detail::spot_node_runtime_t::from (builder);
+    /* Deliberately no add_entry_spot / create_spot ("entry"): the target
+       node has no local Entry Spot to resolve. */
+
+    const object_ref_t source_actor{
+      .kind = object_kind_t::actor,
+      .key = "entry-relocation-test-actor-id",
+      .object_generation = 1,
+      .authority_owner_generation = 1,
+      .mesh_name = "mesh",
+      .node_id = "source"};
+    const frozen_object_state_t frozen{
+      .owner = source_actor,
+      .stable_type = "entry-relocation-test-actor",
+      .application_state = {},
+      .pending_application = {},
+      .timers = {}};
+    const object_ref_t target_actor{
+      .kind = object_kind_t::actor,
+      .key = "entry-relocation-test-actor-id",
+      .object_generation = 1,
+      .authority_owner_generation = 2,
+      .mesh_name = "mesh",
+      .node_id = "target"};
+
+    const auto materialized = runtime.materialize_relocation_state (
+      frozen, target_actor, std::nullopt, {});
+    test.require (
+      !materialized && entry_relocation_test_actor_t::create_count == 0,
+      "a standalone Actor relocation unit must fail explicitly (not "
+      "crash) when the target node has no local Entry Spot to resolve");
+
+    runtime.request_stop ();
+    runtime.cancel_pending_dispatch ();
+    runtime.cancel_pending_work ();
+    runtime.release_native_handles ();
+}
+
 void test_stateful_application_reservation_includes_active_work (
   test_context_t &test)
 {
@@ -5026,6 +5323,10 @@ int main ()
       test);
     test_aggregate_seal_failure_preserves_earlier_application_work (test);
     test_relocation_adapter_single_capture_restore_path (test);
+    test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (
+      test);
+    test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (
+      test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_reservation_includes_active_work (test);
     test_advertised_receive_chunk_limit_wiring (test);
