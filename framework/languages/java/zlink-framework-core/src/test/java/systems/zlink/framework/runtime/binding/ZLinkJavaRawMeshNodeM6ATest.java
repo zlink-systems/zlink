@@ -379,7 +379,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 peerRid,
                 peerEndpoint,
                 peer.status().lifecycleGeneration(),
-                peerRid.toString());
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             long intent = local.connectPeer(peerEndpoint, peerRid);
             awaitState(local, MeshPeerState.ADMITTED);
             assertTrue(local.classifyChannelTarget("game.api").isEmpty());
@@ -426,7 +426,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 peerEndpoint,
                 peerRid,
                 peer.status().lifecycleGeneration() + 1,
-                peerRid.toString());
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             awaitState(local, MeshPeerState.ERROR);
             assertFalse(local.peers().stream().anyMatch(peerEntry ->
                 peerEntry.state() == MeshPeerState.ADMITTED));
@@ -454,7 +454,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 peerEndpoint,
                 peerRid,
                 peer.status().lifecycleGeneration(),
-                peerRid.toString());
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             awaitState(local, MeshPeerState.ADMITTED);
         }
     }
@@ -485,7 +485,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerEndpoint,
                     peerRid,
                     peer.status().lifecycleGeneration(),
-                    peerRid.toString()));
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
 
             peer.close();
             try (var replacementPeer = new ZLinkJavaRawMeshNode(
@@ -498,7 +498,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerEndpoint,
                     peerRid,
                     replacementPeer.status().lifecycleGeneration(),
-                    peerRid.toString());
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
 
                 awaitState(local, MeshPeerState.ADMITTED);
                 var admitted = local.peers().stream()
@@ -515,7 +515,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         peerEndpoint,
                         peerRid,
                         replacementPeer.status().lifecycleGeneration() + 1,
-                        peerRid.toString()));
+                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
             }
         }
     }
@@ -545,7 +545,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerEndpoint,
                     peerRid,
                     peer.status().lifecycleGeneration(),
-                    peerRid.toString()));
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
 
             peer.close();
             try (var replacementPeer = new ZLinkJavaRawMeshNode(
@@ -558,7 +558,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     peerEndpoint,
                     peerRid,
                     replacementPeer.status().lifecycleGeneration(),
-                    peerRid.toString());
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
 
                 awaitState(local, MeshPeerState.ADMITTED);
                 assertEquals(

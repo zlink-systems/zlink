@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkMeshNodeMonitoringProjection;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
@@ -145,7 +146,11 @@ public final class ZLinkObjectServerDescriptorPublisher {
                 placement.activationConcurrency().limit()),
             registration.maintenanceWave(),
             state,
-            node.status().routingId().toString(),
+            //  The published security identity must be the value peers see
+            //  in the admission descriptor (the plaintext-transport
+            //  placeholder), not this node's routing id: auto-connect turns
+            //  this row back into the expected admission identity.
+            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
             owner.ownerId(),
             owner.leaseGeneration(),
             Instant.now());

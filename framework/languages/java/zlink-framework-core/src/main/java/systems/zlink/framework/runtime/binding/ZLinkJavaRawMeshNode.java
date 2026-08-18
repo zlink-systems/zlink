@@ -785,13 +785,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public long connectPeer(String endpoint, RoutingId expectedRoutingId) {
+        //  A declared peer routing id fences the endpoint and the transport
+        //  security identity, not the routing id twice: the descriptor's
+        //  securityIdentity is the plaintext placeholder every language
+        //  encodes. Expecting the routing id here rejected every non-Java
+        //  peer. An endpoint-only intent keeps "no constraint" (null).
         return connectPeer(
             endpoint,
             expectedRoutingId,
             0,
             expectedRoutingId == null
                 ? null
-                : expectedRoutingId.toString());
+                : ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
     }
 
     @Override
@@ -804,10 +809,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
         }
-        if (expectedLifecycleGeneration < 0) {
-            throw new IllegalArgumentException(
-                "expected lifecycle generation must not be negative");
-        }
+        //  0 means "no lifecycle constraint"; every other 64-bit pattern is
+        //  a valid opaque CSPRNG generation token, including the ~50% that
+        //  read back as a negative long (spec 13 §7.1 -- the token is never
+        //  judged by numeric magnitude).
         long intent = nextIntent.getAndIncrement();
         peerIntents.put(
             intent,
@@ -854,10 +859,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
         }
-        if (expectedLifecycleGeneration < 0) {
-            throw new IllegalArgumentException(
-                "expected lifecycle generation must not be negative");
-        }
+        //  See the opaque-token note on connectPeer above: 0 is "no
+        //  constraint", any other 64-bit pattern is a valid generation.
         List<Long> staleIntentIds = peerIntents.entrySet().stream()
             .filter(entry -> endpoint.equals(entry.getValue().endpoint()))
             .map(Map.Entry::getKey)
@@ -3696,6 +3699,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 throw new IllegalArgumentException(
                     "invalid Actor reply frame count");
             }
+            //  Generic application request-to-Actor completion path: not one
+            //  of request-specific-tail's tail-bearing originalOperationKind
+            //  cases, so the tail MUST be empty (schema "otherwise" branch).
+            //  See completeRequest() below for the full rationale.
+            if (frames.getFirst().length != 21) {
+                throw new IllegalArgumentException(
+                    "generic Actor reply carries an operation-specific tail");
+            }
             ZLinkServiceM6AWireCodec.Reply header =
                 wire.decodeReplyHeader(frames.getFirst());
             if (header.correlation() != correlation
@@ -3809,6 +3820,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             if (frames.isEmpty() || frames.size() > 2) {
                 throw new IllegalArgumentException("invalid service reply frame count");
+            }
+            //  This is the generic requestToNode/requestToChannel completion
+            //  path: its originalOperationKind is not one of
+            //  request-specific-tail's tail-bearing cases
+            //  (service-wire-v1.schema.json), so the schema's "otherwise"
+            //  branch applies and the tail MUST be empty.
+            //  decodeReplyHeader itself now permissively accepts
+            //  tail-bearing frames (fix for the residual-convergence tail
+            //  rejection bug), so this generic caller enforces the
+            //  empty-tail contract explicitly, matching Node's
+            //  raw-service-mesh-runtime.ts generic reply guard ("Generic
+            //  node/channel reply carries an operation-specific tail.").
+            if (frames.getFirst().length != 21) {
+                throw new IllegalArgumentException(
+                    "generic service reply carries an operation-specific tail");
             }
             ZLinkServiceM6AWireCodec.Reply header =
                 wire.decodeReplyHeader(frames.getFirst());
@@ -6078,6 +6104,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     "admit-response");
             }
         } catch (RuntimeException invalid) {
+            streamTrace(STREAM_TRACE ? "admission-invalid source=" + inbound.source()
+                + " command=" + command
+                + " error=" + invalid : null);
             trySendAdmissionControl(
                 inbound.source(),
                 transportPair(inbound),
@@ -6373,6 +6402,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 && matchesMonitorPeer(intentId, intent, event, peerRid)) {
                 closedPeerIntents.remove(intentId);
                 livePeerIntents.add(intentId);
+                if (peerRid != null
+                    && intent.expectedRoutingId() == null) {
+                    // An endpoint-only intent learns its peer's routing id
+                    // from this monitor edge. Recording it here is what lets
+                    // announceExpectedPeers open admission on a blind
+                    // connect(endpoint): a peer that only listens, or that
+                    // only announces to peers it was configured to expect
+                    // (Node, .NET, and this runtime), never speaks first, so
+                    // an un-announced blind connect leaves the pipe
+                    // ESTABLISHED with no HELLO ever exchanged.
+                    peerIntentRoutingIds.put(intentId, peerRid);
+                }
                 peerIntentTransports.computeIfAbsent(
                     intentId,
                     ignored -> ConcurrentHashMap.newKeySet())
@@ -6491,8 +6532,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void announceExpectedPeers(long nowNanos) {
-        for (PeerIntent intent : peerIntents.values()) {
-            RoutingId expected = intent.expectedRoutingId();
+        for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
+            PeerIntent intent = entry.getValue();
+            // A locally initiated connection announces itself. An
+            // endpoint-only intent has no configured routing id, so it uses
+            // the one its CONNECTION_READY monitor edge reported: peers that
+            // only listen (Node, .NET) never send the first HELLO, so an
+            // un-announced blind connect deadlocks admission forever.
+            RoutingId expected = intent.expectedRoutingId() != null
+                ? intent.expectedRoutingId()
+                : peerIntentRoutingIds.get(entry.getKey());
             if (expected == null || topology.peer(expected).isPresent()) {
                 continue;
             }
@@ -7110,7 +7159,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             advertisedEndpoint(bindEndpoint),
             channels,
             descriptorState,
-            routingId.toString(),
+            //  securityIdentity is the plaintext-transport placeholder every
+            //  language encodes, not this node's routing id. Encoding the
+            //  routing id here made every non-Java peer that fences an
+            //  expected security identity ("default") reject this
+            //  descriptor.
+            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
             0,
             List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
             objectRole,
@@ -7416,8 +7470,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long lifecycleGeneration,
         String securityIdentity) {
         private PeerAdmissionExpectation {
+            //  lifecycleGeneration is an opaque equality token: only zero
+            //  (absent) is invalid, not a negative long (spec 13 §7.1).
             if (endpoint == null || endpoint.isBlank()
-                || lifecycleGeneration <= 0
+                || lifecycleGeneration == 0
                 || securityIdentity == null
                 || securityIdentity.isBlank()) {
                 throw new IllegalArgumentException(

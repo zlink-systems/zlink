@@ -276,6 +276,13 @@ final class ZLinkServiceM6AWireCodecTest {
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId source) {
+        return descriptor(
+            source, ZLinkServiceNodeDescriptor.State.SERVING);
+    }
+
+    private static ZLinkServiceNodeDescriptor descriptor(
+        RoutingId source,
+        ZLinkServiceNodeDescriptor.State state) {
         return new ZLinkServiceNodeDescriptor(
             "mesh",
             source,
@@ -285,7 +292,7 @@ final class ZLinkServiceM6AWireCodecTest {
             List.of(
                 new ZLinkServiceNodeDescriptor.Channel("chat", 50),
                 new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            ZLinkServiceNodeDescriptor.State.SERVING,
+            state,
             "service-a",
             3,
             List.of(
@@ -297,6 +304,126 @@ final class ZLinkServiceM6AWireCodecTest {
             100,
             4,
             2);
+    }
+
+    //  GOLDEN — service-wire-v1.schema.json `runtime-state` (u8) is
+    //  preparing=0, serving=1, draining=2, stopped=3, error=4, with NO
+    //  `retiring` value: it is a host-internal transition whose remote
+    //  admission meaning is `draining`. C++ (runtime_state_wire) and Node
+    //  (stateToWire) encode exactly these values. Deriving the wire value
+    //  from the Java enum ordinal shifted every state by one, so a SERVING
+    //  Java node advertised itself to every peer as `draining` and stayed
+    //  out of the peer's ready-peer set forever. These vectors are the
+    //  descriptor extension's TLV 1 payload byte.
+    @Test
+    void goldenRuntimeStatePinsTheSchemaWireValues() {
+        record Case(ZLinkServiceNodeDescriptor.State state, int wire) {
+        }
+        for (Case expected : List.of(
+            new Case(ZLinkServiceNodeDescriptor.State.PREPARING, 0),
+            new Case(ZLinkServiceNodeDescriptor.State.SERVING, 1),
+            new Case(ZLinkServiceNodeDescriptor.State.RETIRING, 2),
+            new Case(ZLinkServiceNodeDescriptor.State.DRAINING, 2),
+            new Case(ZLinkServiceNodeDescriptor.State.STOPPED, 3),
+            new Case(ZLinkServiceNodeDescriptor.State.ERROR, 4))) {
+            var source = RoutingId.from("node-a");
+            byte[] frame = codec.encodeAdmission(
+                ServiceWireConstants.COMMAND_HELLO,
+                descriptor(source, expected.state()));
+            //  TLV 1 is the first descriptor-extension field: u8 id, u32
+            //  length, then the one-byte runtime state.
+            int stateIndex = indexOfExtensionTlv(frame, 1);
+            assertEquals(
+                expected.wire(),
+                Byte.toUnsignedInt(frame[stateIndex]),
+                "runtime state wire value for " + expected.state());
+        }
+
+        //  `retiring` is not a wire value: it never decodes back.
+        var source = RoutingId.from("node-a");
+        assertEquals(
+            ZLinkServiceNodeDescriptor.State.DRAINING,
+            codec.decodeAdmission(
+                codec.encodeAdmission(
+                    ServiceWireConstants.COMMAND_HELLO,
+                    descriptor(
+                        source,
+                        ZLinkServiceNodeDescriptor.State.RETIRING)),
+                ServiceWireConstants.COMMAND_HELLO,
+                source).state());
+    }
+
+    //  spec 13 §7.1: the lifecycle generation is an OPAQUE CSPRNG equality
+    //  token -- "which lifecycle is newer isn't judged by numeric
+    //  magnitude". C++/Node/.NET carry the full unsigned 64-bit range, so
+    //  about half of all peer-generated tokens have bit 63 set. Rejecting
+    //  those made admission against a peer fail at random, about half the
+    //  time, for the lifetime of that peer process.
+    @Test
+    void admissionAcceptsAnOpaqueLifecycleGenerationWithBit63Set() {
+        var source = RoutingId.from("node-a");
+        for (long generation : new long[] {
+            1L,
+            Long.MAX_VALUE,
+            Long.MIN_VALUE,          // 0x8000000000000000
+            -1L,                     // 0xffffffffffffffff
+            0x9e3779b97f4a7c15L}) {
+            var descriptor = new ZLinkServiceNodeDescriptor(
+                "mesh",
+                source,
+                generation,
+                11,
+                "tcp://127.0.0.1:3001",
+                List.of(new ZLinkServiceNodeDescriptor.Channel("chat", 50)),
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                3,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                80,
+                1000,
+                100,
+                4,
+                2);
+            assertEquals(
+                descriptor,
+                codec.decodeAdmission(
+                    codec.encodeAdmission(
+                        ServiceWireConstants.COMMAND_HELLO, descriptor),
+                    ServiceWireConstants.COMMAND_HELLO,
+                    source),
+                "lifecycle generation " + Long.toUnsignedString(generation));
+        }
+    }
+
+    //  The descriptor's securityIdentity is the shared plaintext-transport
+    //  placeholder every language encodes ("default"), never a routing id.
+    //  A node that advertised its routing id here was rejected by every peer
+    //  that fences an expected security identity.
+    @Test
+    void plaintextSecurityIdentityIsTheSharedCrossLanguagePlaceholder() {
+        assertEquals(
+            "default",
+            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+    }
+
+    /** Offset of the value byte of the first descriptor-extension TLV `id`. */
+    private static int indexOfExtensionTlv(byte[] frame, int id) {
+        //  prefix(5) + topologyKind(1) + routeLength(4) then the route body;
+        //  the extension follows its own u32 length. Scanning for the TLV
+        //  header from the end of the frame is enough for this fixture: TLV
+        //  1 is the first extension field and the extension is the frame
+        //  tail.
+        for (int index = 10; index + 5 < frame.length; index++) {
+            if (Byte.toUnsignedInt(frame[index]) == id
+                && frame[index + 1] == 0
+                && frame[index + 2] == 0
+                && frame[index + 3] == 0
+                && frame[index + 4] == 1) {
+                return index + 5;
+            }
+        }
+        throw new AssertionError("descriptor extension TLV is missing: " + id);
     }
 
     @Test

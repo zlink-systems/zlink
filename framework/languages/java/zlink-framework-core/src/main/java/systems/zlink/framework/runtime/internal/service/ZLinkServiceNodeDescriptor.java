@@ -25,6 +25,17 @@ public record ZLinkServiceNodeDescriptor(
     int pendingCapacityUsed) {
     public static final String REQUIRED_CAPABILITY = "framework-service-v12";
 
+    /**
+     * Shared admission identity of the plaintext ROUTER transport. The
+     * MeshNode socket exposes no authenticated peer identity, so every
+     * language encodes this single placeholder in {@code securityIdentity}
+     * (C++ {@code service_topology_registry.hpp} default, Node
+     * {@code node-raw-mesh-backend.createDescriptor}, .NET
+     * {@code ZLinkServiceSecurityIdentity.Plaintext}) and compares an
+     * expectation against it. It is NOT a routing id.
+     */
+    public static final String PLAINTEXT_SECURITY_IDENTITY = "default";
+
     public ZLinkServiceNodeDescriptor {
         meshName = requireText(meshName, "meshName");
         Objects.requireNonNull(nodeRoutingId, "nodeRoutingId");
@@ -32,9 +43,20 @@ public record ZLinkServiceNodeDescriptor(
         securityIdentity = requireText(securityIdentity, "securityIdentity");
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(objectRole, "objectRole");
-        if (lifecycleGeneration <= 0 || descriptorRevision <= 0) {
+        //  The lifecycle generation is an opaque CSPRNG equality token over
+        //  the full unsigned 64-bit range (spec 13 §7.1: "which lifecycle is
+        //  newer isn't judged by numeric magnitude"), so any non-zero bit
+        //  pattern is valid here -- including the ~50% of peer-generated
+        //  tokens whose bit 63 is set and that read back as a negative long.
+        //  Only the descriptor revision is ordered, so only it is bounded to
+        //  the range where signed comparison is the unsigned comparison.
+        if (lifecycleGeneration == 0) {
             throw new IllegalArgumentException(
-                "lifecycle generation and descriptor revision must be positive");
+                "lifecycle generation must be non-zero");
+        }
+        if (descriptorRevision <= 0) {
+            throw new IllegalArgumentException(
+                "descriptor revision must be positive");
         }
         if (applicationVersion < 0) {
             throw new IllegalArgumentException(

@@ -425,8 +425,17 @@ public final class ZLinkMeshApplicationDispatcher
             // (submitLocalNodeSend) and every other cross-language host's
             // route-mesh reply for an unregistered request handler: NOT_FOUND,
             // not the reject(...) overload's INTERNAL_FAILURE default.
+            //  The error envelope must echo the request's channel/message
+            //  names and correlation id exactly like the handler-failure
+            //  path below (replyError(record, token, envelope, error)) and
+            //  like every other language's reply writer. An error envelope
+            //  built without the request header carries no messageName, and
+            //  a peer that validates the reply header against the request
+            //  cannot decode it as a framework error at all -- it surfaces
+            //  as an unclassified internal failure instead of NOT_FOUND.
             reject(
                 record,
+                envelope,
                 ZLinkFrameworkErrorKind.NOT_FOUND,
                 "MeshNode request handler is not registered: " + packetName,
                 claim);
@@ -511,13 +520,18 @@ public final class ZLinkMeshApplicationDispatcher
 
     private void reject(
         ZLinkMeshDispatchRecord record,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope,
         ZLinkFrameworkErrorKind kind,
         String message,
         ZLinkMeshDrainCoordinator.Claim claim) {
         ReplyToken token = record.receive().replyToken();
         try {
             if (token != null || record.canReply()) {
-                replyError(record, token, kind, message);
+                replyAndClose(
+                    record,
+                    token,
+                    ZLinkFrameworkErrorReply.create(
+                        envelope, kind, message, Map.of()));
             }
         } finally {
             closeRecord(record, claim);
@@ -536,23 +550,11 @@ public final class ZLinkMeshApplicationDispatcher
         }
     }
 
-    private void replyError(ReplyToken token, String message) {
-        replyAndClose(token, ZLinkFrameworkErrorReply.create(message));
-    }
-
     private void replyError(
         ZLinkMeshDispatchRecord record,
         ReplyToken token,
         String message) {
         replyAndClose(record, token, ZLinkFrameworkErrorReply.create(message));
-    }
-
-    private void replyError(
-        ZLinkMeshDispatchRecord record,
-        ReplyToken token,
-        ZLinkFrameworkErrorKind kind,
-        String message) {
-        replyAndClose(record, token, ZLinkFrameworkErrorReply.create(kind, message));
     }
 
     private void replyError(
@@ -589,14 +591,6 @@ public final class ZLinkMeshApplicationDispatcher
         return List.of(
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(envelope)),
             reply);
-    }
-
-    private void replyAndClose(ReplyToken token, List<Message> parts) {
-        try {
-            replies.send(token, parts);
-        } finally {
-            parts.forEach(Message::close);
-        }
     }
 
     private void replyAndClose(

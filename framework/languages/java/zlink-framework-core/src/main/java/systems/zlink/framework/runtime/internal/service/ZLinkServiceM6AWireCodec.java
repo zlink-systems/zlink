@@ -26,7 +26,10 @@ public final class ZLinkServiceM6AWireCodec {
         Writer route = new Writer();
         route.text8(descriptor.meshName(), "meshName");
         route.text8(descriptor.securityIdentity(), "securityIdentity");
-        route.u64(descriptor.lifecycleGeneration());
+        //  lifecycleGeneration is an opaque equality token over the full
+        //  unsigned 64-bit range (spec 13 §7.1); descriptorRevision is
+        //  ordered and stays range-checked.
+        route.opaqueU64(descriptor.lifecycleGeneration());
         route.u64(descriptor.descriptorRevision());
         route.text16(descriptor.advertisedEndpoint(), "advertisedEndpoint");
         route.u16(descriptor.channels().size());
@@ -85,7 +88,17 @@ public final class ZLinkServiceM6AWireCodec {
         }
         String meshName = reader.text8("meshName");
         String securityIdentity = reader.text8("securityIdentity");
-        long lifecycleGeneration = reader.nonzeroU64("lifecycleGeneration");
+        //  spec 13 §7.1 / service-wire-v1.schema.json `nonzero-u64`: the
+        //  lifecycle generation is an OPAQUE equality token produced by a
+        //  CSPRNG -- "which lifecycle is newer isn't judged by numeric
+        //  magnitude". Every other language carries it as a full unsigned
+        //  64-bit value (C++ std::uint64_t, Node bigint, .NET ulong), so
+        //  roughly half of all generated tokens have bit 63 set. Rejecting
+        //  those as "out of JVM range" made admission against a peer fail
+        //  about half the time, at random, per process lifetime. Java keeps
+        //  the raw 64-bit pattern in a long and only ever compares it for
+        //  equality, which is exactly the contract.
+        long lifecycleGeneration = reader.opaqueNonzeroU64("lifecycleGeneration");
         long descriptorRevision = reader.nonzeroU64("descriptorRevision");
         String endpoint = reader.text16("advertisedEndpoint");
         int channelCount = reader.u16("channelCount");
@@ -462,16 +475,33 @@ public final class ZLinkServiceM6AWireCodec {
         }
     }
 
+    //  service-wire-v1.schema.json `runtime-state` (u8): preparing=0,
+    //  serving=1, draining=2, stopped=3, error=4. The wire has no `retiring`
+    //  value -- it is a host-internal transition whose remote admission
+    //  meaning is `draining`, exactly as C++ (runtime_state_wire) and Node
+    //  (stateToWire) encode it. Deriving the value from the Java enum's
+    //  ordinal shifted every state by one and made a SERVING Java node
+    //  advertise itself as `draining` to every peer, which kept the peer out
+    //  of the remote ready-peer set forever.
     private static int stateToWire(ZLinkServiceNodeDescriptor.State value) {
-        return value.ordinal() + 1;
+        return switch (value) {
+            case PREPARING -> 0;
+            case SERVING -> 1;
+            case RETIRING, DRAINING -> 2;
+            case STOPPED -> 3;
+            case ERROR -> 4;
+        };
     }
 
     private static ZLinkServiceNodeDescriptor.State stateFromWire(int value) {
-        if (value < 1
-            || value > ZLinkServiceNodeDescriptor.State.values().length) {
-            throw protocol("invalid runtime state");
-        }
-        return ZLinkServiceNodeDescriptor.State.values()[value - 1];
+        return switch (value) {
+            case 0 -> ZLinkServiceNodeDescriptor.State.PREPARING;
+            case 1 -> ZLinkServiceNodeDescriptor.State.SERVING;
+            case 2 -> ZLinkServiceNodeDescriptor.State.DRAINING;
+            case 3 -> ZLinkServiceNodeDescriptor.State.STOPPED;
+            case 4 -> ZLinkServiceNodeDescriptor.State.ERROR;
+            default -> throw protocol("invalid runtime state");
+        };
     }
 
     private static int roleToWire(ZLinkServiceNodeDescriptor.ObjectRole value) {
@@ -574,6 +604,15 @@ public final class ZLinkServiceM6AWireCodec {
             if (value < 0) {
                 throw protocol("value exceeds supported u64 range");
             }
+            opaqueU64(value);
+        }
+
+        /**
+         * Writes the raw 64-bit pattern of an opaque `nonzero-u64` equality
+         * token (see {@link Reader#opaqueNonzeroU64}). Fields that carry a
+         * magnitude use the range-checked {@link #u64} instead.
+         */
+        void opaqueU64(long value) {
             output.writeBytes(ByteBuffer.allocate(8)
                 .order(ByteOrder.BIG_ENDIAN)
                 .putLong(value)
@@ -679,6 +718,21 @@ public final class ZLinkServiceM6AWireCodec {
 
         long nonzeroU64(String field) {
             long value = nonnegativeU64(field);
+            if (value == 0) {
+                throw protocol(field + " must be non-zero");
+            }
+            return value;
+        }
+
+        /**
+         * Reads a `nonzero-u64` whose value is an opaque equality token: the
+         * full unsigned 64-bit range is valid and the raw bit pattern is
+         * kept in a long. Only fields that are compared for ORDER (such as
+         * descriptorRevision) may use the range-checked {@link #nonzeroU64}.
+         */
+        long opaqueNonzeroU64(String field) {
+            require(8, field);
+            long value = input.getLong();
             if (value == 0) {
                 throw protocol(field + " must be non-zero");
             }

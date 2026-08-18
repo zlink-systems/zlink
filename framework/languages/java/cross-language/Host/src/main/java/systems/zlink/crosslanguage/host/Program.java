@@ -118,17 +118,20 @@ public final class Program {
                     : options.addRouteMesh(channel).listen(bindEndpoint);
                 // RegistryMessaging e2e convention: every route mesh member
                 // exposes the channel server role, and peers connect by
-                // endpoint; the routing id is learned from admission. Tried
-                // switching to the connect(RoutingId, endpoint) overload
-                // (declaring the expected peer id up front, like the .NET
-                // spot-route-client TestHost mode) to see if it would also
-                // unblock Java<->Node/.NET admission -- it did not, and it
-                // regressed the previously-green Java<->C++ direction
-                // (stage_java_spot_route_client_cpp_host started failing
-                // with kind=unavailable "route is not connected"), so this
-                // stays a blind connect(endpoint). See the harness
-                // convergence report for the Java<->Node/.NET admission
-                // finding.
+                // endpoint; the routing id is learned from admission. This
+                // is the same blind connect(endpoint) the C++ host uses.
+                //
+                // An earlier attempt to switch this to the
+                // connect(RoutingId, endpoint) overload regressed
+                // Java<->C++ with kind=unavailable, because
+                // ZLinkJavaRawMeshNode.connectPeer(endpoint, rid) fenced the
+                // peer's securityIdentity against the peer's ROUTING ID
+                // instead of the plaintext-transport placeholder every
+                // language actually encodes -- so a declared peer id
+                // rejected every non-Java peer. That framework bug is fixed
+                // (see ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                // the blind connect stays because it now admits against
+                // every peer language on its own.
                 mesh.setRoutingId(
                     RoutingId.from(args.option("node-rid", "java-spot-route-client")));
                 mesh.channelName(channel).server();

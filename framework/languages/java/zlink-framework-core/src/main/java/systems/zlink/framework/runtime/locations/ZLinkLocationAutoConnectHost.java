@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
 public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
@@ -458,10 +459,15 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 target.nodeRid(),
                 target.endpoint(),
                 target.lifecycleGeneration(),
+                //  A row without the metadata key falls back to the shared
+                //  plaintext-transport identity every language encodes in
+                //  its admission descriptor -- never to the routing id,
+                //  which no peer ever puts in that field.
                 target.metadata().getOrDefault(
                     ZLinkAutoConnectPlanner
                         .SECURITY_IDENTITY_METADATA_KEY,
-                    target.nodeRid().toString()));
+                    ZLinkServiceNodeDescriptor
+                        .PLAINTEXT_SECURITY_IDENTITY));
         }
 
         @Override
@@ -485,7 +491,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                         target.metadata().getOrDefault(
                             ZLinkAutoConnectPlanner
                                 .SECURITY_IDENTITY_METADATA_KEY,
-                            target.nodeRid().toString()))
+                            ZLinkServiceNodeDescriptor
+                                .PLAINTEXT_SECURITY_IDENTITY))
                     : node.connectPeer(target.endpoint());
                 connectionIntents.put(
                     target.endpoint(),
