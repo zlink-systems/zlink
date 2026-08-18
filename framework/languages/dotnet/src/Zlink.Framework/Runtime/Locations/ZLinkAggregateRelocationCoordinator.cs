@@ -277,12 +277,12 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 request.TargetDescriptor.Rid.ToHex(),
                 request.TargetDescriptorLifecycleGeneration,
                 Phase: 4,
-                stored.Reference,
-                stored.ChecksumCrc32c,
                 envelope.CanonicalApplicationVersion)
             {
                 CoordinatorExpectedAuthorityStoreVersion =
-                    spotParticipant.ExpectedStoreVersion
+                    spotParticipant.ExpectedStoreVersion,
+                RelocationReference = stored.Reference,
+                RelocationChecksumCrc32c = stored.ChecksumCrc32c
             },
             envelope);
     }

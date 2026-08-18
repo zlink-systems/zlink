@@ -4,7 +4,6 @@ import type {
   RoutingId,
   ZLinkActor,
   ZLinkActorJoinOperationId,
-  ZLinkBlobReference,
   ZLinkMessage,
   ZLinkMessageSerializer,
   ZLinkRelocationStore,
@@ -21,8 +20,6 @@ import type {
   ZLinkOwnerLeaseStore
 } from '../locations/internal-store-contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import { putNewRelocationBlob, relocationBlobReference } from '../locations/relocation-blob';
-import { crc32c } from '../foundation/service-relocation-runtime';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend';
 import {
@@ -529,22 +526,9 @@ export class ZLinkActorTransferRuntime {
         state.actorType,
         signal
       );
-      const transferBytes = transfer.state.toEncodedPayload().toBytes();
-      let transferStateReference: ZLinkBlobReference | undefined;
-      let transferStateChecksumCrc32c: number | undefined;
-      if (transfer.adapterKey !== undefined) {
-        const relocationStore = this.options.relocationStore();
-        if (relocationStore === undefined) {
-          throw new Error('Cross-node Actor relocation requires a Relocation Store.');
-        }
-        transferStateReference = (await putNewRelocationBlob(
-          relocationStore,
-          transferBytes,
-          24 * 60 * 60 * 1_000,
-          signal
-        )).reference;
-        transferStateChecksumCrc32c = crc32c(transferBytes);
-      }
+      // The captured state is handed off inline with the join request; the
+      // Relocation Store no longer carries relocation state payloads
+      // (spec 28 §2 — direct transfer is the only handoff original).
       relocationMetric?.recordBytes(transfer.state.toEncodedPayload().toBytes().byteLength);
       if (lifecycleAuthority === 'framework') {
         sourceLeaveStarted = true;
@@ -562,8 +546,6 @@ export class ZLinkActorTransferRuntime {
         ZLinkActorMessageFollowOwnerFence | undefined;
       return {
         ...transfer,
-        stateReference: transferStateReference?.value,
-        stateChecksumCrc32c: transferStateChecksumCrc32c,
         handoffBacklog,
         sourceLeaveCompletion,
         sourceLeaveSubmitted: coreSourceLeave?.submitted,
@@ -662,9 +644,6 @@ export class ZLinkActorTransferRuntime {
           phase = 'rolledBack';
           relocationMetric?.complete('aborted');
           this.coreSourceLeaves.delete(actor.context.actorId);
-          if (transferStateReference !== undefined) {
-            await this.options.relocationStore()?.delete(transferStateReference, signal);
-          }
           await this.cancelSourceActorMove(actor, state, deferredOperationId);
           await this.restoreSourceActor(actor, sourceSpotId);
           if (sealId !== undefined) {
@@ -685,22 +664,6 @@ export class ZLinkActorTransferRuntime {
       }
       throw error;
     }
-  }
-
-  async readPreparedTransferState(
-    reference: string,
-    checksumCrc32c: number,
-    signal?: AbortSignal
-  ): Promise<Buffer> {
-    const store = this.options.relocationStore();
-    if (store === undefined) {
-      throw new Error('Cross-node Actor relocation requires a Relocation Store.');
-    }
-    const read = await store.read(relocationBlobReference(reference), signal);
-    if (read.kind !== 'found' || crc32c(read.bytes) !== checksumCrc32c) {
-      throw new Error('Actor relocation state reference is missing or corrupt.');
-    }
-    return Buffer.from(read.bytes);
   }
 
   async prepareMaintenanceSession(

@@ -109,6 +109,25 @@ internal static class ZLinkRuntimeMetrics
         Meter.CreateHistogram<double>(
             "zlink.relocation.interruption",
             "s");
+    //  Spec 25 §5 — target-local S2→S3: Location Store CAS confirmation to
+    //  application dispatch open for one relocation unit.
+    private static readonly Histogram<double> RelocationTargetResume =
+        Meter.CreateHistogram<double>(
+            "zlink.relocation.target_resume",
+            "s");
+    //  Spec 25 §5 — source-local S1→S4: cutover submit terminal to the point
+    //  where the unit's Message Follow route becomes removable.
+    private static readonly Histogram<double> RelocationRouteConvergence =
+        Meter.CreateHistogram<double>(
+            "zlink.relocation.route_convergence",
+            "s");
+    //  Spec 25 §5 — counts cutover-wait expiries where the target proceeded
+    //  to the Location Store CAS via the fallback path without completeness
+    //  verification.
+    private static readonly Counter<long> RelocationCutoverTimeout =
+        Meter.CreateCounter<long>(
+            "zlink.relocation.cutover_timeout",
+            "{fallback}");
 
     private static readonly Counter<long> InstanceSpotActivations =
         Meter.CreateCounter<long>("zlink.instance_spot.activations", "{activation}");
@@ -277,6 +296,33 @@ internal static class ZLinkRuntimeMetrics
                 "execution_mode",
                 executionMode);
     }
+
+    internal static void RecordRelocationTargetResume(
+        TimeSpan duration,
+        string unitKind)
+    {
+        if (!RelocationTargetResume.Enabled) return;
+        SafeRecord(
+            RelocationTargetResume,
+            Math.Max(0, duration.TotalSeconds),
+            "unit_kind",
+            unitKind);
+    }
+
+    internal static void RecordRelocationRouteConvergence(
+        TimeSpan duration,
+        string unitKind)
+    {
+        if (!RelocationRouteConvergence.Enabled) return;
+        SafeRecord(
+            RelocationRouteConvergence,
+            Math.Max(0, duration.TotalSeconds),
+            "unit_kind",
+            unitKind);
+    }
+
+    internal static void RecordRelocationCutoverTimeout(string unitKind) =>
+        SafeAdd(RelocationCutoverTimeout, 1, "unit_kind", unitKind);
 
     public static ZLinkRelocationMetricOperation CreateRelocation(
         string meshName,

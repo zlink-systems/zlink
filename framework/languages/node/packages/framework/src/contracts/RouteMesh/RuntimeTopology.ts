@@ -75,6 +75,12 @@ export interface ZLinkFrameworkRuntimeStatus {
   readonly isReady: boolean;
   readonly acceptingWork: boolean;
   readonly capacity: ZLinkHostCapacityStatus;
+  /**
+   * True when every relocation this source started reached its Message
+   * Follow route removal point and its cutover retransmission window ended
+   * (spec 30 §11) — the source-published SafeToShutdown observation.
+   */
+  readonly safeToShutdown: boolean;
   readonly deadline?: Date;
   readonly relocationResult?: ZLinkFrameworkRelocationResult;
   readonly terminationResult?: ZLinkFrameworkTerminationResult;

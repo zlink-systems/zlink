@@ -1617,49 +1617,33 @@ relocation_object_t read_object (std::span<const std::uint8_t> bytes,
     return result;
 }
 
-void append_root (std::vector<std::uint8_t> &bytes,
-                  const std::optional<relocation_root_t> &root)
+void append_payload_manifest (std::vector<std::uint8_t> &bytes,
+                              const relocation_prepare_t &record)
 {
-    if (!root) {
-        bytes.push_back (0);
-        append_u16 (bytes, 0);
-        return;
-    }
-    std::vector<std::uint8_t> body;
-    append_text16 (body, root->reference, "relocation reference",
-                   relocationReferenceBytes);
-    append_u32 (body, root->checksum_crc32c);
-    bytes.push_back (1);
-    append_u16 (bytes, static_cast<std::uint16_t> (body.size ()));
-    bytes.insert (bytes.end (), body.begin (), body.end ());
+    if (record.payload_total_length > relocationLogicalBytes)
+        throw service_wire_error_t (
+          "relocation payload total length exceeds the logical bound");
+    if (record.payload_chunk_count > relocationChunkCount)
+        throw service_wire_error_t (
+          "relocation payload chunk count exceeds the chunk bound");
+    append_u64 (bytes, record.payload_total_length);
+    append_u32 (bytes, record.payload_chunk_count);
+    append_u32 (bytes, record.payload_checksum_crc32c);
 }
 
-std::optional<relocation_root_t> read_root (
-  std::span<const std::uint8_t> bytes, std::size_t &offset)
+void read_payload_manifest (std::span<const std::uint8_t> bytes,
+                            std::size_t &offset,
+                            relocation_prepare_t &record)
 {
-    if (offset >= bytes.size ())
-        throw service_wire_error_t ("relocation root presence is truncated");
-    const auto present = bytes[offset++];
-    if (present > 1)
-        throw service_wire_error_t ("invalid relocation root presence");
-    const auto length = read_u16 (bytes, offset);
-    if (bytes.size () - offset < length)
-        throw service_wire_error_t ("relocation root is truncated");
-    const auto body = bytes.subspan (offset, length);
-    offset += length;
-    if (present == 0) {
-        if (!body.empty ())
-            throw service_wire_error_t ("absent relocation root has a body");
-        return std::nullopt;
-    }
-    std::size_t body_offset = 0;
-    relocation_root_t result;
-    result.reference = read_text16 (
-      body, body_offset, "relocation reference", relocationReferenceBytes);
-    result.checksum_crc32c = read_u32 (body, body_offset);
-    if (body_offset != body.size ())
-        throw service_wire_error_t ("relocation root has trailing bytes");
-    return result;
+    record.payload_total_length = read_u64 (bytes, offset);
+    if (record.payload_total_length > relocationLogicalBytes)
+        throw service_wire_error_t (
+          "relocation payload total length exceeds the logical bound");
+    record.payload_chunk_count = read_u32 (bytes, offset);
+    if (record.payload_chunk_count > relocationChunkCount)
+        throw service_wire_error_t (
+          "relocation payload chunk count exceeds the chunk bound");
+    record.payload_checksum_crc32c = read_u32 (bytes, offset);
 }
 
 template <typename Record>
@@ -1854,6 +1838,8 @@ std::vector<std::uint8_t> encode_relocation_control (
             kind = command::relocationReady;
         else if constexpr (std::is_same_v<record_t, relocation_data_t>)
             kind = command::relocationData;
+        else if constexpr (std::is_same_v<record_t, relocation_state_t>)
+            kind = command::relocationState;
         else
             kind = command::relocationCutover;
 
@@ -1873,7 +1859,7 @@ std::vector<std::uint8_t> encode_relocation_control (
                            "source node RID");
             append_nonzero_u64 (bytes, value.source_node_generation,
                                 "source node generation");
-            append_root (bytes, value.root);
+            append_payload_manifest (bytes, value);
             append_ordinal (bytes, value.application_version,
                             "application version");
         }
@@ -1893,10 +1879,26 @@ std::vector<std::uint8_t> encode_relocation_control (
             const auto frozen = encode_frozen_record (value.record);
             bytes.insert (bytes.end (), frozen.begin (), frozen.end ());
         }
+        else if constexpr (std::is_same_v<record_t, relocation_state_t>) {
+            append_relocation_base (bytes, value);
+            append_role (bytes, value.sender_role);
+            append_object (bytes, value.object);
+            append_u32 (bytes, value.chunk_ordinal);
+            if (value.chunk_data.size () > relocationChunkBytes)
+                throw service_wire_error_t (
+                  "relocation state chunk exceeds the chunk byte bound");
+            append_u32 (bytes,
+                        static_cast<std::uint32_t> (value.chunk_data.size ()));
+            bytes.insert (bytes.end (), value.chunk_data.begin (),
+                          value.chunk_data.end ());
+        }
         else {
             append_relocation_base (bytes, value);
             append_role (bytes, value.sender_role);
             append_object (bytes, value.object);
+            append_ordinal (bytes, value.boundary_record_count,
+                            "boundary record count");
+            append_u32 (bytes, value.boundary_checksum_crc32c);
         }
         return bytes;
     }, record);
@@ -1923,7 +1925,7 @@ relocation_control_t decode_relocation_control (
               bytes, offset, "source node RID");
             result.source_node_generation = read_nonzero_u64 (
               bytes, offset, "source node generation");
-            result.root = read_root (bytes, offset);
+            read_payload_manifest (bytes, offset, result);
             result.application_version = read_ordinal (
               bytes, offset, "application version");
             if (offset != bytes.size ())
@@ -1960,15 +1962,47 @@ relocation_control_t decode_relocation_control (
             read_relocation_base (bytes, offset, result);
             result.sender_role = read_role (bytes, offset);
             result.object = read_object (bytes, offset);
+            result.boundary_record_count = read_ordinal (
+              bytes, offset, "boundary record count");
+            result.boundary_checksum_crc32c = read_u32 (bytes, offset);
             if (offset != bytes.size ())
                 throw service_wire_error_t (
                   "relocation cutover has trailing bytes");
+            return result;
+        }
+        case command::relocationState: {
+            relocation_state_t result;
+            read_relocation_base (bytes, offset, result);
+            result.sender_role = read_role (bytes, offset);
+            result.object = read_object (bytes, offset);
+            result.chunk_ordinal = read_u32 (bytes, offset);
+            const auto chunk_length = read_u32 (bytes, offset);
+            if (chunk_length > relocationChunkBytes)
+                throw service_wire_error_t (
+                  "relocation state chunk exceeds the chunk byte bound");
+            if (bytes.size () - offset < chunk_length)
+                throw service_wire_error_t (
+                  "relocation state chunk data is truncated");
+            result.chunk_data.assign (
+              bytes.begin () + static_cast<std::ptrdiff_t> (offset),
+              bytes.begin () + static_cast<std::ptrdiff_t> (offset)
+                + chunk_length);
+            offset += chunk_length;
+            if (offset != bytes.size ())
+                throw service_wire_error_t (
+                  "relocation state has trailing bytes");
             return result;
         }
         default:
             throw service_wire_error_t (
               "record is not a maintenance relocation control command");
     }
+}
+
+std::uint32_t relocation_checksum_crc32c (
+  std::span<const std::uint8_t> payload) noexcept
+{
+    return crc32c (payload);
 }
 
 namespace

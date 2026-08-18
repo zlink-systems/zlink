@@ -54,4 +54,32 @@ public sealed class ZLinkLocationOptions
     /// </summary>
     public TimeSpan SessionRelocationSealTimeout { get; set; } =
         TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Maximum size in bytes of one encoded relocation payload chunk sent as
+    /// a relocationState command. Must be positive and must not exceed the
+    /// transport frame limit.
+    /// </summary>
+    public long RelocationPayloadChunkLimit { get; set; } = 256 * 1024;
+
+    /// <summary>
+    /// Upper bound on the sum of relocation chunk bytes in flight on one peer
+    /// connection. Zero disables the budget.
+    /// </summary>
+    public long RelocationInFlightPayloadBudget { get; set; } =
+        16 * 1024 * 1024;
+
+    /// <summary>
+    /// Upper bound on the sum of relocation chunk bytes in flight across the
+    /// whole node. Zero disables the budget.
+    /// </summary>
+    public long RelocationNodeInFlightPayloadBudget { get; set; }
+
+    /// <summary>
+    /// Time the target waits for the relocation cutover after restore, and
+    /// the time the source retains the boundary batch copy for
+    /// retransmission after the cutover submit reaches a terminal state.
+    /// </summary>
+    public TimeSpan RelocationCutoverWaitTimeout { get; set; } =
+        TimeSpan.FromSeconds(1);
 }

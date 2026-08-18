@@ -20,7 +20,6 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -45,6 +44,7 @@ public final class ZLinkUserSpotRetireRuntime {
     private final Duration sessionRelocationSealTimeout;
     private final Map<String, Lane> lanes;
     private final Map<String, ActorLane> actorLanes;
+    private final List<ZLinkCanonicalRelocationStateMachine> stateMachines;
 
     public static final class RelocationBlockedException
         extends IllegalStateException {
@@ -69,7 +69,6 @@ public final class ZLinkUserSpotRetireRuntime {
         Map<String, ZLinkInternalMeshNode> nodes,
         ZLinkLocationRepository locations,
         ZLinkLocationRepository authorities,
-        ZLinkRelocationStore relocationStore,
         ZLinkLocationOptions options,
         ZLinkRelocationAdapterRegistry adapters,
         long applicationVersion,
@@ -94,9 +93,16 @@ public final class ZLinkUserSpotRetireRuntime {
         Objects.requireNonNull(registrations, "registrations");
         Objects.requireNonNull(nodes, "nodes");
         var coordinator = new ZLinkAggregateRelocationCoordinator(
-            Objects.requireNonNull(authorities, "authorities"),
-            Objects.requireNonNull(relocationStore, "relocationStore"));
+            Objects.requireNonNull(authorities, "authorities"));
         Objects.requireNonNull(options, "options");
+        var transferOptions = new ZLinkRelocationPayloadTransfer.Options(
+            options.relocationPayloadChunkLimitBytes(),
+            options.relocationInFlightPayloadBudgetBytes(),
+            options.relocationNodeInFlightPayloadBudgetBytes(),
+            options.relocationCutoverWaitTimeout(),
+            options.messageFollowDuration());
+        var machines =
+            new ArrayList<ZLinkCanonicalRelocationStateMachine>();
         LinkedHashMap<String, Lane> configured = new LinkedHashMap<>();
         LinkedHashMap<String, ActorLane> configuredActors =
             new LinkedHashMap<>();
@@ -184,7 +190,9 @@ public final class ZLinkUserSpotRetireRuntime {
                     locations,
                     coordinator,
                     target,
-                    spots::scheduleRelocationCleanup);
+                    spots::scheduleRelocationCleanup,
+                    transferOptions);
+            machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient)
                 .install(node);
             node.setRelocationReplyRelayHandler(
@@ -240,6 +248,7 @@ public final class ZLinkUserSpotRetireRuntime {
         }
         lanes = Map.copyOf(configured);
         actorLanes = Map.copyOf(configuredActors);
+        stateMachines = List.copyOf(machines);
         if (!actorLanes.isEmpty()) {
             actors.setActorJoinRelocationPort(actorJoin);
         }
@@ -262,6 +271,16 @@ public final class ZLinkUserSpotRetireRuntime {
                 route.sessionOwnerNodeRid(),
                 route.sessionRid());
         }
+    }
+
+    /**
+     * True when every source-side relocation unit has passed its Message
+     * Follow route removal point (S4) and its cutover retransmission window
+     * — the source-local SafeToShutdown condition (spec 30 §11).
+     */
+    public boolean relocationSourceQuiescent() {
+        return stateMachines.stream()
+            .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);
     }
 
     public CompletionStage<Void> startup() {
@@ -564,7 +583,9 @@ public final class ZLinkUserSpotRetireRuntime {
             return CompletableFuture.failedFuture(new java.util.concurrent
                 .TimeoutException("User Spot Retire deadline elapsed"));
         }
-        return lane.source().prepare(spotId, targetPolicy, cancellation)
+        return lane.awaitUnitAdmission()
+            .thenCompose(admitted ->
+                lane.source().prepare(spotId, targetPolicy, cancellation))
             .thenCompose(source -> {
                 requireExactCoreReady(
                     lane.node(), source.stageRequest().targetNodeRid(),
@@ -598,7 +619,9 @@ public final class ZLinkUserSpotRetireRuntime {
             return CompletableFuture.failedFuture(new java.util.concurrent
                 .TimeoutException("Actor relocation deadline elapsed"));
         }
-        return lane.source().prepare(actorId, targetPolicy, cancellation)
+        return lane.awaitUnitAdmission()
+            .thenCompose(admitted ->
+                lane.source().prepare(actorId, targetPolicy, cancellation))
             .thenCompose(source -> {
                 requireExactCoreReady(
                     lane.node(), source.stageRequest().targetNodeRid(),
@@ -617,6 +640,12 @@ public final class ZLinkUserSpotRetireRuntime {
         ZLinkUserSpotRetireScheduler scheduler,
         ZLinkRelocationTransitionClient client,
         ZLinkInternalMeshNode node) {
+        CompletionStage<Void> awaitUnitAdmission() {
+            return client instanceof ZLinkCanonicalRelocationStateMachine
+                machine
+                ? machine.awaitUnitAdmission()
+                : CompletableFuture.completedFuture(null);
+        }
     }
 
     private record ActorLane(
@@ -624,6 +653,12 @@ public final class ZLinkUserSpotRetireRuntime {
         ZLinkStandaloneActorRelocationScheduler scheduler,
         ZLinkRelocationTransitionClient client,
         ZLinkInternalMeshNode node) {
+        CompletionStage<Void> awaitUnitAdmission() {
+            return client instanceof ZLinkCanonicalRelocationStateMachine
+                machine
+                ? machine.awaitUnitAdmission()
+                : CompletableFuture.completedFuture(null);
+        }
     }
 
     private static void requireExactCoreReady(

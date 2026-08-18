@@ -76,6 +76,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _pendingReplyRelays = new();
     private readonly ConcurrentDictionary<PendingRelocationPrepareKey,
         PendingRelocationPrepare> _pendingRelocationPrepares = new();
+    //  Inbound direct-transfer assemblies (spec 28 §4.3), keyed by the exact
+    //  relocation identity plus the authenticated source rid. Registered
+    //  synchronously when command 40 arrives so command 52 chunks on the same
+    //  ordered connection always find their assembly.
+    private readonly ConcurrentDictionary<PendingRelocationPrepareKey,
+        ZLinkRelocationChunkAssembler> _inboundRelocationAssemblies = new();
+    //  Per-peer and node-wide in-flight relocation chunk budgets
+    //  (spec 28 §5.3). Lazily built from the configured budget values.
+    private readonly ConcurrentDictionary<RoutingId,
+        ZLinkRelocationTransferBudget> _relocationPeerBudgets = new();
+    private ZLinkRelocationTransferBudget? _relocationNodeBudget;
     private readonly ConcurrentDictionary<PendingSessionRelocationKey,
         PendingSessionRelocationSeal> _pendingSessionRelocationSeals = new();
     private readonly ConcurrentDictionary<PendingSessionRelocationKey,
@@ -181,6 +192,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     public ulong RouterReceiveHighWaterMark { get; set; } = 4_096_000;
     public ulong MailboxMessageBudget { get; set; } = 10_000;
     public ulong MailboxByteBudget { get; set; } = 64 * 1024 * 1024;
+    //  Direct-transfer relocation options (spec 28 §4.2/§5.3), snapshotted
+    //  from ZLinkLocationOptions at host startup.
+    public long RelocationPayloadChunkLimit { get; set; } = 256 * 1024;
+    public long RelocationInFlightPayloadBudget { get; set; } =
+        16 * 1024 * 1024;
+    public long RelocationNodeInFlightPayloadBudget { get; set; }
     public TimeSpan? ReceiveTimeout { get; set; }
     public TimeSpan? SendTimeout { get; set; }
 
@@ -751,9 +768,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
             CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(payload);
+        if (prepare.PayloadTotalLength != (ulong)payload.TotalLength
+            || prepare.PayloadChunkCount != (uint)payload.ChunkCount
+            || prepare.PayloadChecksumCrc32c != payload.ChecksumCrc32c)
+            throw new ArgumentException(
+                "Command 40 manifest does not match the transfer payload.",
+                nameof(payload));
         Peer? peer;
         lock (_gate) _peersByRid.TryGetValue(targetNodeRid, out peer);
         if (peer is null || !peer.Admitted
@@ -799,6 +824,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             await SendCanonicalRelocationRecordAsync(
                     peer,
                     ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare),
+                    deadline.Token)
+                .ConfigureAwait(false);
+            //  Spec 28 §4.2: the payload chunks follow command 40 on the same
+            //  ordered connection and must all be submitted before the target
+            //  can assemble, verify, and reply relay-ready.
+            await SendRelocationStateChunksAsync(
+                    peer,
+                    prepare,
+                    payload,
                     deadline.Token)
                 .ConfigureAwait(false);
             return await pending.Ready.Task.WaitAsync(deadline.Token)
@@ -856,6 +890,62 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ZLinkServiceWireCodec.EncodeRelocationCutover(cutover),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private async ValueTask SendRelocationStateChunksAsync(
+        Peer peer,
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationTransferPayload payload,
+        CancellationToken cancellationToken)
+    {
+        var peerBudget = _relocationPeerBudgets.GetOrAdd(
+            peer.RoutingId,
+            _ => new ZLinkRelocationTransferBudget(
+                RelocationInFlightPayloadBudget));
+        var nodeBudget = _relocationNodeBudget ??=
+            new ZLinkRelocationTransferBudget(
+                RelocationNodeInFlightPayloadBudget);
+        for (var ordinal = 0; ordinal < payload.ChunkCount; ordinal++)
+        {
+            var encoded = ZLinkServiceWireCodec.EncodeRelocationState(
+                new ZLinkServiceWireCodec.RelocationStateRecord(
+                    prepare.RelocationId,
+                    prepare.TargetAttemptGeneration,
+                    prepare.Coordinator,
+                    1,
+                    prepare.Object,
+                    checked((uint)ordinal),
+                    payload.Chunk(ordinal)));
+            //  Phase 1 budget accounting: the encoded frame bytes are charged
+            //  for the submit-to-terminal window of each chunk.
+            await peerBudget.ChargeAsync(encoded.LongLength, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                await nodeBudget.ChargeAsync(
+                        encoded.LongLength,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                peerBudget.Release(encoded.LongLength);
+                throw;
+            }
+            try
+            {
+                await SendCanonicalRelocationRecordAsync(
+                        peer,
+                        encoded,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                nodeBudget.Release(encoded.LongLength);
+                peerBudget.Release(encoded.LongLength);
+            }
+        }
     }
 
     public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
@@ -4576,6 +4666,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.RelocationReady
             or ServiceWireConstants.Command.ReplyRelay
             or ServiceWireConstants.Command.RelocationData
+            or ServiceWireConstants.Command.RelocationState
             or ServiceWireConstants.Command.RelocationCutover
             or ServiceWireConstants.Command.RelocationPrepare
             or ServiceWireConstants.Command.ReplyRelayAck
@@ -4642,8 +4733,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.ReplyRelay
             // RelocationData carries a frozen application payload and uses
             // the structural envelope limit rather than the small
-            // infrastructure-control limit.
-            or ServiceWireConstants.Command.RelocationData;
+            // infrastructure-control limit. RelocationState carries a direct
+            // transfer payload chunk with the same envelope-scale bound.
+            or ServiceWireConstants.Command.RelocationData
+            or ServiceWireConstants.Command.RelocationState;
 
     private static bool IsInfrastructureControlFrameShape(
         ServiceWireConstants.Command command,
@@ -4803,6 +4896,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return true;
             }
             ProcessRelocationData(sourceRid, relocationData);
+            return true;
+        }
+        if (ZLinkServiceWireCodec.TryDecodeRelocationState(
+                head, out var relocationState, out _))
+        {
+            if (parts.Count != 1)
+            {
+                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                return true;
+            }
+            ProcessRelocationState(sourceRid, relocationState);
             return true;
         }
         if (ZLinkServiceWireCodec.TryDecodeRelocationCutover(
@@ -5150,20 +5254,74 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
             return;
         }
+        //  The assembly must exist before the inbound loop dispatches the
+        //  command 52 chunks that follow on this ordered connection, so it is
+        //  registered synchronously here. A prepare with the same exact
+        //  identity but a different manifest is a conflict failure
+        //  (spec 28 §4.3) and never reuses or replaces the existing assembly.
+        var assemblyKey = new PendingRelocationPrepareKey(
+            sourceNodeRid,
+            prepare.RelocationId,
+            prepare.TargetAttemptGeneration,
+            prepare.Coordinator);
+        ZLinkRelocationChunkAssembler assembler;
+        try
+        {
+            assembler = _inboundRelocationAssemblies.GetOrAdd(
+                assemblyKey,
+                static (_, manifest) => new ZLinkRelocationChunkAssembler(
+                    manifest.PayloadTotalLength,
+                    manifest.PayloadChunkCount,
+                    manifest.PayloadChecksumCrc32c),
+                prepare);
+            if (!assembler.MatchesManifest(
+                    prepare.PayloadTotalLength,
+                    prepare.PayloadChunkCount,
+                    prepare.PayloadChecksumCrc32c))
+                throw new ZLinkRelocationDataLostException(
+                    "A relocation prepare retry changed its payload manifest.");
+        }
+        catch (ZLinkRelocationDataLostException exception)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure(
+                "canonical-relocation-prepare-manifest",
+                exception);
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+            return;
+        }
         RunInboundOperation(
-            () => ProcessRelocationPrepareAsync(target, peer, sourceNodeRid, prepare));
+            () => ProcessRelocationPrepareAsync(
+                target,
+                peer,
+                sourceNodeRid,
+                prepare,
+                assemblyKey,
+                assembler));
     }
 
     private async Task ProcessRelocationPrepareAsync(
         ICanonicalRelocationTarget target,
         Peer peer,
         RoutingId sourceNodeRid,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare)
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        PendingRelocationPrepareKey assemblyKey,
+        ZLinkRelocationChunkAssembler assembler)
     {
         var lease = new ZLinkCanonicalRelocationPreparationLease();
         try
         {
-            var ready = await target.PrepareAsync(prepare, sourceNodeRid,
+            //  Assemble and verify the directly transferred payload before
+            //  restoring (spec 28 §4.3). A checksum mismatch or a chunk
+            //  conflict fails the prepare explicitly — no partial restore.
+            using var assemblyDeadline =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    _stop?.Token ?? CancellationToken.None);
+            assemblyDeadline.CancelAfter(TimeSpan.FromSeconds(30));
+            await assembler.Completed.WaitAsync(assemblyDeadline.Token)
+                .ConfigureAwait(false);
+            var envelope = assembler.VerifyAndDecode();
+            var ready = await target.PrepareAsync(prepare, envelope,
+                    sourceNodeRid,
                     lease,
                     _stop?.Token ?? CancellationToken.None)
                 .ConfigureAwait(false);
@@ -5176,9 +5334,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"canonical_ready_sent relocation={ready.RelocationId.High:x16}{ready.RelocationId.Low:x16} "
                 + $"attempt={ready.TargetAttemptGeneration} kind={ready.Object.Kind}");
+            _inboundRelocationAssemblies.TryRemove(
+                new KeyValuePair<PendingRelocationPrepareKey,
+                    ZLinkRelocationChunkAssembler>(assemblyKey, assembler));
         }
         catch (Exception exception)
         {
+            _inboundRelocationAssemblies.TryRemove(
+                new KeyValuePair<PendingRelocationPrepareKey,
+                    ZLinkRelocationChunkAssembler>(assemblyKey, assembler));
             try
             {
                 if (lease.IsPrepared)
@@ -5254,6 +5418,51 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch
         {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+        }
+    }
+
+    private void ProcessRelocationState(
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.RelocationStateRecord state)
+    {
+        Peer? peer;
+        lock (_gate)
+            _peersByRid.TryGetValue(sourceNodeRid, out peer);
+        if (peer is null || !peer.Admitted
+            || state.SenderRole != 1
+            || state.Coordinator.NodeRid != sourceNodeRid
+            || state.Coordinator.NodeGeneration != peer.LifecycleGeneration)
+        {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+            return;
+        }
+        var key = new PendingRelocationPrepareKey(
+            sourceNodeRid,
+            state.RelocationId,
+            state.TargetAttemptGeneration,
+            state.Coordinator);
+        if (!_inboundRelocationAssemblies.TryGetValue(key, out var assembler))
+        {
+            //  Spec 28 §4.3: a chunk whose exact identity has no in-progress
+            //  assembly is discarded and never attached to another assembly.
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                "relocation_state_chunk_discarded reason=no_matching_prepare");
+            return;
+        }
+        try
+        {
+            //  Spec 33: the chunk is copied into the framework-owned assembly
+            //  buffer synchronously and the transport buffer returns
+            //  immediately — chunk bytes never transfer into a backlog lease.
+            assembler.Append(state.ChunkOrdinal, state.ChunkData.Span);
+        }
+        catch (ZLinkRelocationDataLostException exception)
+        {
+            _inboundRelocationAssemblies.TryRemove(
+                new KeyValuePair<PendingRelocationPrepareKey,
+                    ZLinkRelocationChunkAssembler>(key, assembler));
+            assembler.Fail(exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
         }
     }

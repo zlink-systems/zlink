@@ -132,6 +132,7 @@ public final class ZLinkServiceWireCodec {
                  ServiceWireConstants.COMMAND_RELOCATION_DATA,
                  ServiceWireConstants.COMMAND_REPLY_RELAY,
                  ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                 ServiceWireConstants.COMMAND_RELOCATION_STATE,
                  ServiceWireConstants.COMMAND_BOUND_SESSION_SEND,
                  ServiceWireConstants.COMMAND_ACTOR_JOINED,
                  ServiceWireConstants.COMMAND_BOUND_SESSION_BIND,

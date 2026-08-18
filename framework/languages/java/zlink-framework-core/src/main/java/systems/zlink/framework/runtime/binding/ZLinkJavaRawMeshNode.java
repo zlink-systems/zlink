@@ -4063,6 +4063,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || command == ServiceWireConstants.COMMAND_REPLY_RELAY
             || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER
             || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
+            || command == ServiceWireConstants.COMMAND_RELOCATION_STATE
             || command == ServiceWireConstants.COMMAND_REPLY_RELAY_ACK
             || command == ServiceWireConstants.COMMAND_MESSAGE_FOLLOW
             || command == ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED
@@ -4089,7 +4090,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         int command) {
         return command == ServiceWireConstants.COMMAND_REPLY
             || command == ServiceWireConstants.COMMAND_REPLY_RELAY
-            || command == ServiceWireConstants.COMMAND_RELOCATION_DATA;
+            || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
+            || command == ServiceWireConstants.COMMAND_RELOCATION_STATE;
     }
 
     private void dispatch(ZLinkJavaRawServicePort.Inbound inbound) {
@@ -6647,7 +6649,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return command == ServiceWireConstants.COMMAND_RELOCATION_READY
             || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
             || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
-            || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER;
+            || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER
+            || command == ServiceWireConstants.COMMAND_RELOCATION_STATE;
     }
 
     private void disconnectAdmitted(RoutingId peer) {

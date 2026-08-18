@@ -2053,8 +2053,7 @@ public final class ZLinkSpotRuntime
                 ? null
                 : new systems.zlink.framework.runtime.internal.locations
                     .ZLinkProviderLocationRepository(
-                        frameworkRegistration.locations().storeInstance()),
-            frameworkRegistration.relocationStore());
+                        frameworkRegistration.locations().storeInstance()));
         actorSessions.attach(
             actorRuntime,
             this::notifyEntrySpotActorCreated,

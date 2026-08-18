@@ -18,9 +18,12 @@ internal static partial class ZLinkServiceWireCodec
         ulong ObjectGeneration,
         ulong ExpectedAuthorityOwnerGeneration);
 
-    internal sealed record RelocationRootRecord(
-        string Reference,
-        uint ChecksumCrc32c);
+    //  Schema bounds relocationLogicalBytes / relocationChunkCount /
+    //  relocationChunkBytes (service-wire-v1.schema.json) — the payload
+    //  manifest and state-chunk fields must stay within these limits.
+    internal const ulong RelocationLogicalBytesBound = 274_877_906_944;
+    internal const uint RelocationChunkCountBound = 4_096;
+    internal const uint RelocationChunkBytesBound = 67_108_864;
 
     internal sealed record RelocationPrepareRecord(
         RelocationWireId RelocationId,
@@ -31,7 +34,9 @@ internal static partial class ZLinkServiceWireCodec
         RelocationObjectRecord Object,
         RoutingId SourceNodeRid,
         ulong SourceNodeGeneration,
-        RelocationRootRecord? Root,
+        ulong PayloadTotalLength,
+        uint PayloadChunkCount,
+        uint PayloadChecksumCrc32c,
         ulong ApplicationVersion);
 
     internal sealed record RelocationReadyRecord(
@@ -67,7 +72,18 @@ internal static partial class ZLinkServiceWireCodec
         ulong TargetAttemptGeneration,
         RelocationCoordinatorFence Coordinator,
         byte SenderRole,
-        RelocationObjectRecord Object);
+        RelocationObjectRecord Object,
+        ulong BoundaryRecordCount,
+        uint BoundaryChecksumCrc32c);
+
+    internal sealed record RelocationStateRecord(
+        RelocationWireId RelocationId,
+        ulong TargetAttemptGeneration,
+        RelocationCoordinatorFence Coordinator,
+        byte SenderRole,
+        RelocationObjectRecord Object,
+        uint ChunkOrdinal,
+        ReadOnlyMemory<byte> ChunkData);
 
     internal static byte[] EncodeRelocationPrepare(RelocationPrepareRecord record)
     {
@@ -76,7 +92,9 @@ internal static partial class ZLinkServiceWireCodec
         ValidateTarget(record.Target);
         ValidateRole(record.InitiatorRole);
         if (record.SourceNodeRid.IsEmpty || record.SourceNodeGeneration == 0
-            || record.ApplicationVersion > long.MaxValue)
+            || record.ApplicationVersion > long.MaxValue
+            || record.PayloadTotalLength > RelocationLogicalBytesBound
+            || record.PayloadChunkCount > RelocationChunkCountBound)
             throw new ArgumentOutOfRangeException(nameof(record));
 
         var body = new WireWriter();
@@ -88,7 +106,9 @@ internal static partial class ZLinkServiceWireCodec
         WriteRelocationObject(body, record.Object);
         body.Rid(record.SourceNodeRid);
         body.U64(record.SourceNodeGeneration);
-        WriteRoot(body, record.Root);
+        body.U64(record.PayloadTotalLength);
+        body.U32(record.PayloadChunkCount);
+        body.U32(record.PayloadChecksumCrc32c);
         body.U64(record.ApplicationVersion);
         return Finish(ServiceWireConstants.Command.RelocationPrepare,
             ServiceWireConstants.Flag.None, body);
@@ -137,6 +157,8 @@ internal static partial class ZLinkServiceWireCodec
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
         ValidateRole(record.SenderRole);
+        if (record.BoundaryRecordCount > long.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(record));
 
         var body = new WireWriter();
         WriteRelocationId(body, record.RelocationId);
@@ -144,7 +166,30 @@ internal static partial class ZLinkServiceWireCodec
         WriteCoordinator(body, record.Coordinator);
         body.U8(record.SenderRole);
         WriteRelocationObject(body, record.Object);
+        body.U64(record.BoundaryRecordCount);
+        body.U32(record.BoundaryChecksumCrc32c);
         return Finish(ServiceWireConstants.Command.RelocationCutover,
+            ServiceWireConstants.Flag.None, body);
+    }
+
+    internal static byte[] EncodeRelocationState(RelocationStateRecord record)
+    {
+        ValidateRelocationCommon(record.RelocationId,
+            record.TargetAttemptGeneration, record.Coordinator);
+        ValidateRole(record.SenderRole);
+        if (record.ChunkData.Length > RelocationChunkBytesBound)
+            throw new ArgumentOutOfRangeException(nameof(record));
+
+        var body = new WireWriter();
+        WriteRelocationId(body, record.RelocationId);
+        body.U64(record.TargetAttemptGeneration);
+        WriteCoordinator(body, record.Coordinator);
+        body.U8(record.SenderRole);
+        WriteRelocationObject(body, record.Object);
+        body.U32(record.ChunkOrdinal);
+        body.U32((uint)record.ChunkData.Length);
+        body.Bytes(record.ChunkData.Span);
+        return Finish(ServiceWireConstants.Command.RelocationState,
             ServiceWireConstants.Flag.None, body);
     }
 
@@ -163,12 +208,17 @@ internal static partial class ZLinkServiceWireCodec
             || !TryRelocationObject(ref reader, out var relocationObject)
             || !reader.TryRid(out var sourceRid)
             || !reader.TryU64(out var sourceGeneration) || sourceGeneration == 0
-            || !TryRoot(ref reader, out var root)
+            || !reader.TryU64(out var payloadTotalLength)
+            || payloadTotalLength > RelocationLogicalBytesBound
+            || !reader.TryU32(out var payloadChunkCount)
+            || payloadChunkCount > RelocationChunkCountBound
+            || !reader.TryU32(out var payloadChecksum)
             || !reader.TryU64(out var applicationVersion)
             || applicationVersion > long.MaxValue)
             return DecodeFailure(ref reader, out error);
         record = new RelocationPrepareRecord(id, attempt, coordinator, target,
-            role, relocationObject, sourceRid, sourceGeneration, root,
+            role, relocationObject, sourceRid, sourceGeneration,
+            payloadTotalLength, payloadChunkCount, payloadChecksum,
             applicationVersion);
         return End(ref reader, out error);
     }
@@ -229,10 +279,35 @@ internal static partial class ZLinkServiceWireCodec
             || !reader.TryU64(out var attempt) || attempt == 0
             || !TryCoordinator(ref reader, out var coordinator)
             || !reader.TryU8(out var role) || !IsRole(role)
-            || !TryRelocationObject(ref reader, out var relocationObject))
+            || !TryRelocationObject(ref reader, out var relocationObject)
+            || !reader.TryU64(out var boundaryRecordCount)
+            || boundaryRecordCount > long.MaxValue
+            || !reader.TryU32(out var boundaryChecksum))
             return DecodeFailure(ref reader, out error);
         record = new RelocationCutoverRecord(id, attempt, coordinator, role,
-            relocationObject);
+            relocationObject, boundaryRecordCount, boundaryChecksum);
+        return End(ref reader, out error);
+    }
+
+    internal static bool TryDecodeRelocationState(ReadOnlySpan<byte> bytes,
+        out RelocationStateRecord record, out DecodeError error)
+    {
+        record = null!;
+        if (!Begin(bytes, ServiceWireConstants.Command.RelocationState,
+                ServiceWireConstants.Flag.None, out var reader, out error))
+            return false;
+        if (!TryRelocationId(ref reader, out var id)
+            || !reader.TryU64(out var attempt) || attempt == 0
+            || !TryCoordinator(ref reader, out var coordinator)
+            || !reader.TryU8(out var role) || !IsRole(role)
+            || !TryRelocationObject(ref reader, out var relocationObject)
+            || !reader.TryU32(out var chunkOrdinal)
+            || !reader.TryU32(out var chunkLength)
+            || chunkLength > RelocationChunkBytesBound
+            || !reader.TrySlice(checked((int)chunkLength), out var chunkBytes))
+            return DecodeFailure(ref reader, out error);
+        record = new RelocationStateRecord(id, attempt, coordinator, role,
+            relocationObject, chunkOrdinal, chunkBytes.ToArray());
         return End(ref reader, out error);
     }
 
@@ -328,38 +403,6 @@ internal static partial class ZLinkServiceWireCodec
         value = new RelocationObjectRecord(kind, stable, id, generation,
             expected);
         return true;
-    }
-
-    private static void WriteRoot(WireWriter writer, RelocationRootRecord? root)
-    {
-        var body = new WireWriter();
-        if (root is not null)
-        {
-            body.Text16(root.Reference, requireNonEmpty: true);
-            body.U32(root.ChecksumCrc32c);
-        }
-        writer.U8(root is null ? (byte)0 : (byte)1);
-        writer.U16(checked((ushort)body.Count));
-        writer.Bytes(body.ToArray());
-    }
-
-    private static bool TryRoot(ref WireReader reader,
-        out RelocationRootRecord? root)
-    {
-        root = null;
-        if (!reader.TryU8(out var has) || has > 1
-            || !reader.TryU16(out var length)
-            || !reader.TrySlice(length, out var bytes))
-            return false;
-        var body = new WireReader(bytes);
-        if (has == 1)
-        {
-            if (!body.TryText16(out var reference, requireNonEmpty: true)
-                || !body.TryU32(out var checksum))
-                return false;
-            root = new RelocationRootRecord(reference, checksum);
-        }
-        return body.Remaining == 0 && (has == 1 || length == 0);
     }
 
     private static void WriteFrozenRelocationControl(WireWriter writer,

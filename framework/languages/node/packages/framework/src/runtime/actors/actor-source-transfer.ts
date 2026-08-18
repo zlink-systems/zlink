@@ -7,8 +7,6 @@ import type { ServiceWireOperationId } from '../foundation/service-stateful-wire
 export interface ZLinkPreparedActorSource {
   readonly adapterKey?: string;
   readonly state: ZLinkMessage;
-  readonly stateReference?: string;
-  readonly stateChecksumCrc32c?: number;
   readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
   readonly sourceLeaveCompletion?: Promise<void>;
   readonly sourceLeaveSubmitted?: Promise<void>;

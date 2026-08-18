@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Identifiers;
@@ -201,17 +202,27 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         maintenancePolicy: ToMaintenancePolicy(
                             relocation.PolicyKind)),
                     registration.ApplicationVersion);
-                var publication = new ZLinkRelocationPublicationCoordinator(
-                    authorityStore,
-                    relocationStore);
-                initialPrepared = await publication.PrepareAsync(
-                        initialEnvelope,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                //  Direct transfer (spec 28 §4.2): the captured envelope is
+                //  encoded once into source memory — the single handoff
+                //  origin — and never written to the Relocation Store.
+                var transferPayload = ZLinkRelocationTransferPayload.Create(
+                    initialEnvelope,
+                    registration.Locations.Options.RelocationPayloadChunkLimit);
+                initialPrepared = new ZLinkPreparedRelocation(
+                    new ZLinkRelocationStored(
+                        string.Empty,
+                        transferPayload.ChecksumCrc32c,
+                        default,
+                        default),
+                    initialEnvelope)
+                {
+                    LogicalLength = transferPayload.TotalLength,
+                    LogicalChecksumCrc32c = transferPayload.ChecksumCrc32c,
+                    ChunkCount = transferPayload.ChunkCount
+                };
                 precommitSnapshot = await precommit.CaptureAsync(
                         precommitSnapshot,
                         initialEnvelope,
-                        initialPrepared.Relocation,
                         cancellationToken)
                     .ConfigureAwait(false);
 
@@ -225,11 +236,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         sourceAuthority,
                         target,
                         initialEnvelope,
-                        initialPrepared.Relocation,
+                        transferPayload,
                         registration.ApplicationVersion);
                 _ = await canonical.PrepareCanonicalRelocationAsync(
                         target.Rid,
                         prepare,
+                        transferPayload,
                         RemainingTimeout(absoluteDeadline),
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -267,6 +279,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             record,
                             cancellationToken)
                         .ConfigureAwait(false);
+                //  Spec 28 §4.4: the cutover carries the boundary record
+                //  count and the CRC-32C over the relayed pre-boundary
+                //  records so the target can compare its staged relay span.
                 await canonical.SendCanonicalRelocationCutoverAsync(
                         target.Rid,
                         new ZLinkServiceWireCodec.RelocationCutoverRecord(
@@ -274,7 +289,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                             prepare.TargetAttemptGeneration,
                             prepare.Coordinator,
                             1,
-                            prepare.Object),
+                            prepare.Object,
+                            checked((ulong)data.Length),
+                            ZLinkRelocationBoundaryBatch.ComputeChecksum(
+                                data.Select(static record =>
+                                    record.FrozenRecord.Encoded))),
                         cancellationToken)
                     .ConfigureAwait(false);
                 var committedTarget = await WaitForCommittedTargetAuthorityAsync(
@@ -914,7 +933,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkActorAuthorityPayload sourceAuthority,
         ZLinkMeshNodeDescriptor target,
         ZLinkRelocationEnvelope envelope,
-        ZLinkRelocationStored root,
+        ZLinkRelocationTransferPayload payload,
         long applicationVersion)
     {
         var relocationId = ToWireId(envelope.AggregateId);
@@ -941,9 +960,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 sourceSnapshot.AuthorityOwnerGeneration),
             sourceAuthority.NodeRid,
             sourceAuthority.NodeGeneration,
-            new ZLinkServiceWireCodec.RelocationRootRecord(
-                root.Reference,
-                root.ChecksumCrc32c),
+            checked((ulong)payload.TotalLength),
+            checked((uint)payload.ChunkCount),
+            payload.ChecksumCrc32c,
             checked((ulong)applicationVersion));
     }
 
@@ -959,6 +978,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 
     internal async ValueTask StageTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationEnvelope envelope,
         RoutingId authenticatedSourceNodeRid,
         ulong targetAuthorityOwnerGeneration,
         CancellationToken cancellationToken)
@@ -975,6 +995,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             await StageTargetCoreAsync(
                     lease.Slot,
                     prepare,
+                    envelope,
                     authenticatedSourceNodeRid,
                     targetAuthorityOwnerGeneration,
                     cancellationToken)
@@ -1007,6 +1028,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 throw DataLost(
                     "Standalone Actor relocation data has no prepared target.");
             stage.ValidateData(data, authenticatedSourceNodeRid);
+            stage.TrackRelayRecord(data.FrozenRecord.Encoded.Span);
             var nextArrival = stage.NextArrivalIndex;
             var frame = ZLinkCanonicalActorAcceptedJournal.Decode(
                     data.FrozenRecord.Encoded.Span,
@@ -1029,9 +1051,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
     }
 
-    internal async ValueTask CutoverTargetAsync(
+    internal ValueTask CutoverTargetAsync(
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         RoutingId authenticatedSourceNodeRid,
+        CancellationToken cancellationToken) =>
+        CutoverTargetAsync(
+            cutover,
+            authenticatedSourceNodeRid,
+            verifyBoundary: true,
+            cancellationToken);
+
+    private async ValueTask CutoverTargetAsync(
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
+        RoutingId authenticatedSourceNodeRid,
+        bool verifyBoundary,
         CancellationToken cancellationToken)
     {
         var key = new AttemptKey(
@@ -1061,6 +1094,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     "late_cutover object=actor reason=already_committed");
                 return;
             }
+            if (verifyBoundary)
+                stage.ValidateBoundary(cutover);
 
             var store = registration.Locations.ResolveStore()
                         ?? throw new ZLinkConfigurationException(
@@ -1098,6 +1133,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             }
 
             MarkAuthorityPublished(stage);
+            //  Spec 25 §5: target-local S2 (CAS confirmed) → S3 (dispatch
+            //  open) resume interval for this unit.
+            var resumeStartedTimestamp = Stopwatch.GetTimestamp();
             if (stage.RemoteJoinRequest is { } remoteJoinRequest
                 && stage.RemoteJoinRecovery is { } remoteJoinRecovery)
             {
@@ -1139,6 +1177,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+            ZLinkRuntimeMetrics.RecordRelocationTargetResume(
+                Stopwatch.GetElapsedTime(resumeStartedTimestamp),
+                "actor");
         }
         finally
         {
@@ -1182,7 +1223,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(1), runtime.ShutdownToken)
+            await Task.Delay(
+                    registration.Locations.Options.RelocationCutoverWaitTimeout,
+                    runtime.ShutdownToken)
                 .ConfigureAwait(false);
             var key = new AttemptKey(
                 prepare.RelocationId.High,
@@ -1196,14 +1239,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     return;
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 "cutover_timeout object=actor");
+            //  Spec 28 §4.4/25 §5: the fallback proceeds to the CAS without
+            //  boundary completeness verification and is counted.
+            ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout("actor");
             await CutoverTargetAsync(
                     new ZLinkServiceWireCodec.RelocationCutoverRecord(
                         prepare.RelocationId,
                         prepare.TargetAttemptGeneration,
                         prepare.Coordinator,
                         prepare.InitiatorRole,
-                        prepare.Object),
+                        prepare.Object,
+                        0,
+                        0),
                     authenticatedSourceNodeRid,
+                    verifyBoundary: false,
                     runtime.ShutdownToken)
                 .ConfigureAwait(false);
         }
@@ -1604,6 +1653,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private async ValueTask StageTargetCoreAsync(
         AttemptSlot slot,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationEnvelope envelope,
         RoutingId authenticatedSourceNodeRid,
         ulong targetAuthorityOwnerGeneration,
         CancellationToken cancellationToken)
@@ -1634,18 +1684,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             return;
         }
 
-        var root = prepare.Root
-                   ?? throw DataLost("Standalone Actor relocation has no immutable root.");
-        var relocationStore = registration.Locations.ResolveRelocationStore()
-                              ?? throw new ZLinkConfigurationException(
-                                  "Relocation Store is not registered.");
-        var tree = await ZLinkRelocationTreeStore.ReadAsync(
-                relocationStore,
-                root.Reference,
-                root.ChecksumCrc32c,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var participant = tree.Envelope.Participants.SingleOrDefault()
+        //  Spec 28 §4.3: the payload arrived over relocationState chunks on
+        //  this connection and was assembled and checksum-verified before the
+        //  staging call — the Relocation Store holds no handoff payload.
+        var participant = envelope.Participants.SingleOrDefault()
                           ?? throw DataLost(
                               "Standalone Actor relocation must contain one participant.");
         var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
@@ -1661,8 +1703,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         var effectiveTargetAuthorityOwnerGeneration =
             remoteJoinRecovery?.TargetAuthorityOwnerGeneration
             ?? targetAuthorityOwnerGeneration;
-        if (ToWireId(tree.Envelope.AggregateId) != prepare.RelocationId
-            || tree.Envelope.AggregateGeneration != 1
+        if (ToWireId(envelope.AggregateId) != prepare.RelocationId
+            || envelope.AggregateGeneration != 1
             || participant.ObjectKind != ZLinkPlacementObjectKind.Actor
             || recovery.ObjectKind != ZLinkPlacementObjectKind.Actor
             || recovery.AuthorityKey != participant.AuthorityKey
@@ -1677,7 +1719,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             || !ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
                 recovery.AuthorityPayload.Span,
                 out var relocating)
-            || relocating.RelocationId != tree.Envelope.AggregateId
+            || relocating.RelocationId != envelope.AggregateId
             || relocating.Phase != ZLinkActorRelocationAuthorityPhase.Activated
             || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                 relocating.ApplicationPayload.Span,
@@ -1715,18 +1757,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkRemoteActorJoinRequest? remoteJoinRequest = null;
         if (remoteJoinRecovery is not null)
         {
+            //  Direct transfer keeps the durable "pending" sentinel: no
+            //  immutable store root exists for the handoff payload anymore.
             var candidate = remoteJoinRecovery.Request with
             {
-                RelocationReference = root.Reference,
-                RelocationChecksumCrc32c = root.ChecksumCrc32c,
-                RelocationAggregateId = tree.Envelope.AggregateId,
-                RelocationAggregateGeneration = tree.Envelope.AggregateGeneration,
-                RelocationInventoryDigest = tree.Envelope.InventoryDigest.ToArray(),
+                RelocationAggregateId = envelope.AggregateId,
+                RelocationAggregateGeneration = envelope.AggregateGeneration,
+                RelocationInventoryDigest = envelope.InventoryDigest.ToArray(),
                 HandoffFrames = []
             };
             remoteJoinRequest = ZLinkActorRelocationRoot.WithDurableFrames(
                 candidate,
-                ZLinkActorRelocationRoot.Load(candidate, tree.Envelope));
+                ZLinkActorRelocationRoot.Load(candidate, envelope));
         }
 
         var actorState = actorSessions.GetOrCreateState(targetAuthority.ActorId);
@@ -1766,7 +1808,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 attached = true;
             }
             actorState.StageRelocationSessionRoute(
-                tree.Envelope.AggregateId.ToString("N"),
+                envelope.AggregateId.ToString("N"),
                 relocating.BoundSessionRoute,
                 remoteJoinRequest is not null
                     ? ZLinkRemoteActorJoinPackets
@@ -1783,12 +1825,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     .ConfigureAwait(false);
             else
                 actorState.Handoff.BeginCanonicalMaintenanceImport(
-                    tree.Envelope.AggregateId.ToString("N"),
+                    envelope.AggregateId.ToString("N"),
                     frames);
             var stage = new TargetStage(
                 prepare,
                 authenticatedSourceNodeRid,
-                tree.Envelope,
+                envelope,
                 actorState,
                 targetAuthority,
                 frames,
@@ -2662,8 +2704,29 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         internal DateTimeOffset CreatedAt { get; } = TimeProvider.System.GetUtcNow();
         internal bool AuthorityPublished { get; set; }
 
+        private uint _relayCrcState = uint.MaxValue;
+        private ulong _relayRecordCount;
+
         internal void Append(ZLinkActorHandoffFrame frame) =>
             _acceptedFrames.Add(frame);
+
+        internal void TrackRelayRecord(ReadOnlySpan<byte> encodedFrozenRecord)
+        {
+            ZLinkCrc32C.Append(ref _relayCrcState, encodedFrozenRecord);
+            _relayRecordCount = checked(_relayRecordCount + 1);
+        }
+
+        //  Spec 28 §4.4: on the ordered connection the boundary values always
+        //  match the staged relay span; a mismatch is an implementation
+        //  defect, not a retryable condition.
+        internal void ValidateBoundary(
+            ZLinkServiceWireCodec.RelocationCutoverRecord cutover)
+        {
+            if (cutover.BoundaryRecordCount != _relayRecordCount
+                || cutover.BoundaryChecksumCrc32c != ~_relayCrcState)
+                throw DataLost(
+                    "Command 34 boundary values do not match the staged relay span.");
+        }
 
         internal void BeginReadySubmission()
         {

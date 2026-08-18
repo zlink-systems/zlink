@@ -11,10 +11,15 @@ import java.util.UUID;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-/** Semantic projection of the four canonical relocation controls. */
+/** Semantic projection of the five canonical relocation controls. */
 final class ZLinkCanonicalRelocationProtocol {
     private static final int ROLE_SOURCE = 1;
     private static final int ROLE_TARGET = 2;
+    //  Schema bounds relocationLogicalBytes / relocationChunkCount /
+    //  relocationChunkBytes (service-wire-v1.schema.json).
+    static final long PAYLOAD_TOTAL_LENGTH_BOUND = 274_877_906_944L;
+    static final int PAYLOAD_CHUNK_COUNT_BOUND = 4_096;
+    static final int CHUNK_DATA_BYTES_BOUND = 67_108_864;
 
     private ZLinkCanonicalRelocationProtocol() {
     }
@@ -29,7 +34,7 @@ final class ZLinkCanonicalRelocationProtocol {
         object(writer, value.object());
         writer.rid(value.sourceNodeRid());
         writer.nonzero(value.sourceNodeGeneration());
-        root(writer, value.root());
+        manifest(writer, value.manifest());
         writer.u64(value.applicationVersion());
         return writer.bytes();
     }
@@ -46,7 +51,7 @@ final class ZLinkCanonicalRelocationProtocol {
             object(reader),
             reader.rid(),
             reader.nonzero(),
-            root(reader),
+            manifest(reader),
             reader.u64());
         reader.end();
         return value;
@@ -109,6 +114,8 @@ final class ZLinkCanonicalRelocationProtocol {
         coordinator(writer, value.coordinator());
         writer.u8(value.senderRole());
         object(writer, value.object());
+        writer.u64(value.boundaryRecordCount());
+        writer.u32(value.boundaryChecksumCrc32c());
         return writer.bytes();
     }
 
@@ -120,9 +127,48 @@ final class ZLinkCanonicalRelocationProtocol {
             reader.nonzero(),
             coordinator(reader),
             reader.role(),
-            object(reader));
+            object(reader),
+            reader.ordinal(),
+            reader.u32Unsigned());
         reader.end();
         return value;
+    }
+
+    static byte[] encodeState(State value) {
+        Objects.requireNonNull(value, "value");
+        Writer writer = body(ServiceWireConstants.COMMAND_RELOCATION_STATE);
+        relocation(writer, value.id(), value.targetAttemptGeneration());
+        coordinator(writer, value.coordinator());
+        writer.u8(value.senderRole());
+        object(writer, value.object());
+        writer.u32(value.chunkOrdinal());
+        byte[] chunk = value.chunkData();
+        writer.u32(chunk.length);
+        writer.raw(chunk);
+        return writer.bytes();
+    }
+
+    static State decodeState(byte[] encoded) {
+        Reader reader = body(encoded,
+            ServiceWireConstants.COMMAND_RELOCATION_STATE);
+        State value = new State(
+            reader.uuid(),
+            reader.nonzero(),
+            coordinator(reader),
+            reader.role(),
+            object(reader),
+            reader.u32Unsigned(),
+            reader.bytes(chunkLength(reader)));
+        reader.end();
+        return value;
+    }
+
+    private static int chunkLength(Reader reader) {
+        long length = reader.u32Unsigned();
+        if (length > CHUNK_DATA_BYTES_BOUND) {
+            throw invalid("chunk data length");
+        }
+        return (int) length;
     }
 
     private static Writer body(int command) {
@@ -230,25 +276,17 @@ final class ZLinkCanonicalRelocationProtocol {
         return value;
     }
 
-    private static void root(Writer writer, Root value) {
-        Writer selected = new Writer();
-        if (value != null) {
-            selected.text16(value.reference());
-            selected.u32(value.checksum());
-        }
-        writer.u8(value == null ? 0 : 1);
-        writer.u16(selected.size());
-        writer.raw(selected.bytes());
+    private static void manifest(Writer writer, Manifest value) {
+        writer.u64(value.totalLength());
+        writer.u32(value.chunkCount());
+        writer.u32(value.checksumCrc32c());
     }
 
-    private static Root root(Reader reader) {
-        boolean present = reader.bool();
-        Reader selected = reader.slice(reader.u16());
-        Root value = present
-            ? new Root(selected.text16(), selected.u32Unsigned())
-            : null;
-        selected.end();
-        return value;
+    private static Manifest manifest(Reader reader) {
+        return new Manifest(
+            reader.u64(),
+            (int) reader.u32Unsigned(),
+            reader.u32Unsigned());
     }
 
     private static IllegalArgumentException invalid(String field) {
@@ -313,11 +351,17 @@ final class ZLinkCanonicalRelocationProtocol {
         }
     }
 
-    record Root(String reference, long checksum) {
-        Root {
-            requireText(reference, "reference");
-            if (checksum < 0 || checksum > 0xffff_ffffL) {
-                throw invalid("checksum");
+    /** Direct-transfer payload manifest carried by PREPARE (spec 28 §4.2). */
+    record Manifest(long totalLength, int chunkCount, long checksumCrc32c) {
+        Manifest {
+            if (totalLength < 0 || totalLength > PAYLOAD_TOTAL_LENGTH_BOUND) {
+                throw invalid("payload total length");
+            }
+            if (chunkCount < 0 || chunkCount > PAYLOAD_CHUNK_COUNT_BOUND) {
+                throw invalid("payload chunk count");
+            }
+            if (checksumCrc32c < 0 || checksumCrc32c > 0xffff_ffffL) {
+                throw invalid("payload checksum");
             }
         }
     }
@@ -331,7 +375,7 @@ final class ZLinkCanonicalRelocationProtocol {
         ObjectFence object,
         RoutingId sourceNodeRid,
         long sourceNodeGeneration,
-        Root root,
+        Manifest manifest,
         long applicationVersion) {
         Prepare {
             requireIdentity(id, targetAttemptGeneration);
@@ -343,6 +387,7 @@ final class ZLinkCanonicalRelocationProtocol {
             Objects.requireNonNull(object, "object");
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
             requirePositive(sourceNodeGeneration, "sourceNodeGeneration");
+            Objects.requireNonNull(manifest, "manifest");
         }
     }
 
@@ -396,7 +441,9 @@ final class ZLinkCanonicalRelocationProtocol {
         long targetAttemptGeneration,
         Coordinator coordinator,
         int senderRole,
-        ObjectFence object) {
+        ObjectFence object,
+        long boundaryRecordCount,
+        long boundaryChecksumCrc32c) {
         Cutover {
             requireIdentity(id, targetAttemptGeneration);
             Objects.requireNonNull(coordinator, "coordinator");
@@ -404,6 +451,45 @@ final class ZLinkCanonicalRelocationProtocol {
                 throw invalid("cutover sender role");
             }
             Objects.requireNonNull(object, "object");
+            if (boundaryRecordCount < 0) {
+                throw invalid("boundary record count");
+            }
+            if (boundaryChecksumCrc32c < 0
+                || boundaryChecksumCrc32c > 0xffff_ffffL) {
+                throw invalid("boundary checksum");
+            }
+        }
+    }
+
+    /** One direct-transfer state chunk (spec 28 §4.2, command 52). */
+    record State(
+        UUID id,
+        long targetAttemptGeneration,
+        Coordinator coordinator,
+        int senderRole,
+        ObjectFence object,
+        long chunkOrdinal,
+        byte[] chunkData) {
+        State {
+            requireIdentity(id, targetAttemptGeneration);
+            Objects.requireNonNull(coordinator, "coordinator");
+            if (senderRole != ROLE_SOURCE) {
+                throw invalid("state sender role");
+            }
+            Objects.requireNonNull(object, "object");
+            if (chunkOrdinal < 0 || chunkOrdinal > 0xffff_ffffL) {
+                throw invalid("chunk ordinal");
+            }
+            chunkData = Objects.requireNonNull(
+                chunkData, "chunkData").clone();
+            if (chunkData.length > CHUNK_DATA_BYTES_BOUND) {
+                throw invalid("chunk data length");
+            }
+        }
+
+        @Override
+        public byte[] chunkData() {
+            return chunkData.clone();
         }
     }
 
@@ -555,12 +641,12 @@ final class ZLinkCanonicalRelocationProtocol {
             return value;
         }
 
-        boolean bool() {
-            int value = u8();
-            if (value > 1) {
-                throw invalid("bool");
+        long ordinal() {
+            long value = u64();
+            if (value < 0) {
+                throw invalid("ordinal");
             }
-            return value == 1;
+            return value;
         }
 
         int role() {

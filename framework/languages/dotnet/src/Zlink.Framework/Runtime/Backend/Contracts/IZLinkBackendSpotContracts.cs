@@ -391,6 +391,7 @@ internal interface IZLinkBackendCanonicalRelocation
         PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
             CancellationToken cancellationToken);
 

@@ -335,7 +335,8 @@ public final class ZLinkActorSpotRoutePackets {
             Long.toUnsignedString(core.finalSequence()),
             Long.toUnsignedString(core.reserveMessageCount()),
             Long.toUnsignedString(core.reserveByteCount()),
-            relocationManifest == null ? "" : relocationManifest.reference(),
+            relocationManifest == null ? ""
+                : Base64.getEncoder().encodeToString(relocationManifest.root()),
             relocationManifest == null ? "0"
                 : Long.toUnsignedString(relocationManifest.checksumCrc32c()),
             relocationManifest == null || relocationManifest.rawReply().length == 0
@@ -397,7 +398,7 @@ public final class ZLinkActorSpotRoutePackets {
             Long.parseUnsignedLong(fields[20]),
             !fields[21].isBlank()
                 ? new ZLinkDirectJoinRelocation.Manifest(
-                    fields[21],
+                    Base64.getDecoder().decode(fields[21]),
                     Long.parseUnsignedLong(fields[22]),
                     Long.parseUnsignedLong(fields[24]),
                     Long.parseUnsignedLong(fields[25]),

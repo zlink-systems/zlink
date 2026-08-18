@@ -10,6 +10,11 @@
 namespace zlink::framework
 {
 
+/* Wire bound of one relocation state chunk (service-wire
+ * relocationChunkBytes). The startup chunk-limit validation caps
+ * relocation_payload_chunk_limit_bytes at this transport frame limit. */
+inline constexpr std::uint64_t relocation_chunk_wire_limit_bytes = 67108864;
+
 struct location_options_t
 {
     std::chrono::milliseconds owner_lease_renew_interval{5000};
@@ -23,6 +28,18 @@ struct location_options_t
     /* Startup-only upper bound for an exact Session relocation route update.
      * The value must be a positive whole-millisecond duration. */
     std::chrono::milliseconds session_relocation_seal_timeout{3000};
+    /* Startup-only positive duration. The target waits this long for cutover
+     * after the relay-ready reply, and the source keeps the boundary batch
+     * retransmission copy for the same window. */
+    std::chrono::milliseconds relocation_cutover_wait_timeout{1000};
+    /* Size cap of one encoded chunk a relocation payload is split into.
+     * Zero and values above the transport frame limit are startup errors. */
+    std::uint64_t relocation_payload_chunk_limit_bytes{262144};
+    /* Accounted byte cap for relocation chunks concurrently in flight on one
+     * peer connection. Zero disables the budget. */
+    std::uint64_t relocation_in_flight_payload_budget_bytes{16777216};
+    /* Node-wide variant of the in-flight payload budget. Zero disables it. */
+    std::uint64_t relocation_node_in_flight_payload_budget_bytes{0};
     std::size_t max_active_outbound_relocations = 64;
     std::size_t max_active_inbound_relocations = 64;
     std::size_t max_concurrent_relocation_captures = 8;

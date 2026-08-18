@@ -35,6 +35,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -49,7 +50,7 @@ import systems.zlink.framework.runtime.internal.locations
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkSpotTypeCapacityDelta;
 
-/** Owns the exact prepare/ready/data/cutover relocation attempt state. */
+/** Owns the exact prepare/ready/state/data/cutover relocation attempt state. */
 final class ZLinkCanonicalRelocationStateMachine
     implements ZLinkCanonicalRelocationTransitionOwner.StateMachine,
         ZLinkRelocationTransitionClient {
@@ -58,7 +59,6 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkCanonicalRelocationStateMachine.class.getName());
     private static final String ACTOR_AUTHORITY_PREFIX = "zla1:a:";
     private static final int SCAN_PAGE_SIZE = 1000;
-    private static final Duration CUTOVER_FALLBACK = Duration.ofSeconds(1);
     private static final Duration STORE_RETRY_DELAY = Duration.ofMillis(25);
 
     private final ZLinkInternalMeshNode node;
@@ -68,6 +68,8 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkSpotRetireControl.TargetEndpoint target;
     private final RetentionScheduler retentionScheduler;
+    private final ZLinkRelocationPayloadTransfer.Options transferOptions;
+    private final ZLinkRelocationPayloadTransfer.Budget budget;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
     private final ConcurrentHashMap<Fence, SourceAttempt> sources =
@@ -78,6 +80,10 @@ final class ZLinkCanonicalRelocationStateMachine
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Fence, TerminalTarget> terminalTargets =
         new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Fence, RetainedSource> retainedSources =
+        new ConcurrentHashMap<>();
+    private final AtomicInteger openSourceQuiescenceWindows =
+        new AtomicInteger();
 
     ZLinkCanonicalRelocationStateMachine(
         ZLinkInternalMeshNode node,
@@ -104,6 +110,26 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkSpotRetireControl.TargetEndpoint target,
         RetentionScheduler retentionScheduler) {
+        this(
+            node,
+            meshName,
+            entrySpotId,
+            locations,
+            coordinator,
+            target,
+            retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options.defaults());
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+        ZLinkInternalMeshNode node,
+        String meshName,
+        String entrySpotId,
+        ZLinkLocationRepository locations,
+        ZLinkAggregateRelocationCoordinator coordinator,
+        ZLinkSpotRetireControl.TargetEndpoint target,
+        RetentionScheduler retentionScheduler,
+        ZLinkRelocationPayloadTransfer.Options transferOptions) {
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -112,8 +138,32 @@ final class ZLinkCanonicalRelocationStateMachine
         this.target = Objects.requireNonNull(target, "target");
         this.retentionScheduler = Objects.requireNonNull(
             retentionScheduler, "retentionScheduler");
+        this.transferOptions = Objects.requireNonNull(
+            transferOptions, "transferOptions");
+        this.budget = new ZLinkRelocationPayloadTransfer.Budget(
+            transferOptions.chunkLimitBytes(),
+            transferOptions.inFlightPayloadBudgetBytes(),
+            transferOptions.nodeInFlightPayloadBudgetBytes());
         localNodeRid = node.status().routingId();
         localNodeGeneration = node.status().lifecycleGeneration();
+    }
+
+    /**
+     * Waits until a new relocation unit may apply its source admission seal
+     * — full in-flight budget delays the seal, never the running unit
+     * (spec 28 §5.3).
+     */
+    CompletionStage<Void> awaitUnitAdmission() {
+        return budget.awaitUnitAdmission();
+    }
+
+    /**
+     * True when this source keeps no relocation payload or boundary batch
+     * copy and no Message Follow route obligation — the SafeToShutdown
+     * component this machine owns (spec 30 §11).
+     */
+    boolean sourceQuiescent() {
+        return openSourceQuiescenceWindows.get() == 0;
     }
 
     @Override
@@ -169,15 +219,16 @@ final class ZLinkCanonicalRelocationStateMachine
         requireTimeout(timeout);
         SourceAttempt attempt = requireSource(Fence.from(fence), targetNodeRid);
         var prepare = attempt.prepare();
-        return send(targetNodeRid,
-            ZLinkCanonicalRelocationProtocol.encodeData(
-                new ZLinkCanonicalRelocationProtocol.Data(
-                    prepare.id(),
-                    prepare.targetAttemptGeneration(),
-                    prepare.coordinator(),
-                    ZLinkCanonicalRelocationProtocol.SOURCE,
-                    prepare.object(),
-                    frozenRecord)));
+        byte[] encoded = ZLinkCanonicalRelocationProtocol.encodeData(
+            new ZLinkCanonicalRelocationProtocol.Data(
+                prepare.id(),
+                prepare.targetAttemptGeneration(),
+                prepare.coordinator(),
+                ZLinkCanonicalRelocationProtocol.SOURCE,
+                prepare.object(),
+                frozenRecord));
+        attempt.batch().append(frozenRecord, encoded);
+        return send(targetNodeRid, encoded);
     }
 
     @Override
@@ -188,17 +239,83 @@ final class ZLinkCanonicalRelocationStateMachine
         requireTimeout(timeout);
         SourceAttempt attempt = requireSource(Fence.from(fence), targetNodeRid);
         var prepare = attempt.prepare();
+        RelayBatch batch = attempt.batch();
         var cutover = new ZLinkCanonicalRelocationProtocol.Cutover(
             prepare.id(),
             prepare.targetAttemptGeneration(),
             prepare.coordinator(),
             ZLinkCanonicalRelocationProtocol.SOURCE,
-            prepare.object());
+            prepare.object(),
+            batch.recordCount(),
+            batch.checksumCrc32c());
         Fence key = Fence.from(fence);
-        return send(targetNodeRid,
-                ZLinkCanonicalRelocationProtocol.encodeCutover(cutover))
-            .whenComplete((ignored, failure) ->
-                sources.remove(key, attempt));
+        byte[] encodedCutover =
+            ZLinkCanonicalRelocationProtocol.encodeCutover(cutover);
+        return send(targetNodeRid, encodedCutover)
+            .whenComplete((ignored, failure) -> {
+                //  Cutover submit terminal (S1). The payload and boundary
+                //  batch copies stay retained for the retransmission window
+                //  regardless of the submit result (spec 28 §4.4).
+                sources.remove(key, attempt);
+                retainSourceCopies(key, attempt, encodedCutover);
+            });
+    }
+
+    private void retainSourceCopies(
+        Fence key,
+        SourceAttempt attempt,
+        byte[] encodedCutover) {
+        RetainedSource retained = new RetainedSource(
+            attempt.request().targetNodeRid(),
+            attempt.batch().encodedFrames(),
+            encodedCutover);
+        if (retainedSources.putIfAbsent(key, retained) != null) {
+            return;
+        }
+        long submitNanos = System.nanoTime();
+        openSourceQuiescenceWindows.incrementAndGet();
+        Instant now = Instant.now();
+        //  Exactly-once copy cleanup after the retransmission window.
+        retentionScheduler.schedule(
+            now.plus(transferOptions.cutoverWaitTimeout()),
+            () -> retainedSources.remove(key, retained));
+        //  Source quiescence (SafeToShutdown component): the unit is done
+        //  when both the retransmission window and the Message Follow route
+        //  window (S4) have elapsed — both source-local (spec 30 §11).
+        Duration quiescence = transferOptions.cutoverWaitTimeout()
+            .compareTo(transferOptions.messageFollowDuration()) >= 0
+            ? transferOptions.cutoverWaitTimeout()
+            : transferOptions.messageFollowDuration();
+        retentionScheduler.schedule(
+            now.plus(quiescence),
+            () -> {
+                openSourceQuiescenceWindows.decrementAndGet();
+                ZLinkRuntimeMetrics.record(
+                    "zlink.relocation.route_convergence",
+                    Duration.ofNanos(System.nanoTime() - submitNanos),
+                    Map.of());
+            });
+    }
+
+    /**
+     * Resends the boundary batch and cutover on the current connection while
+     * the retransmission window is open. The target replaces its partially
+     * received pre-boundary section with the whole batch (spec 28 §4.4).
+     */
+    CompletionStage<Void> retransmitBoundaryBatch(
+        ZLinkSpotRetireControl.Fence fence) {
+        RetainedSource retained = retainedSources.get(Fence.from(fence));
+        if (retained == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        CompletionStage<Void> chain =
+            CompletableFuture.completedFuture(null);
+        for (byte[] frame : retained.dataFrames()) {
+            chain = chain.thenCompose(
+                ignored -> send(retained.targetNodeRid(), frame));
+        }
+        return chain.thenCompose(ignored ->
+            send(retained.targetNodeRid(), retained.encodedCutover()));
     }
 
     @Override
@@ -241,6 +358,9 @@ final class ZLinkCanonicalRelocationStateMachine
                 case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER ->
                     onCutover(transportSource,
                         ZLinkCanonicalRelocationProtocol.decodeCutover(encoded));
+                case ServiceWireConstants.COMMAND_RELOCATION_STATE ->
+                    onState(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeState(encoded));
                 default -> failed(new IllegalArgumentException(
                     "unsupported canonical relocation command"));
             };
@@ -278,7 +398,7 @@ final class ZLinkCanonicalRelocationStateMachine
         RetryPrepared foundRetry = retryPrepared.get(fence);
         if (foundRetry != null
             && !Instant.now().isBefore(
-                foundRetry.prepared().stored().expiresAt())) {
+                foundRetry.prepared().restoreDeadline())) {
             retryPrepared.remove(fence, foundRetry);
             foundRetry = null;
         }
@@ -303,17 +423,13 @@ final class ZLinkCanonicalRelocationStateMachine
             return publishReady(fence, attempt, transportSource);
         }
 
-        reconstruct(prepare)
+        attempt.assembler().assembled()
+            .thenCompose(payload -> reconstruct(prepare, payload))
             .thenCompose(restore -> {
                 attempt.request().complete(restore.request());
                 return target.stage(restore.request())
                     .thenCompose(ignored -> retry == null
-                        ? coordinator.prepareExistingRoot(
-                            restore.authority(),
-                            restore.root(),
-                            prepare.root().reference(),
-                            prepare.root().checksum(),
-                            OPEN)
+                        ? coordinator.prepare(restore.authority(), OPEN)
                         : CompletableFuture.completedFuture(retry.prepared()))
                     .thenAccept(attempt.prepared()::complete);
             })
@@ -371,7 +487,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 prepared);
             if (retryPrepared.putIfAbsent(fence, retained) == null) {
                 retentionScheduler.schedule(
-                    prepared.stored().expiresAt(),
+                    prepared.restoreDeadline(),
                     () -> retryPrepared.remove(fence, retained));
             }
         }
@@ -439,6 +555,25 @@ final class ZLinkCanonicalRelocationStateMachine
         return CompletableFuture.completedFuture(null);
     }
 
+    private CompletionStage<Void> onState(
+        RoutingId transportSource,
+        ZLinkCanonicalRelocationProtocol.State state) {
+        Fence fence = new Fence(state.id(), state.targetAttemptGeneration());
+        TargetAttempt attempt = targets.get(fence);
+        if (attempt == null
+            || !attempt.prepare().sourceNodeRid().equals(transportSource)
+            || !state.coordinator().equals(attempt.prepare().coordinator())
+            || !state.object().equals(attempt.prepare().object())) {
+            //  A chunk with a different exact identity is discarded and never
+            //  connected to a running assembly (spec 28 §4.3).
+            return CompletableFuture.completedFuture(null);
+        }
+        //  The assembler copies the chunk before this turn returns, so the
+        //  transport buffer never outlives the call (spec 28 §4.3).
+        attempt.assembler().accept(state.chunkOrdinal(), state.chunkData());
+        return CompletableFuture.completedFuture(null);
+    }
+
     private CompletionStage<Void> onData(
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.Data data) {
@@ -450,6 +585,7 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "canonical relocation data fence differs"));
         }
+        attempt.boundary().append(data.frozenRecord());
         return attempt.ready().thenCompose(ignored -> attempt.request()
             .thenCompose(request -> target.stageRelayedRecord(
                 request, data.frozenRecord())));
@@ -463,11 +599,12 @@ final class ZLinkCanonicalRelocationStateMachine
         TargetAttempt attempt = targets.get(fence);
         if (attempt == null) {
             TerminalTarget terminal = terminalTargets.get(fence);
-            if (terminal != null
-                && terminal.source().equals(transportSource)
-                && java.util.Arrays.equals(
-                    terminal.encodedCutover(),
-                    ZLinkCanonicalRelocationProtocol.encodeCutover(cutover))) {
+            if (terminal != null && terminal.source().equals(transportSource)
+                && (terminal.encodedCutover() == null
+                    || java.util.Arrays.equals(
+                        terminal.encodedCutover(),
+                        ZLinkCanonicalRelocationProtocol.encodeCutover(
+                            cutover)))) {
                 LOGGER.warning(
                     "Late or duplicate canonical CUTOVER is a no-op: "
                         + fence.id());
@@ -487,13 +624,30 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "canonical relocation cutover fence differs"));
         }
+        RelayBoundary boundary = attempt.boundary();
+        if (boundary.recordCount() != cutover.boundaryRecordCount()
+            || boundary.checksumCrc32c()
+                != cutover.boundaryChecksumCrc32c()) {
+            //  Replacement by a retransmitted batch: discard the partially
+            //  received pre-boundary section and wait for the whole batch —
+            //  on an ordered connection a mismatch at first receipt is a
+            //  defect signal (spec 28 §4.4).
+            LOGGER.severe(
+                "Canonical CUTOVER boundary record count or checksum differs"
+                    + " from the received relay section: " + fence.id());
+            return failed(new IllegalStateException(
+                "canonical relocation cutover boundary differs"));
+        }
+        attempt.receivedCutover(
+            ZLinkCanonicalRelocationProtocol.encodeCutover(cutover));
         return publishTarget(fence, attempt, false);
     }
 
     private void scheduleCutoverFallback(
         Fence fence, TargetAttempt attempt) {
         CompletableFuture.delayedExecutor(
-                CUTOVER_FALLBACK.toMillis(), TimeUnit.MILLISECONDS)
+                transferOptions.cutoverWaitTimeout().toMillis(),
+                TimeUnit.MILLISECONDS)
             .execute(() -> publishTarget(fence, attempt, true)
                 .exceptionally(ignored -> null));
     }
@@ -507,14 +661,37 @@ final class ZLinkCanonicalRelocationStateMachine
             if (attempt.publication() != null) {
                 return attempt.publication();
             }
+            if (fallback) {
+                //  The cutover wait elapsed without a cutover or retransmit.
+                LOGGER.warning(
+                    "cutover_timeout: relay-ready wait elapsed without a"
+                        + " CUTOVER; continuing with target-only CAS: "
+                        + fence.id());
+                ZLinkRuntimeMetrics.increment(
+                    "zlink.relocation.cutover_timeout", Map.of());
+            }
             publication = attempt.prepared()
                 .thenCompose(this::commitUntilRestoreExpiry)
                 .thenApply(published -> {
+                    //  S2 — target owner CAS confirmed.
                     attempt.committed(true);
+                    attempt.committedNanos(System.nanoTime());
                     return published;
                 })
                 .thenCompose(ignored -> attempt.request())
-                .thenCompose(target::publish);
+                .thenCompose(target::publish)
+                .thenApply(ignored -> {
+                    //  S3 — application dispatch opened on the target.
+                    long committedNanos = attempt.committedNanos();
+                    if (committedNanos != 0) {
+                        ZLinkRuntimeMetrics.record(
+                            "zlink.relocation.target_resume",
+                            Duration.ofNanos(
+                                System.nanoTime() - committedNanos),
+                            Map.of());
+                    }
+                    return ignored;
+                });
             attempt.publication(publication);
         }
         publication.whenComplete((ignored, failure) -> {
@@ -533,20 +710,14 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkAggregateRelocationCoordinator.Prepared prepared =
             attempt.prepared().join();
         var prepare = attempt.prepare();
-        var cutover = new ZLinkCanonicalRelocationProtocol.Cutover(
-            prepare.id(),
-            prepare.targetAttemptGeneration(),
-            prepare.coordinator(),
-            ZLinkCanonicalRelocationProtocol.SOURCE,
-            prepare.object());
         TerminalTarget terminal = new TerminalTarget(
             prepare.sourceNodeRid(),
             ZLinkCanonicalRelocationProtocol.encodePrepare(prepare),
-            ZLinkCanonicalRelocationProtocol.encodeCutover(cutover));
+            attempt.receivedCutover());
         TerminalTarget current = terminalTargets.putIfAbsent(fence, terminal);
         if (current == null) {
             retentionScheduler.schedule(
-                prepared.stored().expiresAt(),
+                prepared.restoreDeadline(),
                 () -> terminalTargets.remove(fence, terminal));
         }
         targets.remove(fence, attempt);
@@ -565,7 +736,7 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkAggregateRelocationCoordinator.Prepared prepared,
         CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>
             result) {
-        if (!Instant.now().isBefore(prepared.stored().expiresAt())) {
+        if (!Instant.now().isBefore(prepared.restoreDeadline())) {
             result.completeExceptionally(new TimeoutException(
                 "relocation Restore validity expired before target owner CAS"));
             return;
@@ -580,12 +751,12 @@ final class ZLinkCanonicalRelocationStateMachine
                     .AuthorityConflictException
                 || cause instanceof ZLinkAggregateRelocationCoordinator
                     .RelocationDataLostException
-                || !Instant.now().isBefore(prepared.stored().expiresAt())) {
+                || !Instant.now().isBefore(prepared.restoreDeadline())) {
                 result.completeExceptionally(cause);
                 return;
             }
             long remainingMillis = Math.max(1L, Duration.between(
-                Instant.now(), prepared.stored().expiresAt()).toMillis());
+                Instant.now(), prepared.restoreDeadline()).toMillis());
             CompletableFuture.delayedExecutor(
                     Math.min(STORE_RETRY_DELAY.toMillis(), remainingMillis),
                     TimeUnit.MILLISECONDS)
@@ -599,12 +770,7 @@ final class ZLinkCanonicalRelocationStateMachine
             primary(request.participants());
         CompletionStage<ZLinkAuthorityReadResult> authority =
             locations.read(primary.authorityKey(), OPEN);
-        CompletionStage<ZLinkAggregateRelocationCoordinator.Root> root =
-            coordinator.readRoot(
-                request.relocationReference(),
-                request.relocationChecksum(),
-                OPEN);
-        return authority.thenCombine(root, (read, stored) -> {
+        return authority.thenApply(read -> {
             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                 || snapshot.objectGeneration() != primary.objectGeneration()
                 || snapshot.authorityOwnerGeneration()
@@ -615,8 +781,9 @@ final class ZLinkCanonicalRelocationStateMachine
                 throw new IllegalStateException(
                     "source relocation authority fence is stale");
             }
+            byte[] payload = request.relocationPayload();
             var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(
-                stored.payload());
+                payload);
             return new ZLinkCanonicalRelocationProtocol.Prepare(
                 request.fence().aggregateId(),
                 request.fence().aggregateGeneration(),
@@ -640,39 +807,32 @@ final class ZLinkCanonicalRelocationStateMachine
                     primary.sourceAuthorityOwnerGeneration()),
                 request.sourceNodeRid(),
                 request.sourceNodeGeneration(),
-                new ZLinkCanonicalRelocationProtocol.Root(
-                    request.relocationReference(),
-                    request.relocationChecksum()),
+                ZLinkRelocationPayloadTransfer.manifest(
+                    payload, budget.effectiveChunkBytes()),
                 envelope.applicationVersion());
         });
     }
 
     private CompletionStage<TargetRestore> reconstruct(
-        ZLinkCanonicalRelocationProtocol.Prepare prepare) {
-        if (prepare.root() == null) {
-            return failed(new IllegalArgumentException(
-                "canonical relocation root is required"));
-        }
-        CompletionStage<ZLinkAggregateRelocationCoordinator.Root> root =
-            coordinator.readRoot(
-                prepare.root().reference(), prepare.root().checksum(), OPEN);
+        ZLinkCanonicalRelocationProtocol.Prepare prepare,
+        byte[] payload) {
+        Objects.requireNonNull(payload, "payload");
         CompletionStage<List<ZLinkAuthorityEntry>> inventory =
             prepare.object().kind() == 1
                 ? readStandaloneActor(prepare)
                 : readUserSpotInventory(prepare);
-        return root.thenCombine(inventory, (stored, entries) -> {
+        return inventory.thenApply(entries -> {
             ZLinkSpotRetireControl.TargetProfile profile =
                 Objects.requireNonNull(
                     target.applyTargetProfile(stageRequest(
-                        prepare, stored.payload(), entries),
+                        prepare, payload, entries),
                         localNodeGeneration),
                     "canonical target profile returned null");
             ZLinkSpotRetireControl.StageRequest request = profile.request();
             return new TargetRestore(
                 request,
                 authorityRequest(
-                    prepare, stored.payload(), entries, profile),
-                stored);
+                    prepare, payload, entries, profile));
         });
     }
 
@@ -910,8 +1070,7 @@ final class ZLinkCanonicalRelocationStateMachine
             stableType,
             false,
             restorePrimary,
-            prepare.root().reference(),
-            prepare.root().checksum(),
+            rootBytes,
             participants,
             List.of());
     }
@@ -1020,6 +1179,8 @@ final class ZLinkCanonicalRelocationStateMachine
         CompletionStage<Void> submitted = submitFirst && !attempt.ready().isDone()
             ? send(targetNodeRid,
                 ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()))
+                .thenCompose(ignored -> sendStateChunks(
+                    targetNodeRid, attempt))
             : CompletableFuture.completedFuture(null);
         Duration slice = Duration.ofNanos(
             Math.min(remainingNanos, TimeUnit.SECONDS.toNanos(1)));
@@ -1040,6 +1201,47 @@ final class ZLinkCanonicalRelocationStateMachine
                     return CompletableFuture.<Void>failedFuture(unwrap(failure));
                 })
                 .thenCompose(stage -> stage));
+    }
+
+    /**
+     * Streams the captured payload as command 52 chunks on the same ordered
+     * connection, one submission at a time, each charged against the
+     * in-flight payload budget until its transport terminal (spec 28 §4.2,
+     * §5.3). A resent PREPARE resends the chunks; identical chunks are
+     * idempotent on the target.
+     */
+    private CompletionStage<Void> sendStateChunks(
+        RoutingId targetNodeRid,
+        SourceAttempt attempt) {
+        if (attempt.ready().isDone()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        var prepare = attempt.prepare();
+        List<byte[]> chunks = ZLinkRelocationPayloadTransfer.chunks(
+            attempt.request().relocationPayload(),
+            budget.effectiveChunkBytes());
+        CompletionStage<Void> chain =
+            CompletableFuture.completedFuture(null);
+        for (int index = 0; index < chunks.size(); index++) {
+            byte[] chunk = chunks.get(index);
+            long ordinal = index;
+            chain = chain.thenCompose(ignored ->
+                budget.acquire(targetNodeRid, chunk.length)
+                    .thenCompose(admitted -> send(
+                            targetNodeRid,
+                            ZLinkCanonicalRelocationProtocol.encodeState(
+                                new ZLinkCanonicalRelocationProtocol.State(
+                                    prepare.id(),
+                                    prepare.targetAttemptGeneration(),
+                                    prepare.coordinator(),
+                                    ZLinkCanonicalRelocationProtocol.SOURCE,
+                                    prepare.object(),
+                                    ordinal,
+                                    chunk)))
+                        .whenComplete((result, failure) ->
+                            budget.release(targetNodeRid, chunk.length))));
+        }
+        return chain;
     }
 
     private static CompletionStage<Void> timed(
@@ -1084,7 +1286,8 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkSpotRetireControl.StageRequest request,
         ZLinkCanonicalRelocationProtocol.Prepare prepare,
         CompletableFuture<Void> ready,
-        AtomicInteger activeWaiters) {
+        AtomicInteger activeWaiters,
+        RelayBatch batch) {
         SourceAttempt(
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkCanonicalRelocationProtocol.Prepare prepare) {
@@ -1092,14 +1295,82 @@ final class ZLinkCanonicalRelocationStateMachine
                 request,
                 prepare,
                 new CompletableFuture<>(),
-                new AtomicInteger());
+                new AtomicInteger(),
+                new RelayBatch());
+        }
+    }
+
+    /**
+     * Source-side pre-boundary relay batch: the retransmission copy plus the
+     * running record count and CRC-32C the cutover carries (spec 28 §4.4).
+     */
+    private static final class RelayBatch {
+        private final List<byte[]> encodedFrames = new ArrayList<>();
+        private final java.util.zip.CRC32C checksum =
+            new java.util.zip.CRC32C();
+        private long recordCount;
+
+        synchronized void append(byte[] frozenRecord, byte[] encodedFrame) {
+            checksum.update(frozenRecord, 0, frozenRecord.length);
+            recordCount++;
+            encodedFrames.add(encodedFrame.clone());
+        }
+
+        synchronized long recordCount() {
+            return recordCount;
+        }
+
+        synchronized long checksumCrc32c() {
+            return checksum.getValue();
+        }
+
+        synchronized List<byte[]> encodedFrames() {
+            return List.copyOf(encodedFrames);
+        }
+    }
+
+    /**
+     * Target-side pre-boundary relay accounting the cutover is checked
+     * against (spec 28 §4.4).
+     */
+    private static final class RelayBoundary {
+        private final java.util.zip.CRC32C checksum =
+            new java.util.zip.CRC32C();
+        private long recordCount;
+
+        synchronized void append(byte[] frozenRecord) {
+            checksum.update(frozenRecord, 0, frozenRecord.length);
+            recordCount++;
+        }
+
+        synchronized long recordCount() {
+            return recordCount;
+        }
+
+        synchronized long checksumCrc32c() {
+            return checksum.getValue();
+        }
+    }
+
+    /** Retained copies for the cutover retransmission window (spec 28 §4.4). */
+    private record RetainedSource(
+        RoutingId targetNodeRid,
+        List<byte[]> dataFrames,
+        byte[] encodedCutover) {
+        private RetainedSource {
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            dataFrames = List.copyOf(dataFrames);
+            encodedCutover = encodedCutover.clone();
+        }
+
+        @Override public byte[] encodedCutover() {
+            return encodedCutover.clone();
         }
     }
 
     private record TargetRestore(
         ZLinkSpotRetireControl.StageRequest request,
-        ZLinkAggregateRelocationCoordinator.Request authority,
-        ZLinkAggregateRelocationCoordinator.Root root) {
+        ZLinkAggregateRelocationCoordinator.Request authority) {
     }
 
     private record RetryPrepared(
@@ -1123,8 +1394,9 @@ final class ZLinkCanonicalRelocationStateMachine
             Objects.requireNonNull(source, "source");
             encodedPrepare = Objects.requireNonNull(
                 encodedPrepare, "encodedPrepare").clone();
-            encodedCutover = Objects.requireNonNull(
-                encodedCutover, "encodedCutover").clone();
+            encodedCutover = encodedCutover == null
+                ? null
+                : encodedCutover.clone();
         }
 
         @Override public byte[] encodedPrepare() {
@@ -1132,7 +1404,7 @@ final class ZLinkCanonicalRelocationStateMachine
         }
 
         @Override public byte[] encodedCutover() {
-            return encodedCutover.clone();
+            return encodedCutover == null ? null : encodedCutover.clone();
         }
     }
 
@@ -1143,6 +1415,8 @@ final class ZLinkCanonicalRelocationStateMachine
 
     private static final class TargetAttempt {
         private final ZLinkCanonicalRelocationProtocol.Prepare prepare;
+        private final ZLinkRelocationPayloadTransfer.Assembler assembler;
+        private final RelayBoundary boundary = new RelayBoundary();
         private final CompletableFuture<ZLinkSpotRetireControl.StageRequest>
             request = new CompletableFuture<>();
         private final CompletableFuture<
@@ -1153,13 +1427,42 @@ final class ZLinkCanonicalRelocationStateMachine
         private CompletionStage<Void> readyPublication;
         private boolean fallbackArmed;
         private boolean committed;
+        private volatile long committedNanos;
+        private volatile byte[] receivedCutover;
 
         TargetAttempt(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
             this.prepare = prepare;
+            this.assembler = new ZLinkRelocationPayloadTransfer.Assembler(
+                prepare.manifest());
         }
 
         ZLinkCanonicalRelocationProtocol.Prepare prepare() {
             return prepare;
+        }
+
+        ZLinkRelocationPayloadTransfer.Assembler assembler() {
+            return assembler;
+        }
+
+        RelayBoundary boundary() {
+            return boundary;
+        }
+
+        long committedNanos() {
+            return committedNanos;
+        }
+
+        void committedNanos(long value) {
+            committedNanos = value;
+        }
+
+        byte[] receivedCutover() {
+            byte[] value = receivedCutover;
+            return value == null ? null : value.clone();
+        }
+
+        void receivedCutover(byte[] value) {
+            receivedCutover = value.clone();
         }
 
         CompletableFuture<ZLinkSpotRetireControl.StageRequest> request() {

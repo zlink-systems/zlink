@@ -22,6 +22,10 @@ interface GoldenEntry {
   readonly hex: string;
 }
 
+interface MalformedEntry extends GoldenEntry {
+  readonly error: string;
+}
+
 const coordinator = {
   ownerId: 'coordinator',
   leaseGeneration: 7n,
@@ -44,11 +48,17 @@ const relocationObject = {
   expectedAuthorityOwnerGeneration: 10n
 } as const;
 
-function relocationGolden(): readonly GoldenEntry[] {
-  return (JSON.parse(readFileSync(
+function relocationGolden(): {
+  readonly canonical: readonly GoldenEntry[];
+  readonly malformed: readonly MalformedEntry[];
+} {
+  return JSON.parse(readFileSync(
     '../../runtime/protocol/golden/relocation-control-v1.json',
     'utf8'
-  )) as { readonly canonical: readonly GoldenEntry[] }).canonical;
+  )) as {
+    readonly canonical: readonly GoldenEntry[];
+    readonly malformed: readonly MalformedEntry[];
+  };
 }
 
 function sessionGolden(): readonly GoldenEntry[] {
@@ -75,8 +85,9 @@ function assertGoldenRoundTrip<T>(
   assert.throws(() => decode(forbiddenFlag));
 }
 
-test('commands 30, 31, 34, and 40 match the shared golden vectors', () => {
-  const entries = relocationGolden();
+test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
+  const golden = relocationGolden();
+  const entries = golden.canonical;
   const dataEntry = entries.find(entry => entry.name === 'relocationDataPostCaptureIngress');
   assert.ok(dataEntry);
   const base = {
@@ -87,7 +98,14 @@ test('commands 30, 31, 34, and 40 match the shared golden vectors', () => {
   const values: readonly ServiceMaintenanceRelocationControl[] = [
     { kind: 'ready', ...base, target, object: relocationObject, senderRole: 'target' },
     decodeMaintenanceRelocationControl(Buffer.from(dataEntry.hex, 'hex')),
-    { kind: 'cutover', ...base, senderRole: 'source', object: relocationObject },
+    {
+      kind: 'cutover',
+      ...base,
+      senderRole: 'source',
+      object: relocationObject,
+      boundaryRecordCount: 3n,
+      boundaryChecksumCrc32c: 0xe3069283
+    },
     {
       kind: 'prepare',
       ...base,
@@ -96,12 +114,30 @@ test('commands 30, 31, 34, and 40 match the shared golden vectors', () => {
       object: relocationObject,
       sourceNodeRid: 'node-a',
       sourceNodeGeneration: 11n,
-      root: { reference: 'relocation-root', checksumCrc32c: 0x12345678 },
+      payloadTotalLength: 24n,
+      payloadChunkCount: 2,
+      payloadChecksumCrc32c: 0x29bc8795,
       applicationVersion: 1n
+    },
+    {
+      kind: 'state',
+      ...base,
+      senderRole: 'source',
+      object: relocationObject,
+      chunkOrdinal: 0,
+      chunkData: Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex')
+    },
+    {
+      kind: 'state',
+      ...base,
+      senderRole: 'source',
+      object: relocationObject,
+      chunkOrdinal: 1,
+      chunkData: Buffer.from('1011121314151617', 'hex')
     }
   ];
 
-  assert.deepEqual(entries.map(entry => entry.command), [30, 31, 34, 40]);
+  assert.deepEqual(entries.map(entry => entry.command), [30, 31, 34, 40, 52, 52]);
   for (const [index, entry] of entries.entries()) {
     const encoded = Buffer.from(entry.hex, 'hex');
     const decoded = decodeMaintenanceRelocationControl(encoded);
@@ -120,6 +156,14 @@ test('commands 30, 31, 34, and 40 match the shared golden vectors', () => {
     assert.equal(data.senderRole, 'source');
     assert.deepEqual(data.object, relocationObject);
     assert.equal(data.frozenRecord.recordKind, 6);
+  }
+
+  for (const entry of golden.malformed) {
+    assert.throws(
+      () => decodeMaintenanceRelocationControl(Buffer.from(entry.hex, 'hex')),
+      Error,
+      entry.name
+    );
   }
 
   for (const command of [32, 35, 41]) {

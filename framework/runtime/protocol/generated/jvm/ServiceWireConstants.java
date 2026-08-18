@@ -5,7 +5,7 @@ public final class ServiceWireConstants {
     public static final int MAGIC_0 = 90;
     public static final int MAGIC_1 = 77;
     public static final int WIRE_MAJOR = 1;
-    public static final String REQUIRED_CAPABILITY = "framework-service-v12";
+    public static final String REQUIRED_CAPABILITY = "framework-service-v13";
     public static final String FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart";
     public static final String FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart";
     public static final int COMMAND_HELLO = 1;
@@ -46,6 +46,7 @@ public final class ServiceWireConstants {
     public static final int COMMAND_ACTOR_CREATE = 49;
     public static final int COMMAND_MESSAGE_FOLLOW = 50;
     public static final int COMMAND_BOUND_SESSION_REPLACED = 51;
+    public static final int COMMAND_RELOCATION_STATE = 52;
     public static final int FLAG_METADATA = 1;
     public static final int FLAG_BOUND_SESSION = 2;
     public static final int FLAG_SOURCE_SPOT_ID = 4;

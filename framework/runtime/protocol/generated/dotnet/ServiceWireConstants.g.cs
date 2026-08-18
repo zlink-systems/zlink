@@ -6,7 +6,7 @@ internal static class ServiceWireConstants
     internal const byte Magic0 = 90;
     internal const byte Magic1 = 77;
     internal const byte WireMajor = 1;
-    internal const string RequiredCapability = "framework-service-v12";
+    internal const string RequiredCapability = "framework-service-v13";
     internal const string FrameworkMultipartPacketName = "ZLinkFrameworkMultipart";
     internal const string FrameworkMultipartContentType = "application/x-zlink-multipart";
     internal enum Command : byte
@@ -49,6 +49,7 @@ internal static class ServiceWireConstants
         ActorCreate = 49,
         MessageFollow = 50,
         BoundSessionReplaced = 51,
+        RelocationState = 52,
     }
     [System.Flags]
     internal enum Flag : byte

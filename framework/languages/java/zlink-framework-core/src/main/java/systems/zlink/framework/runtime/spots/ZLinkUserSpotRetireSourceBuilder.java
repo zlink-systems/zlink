@@ -33,8 +33,6 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkRelocationStored;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -295,10 +293,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 return abortSessionRoutes(
                         sessionSealer,
                         context.sealedSessionRoutes())
-                    .thenCompose(aborted -> context.stagedRoot() == null
-                        ? CompletableFuture.completedFuture(null)
-                        : coordinator.discardStagedRoot(
-                            context.stagedRoot()))
                     .thenCompose(discarded -> context.barrier().abortAsync(
                         context.seal()))
                     .thenAccept(aborted -> {
@@ -361,8 +355,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkStoreCancellation cancellation,
         ZLinkUserSpotRelocationBarrier barrier,
         ZLinkUserSpotRelocationBarrier.Seal seal) {
-        AtomicReference<ZLinkAggregateRelocationCoordinator.StagedRoot>
-            staged = new AtomicReference<>();
         AtomicReference<List<SealedSessionRoute>> sealedSessions =
             new AtomicReference<>(List.of());
         return readInventory(
@@ -404,37 +396,28 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                 exact.inventory().spot().snapshot()
                                     .authorityOwnerGeneration(),
                                 inventory);
-                        var authorityRequest = relocationRequest(
-                            exact,
-                            root,
-                            admission.target(),
-                            aggregateId);
-                        return coordinator.stageRoot(
-                                authorityRequest, cancellation)
-                            .thenCompose(stagedRoot -> {
-                                staged.set(stagedRoot);
-                                if (cancellation.isCancellationRequested()) {
-                                    return cancelled();
-                                }
-                                return CompletableFuture.completedFuture(
-                                    new PreparedSource(
-                                        coordinator,
-                                        barrier,
-                                        seal,
-                                        exact,
-                                        stagedRoot,
-                                        spots,
-                                        actors,
-                                        relocationReplies,
-                                        sessionSealer,
-                                        sealed,
-                                        unresolved,
-                                        stageRequest(
-                                            exact,
-                                            authorityRequest,
-                                            stagedRoot.stored(),
-                                            admission.target())));
-                            });
+                        //  The aggregate payload lives only in source
+                        //  memory and travels directly with the stage
+                        //  request (spec 28 §4.2).
+                        if (cancellation.isCancellationRequested()) {
+                            return cancelled();
+                        }
+                        return CompletableFuture.completedFuture(
+                            new PreparedSource(
+                                barrier,
+                                seal,
+                                exact,
+                                spots,
+                                actors,
+                                relocationReplies,
+                                sessionSealer,
+                                sealed,
+                                unresolved,
+                                stageRequest(
+                                    exact,
+                                    aggregateId,
+                                    root,
+                                    admission.target())));
                     });
             })
             .exceptionallyCompose(failure -> {
@@ -446,16 +429,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         barrier,
                         seal,
                         sealedSessions.get(),
-                        staged.get(),
                         false));
                     return failed(cause);
                 }
                 CompletionStage<Void> release = abortSessionRoutes(
                         sessionSealer,
                         sealedSessions.get())
-                    .thenCompose(ignored -> staged.get() == null
-                        ? CompletableFuture.completedFuture(null)
-                        : coordinator.discardStagedRoot(staged.get()))
                     .thenCompose(ignored -> barrier.abortAsync(seal))
                     .thenAccept(aborted -> {
                         if (!aborted) {
@@ -474,7 +453,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                     barrier,
                                     seal,
                                     sealedSessions.get(),
-                                    staged.get(),
                                     true));
                             return failed(cause);
                         }
@@ -1059,53 +1037,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
             instanceof RelocationPolicy.PreserveState;
     }
 
-    private static ZLinkAggregateRelocationCoordinator.Request
-        relocationRequest(
-            Captured captured,
-            byte[] root,
-            ZLinkMeshNodeDescriptor target,
-            UUID aggregateId) {
-        List<ZLinkAggregateRelocationCoordinator.Participant> participants =
-            new ArrayList<>();
-        participants.add(participant(
-            captured.inventory().spot(),
-            new byte[0]));
-        for (Owned actor : captured.inventory().actors()) {
-            participants.add(participant(actor, new byte[0]));
-        }
-        return new ZLinkAggregateRelocationCoordinator.Request(
-            aggregateId,
-            1,
-            participants,
-            root,
-            new ZLinkMeshNodeDescriptorKey(target.meshName(), target.rid()),
-            target.lifecycleGeneration(),
-            new ZLinkPlacementCapacityBundle(
-                captured.inventory().actors().size(),
-                1,
-                Optional.of(new ZLinkSpotTypeCapacityDelta(
-                    ZLinkPlacementObjectKind.USER_SPOT,
-                    captured.inventory().spot().stableType(),
-                    1))),
-            new ZLinkLocationOwnerToken(
-                target.ownerId(),
-                target.leaseGeneration()));
-    }
-
-    private static ZLinkAggregateRelocationCoordinator.Participant participant(
-        Owned owned,
-        byte[] completion) {
-        return new ZLinkAggregateRelocationCoordinator.Participant(
-            owned.key(),
-            owned.snapshot().allocation().objectKind(),
-            owned.snapshot().objectGeneration(),
-            owned.snapshot().authorityOwnerGeneration(),
-            owned.snapshot().storeVersion(),
-            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            owned.snapshot().payload(),
-            completion);
-    }
-
     private static List<ZLinkSpotRetireControl.ParticipantFence>
         participantFences(Captured captured) {
         return Stream.concat(
@@ -1130,15 +1061,13 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     private ZLinkSpotRetireControl.StageRequest stageRequest(
         Captured captured,
-        ZLinkAggregateRelocationCoordinator.Request authorityRequest,
-        ZLinkRelocationStored stored,
+        UUID aggregateId,
+        byte[] relocationPayload,
         ZLinkMeshNodeDescriptor target) {
         ZLinkAuthoritySnapshot source =
             captured.inventory().spot().snapshot();
         return new ZLinkSpotRetireControl.StageRequest(
-            new ZLinkSpotRetireControl.Fence(
-                authorityRequest.aggregateId(),
-                authorityRequest.aggregateGeneration()),
+            new ZLinkSpotRetireControl.Fence(aggregateId, 1),
             localNodeRid,
             localNodeGeneration,
             source.ownerId(),
@@ -1152,19 +1081,15 @@ final class ZLinkUserSpotRetireSourceBuilder {
             captured.inventory().spot().stableType(),
             false,
             captured.staging().restoreSpotSnapshot(),
-            stored.reference(),
-            stored.checksumCrc32c(),
+            relocationPayload,
             participantFences(captured),
             captured.sessionRoutes());
     }
 
     static final class PreparedSource {
-        private final ZLinkAggregateRelocationCoordinator coordinator;
         private final ZLinkUserSpotRelocationBarrier barrier;
         private final ZLinkUserSpotRelocationBarrier.Seal seal;
         private final Captured captured;
-        private final ZLinkAggregateRelocationCoordinator.StagedRoot
-            stagedRoot;
         private final ZLinkSpotLifecycle spots;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkSpotRuntime relocationReplies;
@@ -1181,11 +1106,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private boolean terminal;
 
         private PreparedSource(
-            ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkUserSpotRelocationBarrier barrier,
             ZLinkUserSpotRelocationBarrier.Seal seal,
             Captured captured,
-            ZLinkAggregateRelocationCoordinator.StagedRoot stagedRoot,
             ZLinkSpotLifecycle spots,
             ZLinkActorSessionCoordinator actors,
             ZLinkSpotRuntime relocationReplies,
@@ -1193,11 +1116,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
             List<SealedSessionRoute> sealedSessionRoutes,
             List<UnresolvedPreparation> unresolved,
             ZLinkSpotRetireControl.StageRequest stageRequest) {
-            this.coordinator = coordinator;
             this.barrier = barrier;
             this.seal = seal;
             this.captured = captured;
-            this.stagedRoot = stagedRoot;
             this.spots = Objects.requireNonNull(spots, "spots");
             this.actors = Objects.requireNonNull(actors, "actors");
             this.relocationReplies = relocationReplies;
@@ -1205,10 +1126,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
             this.sealedSessionRoutes = List.copyOf(sealedSessionRoutes);
             this.unresolved = Objects.requireNonNull(unresolved, "unresolved");
             this.stageRequest = stageRequest;
-        }
-
-        ZLinkAggregateRelocationCoordinator.StagedRoot stagedRoot() {
-            return stagedRoot;
         }
 
         ZLinkSpotRetireControl.StageRequest stageRequest() {
@@ -1400,12 +1317,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                 barrier,
                                 seal,
                                 sealedSessionRoutes,
-                                stagedRoot,
                                 true));
                         return failed(unwrap(failure));
                     })
-                .thenCompose(ignored -> coordinator.discardStagedRoot(
-                    stagedRoot))
                 .thenCompose(ignored -> {
                     ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
                     synchronized (PreparedSource.this) {
@@ -1454,17 +1368,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         "source relocation is not committed"));
                 }
             }
-            return coordinator.discardStagedRoot(stagedRoot)
-                .thenRun(() -> {
-                    synchronized (this) {
-                        if (!sourceCommitted || terminal) {
-                            throw new IllegalStateException(
-                                "source relocation cleanup is not ready "
-                                    + "to finish");
-                        }
-                        terminal = true;
-                    }
-                });
+            synchronized (this) {
+                if (!sourceCommitted || terminal) {
+                    return failed(new IllegalStateException(
+                        "source relocation cleanup is not ready to finish"));
+                }
+                terminal = true;
+            }
+            return CompletableFuture.completedFuture(null);
         }
 
         CompletionStage<Void> cleanupLocal(Instant deadline) {
@@ -1532,7 +1443,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkUserSpotRelocationBarrier barrier,
         ZLinkUserSpotRelocationBarrier.Seal seal,
         List<SealedSessionRoute> sealedSessionRoutes,
-        ZLinkAggregateRelocationCoordinator.StagedRoot stagedRoot,
         boolean authorityAborted) {
         private UnresolvedPreparation {
             sealedSessionRoutes = List.copyOf(sealedSessionRoutes);

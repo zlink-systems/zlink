@@ -39,11 +39,6 @@ export interface ZLinkEntryActorRuntime {
 }
 
 export interface ZLinkSpotActorTransferRuntime {
-  readPreparedTransferState(
-    reference: string,
-    checksumCrc32c: number,
-    signal?: AbortSignal
-  ): Promise<Buffer>;
   prepareDeferredJoinAccepted(
     actorId: string,
     operationId: ZLinkActorJoinOperationId,

@@ -28,8 +28,9 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWi
 
 /**
  * Infrastructure-only request/reply bridge for User Spot relocation control.
- * The immutable payload remains in Relocation Store; commands carry only the
- * exact aggregate, node, owner and root fences needed by the target.
+ * The handoff payload lives in source memory and travels directly with the
+ * stage request; commands carry the exact aggregate, node and owner fences
+ * plus the payload the target assembles and restores (spec 28 §4.2).
  */
 final class ZLinkSpotRetireControl {
     private static final int MAGIC = 0x5a4c5243; // ZLRC
@@ -41,7 +42,7 @@ final class ZLinkSpotRetireControl {
     private static final int RELAY_ACK = 126;
     private static final int ACK = 127;
     private static final int MAX_TEXT_BYTES = 4096;
-    private static final int MAX_COMMAND_BYTES = 1024 * 1024;
+    private static final int MAX_COMMAND_BYTES = 64 * 1024 * 1024;
     private static final int MAX_PARTICIPANTS = 1024;
 
     private ZLinkSpotRetireControl() {
@@ -333,8 +334,7 @@ final class ZLinkSpotRetireControl {
         String stableType,
         boolean instanceSpot,
         boolean restoreSpotSnapshot,
-        String relocationReference,
-        long relocationChecksum,
+        byte[] relocationPayload,
         List<ParticipantFence> participants,
         List<SessionRouteFence> sessionRoutes) {
         StageRequest(
@@ -352,8 +352,7 @@ final class ZLinkSpotRetireControl {
             String stableType,
             boolean instanceSpot,
             boolean restoreSpotSnapshot,
-            String relocationReference,
-            long relocationChecksum,
+            byte[] relocationPayload,
             List<ParticipantFence> participants) {
             this(
                 fence,
@@ -370,8 +369,7 @@ final class ZLinkSpotRetireControl {
                 stableType,
                 instanceSpot,
                 restoreSpotSnapshot,
-                relocationReference,
-                relocationChecksum,
+                relocationPayload,
                 participants,
                 List.of());
         }
@@ -385,7 +383,12 @@ final class ZLinkSpotRetireControl {
             requireText(meshName, "meshName");
             requireText(spotId, "spotId");
             requireText(stableType, "stableType");
-            requireText(relocationReference, "relocationReference");
+            relocationPayload = Objects.requireNonNull(
+                relocationPayload, "relocationPayload").clone();
+            if (relocationPayload.length == 0) {
+                throw new IllegalArgumentException(
+                    "relocation stage payload is required");
+            }
             participants = List.copyOf(Objects.requireNonNull(
                 participants, "participants"));
             sessionRoutes = List.copyOf(Objects.requireNonNull(
@@ -393,11 +396,9 @@ final class ZLinkSpotRetireControl {
             if (sourceNodeGeneration <= 0
                 || sourceOwnerLeaseGeneration <= 0
                 || targetNodeGeneration <= 0
-                || targetOwnerLeaseGeneration <= 0
-                || relocationChecksum < 0
-                || relocationChecksum > 0xffff_ffffL) {
+                || targetOwnerLeaseGeneration <= 0) {
                 throw new IllegalArgumentException(
-                    "relocation stage contains an invalid generation or checksum");
+                    "relocation stage contains an invalid generation");
             }
             if (participants.isEmpty()
                 || participants.size() > MAX_PARTICIPANTS) {
@@ -433,6 +434,65 @@ final class ZLinkSpotRetireControl {
                 }
                 previous = route.actorId();
             }
+        }
+
+        @Override
+        public byte[] relocationPayload() {
+            return relocationPayload.clone();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof StageRequest that
+                && fence.equals(that.fence)
+                && sourceNodeRid.equals(that.sourceNodeRid)
+                && sourceNodeGeneration == that.sourceNodeGeneration
+                && sourceOwnerId.equals(that.sourceOwnerId)
+                && sourceOwnerLeaseGeneration
+                    == that.sourceOwnerLeaseGeneration
+                && targetNodeRid.equals(that.targetNodeRid)
+                && targetNodeGeneration == that.targetNodeGeneration
+                && targetOwnerId.equals(that.targetOwnerId)
+                && targetOwnerLeaseGeneration
+                    == that.targetOwnerLeaseGeneration
+                && meshName.equals(that.meshName)
+                && spotId.equals(that.spotId)
+                && stableType.equals(that.stableType)
+                && instanceSpot == that.instanceSpot
+                && restoreSpotSnapshot == that.restoreSpotSnapshot
+                && Arrays.equals(
+                    relocationPayload, that.relocationPayload)
+                && participants.equals(that.participants)
+                && sessionRoutes.equals(that.sessionRoutes);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(
+                fence,
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sourceOwnerId,
+                sourceOwnerLeaseGeneration,
+                targetNodeRid,
+                targetNodeGeneration,
+                targetOwnerId,
+                targetOwnerLeaseGeneration,
+                meshName,
+                spotId,
+                stableType,
+                instanceSpot,
+                restoreSpotSnapshot,
+                Arrays.hashCode(relocationPayload),
+                participants,
+                sessionRoutes);
+        }
+
+        /** CRC-32C of the whole encoded handoff payload (spec 28 §4.2). */
+        long relocationPayloadChecksumCrc32c() {
+            java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+            checksum.update(relocationPayload, 0, relocationPayload.length);
+            return checksum.getValue();
         }
     }
 
@@ -542,8 +602,9 @@ final class ZLinkSpotRetireControl {
             writeText(output, request.stableType());
             output.writeBoolean(request.instanceSpot());
             output.writeBoolean(request.restoreSpotSnapshot());
-            writeText(output, request.relocationReference());
-            output.writeInt((int) request.relocationChecksum());
+            byte[] payload = request.relocationPayload();
+            output.writeInt(payload.length);
+            output.write(payload);
             output.writeInt(request.participants().size());
             for (ParticipantFence participant : request.participants()) {
                 writeText(output, participant.authorityKey());
@@ -638,8 +699,15 @@ final class ZLinkSpotRetireControl {
                 String stableType = readText(input);
                 boolean instanceSpot = input.readBoolean();
                 boolean restoreSpotSnapshot = input.readBoolean();
-                String reference = readText(input);
-                long checksum = Integer.toUnsignedLong(input.readInt());
+                int payloadLength = input.readInt();
+                if (payloadLength < 1 || payloadLength > MAX_COMMAND_BYTES) {
+                    throw new IllegalArgumentException(
+                        "relocation stage payload length is invalid");
+                }
+                byte[] payload = input.readNBytes(payloadLength);
+                if (payload.length != payloadLength) {
+                    throw new EOFException();
+                }
                 int participantCount = input.readInt();
                 if (participantCount < 1
                     || participantCount > MAX_PARTICIPANTS) {
@@ -702,8 +770,7 @@ final class ZLinkSpotRetireControl {
                     stableType,
                     instanceSpot,
                     restoreSpotSnapshot,
-                    reference,
-                    checksum,
+                    payload,
                     participants,
                     sessionRoutes));
             } else if (kind == PUBLISH) {

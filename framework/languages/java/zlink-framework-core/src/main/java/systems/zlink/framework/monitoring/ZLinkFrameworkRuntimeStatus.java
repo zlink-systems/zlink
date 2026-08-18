@@ -7,6 +7,12 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult;
 
+/**
+ * {@code safeToShutdown} is the source-published observation of spec 30 §11:
+ * every relocation unit this source started has reached its Message Follow
+ * route removal point (S4) and its cutover retransmission window has ended.
+ * It is a source-local observation, never a completion ACK from a target.
+ */
 public record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkRuntimeState state,
     boolean isReady,
@@ -14,6 +20,7 @@ public record ZLinkFrameworkRuntimeStatus(
     Optional<Instant> deadline,
     Optional<ZLinkFrameworkRelocationResult> relocationResult,
     Optional<ZLinkFrameworkTerminationResult> terminationResult,
+    boolean safeToShutdown,
     ZLinkHostCapacityStatus capacity,
     long sequence,
     Instant observedAt) {

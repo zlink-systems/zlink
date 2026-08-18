@@ -317,6 +317,7 @@ internal interface ICanonicalRelocationTarget
 {
     ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationEnvelope envelope,
         RoutingId authenticatedSourceNodeRid,
         ZLinkCanonicalRelocationPreparationLease lease,
         CancellationToken cancellationToken);
@@ -726,6 +727,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
             CancellationToken cancellationToken);
     ValueTask SendCanonicalRelocationDataAsync(

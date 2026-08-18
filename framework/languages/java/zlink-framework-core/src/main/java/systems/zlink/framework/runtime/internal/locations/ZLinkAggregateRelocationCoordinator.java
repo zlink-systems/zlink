@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -29,116 +30,33 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 
 /**
- * Prepares an immutable relocation root and publishes all participant routes
- * through one bounded Location Store aggregate commit.
+ * Publishes all participant routes of one direct-transfer relocation through
+ * one bounded Location Store aggregate commit. The handoff payload lives only
+ * in source memory and on the wire (spec 28 §4.2) — no store round-trip.
  */
 public final class ZLinkAggregateRelocationCoordinator {
-    private static final Duration RETENTION = Duration.ofHours(24);
+    /** Restore operation absolute validity (spec 28 §4.5 retry deadline). */
+    private static final Duration RESTORE_VALIDITY = Duration.ofHours(24);
     private static final ZLinkStoreCancellation NEVER_CANCELLED = () -> false;
 
     private final ZLinkLocationRepository authorityStore;
-    private final ZLinkRelocationStore relocationStore;
 
     public ZLinkAggregateRelocationCoordinator(
-        ZLinkLocationRepository authorityStore,
-        ZLinkRelocationStore relocationStore) {
+        ZLinkLocationRepository authorityStore) {
         this.authorityStore = Objects.requireNonNull(
             authorityStore,
             "authorityStore");
-        this.relocationStore = Objects.requireNonNull(
-            relocationStore,
-            "relocationStore");
     }
 
     public CompletionStage<Prepared> prepare(
         Request request,
         ZLinkStoreCancellation cancellation) {
-        return stageRoot(request, cancellation).thenCompose(staged ->
-            prepareAuthority(
-                staged.request(),
-                staged.inventoryDigest(),
-                staged.stored(),
-                cancellation));
-    }
-
-    /** Prepares authority against an already verified immutable source root. */
-    public CompletionStage<Prepared> prepareExistingRoot(
-        Request request,
-        Root verified,
-        String reference,
-        long checksumCrc32c,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(request, "request");
-        Objects.requireNonNull(verified, "verified");
-        Objects.requireNonNull(reference, "reference");
-        Objects.requireNonNull(cancellation, "cancellation");
-        byte[] digest = inventoryDigest(request.participants());
-        if (!Arrays.equals(request.root(), verified.payload())
-            || !Arrays.equals(digest, verified.inventoryDigest())) {
-            return failed(new RelocationDataLostException(
-                "verified relocation root differs from authority request"));
-        }
-        return ZLinkRelocationTreeStore.renewStored(
-                relocationStore,
-                reference,
-                checksumCrc32c,
-                RETENTION,
-                cancellation)
-            .thenCompose(stored -> prepareAuthority(
-                request,
-                digest,
-                stored,
-                cancellation));
-    }
-
-    /** Stores and verifies an initial factory/Restore root without publishing
-     * or preparing Location authority. */
-    public CompletionStage<StagedRoot> stageRoot(
-        Request request,
-        ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
-        return stageRoot(
+        return prepareAuthority(
             request,
             inventoryDigest(request.participants()),
             cancellation);
-    }
-
-    private CompletionStage<StagedRoot> stageRoot(
-        Request request,
-        byte[] digest,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(request, "request");
-        byte[] expectedDigest = Objects.requireNonNull(digest, "digest").clone();
-        byte[] root = request.root();
-        return ZLinkRelocationTreeStore.put(
-                relocationStore,
-                root,
-                expectedDigest,
-                RETENTION,
-                cancellation)
-            .thenCompose(tree -> ZLinkRelocationTreeStore.read(
-                    relocationStore,
-                    tree.root().reference(),
-                    tree.root().checksumCrc32c(),
-                    cancellation)
-                .thenCompose(read -> {
-                    if (!Arrays.equals(read.logicalRoot(), root)
-                        || !Arrays.equals(read.inventoryDigest(), digest)) {
-                        return deleteOrphan(tree.root().reference()).thenCompose(
-                            ignored -> failed(new RelocationDataLostException(
-                                "relocation tree read-back did not preserve the root")));
-                    }
-                    return CompletableFuture.completedFuture(new StagedRoot(
-                        request,
-                        tree.root(),
-                        expectedDigest));
-                }));
-    }
-
-    public CompletionStage<Void> discardStagedRoot(StagedRoot staged) {
-        Objects.requireNonNull(staged, "staged");
-        return deleteOrphan(staged.stored().reference());
     }
 
     public CompletionStage<Published> commit(
@@ -146,194 +64,7 @@ public final class ZLinkAggregateRelocationCoordinator {
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(prepared, "prepared");
         Objects.requireNonNull(cancellation, "cancellation");
-        return ZLinkRelocationTreeStore.renew(
-                relocationStore,
-                prepared.stored().reference(),
-                prepared.stored().checksumCrc32c(),
-                RETENTION,
-                cancellation)
-            .thenCompose(ignored -> commitAuthority(prepared, cancellation));
-    }
-
-    /** Reads and verifies the immutable logical root selected by authority. */
-    public CompletionStage<Root> readRoot(
-        String reference,
-        long checksumCrc32c,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(reference, "reference");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return ZLinkRelocationTreeStore.read(
-                relocationStore,
-                reference,
-                checksumCrc32c,
-                cancellation)
-            .thenApply(value -> new Root(
-                value.logicalRoot(),
-                value.inventoryDigest()));
-    }
-
-    /** Extends every immutable component of an exact relocation root. */
-    public CompletionStage<Void> renewRoot(
-        String reference,
-        long checksumCrc32c,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(reference, "reference");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return ZLinkRelocationTreeStore.renew(
-            relocationStore,
-            reference,
-            checksumCrc32c,
-            RETENTION,
-            cancellation);
-    }
-
-    /**
-     * Verifies that Location authority has published the exact immutable root
-     * and target owner before a target activation becomes visible.
-     */
-    public CompletionStage<Void> verifyPublishedRoot(
-        String authorityKey,
-        ZLinkAggregateFence fence,
-        String reference,
-        long checksumCrc32c,
-        ZLinkLocationOwnerToken targetOwner,
-        byte[] inventoryDigest,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(authorityKey, "authorityKey");
-        Objects.requireNonNull(fence, "fence");
-        Objects.requireNonNull(reference, "reference");
-        Objects.requireNonNull(targetOwner, "targetOwner");
-        byte[] expectedDigest = Objects.requireNonNull(
-            inventoryDigest,
-            "inventoryDigest").clone();
-        Objects.requireNonNull(cancellation, "cancellation");
-        return authorityStore.read(authorityKey, cancellation)
-            .thenCompose(read -> {
-                if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                    return failed(new RelocationDataLostException(
-                        "published relocation authority is missing: "
-                            + authorityKey));
-                }
-                ZLinkCanonicalRelocationAuthorityStateCodec.Published payload =
-                    ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                        snapshot.payload());
-                if (payload == null
-                    || !payload.aggregateId().equals(fence.aggregateId())
-                    || payload.aggregateGeneration()
-                        != fence.aggregateGeneration()
-                    || !payload.reference().equals(reference)
-                    || payload.checksumCrc32c() != checksumCrc32c
-                    || !payload.targetOwnerId().equals(targetOwner.ownerId())
-                    || payload.targetOwnerLeaseGeneration()
-                        != targetOwner.leaseGeneration()) {
-                    return failed(new RelocationDataLostException(
-                        "published relocation authority has a different fence: "
-                            + authorityKey));
-                }
-                return CompletableFuture.completedFuture(null);
-            });
-    }
-
-    /**
-     * Resolves the authority-selected final root and verifies every staged
-     * participant before target publication. The initial staging root is not
-     * an authority reference and is never accepted here.
-     */
-    public CompletionStage<PublishedRoot> readPublishedAggregate(
-        List<ExpectedParticipant> participants,
-        ZLinkAggregateFence fence,
-        ZLinkLocationOwnerToken targetOwner,
-        byte[] inventoryDigest,
-        ZLinkStoreCancellation cancellation) {
-        List<ExpectedParticipant> expected = List.copyOf(
-            Objects.requireNonNull(participants, "participants"));
-        if (expected.isEmpty()) {
-            throw new IllegalArgumentException(
-                "published aggregate participants are required");
-        }
-        Objects.requireNonNull(fence, "fence");
-        Objects.requireNonNull(targetOwner, "targetOwner");
-        byte[] digest = Objects.requireNonNull(
-            inventoryDigest, "inventoryDigest").clone();
-        Objects.requireNonNull(cancellation, "cancellation");
-        return requireAggregateProgress(
-                fence, targetOwner, digest, cancellation)
-            .thenCompose(marker -> {
-                var publication = new AtomicReference<
-                    ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
-                Map<String, Long> ownerGenerations = new LinkedHashMap<>();
-                CompletionStage<Void> reads =
-                    CompletableFuture.completedFuture(null);
-                for (ExpectedParticipant participant : expected) {
-                    reads = reads.thenCompose(ignored -> authorityStore.read(
-                            participant.authorityKey(),
-                            cancellation)
-                        .thenCompose(read -> {
-                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return failed(new RelocationDataLostException(
-                                    "published relocation participant is missing: "
-                                        + participant.authorityKey()));
-                            }
-                            var payload =
-                                ZLinkCanonicalRelocationAuthorityStateCodec
-                                    .decode(snapshot.payload());
-                            var first = publication.get();
-                            boolean ownerGenerationMatches =
-                                ownerGenerationAdvanced(
-                                    participant.sourceAuthorityOwnerGeneration(),
-                                    snapshot.authorityOwnerGeneration());
-                            if (payload == null
-                                || snapshot.objectGeneration()
-                                    != participant.objectGeneration()
-                                || !ownerGenerationMatches
-                                || !snapshot.ownerId().equals(
-                                    targetOwner.ownerId())
-                                || snapshot.ownerLeaseGeneration()
-                                    != targetOwner.leaseGeneration()
-                                || !payload.aggregateId().equals(
-                                    fence.aggregateId())
-                                || payload.aggregateGeneration()
-                                    != fence.aggregateGeneration()
-                                || !payload.targetOwnerId().equals(
-                                    targetOwner.ownerId())
-                                || payload.targetOwnerLeaseGeneration()
-                                    != targetOwner.leaseGeneration()
-                                || !payload.targetNodeRid().equals(
-                                    marker.request().targetDescriptor().rid())
-                                || payload.targetNodeGeneration()
-                                    != marker.request()
-                                        .targetDescriptorLifecycleGeneration()
-                                || first != null
-                                    && (!payload.aggregateId().equals(
-                                            first.aggregateId())
-                                        || payload.aggregateGeneration()
-                                            != first.aggregateGeneration())) {
-                                return failed(new RelocationDataLostException(
-                                    "published relocation participant has a different fence: "
-                                        + participant.authorityKey()));
-                            }
-                            ownerGenerations.put(
-                                participant.authorityKey(),
-                                snapshot.authorityOwnerGeneration());
-                            publication.compareAndSet(null, payload);
-                            return CompletableFuture.completedFuture(null);
-                        }));
-                }
-                return reads.thenCompose(ignored -> readRoot(
-                        marker.progress().reference(),
-                        marker.progress().checksumCrc32c(),
-                        cancellation)
-                    .thenCompose(root -> Arrays.equals(
-                            root.inventoryDigest(), digest)
-                        ? CompletableFuture.completedFuture(new PublishedRoot(
-                            marker.progress().reference(),
-                            marker.progress().checksumCrc32c(),
-                            root.payload(),
-                            root.inventoryDigest(),
-                            ownerGenerations))
-                        : failed(new RelocationDataLostException(
-                            "published relocation root inventory differs"))));
-            });
+        return commitAuthority(prepared, cancellation);
     }
 
     public record ExpectedParticipant(
@@ -347,31 +78,6 @@ public final class ZLinkAggregateRelocationCoordinator {
                 throw new IllegalArgumentException(
                     "published participant fence is invalid");
             }
-        }
-    }
-
-    public record PublishedRoot(
-        String reference,
-        long checksumCrc32c,
-        byte[] payload,
-        byte[] inventoryDigest,
-        Map<String, Long> targetOwnerGenerations) {
-        public PublishedRoot {
-            Objects.requireNonNull(reference, "reference");
-            payload = Objects.requireNonNull(payload, "payload").clone();
-            inventoryDigest = Objects.requireNonNull(
-                inventoryDigest, "inventoryDigest").clone();
-            targetOwnerGenerations = immutableOwnerGenerations(
-                targetOwnerGenerations);
-        }
-
-        public long targetOwnerGeneration(String authorityKey) {
-            return ownerGeneration(targetOwnerGenerations, authorityKey);
-        }
-
-        @Override public byte[] payload() { return payload.clone(); }
-        @Override public byte[] inventoryDigest() {
-            return inventoryDigest.clone();
         }
     }
 
@@ -594,7 +300,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                     return failed(new IllegalStateException(
                         "aggregate relocation abort was rejected: " + result));
                 }
-                return deleteOrphan(prepared.stored().reference());
+                return CompletableFuture.<Void>completedFuture(null);
             });
     }
 
@@ -612,49 +318,18 @@ public final class ZLinkAggregateRelocationCoordinator {
                 : failed(new AuthorityConflictException(result)));
     }
 
-    public record Root(byte[] payload, byte[] inventoryDigest) {
-        public Root {
-            payload = Objects.requireNonNull(payload, "payload").clone();
-            inventoryDigest = Objects.requireNonNull(
-                inventoryDigest,
-                "inventoryDigest").clone();
-        }
-
-        @Override public byte[] payload() { return payload.clone(); }
-        @Override public byte[] inventoryDigest() {
-            return inventoryDigest.clone();
-        }
-    }
-
-    public record StagedRoot(
-        Request request,
-        ZLinkRelocationStored stored,
-        byte[] inventoryDigest) {
-        public StagedRoot {
-            Objects.requireNonNull(request, "request");
-            Objects.requireNonNull(stored, "stored");
-            inventoryDigest = Objects.requireNonNull(
-                inventoryDigest, "inventoryDigest").clone();
-        }
-
-        @Override public byte[] inventoryDigest() {
-            return inventoryDigest.clone();
-        }
-    }
-
     private CompletionStage<Prepared> prepareAuthority(
         Request request,
         byte[] digest,
-        ZLinkRelocationStored stored,
         ZLinkStoreCancellation cancellation) {
+        Instant restoreDeadline = Instant.now().plus(RESTORE_VALIDITY);
         List<ZLinkAggregateParticipant> mutations = new ArrayList<>();
         for (Participant participant : canonical(request.participants())) {
             byte[] authorityPayload =
                 ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                     participant.applicationAuthorityPayload(),
                     request,
-                    participant.ownerTransition(),
-                    stored);
+                    participant.ownerTransition());
             mutations.add(new ZLinkAggregateParticipant(
                 participant.authorityKey(),
                 participant.objectGeneration(),
@@ -693,20 +368,17 @@ public final class ZLinkAggregateRelocationCoordinator {
                         instanceof ZLinkAggregateAlreadyPrepared value) {
                         fence = value.fence();
                     } else {
-                        return deleteOrphan(stored.reference()).thenCompose(
-                            ignored -> failed(new AuthorityConflictException(
-                                attempt.result())));
+                        return failed(new AuthorityConflictException(
+                            attempt.result()));
                     }
                     return CompletableFuture.completedFuture(new Prepared(
                         fence,
-                        stored,
                         request,
-                        digest));
+                        digest,
+                        restoreDeadline));
                 }
                 Throwable original = unwrap(attempt.failure());
-                return abortAfterAmbiguousPrepare(
-                        expectedFence,
-                        stored.reference())
+                return abortAfterAmbiguousPrepare(expectedFence)
                     .thenCompose(safeToResume -> safeToResume
                         ? failed(original)
                         : failed(new PreparationOutcomeUnknownException(
@@ -714,9 +386,9 @@ public final class ZLinkAggregateRelocationCoordinator {
                             original,
                             new Prepared(
                                 expectedFence,
-                                stored,
                                 request,
-                                digest))));
+                                digest,
+                                restoreDeadline))));
             });
     }
 
@@ -759,26 +431,11 @@ public final class ZLinkAggregateRelocationCoordinator {
                 cancellation)
             .thenCompose(marker -> readPublishedOwnerGenerations(
                     prepared, cancellation)
-                .thenApply(generations -> {
-                    var progress = marker.progress();
-                    ZLinkRelocationStored stored =
-                        progress.reference().equals(
-                                prepared.stored().reference())
-                            && progress.checksumCrc32c()
-                                == prepared.stored().checksumCrc32c()
-                            ? prepared.stored()
-                            : new ZLinkRelocationStored(
-                                progress.reference(),
-                                progress.checksumCrc32c(),
-                                prepared.stored().expiresAt(),
-                                prepared.stored().storeNow());
-                    return new Published(
-                        prepared.fence(),
-                        stored,
-                        prepared.request(),
-                        prepared.inventoryDigest(),
-                        generations);
-                }));
+                .thenApply(generations -> new Published(
+                    prepared.fence(),
+                    prepared.request(),
+                    prepared.inventoryDigest(),
+                    generations)));
     }
 
     private CompletionStage<Boolean> isPublished(Prepared prepared) {
@@ -796,23 +453,11 @@ public final class ZLinkAggregateRelocationCoordinator {
     }
 
     private CompletionStage<Boolean> abortAfterAmbiguousPrepare(
-        ZLinkAggregateFence fence,
-        String reference) {
+        ZLinkAggregateFence fence) {
         return authorityStore.abortAggregate(fence, NEVER_CANCELLED)
             .handle((result, failure) -> failure == null
                 && (result == ZLinkAggregateAbortResult.ABORTED
-                    || result == ZLinkAggregateAbortResult.ALREADY_ABORTED))
-            .thenCompose(safeToDelete -> safeToDelete
-                ? deleteOrphan(reference).thenApply(ignored -> true)
-                : CompletableFuture.completedFuture(false));
-    }
-
-    private CompletionStage<Void> deleteOrphan(String reference) {
-        return ZLinkRelocationTreeStore.delete(
-                relocationStore,
-                reference,
-                NEVER_CANCELLED)
-            .handle((ignored, failure) -> null);
+                    || result == ZLinkAggregateAbortResult.ALREADY_ABORTED));
     }
 
     private static List<Participant> canonical(List<Participant> participants) {
@@ -957,11 +602,12 @@ public final class ZLinkAggregateRelocationCoordinator {
 
     public record Prepared(
         ZLinkAggregateFence fence,
-        ZLinkRelocationStored stored,
         Request request,
-        byte[] inventoryDigest) {
+        byte[] inventoryDigest,
+        Instant restoreDeadline) {
         public Prepared {
             inventoryDigest = inventoryDigest.clone();
+            Objects.requireNonNull(restoreDeadline, "restoreDeadline");
         }
 
         @Override
@@ -972,7 +618,6 @@ public final class ZLinkAggregateRelocationCoordinator {
 
     public record Published(
         ZLinkAggregateFence fence,
-        ZLinkRelocationStored stored,
         Request request,
         byte[] inventoryDigest,
         Map<String, Long> targetOwnerGenerations) {

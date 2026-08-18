@@ -1083,8 +1083,10 @@ int main ()
     const std::vector<std::string_view> relocation_control_golden{
       "5a4d011e000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e657200000000000000080200170673706f742d310000000000000009000000000000000a02",
       "5a4d011f000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a06010021016e00000000000000010e726571756573742d736f757263650000000000000006000000000000000000000000000000002a000000030008000000000000006304726f6f6d0000000000000001016d00000000000000020000000000000007000000000000000101000000290b4368617452657175657374106170706c69636174696f6e2f6a736f6e000000087b226964223a317d",
-      "5a4d0122000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a",
-      "5a4d0128000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e65720000000000000008010200170673706f742d310000000000000009000000000000000a066e6f64652d61000000000000000b010015000f72656c6f636174696f6e2d726f6f74123456780000000000000001"};
+      "5a4d0122000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a0000000000000003e3069283",
+      "5a4d0128000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e65720000000000000008010200170673706f742d310000000000000009000000000000000a066e6f64652d61000000000000000b00000000000000180000000229bc87950000000000000001",
+      "5a4d0134000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a0000000000000010000102030405060708090a0b0c0d0e0f",
+      "5a4d0134000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a00000001000000081011121314151617"};
     std::vector<protocol::relocation_control_t> decoded_controls;
     for (const auto fixture : relocation_control_golden) {
         const auto bytes = from_hex (fixture);
@@ -1111,6 +1113,10 @@ int main ()
       decoded_controls[2]));
     assert (std::holds_alternative<protocol::relocation_prepare_t> (
       decoded_controls[3]));
+    assert (std::holds_alternative<protocol::relocation_state_t> (
+      decoded_controls[4]));
+    assert (std::holds_alternative<protocol::relocation_state_t> (
+      decoded_controls[5]));
     const auto &ready = std::get<protocol::relocation_ready_t> (
       decoded_controls[0]);
     const auto &data = std::get<protocol::relocation_data_t> (
@@ -1119,14 +1125,62 @@ int main ()
       decoded_controls[2]);
     const auto &prepare = std::get<protocol::relocation_prepare_t> (
       decoded_controls[3]);
+    const auto &state_chunk = std::get<protocol::relocation_state_t> (
+      decoded_controls[4]);
+    const auto &state_final_chunk = std::get<protocol::relocation_state_t> (
+      decoded_controls[5]);
     assert (ready.sender_role == protocol::relocation_role_t::target);
     assert (data.sender_role == protocol::relocation_role_t::source);
     assert (data.record.kind
             == protocol::frozen_record_kind_t::spot_request);
     assert (cutover.sender_role == protocol::relocation_role_t::source);
+    assert (cutover.boundary_record_count == 3);
+    assert (cutover.boundary_checksum_crc32c == 0xe3069283u);
     assert (prepare.initiator_role == protocol::relocation_role_t::source);
-    assert (prepare.root.has_value ());
-    assert (prepare.root->reference == "relocation-root");
+    assert (prepare.payload_total_length == 24);
+    assert (prepare.payload_chunk_count == 2);
+    assert (prepare.payload_checksum_crc32c == 0x29bc8795u);
+    assert (state_chunk.sender_role == protocol::relocation_role_t::source);
+    assert (state_chunk.chunk_ordinal == 0);
+    assert (state_chunk.chunk_data.size () == 16);
+    assert (state_final_chunk.chunk_ordinal == 1);
+    assert (state_final_chunk.chunk_data.size () == 8);
+    {
+        /* prepare manifest checksum matches the CRC-32C convention over the
+         * 24-byte payload split into the two relocationState chunks. */
+        std::vector<std::uint8_t> payload = state_chunk.chunk_data;
+        payload.insert (payload.end (), state_final_chunk.chunk_data.begin (),
+                        state_final_chunk.chunk_data.end ());
+        assert (payload.size () == prepare.payload_total_length);
+        assert (protocol::relocation_checksum_crc32c (payload)
+                == prepare.payload_checksum_crc32c);
+        const std::string_view check_input{"123456789"};
+        assert (protocol::relocation_checksum_crc32c (
+                  std::span<const std::uint8_t>{
+                    reinterpret_cast<const std::uint8_t *> (
+                      check_input.data ()),
+                    check_input.size ()})
+                == 0xe3069283u);
+    }
+    {
+        /* golden malformed: zero target attempt generation, truncated chunk
+         * data, and a trailing byte are rejected. */
+        const std::vector<std::string_view> malformed{
+          "5a4d0134000000000000000004000000000000000500000000000000000b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a0000000000000010000102030405060708090a0b0c0d0e0f",
+          "5a4d0134000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a0000000000000010000102030405060708090a0b0c0d0e",
+          "5a4d0134000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a0000000000000010000102030405060708090a0b0c0d0e0f00"};
+        for (const auto fixture : malformed) {
+            bool rejected = false;
+            try {
+                static_cast<void> (protocol::decode_relocation_control (
+                  from_hex (fixture)));
+            }
+            catch (const protocol::service_wire_error_t &) {
+                rejected = true;
+            }
+            assert (rejected);
+        }
+    }
 
     std::vector<std::vector<std::uint8_t>> frozen_records;
     frozen_records.push_back (make_frozen_record (

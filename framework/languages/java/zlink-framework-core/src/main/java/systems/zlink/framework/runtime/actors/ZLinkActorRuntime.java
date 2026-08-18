@@ -293,14 +293,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     public void setDirectJoinRelocationStores(
-        ZLinkLocationRepository authority,
-        systems.zlink.framework.runtime.internal.locations
-            .ZLinkRelocationStore store) {
-        directJoinRelocation = authority == null || store == null
+        ZLinkLocationRepository authority) {
+        directJoinRelocation = authority == null
             ? null
             : new ZLinkDirectJoinRelocation(
                 authority,
-                store,
                 serializer);
     }
 

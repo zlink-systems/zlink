@@ -212,25 +212,20 @@ final class ZLinkUserSpotRetireTargetEndpoint
         if (isStandaloneActor(request)) {
             return stageActor(request);
         }
-        return coordinator.readRoot(
-                request.relocationReference(),
-                request.relocationChecksum(),
-                OPEN)
-            .thenCompose(root -> {
-                var decoded = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
-                    root.payload(),
-                    localNodeRid,
-                    spotTypes,
-                    request);
-                if (!decoded.spotId().equals(request.spotId())
-                    || !decoded.spotStableType().equals(request.stableType())) {
-                    return CompletableFuture.failedFuture(
-                        new IllegalArgumentException(
-                            "relocation root does not match the target Spot"));
-                }
-                return stageAggregate(
-                    request, decoded, root.inventoryDigest());
-            });
+        //  The directly transferred payload arrives assembled and
+        //  checksum-verified with the stage request (spec 28 §4.3).
+        var decoded = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
+            request.relocationPayload(),
+            localNodeRid,
+            spotTypes,
+            request);
+        if (!decoded.spotId().equals(request.spotId())
+            || !decoded.spotStableType().equals(request.stableType())) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "relocation payload does not match the target Spot"));
+        }
+        return stageAggregate(request, decoded);
     }
 
     @Override
@@ -240,27 +235,18 @@ final class ZLinkUserSpotRetireTargetEndpoint
             return publishActor(request);
         }
         TargetStage target = requireStage(request);
-        List<ZLinkAggregateRelocationCoordinator.ExpectedParticipant>
-            participants = request.participants().stream()
-                .map(value -> new ZLinkAggregateRelocationCoordinator
-                    .ExpectedParticipant(
-                        value.authorityKey(),
-                        value.objectGeneration(),
-                        value.sourceAuthorityOwnerGeneration()))
-                .toList();
-        return coordinator.readPublishedAggregate(
-                participants,
+        return coordinator.readTargetOwnerGenerations(
+                expectedParticipants(request),
                 new ZLinkAggregateFence(
                     request.fence().aggregateId(),
                     request.fence().aggregateGeneration()),
                 new ZLinkLocationOwnerToken(
                     request.targetOwnerId(),
                     request.targetOwnerLeaseGeneration()),
-                target.inventoryDigest(),
                 OPEN)
-            .thenCompose(root -> {
+            .thenCompose(generations -> {
                 var finalRequest = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
-                    root.payload(),
+                    request.relocationPayload(),
                     localNodeRid,
                     spotTypes,
                     request);
@@ -269,7 +255,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         request.stableType())) {
                     return CompletableFuture.failedFuture(
                         new IllegalArgumentException(
-                            "published relocation root does not match the target Spot"));
+                            "published relocation payload does not match the target Spot"));
                 }
                 Map<String, Long> actorOwnerGenerations = new HashMap<>();
                 for (var participant : request.participants()) {
@@ -277,7 +263,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             == ZLinkPlacementObjectKind.ACTOR.value()) {
                         actorOwnerGenerations.put(
                             participant.objectId(),
-                            root.targetOwnerGeneration(participant.authorityKey()));
+                            requireGeneration(
+                                generations, participant.authorityKey()));
                     }
                 }
                 return staging.closeDurableBacklog(
@@ -412,8 +399,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             request.stableType(),
             request.instanceSpot(),
             request.restoreSpotSnapshot(),
-            request.relocationReference(),
-            request.relocationChecksum(),
+            request.relocationPayload(),
             request.participants(),
             List.of(route));
     }
@@ -669,7 +655,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 request.targetOwnerLeaseGeneration(),
                 localNodeRid,
                 localNodeGeneration,
-                request.relocationReference());
+                request.fence().aggregateId().toString());
         var relay = new ZLinkServiceRelocationWireCodec.ReplyRelay(
             new ZLinkServiceRelocationWireCodec.Operation(
                 completion.operationHigh(), completion.operationLow()),
@@ -957,19 +943,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
             previous = directAdmission == null
                 ? CompletableFuture.completedFuture(null)
                 : readPreviousMembership(request, participant);
-        return previous.thenCompose(previousMembership -> coordinator.readRoot(
-                request.relocationReference(),
-                request.relocationChecksum(),
-                OPEN)
-            .thenCompose(root -> {
-                return stageStandaloneActor(
-                    request,
-                    targetRequest,
-                    root.payload(),
-                    root.inventoryDigest(),
-                    directAdmission,
-                    previousMembership);
-            }));
+        return previous.thenCompose(previousMembership ->
+            stageStandaloneActor(
+                request,
+                targetRequest,
+                request.relocationPayload(),
+                directAdmission,
+                previousMembership));
     }
 
     private CompletionStage<Void> publishActor(
@@ -979,7 +959,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             return publishDirectJoinActor(request, target);
         }
         var participant = request.participants().getFirst();
-        return coordinator.readPublishedAggregate(
+        return coordinator.readTargetOwnerGenerations(
                 expectedParticipants(request),
                 new ZLinkAggregateFence(
                     request.fence().aggregateId(),
@@ -987,16 +967,16 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 new ZLinkLocationOwnerToken(
                     request.targetOwnerId(),
                     request.targetOwnerLeaseGeneration()),
-                coordinatorInventoryDigest(request),
                 OPEN)
-            .thenCompose(root -> {
+            .thenCompose(generations -> {
                 var backlog = actorStaging.closeDurableBacklog(
                     target.staged(),
-                    root.payload(),
+                    request.relocationPayload(),
                     productionActorReplayer(target, request));
                 actorStaging.publishHidden(
                     backlog,
-                    root.targetOwnerGeneration(participant.authorityKey()));
+                    requireGeneration(
+                        generations, participant.authorityKey()));
                 target.published().set(true);
                 actorStaging.openAdmission(target.staged());
                 return actorStaging.drainDurableBacklog(backlog);
@@ -1011,7 +991,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         ZLinkSpotRetireControl.StageRequest request,
         ActorTargetStage target) {
         var participant = request.participants().getFirst();
-        return coordinator.readPublishedAggregate(
+        return coordinator.readTargetOwnerGenerations(
                 expectedParticipants(request),
                 new ZLinkAggregateFence(
                     request.fence().aggregateId(),
@@ -1019,13 +999,12 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 new ZLinkLocationOwnerToken(
                     request.targetOwnerId(),
                     request.targetOwnerLeaseGeneration()),
-                coordinatorInventoryDigest(request),
                 OPEN)
-            .thenCompose(root -> {
-                long targetOwnerGeneration = root.targetOwnerGeneration(
-                    participant.authorityKey());
+            .thenCompose(generations -> {
+                long targetOwnerGeneration = requireGeneration(
+                    generations, participant.authorityKey());
                 var replay = actorStaging.closeDirectJoinIngress(
-                    target.staged(), root.payload());
+                    target.staged(), request.relocationPayload());
                 actorStaging.publishDirectJoinHidden(
                     replay, targetOwnerGeneration);
                 actorStaging.prepareDirectJoinBoundSession(
@@ -1180,10 +1159,16 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return target;
     }
 
-    private byte[] coordinatorInventoryDigest(
-        ZLinkSpotRetireControl.StageRequest request) {
-        ActorTargetStage target = requireActorStage(request);
-        return target.inventoryDigest();
+    private static long requireGeneration(
+        Map<String, Long> generations,
+        String authorityKey) {
+        Long generation = generations.get(authorityKey);
+        if (generation == null) {
+            throw new IllegalStateException(
+                "target owner generation is absent for authority key: "
+                    + authorityKey);
+        }
+        return generation;
     }
 
     private static boolean isStandaloneActor(
@@ -1205,13 +1190,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private CompletionStage<Void> stageAggregate(
         ZLinkSpotRetireControl.StageRequest request,
-        ZLinkUserSpotAggregateStagingOwner.Request decoded,
-        byte[] inventoryDigest) {
+        ZLinkUserSpotAggregateStagingOwner.Request decoded) {
         return staging.stage(decoded, NOT_CANCELLED)
             .thenCompose(value -> {
                 TargetStage target = new TargetStage(
                     request,
-                    inventoryDigest,
                     value,
                     new AtomicBoolean());
                 if (stages.putIfAbsent(request.fence(), target) == null) {
@@ -1228,7 +1211,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
         ZLinkSpotRetireControl.StageRequest request,
         ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest,
         byte[] payload,
-        byte[] inventoryDigest,
         ZLinkActorJoinRelocationPort.Admission directAdmission,
         ZLinkActorJoinCanonicalAdapter.PreviousMembership
             previousMembership) {
@@ -1242,7 +1224,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     new AtomicReference<>(request.sessionRoutes().isEmpty()
                         ? null
                         : request.sessionRoutes().getFirst()),
-                    inventoryDigest,
                     directAdmission,
                     previousMembership);
                 if (actorStages.putIfAbsent(request.fence(), target) == null) {
@@ -1263,18 +1244,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private record TargetStage(
         ZLinkSpotRetireControl.StageRequest request,
-        byte[] inventoryDigest,
         ZLinkUserSpotAggregateStagingOwner.Staged staged,
         AtomicBoolean published) {
         private TargetStage {
-            inventoryDigest = Objects.requireNonNull(
-                inventoryDigest,
-                "inventoryDigest").clone();
             Objects.requireNonNull(published, "published");
-        }
-
-        @Override public byte[] inventoryDigest() {
-            return inventoryDigest.clone();
         }
     }
 
@@ -1284,13 +1257,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
         ZLinkStandaloneActorRelocationStagingOwner.Staged staged,
         AtomicBoolean published,
         AtomicReference<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
-        byte[] inventoryDigest,
         ZLinkActorJoinRelocationPort.Admission directAdmission,
         ZLinkActorJoinCanonicalAdapter.PreviousMembership
             previousMembership) {
         ActorTargetStage {
             Objects.requireNonNull(sessionRoute, "sessionRoute");
-            inventoryDigest = inventoryDigest.clone();
         }
 
         void stageSessionRoute(
@@ -1319,9 +1290,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 : withSessionRoute(request, route);
         }
 
-        @Override public byte[] inventoryDigest() {
-            return inventoryDigest == null ? null : inventoryDigest.clone();
-        }
     }
 
     private record CanonicalReply(

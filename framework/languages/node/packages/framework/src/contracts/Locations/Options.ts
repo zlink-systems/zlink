@@ -10,6 +10,10 @@ export interface ZLinkLocationOptions {
   routeCacheMaxAgeMs(value: number): this;
   messageFollowDurationMs(value: number): this;
   sessionRelocationSealTimeoutMs(value: number): this;
+  relocationCutoverWaitTimeoutMs(value: number): this;
+  relocationPayloadChunkLimitBytes(value: number): this;
+  relocationInFlightPayloadBudgetBytes(value: number): this;
+  relocationNodeInFlightPayloadBudgetBytes(value: number): this;
 }
 
 export type ZLinkLocationOptionOverrides =
@@ -27,7 +31,11 @@ export const zlinkRuntimeDefaultLocationOptions: Readonly<
   ownerLeaseRenewTimeoutMs: 3000,
   routeCacheMaxAgeMs: 15000,
   messageFollowDurationMs: 30000,
-  sessionRelocationSealTimeoutMs: 3000
+  sessionRelocationSealTimeoutMs: 3000,
+  relocationCutoverWaitTimeoutMs: 1000,
+  relocationPayloadChunkLimitBytes: 262144,
+  relocationInFlightPayloadBudgetBytes: 16777216,
+  relocationNodeInFlightPayloadBudgetBytes: 0
 };
 
 export const zlinkDefaultLocationOptions: Readonly<ZLinkLocationOptionValues> =

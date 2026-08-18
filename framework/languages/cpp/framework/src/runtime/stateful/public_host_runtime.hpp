@@ -713,6 +713,15 @@ class public_host_runtime_t :
       stateful::maintenance_runtime_t::observer_t relocation_observer = {});
     stateful::maintenance_runtime_t *maintenance () noexcept;
     stateful::host_maintenance_runtime_t *termination () noexcept;
+    /* Target-side relocation instruments, wired by the host service that
+     * owns the metrics surface. All hooks are optional. */
+    struct relocation_target_metrics_t
+    {
+        std::function<void ()> cutover_timeout;
+        std::function<void (double)> target_resume_seconds;
+    };
+    void configure_relocation_target_metrics (
+      relocation_target_metrics_t metrics);
     stateful::raw_relocation_replay_coordinator_t &
     relocation_wire () noexcept;
     void configure_user_spot_operations (
@@ -1077,7 +1086,40 @@ class public_host_runtime_t :
         std::chrono::steady_clock::time_point ready_fallback_at{};
         bool target_finalized = false;
         std::chrono::steady_clock::time_point attempt_expires_at{};
+        /* Pre-boundary relay verification: count and running CRC-32C over
+         * the canonical bytes of relocationData records staged before the
+         * cutover, compared against the cutover's boundary declaration. */
+        std::uint64_t boundary_records_received = 0;
+        stateful::relocation_crc32c_accumulator_t boundary_accumulator;
+        std::uint64_t boundary_expected_count = 0;
+        std::uint32_t boundary_expected_checksum = 0;
+        /* S2 (owner CAS confirmed) for the target-resume interval. */
+        std::chrono::steady_clock::time_point authority_committed_at{};
     };
+    /* One relocationState assembly per exact identity between the Restore
+     * request and its relay-ready (or explicit failure) reply. */
+    struct pending_relocation_assembly_t
+    {
+        protocol::relocation_prepare_t prepare;
+        mesh::service_mailbox_record_t request;
+        stateful::relocation_state_assembly_t assembly;
+        bool principal_registered = false;
+        std::chrono::steady_clock::time_point expires_at{};
+    };
+    std::map<relocation_attempt_key_t, pending_relocation_assembly_t>
+      _relocation_assemblies;
+    static constexpr auto relocation_assembly_retention =
+      std::chrono::seconds (10);
+    void fail_relocation_assembly_locked (
+      const relocation_attempt_key_t &key,
+      pending_relocation_assembly_t &pending) noexcept;
+    void complete_relocation_assembly (
+      const relocation_attempt_key_t &key,
+      pending_relocation_assembly_t pending);
+    bool register_relocation_target_queue (
+      const protocol::relocation_prepare_t &prepare,
+      const stateful::object_ref_t &target,
+      const protocol::relocation_object_t &wire_object);
     std::vector<relocation_target_attempt_t>
     take_expired_relocation_target_attempts_locked (
       std::chrono::steady_clock::time_point now);
@@ -1093,8 +1135,10 @@ class public_host_runtime_t :
       _aggregate_relocation_authority;
     static constexpr auto relocation_attempt_retention =
       std::chrono::minutes (5);
-    static constexpr auto relocation_ready_fallback =
-      std::chrono::milliseconds (1000);
+    /* Cutover wait measured from the relay-ready reply
+     * (relocation_cutover_wait_timeout snapshot, default 1000 ms). */
+    std::chrono::milliseconds _relocation_cutover_wait{1000};
+    relocation_target_metrics_t _relocation_target_metrics;
     struct user_spot_terminal_record_t
     {
         protocol::command kind = protocol::command::userSpotCreate;

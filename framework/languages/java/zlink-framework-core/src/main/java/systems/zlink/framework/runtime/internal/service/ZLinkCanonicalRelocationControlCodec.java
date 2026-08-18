@@ -13,6 +13,11 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 /** Strict canonical reader/preserver for service-wire relocation controls. */
 final class ZLinkCanonicalRelocationControlCodec {
     private static final int PREFIX = 5;
+    //  Schema bounds relocationLogicalBytes / relocationChunkCount /
+    //  relocationChunkBytes (service-wire-v1.schema.json).
+    private static final long PAYLOAD_TOTAL_LENGTH_BOUND = 274_877_906_944L;
+    private static final long PAYLOAD_CHUNK_COUNT_BOUND = 4_096L;
+    private static final long CHUNK_DATA_BYTES_BOUND = 67_108_864L;
 
     public record Control(int command, byte[] encoded) {
         public Control {
@@ -40,6 +45,7 @@ final class ZLinkCanonicalRelocationControlCodec {
             case ServiceWireConstants.COMMAND_RELOCATION_READY -> ready(reader);
             case ServiceWireConstants.COMMAND_RELOCATION_DATA -> data(reader);
             case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER -> cutover(reader);
+            case ServiceWireConstants.COMMAND_RELOCATION_STATE -> state(reader);
             default -> throw invalid("command");
         }
         reader.end();
@@ -55,8 +61,21 @@ final class ZLinkCanonicalRelocationControlCodec {
 
     private static void prepare(Reader r) {
         relocationId(r); r.nonzero64(); coordinator(r); candidate(r);
-        requireRole(r, 1); object(r); r.bytes8(); r.nonzero64(); root(r);
+        requireRole(r, 1); object(r); r.bytes8(); r.nonzero64();
+        manifest(r);
         r.ordinal();
+    }
+
+    private static void manifest(Reader r) {
+        long totalLength = r.u64();
+        if (totalLength < 0 || totalLength > PAYLOAD_TOTAL_LENGTH_BOUND) {
+            throw invalid("payload total length");
+        }
+        long chunkCount = Integer.toUnsignedLong(r.u32());
+        if (chunkCount > PAYLOAD_CHUNK_COUNT_BOUND) {
+            throw invalid("payload chunk count");
+        }
+        r.u32();
     }
 
     private static void ready(Reader r) {
@@ -70,6 +89,17 @@ final class ZLinkCanonicalRelocationControlCodec {
 
     private static void cutover(Reader r) {
         relocationBase(r); requireRole(r, 1); object(r);
+        r.ordinal(); r.u32();
+    }
+
+    private static void state(Reader r) {
+        relocationBase(r); requireRole(r, 1); object(r);
+        r.u32();
+        long chunkLength = Integer.toUnsignedLong(r.u32());
+        if (chunkLength > CHUNK_DATA_BYTES_BOUND) {
+            throw invalid("chunk data length");
+        }
+        r.raw((int) chunkLength);
     }
 
     private static void relocationBase(Reader r) {
@@ -102,12 +132,6 @@ final class ZLinkCanonicalRelocationControlCodec {
         } else if (kind == 3) {
             body.text8(); body.text8(); body.nonzero64();
         } else throw invalid("object kind");
-        body.end();
-    }
-    private static void root(Reader r) {
-        boolean present = r.bool(); Reader body = r.slice(r.u16());
-        if (present) { body.text16(); body.u32(); }
-        else if (body.remaining() != 0) throw invalid("absent root body");
         body.end();
     }
     private static void frozen(Reader r) {

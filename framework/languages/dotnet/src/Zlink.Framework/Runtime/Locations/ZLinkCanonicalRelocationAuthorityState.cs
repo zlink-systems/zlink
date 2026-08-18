@@ -20,12 +20,18 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
     string CoordinatorNodeRid,
     ulong CoordinatorNodeGeneration,
     byte Phase,
-    string RelocationReference,
-    uint RelocationChecksumCrc32c,
     long ApplicationVersion)
 {
     internal ulong AggregateGeneration { get; init; }
     internal string CoordinatorExpectedAuthorityStoreVersion { get; init; } = "";
+
+    //  Residual durable-progress root pointer (deferred Join completion and
+    //  pending-request terminal records — the Relocation Store's remaining
+    //  responsibilities). Carried in the runtime-local trailing extension of
+    //  the encoded record; the schema slot authority-relocation-state no
+    //  longer has a relocationRoot field (direct-transfer contract).
+    internal string RelocationReference { get; init; } = "";
+    internal uint RelocationChecksumCrc32c { get; init; }
 }
 
 internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
@@ -35,9 +41,9 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
     string TargetOwnerId,
     ulong TargetOwnerLeaseGeneration,
     byte Phase,
+    long ApplicationVersion,
     string RelocationReference,
     uint RelocationChecksumCrc32c,
-    long ApplicationVersion,
     ReadOnlyMemory<byte> SteadyAuthorityPayload,
     ZLinkCanonicalRelocationAuthorityState State)
 {
@@ -94,29 +100,32 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             var coordinatorNodeRid = relocation.Text8();
             var coordinatorNodeGeneration = relocation.U64();
             var phase = relocation.U8();
-            var pointerPresence = relocation.U8();
-            if (pointerPresence > 1)
-                return false;
-            var pointer = new Reader(relocation.Bytes(relocation.U16()));
-            var reference = string.Empty;
-            var checksum = 0U;
-            if (pointerPresence == 1)
-            {
-                reference = pointer.Text16();
-                checksum = pointer.U32();
-            }
-            if (!pointer.End) return false;
             var applicationVersion = relocation.I64();
             _ = relocation.U8();
             var aggregateGeneration = 0UL;
             var coordinatorExpectedStoreVersion = string.Empty;
+            var reference = string.Empty;
+            var checksum = 0U;
             if (!relocation.End)
             {
                 if (relocation.U8() != 1)
                     return false;
                 aggregateGeneration = relocation.U64();
                 if (!relocation.End)
-                    coordinatorExpectedStoreVersion = relocation.Text8();
+                    coordinatorExpectedStoreVersion = relocation.OptionalText8();
+                //  Residual durable-progress pointer (see the state record
+                //  doc comment); optional trailing extension.
+                if (!relocation.End)
+                {
+                    var pointerPresence = relocation.U8();
+                    if (pointerPresence > 1)
+                        return false;
+                    if (pointerPresence == 1)
+                    {
+                        reference = relocation.Text16();
+                        checksum = relocation.U32();
+                    }
+                }
             }
             if (!relocation.End)
                 return false;
@@ -142,15 +151,17 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 targetOwner, targetLease,
                 coordinatorOwner, coordinatorLease,
                 coordinatorNodeRid, coordinatorNodeGeneration,
-                phase, reference, checksum, applicationVersion)
+                phase, applicationVersion)
             {
                 AggregateGeneration = aggregateGeneration,
                 CoordinatorExpectedAuthorityStoreVersion =
-                    coordinatorExpectedStoreVersion
+                    coordinatorExpectedStoreVersion,
+                RelocationReference = reference,
+                RelocationChecksumCrc32c = checksum
             };
             projection = new ZLinkCanonicalRelocationAuthorityProjection(
                 high, low, attempt, targetOwner, targetLease, phase,
-                reference, checksum, applicationVersion,
+                applicationVersion, reference, checksum,
                 steady.ToArray(), state)
             {
                 AggregateGeneration = aggregateGeneration
@@ -324,13 +335,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             throw new ArgumentException(
                 "Canonical relocation target fields do not match the phase.",
                 nameof(value));
-        if (value.Phase == 1
-            && (root is not null
-                || value.RelocationReference.Length != 0
-                || value.RelocationChecksumCrc32c != 0)
-            || value.Phase != 1
-            && (root is null
-                || value.RelocationReference.Length == 0))
+        if (value.Phase == 1 && root is not null
+            || value.Phase != 1 && root is null)
             throw new ArgumentException(
                 "Canonical relocation root does not match the phase.",
                 nameof(value));
@@ -351,21 +357,6 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         WriteText8(body, value.CoordinatorNodeRid, optional: false);
         WriteU64(body, value.CoordinatorNodeGeneration);
         body.WriteByte(value.Phase);
-        if (root is null)
-        {
-            body.WriteByte(0);
-            WriteU16(body, 0);
-        }
-        else
-        {
-            using var pointer = new MemoryStream();
-            WriteText16(pointer, value.RelocationReference);
-            WriteU32(pointer, value.RelocationChecksumCrc32c);
-            body.WriteByte(1);
-            WriteU16(body, checked((ushort)pointer.Length));
-            pointer.Position = 0;
-            pointer.CopyTo(body);
-        }
         WriteI64(body, value.ApplicationVersion);
         // ZLAU v1 keeps this byte for wire compatibility. It has no durable
         // source-cleanup meaning; target authority publication is terminal.
@@ -374,12 +365,22 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         WriteU64(
             body,
             root?.AggregateGeneration ?? value.AggregateGeneration);
-        if (!string.IsNullOrWhiteSpace(
+        var hasPointer = value.RelocationReference.Length != 0;
+        if (hasPointer
+            || !string.IsNullOrWhiteSpace(
                 value.CoordinatorExpectedAuthorityStoreVersion))
             WriteText8(
                 body,
                 value.CoordinatorExpectedAuthorityStoreVersion,
-                optional: false);
+                optional: true);
+        if (hasPointer)
+        {
+            //  Residual durable-progress pointer trailing extension (see the
+            //  state record doc comment).
+            body.WriteByte(1);
+            WriteText16(body, value.RelocationReference);
+            WriteU32(body, value.RelocationChecksumCrc32c);
+        }
         using var slot = new MemoryStream();
         slot.WriteByte(1);
         WriteU32(slot, checked((uint)body.Length));

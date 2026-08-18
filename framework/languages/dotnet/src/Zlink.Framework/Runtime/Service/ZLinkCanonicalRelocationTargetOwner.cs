@@ -22,6 +22,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
         PrepareAsync(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationEnvelope envelope,
             RoutingId authenticatedSourceNodeRid,
             ZLinkCanonicalRelocationPreparationLease lease,
             CancellationToken cancellationToken)
@@ -38,6 +39,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         "Standalone Actor target relocation is not configured.");
                 await standaloneActorRuntime.StageTargetAsync(
                         prepare,
+                        envelope,
                         authenticatedSourceNodeRid,
                         checked(prepare.Object
                             .ExpectedAuthorityOwnerGeneration + 1),
@@ -51,6 +53,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         "SPOT target relocation is not configured.");
                 await targetRuntime.StageCanonicalInboundAsync(
                         prepare,
+                        envelope,
                         authenticatedSourceNodeRid,
                         cancellationToken)
                     .ConfigureAwait(false);

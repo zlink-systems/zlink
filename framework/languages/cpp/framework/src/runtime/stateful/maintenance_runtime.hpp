@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/stateful/relocation_transfer.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 
@@ -13,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -269,9 +271,19 @@ struct eligible_relocation_unit_t
         std::function<task_t<std::optional<
           std::vector<protocol::session_relocation_route_t>>> ()>
           capture_session_routes;
+        /* Sends the Restore request carrying the payload manifest. The
+         * request frame must be enqueued on the ordered mesh connection
+         * before the first suspension so the relocationState chunks the
+         * caller sends next arrive after it. The returned task completes
+         * once the target's relay-ready reply arrives (after the target
+         * assembled, verified, and restored the payload). */
         std::function<task_t<bool> (
           const std::vector<frozen_object_state_t> &,
-          const relocation_stored_t &)> prepare_target;
+          const relocation_payload_manifest_t &)> prepare_target;
+        /* Sends one relocationState chunk on the same ordered mesh
+         * connection as the Restore request and the relay lane. */
+        std::function<task_t<bool> (
+          const protocol::relocation_state_t &)> send_state_chunk;
         std::function<task_t<bool> (
           const std::vector<protocol::relocation_data_t> &,
           const relocation_ingress_batch_t &)> send_relocation_data;
@@ -328,7 +340,18 @@ struct relocation_limits_t
     std::size_t inbound_units = 64;
     std::size_t capture_callbacks = 8;
     std::size_t restore_callbacks = 8;
+    /* Direct-transfer options (location_options_t snapshot at startup). */
+    std::uint64_t payload_chunk_limit_bytes = 262144;
+    std::uint64_t in_flight_payload_budget_bytes = 16777216;
+    std::uint64_t node_in_flight_payload_budget_bytes = 0;
+    std::chrono::milliseconds cutover_wait_timeout{1000};
 };
+
+/* Phase 1 conservative in-flight cap. Until the Core exposes per-pipe
+ * effective HWM and accounted-charge observation, the effective budget is
+ * min(configured, this constant). */
+inline constexpr std::uint64_t
+  relocation_conservative_in_flight_budget_bytes = 16777216;
 
 struct relocation_gate_snapshot_t
 {
@@ -373,7 +396,7 @@ struct target_only_cas_t
     std::string target_node_id;
     location_owner_token_t target_owner;
     inventory_digest_t inventory_digest{};
-    relocation_stored_t stored;
+    relocation_payload_manifest_t manifest;
 };
 
 struct relocation_result_t
@@ -385,6 +408,9 @@ struct relocation_result_t
     // Target-only Location Store CAS is deliberately outside the source
     // maintenance path.  The public-host integration consumes this handoff.
     std::optional<target_only_cas_t> target_handoff;
+    /* S0 (source admission seal) to S1 (cutover submit terminal), on the
+     * source clock. Zero when the unit never reached the seal. */
+    std::chrono::steady_clock::duration source_stall{};
 };
 
 struct aggregate_relocation_result_t
@@ -494,13 +520,20 @@ class maintenance_runtime_t
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> capture_relocation_session_routes (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
-    bool relocate_encode_and_store (
+    bool relocate_encode (
       const std::shared_ptr<relocation_terminal_state_t> &state);
     task_t<bool> relocate_prepare_target (
+      std::shared_ptr<relocation_terminal_state_t> state);
+    task_t<bool> relocate_send_state_chunks (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_boundary_and_send (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_cutover (
+      std::shared_ptr<relocation_terminal_state_t> state);
+    std::uint64_t effective_in_flight_budget () const noexcept;
+    task_t<void> acquire_transfer_budget (std::uint64_t bytes);
+    void release_transfer_budget (std::uint64_t bytes) noexcept;
+    void retain_retransmission_copies (
       std::shared_ptr<relocation_terminal_state_t> state);
     void release () noexcept;
     relocation_result_t finish (relocation_result_t result);
@@ -513,7 +546,7 @@ class maintenance_runtime_t
     task_t<bool> prepare_target (
       const eligible_relocation_unit_t::canonical_wire_context_t &context,
       const std::vector<frozen_object_state_t> &participants,
-      const relocation_stored_t &stored);
+      const relocation_payload_manifest_t &manifest);
     task_t<bool> send_boundary_records (
       const eligible_relocation_unit_t::canonical_wire_context_t &context,
       const std::vector<protocol::relocation_data_t> &records,
@@ -530,6 +563,14 @@ class maintenance_runtime_t
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
+    /* Phase 1 in-flight transfer budget: accounted bytes of relocation
+     * chunks between submit and send terminal, node-wide. Waiters queue
+     * FIFO; a new unit acquires headroom before its source admission seal. */
+    mutable std::mutex _budget_mutex;
+    std::uint64_t _budget_in_flight_bytes = 0;
+    std::deque<std::pair<std::uint64_t,
+                         std::shared_ptr<detail::task_completion_source_t<bool>>>>
+      _budget_waiters;
 };
 
 // This state gates maintenance admission only. The public seven-state host

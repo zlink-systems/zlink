@@ -3521,7 +3521,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     == protocol::command::relocationPrepare) {
                     if (mailbox_record.parts.size () != 1
                         || !mailbox_record.request_sequence
-                        || !relocation_store
                         || !session_route_owner_resolver)
                         continue;
                     const auto control =
@@ -3532,7 +3531,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         &control);
                     const auto local = status ();
                     const auto owner = session_route_owner_resolver ();
-                    if (!prepare || !prepare->root || !owner
+                    if (!prepare || !owner
                         || prepare->initiator_role
                              != protocol::relocation_role_t::source
                         || prepare->target.target_node_routing_id
@@ -3585,7 +3584,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             if (found != _relocation_target_attempts.end ())
                                 found->second.ready_fallback_at =
                                   std::chrono::steady_clock::now ()
-                                  + relocation_ready_fallback;
+                                  + _relocation_cutover_wait;
                         }
                         continue;
                     }
@@ -3917,7 +3916,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         if (found != _relocation_target_attempts.end ())
                             found->second.ready_fallback_at =
                               std::chrono::steady_clock::now ()
-                              + relocation_ready_fallback;
+                              + _relocation_cutover_wait;
                     }
                     else {
                         {

@@ -6,7 +6,6 @@ import type {
   ZLinkActor,
   ZLinkActorRelocationAdapter,
   ZLinkMeshNodeDescriptor,
-  ZLinkRelocationStore,
   ZLinkSpot,
   ZLinkSpotRelocationAdapter,
   ZLinkInstanceSpot
@@ -32,10 +31,6 @@ import {
 } from '../framework-errors-internal';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
 import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
-import {
-  putNewRelocationBlob,
-  relocationBlobReference
-} from '../locations/relocation-blob';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type {
   ZLinkRuntimeEventPublisher,
@@ -62,9 +57,23 @@ import {
   type ServiceRelocationParticipant,
   type ServiceRelocationPublication,
   type ServiceRelocationQueuedMessage,
-  type ServiceRelocationStorePort,
   type ServiceRelocationTimer
 } from '../foundation/service-relocation-runtime';
+import {
+  ZLinkRelocationInFlightBudget,
+  ZLinkRelocationPayloadAssembly,
+  effectiveRelocationBudgetBytes,
+  planRelocationChunks,
+  relocationChunkAt
+} from './relocation-direct-transfer';
+import {
+  captureRelocationAdapterState,
+  restoreRelocationAdapterState,
+  type ZLinkRelocationStateAdapterLike
+} from './relocation-state-adapter';
+import {
+  zlinkRelocationAdapterHasBaseDelta
+} from '../../contracts/Configuration/ObjectRoles';
 import {
   ServiceRelocationPostCommitError
 } from '../foundation/service-relocation-coordinator';
@@ -141,6 +150,7 @@ import {
   type ServiceMaintenanceRelocationData,
   type ServiceMaintenanceRelocationReady,
   type ServiceMaintenanceRelocationPrepare,
+  type ServiceMaintenanceRelocationState,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed,
@@ -164,10 +174,7 @@ export class ZLinkRelocationStateIncompatibleError extends Error {
   }
 }
 
-const RELOCATION_STRIPE_BYTES = 64 * 1024 * 1024;
-const RELOCATION_STRIPE_CONCURRENCY = 64;
-const RELOCATION_STRIPE_LIMIT = 4096;
-const RELOCATION_STRIPE_MANIFEST_KIND = 'zlink-relocation-striped-v1';
+const RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES = 64 * 1024 * 1024;
 const RELOCATION_TARGET_TOMBSTONE_LIMIT = 1024;
 const RELOCATION_OPERATION_RETENTION_MS = 5 * 60_000;
 const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
@@ -176,7 +183,6 @@ interface ZLinkHostRelocationOptions {
   readonly registration: ZLinkFrameworkRegistration;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly locationStore: () => ZLinkLocationStore | undefined;
-  readonly relocationStore: () => ZLinkRelocationStore | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
   readonly liveDescriptors: (
     meshName: string,
@@ -228,8 +234,30 @@ interface LocalStage {
   phase: 'ready' | 'finalizing' | 'committed' | 'open' | 'failed';
   lane: Promise<void>;
   cutoverReceived: boolean;
+  /** Boundary relay records buffered until cutover (or fallback) applies them. */
+  readonly boundaryRelay: ServiceMaintenanceRelocationData[];
   fallback?: ReturnType<typeof setTimeout>;
   finalize?: Promise<void>;
+}
+
+interface TargetPayloadAssembly {
+  readonly prepare: ServiceMaintenanceRelocationPrepare;
+  readonly fingerprint: string;
+  readonly authenticatedSourceNodeRid: string;
+  readonly assembly: ZLinkRelocationPayloadAssembly;
+}
+
+interface SourceCutoverWindow {
+  readonly meshName: string;
+  readonly targetNodeRid: RoutingId;
+  /** Boundary batch frames plus the cutover frame, retained for retransmission. */
+  frames?: readonly Buffer[];
+  readonly cutoverSubmittedAtMs: number;
+  windowTimer?: ReturnType<typeof setTimeout>;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  followTimer?: ReturnType<typeof setTimeout>;
+  windowClosed: boolean;
+  followExpired: boolean;
 }
 
 interface TargetRelocationReservation {
@@ -318,6 +346,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       SERVICE_CONTROL_TERMINAL_CAPACITY
     );
   private readonly sourceRelocationIds = new Set<string>();
+  private readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
+  private readonly pendingTargetReadyFailures = new Map<string, unknown>();
+  private readonly sourceCutoverWindows = new Map<string, SourceCutoverWindow>();
+  private readonly peerPayloadBudgets = new Map<string, ZLinkRelocationInFlightBudget>();
+  private nodePayloadBudget?: ZLinkRelocationInFlightBudget;
   private readonly sourceActorJoinProfiles = new Map<string, SourceActorJoinProfile>();
   private readonly terminalActorJoinSourceLeaves =
     new BoundedReplayMap<string, string>(SERVICE_CONTROL_TERMINAL_CAPACITY);
@@ -410,6 +443,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     this.targetStages.clear();
     this.terminalTargets.clear();
+    for (const pending of this.targetAssemblies.values()) {
+      pending.assembly.fail('Relocation runtime stopped.');
+    }
+    this.targetAssemblies.clear();
+    this.pendingTargetReadyFailures.clear();
+    for (const window of this.sourceCutoverWindows.values()) {
+      if (window.windowTimer !== undefined) clearTimeout(window.windowTimer);
+      if (window.retryTimer !== undefined) clearTimeout(window.retryTimer);
+      if (window.followTimer !== undefined) clearTimeout(window.followTimer);
+    }
+    this.sourceCutoverWindows.clear();
     const stopped = new Error('Relocation runtime stopped.');
     stopped.name = 'AbortError';
     for (const pending of this.pendingControls.values()) {
@@ -639,17 +683,33 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.acceptControlResponse(request, record.sourceNodeRid);
       return true;
     }
+    if (request.kind === 'state') {
+      this.acceptRelocationStateChunk(request, record.sourceNodeRid);
+      return true;
+    }
     if (request.kind === 'prepare') {
       if (record.sourceNodeRid === null) {
         throw new Error('Relocation prepare has no authenticated source node.');
       }
       const operationKey = relocationStagingId(request);
+      // A failed Ready delivery surfaces on the next identical Prepare resend
+      // so the source observes an explicit failure instead of a silent stall.
+      const readyFailure = this.pendingTargetReadyFailures.get(operationKey);
+      if (readyFailure !== undefined) {
+        this.pendingTargetReadyFailures.delete(operationKey);
+        throw readyFailure;
+      }
       const fingerprint = stringifyWire(request);
       let operation = this.targetPrepareOperations.get(operationKey);
       if (operation !== undefined && operation.fingerprint !== fingerprint) {
         throw new Error(`Relocation '${operationKey}' repeated Prepare with different bytes.`);
       }
       if (operation === undefined) {
+        // The prepare turn must not block the ordered dispatch lane: the
+        // payload chunks that complete this operation arrive as later records
+        // on the same connection. Register the assembly synchronously, then
+        // finish the restore and the Ready reply asynchronously.
+        this.registerTargetAssembly(operationKey, request, String(record.sourceNodeRid));
         const promise = this.handlePrepareControl(
           meshName,
           operationKey,
@@ -665,24 +725,107 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           }
         }).catch(() => undefined);
       }
-      const response = await operation.promise;
-      try {
-        const submitted = await this.requireMeshNode(meshName).sendToNode(
-          record.sourceNodeRid,
-          encodeServiceRelocationControlResponse(response)
-        );
-        if (submitted !== SubmitResult.Ok) {
-          throw new Error('Relocation Ready reply was not accepted by RouteMesh.');
-        }
-      } catch (error) {
-        await this.rollbackTargetReadyDelivery(operationKey, error);
-        throw error;
-      }
-      this.armTargetCutoverFallback(meshName, operationKey);
+      void this.deliverTargetReady(
+        meshName,
+        operationKey,
+        record.sourceNodeRid,
+        operation.promise
+      );
       return true;
     }
     await this.handleOneWayControl(meshName, request, record.sourceNodeRid, signal);
     return true;
+  }
+
+  /** Sends the Ready reply once the async restore finished; failures replay on resend. */
+  private async deliverTargetReady(
+    meshName: string,
+    operationKey: string,
+    sourceNodeRid: RoutingId,
+    operation: Promise<ServiceMaintenanceRelocationReady>
+  ): Promise<void> {
+    let response: ServiceMaintenanceRelocationReady;
+    try {
+      response = await operation;
+    } catch (error) {
+      if (!this.pendingTargetReadyFailures.has(operationKey)) {
+        this.pendingTargetReadyFailures.set(operationKey, error);
+        console.error('[zlink.runtime.relocation.restore_failed]', operationKey, error);
+      }
+      return;
+    }
+    try {
+      const submitted = await this.requireMeshNode(meshName).sendToNode(
+        sourceNodeRid,
+        encodeServiceRelocationControlResponse(response)
+      );
+      if (submitted !== SubmitResult.Ok) {
+        throw new Error('Relocation Ready reply was not accepted by RouteMesh.');
+      }
+    } catch (error) {
+      try {
+        await this.rollbackTargetReadyDelivery(operationKey, error);
+        this.pendingTargetReadyFailures.set(operationKey, error);
+      } catch (rollbackError) {
+        this.pendingTargetReadyFailures.set(operationKey, rollbackError);
+      }
+      return;
+    }
+    this.armTargetCutoverFallback(meshName, operationKey);
+  }
+
+  /** Copies one exact-identity payload chunk into its registered assembly. */
+  private acceptRelocationStateChunk(
+    request: ServiceMaintenanceRelocationState,
+    sourceNodeRid: RoutingId | null
+  ): void {
+    const operationKey = relocationStagingId(request);
+    const pending = this.targetAssemblies.get(operationKey);
+    if (
+      pending === undefined
+      || sourceNodeRid === null
+      || String(sourceNodeRid) !== pending.authenticatedSourceNodeRid
+      || request.senderRole !== 'source'
+      || !sameCoordinator(request.coordinator, pending.prepare.coordinator)
+      || stringifyWire(request.object) !== stringifyWire(pending.prepare.object)
+    ) {
+      // Spec 28 §4.3 — a chunk with a different exact identity is never
+      // attached to an in-progress assembly; it is discarded.
+      console.warn('[zlink.runtime.relocation.stale_state_chunk]', operationKey);
+      return;
+    }
+    pending.assembly.accept(request.chunkOrdinal, request.chunkData);
+  }
+
+  private registerTargetAssembly(
+    operationKey: string,
+    request: ServiceMaintenanceRelocationPrepare,
+    authenticatedSourceNodeRid: string
+  ): TargetPayloadAssembly {
+    const existing = this.targetAssemblies.get(operationKey);
+    if (existing !== undefined) {
+      if (existing.fingerprint !== stringifyWire(request)) {
+        // Same exact identity with a different declared length or checksum is
+        // an explicit conflict failure; the existing assembly is neither
+        // reused nor overwritten (spec 28 §4.3).
+        throw existing.assembly.fail(
+          `Relocation '${operationKey}' repeated Prepare with a conflicting manifest.`
+        );
+      }
+      return existing;
+    }
+    const pending: TargetPayloadAssembly = {
+      prepare: request,
+      fingerprint: stringifyWire(request),
+      authenticatedSourceNodeRid,
+      assembly: new ZLinkRelocationPayloadAssembly(
+        Number(request.payloadTotalLength),
+        request.payloadChunkCount,
+        request.payloadChecksumCrc32c
+      )
+    };
+    this.targetAssemblies.set(operationKey, pending);
+    return pending;
   }
 
   requestSessionRelocationSeal(
@@ -1120,6 +1263,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       signal
     );
     const aggregateId = this.reserveRelocationId();
+    let spotPreSealState: Awaited<
+      ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>
+    >;
+    const actorPreSealStates = new Map<
+      string,
+      Awaited<ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>>
+    >();
     const spotUnit: ServiceRelocationCaptureUnit = {
       authorityKey: spotKey.value,
       objectKind: kind,
@@ -1158,7 +1308,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         };
       },
       captureApplicationState: captureSignal =>
-        this.captureApplication(spotRegistration.relocation, activation.spot, captureSignal),
+        this.captureApplication(
+          spotRegistration.relocation,
+          activation.spot,
+          captureSignal,
+          spotPreSealState
+        ),
       commitSeal: async () => {
         if (!spotSealCommitted) {
           if (spotCapture === undefined || !await activation.commitRelocation(spotCapture)) {
@@ -1239,7 +1394,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const actorUnits = actorStates.map(state => this.actorCaptureUnit(
       state,
       actorAuthorities.get(state.actorId)!,
-      sessions
+      sessions,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      () => actorPreSealStates.get(state.actorId)
     ));
     const memberships = actorStates.map(state => ({
       actorKey: encodeAuthorityKey('actor', state.actorId).value,
@@ -1257,6 +1419,27 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readinessBoundaryConsumed = waitForRelocationBoundary === undefined
         ? false
         : await waitForRelocationBoundary.call(activation, signal);
+      // A full in-flight payload budget delays this unit before its seal, so
+      // the Spot and its Actors keep processing messages while waiting.
+      await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
+      // Base snapshots (optional base/delta capability) are captured before
+      // the admission seal while the source keeps processing.
+      spotPreSealState = await this.captureApplicationBase(
+        spotRegistration.relocation,
+        activation.spot,
+        signal
+      );
+      for (const state of actorStates) {
+        const actorAuthority = actorAuthorities.get(state.actorId)!;
+        actorPreSealStates.set(state.actorId, await this.captureApplicationBase(
+          this.actorRegistration(
+            state.meshName ?? meshName,
+            state.actorType ?? actorAuthority.allocation.stableType
+          ).relocation,
+          state.actor!,
+          signal
+        ));
+      }
       const captureOwner = new ServiceRelocationObjectCaptureOwner();
       const captured = kind === 'user_spot'
         ? await captureOwner.captureUserSpotAggregate(
@@ -1338,6 +1521,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const membershipSpotId = targetMembership?.spotId
       ?? ((target.entrySpotId ?? String(target.rid)) as RoutingId);
     const aggregateId = aggregateIdOverride ?? this.reserveRelocationId();
+    let actorPreSealState: Awaited<
+      ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>
+    >;
     const unit = this.actorCaptureUnit(
       state,
       authority,
@@ -1350,7 +1536,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry
       },
       relocationWireId(aggregateId),
-      retainSourceForActorJoin
+      retainSourceForActorJoin,
+      () => actorPreSealState
     );
     const membership: ServiceRelocationMembership = {
       actorKey: encodeAuthorityKey('actor', state.actorId).value,
@@ -1369,6 +1556,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     };
     let outcome = 'completed';
     try {
+      await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
+      actorPreSealState = await this.captureApplicationBase(
+        this.actorRegistration(
+          state.meshName ?? meshName,
+          state.actorType ?? authority.allocation.stableType
+        ).relocation,
+        state.actor!,
+        signal
+      );
       const captured = await new ServiceRelocationObjectCaptureOwner().captureStandaloneActor(
         aggregateId, 1n, measuredUnit, membership, signal);
       await this.runCoordinator(
@@ -1489,6 +1685,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const aggregateId = this.reserveRelocationId();
     let outcome = 'completed';
     try {
+      await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
       const captured = await new ServiceRelocationObjectCaptureOwner().captureUserSpotAggregate(
         aggregateId,
         1n,
@@ -1535,7 +1732,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
     },
     sessionRelocation?: ServiceWireOperationId,
-    retainSourceForActorJoin = false
+    retainSourceForActorJoin = false,
+    preSealState?: () => Awaited<
+      ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>
+    >
   ): ServiceRelocationCaptureUnit {
     const registration = this.actorRegistration(state.meshName ?? meshName ?? '', state.actorType ?? authority.allocation.stableType);
     let ownSession: SourceActorSession | undefined;
@@ -1563,7 +1763,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         };
       },
       captureApplicationState: signal =>
-        this.captureApplication(registration.relocation, state.actor!, signal),
+        this.captureApplication(
+          registration.relocation,
+          state.actor!,
+          signal,
+          preSealState?.()
+        ),
       commitSeal: async () => {
         if (!standalone || ownSession === undefined || target === undefined || meshName === undefined) return;
         const membershipSpotId = targetMembership?.spotId
@@ -1654,24 +1859,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new Error(`Relocation reply relay authority '${relayAuthorityId}' is already registered.`);
     }
     this.relocationAuthorityKeys.set(relayAuthorityId, relayAuthorityKey);
+    // The captured payload stays in source memory: this copy is the only
+    // handoff original until the cutover submit terminal and the
+    // retransmission window end (spec 28 §4.2).
     const encoded = encodeServiceRelocationEnvelope(captured.envelope);
-    const relocationStore = relocationStorePort(this.requireRelocationStore());
-    let stored: Awaited<ReturnType<typeof relocationStore.put>> | undefined;
-    let convergenceDeadlineAtMs = controlDeadlineAtMs;
+    const limits = this.relocationLimits();
+    const plan = planRelocationChunks(encoded, limits.relocationPayloadChunkLimitBytes);
+    const convergenceDeadlineAtMs = signal === undefined
+      ? Date.now() + RELOCATION_OPERATION_RETENTION_MS
+      : controlDeadlineAtMs;
     let readyReceived = false;
     let sourceCommitted = false;
     try {
-      stored = await relocationStore.put(
-        encoded,
-        RELOCATION_OPERATION_RETENTION_MS,
-        signal
-      );
-      if (stored.checksumCrc32c !== crc32c(encoded)
-        || stored.expiresAtMs <= stored.storeNowMs) {
-        throw new Error('Relocation Store returned an invalid captured payload receipt.');
-      }
-      convergenceDeadlineAtMs = Date.now()
-        + Math.max(0, stored.expiresAtMs - stored.storeNowMs);
       const prepare = {
         kind: 'prepare',
         relocation,
@@ -1682,24 +1881,46 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         object,
         sourceNodeRid: coordinator.nodeRid,
         sourceNodeGeneration: coordinator.nodeGeneration,
-        root: {
-          reference: stored.reference,
-          checksumCrc32c: stored.checksumCrc32c
-        },
+        payloadTotalLength: BigInt(plan.totalLength),
+        payloadChunkCount: plan.chunkCount,
+        payloadChecksumCrc32c: plan.checksumCrc32c,
         applicationVersion: target.applicationVersion
       } satisfies ServiceMaintenanceRelocationPrepare;
-      const ready = await this.sendControl(
+      // Start the Restore request first (it also registers the temporary
+      // queue and the assembly on the target), then stream the payload chunks
+      // on the same ordered connection. The Ready reply arrives only after
+      // the target assembled, verified, and restored the payload.
+      const readyOperation = this.sendControl(
         meshName,
         target.rid,
         prepare,
         signal,
         controlDeadlineAtMs
       );
+      try {
+        await this.sendRelocationStateChunks(
+          meshName,
+          target,
+          prepare,
+          encoded,
+          plan,
+          signal
+        );
+      } catch (chunkError) {
+        readyOperation.catch(() => undefined);
+        throw chunkError;
+      }
+      const ready = await readyOperation;
       validateControlResponse(prepare, ready);
-      // Ready arms the target's 1,000 ms fallback. From this point forward
-      // the source can no longer reopen dispatch without risking two owners.
+      // Ready arms the target's cutover-wait fallback. From this point
+      // forward the source can no longer reopen dispatch without risking two
+      // owners.
       readyReceived = true;
 
+      const boundaryBatch: Array<{
+        readonly frame: Buffer;
+        readonly canonicalBytes: Buffer;
+      }> = [];
       for (const session of sessions) {
         const participant = captured.envelope.participants.find(value =>
           value.objectKind === 'actor'
@@ -1710,6 +1931,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           throw new Error(`Relocation Actor '${session.state.actorId}' is missing from its envelope.`);
         }
         for (const packet of session.prepared.takeRelocationRelay()) {
+          const frozenRecord = canonicalRelayFrozenRecord(
+            participant,
+            packet,
+            coordinator,
+            targetFence
+          );
           const data = {
             kind: 'data',
             relocation,
@@ -1717,25 +1944,47 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             coordinator,
             senderRole: 'source',
             object: relocationObjectForParticipant(participant),
-            frozenRecord: canonicalRelayFrozenRecord(
-              participant,
-              packet,
-              coordinator,
-              targetFence
-            )
+            frozenRecord
           } satisfies Extract<ServiceMaintenanceRelocationControl, { kind: 'data' }>;
-          await this.sendControlOneWay(meshName, target.rid, data);
+          boundaryBatch.push({
+            frame: encodeServiceRelocationControlRequest(data),
+            canonicalBytes: frozenRecord.canonicalBytes
+          });
         }
       }
-
-      await this.sendControlOneWay(meshName, target.rid, {
+      const cutoverFrame = encodeServiceRelocationControlRequest({
         kind: 'cutover',
         relocation,
         targetAttemptGeneration: 1n,
         coordinator,
         senderRole: 'source',
-        object
+        object,
+        boundaryRecordCount: BigInt(boundaryBatch.length),
+        boundaryChecksumCrc32c: crc32c(
+          Buffer.concat(boundaryBatch.map(value => value.canonicalBytes))
+        )
       });
+      // The one-way cutover submit reaches a terminal result exactly once;
+      // success and failure both end source dispatch permanently. The batch
+      // copy stays for the retransmission window (spec 28 §4.4).
+      let submitFailure: unknown;
+      try {
+        for (const record of boundaryBatch) {
+          await this.submitControlFrame(meshName, target.rid, record.frame, 'relay');
+        }
+        await this.submitControlFrame(meshName, target.rid, cutoverFrame, 'cutover');
+      } catch (error) {
+        submitFailure = error;
+        console.warn('[zlink.runtime.relocation.cutover_submit_failed]', relayAuthorityId, error);
+      }
+      this.beginSourceCutoverWindow(
+        meshName,
+        target.rid,
+        relayAuthorityId,
+        [...boundaryBatch.map(value => value.frame), cutoverFrame],
+        submitFailure !== undefined,
+        limits
+      );
 
       await this.waitForTargetAuthorities(
         captured.envelope,
@@ -1782,15 +2031,185 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
     } finally {
       if (!readyReceived) {
+        // Only an explicit failure before the Ready reply becomes accepted
+        // restores the source from the memory payload (spec 28 §9).
         await captured.abortSource().catch(() => undefined);
-      }
-      if (stored !== undefined) {
-        await relocationStore.delete(stored.reference).catch(() => undefined);
       }
       if (this.relocationAuthorityKeys.get(relayAuthorityId) === relayAuthorityKey) {
         this.relocationAuthorityKeys.delete(relayAuthorityId);
       }
     }
+  }
+
+  /** Streams the payload chunks under the effective in-flight budgets. */
+  private async sendRelocationStateChunks(
+    meshName: string,
+    target: ZLinkMeshNodeDescriptor,
+    prepare: ServiceMaintenanceRelocationPrepare,
+    encoded: Buffer,
+    plan: ReturnType<typeof planRelocationChunks>,
+    signal?: AbortSignal
+  ): Promise<void> {
+    for (let ordinal = 0; ordinal < plan.chunkCount; ordinal += 1) {
+      const chunkData = relocationChunkAt(encoded, plan, ordinal);
+      const releases = await this.acquireRelocationBudget(
+        String(target.rid),
+        chunkData.byteLength,
+        signal
+      );
+      try {
+        await this.sendControlOneWay(meshName, target.rid, {
+          kind: 'state',
+          relocation: prepare.relocation,
+          targetAttemptGeneration: prepare.targetAttemptGeneration,
+          coordinator: prepare.coordinator,
+          senderRole: 'source',
+          object: prepare.object,
+          chunkOrdinal: ordinal,
+          chunkData
+        });
+      } finally {
+        for (const release of releases) release();
+      }
+    }
+  }
+
+  /**
+   * Phase 1 in-flight accounting: the charge covers the submit window of one
+   * chunk under min(configured, conservative) budgets per peer and per node.
+   */
+  private async acquireRelocationBudget(
+    targetRid: string,
+    bytes: number,
+    signal?: AbortSignal
+  ): Promise<ReadonlyArray<() => void>> {
+    const releases: Array<() => void> = [];
+    const nodeBudget = this.requireNodePayloadBudget();
+    const peerBudget = this.requirePeerPayloadBudget(targetRid);
+    releases.push(await nodeBudget.acquire(bytes, signal));
+    try {
+      releases.push(await peerBudget.acquire(bytes, signal));
+    } catch (error) {
+      for (const release of releases) release();
+      throw error;
+    }
+    return releases;
+  }
+
+  /** Pre-seal admission wait — a full budget delays the next unit before seal. */
+  private async waitForRelocationBudgetHeadroom(
+    targetRid: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.requireNodePayloadBudget().waitForHeadroom(signal);
+    await this.requirePeerPayloadBudget(targetRid).waitForHeadroom(signal);
+  }
+
+  private requireNodePayloadBudget(): ZLinkRelocationInFlightBudget {
+    this.nodePayloadBudget ??= new ZLinkRelocationInFlightBudget(
+      effectiveRelocationBudgetBytes(
+        this.relocationLimits().relocationNodeInFlightPayloadBudgetBytes
+      )
+    );
+    return this.nodePayloadBudget;
+  }
+
+  private requirePeerPayloadBudget(targetRid: string): ZLinkRelocationInFlightBudget {
+    let budget = this.peerPayloadBudgets.get(targetRid);
+    if (budget === undefined) {
+      budget = new ZLinkRelocationInFlightBudget(
+        effectiveRelocationBudgetBytes(
+          this.relocationLimits().relocationInFlightPayloadBudgetBytes
+        )
+      );
+      this.peerPayloadBudgets.set(targetRid, budget);
+    }
+    return budget;
+  }
+
+  /**
+   * Starts the source retransmission window after the cutover submit
+   * terminal. The boundary batch and cutover copies live in framework memory
+   * (not charged to the in-flight budget) and are cleaned exactly once when
+   * the window ends. While the window is open a failed submit retries the
+   * whole batch on the (re-established) connection. S4 — the Message Follow
+   * route removal point — closes the unit for SafeToShutdown.
+   */
+  private beginSourceCutoverWindow(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    relocationKey: string,
+    frames: readonly Buffer[],
+    initialSubmitFailed: boolean,
+    limits: ReturnType<ZLinkHostServiceRelocationRuntime['relocationLimits']>
+  ): void {
+    const submittedAt = Date.now();
+    const window: SourceCutoverWindow = {
+      meshName,
+      targetNodeRid,
+      frames,
+      cutoverSubmittedAtMs: submittedAt,
+      windowClosed: false,
+      followExpired: false
+    };
+    this.sourceCutoverWindows.set(relocationKey, window);
+    const settle = () => {
+      if (window.windowClosed && window.followExpired) {
+        this.sourceCutoverWindows.delete(relocationKey);
+      }
+    };
+    window.windowTimer = setTimeout(() => {
+      window.windowClosed = true;
+      window.frames = undefined;
+      if (window.retryTimer !== undefined) clearTimeout(window.retryTimer);
+      settle();
+    }, limits.relocationCutoverWaitTimeoutMs);
+    window.windowTimer.unref?.();
+    window.followTimer = setTimeout(() => {
+      window.followExpired = true;
+      // S1→S4 route convergence: the span the source must keep its Message
+      // Follow route (spec 30 §7.1).
+      this.options.metrics?.duration(
+        'zlink.relocation.route_convergence',
+        Math.max(0, Date.now() - submittedAt) / 1000,
+        { mesh_name: meshName }
+      );
+      settle();
+    }, limits.messageFollowDurationMs);
+    window.followTimer.unref?.();
+    if (initialSubmitFailed) this.scheduleCutoverRetransmit(window);
+  }
+
+  private scheduleCutoverRetransmit(window: SourceCutoverWindow): void {
+    if (window.windowClosed || window.frames === undefined) return;
+    window.retryTimer = setTimeout(() => {
+      void (async () => {
+        const frames = window.frames;
+        if (window.windowClosed || frames === undefined) return;
+        try {
+          for (const frame of frames) {
+            await this.submitControlFrame(
+              window.meshName,
+              window.targetNodeRid,
+              frame,
+              'cutover retransmission'
+            );
+          }
+        } catch {
+          this.scheduleCutoverRetransmit(window);
+        }
+      })();
+    }, 250);
+    window.retryTimer.unref?.();
+  }
+
+  /**
+   * True when every relocation this source started reached its Message
+   * Follow route removal point (S4) and its cutover retransmission window
+   * ended — both source-local events (spec 30 §11).
+   */
+  isSafeToShutdown(): boolean {
+    return this.sourceCutoverWindows.size === 0;
   }
 
   private async releaseParticipantAuthorities(
@@ -1843,7 +2262,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         && targetDescriptor.applicationVersion !== request.applicationVersion) {
       throw new Error('Relocation prepare target fence does not match the target owner.');
     }
-    if (request.root === undefined) throw new Error('Relocation prepare has no shared durable root.');
     const fingerprint = stringifyWire(request);
     const existing = this.targetStages.get(stagingId);
     if (existing !== undefined) {
@@ -1861,11 +2279,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.terminalTargets.touch(stagingId);
       return relocationReady(request);
     }
-    const restored = await this.readSharedEnvelope(request.root, signal);
-    const envelope = restored.envelope;
-    if (restored.expiresAtMs <= Date.now()) {
-      throw new Error('Relocation Prepare immutable root has expired.');
+    const pendingAssembly = this.targetAssemblies.get(stagingId);
+    if (pendingAssembly === undefined || pendingAssembly.fingerprint !== fingerprint) {
+      throw new Error(`Relocation '${stagingId}' has no matching payload assembly.`);
     }
+    // The directly transferred payload replaces the shared durable root: the
+    // Restore starts only after every chunk arrived and the assembled bytes
+    // matched the manifest checksum exactly once.
+    const payload = await pendingAssembly.assembly.payload();
+    const envelope = decodeServiceRelocationEnvelope(payload);
     validatePrepareEnvelope(request, envelope);
     const reservation = await this.reserveTargetForPrepare(meshName, request, envelope, signal);
     const offer: TargetRelocationOffer = {
@@ -1873,7 +2295,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       prepareFingerprint: fingerprint,
       authenticatedSourceNodeRid: String(sourceNodeRid),
       envelope,
-      restoreDeadlineAtMs: restored.expiresAtMs,
+      restoreDeadlineAtMs: Date.now() + RELOCATION_OPERATION_RETENTION_MS,
       reservation
     };
     let stage: LocalStage | undefined;
@@ -1915,7 +2337,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     stage.fallback = setTimeout(() => {
       void this.beginTargetFinalize(meshName, stagingId, stage, true)
         .catch(error => console.error('[zlink.runtime.relocation.location_update_failed]', error));
-    }, 1_000);
+    }, this.relocationLimits().relocationCutoverWaitTimeoutMs);
     stage.fallback.unref();
   }
 
@@ -1941,7 +2363,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     validateTargetOneWayControl(stage, request, sourceNodeRid);
     if (request.kind === 'data') {
-      stage.lane = stage.lane.then(() => this.enqueueRelocationData(stage, request, signal));
+      stage.lane = stage.lane.then(() => this.stageBoundaryRelay(stage, request));
       await stage.lane;
       return;
     }
@@ -1949,9 +2371,57 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       console.warn('[zlink.runtime.relocation.late_cutover]', stagingId);
       return;
     }
+    this.reconcileBoundaryRelay(stage, request, stagingId);
     stage.cutoverReceived = true;
     if (stage.fallback !== undefined) clearTimeout(stage.fallback);
     await this.beginTargetFinalize(meshName, stagingId, stage, false, signal);
+  }
+
+  /** Validates one boundary relay record and buffers it until cutover applies it. */
+  private async stageBoundaryRelay(
+    stage: LocalStage,
+    request: ServiceMaintenanceRelocationData
+  ): Promise<void> {
+    this.validateRelocationData(stage, request);
+    stage.boundaryRelay.push(request);
+  }
+
+  /**
+   * Compares the cutover confirmation values against the staged boundary
+   * relay. A retransmitted batch replaces a partially received span as a
+   * whole (the retransmission always resends the entire batch, so the exact
+   * span is the staged suffix of `boundaryRecordCount` records).
+   */
+  private reconcileBoundaryRelay(
+    stage: LocalStage,
+    request: ServiceMaintenanceRelocationCutover,
+    stagingId: string
+  ): void {
+    if (request.boundaryRecordCount > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error('Relocation cutover boundary record count is out of range.');
+    }
+    const expectedCount = Number(request.boundaryRecordCount);
+    const staged = stage.boundaryRelay;
+    const checksumOf = (records: readonly ServiceMaintenanceRelocationData[]) =>
+      crc32c(Buffer.concat(records.map(value => value.frozenRecord.canonicalBytes)));
+    if (staged.length === expectedCount
+      && checksumOf(staged) === request.boundaryChecksumCrc32c) {
+      return;
+    }
+    if (staged.length > expectedCount) {
+      const suffix = staged.slice(staged.length - expectedCount);
+      if (checksumOf(suffix) === request.boundaryChecksumCrc32c) {
+        console.warn('[zlink.runtime.relocation.boundary_batch_replaced]', stagingId);
+        staged.splice(0, staged.length - expectedCount);
+        return;
+      }
+    }
+    // Spec 28 §4.4 — on an ordered connection this comparison always holds on
+    // the normal path; a mismatch signals an implementation defect.
+    throw new Error(
+      `Relocation cutover boundary confirmation mismatch for '${stagingId}' `
+      + `(staged=${staged.length} declared=${expectedCount}).`
+    );
   }
 
   private beginTargetFinalize(
@@ -1962,7 +2432,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     signal?: AbortSignal
   ): Promise<void> {
     if (stage.finalize !== undefined) return stage.finalize;
-    if (fallback) console.warn('[zlink.runtime.relocation.cutover_timeout]', stagingId);
+    if (fallback) {
+      console.warn('[zlink.runtime.relocation.cutover_timeout]', stagingId);
+      this.options.metrics?.count('zlink.relocation.cutover_timeout', 1, {
+        mesh_name: meshName
+      });
+    }
     const finalize = stage.lane.then(() =>
       this.finalizeTargetStage(meshName, stagingId, stage, signal));
     stage.finalize = finalize;
@@ -1980,18 +2455,32 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     stage.phase = 'finalizing';
     let authorityCommitted = false;
     let authority: ZLinkAuthoritySnapshot | undefined;
+    let resumeStartedAt: number | undefined;
     try {
+      // The boundary relay span is applied to the temporary queue before the
+      // owner CAS so the merged order is saved work, pre-boundary relay, then
+      // post-boundary temporary records (spec 28 §4.6).
+      for (const relay of stage.boundaryRelay.splice(0)) {
+        await this.applyRelocationData(stage, relay, signal);
+      }
       authority = await this.commitTargetReservation(
         stage,
         stage.offer.reservation,
         signal
       );
       authorityCommitted = true;
+      resumeStartedAt = performance.now();
       stage.phase = 'committed';
       await stage.owner.normalize(stage.staging, authority, signal);
       await stage.owner.publish(stage.staging, authority, signal);
       await this.finalizeActorJoinProfiles(meshName, stage, signal);
       await stage.owner.openAdmission(stage.staging, signal);
+      // S2→S3: owner confirmation to application dispatch opening.
+      this.options.metrics?.duration(
+        'zlink.relocation.target_resume',
+        Math.max(0, performance.now() - resumeStartedAt) / 1000,
+        { mesh_name: meshName }
+      );
       await this.publishSessionRoutes(stage.staging);
       await this.relayTerminalReplies(
         meshName,
@@ -2003,10 +2492,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       stage.phase = 'open';
       this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
       this.targetStages.delete(stagingId);
+      this.targetAssemblies.delete(stagingId);
     } catch (error) {
       stage.phase = 'failed';
       this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
       this.targetStages.delete(stagingId);
+      this.targetAssemblies.delete(stagingId);
       if (!authorityCommitted) {
         await this.abortTargetStage(stage).catch(() => undefined);
         throw error;
@@ -2018,11 +2509,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async enqueueRelocationData(
+  private validateRelocationData(
     stage: LocalStage,
-    request: ServiceMaintenanceRelocationData,
-    signal?: AbortSignal
-  ): Promise<void> {
+    request: ServiceMaintenanceRelocationData
+  ): void {
     const frozen = request.frozenRecord;
     const target = frozen.target;
     const payload = frozen.applicationPayload;
@@ -2048,9 +2538,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         !== request.object.expectedAuthorityOwnerGeneration) {
       throw new Error('Relocation data Actor is not part of the prepared unit.');
     }
+  }
+
+  private async applyRelocationData(
+    stage: LocalStage,
+    request: ServiceMaintenanceRelocationData,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const payload = request.frozenRecord.applicationPayload!;
     await stage.owner.replayRelayedMessage(
       stage.staging,
-      key,
+      encodeAuthorityKey('actor', (request.object as { actorId: string }).actorId).value,
       { sequence: 0n, payload: Buffer.from(payload.bytes) },
       signal
     );
@@ -2158,16 +2656,28 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private async sendControlOneWay(
     meshName: string,
     targetNodeRid: RoutingId,
-    request: ServiceMaintenanceRelocationData | ServiceMaintenanceRelocationCutover
+    request:
+      | ServiceMaintenanceRelocationData
+      | ServiceMaintenanceRelocationCutover
+      | ServiceMaintenanceRelocationState
   ): Promise<void> {
-    const submitted = await this.requireMeshNode(meshName).sendToNode(
+    await this.submitControlFrame(
+      meshName,
       targetNodeRid,
-      encodeServiceRelocationControlRequest(request)
+      encodeServiceRelocationControlRequest(request),
+      request.kind
     );
+  }
+
+  private async submitControlFrame(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    frame: Buffer,
+    kind: string
+  ): Promise<void> {
+    const submitted = await this.requireMeshNode(meshName).sendToNode(targetNodeRid, frame);
     if (submitted !== SubmitResult.Ok) {
-      throw new Error(
-        `Relocation ${request.kind === 'data' ? 'relay' : 'cutover'} was not accepted by RouteMesh.`
-      );
+      throw new Error(`Relocation ${kind} was not accepted by RouteMesh.`);
     }
   }
 
@@ -2244,24 +2754,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       current = read;
     }
     throw new Error('Relocation target authority normalization CAS failed.');
-  }
-
-  private async readSharedEnvelope(
-    root: NonNullable<ServiceMaintenanceRelocationPrepare['root']>,
-    signal?: AbortSignal
-  ): Promise<{ readonly envelope: ServiceRelocationEnvelope; readonly expiresAtMs: number }> {
-    const read = await readRelocationPayload(
-      this.requireRelocationStore(),
-      root.reference,
-      signal
-    );
-    if (read.kind === 'missing' || crc32c(read.payload) !== root.checksumCrc32c) {
-      throw new Error('Relocation prepare references missing or corrupt shared durable data.');
-    }
-    return {
-      envelope: decodeServiceRelocationEnvelope(read.payload),
-      expiresAtMs: Date.now() + Math.max(0, read.expiresAtMs - read.storeNowMs)
-    };
   }
 
   private async handleReplyRelay(
@@ -2870,7 +3362,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       staging,
       phase: 'ready',
       lane: Promise.resolve(),
-      cutoverReceived: false
+      cutoverReceived: false,
+      boundaryRelay: []
     };
     this.targetStages.set(stagingId, stage);
     return stage;
@@ -2910,26 +3403,69 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return value;
   }
 
-  private async captureApplication<T>(
+  /**
+   * Captures a base snapshot before the admission seal when the adapter
+   * registers the base/delta capability, so the seal window only pays for
+   * captureDelta (spec 15 §5). Returns undefined for policies or adapters
+   * without the capability.
+   */
+  private async captureApplicationBase<T>(
     policy: { readonly kind: 'disabled' | 'recreate' | 'snapshot'; readonly adapterType?: Type },
     value: T,
     signal?: AbortSignal
+  ): Promise<
+    | {
+        readonly adapter: ZLinkRelocationStateAdapterLike<never>;
+        readonly base: Uint8Array;
+      }
+    | undefined
+  > {
+    if (policy.kind !== 'snapshot') return undefined;
+    const adapter = await this.createRelocationAdapter(policy.adapterType!);
+    if (!zlinkRelocationAdapterHasBaseDelta(adapter)) return undefined;
+    return {
+      adapter,
+      base: await adapter.captureBase!(
+        value as never,
+        signal ?? new AbortController().signal
+      )
+    };
+  }
+
+  private async captureApplication<T>(
+    policy: { readonly kind: 'disabled' | 'recreate' | 'snapshot'; readonly adapterType?: Type },
+    value: T,
+    signal?: AbortSignal,
+    preSeal?: {
+      readonly adapter: ZLinkRelocationStateAdapterLike<never>;
+      readonly base: Uint8Array;
+    }
   ): Promise<Uint8Array> {
     if (policy.kind === 'disabled') {
       throw new Error(`Relocation is disabled for '${(value as { constructor?: { name?: string } }).constructor?.name ?? 'object'}'.`);
     }
     if (policy.kind === 'recreate') return Buffer.alloc(0);
-    const adapter = await createProviderInstance(policy.adapterType!, this.options.providerResolver) as
-      ZLinkActorRelocationAdapter<ZLinkActor> | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
-    const captured = Buffer.from(
-      await adapter.capture(value as never, signal ?? new AbortController().signal)
+    const adapter = preSeal?.adapter
+      ?? await this.createRelocationAdapter(policy.adapterType!);
+    const captured = await captureRelocationAdapterState(
+      adapter as ZLinkRelocationStateAdapterLike<T>,
+      value,
+      preSeal?.base,
+      signal ?? new AbortController().signal
     );
-    if (captured.byteLength > RELOCATION_STRIPE_BYTES) {
+    if (captured.byteLength > RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES) {
       throw new ZLinkRelocationStateIncompatibleError(
         'Relocation application state exceeds the 64 MiB participant limit.'
       );
     }
     return captured;
+  }
+
+  private async createRelocationAdapter(
+    adapterType: Type
+  ): Promise<ZLinkRelocationStateAdapterLike<never>> {
+    return await createProviderInstance(adapterType, this.options.providerResolver) as
+      ZLinkActorRelocationAdapter<ZLinkActor> | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
   }
 
   private recordRelocationInterruption(
@@ -3047,12 +3583,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return value;
   }
 
-  private requireRelocationStore(): ZLinkRelocationStore {
-    const value = this.options.relocationStore();
-    if (value === undefined) throw new Error('Host relocation requires a Relocation Store.');
-    return value;
-  }
-
   private requireSpotManager(): DefaultZLinkSpotManager {
     const value = this.options.spotManager();
     if (value === undefined) throw new Error('Host relocation requires the Spot manager.');
@@ -3071,8 +3601,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         readonly locations?: {
           readonly options?: Partial<typeof zlinkRuntimeDefaultLocationOptions>;
         };
-      }
-    ).locations?.options;
+      } | undefined
+    )?.locations?.options;
     return {
       ...zlinkRuntimeDefaultLocationOptions,
       ...(configured ?? {})
@@ -3163,7 +3693,11 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       registration.relocation.adapterType,
       this.options.providerResolver
     ) as ZLinkActorRelocationAdapter<ZLinkActor> | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
-    await adapter.restore(
+    // Base/delta payloads restore with restoreBase then applyDelta; an
+    // applyDelta failure discards this staged instance through the stage
+    // abort — a partially applied instance is never published.
+    await restoreRelocationAdapterState(
+      adapter as ZLinkRelocationStateAdapterLike<unknown>,
       (hidden.actor ?? hidden.activation?.spot) as never,
       payload,
       signal ?? new AbortController().signal
@@ -3381,226 +3915,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     if (manager === undefined) throw new Error('Relocation target Actor manager is unavailable.');
     return manager;
   }
-}
-
-function relocationStorePort(store: ZLinkRelocationStore): ServiceRelocationStorePort {
-  return {
-    async put(payload, retentionMs, signal) {
-      if (payload.byteLength > RELOCATION_STRIPE_BYTES) {
-        const stripes = splitRelocationPayload(payload);
-        const stored: Array<{
-          readonly reference: string;
-          readonly checksumCrc32c: number;
-          readonly byteLength: number;
-        }> = [];
-        try {
-          const receipts = await mapConcurrentOrdered(
-            stripes,
-            RELOCATION_STRIPE_CONCURRENCY,
-            async stripe => {
-              const result = await putNewRelocationBlob(
-                store,
-                stripe,
-                retentionMs,
-                signal
-              );
-              return {
-                reference: result.reference.value,
-                checksumCrc32c: crc32c(stripe),
-                byteLength: stripe.byteLength,
-                expiresAt: result.expiresAt,
-                storeNow: result.storeNow
-              };
-            },
-            signal
-          );
-          stored.push(...receipts);
-          const manifest = Buffer.from(JSON.stringify({
-            kind: RELOCATION_STRIPE_MANIFEST_KIND,
-            byteLength: payload.byteLength,
-            checksumCrc32c: crc32c(payload),
-            stripes: receipts.map(({ reference, checksumCrc32c, byteLength }) => ({
-              reference,
-              checksumCrc32c,
-              byteLength
-            }))
-          }), 'utf8');
-          const root = await putNewRelocationBlob(store, manifest, retentionMs, signal);
-          return {
-            reference: root.reference.value,
-            checksumCrc32c: crc32c(payload),
-            expiresAtMs: Math.min(
-              root.expiresAt.getTime(),
-              ...receipts.map(value => value.expiresAt.getTime())
-            ),
-            storeNowMs: Math.max(
-              root.storeNow.getTime(),
-              ...receipts.map(value => value.storeNow.getTime())
-            )
-          };
-        } catch (error) {
-          await Promise.all(stored.map(value =>
-            store.delete(relocationBlobReference(value.reference), signal)
-              .catch(() => undefined)));
-          throw error;
-        }
-      }
-      const result = await putNewRelocationBlob(
-        store,
-        payload,
-        retentionMs,
-        signal
-      );
-      return {
-        reference: result.reference.value,
-        checksumCrc32c: crc32c(payload),
-        expiresAtMs: result.expiresAt.getTime(),
-        storeNowMs: result.storeNow.getTime()
-      };
-    },
-    async get(reference, signal) {
-      const result = await readRelocationPayload(store, reference, signal);
-      return result.kind === 'missing'
-        ? result
-        : { kind: 'found', payload: result.payload };
-    },
-    async delete(reference, signal) {
-      const read = await store.read(relocationBlobReference(reference), signal);
-      const manifest = read.kind === 'found'
-        ? decodeRelocationStripeManifest(read.bytes)
-        : undefined;
-      await store.delete(relocationBlobReference(reference), signal);
-      if (manifest !== undefined) {
-        await mapConcurrentOrdered(
-          manifest.stripes,
-          RELOCATION_STRIPE_CONCURRENCY,
-          async stripe => {
-            await store.delete(relocationBlobReference(stripe.reference), signal);
-          },
-          signal
-        );
-      }
-      return 'deleted';
-    }
-  };
-}
-
-async function readRelocationPayload(
-  store: ZLinkRelocationStore,
-  reference: string,
-  signal?: AbortSignal
-): Promise<
-  | { readonly kind: 'missing' }
-  | {
-      readonly kind: 'found';
-      readonly payload: Buffer;
-      readonly expiresAtMs: number;
-      readonly storeNowMs: number;
-    }
-> {
-  const result = await store.read(relocationBlobReference(reference), signal);
-  if (result.kind !== 'found') return { kind: 'missing' };
-  const manifest = decodeRelocationStripeManifest(result.bytes);
-  if (manifest === undefined) {
-    return {
-      kind: 'found',
-      payload: Buffer.from(result.bytes),
-      expiresAtMs: result.expiresAt.getTime(),
-      storeNowMs: result.storeNow.getTime()
-    };
-  }
-  const stripes = await mapConcurrentOrdered(
-    manifest.stripes,
-    RELOCATION_STRIPE_CONCURRENCY,
-    async stripe => {
-      const read = await store.read(relocationBlobReference(stripe.reference), signal);
-      if (read.kind !== 'found'
-        || read.bytes.byteLength !== stripe.byteLength
-        || crc32c(read.bytes) !== stripe.checksumCrc32c) {
-        throw new Error(`Relocation stripe '${stripe.reference}' is missing or corrupt.`);
-      }
-      return {
-        payload: Buffer.from(read.bytes),
-        expiresAtMs: read.expiresAt.getTime(),
-        storeNowMs: read.storeNow.getTime()
-      };
-    },
-    signal
-  );
-  const payload = Buffer.concat(stripes.map(value => value.payload));
-  if (payload.byteLength !== manifest.byteLength
-    || crc32c(payload) !== manifest.checksumCrc32c) {
-    throw new Error('Relocation striped payload failed root integrity validation.');
-  }
-  return {
-    kind: 'found',
-    payload,
-    expiresAtMs: Math.min(result.expiresAt.getTime(), ...stripes.map(value => value.expiresAtMs)),
-    storeNowMs: Math.max(result.storeNow.getTime(), ...stripes.map(value => value.storeNowMs))
-  };
-}
-
-interface RelocationStripeManifest {
-  readonly byteLength: number;
-  readonly checksumCrc32c: number;
-  readonly stripes: readonly {
-    readonly reference: string;
-    readonly checksumCrc32c: number;
-    readonly byteLength: number;
-  }[];
-}
-
-function splitRelocationPayload(payload: Uint8Array): readonly Buffer[] {
-  const count = Math.ceil(payload.byteLength / RELOCATION_STRIPE_BYTES);
-  if (count > RELOCATION_STRIPE_LIMIT) {
-    throw new Error(`Relocation payload exceeds ${RELOCATION_STRIPE_LIMIT} stripes.`);
-  }
-  const source = Buffer.from(payload);
-  return Array.from({ length: count }, (_, index) =>
-    source.subarray(
-      index * RELOCATION_STRIPE_BYTES,
-      Math.min(source.byteLength, (index + 1) * RELOCATION_STRIPE_BYTES)
-    ));
-}
-
-function decodeRelocationStripeManifest(
-  payload: Uint8Array
-): RelocationStripeManifest | undefined {
-  if (payload.byteLength > 1024 * 1024) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(payload).toString('utf8'));
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(parsed) || parsed.kind !== RELOCATION_STRIPE_MANIFEST_KIND
-    || !Number.isSafeInteger(parsed.byteLength) || (parsed.byteLength as number) <= 0
-    || !Number.isSafeInteger(parsed.checksumCrc32c)
-    || !Array.isArray(parsed.stripes)
-    || parsed.stripes.length < 2
-    || parsed.stripes.length > RELOCATION_STRIPE_LIMIT) {
-    return undefined;
-  }
-  const stripes = parsed.stripes.map((value, index) => {
-    if (!isRecord(value)
-      || typeof value.reference !== 'string' || value.reference.length === 0
-      || !Number.isSafeInteger(value.checksumCrc32c)
-      || !Number.isSafeInteger(value.byteLength)
-      || (value.byteLength as number) <= 0
-      || (value.byteLength as number) > RELOCATION_STRIPE_BYTES) {
-      throw new Error(`Relocation stripe manifest entry ${index} is invalid.`);
-    }
-    return {
-      reference: value.reference,
-      checksumCrc32c: value.checksumCrc32c as number,
-      byteLength: value.byteLength as number
-    };
-  });
-  return {
-    byteLength: parsed.byteLength as number,
-    checksumCrc32c: parsed.checksumCrc32c as number,
-    stripes
-  };
 }
 
 async function requireAuthority(
@@ -4060,12 +4374,12 @@ function relocationPublication(
   prepare: ServiceMaintenanceRelocationPrepare,
   envelope: ServiceRelocationEnvelope
 ): ServiceRelocationPublication {
-  if (prepare.root === undefined) {
-    throw new Error('Relocation Prepare has no immutable root.');
-  }
+  // The direct transfer has no durable store root; the authority wrapper
+  // keeps a synthetic in-progress marker derived from the exact relocation
+  // identity and the payload manifest checksum.
   return {
-    reference: prepare.root.reference,
-    checksumCrc32c: prepare.root.checksumCrc32c,
+    reference: `zlink-direct:${envelope.aggregateId}:${prepare.targetAttemptGeneration}`,
+    checksumCrc32c: prepare.payloadChecksumCrc32c,
     aggregateId: envelope.aggregateId,
     aggregateGeneration: envelope.aggregateGeneration,
     inventoryDigest: inventoryDigest(envelope.participants, envelope.memberships),
@@ -4100,35 +4414,6 @@ function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
       }
     );
   });
-}
-
-async function mapConcurrentOrdered<TInput, TResult>(
-  values: readonly TInput[],
-  concurrency: number,
-  callback: (value: TInput, index: number) => Promise<TResult>,
-  signal?: AbortSignal
-): Promise<TResult[]> {
-  const results = new Array<TResult>(values.length);
-  let next = 0;
-  let failure: unknown;
-  const worker = async (): Promise<void> => {
-    while (failure === undefined) {
-      signal?.throwIfAborted();
-      const index = next++;
-      if (index >= values.length) return;
-      try {
-        results[index] = await callback(values[index]!, index);
-      } catch (error) {
-        failure = error;
-      }
-    }
-  };
-  await Promise.all(Array.from(
-    { length: Math.min(concurrency, values.length) },
-    () => worker()
-  ));
-  if (failure !== undefined) throw failure;
-  return results;
 }
 
 function canonicalQueuedFrozenRecord(
@@ -4334,10 +4619,6 @@ function isServiceWireCommand(payload: Uint8Array, command: number): boolean {
   return payload.byteLength >= 5
     && payload[0] === 0x5a && payload[1] === 0x4d && payload[2] === 1
     && payload[3] === command;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function encodeHandoffQueuedMessages(

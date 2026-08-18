@@ -764,17 +764,27 @@ internal sealed class ZLinkActorRemoteJoiner(
         var initialEnvelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
             relocationEnvelope,
             registration.ApplicationVersion);
-        var publication = new ZLinkRelocationPublicationCoordinator(
-            authorityStore,
-            relocationStore);
-        var prepared = await publication.PrepareAsync(
-                initialEnvelope,
-                cancellationToken)
-            .ConfigureAwait(false);
+        //  Direct transfer (spec 28 §4.2): the encoded envelope stays in
+        //  source memory and is streamed as relocationState chunks — the
+        //  Relocation Store holds no handoff payload.
+        var transferPayload = ZLinkRelocationTransferPayload.Create(
+            initialEnvelope,
+            registration.Locations.Options.RelocationPayloadChunkLimit);
+        var prepared = new ZLinkPreparedRelocation(
+            new ZLinkRelocationStored(
+                string.Empty,
+                transferPayload.ChecksumCrc32c,
+                default,
+                default),
+            initialEnvelope)
+        {
+            LogicalLength = transferPayload.TotalLength,
+            LogicalChecksumCrc32c = transferPayload.ChecksumCrc32c,
+            ChunkCount = transferPayload.ChunkCount
+        };
         precommitSnapshot = await precommit.CaptureAsync(
                 precommitSnapshot,
                 initialEnvelope,
-                prepared.Relocation,
                 cancellationToken)
             .ConfigureAwait(false);
         if (sourceNode.Node is not IZLinkBackendCanonicalRelocation canonical)
@@ -785,11 +795,12 @@ internal sealed class ZLinkActorRemoteJoiner(
             sourceAuthority,
             targetDescriptor,
             initialEnvelope,
-            prepared.Relocation,
+            transferPayload,
             registration.ApplicationVersion);
         _ = await canonical.PrepareCanonicalRelocationAsync(
                 targetNodeRid,
                 prepare,
+                transferPayload,
                 RemainingTimeout(absoluteDeadline),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -802,7 +813,14 @@ internal sealed class ZLinkActorRemoteJoiner(
                         $"Actor '{actor.Context.ActorId}' accepted journal lost its source fence."),
                     targetActor))
             .ToArray();
-        foreach (var accepted in cutoverRecords.Skip(acceptedRecords.Length))
+        //  Spec 28 §4.4: the pre-boundary relay batch is encoded once so the
+        //  cutover boundary CRC covers exactly the relayed bytes.
+        var boundaryRecords = cutoverRecords
+            .Skip(acceptedRecords.Length)
+            .Select(accepted => (ReadOnlyMemory<byte>)
+                ZLinkCanonicalActorAcceptedJournal.Encode(accepted, actorRef))
+            .ToArray();
+        foreach (var encodedRecord in boundaryRecords)
             await canonical.SendCanonicalRelocationDataAsync(
                     targetNodeRid,
                     new ZLinkServiceWireCodec.RelocationDataRecord(
@@ -811,10 +829,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         prepare.Coordinator,
                         1,
                         prepare.Object,
-                        new ZLinkServiceWireCodec.FrozenRecord(
-                            ZLinkCanonicalActorAcceptedJournal.Encode(
-                                accepted,
-                                actorRef))),
+                        new ZLinkServiceWireCodec.FrozenRecord(encodedRecord)),
                     cancellationToken)
                 .ConfigureAwait(false);
         await canonical.SendCanonicalRelocationCutoverAsync(
@@ -824,7 +839,10 @@ internal sealed class ZLinkActorRemoteJoiner(
                     prepare.TargetAttemptGeneration,
                     prepare.Coordinator,
                     1,
-                    prepare.Object),
+                    prepare.Object,
+                    checked((ulong)boundaryRecords.Length),
+                    ZLinkRelocationBoundaryBatch.ComputeChecksum(
+                        boundaryRecords)),
                 cancellationToken)
             .ConfigureAwait(false);
         var published = await ZLinkStandaloneActorRelocationRuntime

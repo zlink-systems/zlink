@@ -21,6 +21,15 @@ internal sealed record ZLinkPreparedRelocation(
     ZLinkRelocationStored Relocation,
     ZLinkRelocationEnvelope Envelope)
 {
+    /// <summary>Total length of the encoded logical payload stream.</summary>
+    internal long LogicalLength { get; init; }
+
+    /// <summary>CRC-32C over the complete encoded logical payload.</summary>
+    internal uint LogicalChecksumCrc32c { get; init; }
+
+    /// <summary>Chunk count of the persisted logical payload stream.</summary>
+    internal int ChunkCount { get; init; }
+
     internal ZLinkRelocationManifestReference Reference => new(
         Relocation.Reference,
         Relocation.ChecksumCrc32c,
@@ -81,7 +90,12 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
         var stored = tree.Root;
         try
         {
-            return new ZLinkPreparedRelocation(stored, envelope);
+            return new ZLinkPreparedRelocation(stored, envelope)
+            {
+                LogicalLength = tree.LogicalLength,
+                LogicalChecksumCrc32c = tree.LogicalChecksumCrc32c,
+                ChunkCount = tree.ChunkCount
+            };
         }
         catch
         {

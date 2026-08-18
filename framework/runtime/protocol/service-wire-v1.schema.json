@@ -10,7 +10,7 @@
     "wireMajor": 1,
     "byteOrder": "big-endian",
     "headPrefixBytes": 5,
-    "requiredCapability": "framework-service-v12"
+    "requiredCapability": "framework-service-v13"
   },
   "bounds": [
     {
@@ -326,10 +326,10 @@
       "savedWorkField": "savedWork",
       "participantField": "participantId",
       "orderField": "order",
-      "ownership": "relocation-store-payload-is-the-only-handoff-source-for-work-and-timers-accepted-before-capture",
+      "ownership": "source-memory-payload-is-the-only-handoff-source-for-work-and-timers-accepted-before-capture",
       "sourceRestore": "pre-cutover-abort-restores-the-same-payload-to-source-in-original-queue-order",
       "targetRestore": "target-materializes-the-same-payload-once-before-relay-ready",
-      "relayExclusion": "relocationData-never-carries-saved-work-or-timers-from-the-relocation-store-payload",
+      "relayExclusion": "relocationData-never-carries-saved-work-or-timers-which-travel-only-in-relocationState-chunks",
       "queueOrder": "saved-work-and-pending-timer-ticks-share-one-strictly-increasing-order-per-participant",
       "requestIdentity": "operation-id-source-fence-and-reply-route-remain-part-of-the-frozen-record",
       "duplicateTransmission": "same-payload-may-be-accepted-twice-no-hidden-delivery-deduplication-or-ack-journal"
@@ -568,7 +568,7 @@
         {
           "phase": "captured",
           "after": [
-            "immutable-relocation-put"
+            "local-capture-complete"
           ],
           "relocation": "present"
         },
@@ -753,17 +753,19 @@
         "exact-source-and-target-owner-lease-fences"
       ],
       "sequence": [
-        "source-captures-existing-work-and-timers-into-relocation-store",
-        "source-relocationPrepare-request",
-        "target-installs-temporary-queue-restores-store-payload-and-keeps-dispatch-closed",
+        "source-captures-existing-work-and-timers-into-source-memory-payload",
+        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
+        "source-relocationState-chunks-on-the-same-ordered-connection",
+        "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
         "target-relocationReady-reply",
         "source-relocationData-for-post-capture-ingress-only",
-        "source-relocationCutover-one-way-after-current-relay-prefix",
+        "source-relocationCutover-one-way-with-boundary-record-count-and-checksum-after-current-relay-prefix",
         "target-only-owner-membership-cas-after-cutover-or-1000ms-ready-fallback",
         "target-merges-saved-work-pre-boundary-relay-and-remaining-temporary-work",
         "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch"
       ],
-      "savedPrefixOwner": "relocation-store-only-never-relocationData",
+      "savedPrefixOwner": "source-memory-payload-only-never-relocationData",
+      "relocationState": "saved-work-chunk-only-exact-identity-in-ordinal-order-conflicting-length-or-checksum-is-explicit-failure",
       "relocationData": "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
       "cutover": "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
       "capacity": "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
@@ -1354,6 +1356,23 @@
     "recordSplit": "allowed-across-chunk-boundaries",
     "oversize": "reversible-seal-rollback-and-blocked-state-incompatible-before-draining"
   },
+  "relocationTransferChecksumProfile": {
+    "algorithm": "crc-32c",
+    "polynomial": 517762881,
+    "initialValue": 4294967295,
+    "reflectInput": true,
+    "reflectOutput": true,
+    "xorOutput": 4294967295,
+    "checkInputAscii": "123456789",
+    "checkValue": 3808858755,
+    "coverage": [
+      "relocationPrepare.payloadChecksumCrc32c",
+      "relocationCutover.boundaryChecksumCrc32c",
+      "relocation-manifest-v1.totalChecksumCrc32c",
+      "relocation-chunk-entry-v1.checksumCrc32c",
+      "relocation-root-pointer.checksumCrc32c"
+    ]
+  },
   "frameworkJsonV1Profile": {
     "name": "framework-json-v1",
     "encoding": "utf-8-without-bom",
@@ -1647,6 +1666,15 @@
       "minimum": 0,
       "maximum": {
         "$bound": "relocationLogicalBytes"
+      }
+    },
+    {
+      "name": "relocation-chunk-count",
+      "kind": "integer",
+      "encoding": "u32",
+      "minimum": 0,
+      "maximum": {
+        "$bound": "relocationChunkCount"
       }
     },
     {
@@ -3822,10 +3850,6 @@
         {
           "name": "inventoryDigestSha256",
           "$ref": "sha256-bytes"
-        },
-        {
-          "name": "relocationRoot",
-          "$ref": "relocation-root-pointer"
         }
       ],
       "trailingBytes": "forbidden"
@@ -6104,10 +6128,6 @@
               "$ref": "relocation-phase"
             },
             {
-              "name": "relocationRoot",
-              "$ref": "relocation-root-pointer"
-            },
-            {
               "name": "applicationVersion",
               "$ref": "application-version"
             },
@@ -7384,6 +7404,14 @@
         {
           "name": "object",
           "$ref": "relocation-object-identity"
+        },
+        {
+          "name": "boundaryRecordCount",
+          "$ref": "ordinal-or-zero"
+        },
+        {
+          "name": "boundaryChecksumCrc32c",
+          "$ref": "u32"
         }
       ],
       "payload": "forbidden"
@@ -7550,8 +7578,16 @@
           "$ref": "nonzero-u64"
         },
         {
-          "name": "relocationRoot",
-          "$ref": "relocation-root-pointer"
+          "name": "payloadTotalLength",
+          "$ref": "relocation-logical-length"
+        },
+        {
+          "name": "payloadChunkCount",
+          "$ref": "relocation-chunk-count"
+        },
+        {
+          "name": "payloadChecksumCrc32c",
+          "$ref": "u32"
         },
         {
           "name": "applicationVersion",
@@ -7907,6 +7943,44 @@
         "callback-notification-or-close-failure-does-not-rollback-replacement"
       ],
       "payload": "forbidden"
+    },
+    {
+      "id": 52,
+      "name": "relocationState",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        {
+          "name": "relocation",
+          "$ref": "relocation-id"
+        },
+        {
+          "name": "targetAttemptGeneration",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "coordinator",
+          "$ref": "relocation-coordinator-fence"
+        },
+        {
+          "name": "senderRole",
+          "$ref": "relocation-role"
+        },
+        {
+          "name": "object",
+          "$ref": "relocation-object-identity"
+        },
+        {
+          "name": "chunkOrdinal",
+          "$ref": "u32"
+        },
+        {
+          "name": "chunkData",
+          "$ref": "durable-blob"
+        }
+      ],
+      "payload": "forbidden"
     }
   ],
   "relocationStateMachine": {
@@ -7925,7 +7999,7 @@
       {
         "phase": "captured",
         "after": [
-          "immutable-relocation-put"
+          "local-capture-complete"
         ],
         "relocation": "present"
       },
@@ -8055,6 +8129,19 @@
         "loss": "retransmit-until-matching-ready-or-phase-advance-or-deadline"
       },
       {
+        "command": "relocationState",
+        "senderRoles": [
+          "source"
+        ],
+        "phases": [
+          "captured",
+          "prepared"
+        ],
+        "duplicate": "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
+        "reorder": "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
+        "loss": "no-per-chunk-ack-restore-deadline-fails-the-relocation"
+      },
+      {
         "command": "relocationReady",
         "senderRoles": [
           "target"
@@ -8170,7 +8257,7 @@
       "last": 45
     },
     {
-      "first": 52,
+      "first": 53,
       "last": 255
     }
   ]

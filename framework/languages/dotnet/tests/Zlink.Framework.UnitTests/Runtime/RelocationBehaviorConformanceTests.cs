@@ -2052,6 +2052,7 @@ internal sealed class CanonicalRelocationTransportProbe
         public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
             PrepareAsync(
                 ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+                ZLinkRelocationEnvelope envelope,
                 RoutingId authenticatedSourceNodeRid,
                 ZLinkCanonicalRelocationPreparationLease lease,
                 CancellationToken cancellationToken)
@@ -2063,6 +2064,7 @@ internal sealed class CanonicalRelocationTransportProbe
             {
                 ready = await inner.PrepareAsync(
                         prepare,
+                        envelope,
                         authenticatedSourceNodeRid,
                         lease,
                         cancellationToken)

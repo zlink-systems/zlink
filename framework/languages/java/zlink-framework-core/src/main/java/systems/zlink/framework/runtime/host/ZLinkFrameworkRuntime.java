@@ -194,7 +194,8 @@ public final class ZLinkFrameworkRuntime
                     status.capacity(),
                     status.deadline(),
                     status.relocationResult(),
-                    status.terminationResult()),
+                    status.terminationResult(),
+                    status.safeToShutdown()),
                 ignored -> runtimeState,
                 64,
                 status -> status.state() == ZLinkFrameworkRuntimeState.STOPPED
@@ -262,17 +263,6 @@ public final class ZLinkFrameworkRuntime
                 this.registration.relocationStore());
         }
         this.locationStores = locationSubsystem.locationStores();
-        if (this.locationStores != null
-            && this.locationStores.authorityStore() != null
-            && this.registration.relocationStore() != null) {
-            runtimeHandlers.add(
-                systems.zlink.framework.runtime.internal.locations
-                    .ZLinkRelocationPublicationCoordinator.class,
-                new systems.zlink.framework.runtime.internal.locations
-                    .ZLinkRelocationPublicationCoordinator(
-                        this.locationStores.authorityStore(),
-                        this.registration.relocationStore()));
-        }
         if (locationSubsystem.enabled()) {
             this.locationRuntime = locationSubsystem.locationRuntime();
             this.locationRuntimeQuery = locationSubsystem.locationRuntimeQuery();
@@ -473,7 +463,6 @@ public final class ZLinkFrameworkRuntime
                     this.meshNodes.nodesByName(),
                     locationStore,
                     this.locationStores.authorityStore(),
-                    this.registration.relocationStore(),
                     this.registration.locations().options(),
                     relocationAdapters,
                     this.registration.applicationVersion(),
@@ -1679,9 +1668,22 @@ public final class ZLinkFrameworkRuntime
                 Optional.ofNullable(terminationDeadline.get()),
                 Optional.ofNullable(lastRelocationResult.get()),
                 Optional.ofNullable(lastTerminationResult.get()),
+                safeToShutdown(state),
                 capacityStatus(),
                 sequence,
                 Instant.now());
+    }
+
+    /**
+     * Spec 30 §11 — this source published every relocation unit past its
+     * Message Follow route removal point (S4) and its cutover retransmission
+     * window ended, so a Shutdown no longer discards follow routes or
+     * retransmission copies. Both are source-local observations.
+     */
+    private boolean safeToShutdown(ZLinkFrameworkRuntimeState state) {
+        return state == ZLinkFrameworkRuntimeState.RELOCATED
+            && (spotRetire == null
+                || spotRetire.relocationSourceQuiescent());
     }
 
     private systems.zlink.framework.monitoring.ZLinkHostCapacityStatus

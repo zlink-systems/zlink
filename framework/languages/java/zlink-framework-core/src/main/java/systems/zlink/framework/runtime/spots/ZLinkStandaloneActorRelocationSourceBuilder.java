@@ -279,55 +279,36 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             applicationState,
                             seal.captured(),
                             timerEnvelope);
-                    var request = request(
-                        admission.owned(),
-                        admission.target(),
-                        relocationId,
-                        initialRoot,
-                        targetSpotId,
-                        targetSpotGeneration,
-                        targetSpotKind);
                     Optional<ZLinkSpotRetireControl.SessionRouteFence>
                         capturedRoute = admission.sessionRoute().or(() ->
                             capturedSessionRoute(
                                 admission.owned(),
                                 seal.captured()));
+                    //  The captured payload lives only in source memory and
+                    //  travels directly with the stage request; nothing is
+                    //  written to a relocation store (spec 28 §4.2).
                     return sealSessionRoute(
                             admission.owned(), relocationId, capturedRoute)
-                        .thenCompose(sessionRoute ->
-                            coordinator.stageRoot(request, cancellation)
-                                .thenApply(staged -> new PreparedSource(
-                                    coordinator,
-                                    locations,
-                                    actors,
-                                    relocationReplies,
-                                    sessionSealer,
-                                    sessionRoute,
-                                    seal,
-                                    admission.owned(),
-                                    admission.target(),
+                        .thenApply(sessionRoute -> new PreparedSource(
+                                locations,
+                                actors,
+                                relocationReplies,
+                                sessionSealer,
+                                sessionRoute,
+                                seal,
+                                admission.owned(),
+                                admission.target(),
+                                relocationId,
+                                applicationState,
+                                timerEnvelope,
+                                stageRequest(
+                                    admission,
                                     relocationId,
-                                    applicationState,
-                                    timerEnvelope,
-                                    staged,
-                                    stageRequest(
-                                        admission,
-                                        relocationId,
-                                        staged,
-                                        sessionRoute.map(
-                                            SealedSessionRoute::route),
-                                        targetSpotId),
-                                    targetSpotId))
-                                .exceptionallyCompose(failure ->
-                                    abortSessionRoute(sessionSealer, sessionRoute)
-                                        .handle((ignored, abortFailure) -> {
-                                            Throwable cause = unwrap(failure);
-                                            if (abortFailure != null) {
-                                                cause.addSuppressed(
-                                                    unwrap(abortFailure));
-                                            }
-                                            throw new CompletionException(cause);
-                                        })));
+                                    initialRoot,
+                                    sessionRoute.map(
+                                        SealedSessionRoute::route),
+                                    targetSpotId),
+                                targetSpotId));
                 }).exceptionallyCompose(failure -> {
                     relocationReplies.resumeActorTimersAfterRelocationAbort(
                         admission.owned().actorId());
@@ -592,51 +573,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     < candidate.activationConcurrency().limit());
     }
 
-    private ZLinkAggregateRelocationCoordinator.Request request(
-        Owned actor,
-        ZLinkMeshNodeDescriptor target,
-        UUID relocationId,
-        byte[] root,
-        String targetSpotId,
-        long targetSpotGeneration,
-        int targetSpotKind) {
-        byte[] targetAuthority = authorities.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            actor.stableType(),
-            actor.actorId(),
-            targetSpotId,
-            targetSpotGeneration,
-            targetSpotKind,
-            target.ownerId(),
-            target.leaseGeneration(),
-            meshName,
-            target.rid(),
-            target.lifecycleGeneration());
-        var participant = new ZLinkAggregateRelocationCoordinator.Participant(
-            actor.authorityKey(),
-            ZLinkPlacementObjectKind.ACTOR,
-            actor.snapshot().objectGeneration(),
-            actor.snapshot().authorityOwnerGeneration(),
-            actor.snapshot().storeVersion(),
-            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            targetAuthority,
-            new byte[0]);
-        return new ZLinkAggregateRelocationCoordinator.Request(
-            relocationId,
-            1,
-            List.of(participant),
-            root,
-            new ZLinkMeshNodeDescriptorKey(meshName, target.rid()),
-            target.lifecycleGeneration(),
-            ZLinkPlacementCapacityBundle.actor(1),
-            new ZLinkLocationOwnerToken(
-                target.ownerId(), target.leaseGeneration()));
-    }
-
     private ZLinkSpotRetireControl.StageRequest stageRequest(
         Admission admission,
         UUID relocationId,
-        ZLinkAggregateRelocationCoordinator.StagedRoot staged,
+        byte[] relocationPayload,
         Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
         String targetSpotId) {
         Owned actor = admission.owned();
@@ -656,8 +596,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             actor.stableType(),
             false,
             actor.snapshotPolicy(),
-            staged.stored().reference(),
-            staged.stored().checksumCrc32c(),
+            relocationPayload,
             List.of(new ZLinkSpotRetireControl.ParticipantFence(
                 actor.authorityKey(),
                 1,
@@ -833,7 +772,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     }
 
     static final class PreparedSource {
-        private final ZLinkAggregateRelocationCoordinator coordinator;
         private final ZLinkLocationRepository locations;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkSpotRuntime relocationReplies;
@@ -845,7 +783,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private final UUID relocationId;
         private final byte[] state;
         private final byte[] timerEnvelope;
-        private final ZLinkAggregateRelocationCoordinator.StagedRoot initial;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final String targetSpotId;
         private List<ZLinkAsyncSerialQueue.QueuedRecord> finalJournal =
@@ -857,7 +794,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private boolean terminal;
 
         private PreparedSource(
-            ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkLocationRepository locations,
             ZLinkActorSessionCoordinator actors,
             ZLinkSpotRuntime relocationReplies,
@@ -869,10 +805,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             UUID relocationId,
             byte[] state,
             byte[] timerEnvelope,
-            ZLinkAggregateRelocationCoordinator.StagedRoot initial,
             ZLinkSpotRetireControl.StageRequest stageRequest,
             String targetSpotId) {
-            this.coordinator = coordinator;
             this.locations = locations;
             this.actors = actors;
             this.relocationReplies = relocationReplies;
@@ -885,7 +819,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             this.relocationId = relocationId;
             this.state = state.clone();
             this.timerEnvelope = timerEnvelope.clone();
-            this.initial = initial;
             this.stageRequest = stageRequest;
             this.targetSpotId = targetSpotId;
         }
@@ -899,10 +832,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 owned.snapshot().authorityOwnerGeneration(),
                 owned.snapshotPolicy(),
                 targetSpotId);
-        }
-
-        ZLinkAggregateRelocationCoordinator.StagedRoot initialRoot() {
-            return initial;
         }
 
         ZLinkSpotRetireControl.StageRequest stageRequest() {
@@ -1081,8 +1010,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         "Actor relocation source is not committed"));
                 }
             }
-            return coordinator.discardStagedRoot(initial)
-                .thenRun(this::finish);
+            finish();
+            return CompletableFuture.completedFuture(null);
         }
 
         CompletionStage<Void> cleanupLocal() {
@@ -1102,8 +1031,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     "committed Actor relocation cannot be aborted"));
             }
             return abortSessionRoute(sessionSealer, sealedSessionRoute)
-                .thenCompose(ignored ->
-                    coordinator.discardStagedRoot(initial))
                 .thenRun(() -> {
                     boolean restored = relocationCommit == null
                         ? actors.abortActorRelocation(owned.actorId(), seal)

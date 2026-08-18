@@ -260,8 +260,7 @@ final class ZLinkActorJoinCanonicalAdapter
             request.stableType(),
             request.instanceSpot(),
             request.restoreSpotSnapshot(),
-            request.relocationReference(),
-            request.relocationChecksum(),
+            request.relocationPayload(),
             request.participants(),
             request.sessionRoutes());
         long targetSpotGeneration = ((systems.zlink.framework.spots.ZLinkSpot<?>)

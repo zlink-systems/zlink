@@ -874,8 +874,7 @@ final class ZLinkProviderAuthorityRepository {
                                                     marker,
                                                     encodeAggregate(
                                                         AGGREGATE_COMMITTED,
-                                                        request,
-                                                        initialProgress(request)),
+                                                        request),
                                                     null))),
                                             opaqueCancellation)
                                         .thenCompose(result -> {
@@ -982,8 +981,7 @@ final class ZLinkProviderAuthorityRepository {
                 }
                 PreparedAggregate aggregate =
                     decodeAggregate(found.value().bytes());
-                if (aggregate.state() != AGGREGATE_COMMITTED
-                    || aggregate.progress() == null) {
+                if (aggregate.state() != AGGREGATE_COMMITTED) {
                     return completed(Optional.empty());
                 }
                 return aggregateInventory.load(
@@ -995,8 +993,7 @@ final class ZLinkProviderAuthorityRepository {
                         new ZLinkAggregateProgressSnapshot(
                             fence,
                             found.value().version().value(),
-                            aggregate.request(participants),
-                            aggregate.progress())));
+                            aggregate.request(participants))));
             });
     }
 
@@ -2131,13 +2128,6 @@ final class ZLinkProviderAuthorityRepository {
     private static byte[] encodeAggregate(
         byte state,
         ZLinkAggregatePrepareRequest request) {
-        return encodeAggregate(state, request, null);
-    }
-
-    private static byte[] encodeAggregate(
-        byte state,
-        ZLinkAggregatePrepareRequest request,
-        ZLinkAggregateProgress progress) {
         try {
             var bytes = new ByteArrayOutputStream();
             var out = new DataOutputStream(bytes);
@@ -2163,15 +2153,6 @@ final class ZLinkProviderAuthorityRepository {
             }
             out.writeInt(request.participants().size());
             writeBytes(out, ZLinkAggregateInventoryStore.fingerprint(request));
-            if (state == AGGREGATE_COMMITTED) {
-                if (progress == null) {
-                    throw new IllegalArgumentException(
-                        "committed aggregate marker requires progress");
-                }
-                ZLinkAggregateProgress value = progress;
-                out.writeUTF(value.reference());
-                out.writeLong(value.checksumCrc32c());
-            }
             out.flush();
             return bytes.toByteArray();
         } catch (IOException failure) {
@@ -2213,11 +2194,6 @@ final class ZLinkProviderAuthorityRepository {
             if (fingerprint.length != 32) {
                 throw new IOException("aggregate request fingerprint is invalid");
             }
-            ZLinkAggregateProgress progress = state == AGGREGATE_COMMITTED
-                ? new ZLinkAggregateProgress(
-                    in.readUTF(),
-                    in.readLong())
-                : null;
             if (in.available() != 0) {
                 throw new IOException("aggregate marker has trailing bytes");
             }
@@ -2233,8 +2209,7 @@ final class ZLinkProviderAuthorityRepository {
                 spots,
                 spotType,
                 count,
-                fingerprint,
-                progress);
+                fingerprint);
         } catch (IOException | RuntimeException failure) {
             throw new IllegalStateException(
                 "Location Store aggregate record is invalid",
@@ -2293,22 +2268,6 @@ final class ZLinkProviderAuthorityRepository {
         return new ZLinkStoreKey(
             "zlink:v11:aggregate:" + fence.aggregateId()
                 + ":" + fence.aggregateGeneration());
-    }
-
-    private static ZLinkAggregateProgress initialProgress(
-        ZLinkAggregatePrepareRequest request) {
-        for (ZLinkAggregateParticipant participant : request.participants()) {
-            ZLinkCanonicalRelocationAuthorityStateCodec.Published publication =
-                ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                    participant.authorityPayload());
-            if (publication != null) {
-                return new ZLinkAggregateProgress(
-                    publication.reference(),
-                    publication.checksumCrc32c());
-            }
-        }
-        throw new IllegalStateException(
-            "committed aggregate marker has no canonical relocation root");
     }
 
     private static long ownerGeneration(byte[] bytes) {
@@ -2642,8 +2601,7 @@ final class ZLinkProviderAuthorityRepository {
         int spots,
         Optional<ZLinkSpotTypeCapacityDelta> spotType,
         int participantCount,
-        byte[] requestFingerprint,
-        ZLinkAggregateProgress progress) {
+        byte[] requestFingerprint) {
         PreparedAggregate {
             inventoryDigest = inventoryDigest.clone();
             requestFingerprint = requestFingerprint.clone();

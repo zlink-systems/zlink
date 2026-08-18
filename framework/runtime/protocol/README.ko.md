@@ -18,8 +18,9 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `golden/reply-relay-v1.json`: maintenance request의 terminal reply relay command 33과 exact source fence를
   닫는 ACK command 46을 네 runtime codec이 같은 bytes로 읽고 쓰는 golden fixture
 - `golden/relocation-control-v1.json`: maintenance relocation의 Ready reply·post-capture ingress Data·one-way
-  Cutover·payload Restore Prepare command 30·31·34·40을 네 runtime codec이 같은 field 순서와 bytes로 읽고
-  쓰는 golden fixture. 폐기한 command 32·35·41은 fixture에 없으며 수신하지 않는다.
+  Cutover·payload Restore Prepare·직접 전송 state chunk command 30·31·34·40·52를 네 runtime codec이 같은
+  field 순서와 bytes로 읽고 쓰는 golden fixture. Command 52 malformed 거부 사례를 함께 고정한다. 폐기한
+  command 32·35·41은 fixture에 없으며 수신하지 않는다.
 - `golden/session-relocation-barrier-v1.json`: exact Session seal request/reply command 42·43과 reply 없는
   commit·pre-cutover abort command 44를 고정한다. 폐기한 completion reply command 45는 fixture에 없으며 수신하지 않는다.
 - `golden/authority-key-v1.json`: MeshName과 독립적인 global ActorId·SpotId를 canonical Store key로 만드는
@@ -37,9 +38,9 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
 - `generated/`: C++·.NET·JVM·Node.js runtime이 복사하지 않고 사용하는 생성 상수
 - `traces/`: schema 승인 뒤 생성하는 normalized behavior trace
 
-Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 38개 command, 154개 type,
+Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 39개 command, 155개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는
-contract amendment fixture 1개와 234가지 invalid mutation이 실제로
+contract amendment fixture 1개와 231가지 invalid mutation이 실제로
 거부되는지도 확인한다. 여기에는 integer overflow, length capacity 초과, 잘못된 정렬 field, enum domain 이탈,
 conditional discriminator 오류, TLV 순서·required capability 제약 변경, relocation vector 불일치, durable
 magic·version·length·checksum·semantic·order·range 훼손, relocation graph·policy 오류와 fanout socket·beacon·deadline

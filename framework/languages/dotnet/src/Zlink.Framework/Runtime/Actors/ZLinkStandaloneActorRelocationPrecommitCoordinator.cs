@@ -41,8 +41,6 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             sourceAuthority.NodeRid.ToHex(),
             sourceAuthority.NodeGeneration,
             Phase: 1,
-            RelocationReference: string.Empty,
-            RelocationChecksumCrc32c: 0,
             applicationVersion)
         {
             CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion
@@ -64,8 +62,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     phase: 1,
                     source,
                     target: null,
-                    attempt: 0,
-                    reference: null),
+                    attempt: 0),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -73,15 +70,12 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     internal async ValueTask<ZLinkAuthoritySnapshot> CaptureAsync(
         ZLinkAuthoritySnapshot preparing,
         ZLinkRelocationEnvelope root,
-        ZLinkRelocationStored stored,
         CancellationToken cancellationToken)
     {
         var projection = RequirePhase(preparing, root.AggregateId, 1);
         var state = projection.State with
         {
-            Phase = 2,
-            RelocationReference = stored.Reference,
-            RelocationChecksumCrc32c = stored.ChecksumCrc32c
+            Phase = 2
         };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(preparing.Payload.Span, state, root);
@@ -99,8 +93,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     phase: 2,
                     preparing,
                     target: null,
-                    attempt: 0,
-                    stored.Reference),
+                    attempt: 0),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -182,8 +175,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     root.AggregateId,
                     captured,
                     targetOwner,
-                    prepare,
-                    projection.RelocationReference),
+                    prepare),
                 cancellationToken,
                 retryAuxiliaryConflicts: true)
             .ConfigureAwait(false);
@@ -406,18 +398,14 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         byte phase,
         ZLinkAuthoritySnapshot source,
         ZLinkLocationOwnerToken? target,
-        ulong attempt,
-        string? reference)
+        ulong attempt)
     {
         if (!ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                 current.Payload.Span,
                 out var projection)
             || !SameRelocation(projection, relocationId)
             || projection.Phase != phase
-            || projection.TargetAttemptGeneration != attempt
-            || !StringComparer.Ordinal.Equals(
-                projection.RelocationReference,
-                reference ?? string.Empty))
+            || projection.TargetAttemptGeneration != attempt)
             return false;
         var expectedOwner = target ?? new ZLinkLocationOwnerToken(
             source.OwnerId,
@@ -434,8 +422,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         Guid relocationId,
         ZLinkAuthoritySnapshot source,
         ZLinkLocationOwnerToken targetOwner,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        string reference)
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare)
     {
         if (!Matches(
                 current,
@@ -443,8 +430,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 phase: (byte)ZLinkStandaloneActorCanonicalPhase.Committed,
                 source,
                 targetOwner,
-                prepare.TargetAttemptGeneration,
-                reference)
+                prepare.TargetAttemptGeneration)
             || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                 current.Payload.Span,
                 out var projection))

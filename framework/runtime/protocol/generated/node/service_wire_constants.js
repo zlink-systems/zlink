@@ -4,7 +4,7 @@ exports.isValidServiceWireTerminalFailure = exports.ServiceWireExactTerminalByFa
 // Generated from service-wire-v1.schema.json. Do not edit.
 exports.SERVICE_WIRE_MAGIC = [90, 77];
 exports.SERVICE_WIRE_MAJOR = 1;
-exports.SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v12";
+exports.SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v13";
 exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart";
 exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart";
 exports.ServiceWireCommand = {
@@ -46,6 +46,7 @@ exports.ServiceWireCommand = {
     actorCreate: 49,
     messageFollow: 50,
     boundSessionReplaced: 51,
+    relocationState: 52,
 };
 exports.ServiceWireFlag = {
     metadata: 1,

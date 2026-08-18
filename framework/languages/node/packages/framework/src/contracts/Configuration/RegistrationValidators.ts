@@ -18,6 +18,7 @@ import {
   isRouteTransportDeclared
 } from './RouteChannelInternalState';
 import { validateTimerRegistration } from './TimerRegistrationValidator';
+import { zlinkValidateRelocationAdapterBaseDelta } from './ObjectRoles';
 import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
 
@@ -140,6 +141,29 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     throw new ZLinkConfigurationException(
       'ownerLeaseRenewIntervalMs + ownerLeaseRenewTimeoutMs must be less than ownerLeaseTtlMs - ownerLeaseFencingMarginMs.'
     );
+  }
+  for (const [name, value] of Object.entries({
+    relocationCutoverWaitTimeoutMs: options.relocationCutoverWaitTimeoutMs,
+    relocationPayloadChunkLimitBytes: options.relocationPayloadChunkLimitBytes
+  })) {
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new ZLinkConfigurationException(`${name} must be a positive integer.`);
+    }
+  }
+  if (options.relocationPayloadChunkLimitBytes > 67_108_864) {
+    throw new ZLinkConfigurationException(
+      'relocationPayloadChunkLimitBytes must not exceed the 64 MiB wire chunk bound.'
+    );
+  }
+  for (const [name, value] of Object.entries({
+    relocationInFlightPayloadBudgetBytes: options.relocationInFlightPayloadBudgetBytes,
+    relocationNodeInFlightPayloadBudgetBytes: options.relocationNodeInFlightPayloadBudgetBytes
+  })) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new ZLinkConfigurationException(
+        `${name} must be a non-negative safe integer (0 disables the budget).`
+      );
+    }
   }
   for (const [name, value] of Object.entries({
     routeCacheMaxAgeMs: options.routeCacheMaxAgeMs,
@@ -300,6 +324,7 @@ function validateSpotNodes(registration: ZLinkFrameworkRegistration): void {
       spotNode.publisherConfig?.sendTimeoutMs
     );
     validateSpotNodeFactories(spotNodeName, spotNode);
+    validateRelocationAdapterRegistrations(spotNodeName, spotNode);
     validateSpotNodeTimers(spotNode);
     if (
       spotNode.objectRole === 'client'
@@ -376,6 +401,33 @@ function validateSpotNodeFactories(spotNodeName: string, spotNode: ZLinkSpotNode
       );
     }
     seen.add(factory);
+  }
+}
+
+function validateRelocationAdapterRegistrations(
+  spotNodeName: string,
+  spotNode: ZLinkSpotNodeOptions
+): void {
+  const groups = [
+    ['Actor', spotNode.actorFactoryRegistrations],
+    ['User Spot', spotNode.spotFactoryRegistrations],
+    ['Instance Spot', spotNode.instanceSpotFactoryRegistrations]
+  ] as const;
+  for (const [label, registrations] of groups) {
+    for (const [stableType, registration] of Object.entries(registrations ?? {})) {
+      const relocation = registration.relocation;
+      if (relocation.kind !== 'snapshot') continue;
+      try {
+        zlinkValidateRelocationAdapterBaseDelta(
+          relocation.adapterType,
+          `SpotNode '${spotNodeName}' ${label} '${stableType}'`
+        );
+      } catch (error) {
+        throw new ZLinkConfigurationException(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
   }
 }
 

@@ -200,7 +200,8 @@ class mesh_node_runtime_t
     void configure_relocation_runtime (
       std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority,
       std::shared_ptr<runtime::stateful::relocation_store_port_t> relocations,
-      std::shared_ptr<runtime::stateful::aggregate_authority_port_t> aggregate_authority = {});
+      std::shared_ptr<runtime::stateful::aggregate_authority_port_t> aggregate_authority = {},
+      runtime::stateful::relocation_limits_t relocation_limits = {});
     task_t<runtime::stateful::relocation_result_t>
     relocate_application_actor (const actor_ref_t &actor,
                                 const mesh_node_descriptor_t &target,
@@ -576,6 +577,7 @@ class mesh_node_runtime_t
     std::shared_ptr<runtime::stateful::authority_relocation_port_t> _relocation_authority;
     std::shared_ptr<runtime::stateful::relocation_store_port_t> _relocation_store;
     std::shared_ptr<runtime::stateful::aggregate_authority_port_t> _aggregate_relocation_authority;
+    runtime::stateful::relocation_limits_t _relocation_limits;
     location_owner_token_t _instance_spot_owner;
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;
     host::public_host_runtime_t::session_route_target_owner_resolver_t

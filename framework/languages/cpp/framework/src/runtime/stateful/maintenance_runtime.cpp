@@ -3,6 +3,7 @@
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -502,12 +503,17 @@ struct maintenance_runtime_t::relocation_terminal_state_t
     std::shared_ptr<permit_t> permit;
     aggregate_relocation_seal_attempt_t seal_attempt;
     std::vector<std::uint8_t> payload;
-    relocation_stored_t stored;
+    relocation_payload_manifest_t manifest;
+    std::uint64_t effective_chunk_limit = 0;
+    std::uint64_t budget_reserved = 0;
+    std::chrono::steady_clock::time_point sealed_at{};
     std::optional<target_only_cas_t> handoff;
     relocation_ingress_batch_t batch;
     relocation_reason_t failure = relocation_reason_t::restore_failed;
     std::optional<std::vector<protocol::relocation_data_t>> records;
     std::optional<relocation_result_t> result;
+    std::optional<protocol::relocation_cutover_t> cutover_record;
+    bool cutover_enqueued = false;
 };
 
 durable_join_completion_store_t::durable_join_completion_store_t (
@@ -707,7 +713,8 @@ maintenance_runtime_t::build_boundary_records (
         || context.coordinator.expected_authority_store_version.empty ()
         || context.target_node_routing_id.empty ()
         || context.target_node_generation == 0
-        || !context.prepare_target || !context.send_relocation_data
+        || !context.prepare_target || !context.send_state_chunk
+        || !context.send_relocation_data
         || !context.send_cutover || !context.abort_target_before_cutover)
         return std::nullopt;
 
@@ -781,17 +788,113 @@ maintenance_runtime_t::build_boundary_records (
 task_t<bool> maintenance_runtime_t::prepare_target (
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
   const std::vector<frozen_object_state_t> &participants,
-  const relocation_stored_t &stored)
+  const relocation_payload_manifest_t &manifest)
 {
     bool target_prepared = false;
     try {
         target_prepared =
-          co_await context.prepare_target (participants, stored);
+          co_await context.prepare_target (participants, manifest);
     }
     catch (...) {
         target_prepared = false;
     }
     co_return target_prepared;
+}
+
+std::uint64_t maintenance_runtime_t::effective_in_flight_budget () const noexcept
+{
+    /* Phase 1: min of the configured connection and node budgets (zero
+     * disables a budget) and the fixed conservative constant, pending a
+     * Core observation API for per-pipe effective HWM. */
+    auto budget = relocation_conservative_in_flight_budget_bytes;
+    if (_limits.in_flight_payload_budget_bytes != 0)
+        budget = std::min (budget, _limits.in_flight_payload_budget_bytes);
+    if (_limits.node_in_flight_payload_budget_bytes != 0)
+        budget = std::min (budget, _limits.node_in_flight_payload_budget_bytes);
+    return budget;
+}
+
+task_t<void> maintenance_runtime_t::acquire_transfer_budget (
+  std::uint64_t bytes)
+{
+    if (bytes == 0)
+        co_return;
+    const auto budget = effective_in_flight_budget ();
+    for (;;) {
+        std::shared_ptr<detail::task_completion_source_t<bool>> waiter;
+        {
+            std::lock_guard lock (_budget_mutex);
+            if (_budget_in_flight_bytes == 0
+                || _budget_in_flight_bytes + bytes <= budget) {
+                _budget_in_flight_bytes += bytes;
+                co_return;
+            }
+            waiter =
+              std::make_shared<detail::task_completion_source_t<bool>> ();
+            _budget_waiters.emplace_back (bytes, waiter);
+        }
+        (void) co_await waiter->task ();
+    }
+}
+
+void maintenance_runtime_t::release_transfer_budget (
+  std::uint64_t bytes) noexcept
+{
+    std::vector<std::shared_ptr<detail::task_completion_source_t<bool>>>
+      released;
+    {
+        std::lock_guard lock (_budget_mutex);
+        _budget_in_flight_bytes =
+          _budget_in_flight_bytes > bytes ? _budget_in_flight_bytes - bytes
+                                          : 0;
+        while (!_budget_waiters.empty ()) {
+            released.push_back (std::move (_budget_waiters.front ().second));
+            _budget_waiters.pop_front ();
+        }
+    }
+    for (auto &waiter : released) {
+        try {
+            waiter->complete (result_t<bool>::success (true));
+        }
+        catch (...) {
+        }
+    }
+}
+
+task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    if (!state->context.send_state_chunk)
+        co_return false;
+    const auto &participants = state->seal_attempt.seal.participants;
+    const auto found = std::find_if (
+      participants.begin (), participants.end (),
+      [] (const frozen_object_state_t &candidate) {
+          return candidate.owner.kind == object_kind_t::user_spot;
+      });
+    const auto &principal =
+      found != participants.end () ? *found : participants.front ();
+    const protocol::relocation_object_t object{
+      to_wire_object_kind (principal.owner.kind), principal.stable_type,
+      principal.owner.key, principal.owner.object_generation,
+      principal.owner.authority_owner_generation};
+    for (std::uint32_t ordinal = 0; ordinal != state->manifest.chunk_count;
+         ++ordinal) {
+        auto chunk = make_relocation_state_chunk (
+          state->context.relocation, state->context.target_attempt_generation,
+          state->context.coordinator, object, state->payload, ordinal,
+          state->effective_chunk_limit);
+        bool sent = false;
+        try {
+            sent = co_await state->context.send_state_chunk (chunk);
+        }
+        catch (...) {
+            sent = false;
+        }
+        if (!sent)
+            co_return false;
+    }
+    co_return true;
 }
 
 task_t<bool> maintenance_runtime_t::send_boundary_records (
@@ -816,6 +919,72 @@ bool maintenance_runtime_t::abort_target_before_cutover (
     catch (...) {
         return false;
     }
+}
+
+namespace
+{
+/* CRC-32C over the concatenated canonical wire bytes of the pre-boundary
+ * relay batch, in send order. The target accumulates the same value over
+ * the relocationData records it stages and compares it at cutover. */
+std::uint32_t boundary_batch_checksum (
+  const std::vector<protocol::relocation_data_t> &records)
+{
+    relocation_crc32c_accumulator_t accumulator;
+    for (const auto &record : records) {
+        const auto bytes = protocol::encode_relocation_control (record);
+        accumulator.update (bytes);
+    }
+    return accumulator.value ();
+}
+} // namespace
+
+void maintenance_runtime_t::retain_retransmission_copies (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    /* The payload and boundary batch copies survive the submit terminal for
+     * one retransmission window (the cutover wait timeout), then are
+     * released exactly once. These copies are Framework memory and are not
+     * charged to the in-flight budget. When the cutover submit did not
+     * reach the wire, the window is also used to retry the one-way cutover
+     * on the (possibly re-established) connection. */
+    const auto window = _limits.cutover_wait_timeout;
+    auto retention = std::make_shared<task_t<void>> (
+      [] (maintenance_runtime_t *owner,
+          std::shared_ptr<relocation_terminal_state_t> retained,
+          std::chrono::milliseconds duration) -> task_t<void> {
+          const auto deadline = std::chrono::steady_clock::now () + duration;
+          constexpr auto retry_interval = std::chrono::milliseconds (100);
+          while (std::chrono::steady_clock::now () < deadline) {
+              const auto remaining =
+                std::chrono::duration_cast<std::chrono::milliseconds> (
+                  deadline - std::chrono::steady_clock::now ());
+              if (retained->cutover_enqueued || !retained->cutover_record) {
+                  co_await ::zlink::framework::detail::delay (
+                    std::max (remaining, std::chrono::milliseconds (1)));
+                  break;
+              }
+              co_await ::zlink::framework::detail::delay (
+                std::min (retry_interval,
+                          std::max (remaining, std::chrono::milliseconds (1))));
+              try {
+                  const auto retried = co_await retained->context.send_cutover (
+                    *retained->cutover_record);
+                  if (retried
+                      == eligible_relocation_unit_t::canonical_wire_context_t::
+                        cutover_enqueue_t::enqueued)
+                      retained->cutover_enqueued = true;
+              }
+              catch (...) {
+              }
+          }
+          (void) owner;
+          retained->payload.clear ();
+          retained->payload.shrink_to_fit ();
+          retained->records.reset ();
+          retained->cutover_record.reset ();
+      } (this, state, window));
+    detail::observe_task_completion (
+      *retention, [retention] (const result_t<void> &) {});
 }
 
 task_t<relocation_result_t> maintenance_runtime_t::relocate (
@@ -851,12 +1020,54 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate (
 task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
-    if (!co_await relocate_seal (state))
+    /* The in-flight payload budget is acquired before the source admission
+     * seal so a unit waiting on the budget keeps serving messages. Chunk
+     * sends are awaited one at a time, so one reservation of the effective
+     * chunk size bounds this unit's in-flight bytes. */
+    state->effective_chunk_limit =
+      std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes
+                                 ? _limits.payload_chunk_limit_bytes
+                                 : protocol::relocationChunkBytes,
+                               protocol::relocationChunkBytes);
+    state->budget_reserved =
+      std::min (state->effective_chunk_limit, effective_in_flight_budget ());
+    co_await acquire_transfer_budget (state->budget_reserved);
+    const auto release_reservation = [this, state] {
+        if (state->budget_reserved != 0) {
+            release_transfer_budget (state->budget_reserved);
+            state->budget_reserved = 0;
+        }
+    };
+    if (!co_await relocate_seal (state)) {
+        release_reservation ();
         co_return std::move (*state->result);
-    if (!relocate_encode_and_store (state))
+    }
+    if (!relocate_encode (state)) {
+        release_reservation ();
         co_return std::move (*state->result);
-    if (!co_await relocate_prepare_target (state))
+    }
+    /* Start the Restore request first: the eager task enqueues the request
+     * frame on the ordered connection before its first suspension, so the
+     * relocationState chunks sent next arrive after it. The relay-ready
+     * reply arrives only after the target assembled and restored every
+     * chunk, so the reply is awaited after the chunk sends complete. */
+    auto prepared = relocate_prepare_target (state);
+    const auto chunks_sent = co_await relocate_send_state_chunks (state);
+    release_reservation ();
+    const auto target_ready = co_await prepared;
+    if (!target_ready)
         co_return std::move (*state->result);
+    if (!chunks_sent) {
+        /* The target replied ready without every chunk — treat it as an
+         * exact target failure before cutover. */
+        if (abort_target_before_cutover (state->context))
+            (void) _objects.abort_relocation_before_cutover (
+              state->seal_attempt.seal.token);
+        state->result.emplace (finish ({relocation_terminal_t::blocked,
+                                        relocation_reason_t::restore_failed,
+                                        std::nullopt}));
+        co_return std::move (*state->result);
+    }
     if (!co_await relocate_boundary_and_send (state))
         co_return std::move (*state->result);
     (void) co_await relocate_cutover (state);
@@ -896,12 +1107,16 @@ task_t<bool> maintenance_runtime_t::relocate_seal (
            std::nullopt}));
         co_return false;
     }
+    state->sealed_at = std::chrono::steady_clock::now ();
     co_return true;
 }
 
-bool maintenance_runtime_t::relocate_encode_and_store (
+bool maintenance_runtime_t::relocate_encode (
   const std::shared_ptr<relocation_terminal_state_t> &state)
 {
+    /* The captured payload stays only in source memory: it is chunked onto
+     * the wire and retained through the retransmission window. Nothing is
+     * written to the Relocation Store on this path. */
     try {
         state->payload = encode (state->seal_attempt.seal.participants.front (),
                                  state->inventory_digest);
@@ -915,6 +1130,8 @@ bool maintenance_runtime_t::relocate_encode_and_store (
                std::nullopt}));
             return false;
         }
+        state->manifest = plan_relocation_payload (
+          state->payload, state->effective_chunk_limit);
     }
     catch (...) {
         (void) _objects.abort_relocation (state->seal_attempt.seal.token);
@@ -924,39 +1141,13 @@ bool maintenance_runtime_t::relocate_encode_and_store (
            std::nullopt}));
         return false;
     }
-    if (state->payload.empty ()) {
+    if (state->payload.empty ()
+        || state->manifest.chunk_count > protocol::relocationChunkCount
+        || state->manifest.total_length > protocol::relocationLogicalBytes) {
         (void) _objects.abort_relocation (state->seal_attempt.seal.token);
         state->result.emplace (finish (
           {relocation_terminal_t::blocked,
            relocation_reason_t::payload_bound_exceeded,
-           std::nullopt}));
-        return false;
-    }
-    const auto checksum = crc32c (state->payload);
-
-    try {
-        state->stored = _relocations->put (state->payload, relocation_retention);
-    }
-    catch (...) {
-        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-        state->result.emplace (finish (
-          {relocation_terminal_t::store_failed,
-           relocation_reason_t::store_write_failed,
-           std::nullopt}));
-        return false;
-    }
-    if (state->stored.reference.empty () || state->stored.checksum_crc32c != checksum) {
-        if (!state->stored.reference.empty ()) {
-            try {
-                _relocations->remove (state->stored.reference);
-            }
-            catch (...) {
-            }
-        }
-        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-        state->result.emplace (finish (
-          {relocation_terminal_t::store_failed,
-           relocation_reason_t::checksum_mismatch,
            std::nullopt}));
         return false;
     }
@@ -968,11 +1159,12 @@ task_t<bool> maintenance_runtime_t::relocate_prepare_target (
 {
     state->handoff.emplace (target_only_cas_t{
       {state->source}, state->target_node_id, state->target_owner,
-      state->inventory_digest, state->stored});
+      state->inventory_digest, state->manifest});
     auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
     auto output = completion->task ();
     auto prepared = std::make_shared<task_t<bool>> (prepare_target (
-      state->context, {state->seal_attempt.seal.participants.front ()}, state->stored));
+      state->context, {state->seal_attempt.seal.participants.front ()},
+      state->manifest));
     detail::observe_task_completion (
       *prepared, [this, state, completion, prepared] (
                    const result_t<bool> &settled) {
@@ -1035,31 +1227,37 @@ task_t<bool> maintenance_runtime_t::relocate_cutover (
       state->seal_attempt.seal.participants.front ().stable_type,
       state->source.key, state->source.object_generation,
       state->source.authority_owner_generation};
-    const auto cutover = protocol::relocation_cutover_t{
+    auto cutover = protocol::relocation_cutover_t{
       state->context.relocation, state->context.target_attempt_generation,
       state->context.coordinator, protocol::relocation_role_t::source, object};
+    cutover.boundary_record_count = state->records->size ();
+    cutover.boundary_checksum_crc32c =
+      boundary_batch_checksum (*state->records);
     const auto outcome = co_await state->context.send_cutover (cutover);
-    if (outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::not_enqueued) {
-        if (abort_target_before_cutover (state->context))
-            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
-        state->result.emplace (finish ({relocation_terminal_t::blocked,
-                        relocation_reason_t::restore_failed, std::nullopt,
-                        *state->records, state->handoff}));
-        co_return false;
-    }
-    if (_objects.finalize_relocation_cutover (state->seal_attempt.seal.token) != stateful_error_t::none) {
+    const auto stall = state->sealed_at
+                           != std::chrono::steady_clock::time_point{}
+                         ? std::chrono::steady_clock::now () - state->sealed_at
+                         : std::chrono::steady_clock::duration::zero ();
+    /* The target's relay-ready reply was already accepted: source dispatch
+     * never reopens from here, whatever the submit outcome (28 §4.4/§9). */
+    const auto finalized =
+      _objects.finalize_relocation_cutover (state->seal_attempt.seal.token)
+      == stateful_error_t::none;
+    const auto enqueued =
+      outcome
+      == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
+    state->cutover_record = cutover;
+    state->cutover_enqueued = enqueued;
+    retain_retransmission_copies (state);
+    if (!enqueued || !finalized) {
         state->result.emplace (finish ({relocation_terminal_t::recovery_required,
                         relocation_reason_t::restore_failed, std::nullopt,
-                        *state->records, state->handoff}));
+                        *state->records, state->handoff, stall}));
         co_return false;
     }
-    state->result.emplace (finish ({outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
-                      ? relocation_terminal_t::completed
-                      : relocation_terminal_t::recovery_required,
-                    outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
-                      ? relocation_reason_t::none
-                      : relocation_reason_t::restore_failed,
-                    std::nullopt, *state->records, state->handoff}));
+    state->result.emplace (finish ({relocation_terminal_t::completed,
+                    relocation_reason_t::none,
+                    std::nullopt, *state->records, state->handoff, stall}));
     co_return true;
 }
 
@@ -1085,77 +1283,15 @@ relocation_result_t maintenance_runtime_t::recover (
            relocation_reason_t::authority_conflict,
            std::nullopt});
     }
-    std::optional<std::vector<std::uint8_t>> payload;
-    try {
-        payload = _relocations->get (authority->relocation_reference);
-    }
-    catch (...) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::store_write_failed,
-           authority});
-    }
-    if (!payload) {
-        return finish (
-          {relocation_terminal_t::data_lost,
-           relocation_reason_t::payload_missing,
-           authority});
-    }
-    if (crc32c (*payload) != authority->checksum_crc32c) {
-        return finish (
-          {relocation_terminal_t::data_lost,
-           relocation_reason_t::checksum_mismatch,
-           authority});
-    }
-    std::optional<recoverable_payload_t> recoverable;
-    std::optional<
-      std::pair<frozen_object_state_t, inventory_digest_t>> decoded;
-    try {
-        recoverable = decode_recoverable_payload (*payload);
-        if (recoverable)
-            decoded = decode (recoverable->state);
-    }
-    catch (...) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::restore_failed,
-           authority});
-    }
-    if (!decoded
-        || decoded->second != authority->inventory_digest) {
-        return finish (
-          {relocation_terminal_t::data_lost,
-           relocation_reason_t::inventory_mismatch,
-           authority});
-    }
-    stateful_error_t restored = stateful_error_t::conflict;
-    try {
-        restored = target.restore_relocation (
-          std::move (decoded->first), authority->target,
-          {authority->relocation_reference,
-           authority->checksum_crc32c,
-           authority->inventory_digest},
-          cancellation);
-    }
-    catch (...) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::restore_failed,
-           authority});
-    }
-    if (restored != stateful_error_t::none
-        && !(restored == stateful_error_t::already_exists
-             && target.find (kind, key) == authority->target)) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::restore_failed,
-           authority});
-    }
-    // Target restoration owns saved work; recovery does not replay it into
-    // the source relay lane.
+    /* Direct transfer keeps the payload's only original in the source
+     * process memory. A store-mediated payload recovery path no longer
+     * exists; an interrupted transfer whose source is gone is data loss.
+     * The unused arguments stay for the recovery-orchestration callers. */
+    (void) target;
+    (void) cancellation;
     return finish (
-      {relocation_terminal_t::recovery_required,
-       relocation_reason_t::restore_failed,
+      {relocation_terminal_t::data_lost,
+       relocation_reason_t::payload_missing,
        authority});
 }
 
@@ -1230,113 +1366,14 @@ aggregate_relocation_result_t maintenance_runtime_t::recover_aggregate (
         }
     }
 
-    std::optional<std::vector<std::uint8_t>> payload;
-    try {
-        payload = _relocations->get (root.relocation_reference);
-    }
-    catch (...) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::store_write_failed,
-          authority};
-    }
-    if (!payload) {
-        return {
-          relocation_terminal_t::data_lost,
-          relocation_reason_t::payload_missing,
-          authority};
-    }
-    if (crc32c (*payload) != root.checksum_crc32c) {
-        return {
-          relocation_terminal_t::data_lost,
-          relocation_reason_t::checksum_mismatch,
-          authority};
-    }
-    std::optional<recoverable_payload_t> recoverable;
-    std::optional<
-      std::pair<std::vector<frozen_object_state_t>,
-                inventory_digest_t>> decoded;
-    try {
-        recoverable = decode_recoverable_payload (*payload);
-        if (recoverable)
-            decoded = decode_aggregate (recoverable->state);
-    }
-    catch (...) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          authority};
-    }
-    if (!decoded || decoded->second != root.inventory_digest
-        || decoded->first.size () != authority.size ()) {
-        return {
-          relocation_terminal_t::data_lost,
-          relocation_reason_t::inventory_mismatch,
-          authority};
-    }
-
-    std::vector<object_ref_t> targets;
-    auto frozen = std::move (decoded->first);
-    try {
-        std::sort (
-          frozen.begin (), frozen.end (),
-          [] (const frozen_object_state_t &left,
-              const frozen_object_state_t &right) {
-              if (left.owner.kind != right.owner.kind)
-                  return left.owner.kind < right.owner.kind;
-              return left.owner.key < right.owner.key;
-          });
-        std::sort (
-          authority.begin (), authority.end (),
-          [] (const authority_relocation_reference_t &left,
-              const authority_relocation_reference_t &right) {
-              if (left.source.kind != right.source.kind)
-                  return left.source.kind < right.source.kind;
-              return left.source.key < right.source.key;
-          });
-        targets.reserve (authority.size ());
-        for (std::size_t index = 0; index != authority.size (); ++index) {
-            if (frozen[index].owner != authority[index].source) {
-                return {
-                  relocation_terminal_t::data_lost,
-                  relocation_reason_t::inventory_mismatch,
-                  authority};
-            }
-            targets.push_back (authority[index].target);
-        }
-    }
-    catch (...) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          authority};
-    }
-
-    stateful_error_t restored = stateful_error_t::conflict;
-    try {
-        restored = target.restore_relocation_aggregate (
-          std::move (frozen), std::move (targets),
-          {root.relocation_reference,
-           root.checksum_crc32c,
-           root.inventory_digest},
-          cancellation);
-    }
-    catch (...) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          authority};
-    }
-    if (restored != stateful_error_t::none
-        && restored != stateful_error_t::already_exists) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          authority};
-    }
+    /* Direct transfer keeps the payload's only original in the source
+     * process memory; there is no store-mediated aggregate payload to
+     * recover from. */
+    (void) target;
+    (void) cancellation;
     return {
-      relocation_terminal_t::recovery_required,
-      relocation_reason_t::restore_failed,
+      relocation_terminal_t::data_lost,
+      relocation_reason_t::payload_missing,
       authority};
 }
 
@@ -1372,37 +1409,55 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
                 relocation_reason_t::restore_failed, {}};
     }
-    std::vector<std::uint8_t> payload;
+    auto state = std::make_shared<relocation_terminal_state_t> ();
+    state->context = persisted_context;
+    state->effective_chunk_limit =
+      std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes
+                                 ? _limits.payload_chunk_limit_bytes
+                                 : protocol::relocationChunkBytes,
+                               protocol::relocationChunkBytes);
+    state->seal_attempt = seal_attempt;
+    state->sealed_at = std::chrono::steady_clock::now ();
     try {
-        payload = encode_aggregate (seal.participants, inventory_digest);
-        payload = encode_recoverable_payload (
-          std::move (payload), persisted_context, {});
+        state->payload = encode_aggregate (seal.participants, inventory_digest);
+        state->payload = encode_recoverable_payload (
+          std::move (state->payload), persisted_context, {});
+        state->manifest = plan_relocation_payload (
+          state->payload, state->effective_chunk_limit);
     }
     catch (...) {
     }
-    if (payload.empty () || payload.size () > encoded_upper_bound) {
+    if (state->payload.empty ()
+        || state->payload.size () > encoded_upper_bound
+        || state->manifest.chunk_count > protocol::relocationChunkCount) {
         (void) _objects.abort_relocation_before_cutover (seal.token);
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
                 relocation_reason_t::payload_bound_exceeded, {}};
     }
-    relocation_stored_t stored;
+    state->budget_reserved =
+      std::min (state->effective_chunk_limit, effective_in_flight_budget ());
+    co_await acquire_transfer_budget (state->budget_reserved);
+    auto prepared = std::make_shared<task_t<bool>> (prepare_target (
+      persisted_context, seal.participants, state->manifest));
+    const auto chunks_sent =
+      co_await relocate_send_state_chunks (state);
+    release_transfer_budget (state->budget_reserved);
+    state->budget_reserved = 0;
+    bool target_prepared = false;
     try {
-        stored = _relocations->put (payload, relocation_retention);
+        target_prepared = co_await *prepared;
     }
     catch (...) {
-        (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{relocation_terminal_t::store_failed,
-                relocation_reason_t::store_write_failed, {}};
+        target_prepared = false;
     }
-    if (stored.reference.empty () || stored.checksum_crc32c != crc32c (payload)
-        || !co_await prepare_target (*canonical_wire, seal.participants, stored)) {
+    if (!target_prepared || !chunks_sent) {
         (void) _objects.abort_relocation_before_cutover (seal.token);
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
                 relocation_reason_t::restore_failed, {}};
     }
     const target_only_cas_t handoff{
       sources, target_node_id, target_owner,
-      inventory_digest, stored};
+      inventory_digest, state->manifest};
     const auto [boundary_error, batch] =
       _objects.begin_relocation_boundary (seal.token);
     auto failure = relocation_reason_t::restore_failed;
@@ -1415,28 +1470,39 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required, failure, {},
                 records.value_or (std::vector<protocol::relocation_data_t>{}), handoff};
     }
-    const auto &root = seal.participants.front ();
-    const protocol::relocation_cutover_t cutover{
+    /* Cutover carries the same principal object identity as the Restore
+     * request so the target binds it to the prepared attempt. */
+    const auto principal = std::find_if (
+      seal.participants.begin (), seal.participants.end (),
+      [] (const frozen_object_state_t &candidate) {
+          return candidate.owner.kind == object_kind_t::user_spot;
+      });
+    const auto &root = principal != seal.participants.end ()
+                         ? *principal
+                         : seal.participants.front ();
+    auto cutover = protocol::relocation_cutover_t{
       canonical_wire->relocation, canonical_wire->target_attempt_generation,
       canonical_wire->coordinator, protocol::relocation_role_t::source,
       {to_wire_object_kind (root.owner.kind),
        root.stable_type, root.owner.key, root.owner.object_generation,
        root.owner.authority_owner_generation}};
+    cutover.boundary_record_count = records->size ();
+    cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
     const auto outcome = co_await canonical_wire->send_cutover (cutover);
-    if (outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::not_enqueued) {
-        if (abort_target_before_cutover (*canonical_wire))
-            (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked, relocation_reason_t::restore_failed,
-                {}, *records, handoff};
-    }
-    if (_objects.finalize_relocation_cutover (seal.token) != stateful_error_t::none) {
-        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required,
-                relocation_reason_t::restore_failed, {}, *records, handoff};
-    }
-    co_return aggregate_relocation_result_t{outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
+    /* The relay-ready reply was already accepted: source dispatch never
+     * reopens from here, whatever the submit outcome (28 §4.4/§9). */
+    const auto finalized =
+      _objects.finalize_relocation_cutover (seal.token) == stateful_error_t::none;
+    const auto enqueued =
+      outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
+    state->records = *records;
+    state->cutover_record = cutover;
+    state->cutover_enqueued = enqueued;
+    retain_retransmission_copies (state);
+    co_return aggregate_relocation_result_t{enqueued && finalized
               ? relocation_terminal_t::completed
               : relocation_terminal_t::recovery_required,
-            outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
+            enqueued && finalized
               ? relocation_reason_t::none
               : relocation_reason_t::restore_failed,
             {}, *records, handoff};
@@ -2339,6 +2405,7 @@ void public_host_runtime_t::configure_relocation (
     _relocation_authority = authority;
     _aggregate_relocation_authority = aggregate_authority;
     _session_relocations = relocations;
+    _relocation_cutover_wait = limits.cutover_wait_timeout;
     auto maintenance =
       std::make_unique<stateful::maintenance_runtime_t> (
         _objects, std::move (authority), std::move (relocations),
@@ -2346,6 +2413,13 @@ void public_host_runtime_t::configure_relocation (
         std::move (aggregate_authority));
     maintenance->attach_relocation_wire (*_relocation_wire);
     _maintenance = std::move (maintenance);
+}
+
+void public_host_runtime_t::configure_relocation_target_metrics (
+  relocation_target_metrics_t metrics)
+{
+    std::lock_guard lock (_mutex);
+    _relocation_target_metrics = std::move (metrics);
 }
 
 void public_host_runtime_t::configure_maintenance (
@@ -2364,6 +2438,7 @@ void public_host_runtime_t::configure_maintenance (
     _relocation_authority = providers.authority;
     _aggregate_relocation_authority = providers.aggregate_authority;
     _session_relocations = providers.relocations;
+    _relocation_cutover_wait = limits.cutover_wait_timeout;
     auto maintenance =
       std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (providers), limits,

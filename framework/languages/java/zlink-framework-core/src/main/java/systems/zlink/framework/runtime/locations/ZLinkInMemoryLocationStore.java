@@ -8,7 +8,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitRe
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgress;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressSnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;

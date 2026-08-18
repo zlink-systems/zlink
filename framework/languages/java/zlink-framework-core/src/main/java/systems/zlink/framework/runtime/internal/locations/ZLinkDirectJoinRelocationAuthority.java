@@ -27,7 +27,6 @@ public final class ZLinkDirectJoinRelocationAuthority {
     private static final ZLinkStoreCancellation NEVER = () -> false;
 
     private final ZLinkLocationRepository authority;
-    private final ZLinkRelocationStore relocation;
 
     /** Immutable Actor tenure accepted from the committed Location row. */
     public record CommittedActorTenure(
@@ -48,10 +47,8 @@ public final class ZLinkDirectJoinRelocationAuthority {
     }
 
     public ZLinkDirectJoinRelocationAuthority(
-        ZLinkLocationRepository authority,
-        ZLinkRelocationStore relocation) {
+        ZLinkLocationRepository authority) {
         this.authority = Objects.requireNonNull(authority, "authority");
-        this.relocation = Objects.requireNonNull(relocation, "relocation");
     }
 
     /**
@@ -146,7 +143,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
                         targetAuthority,
                         new byte[0]);
                 var coordinator = new ZLinkAggregateRelocationCoordinator(
-                    authority, relocation);
+                    authority);
                 return authority.listMeshNodes(
                         target.meshName(),
                         new ZLinkPageRequest(1_000, null))
@@ -184,7 +181,8 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                     descriptor.leaseGeneration()));
                         return coordinator.prepare(request, NEVER)
                             .thenApply(prepared -> new PreparedPublication(
-                                prepared.stored(),
+                                root,
+                                crc32c(root),
                                 prepared.fence()));
                     });
             });
@@ -269,27 +267,19 @@ public final class ZLinkDirectJoinRelocationAuthority {
                         new IllegalStateException(
                             "direct Join Actor authority owner differs after commit"));
                 }
-                return load(
-                        publication.reference(),
-                        publication.checksumCrc32c())
-                    .thenApply(root -> {
-                        if (root.relocationHigh()
-                                != aggregateId.getMostSignificantBits()
-                            || root.relocationLow()
-                                != aggregateId.getLeastSignificantBits()) {
-                            throw new IllegalStateException(
-                                "direct Join canonical root identity differs after commit");
-                        }
-                        return new CommittedActorTenure(
-                            new ZLinkBackendActorRef(
-                                snapshot.allocation().descriptor().rid(),
-                                actor.actorId(),
-                                snapshot.objectGeneration()),
-                            snapshot.allocation()
-                                .descriptorLifecycleGeneration(),
-                            snapshot.authorityOwnerGeneration(),
-                            snapshot.ownerLeaseGeneration());
-                    });
+                //  The direct-transfer manifest is the handoff root; its
+                //  relocation identity is validated in loadPrepared, so a
+                //  committed tenure needs no store read-back here.
+                return CompletableFuture.completedFuture(
+                    new CommittedActorTenure(
+                        new ZLinkBackendActorRef(
+                            snapshot.allocation().descriptor().rid(),
+                            actor.actorId(),
+                            snapshot.objectGeneration()),
+                        snapshot.allocation()
+                            .descriptorLifecycleGeneration(),
+                        snapshot.authorityOwnerGeneration(),
+                        snapshot.ownerLeaseGeneration()));
             });
     }
 
@@ -384,8 +374,6 @@ public final class ZLinkDirectJoinRelocationAuthority {
                     ? authority.removeAggregateProgress(
                         fence, marker.get().storeVersion(), NEVER)
                     : CompletableFuture.completedFuture(true))
-                .thenCompose(ignored -> ZLinkRelocationTreeStore.delete(
-                    relocation, publication.reference(), NEVER))
                 .exceptionally(ignored -> null);
         } catch (RuntimeException ignored) {
             // Ready is terminal; cleanup never rolls target authority back.
@@ -394,8 +382,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
 
     public CompletionStage<Void> abortPrepared(
         UUID aggregateId,
-        long aggregateGeneration,
-        String reference) {
+        long aggregateGeneration) {
         return authority.abortAggregate(
                 new ZLinkAggregateFence(
                     aggregateId,
@@ -409,20 +396,17 @@ public final class ZLinkDirectJoinRelocationAuthority {
                             "direct Join relocation aggregate abort failed: "
                                 + result));
                 }
-                return ZLinkRelocationTreeStore.delete(
-                    relocation,
-                    reference,
-                    NEVER);
+                return CompletableFuture.<Void>completedFuture(null);
             });
     }
 
     public CompletionStage<PreparedRoot> loadPrepared(
-        String reference,
+        byte[] rootBytes,
         long checksumCrc32c,
         ZLinkBackendActorRef actor,
         UUID relocationId,
         boolean restoreSnapshot) {
-        return load(reference, checksumCrc32c).thenApply(root -> {
+        return verify(rootBytes, checksumCrc32c).thenApply(root -> {
             validateActor(root, actor);
             if (root.relocationHigh()
                     != relocationId.getMostSignificantBits()
@@ -458,30 +442,28 @@ public final class ZLinkDirectJoinRelocationAuthority {
         });
     }
 
-    private CompletionStage<ZLinkServiceRelocationEnvelopeCodec.Envelope> load(
-            String reference,
-            long checksumCrc32c) {
-        return relocation.get(reference, NEVER).thenCompose(result -> {
-            if (result instanceof ZLinkRelocationMissing) {
-                return CompletableFuture.failedFuture(
-                    new CanonicalRootMissingException(
-                        "deferred Join canonical relocation root is missing"));
-            }
-            if (!(result instanceof ZLinkRelocationFound found)
-                || crc32c(found.payload()) != checksumCrc32c) {
-                return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.DATA_LOST,
-                        "deferred Join canonical relocation root checksum is invalid"));
-            }
-            return ZLinkRelocationTreeStore.read(
-                    relocation,
-                    reference,
-                    checksumCrc32c,
-                    NEVER)
-                .thenApply(read -> ZLinkServiceRelocationEnvelopeCodec.decode(
-                    read.logicalRoot()));
-        });
+    private static CompletionStage<ZLinkServiceRelocationEnvelopeCodec.Envelope>
+        verify(byte[] rootBytes, long checksumCrc32c) {
+        Objects.requireNonNull(rootBytes, "rootBytes");
+        if (rootBytes.length == 0) {
+            return CompletableFuture.failedFuture(
+                new CanonicalRootMissingException(
+                    "deferred Join canonical relocation root is missing"));
+        }
+        if (crc32c(rootBytes) != checksumCrc32c) {
+            //  A checksum mismatch over TCP is a defect signal, never retried
+            //  and never restored from a partial payload (spec 28 §4.3).
+            return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    "deferred Join canonical relocation root checksum is invalid"));
+        }
+        try {
+            return CompletableFuture.completedFuture(
+                ZLinkServiceRelocationEnvelopeCodec.decode(rootBytes));
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
     }
 
     private static void validateActor(
@@ -502,11 +484,16 @@ public final class ZLinkDirectJoinRelocationAuthority {
     }
 
     public record PreparedPublication(
-        ZLinkRelocationStored stored,
+        byte[] root,
+        long checksumCrc32c,
         ZLinkAggregateFence fence) {
         public PreparedPublication {
-            Objects.requireNonNull(stored, "stored");
+            root = Objects.requireNonNull(root, "root").clone();
             Objects.requireNonNull(fence, "fence");
+        }
+
+        @Override public byte[] root() {
+            return root.clone();
         }
     }
 

@@ -37,7 +37,7 @@ public sealed class ServiceWireRelocationCodecTests
         AssertGoldenRoundTrip(
             "relocationCutover",
             new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                relocation, 6, coordinator, 1, objectRecord),
+                relocation, 6, coordinator, 1, objectRecord, 3, 0xE3069283),
             ZLinkServiceWireCodec.EncodeRelocationCutover,
             ZLinkServiceWireCodec.TryDecodeRelocationCutover);
 
@@ -52,11 +52,66 @@ public sealed class ServiceWireRelocationCodecTests
                 objectRecord,
                 RoutingId.From("node-a"),
                 11,
-                new ZLinkServiceWireCodec.RelocationRootRecord(
-                    "relocation-root", 0x12345678),
+                24,
+                2,
+                0x29BC8795,
                 1),
             ZLinkServiceWireCodec.EncodeRelocationPrepare,
             ZLinkServiceWireCodec.TryDecodeRelocationPrepare);
+    }
+
+    [Fact]
+    public void Command_52_relocation_state_matches_the_shared_golden_vectors()
+    {
+        var relocation = new ZLinkServiceWireCodec.RelocationWireId(4, 5);
+        var coordinator = Coordinator();
+        var objectRecord = Object();
+
+        foreach (var (name, ordinal, dataLength, firstByte) in new[]
+                 {
+                     ("relocationStateChunk", 0u, 16, (byte)0x00),
+                     ("relocationStateFinalChunk", 1u, 8, (byte)0x10)
+                 })
+        {
+            var golden = ReadRelocationControlGolden(name);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationState(
+                golden, out var decoded, out var error));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(relocation, decoded.RelocationId);
+            Assert.Equal(6UL, decoded.TargetAttemptGeneration);
+            Assert.Equal(coordinator, decoded.Coordinator);
+            Assert.Equal(1, decoded.SenderRole);
+            Assert.Equal(objectRecord, decoded.Object);
+            Assert.Equal(ordinal, decoded.ChunkOrdinal);
+            Assert.Equal(dataLength, decoded.ChunkData.Length);
+            Assert.Equal(firstByte, decoded.ChunkData.Span[0]);
+            Assert.Equal(golden,
+                ZLinkServiceWireCodec.EncodeRelocationState(decoded));
+            Assert.False(ZLinkServiceWireCodec.TryDecodeRelocationState(
+                golden[..^1], out _, out var truncated));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.TruncatedField,
+                truncated);
+            Assert.False(ZLinkServiceWireCodec.TryDecodeRelocationState(
+                [.. golden, 0], out _, out var trailing));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte,
+                trailing);
+        }
+
+        foreach (var (name, expected) in new[]
+                 {
+                     ("relocationStateZeroTargetAttemptGeneration",
+                         ZLinkServiceWireCodec.DecodeError.InvalidField),
+                     ("relocationStateTruncatedChunkData",
+                         ZLinkServiceWireCodec.DecodeError.TruncatedField),
+                     ("relocationStateTrailingByte",
+                         ZLinkServiceWireCodec.DecodeError.TrailingByte)
+                 })
+        {
+            var malformed = ReadRelocationControlMalformed(name);
+            Assert.False(ZLinkServiceWireCodec.TryDecodeRelocationState(
+                malformed, out _, out var error));
+            Assert.Equal(expected, error);
+        }
     }
 
     [Fact]
@@ -91,9 +146,23 @@ public sealed class ServiceWireRelocationCodecTests
                 "TargetAttemptGeneration",
                 "Coordinator",
                 "SenderRole",
-                "Object"
+                "Object",
+                "BoundaryRecordCount",
+                "BoundaryChecksumCrc32c"
             },
             PublicPropertyNames<ZLinkServiceWireCodec.RelocationCutoverRecord>());
+        Assert.Equal(
+            new[]
+            {
+                "RelocationId",
+                "TargetAttemptGeneration",
+                "Coordinator",
+                "SenderRole",
+                "Object",
+                "ChunkOrdinal",
+                "ChunkData"
+            },
+            PublicPropertyNames<ZLinkServiceWireCodec.RelocationStateRecord>());
         Assert.Equal(
             new[]
             {
@@ -105,7 +174,9 @@ public sealed class ServiceWireRelocationCodecTests
                 "Object",
                 "SourceNodeRid",
                 "SourceNodeGeneration",
-                "Root",
+                "PayloadTotalLength",
+                "PayloadChunkCount",
+                "PayloadChecksumCrc32c",
                 "ApplicationVersion"
             },
             PublicPropertyNames<ZLinkServiceWireCodec.RelocationPrepareRecord>());
@@ -170,7 +241,9 @@ public sealed class ServiceWireRelocationCodecTests
                 3, "Game.Instance", "instance-1", 9, 0),
             RoutingId.From("node-a"),
             11,
-            null,
+            0,
+            0,
+            0,
             0);
 
         var encoded = ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare);
@@ -310,15 +383,21 @@ public sealed class ServiceWireRelocationCodecTests
         ReadGolden("reply-relay-v1.json", name);
 
     private static byte[] ReadRelocationControlGolden(string name) =>
-        ReadGolden("relocation-control-v1.json", name);
+        ReadGolden("relocation-control-v1.json", "canonical", name);
 
-    private static byte[] ReadGolden(string file, string name)
+    private static byte[] ReadRelocationControlMalformed(string name) =>
+        ReadGolden("relocation-control-v1.json", "malformed", name);
+
+    private static byte[] ReadGolden(string file, string name) =>
+        ReadGolden(file, "canonical", name);
+
+    private static byte[] ReadGolden(string file, string section, string name)
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         var fixturePath = Path.GetFullPath(
             $"../../runtime/protocol/golden/{file}", frameworkRoot);
         using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
-        var fixture = document.RootElement.GetProperty("canonical")
+        var fixture = document.RootElement.GetProperty(section)
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == name);
         return Convert.FromHexString(fixture.GetProperty("hex").GetString()!);

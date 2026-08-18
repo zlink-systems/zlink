@@ -60,6 +60,18 @@ inline void validate_location_options (const location_options_t &options)
           framework_error_kind_t::protocol_error,
           "Message Follow duration must be at least five seconds longer than route cache max age");
     }
+    if (options.relocation_cutover_wait_timeout <= 0ms) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "relocation cutover wait timeout must be a positive whole-millisecond duration");
+    }
+    if (options.relocation_payload_chunk_limit_bytes == 0
+        || options.relocation_payload_chunk_limit_bytes
+             > relocation_chunk_wire_limit_bytes) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "relocation payload chunk limit must be greater than zero and within the transport frame limit");
+    }
     if (options.max_active_outbound_relocations == 0
         || options.max_active_inbound_relocations == 0
         || options.max_concurrent_relocation_captures == 0

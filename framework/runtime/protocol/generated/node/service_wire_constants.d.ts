@@ -1,6 +1,6 @@
 export declare const SERVICE_WIRE_MAGIC: readonly [90, 77];
 export declare const SERVICE_WIRE_MAJOR: 1;
-export declare const SERVICE_WIRE_REQUIRED_CAPABILITY: "framework-service-v12";
+export declare const SERVICE_WIRE_REQUIRED_CAPABILITY: "framework-service-v13";
 export declare const SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME: "ZLinkFrameworkMultipart";
 export declare const SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE: "application/x-zlink-multipart";
 export declare const ServiceWireCommand: {
@@ -42,6 +42,7 @@ export declare const ServiceWireCommand: {
     readonly actorCreate: 49;
     readonly messageFollow: 50;
     readonly boundSessionReplaced: 51;
+    readonly relocationState: 52;
 };
 export declare const ServiceWireFlag: {
     readonly metadata: 1;

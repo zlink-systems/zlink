@@ -769,7 +769,6 @@ final class ZLinkInMemoryAuthorityStore {
                 1);
             state.state = State.COMMITTED;
             state.storeVersion = nextVersion();
-            state.progress = tryInitialProgress(state.request);
             return completed(ZLinkAggregateCommitResult.COMMITTED);
         }
     }
@@ -805,8 +804,7 @@ final class ZLinkInMemoryAuthorityStore {
         synchronized (gate) {
             AggregateState state = aggregates.get(fence.aggregateId());
             if (!sameAggregate(state, fence)
-                || state.state != State.COMMITTED
-                || state.progress == null) {
+                || state.state != State.COMMITTED) {
                 return completed(Optional.empty());
             }
             return completed(Optional.of(progressSnapshot(state, fence)));
@@ -837,31 +835,7 @@ final class ZLinkInMemoryAuthorityStore {
         return new ZLinkAggregateProgressSnapshot(
             fence,
             state.storeVersion,
-            state.request,
-            state.progress);
-    }
-
-    private static ZLinkAggregateProgress initialProgress(
-        ZLinkAggregatePrepareRequest request) {
-        for (ZLinkAggregateParticipant participant : request.participants()) {
-            try {
-                return ZLinkCanonicalRelocationAuthorityStateCodec.progress(
-                    participant.authorityPayload());
-            } catch (RuntimeException ignored) {
-                // The next participant may contain the canonical publication.
-            }
-        }
-        throw new IllegalStateException(
-            "committed aggregate has no canonical relocation root");
-    }
-
-    private static ZLinkAggregateProgress tryInitialProgress(
-        ZLinkAggregatePrepareRequest request) {
-        try {
-            return initialProgress(request);
-        } catch (RuntimeException ignored) {
-            return null;
-        }
+            state.request);
     }
 
     private boolean matches(
@@ -1602,7 +1576,6 @@ final class ZLinkInMemoryAuthorityStore {
         private final ZLinkAggregatePrepareRequest request;
         private State state;
         private String storeVersion;
-        private ZLinkAggregateProgress progress;
 
         private AggregateState(
             ZLinkAggregatePrepareRequest request,

@@ -706,7 +706,6 @@ export class ZLinkFrameworkRuntimeHost implements
       registration: options.registration,
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
-      relocationStore: () => options.registration.locations.relocationStoreInstance,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       liveDescriptors: (meshName, signal) =>
         this.locationOwner.currentRuntime?.listLiveMeshNodes(meshName, signal)
@@ -803,6 +802,7 @@ export class ZLinkFrameworkRuntimeHost implements
         this.admission.acceptsNewWork
       ),
       capacity: this.capacityStatus.snapshot(this.context?.getCoreHwmBudgetSnapshot()),
+      safeToShutdown: this.serviceRelocation.isSafeToShutdown(),
       deadline: this.runtimeDeadline,
       relocationResult: this.runtimeRelocationResult,
       terminationResult: this.runtimeTerminationResult,

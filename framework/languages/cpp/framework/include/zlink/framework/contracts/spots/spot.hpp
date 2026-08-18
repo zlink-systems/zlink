@@ -671,7 +671,64 @@ struct factory_relocation_configuration_t
       void *, std::stop_token)> capture;
     std::function<task_t<void> (
       void *, std::vector<std::byte>, std::stop_token)> restore;
+    /* Delta capture capability. All four members are set together when the
+     * registered adapter inherits the delta adapter; otherwise all empty. */
+    std::function<task_t<std::vector<std::byte>> (
+      void *, std::stop_token)> capture_base;
+    std::function<task_t<std::vector<std::byte>> (
+      void *, std::stop_token)> capture_delta;
+    std::function<task_t<void> (
+      void *, std::vector<std::byte>, std::stop_token)> restore_base;
+    std::function<task_t<void> (
+      void *, std::vector<std::byte>, std::stop_token)> apply_delta;
+
+    bool delta_capable () const noexcept
+    {
+        return static_cast<bool> (capture_base);
+    }
 };
+
+/* Populates the four delta capability members with adapter-forwarding
+ * lambdas. TObject is the concrete Spot or Actor type of TAdapter. */
+template <typename TObject, typename TAdapter>
+void register_delta_capability (
+  factory_relocation_configuration_t &configuration)
+{
+    configuration.capture_base = [] (
+      void *object,
+      std::stop_token operation_cancellation)
+      -> task_t<std::vector<std::byte>> {
+        auto adapter = std::make_shared<TAdapter> ();
+        co_return co_await adapter->capture_base (
+          *static_cast<TObject *> (object), operation_cancellation);
+    };
+    configuration.capture_delta = [] (
+      void *object,
+      std::stop_token operation_cancellation)
+      -> task_t<std::vector<std::byte>> {
+        auto adapter = std::make_shared<TAdapter> ();
+        co_return co_await adapter->capture_delta (
+          *static_cast<TObject *> (object), operation_cancellation);
+    };
+    configuration.restore_base = [] (
+      void *object,
+      std::vector<std::byte> payload,
+      std::stop_token operation_cancellation) -> task_t<void> {
+        auto adapter = std::make_shared<TAdapter> ();
+        co_await adapter->restore_base (
+          *static_cast<TObject *> (object), std::move (payload),
+          operation_cancellation);
+    };
+    configuration.apply_delta = [] (
+      void *object,
+      std::vector<std::byte> payload,
+      std::stop_token operation_cancellation) -> task_t<void> {
+        auto adapter = std::make_shared<TAdapter> ();
+        co_await adapter->apply_delta (
+          *static_cast<TObject *> (object), std::move (payload),
+          operation_cancellation);
+    };
+}
 } // namespace detail
 
 template <typename TSpot>
@@ -685,6 +742,29 @@ class spot_relocation_adapter_t
     restore (TSpot &spot,
              std::vector<std::byte> payload,
              std::stop_token operation_cancellation) = 0;
+};
+
+/* Registers the delta capture capability in addition to whole-state
+ * capture/restore. The base snapshot travels ahead of the seal; after the
+ * seal only the capture_delta(...) result is transferred. A failed
+ * apply_delta(...) discards the instance and repeats from restore_base(...)
+ * on a fresh instance. */
+template <typename TSpot>
+class spot_relocation_delta_adapter_t : public spot_relocation_adapter_t<TSpot>
+{
+  public:
+    virtual task_t<std::vector<std::byte>>
+    capture_base (TSpot &spot, std::stop_token operation_cancellation) = 0;
+    virtual task_t<std::vector<std::byte>>
+    capture_delta (TSpot &spot, std::stop_token operation_cancellation) = 0;
+    virtual task_t<void>
+    restore_base (TSpot &spot,
+                  std::vector<std::byte> payload,
+                  std::stop_token operation_cancellation) = 0;
+    virtual task_t<void>
+    apply_delta (TSpot &spot,
+                 std::vector<std::byte> payload,
+                 std::stop_token operation_cancellation) = 0;
 };
 
 template <typename TSpot>
@@ -761,6 +841,10 @@ class user_spot_factory_builder_t
               std::move (payload),
               operation_cancellation);
         };
+        if constexpr (std::derived_from<
+                        TAdapter, spot_relocation_delta_adapter_t<TSpot>>) {
+            detail::register_delta_capability<TSpot, TAdapter> (_relocation);
+        }
     }
 
   private:
@@ -880,6 +964,10 @@ class instance_spot_factory_builder_t
               std::move (payload),
               operation_cancellation);
         };
+        if constexpr (std::derived_from<
+                        TAdapter, spot_relocation_delta_adapter_t<TSpot>>) {
+            detail::register_delta_capability<TSpot, TAdapter> (_relocation);
+        }
     }
 
   private:

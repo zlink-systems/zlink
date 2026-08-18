@@ -43,10 +43,6 @@
     "canonicalParticipantOrder": ["spot:room-1", "actor:actor-1"],
     "participantMutations": ["spot-owner-and-membership", "actor-owner-and-membership"],
     "inventoryDigestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    "relocationManifestDigestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    "relocationReferenceUtf8Fixture": "relocation/aggregate-1",
-    "relocationChecksumCrc32c": 305419896,
-    "relocationManifestAuthority": false,
     "participantMaximum": 1024,
     "encodedMaximum": 1048576
   },
@@ -70,7 +66,7 @@
       "terminalReply": 20,
       "messageFollow": 50,
       "boundSessionReplaced": 51,
-      "reservedFirst": 52
+      "reservedFirst": 53
     },
     "replyEnvelopeFields": ["correlation", "terminalResult", "failureCode", "tail"],
     "createRequestFields": [

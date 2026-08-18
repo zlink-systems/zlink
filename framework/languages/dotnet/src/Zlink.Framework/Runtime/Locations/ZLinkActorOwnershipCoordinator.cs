@@ -621,12 +621,13 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     authority.NodeRid.ToHex(),
                     authority.NodeGeneration,
                     (byte)ZLinkStandaloneActorCanonicalPhase.Activated,
-                    relocationReference.Reference,
-                    relocationReference.ChecksumCrc32c,
                     0)
                 {
                     CoordinatorExpectedAuthorityStoreVersion =
-                        snapshot.StoreVersion
+                        snapshot.StoreVersion,
+                    RelocationReference = relocationReference.Reference,
+                    RelocationChecksumCrc32c =
+                        relocationReference.ChecksumCrc32c
                 },
                 relocationRoot);
 

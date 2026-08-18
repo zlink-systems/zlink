@@ -1,26 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ZLinkPlacementObjectKind } from '../../contracts/Locations';
 
-export interface ServiceRelocationStored {
-  readonly reference: string;
-  readonly checksumCrc32c: number;
-  readonly expiresAtMs: number;
-  readonly storeNowMs: number;
-}
-
-export interface ServiceRelocationStorePort {
-  put(
-    payload: Uint8Array,
-    retentionMs: number,
-    signal?: AbortSignal
-  ): Promise<ServiceRelocationStored>;
-  get(
-    reference: string,
-    signal?: AbortSignal
-  ): Promise<{ readonly kind: 'found'; readonly payload: Uint8Array } | { readonly kind: 'missing' }>;
-  delete(reference: string, signal?: AbortSignal): Promise<'deleted' | 'missing'>;
-}
-
 export interface ServiceRelocationParticipant {
   readonly key: string;
   readonly objectKind: ZLinkPlacementObjectKind;

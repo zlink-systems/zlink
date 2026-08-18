@@ -267,14 +267,6 @@ struct relocation_object_t
     }
 };
 
-struct relocation_root_t
-{
-    std::string reference;
-    std::uint32_t checksum_crc32c = 0;
-    friend bool operator== (const relocation_root_t &,
-                            const relocation_root_t &) = default;
-};
-
 struct relocation_prepare_t
 {
     relocation_id_t relocation;
@@ -285,7 +277,9 @@ struct relocation_prepare_t
     relocation_object_t object;
     std::vector<std::uint8_t> source_node_routing_id;
     std::uint64_t source_node_generation = 0;
-    std::optional<relocation_root_t> root;
+    std::uint64_t payload_total_length = 0;
+    std::uint32_t payload_chunk_count = 0;
+    std::uint32_t payload_checksum_crc32c = 0;
     std::uint64_t application_version = 0;
     friend bool operator== (const relocation_prepare_t &,
                             const relocation_prepare_t &) = default;
@@ -310,6 +304,8 @@ struct relocation_cutover_t
     relocation_coordinator_fence_t coordinator;
     relocation_role_t sender_role = relocation_role_t::source;
     relocation_object_t object;
+    std::uint64_t boundary_record_count = 0;
+    std::uint32_t boundary_checksum_crc32c = 0;
     friend bool operator== (const relocation_cutover_t &,
                             const relocation_cutover_t &) = default;
 };
@@ -436,9 +432,22 @@ struct relocation_data_t
                             const relocation_data_t &) = default;
 };
 
+struct relocation_state_t
+{
+    relocation_id_t relocation;
+    std::uint64_t target_attempt_generation = 0;
+    relocation_coordinator_fence_t coordinator;
+    relocation_role_t sender_role = relocation_role_t::source;
+    relocation_object_t object;
+    std::uint32_t chunk_ordinal = 0;
+    std::vector<std::uint8_t> chunk_data;
+    friend bool operator== (const relocation_state_t &,
+                            const relocation_state_t &) = default;
+};
+
 using relocation_control_t = std::variant<
   relocation_prepare_t, relocation_ready_t, relocation_data_t,
-  relocation_cutover_t>;
+  relocation_cutover_t, relocation_state_t>;
 
 struct reply_relay_t
 {
@@ -818,6 +827,11 @@ std::vector<std::uint8_t> encode_relocation_control (
   const relocation_control_t &record);
 relocation_control_t decode_relocation_control (
   std::span<const std::uint8_t> bytes);
+/* CRC-32C (Castagnoli): poly 0x1EDC6F41, init 0xFFFFFFFF, reflected
+ * input/output, xorout 0xFFFFFFFF, check("123456789") = 0xE3069283.
+ * Shared checksum for relocation payload manifests and cutover boundaries. */
+std::uint32_t relocation_checksum_crc32c (
+  std::span<const std::uint8_t> payload) noexcept;
 std::vector<std::uint8_t> encode_frozen_record (
   const frozen_record_t &record);
 frozen_record_t encode_frozen_application_record (

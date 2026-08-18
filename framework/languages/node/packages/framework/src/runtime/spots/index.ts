@@ -2036,16 +2036,16 @@ export class DefaultZLinkSpotManager {
         && admissionRecord?.state !== 'committed'
         && (targetsEntrySpot || activation !== undefined)
       ) {
-        // The admission phase has already completed before this point. The
-        // source may roll back and delete the reference after its Core request
-        // becomes disconnected, so the commit phase owns this read.
+        // Relocation state travels inline with the join request. The store
+        // reference handoff was removed with the direct-transfer contract
+        // (spec 28 §2 — Relocation Store keeps no relocation state payloads).
+        if (transferRequest.transferState === undefined) {
+          throw new ZLinkConfigurationException(
+            `Actor '${actorId}' transfer commit carries no inline relocation state.`
+          );
+        }
         preparedTransferState = RuntimeMessage.from(
-          transferRequest.transferStateReference === undefined
-            ? Buffer.from(transferRequest.transferState!, 'base64')
-            : await this.options.actorTransferRuntime.readPreparedTransferState(
-                transferRequest.transferStateReference,
-                transferRequest.transferStateChecksumCrc32c!
-              )
+          Buffer.from(transferRequest.transferState, 'base64')
         );
       }
       if (isRemoteAdmission && targetsEntrySpot) {
@@ -2724,8 +2724,6 @@ interface ZLinkFormalRemoteTransferRequest {
   readonly transferId: string;
   readonly transferAdapterKey?: string;
   readonly transferState?: string;
-  readonly transferStateReference?: string;
-  readonly transferStateChecksumCrc32c?: number;
   readonly request: string;
   readonly requestContentType: string;
   readonly actorEntryNodeRid?: RoutingId;

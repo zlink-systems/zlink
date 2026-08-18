@@ -102,10 +102,10 @@ export type ServiceWireRelocationObject =
       readonly objectGeneration: bigint;
     };
 
-export interface ServiceWireRelocationRoot {
-  readonly reference: string;
-  readonly checksumCrc32c: number;
-}
+/** Shared CRC-32C wire bounds for the direct relocation payload transfer. */
+export const RELOCATION_PAYLOAD_TOTAL_LENGTH_MAX = 274_877_906_944n;
+export const RELOCATION_PAYLOAD_CHUNK_COUNT_MAX = 4096;
+export const RELOCATION_STATE_CHUNK_DATA_MAX_BYTES = 67_108_864;
 
 interface ServiceWireRelocationBase {
   readonly relocation: ServiceWireOperationId;
@@ -120,7 +120,12 @@ export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocati
   readonly object: ServiceWireRelocationObject;
   readonly sourceNodeRid: string;
   readonly sourceNodeGeneration: bigint;
-  readonly root?: ServiceWireRelocationRoot;
+  /** Total encoded byte length of the directly transferred relocation payload. */
+  readonly payloadTotalLength: bigint;
+  /** Number of relocationState chunks that carry the payload. */
+  readonly payloadChunkCount: number;
+  /** CRC-32C (Castagnoli) over the fully assembled payload bytes. */
+  readonly payloadChecksumCrc32c: number;
   readonly applicationVersion: bigint;
 }
 
@@ -179,13 +184,27 @@ export interface ServiceMaintenanceRelocationCutover extends ServiceWireRelocati
   readonly kind: 'cutover';
   readonly senderRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
+  /** Number of boundary relay records sent before this cutover. */
+  readonly boundaryRecordCount: bigint;
+  /** CRC-32C over the concatenated canonical bytes of those relay records. */
+  readonly boundaryChecksumCrc32c: number;
+}
+
+/** One relocation payload chunk (command 52), sent one-way on the ordered connection. */
+export interface ServiceMaintenanceRelocationState extends ServiceWireRelocationBase {
+  readonly kind: 'state';
+  readonly senderRole: ServiceWireRelocationRole;
+  readonly object: ServiceWireRelocationObject;
+  readonly chunkOrdinal: number;
+  readonly chunkData: Uint8Array;
 }
 
 export type ServiceMaintenanceRelocationControl =
   | ServiceMaintenanceRelocationPrepare
   | ServiceMaintenanceRelocationReady
   | ServiceMaintenanceRelocationData
-  | ServiceMaintenanceRelocationCutover;
+  | ServiceMaintenanceRelocationCutover
+  | ServiceMaintenanceRelocationState;
 
 export const M6bServiceWireFlag = ServiceWireFlag;
 
@@ -1422,7 +1441,9 @@ export function encodeMaintenanceRelocationControl(
         relocationObject(value.object),
         rid(value.sourceNodeRid, 'sourceNodeRid'),
         u64(value.sourceNodeGeneration),
-        relocationRoot(value.root),
+        payloadTotalLength(value.payloadTotalLength),
+        payloadChunkCount(value.payloadChunkCount),
+        u32(value.payloadChecksumCrc32c, 'payloadChecksumCrc32c'),
         applicationVersion(value.applicationVersion)
       );
     case 'ready':
@@ -1448,7 +1469,18 @@ export function encodeMaintenanceRelocationControl(
         prefix(M6bServiceWireCommand.relocationCutover),
         base,
         Buffer.of(relocationRole(value.senderRole)),
-        relocationObject(value.object)
+        relocationObject(value.object),
+        ordinalOrZero(value.boundaryRecordCount, 'boundaryRecordCount'),
+        u32(value.boundaryChecksumCrc32c, 'boundaryChecksumCrc32c')
+      );
+    case 'state':
+      return concat(
+        prefix(M6bServiceWireCommand.relocationState),
+        base,
+        Buffer.of(relocationRole(value.senderRole)),
+        relocationObject(value.object),
+        u32(value.chunkOrdinal, 'chunkOrdinal'),
+        relocationChunkData(value.chunkData)
       );
   }
 }
@@ -1470,12 +1502,15 @@ export function decodeMaintenanceRelocationControl(
       const object = reader.relocationObject();
       const sourceNodeRid = reader.rid('sourceNodeRid');
       const sourceNodeGeneration = reader.nonZeroU64('sourceNodeGeneration');
-      const root = reader.relocationRoot();
+      const payloadTotalLength = reader.payloadTotalLength();
+      const payloadChunkCount = reader.payloadChunkCount();
+      const payloadChecksumCrc32c = reader.u32('payloadChecksumCrc32c');
       const applicationVersion = reader.applicationVersion();
       reader.end();
       return { kind: 'prepare', relocation, targetAttemptGeneration, coordinator,
         target, initiatorRole, object, sourceNodeRid, sourceNodeGeneration,
-        ...(root === undefined ? {} : { root }), applicationVersion };
+        payloadTotalLength, payloadChunkCount, payloadChecksumCrc32c,
+        applicationVersion };
     }
     case M6bServiceWireCommand.relocationReady: {
       requireFlags(prefixValue.flags, 0);
@@ -1504,8 +1539,21 @@ export function decodeMaintenanceRelocationControl(
       const base = reader.relocationBase();
       const senderRole = reader.relocationRole();
       const object = reader.relocationObject();
+      const boundaryRecordCount = reader.ordinal('boundaryRecordCount');
+      const boundaryChecksumCrc32c = reader.u32('boundaryChecksumCrc32c');
       reader.end();
-      return { kind: 'cutover', ...base, senderRole, object };
+      return { kind: 'cutover', ...base, senderRole, object,
+        boundaryRecordCount, boundaryChecksumCrc32c };
+    }
+    case M6bServiceWireCommand.relocationState: {
+      requireFlags(prefixValue.flags, 0);
+      const base = reader.relocationBase();
+      const senderRole = reader.relocationRole();
+      const object = reader.relocationObject();
+      const chunkOrdinal = reader.u32('chunkOrdinal');
+      const chunkData = reader.relocationChunkData();
+      reader.end();
+      return { kind: 'state', ...base, senderRole, object, chunkOrdinal, chunkData };
     }
     default:
       fail(`Unsupported maintenance relocation command '${prefixValue.command}'.`);
@@ -1861,19 +1909,33 @@ function relocationObject(value: ServiceWireRelocationObject): Buffer {
     u16(body.byteLength), body);
 }
 
-function relocationRoot(value: ServiceWireRelocationRoot | undefined): Buffer {
-  if (value === undefined) return concat(Buffer.of(0), u16(0));
-  const body = concat(relocationReference(value.reference),
-    u32(value.checksumCrc32c, 'relocationChecksumCrc32c'));
-  return concat(Buffer.of(1), u16(body.byteLength), body);
+function payloadTotalLength(value: bigint): Buffer {
+  if (value < 0n || value > RELOCATION_PAYLOAD_TOTAL_LENGTH_MAX) {
+    throw new RangeError('payloadTotalLength exceeds the relocation logical byte bound.');
+  }
+  return u64Any(value);
 }
 
-function relocationReference(value: string): Buffer {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 4096 || bytes.includes(0)) {
-    throw new RangeError('relocationReference must be 1..4096 UTF-8 bytes without NUL.');
+function payloadChunkCount(value: number): Buffer {
+  if (!Number.isInteger(value) || value < 0
+    || value > RELOCATION_PAYLOAD_CHUNK_COUNT_MAX) {
+    throw new RangeError('payloadChunkCount exceeds the relocation chunk count bound.');
   }
-  return concat(u16(bytes.byteLength), bytes);
+  return u32(value, 'payloadChunkCount');
+}
+
+function ordinalOrZero(value: bigint, name: string): Buffer {
+  if (value < 0n || value > 0x7fff_ffff_ffff_ffffn) {
+    throw new RangeError(`${name} must be a non-negative ordinal.`);
+  }
+  return u64Any(value);
+}
+
+function relocationChunkData(value: Uint8Array): Buffer {
+  if (value.byteLength > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
+    throw new RangeError('relocationState chunkData exceeds the chunk byte bound.');
+  }
+  return concat(u32(value.byteLength, 'chunkData.length'), value);
 }
 
 
@@ -2262,30 +2324,31 @@ class Reader {
     return value;
   }
 
-  relocationRoot(): ServiceWireRelocationRoot | undefined {
-    const present = this.bool8('hasRelocation');
-    const length = this.u16('relocationRootLength');
-    const end = this.offset + length;
-    if (end > this.bytes.byteLength) fail('Truncated relocation root.');
-    if (!present) {
-      if (length !== 0) fail('Absent relocation root has a body.');
-      return undefined;
+  payloadTotalLength(): bigint {
+    const value = this.u64('payloadTotalLength');
+    if (value > RELOCATION_PAYLOAD_TOTAL_LENGTH_MAX) {
+      fail('payloadTotalLength exceeds the relocation logical byte bound.');
     }
-    const value = {
-      reference: this.relocationReference(),
-      checksumCrc32c: this.u32('relocationChecksumCrc32c')
-    };
-    if (this.offset !== end) fail('Invalid relocation root length.');
     return value;
   }
 
-  relocationReference(): string {
-    const length = this.u16('relocationReference.length');
-    if (length < 1 || length > 4096) fail('relocationReference length is invalid.');
-    this.need(length, 'relocationReference');
-    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+  payloadChunkCount(): number {
+    const value = this.u32('payloadChunkCount');
+    if (value > RELOCATION_PAYLOAD_CHUNK_COUNT_MAX) {
+      fail('payloadChunkCount exceeds the relocation chunk count bound.');
+    }
+    return value;
+  }
+
+  relocationChunkData(): Buffer {
+    const length = this.u32('chunkData.length');
+    if (length > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
+      fail('relocationState chunkData exceeds the chunk byte bound.');
+    }
+    this.need(length, 'chunkData');
+    const value = Buffer.from(this.bytes.subarray(this.offset, this.offset + length));
     this.offset += length;
-    return decodeCanonicalServiceWireText(bytes, 'relocationReference', fail);
+    return value;
   }
 
   applicationPayload(): NonNullable<ServiceMaintenanceReplyRelay['payload']> {

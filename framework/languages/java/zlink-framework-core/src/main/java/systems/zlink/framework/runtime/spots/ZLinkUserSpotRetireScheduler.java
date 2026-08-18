@@ -38,7 +38,9 @@ final class ZLinkUserSpotRetireScheduler {
                 .thenCompose(cleaned -> request.source()
                     .discardInitialAfterCommit())
                 .thenRun(() -> recordActorHandoffs(
-                    request.source().stagedRoot().request().participants())));
+                    (int) stage.participants().stream()
+                        .filter(participant -> participant.objectKind() == 1)
+                        .count())));
         return operation.exceptionallyCompose(failure -> {
             Throwable original = unwrap(failure);
             if (request.source().relayBoundaryCommitted()) {
@@ -76,14 +78,6 @@ final class ZLinkUserSpotRetireScheduler {
         Throwable suppressed) {
         original.addSuppressed(suppressed);
         return new CompletionException(original);
-    }
-
-    private static void recordActorHandoffs(
-        List<ZLinkAggregateRelocationCoordinator.Participant> participants) {
-        recordActorHandoffs((int) participants.stream()
-            .filter(participant -> participant.objectKind()
-                == ZLinkPlacementObjectKind.ACTOR)
-            .count());
     }
 
     private static void recordActorHandoffs(int count) {

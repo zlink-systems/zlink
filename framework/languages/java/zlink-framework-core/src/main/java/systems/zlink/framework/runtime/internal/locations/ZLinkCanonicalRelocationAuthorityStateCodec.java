@@ -31,11 +31,9 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     static byte[] publish(
         byte[] authorityPayload,
         ZLinkAggregateRelocationCoordinator.Request request,
-        ZLinkAuthorityGenerationTransition ownerTransition,
-        ZLinkRelocationStored stored) {
+        ZLinkAuthorityGenerationTransition ownerTransition) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ownerTransition, "ownerTransition");
-        Objects.requireNonNull(stored, "stored");
         Published previous = decodeStrict(authorityPayload);
         byte[] applicationPayload = previous == null
             ? Objects.requireNonNull(authorityPayload, "authorityPayload").clone()
@@ -76,12 +74,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         body.u64(request.targetOwner().leaseGeneration());
         body.sized8(request.targetDescriptor().rid().toBytes());
         body.u64(request.targetDescriptorLifecycleGeneration());
-        Writer pointer = new Writer();
-        pointer.text16(stored.reference());
-        pointer.u32(stored.checksumCrc32c());
-        body.u8(1);
-        body.u16(pointer.size());
-        body.raw(pointer.bytes());
         body.u64(root.applicationVersion());
         Writer state = new Writer();
         state.u8(1);
@@ -100,13 +92,8 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         }
     }
 
-    /** Projects the immutable committed-root pointer. */
-    public static ZLinkAggregateProgress progress(byte[] authorityPayload) {
-        Published publication = decodeStrict(authorityPayload);
-        return new ZLinkAggregateProgress(
-            publication.reference(), publication.checksumCrc32c());
-    }
-
+    // The direct-transfer contract removed the relocation-root pointer from
+    // the authority slot (spec 28 §4.2) — the slot carries only fences.
     private static Published decodeStrict(byte[] authorityPayload) {
         Slot slot = slot(authorityPayload);
         if (!slot.present()) {
@@ -114,7 +101,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         }
         Current current = current(slot);
         return new Published(
-            current.reference(), current.checksumCrc32c(),
             new UUID(current.relocationHigh(), current.relocationLow()),
             current.aggregateGeneration(),
             current.sourceOwnerId(),
@@ -157,11 +143,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long capacityOwnerLeaseGeneration = body.nonzeroU64();
         RoutingId capacityDescriptorRid = RoutingId.from(body.sized8());
         long capacityDescriptorGeneration = body.nonzeroU64();
-        if (body.u8() != 1) throw invalid();
-        Reader pointer = body.reader(body.u16());
-        String reference = pointer.text16();
-        long checksumCrc32c = pointer.u32Unsigned();
-        if (!pointer.end()) throw invalid();
         long applicationVersion = body.u64();
         if (applicationVersion < 0) throw invalid();
         if (!body.end()) throw invalid();
@@ -173,8 +154,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             targetOwnerId, targetOwnerLeaseGeneration,
             placementReservationToken,
             capacityOwnerId, capacityOwnerLeaseGeneration,
-            capacityDescriptorRid, capacityDescriptorGeneration,
-            reference, checksumCrc32c);
+            capacityDescriptorRid, capacityDescriptorGeneration);
     }
 
     private static void validateSuccessor(
@@ -425,8 +405,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     }
 
     record Published(
-        String reference,
-        long checksumCrc32c,
         UUID aggregateId,
         long aggregateGeneration,
         String sourceOwnerId,
@@ -459,9 +437,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         String capacityOwnerId,
         long capacityOwnerLeaseGeneration,
         RoutingId capacityDescriptorRid,
-        long capacityDescriptorGeneration,
-        String reference,
-        long checksumCrc32c) {}
+        long capacityDescriptorGeneration) {}
     private record Owner(String ownerId, long ownerLeaseGeneration,
                          String meshName, RoutingId nodeRid,
                          long nodeGeneration) {}

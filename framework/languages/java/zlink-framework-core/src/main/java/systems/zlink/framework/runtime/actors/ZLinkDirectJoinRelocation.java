@@ -15,7 +15,6 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
@@ -30,12 +29,10 @@ final class ZLinkDirectJoinRelocation {
 
     ZLinkDirectJoinRelocation(
         ZLinkLocationRepository authority,
-        ZLinkRelocationStore store,
         ZLinkMessageSerializer serializer) {
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.relocationAuthority = new ZLinkDirectJoinRelocationAuthority(
-            Objects.requireNonNull(authority, "authority"),
-            Objects.requireNonNull(store, "store"));
+            Objects.requireNonNull(authority, "authority"));
     }
 
     CompletionStage<Manifest> prepareRelocation(
@@ -59,8 +56,8 @@ final class ZLinkDirectJoinRelocation {
                 applicationState,
                 acceptedJournal)
             .thenApply(value -> new Manifest(
-                value.stored().reference(),
-                value.stored().checksumCrc32c(),
+                value.root(),
+                value.checksumCrc32c(),
                 operationId.high(),
                 operationId.low(),
                 value.fence().aggregateId().getMostSignificantBits(),
@@ -107,7 +104,7 @@ final class ZLinkDirectJoinRelocation {
                     "direct Actor Join relocation fence is missing"));
         }
         return relocationAuthority.loadPrepared(
-                manifest.reference(),
+                manifest.root(),
                 manifest.checksumCrc32c(),
                 actor,
                 new UUID(
@@ -127,8 +124,7 @@ final class ZLinkDirectJoinRelocation {
             new UUID(
                 manifest.aggregateIdHigh(),
                 manifest.aggregateIdLow()),
-            manifest.aggregateGeneration(),
-            manifest.reference());
+            manifest.aggregateGeneration());
     }
 
     CompletionStage<Void> deliver(
@@ -178,7 +174,7 @@ final class ZLinkDirectJoinRelocation {
     }
 
     record Manifest(
-        String reference,
+        byte[] root,
         long checksumCrc32c,
         long operationIdHigh,
         long operationIdLow,
@@ -187,8 +183,8 @@ final class ZLinkDirectJoinRelocation {
         long aggregateGeneration,
         byte[] rawReply) {
         Manifest {
-            Objects.requireNonNull(reference, "reference");
-            if (reference.isBlank()) {
+            root = Objects.requireNonNull(root, "root").clone();
+            if (root.length == 0) {
                 throw new IllegalArgumentException(
                     "invalid direct Actor Join relocation manifest");
             }
@@ -206,6 +202,10 @@ final class ZLinkDirectJoinRelocation {
 
         boolean hasAggregateFence() {
             return aggregateGeneration > 0;
+        }
+
+        @Override public byte[] root() {
+            return root.clone();
         }
 
         @Override public byte[] rawReply() {

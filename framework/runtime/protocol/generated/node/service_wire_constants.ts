@@ -1,7 +1,7 @@
 // Generated from service-wire-v1.schema.json. Do not edit.
 export const SERVICE_WIRE_MAGIC = [90, 77] as const;
 export const SERVICE_WIRE_MAJOR = 1 as const;
-export const SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v12" as const;
+export const SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v13" as const;
 export const SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart" as const;
 export const SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart" as const;
 export const ServiceWireCommand = {
@@ -43,6 +43,7 @@ export const ServiceWireCommand = {
   actorCreate: 49,
   messageFollow: 50,
   boundSessionReplaced: 51,
+  relocationState: 52,
 } as const;
 export const ServiceWireFlag = {
   metadata: 1,

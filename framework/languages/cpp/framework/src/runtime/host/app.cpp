@@ -1479,9 +1479,27 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                   return std::nullopt;
               });
             if (relocation_authority && relocation_store) {
+                const auto location_options = options.location_options ();
+                runtime::stateful::relocation_limits_t relocation_limits;
+                relocation_limits.outbound_units =
+                  location_options.max_active_outbound_relocations;
+                relocation_limits.inbound_units =
+                  location_options.max_active_inbound_relocations;
+                relocation_limits.capture_callbacks =
+                  location_options.max_concurrent_relocation_captures;
+                relocation_limits.restore_callbacks =
+                  location_options.max_concurrent_relocation_restores;
+                relocation_limits.payload_chunk_limit_bytes =
+                  location_options.relocation_payload_chunk_limit_bytes;
+                relocation_limits.in_flight_payload_budget_bytes =
+                  location_options.relocation_in_flight_payload_budget_bytes;
+                relocation_limits.node_in_flight_payload_budget_bytes =
+                  location_options.relocation_node_in_flight_payload_budget_bytes;
+                relocation_limits.cutover_wait_timeout =
+                  location_options.relocation_cutover_wait_timeout;
                 mesh_node->configure_relocation_runtime (
                   relocation_authority, relocation_store,
-                  aggregate_relocation_authority);
+                  aggregate_relocation_authority, relocation_limits);
             }
             mesh_node->configure_bound_session_relocation_resolver (
               [actor_gateway_runtime, &location_store,

@@ -547,7 +547,8 @@ void mesh_node_runtime_t::start ()
       [this] (const auto &notice) { dispatch_message_follow (notice); });
     if (_relocation_authority && _relocation_store)
         node->configure_relocation (_relocation_authority, _relocation_store,
-                                    _aggregate_relocation_authority);
+                                    _aggregate_relocation_authority,
+                                    _relocation_limits);
     node->start ();
     if (_instance_spot_materializer)
         (void) node->recover_instance_spot_activations ();
@@ -697,15 +698,24 @@ void mesh_node_runtime_t::configure_instance_spot_operations (
 void mesh_node_runtime_t::configure_relocation_runtime (
   std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority,
   std::shared_ptr<runtime::stateful::relocation_store_port_t> relocations,
-  std::shared_ptr<runtime::stateful::aggregate_authority_port_t> aggregate_authority)
+  std::shared_ptr<runtime::stateful::aggregate_authority_port_t> aggregate_authority,
+  runtime::stateful::relocation_limits_t relocation_limits)
 {
     if (_node)
         throw configuration_error ("Relocation runtime must be configured before MeshNode start");
     if (!authority || !relocations)
         throw configuration_error ("Relocation runtime requires Location and Relocation Stores");
+    if (relocation_limits.payload_chunk_limit_bytes == 0
+        || relocation_limits.payload_chunk_limit_bytes
+             > runtime::protocol::relocationChunkBytes
+        || relocation_limits.cutover_wait_timeout
+             <= std::chrono::milliseconds::zero ())
+        throw configuration_error (
+          "Relocation transfer options are out of range");
     _relocation_authority = std::move (authority);
     _relocation_store = std::move (relocations);
     _aggregate_relocation_authority = std::move (aggregate_authority);
+    _relocation_limits = relocation_limits;
 }
 
 void mesh_node_runtime_t::configure_bound_session_relocation_resolver (
@@ -1001,7 +1011,7 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)),
          relocation, coordinator] (
           const std::vector<runtime::stateful::frozen_object_state_t> &,
-                                   const runtime::stateful::relocation_stored_t &stored)
+          const runtime::stateful::relocation_payload_manifest_t &manifest)
           -> task_t<bool> {
             runtime::protocol::relocation_object_kind_t kind;
             switch (source.kind) {
@@ -1030,10 +1040,18 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
                  source.authority_owner_generation},
                 source_status.routing_id ().to_bytes (),
                 source_status.lifecycle_generation (),
-                runtime::protocol::relocation_root_t{stored.reference, stored.checksum_crc32c},
+                manifest.total_length,
+                manifest.chunk_count,
+                manifest.checksum_crc32c,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
               std::chrono::seconds (5));
+        },
+      .send_state_chunk =
+        [this, target] (const runtime::protocol::relocation_state_t &chunk)
+          -> task_t<bool> {
+            co_return co_await _node->transport ().send_relocation_control (
+              target.rid.to_bytes (), chunk);
         },
       .send_relocation_data =
         [this, target] (
@@ -1238,7 +1256,7 @@ mesh_node_runtime_t::relocate_application_unit (
         [this, target, status, sources, stable_types, principal_index,
          relocation, coordinator] (
           const std::vector<frozen_object_state_t> &,
-                       const runtime::stateful::relocation_stored_t &stored)
+          const runtime::stateful::relocation_payload_manifest_t &manifest)
           -> task_t<bool> {
             runtime::protocol::relocation_object_kind_t kind;
             switch (sources[principal_index].kind) {
@@ -1268,10 +1286,18 @@ mesh_node_runtime_t::relocate_application_unit (
                  sources[principal_index].authority_owner_generation},
                 status.routing_id ().to_bytes (),
                 status.lifecycle_generation (),
-                runtime::protocol::relocation_root_t{stored.reference, stored.checksum_crc32c},
+                manifest.total_length,
+                manifest.chunk_count,
+                manifest.checksum_crc32c,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
               std::chrono::seconds (5));
+        },
+      .send_state_chunk =
+        [this, target] (const runtime::protocol::relocation_state_t &chunk)
+          -> task_t<bool> {
+            co_return co_await _node->transport ().send_relocation_control (
+              target.rid.to_bytes (), chunk);
         },
       .send_relocation_data =
         [this, target] (

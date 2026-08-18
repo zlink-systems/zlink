@@ -247,6 +247,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             if (targetAttemptGeneration == 0)
                 throw new InvalidDataException(
                     "Canonical relocation target attempt generation is empty.");
+            //  Direct transfer (spec 28 §4.2): encode the captured aggregate
+            //  envelope once into source memory and stream it as
+            //  relocationState chunks behind command 40.
+            var transferPayload = ZLinkRelocationTransferPayload.Create(
+                relocation.Envelope,
+                registration.Locations.Options.RelocationPayloadChunkLimit);
             var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
                 relocationId,
                 targetAttemptGeneration,
@@ -271,13 +277,14 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     spot.AuthorityOwnerGeneration),
                 reservation.Inventory.SourceNodeRid,
                 reservation.Inventory.SourceNodeLifecycleGeneration,
-                new ZLinkServiceWireCodec.RelocationRootRecord(
-                    relocation.Relocation.Reference,
-                    relocation.Relocation.ChecksumCrc32c),
+                checked((ulong)transferPayload.TotalLength),
+                checked((uint)transferPayload.ChunkCount),
+                transferPayload.ChecksumCrc32c,
                 checked((ulong)registration.ApplicationVersion));
             _ = await canonical.PrepareCanonicalRelocationAsync(
                     reservation.TargetDescriptor.Rid,
                     prepare,
+                    transferPayload,
                     registration.DefaultRequestTimeout,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -287,6 +294,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             _sourceAttempts[sourceFence] = prepare;
             try
             {
+                //  The spot aggregate relays no post-capture ingress via
+                //  command 31 — held ingress travels inside the envelope —
+                //  so the boundary batch is empty (spec 28 §4.4).
                 await canonical.SendCanonicalRelocationCutoverAsync(
                         reservation.TargetDescriptor.Rid,
                         new ZLinkServiceWireCodec.RelocationCutoverRecord(
@@ -294,7 +304,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                             prepare.TargetAttemptGeneration,
                             prepare.Coordinator,
                             prepare.InitiatorRole,
-                            prepare.Object),
+                            prepare.Object,
+                            0,
+                            ZLinkRelocationBoundaryBatch.ComputeChecksum([])),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -817,23 +829,16 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     internal async ValueTask StageCanonicalInboundAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationEnvelope envelope,
         RoutingId sourceNodeRid,
         CancellationToken cancellationToken)
     {
         if (prepare.Object.Kind == 1)
             throw new InvalidOperationException(
                 "Standalone Actor relocation must be handled by the Actor maintenance owner.");
-        var root = prepare.Root
-            ?? throw new InvalidDataException(
-                "Canonical SPOT relocation requires an immutable root.");
-        var relocationStore = registration.Locations.ResolveRelocationStore()
-            ?? throw new ZLinkConfigurationException(
-                "Relocation Store is not registered.");
-        var tree = await ZLinkRelocationTreeStore.ReadAsync(
-                relocationStore, root.Reference, root.ChecksumCrc32c,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var recoveries = tree.Envelope.Participants
+        //  Spec 28 §4.3: the aggregate envelope arrived over relocationState
+        //  chunks and was verified before this call — no store handoff read.
+        var recoveries = envelope.Participants
             .Select(participant =>
                 ZLinkCanonicalParticipantRecoveryCodec.Decode(
                     participant.RecoveryPayload.Span))
@@ -856,8 +861,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             recovery.ObjectKind is ZLinkPlacementObjectKind.UserSpot
                 or ZLinkPlacementObjectKind.InstanceSpot);
         var context = new ZLinkCanonicalSpotStageContext(
-            tree.Envelope.AggregateId,
-            tree.Envelope.AggregateGeneration,
+            envelope.AggregateId,
+            envelope.AggregateGeneration,
             prepare.TargetAttemptGeneration,
             runtime.GetSpotNodeRuntime(
                     prepare.Target.NodeRid)
@@ -873,12 +878,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             prepare.Object.ObjectId,
             spotRecovery.StableType,
             prepare.Object.Kind == 3,
-            root.Reference,
-            root.ChecksumCrc32c,
+            string.Empty,
+            prepare.PayloadChecksumCrc32c,
             actors,
             prepare.Coordinator.ExpectedAuthorityStoreVersion);
         var staged = await StageInboundAsync(
                 context,
+                envelope,
                 sourceNodeRid,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -919,7 +925,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(1), runtime.ShutdownToken)
+            await Task.Delay(
+                    registration.Locations.Options.RelocationCutoverWaitTimeout,
+                    runtime.ShutdownToken)
                 .ConfigureAwait(false);
             var fence = new ZLinkAggregateFence(
                 DecodeRelocationId(prepare.RelocationId),
@@ -930,14 +938,21 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 return;
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 "cutover_timeout object=spot");
+            //  Spec 28 §4.4/25 §5: fallback proceeds to the CAS without
+            //  boundary completeness verification and is counted.
+            ZLinkRuntimeMetrics.RecordRelocationCutoverTimeout(
+                prepare.Object.Kind == 3 ? "instance_spot" : "user_spot");
             await CutoverCanonicalInboundAsync(
                     new ZLinkServiceWireCodec.RelocationCutoverRecord(
                         prepare.RelocationId,
                         prepare.TargetAttemptGeneration,
                         prepare.Coordinator,
                         prepare.InitiatorRole,
-                        prepare.Object),
+                        prepare.Object,
+                        0,
+                        0),
                     sourceNodeRid,
+                    verifyBoundary: false,
                     runtime.ShutdownToken)
                 .ConfigureAwait(false);
         }
@@ -987,13 +1002,25 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     checked(previous + 1),
                     data.FrozenRecord.Encoded.ToArray())
             ];
+            stage.TrackRelayRecord(data.FrozenRecord.Encoded.Span);
         }
         return ValueTask.CompletedTask;
     }
 
-    internal async ValueTask CutoverCanonicalInboundAsync(
+    internal ValueTask CutoverCanonicalInboundAsync(
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         RoutingId sourceNodeRid,
+        CancellationToken cancellationToken) =>
+        CutoverCanonicalInboundAsync(
+            cutover,
+            sourceNodeRid,
+            verifyBoundary: true,
+            cancellationToken);
+
+    private async ValueTask CutoverCanonicalInboundAsync(
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
+        RoutingId sourceNodeRid,
+        bool verifyBoundary,
         CancellationToken cancellationToken)
     {
         TargetStage stage;
@@ -1026,6 +1053,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     "late_cutover object=spot reason=already_committed");
                 return;
             }
+            if (verifyBoundary)
+                stage.ValidateBoundary(cutover);
             await CommitWireTargetAggregateAsync(stage, cancellationToken)
                 .ConfigureAwait(false);
             Volatile.Write(ref stage.AuthorityPublished, 1);
@@ -1034,11 +1063,18 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         {
             stage.PublishGate.Release();
         }
+        //  Spec 25 §5: target-local S2 (CAS confirmed) → S3 (dispatch open).
+        var resumeStartedTimestamp =
+            System.Diagnostics.Stopwatch.GetTimestamp();
         await FinalizeStageAsync(
                 stage,
                 normalizeAuthority: false,
                 cancellationToken)
             .ConfigureAwait(false);
+        ZLinkRuntimeMetrics.RecordRelocationTargetResume(
+            System.Diagnostics.Stopwatch.GetElapsedTime(
+                resumeStartedTimestamp),
+            cutover.Object.Kind == 3 ? "instance_spot" : "user_spot");
         runtime.ScheduleRelocationSessionRouteConvergence(stage);
     }
 
@@ -1141,12 +1177,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     new ZLinkCapacityVector(0, 0, null),
                     targetOwner,
                     stage.Envelope),
-                cancellationToken,
-                acceptedRelocation: new ZLinkRelocationStored(
-                    stage.RelocationReference,
-                    stage.RelocationChecksum,
-                    stage.ExpiresAt,
-                    DateTimeOffset.UtcNow))
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1217,6 +1248,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     internal async ValueTask<bool> StageInboundAsync(
         ZLinkCanonicalSpotStageContext request,
+        ZLinkRelocationEnvelope transferredEnvelope,
         RoutingId sourceNodeRid,
         CancellationToken cancellationToken)
     {
@@ -1254,17 +1286,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     requireCompleted: true),
                 _ => false
             };
-        var relocationStore = registration.Locations.ResolveRelocationStore()
-                              ?? throw new ZLinkConfigurationException(
-                                  "Relocation Store is not registered.");
-        var tree = await ZLinkRelocationTreeStore.ReadAsync(
-                relocationStore,
-                request.RelocationReference,
-                request.RelocationChecksum,
-                cancellationToken)
-            .ConfigureAwait(false);
         var envelope = await BindCanonicalAuthorityInventoryAsync(
-                tree.Envelope,
+                transferredEnvelope,
                 request,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -1564,8 +1587,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     private async ValueTask ValidatePublishedRootAsync(
         TargetStage stage,
-        CancellationToken cancellationToken,
-        ZLinkServiceWireCodec.RelocationRootRecord? expectedRoot = null)
+        CancellationToken cancellationToken)
     {
         var authorityStore = registration.Locations.ResolveStore()
                              ?? throw new ZLinkConfigurationException(
@@ -1578,14 +1600,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             static participant => participant.ObjectKind
                 is ZLinkPlacementObjectKind.UserSpot
                 or ZLinkPlacementObjectKind.InstanceSpot);
-        if (expectedRoot is { } commandRoot
-            && (!StringComparer.Ordinal.Equals(
-                    commandRoot.Reference,
-                    stage.RelocationReference)
-                || commandRoot.ChecksumCrc32c
-                   != stage.RelocationChecksum))
-            throw new ZLinkRelocationDataLostException(
-                "Canonical relocation publication changed its prepared root.");
         var read = await authorityStore.ReadAuthorityAsync(
                 stagedSpot.AuthorityKey,
                 cancellationToken)
@@ -1597,10 +1611,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || publication.AggregateId != stage.Envelope.AggregateId
             || publication.AggregateGeneration
                != stage.Envelope.AggregateGeneration
-            || !StringComparer.Ordinal.Equals(
-                publication.Reference,
-                stage.RelocationReference)
-            || publication.ChecksumCrc32c != stage.RelocationChecksum)
+            || string.IsNullOrEmpty(publication.Reference))
             throw new ZLinkRelocationDataLostException(
                 "Canonical relocation publication is unavailable.");
         var durable = await ZLinkRelocationTreeStore.GetAsync(
@@ -2538,6 +2549,26 @@ internal sealed record TargetStage(
     public byte[]? HeldDigest;
     public byte[]? HeldRelayDigest;
     public IReadOnlyList<ZLinkRelocationQueuedJob> HeldRecords = [];
+    private uint _relayCrcState = uint.MaxValue;
+    private ulong _relayRecordCount;
+
+    internal void TrackRelayRecord(ReadOnlySpan<byte> encodedFrozenRecord)
+    {
+        ZLinkCrc32C.Append(ref _relayCrcState, encodedFrozenRecord);
+        _relayRecordCount = checked(_relayRecordCount + 1);
+    }
+
+    //  Spec 28 §4.4: on the ordered connection the cutover boundary values
+    //  always match the staged relay span; a mismatch is an implementation
+    //  defect, not a retryable condition.
+    internal void ValidateBoundary(
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover)
+    {
+        if (cutover.BoundaryRecordCount != _relayRecordCount
+            || cutover.BoundaryChecksumCrc32c != ~_relayCrcState)
+            throw new InvalidDataException(
+                "Command 34 boundary values do not match the staged relay span.");
+    }
     private readonly object _finalRootGate = new();
     private string? _finalRootReference;
     private uint _finalRootChecksum;

@@ -182,6 +182,7 @@ function validateSchema(schema) {
   validateOwnerLeaseAuthorityProfile(schema.ownerLeaseAuthorityProfile, fail);
   validateRelocationRetentionPolicy(schema.relocationRetentionPolicy, fail);
   validateRelocationStorageProfile(schema.relocationStorageProfile, fail);
+  validateRelocationTransferChecksumProfile(schema.relocationTransferChecksumProfile, fail);
   validateFrameworkJsonV1Profile(schema.frameworkJsonV1Profile, fail);
   validateFrameworkMultipartV1Profile(schema.frameworkMultipartV1Profile, fail);
   validateMaintenanceAdmissionProfile(schema.maintenanceAdmissionProfile, fail);
@@ -1122,10 +1123,10 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       savedWorkField: "savedWork",
       participantField: "participantId",
       orderField: "order",
-      ownership: "relocation-store-payload-is-the-only-handoff-source-for-work-and-timers-accepted-before-capture",
+      ownership: "source-memory-payload-is-the-only-handoff-source-for-work-and-timers-accepted-before-capture",
       sourceRestore: "pre-cutover-abort-restores-the-same-payload-to-source-in-original-queue-order",
       targetRestore: "target-materializes-the-same-payload-once-before-relay-ready",
-      relayExclusion: "relocationData-never-carries-saved-work-or-timers-from-the-relocation-store-payload",
+      relayExclusion: "relocationData-never-carries-saved-work-or-timers-which-travel-only-in-relocationState-chunks",
       queueOrder: "saved-work-and-pending-timer-ticks-share-one-strictly-increasing-order-per-participant",
       requestIdentity: "operation-id-source-fence-and-reply-route-remain-part-of-the-frozen-record",
       duplicateTransmission: "same-payload-may-be-accepted-twice-no-hidden-delivery-deduplication-or-ack-journal",
@@ -1333,7 +1334,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         },
         {
           phase: "captured",
-          after: ["immutable-relocation-put"],
+          after: ["local-capture-complete"],
           relocation: "present",
         },
         {
@@ -1495,17 +1496,19 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "exact-source-and-target-owner-lease-fences",
       ],
       sequence: [
-        "source-captures-existing-work-and-timers-into-relocation-store",
-        "source-relocationPrepare-request",
-        "target-installs-temporary-queue-restores-store-payload-and-keeps-dispatch-closed",
+        "source-captures-existing-work-and-timers-into-source-memory-payload",
+        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
+        "source-relocationState-chunks-on-the-same-ordered-connection",
+        "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
         "target-relocationReady-reply",
         "source-relocationData-for-post-capture-ingress-only",
-        "source-relocationCutover-one-way-after-current-relay-prefix",
+        "source-relocationCutover-one-way-with-boundary-record-count-and-checksum-after-current-relay-prefix",
         "target-only-owner-membership-cas-after-cutover-or-1000ms-ready-fallback",
         "target-merges-saved-work-pre-boundary-relay-and-remaining-temporary-work",
         "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
       ],
-      savedPrefixOwner: "relocation-store-only-never-relocationData",
+      savedPrefixOwner: "source-memory-payload-only-never-relocationData",
+      relocationState: "saved-work-chunk-only-exact-identity-in-ordinal-order-conflicting-length-or-checksum-is-explicit-failure",
       relocationData: "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
       cutover: "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
       capacity: "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
@@ -2248,24 +2251,6 @@ function decodePendingTimerTicks(reader) {
   return ticks;
 }
 
-function decodeRelocationRootPointer(reader) {
-  const present = reader.u8();
-  const body = new FixtureReader(reader.bytesOf(reader.u16()));
-  if (present === 0) {
-    body.end();
-    return null;
-  }
-  if (present !== 1) {
-    throw new Error("relocation pointer has invalid presence flag");
-  }
-  const decoded = {
-    referenceUtf8Fixture: body.text16(),
-    checksumCrc32c: body.u32(),
-  };
-  body.end();
-  return decoded;
-}
-
 function decodeInstancePlacement(reader) {
   if (reader.u8() !== 1) {
     throw new Error("Instance placement fixture must use version 1");
@@ -2422,7 +2407,6 @@ function decodeGoldenBody(formatName, bytes) {
         coordinatorNodeRidUtf8Fixture: relocationBody.text8(),
         coordinatorNodeGeneration: relocationBody.u64(),
         phase: fixtureEnum(FIXTURE_ENUMS.relocationPhase, relocationBody.u8(), "relocation phase"),
-        relocationRoot: decodeRelocationRootPointer(relocationBody),
         applicationVersion: relocationBody.i64(),
         sourceCleanupState: fixtureEnum(
           FIXTURE_ENUMS.sourceCleanup,
@@ -2675,15 +2659,6 @@ function encodePendingTimerTicks(writer, ticks) {
   }
 }
 
-function encodeRelocationRootPointer(writer, relocationRoot) {
-  const body = new FixtureWriter();
-  if (relocationRoot !== null) {
-    body.text16(relocationRoot.referenceUtf8Fixture).u32(relocationRoot.checksumCrc32c);
-  }
-  const bytes = body.finish();
-  writer.u8(relocationRoot === null ? 0 : 1).u16(bytes.length).raw(bytes);
-}
-
 function encodeInstancePlacement(writer, placement) {
   const body = new FixtureWriter();
   body.text8(placement.targetNodeRidUtf8Fixture).u64(placement.targetNodeGeneration)
@@ -2786,7 +2761,6 @@ function encodeGoldenBody(formatName, decoded) {
         .text8(decoded.relocationState.coordinatorNodeRidUtf8Fixture)
         .u64(decoded.relocationState.coordinatorNodeGeneration)
         .u8(fixtureEnumValue(FIXTURE_ENUMS.relocationPhase, decoded.relocationState.phase, "relocation phase"));
-      encodeRelocationRootPointer(relocation, decoded.relocationState.relocationRoot);
       relocation.i64(decoded.relocationState.applicationVersion);
       relocation.u8(fixtureEnumValue(
           FIXTURE_ENUMS.sourceCleanup,
@@ -3203,10 +3177,7 @@ function validateRelocationLogicalFixture(schema, schemaPath) {
           || manifest.chunks[0].checksumCrc32c !== crc32c(bytes)) {
         fail(location, "logical bytes, immutable chunk and root manifest length/checksum relation must match exactly");
       }
-      if (manifest.inventoryDigestSha256Hex !== amendmentFixture.aggregate.inventoryDigestSha256Hex
-          || amendmentFixture.aggregate.relocationManifestDigestSha256Hex
-            !== amendmentFixture.aggregate.inventoryDigestSha256Hex
-          || amendmentFixture.aggregate.relocationManifestAuthority !== false) {
+      if (manifest.inventoryDigestSha256Hex !== amendmentFixture.aggregate.inventoryDigestSha256Hex) {
         fail(location, "Location aggregate and lookup-only Relocation manifest inventory digests must match exactly");
       }
     } catch (error) {
@@ -3667,7 +3638,7 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     },
     {
       phase: "captured",
-      after: ["immutable-relocation-put"],
+      after: ["local-capture-complete"],
       relocation: "present",
     },
     {
@@ -3683,7 +3654,7 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
   ];
   if (JSON.stringify(machine.authorityCommitOrder) !== JSON.stringify(expectedCommitOrder)) {
     fail("$.relocationStateMachine.authorityCommitOrder",
-      "must CAS Preparing after the local seal, Captured after relocation Put, then Prepared after target restore and staging");
+      "must CAS Preparing after the local seal, Captured after local capture completes, then Prepared after target restore and staging");
   }
   const transitionSet = new Set();
   if (!Array.isArray(machine.transitions)) {
@@ -3767,6 +3738,14 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
       reorder: "hold-until-captured-authority",
       loss: "retransmit-until-matching-ready-or-phase-advance-or-deadline",
     }],
+    ["relocationState", {
+      command: "relocationState",
+      senderRoles: ["source"],
+      phases: ["captured", "prepared"],
+      duplicate: "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
+      reorder: "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
+      loss: "no-per-chunk-ack-restore-deadline-fails-the-relocation",
+    }],
     ["relocationReady", {
       command: "relocationReady",
       senderRoles: ["target"],
@@ -3839,8 +3818,8 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
   });
   for (const command of [
     "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute",
-    "relocationPrepare", "relocationReady", "relocationData", "relocationCutover",
-    "replyRelay", "replyRelayAck",
+    "relocationPrepare", "relocationState", "relocationReady", "relocationData",
+    "relocationCutover", "replyRelay", "replyRelayAck",
   ]) {
     if (!ruleCommands.has(command)) {
       fail("$.relocationStateMachine.commandRules", `missing state rule for ${command}`);
@@ -3867,6 +3846,7 @@ function validateServiceInvariants(schema, types, fail) {
     ["relocationData", 31],
     ["relocationCutover", 34],
     ["relocationPrepare", 40],
+    ["relocationState", 52],
     ["sessionRelocationSeal", 42],
     ["sessionRelocationSealed", 43],
     ["sessionRelocationRoute", 44],
@@ -3961,7 +3941,7 @@ function validateServiceInvariants(schema, types, fail) {
   ])) {
     fail("$.types", "reply relay acknowledgement status must use the closed two-value terminal table");
   }
-  for (const name of ["relocationReady", "relocationData", "relocationCutover", "relocationPrepare"]) {
+  for (const name of ["relocationReady", "relocationData", "relocationCutover", "relocationPrepare", "relocationState"]) {
     const body = commands.get(name)?.body ?? [];
     if (body[0]?.name !== "relocation" || body[1]?.name !== "targetAttemptGeneration"
         || body[1]?.$ref !== "nonzero-u64") {
@@ -3969,7 +3949,7 @@ function validateServiceInvariants(schema, types, fail) {
     }
   }
   for (const name of [
-    "relocationReady", "relocationData", "relocationCutover", "relocationPrepare",
+    "relocationReady", "relocationData", "relocationCutover", "relocationPrepare", "relocationState",
     "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute", "replyRelayAck",
   ]) {
     const coordinator = commands.get(name)?.body?.find((field) => field.name === "coordinator");
@@ -3978,7 +3958,7 @@ function validateServiceInvariants(schema, types, fail) {
     }
   }
   for (const name of [
-    "relocationReady", "relocationData", "relocationCutover",
+    "relocationReady", "relocationData", "relocationCutover", "relocationState",
     "sessionRelocationSeal", "sessionRelocationRoute",
   ]) {
     const senderRole = commands.get(name)?.body?.find((field) => field.name === "senderRole");
@@ -4000,7 +3980,26 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
     { name: "senderRole", $ref: "relocation-role" },
     { name: "object", $ref: "relocation-object-identity" },
-  ], "$.commands", "relocationCutover must be one fenced source-to-target boundary without ACK or HWM state");
+    { name: "boundaryRecordCount", $ref: "ordinal-or-zero" },
+    { name: "boundaryChecksumCrc32c", $ref: "u32" },
+  ], "$.commands", "relocationCutover must be one fenced source-to-target boundary carrying the pre-boundary relay count and checksum without ACK or HWM state");
+  requireFields(commands.get("relocationState")?.body, [
+    { name: "relocation", $ref: "relocation-id" },
+    { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
+    { name: "coordinator", $ref: "relocation-coordinator-fence" },
+    { name: "senderRole", $ref: "relocation-role" },
+    { name: "object", $ref: "relocation-object-identity" },
+    { name: "chunkOrdinal", $ref: "u32" },
+    { name: "chunkData", $ref: "durable-blob" },
+  ], "$.commands", "relocationState must carry one exact-identity saved-work chunk with its zero-based ordinal and bounded bytes");
+  const relocationStateCommand = commands.get("relocationState");
+  if (relocationStateCommand?.id !== 52
+      || relocationStateCommand?.domain !== "infrastructure"
+      || relocationStateCommand?.payload !== "forbidden"
+      || JSON.stringify(relocationStateCommand?.allowedFlags) !== "[]"
+      || JSON.stringify(relocationStateCommand?.requiredFlags) !== "[]") {
+    fail("$.commands", "relocationState must use fixed infrastructure command ID 52 without flags or payload");
+  }
   requireFields(commands.get("replyRelayAck")?.body, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
@@ -4415,7 +4414,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "ownerSpot", $ref: "spot-ref" },
     { name: "participants", $ref: "aggregate-participant-vector" },
     { name: "inventoryDigestSha256", $ref: "sha256-bytes" },
-    { name: "relocationRoot", $ref: "relocation-root-pointer" },
   ], "$.types", "Location aggregate must own canonical participants, generation and inventory digest");
   const aggregateVector = types.get("aggregate-participant-vector");
   if (aggregateVector?.item?.$ref !== "maintenance-aggregate-participant-v1"
@@ -4624,9 +4622,11 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "object", $ref: "relocation-object-identity" },
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceNodeGeneration", $ref: "nonzero-u64" },
-    { name: "relocationRoot", $ref: "relocation-root-pointer" },
+    { name: "payloadTotalLength", $ref: "relocation-logical-length" },
+    { name: "payloadChunkCount", $ref: "relocation-chunk-count" },
+    { name: "payloadChecksumCrc32c", $ref: "u32" },
     { name: "applicationVersion", $ref: "application-version" },
-  ], "$.commands", "relocationPrepare must carry the exact target, object and durable relocation pointer without capacity negotiation");
+  ], "$.commands", "relocationPrepare must carry the exact target, object and direct-transfer payload manifest without capacity negotiation");
   requireFields(commands.get("relocationReady")?.body, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
@@ -4823,7 +4823,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "coordinatorNodeRid", $ref: "rid" },
     { name: "coordinatorNodeGeneration", $ref: "nonzero-u64" },
     { name: "phase", $ref: "relocation-phase" },
-    { name: "relocationRoot", $ref: "relocation-root-pointer" },
     { name: "applicationVersion", $ref: "application-version" },
     { name: "sourceCleanupState", $ref: "source-cleanup-state" },
   ], "$.types", "early relocation phases must allow an absent target fence until Prepared");
@@ -5620,6 +5619,35 @@ function validateRelocationStorageProfile(profile, fail) {
   };
   if (!isObject(profile) || JSON.stringify(profile) !== JSON.stringify(expected)) {
     fail("$.relocationStorageProfile", "must define the bounded manifest and immutable relocation chunk contract");
+  }
+}
+
+function validateRelocationTransferChecksumProfile(profile, fail) {
+  const expected = {
+    algorithm: "crc-32c",
+    polynomial: 0x1edc6f41,
+    initialValue: 0xffffffff,
+    reflectInput: true,
+    reflectOutput: true,
+    xorOutput: 0xffffffff,
+    checkInputAscii: "123456789",
+    checkValue: 0xe3069283,
+    coverage: [
+      "relocationPrepare.payloadChecksumCrc32c",
+      "relocationCutover.boundaryChecksumCrc32c",
+      "relocation-manifest-v1.totalChecksumCrc32c",
+      "relocation-chunk-entry-v1.checksumCrc32c",
+      "relocation-root-pointer.checksumCrc32c",
+    ],
+  };
+  if (!isObject(profile) || JSON.stringify(profile) !== JSON.stringify(expected)) {
+    fail("$.relocationTransferChecksumProfile",
+      "must pin the single CRC-32C convention shared by every relocation checksum field");
+    return;
+  }
+  if (crc32c(Buffer.from(profile.checkInputAscii, "ascii")) !== profile.checkValue) {
+    fail("$.relocationTransferChecksumProfile.checkValue",
+      "must equal the local CRC-32C of the declared ASCII check input");
   }
 }
 
@@ -6438,9 +6466,13 @@ function runSelfTests(schema) {
       const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
       delete relocation.maximumEncodedBytes;
     }],
-    ["Location aggregate loses Relocation root", (candidate) => {
+    ["Location aggregate loses inventory digest", (candidate) => {
       const aggregate = candidate.types.find((type) => type.name === "maintenance-aggregate-v1");
-      aggregate.body = aggregate.body.filter((field) => field.name !== "relocationRoot");
+      aggregate.body = aggregate.body.filter((field) => field.name !== "inventoryDigestSha256");
+    }],
+    ["Location aggregate restores Relocation root", (candidate) => {
+      const aggregate = candidate.types.find((type) => type.name === "maintenance-aggregate-v1");
+      aggregate.body.push({ name: "relocationRoot", $ref: "relocation-root-pointer" });
     }],
     ["saved work participant identity omitted", (candidate) => {
       const entry = candidate.types.find((type) => type.name === "saved-work-entry");
@@ -6541,6 +6573,12 @@ function runSelfTests(schema) {
     }],
     ["authority key escaping changed", (candidate) => {
       candidate.authorityKeyFormat.escaping = "lowercase-percent-hex";
+    }],
+    ["relocation transfer checksum convention changed", (candidate) => {
+      candidate.relocationTransferChecksumProfile.polynomial = 0x04c11db7;
+    }],
+    ["relocation transfer checksum coverage dropped", (candidate) => {
+      candidate.relocationTransferChecksumProfile.coverage.pop();
     }],
     ["relocation renew result loses store clock", (candidate) => {
       candidate.relocationRetentionPolicy.renewResult = "renewed-or-missing";
@@ -6876,10 +6914,6 @@ function validateContractAmendmentFixtureData(fixture, location, fail) {
       canonicalParticipantOrder: ["spot:room-1", "actor:actor-1"],
       participantMutations: ["spot-owner-and-membership", "actor-owner-and-membership"],
       inventoryDigestSha256Hex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-      relocationManifestDigestSha256Hex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-      relocationReferenceUtf8Fixture: "relocation/aggregate-1",
-      relocationChecksumCrc32c: 305419896,
-      relocationManifestAuthority: false,
       participantMaximum: 1024,
       encodedMaximum: 1048576,
     },
@@ -6904,7 +6938,7 @@ function validateContractAmendmentFixtureData(fixture, location, fail) {
         terminalReply: 20,
         messageFollow: 50,
         boundSessionReplaced: 51,
-        reservedFirst: 52,
+        reservedFirst: 53,
       },
       replyEnvelopeFields: ["correlation", "terminalResult", "failureCode", "tail"],
       createRequestFields: [
@@ -6965,14 +6999,11 @@ function runContractAmendmentFixtureSelfTests(schemaPath) {
     ["aggregate drops User Spot", (candidate) => {
       candidate.aggregate.participantKinds.shift();
     }],
-    ["aggregate and Relocation manifest digest diverge", (candidate) => {
-      candidate.aggregate.relocationManifestDigestSha256Hex = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    ["aggregate drops inventory digest", (candidate) => {
+      delete candidate.aggregate.inventoryDigestSha256Hex;
     }],
-    ["aggregate drops Relocation reference", (candidate) => {
-      delete candidate.aggregate.relocationReferenceUtf8Fixture;
-    }],
-    ["aggregate drops Relocation checksum", (candidate) => {
-      delete candidate.aggregate.relocationChecksumCrc32c;
+    ["aggregate restores Relocation reference", (candidate) => {
+      candidate.aggregate.relocationReferenceUtf8Fixture = "relocation/aggregate-1";
     }],
     ["reservation changes operation order", (candidate) => {
       candidate.reservation.operationOrder.reverse();

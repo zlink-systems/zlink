@@ -406,7 +406,9 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     object,
     sourceNodeRid: 'source',
     sourceNodeGeneration: 2n,
-    root: { reference: 'root-1', checksumCrc32c: 123 },
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 123,
     applicationVersion: 4n
   };
   const ready: ServiceMaintenanceRelocationReady = {
@@ -469,7 +471,9 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     release();
     assert.deepEqual(await Promise.all([first, second]), [true, true]);
     assert.equal(prepareCalls, 1);
-    assert.equal(sent.length, 2);
+    // The Ready reply is delivered asynchronously once the shared restore
+    // operation completes; each exact Prepare receipt answers once.
+    await waitUntil(() => sent.length === 2);
     for (const bytes of sent) {
       assert.deepEqual(decodeServiceRelocationControlResponse(bytes), ready);
     }
@@ -506,7 +510,9 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
       targetAttemptGeneration: 1n,
       coordinator,
       senderRole: 'source',
-      object
+      object,
+      boundaryRecordCount: 1n,
+      boundaryChecksumCrc32c: 0
     }), true);
     assert.deepEqual(oneWay, ['data', 'cutover']);
     assert.equal(sent.length, 2, 'commands 31 and 34 must not send responses');
@@ -566,7 +572,9 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
     object,
     sourceNodeRid: coordinator.nodeRid,
     sourceNodeGeneration: coordinator.nodeGeneration,
-    root: { reference: 'root-cas', checksumCrc32c: 1 },
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 1,
     applicationVersion: 4n
   };
   let current = expected;
@@ -730,7 +738,8 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
     },
     phase: 'ready',
     lane: Promise.resolve(),
-    cutoverReceived: true
+    cutoverReceived: true,
+    boundaryRelay: []
   };
   const originalWarn = console.warn;
   console.warn = () => events.push('sourceLeave:warning');
@@ -770,7 +779,7 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
       false,
       'the source relocation goal must not wait for the one-way OnLeave callback'
     );
-    assert.deepEqual(harness.controlKinds, ['prepare', 'data', 'cutover']);
+    assert.deepEqual(harness.controlKinds, ['prepare', 'state', 'data', 'cutover']);
     assert.equal(harness.location.commits, 1, 'only the target owner may commit Location CAS');
     assert.equal(harness.targetActorManager.published, 0, 'dispatch stays closed before Accepted');
 
@@ -855,8 +864,10 @@ test('ActorJoin Host owner arms the exact 1000ms target fallback after READY', a
   try {
     await harness.relocate();
     await harness.targetIdle();
-    assert.deepEqual(harness.controlKinds, ['prepare', 'data', 'cutover']);
-    assert.deepEqual(observedFallbacks, [1_000]);
+    assert.deepEqual(harness.controlKinds, ['prepare', 'state', 'data', 'cutover']);
+    // The source retransmission window uses the same configured 1,000 ms
+    // value, so the patched timer observes at least the target fallback arm.
+    assert.equal(observedFallbacks.includes(1_000), true);
     assert.equal(harness.events.includes('fallback:1000'), true);
     assert.equal(harness.location.commits, 1);
   } finally {
@@ -987,7 +998,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     storeNow: new Date()
   };
   const location = actorJoinLocationStore(sourceAuthority, events);
-  const relocationStore = memoryRelocationStore();
   const registration = {
     spotNodes: new Map([['mesh-a', {
       actorFactoryRegistrations: {
@@ -1192,7 +1202,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const common = {
     registration,
     locationStore: () => location,
-    relocationStore: () => relocationStore,
     liveDescriptors: async () => [targetDescriptor],
     completions: () => undefined,
     spotNodeRuntime: () => undefined,
@@ -1287,7 +1296,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           actorId,
           objectGeneration: 5n,
           expectedAuthorityOwnerGeneration: 11n
-        }
+        },
+        boundaryRecordCount: 0n,
+        boundaryChecksumCrc32c: 0
       } as const;
       await dispatchRelocationControl(targetRuntime, 'source', wire as never);
     },
@@ -1372,34 +1383,6 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
       return { ...current, kind: 'stored' };
     },
     async readOwnerLease() { return { kind: 'missing', storeNow: new Date() }; }
-  };
-}
-
-function memoryRelocationStore() {
-  const values = new Map<string, { readonly bytes: Buffer; readonly expiresAt: Date }>();
-  return {
-    async put(reference: { value: string }, payload: Uint8Array, retentionMs: number) {
-      const storeNow = new Date();
-      const expiresAt = new Date(storeNow.getTime() + retentionMs);
-      values.set(reference.value, { bytes: Buffer.from(payload), expiresAt });
-      return { kind: 'stored', storeNow, expiresAt };
-    },
-    async read(reference: { value: string }) {
-      const storeNow = new Date();
-      const value = values.get(reference.value);
-      return value === undefined
-        ? { kind: 'missing', storeNow }
-        : { kind: 'found', bytes: value.bytes, expiresAt: value.expiresAt, storeNow };
-    },
-    async renew(reference: { value: string }, retentionMs: number) {
-      const storeNow = new Date();
-      const value = values.get(reference.value);
-      if (value === undefined) return { kind: 'missing', storeNow };
-      const expiresAt = new Date(storeNow.getTime() + retentionMs);
-      values.set(reference.value, { ...value, expiresAt });
-      return { kind: 'renewed', storeNow, expiresAt };
-    },
-    async delete(reference: { value: string }) { values.delete(reference.value); }
   };
 }
 

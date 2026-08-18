@@ -313,12 +313,13 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
             CancellationToken cancellationToken)
     {
         EnsureStarted();
         return _node.PrepareCanonicalRelocationAsync(
-            targetNodeRid, prepare, timeout, cancellationToken);
+            targetNodeRid, prepare, payload, timeout, cancellationToken);
     }
 
     public ValueTask SendCanonicalRelocationDataAsync(

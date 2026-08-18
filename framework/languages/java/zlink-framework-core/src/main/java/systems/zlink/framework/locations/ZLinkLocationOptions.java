@@ -14,6 +14,10 @@ public final class ZLinkLocationOptions {
     private Duration routeCacheMaxAge = Duration.ofSeconds(15);
     private Duration messageFollowDuration = Duration.ofSeconds(30);
     private Duration sessionRelocationSealTimeout = Duration.ofMillis(3_000);
+    private long relocationPayloadChunkLimitBytes = 262_144L;
+    private long relocationInFlightPayloadBudgetBytes = 16_777_216L;
+    private long relocationNodeInFlightPayloadBudgetBytes = 0L;
+    private Duration relocationCutoverWaitTimeout = Duration.ofMillis(1_000);
     private int maxActiveOutboundRelocations = 64;
     private int maxActiveInboundRelocations = 64;
     private int maxConcurrentRelocationCaptures = 8;
@@ -111,6 +115,46 @@ public final class ZLinkLocationOptions {
             "sessionRelocationSealTimeout");
     }
 
+    public long relocationPayloadChunkLimitBytes() {
+        return relocationPayloadChunkLimitBytes;
+    }
+
+    public void setRelocationPayloadChunkLimitBytes(long value) {
+        relocationPayloadChunkLimitBytes = requirePositive(
+            value,
+            "relocationPayloadChunkLimitBytes");
+    }
+
+    public long relocationInFlightPayloadBudgetBytes() {
+        return relocationInFlightPayloadBudgetBytes;
+    }
+
+    public void setRelocationInFlightPayloadBudgetBytes(long value) {
+        relocationInFlightPayloadBudgetBytes = requireNonNegative(
+            value,
+            "relocationInFlightPayloadBudgetBytes");
+    }
+
+    public long relocationNodeInFlightPayloadBudgetBytes() {
+        return relocationNodeInFlightPayloadBudgetBytes;
+    }
+
+    public void setRelocationNodeInFlightPayloadBudgetBytes(long value) {
+        relocationNodeInFlightPayloadBudgetBytes = requireNonNegative(
+            value,
+            "relocationNodeInFlightPayloadBudgetBytes");
+    }
+
+    public Duration relocationCutoverWaitTimeout() {
+        return relocationCutoverWaitTimeout;
+    }
+
+    public void setRelocationCutoverWaitTimeout(Duration value) {
+        relocationCutoverWaitTimeout = requirePositiveWholeMilliseconds(
+            value,
+            "relocationCutoverWaitTimeout");
+    }
+
     public int maxActiveOutboundRelocations() {
         return maxActiveOutboundRelocations;
     }
@@ -195,6 +239,21 @@ public final class ZLinkLocationOptions {
     private static int requirePositive(int value, String name) {
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive.");
+        }
+        return value;
+    }
+
+    private static long requirePositive(long value, String name) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(name + " must be positive.");
+        }
+        return value;
+    }
+
+    private static long requireNonNegative(long value, String name) {
+        if (value < 0) {
+            throw new IllegalArgumentException(
+                name + " must be greater than or equal to zero.");
         }
         return value;
     }

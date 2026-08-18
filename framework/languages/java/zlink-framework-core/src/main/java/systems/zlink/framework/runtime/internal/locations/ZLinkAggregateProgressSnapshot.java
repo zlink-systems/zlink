@@ -6,8 +6,7 @@ import java.util.Objects;
 public record ZLinkAggregateProgressSnapshot(
     ZLinkAggregateFence fence,
     String storeVersion,
-    ZLinkAggregatePrepareRequest request,
-    ZLinkAggregateProgress progress) {
+    ZLinkAggregatePrepareRequest request) {
     public ZLinkAggregateProgressSnapshot {
         Objects.requireNonNull(fence, "fence");
         if (storeVersion == null || storeVersion.isBlank()) {
@@ -15,7 +14,6 @@ public record ZLinkAggregateProgressSnapshot(
                 "aggregate progress StoreVersion must be non-blank");
         }
         Objects.requireNonNull(request, "request");
-        Objects.requireNonNull(progress, "progress");
         if (!request.aggregateId().equals(fence.aggregateId())
             || request.aggregateGeneration() != fence.aggregateGeneration()) {
             throw new IllegalArgumentException(

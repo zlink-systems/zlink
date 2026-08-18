@@ -396,6 +396,26 @@ export class DefaultLocationOptionsBuilder implements ZLinkLocationOptions {
     this.options.sessionRelocationSealTimeoutMs = value;
     return this;
   }
+
+  relocationCutoverWaitTimeoutMs(value: number): this {
+    this.options.relocationCutoverWaitTimeoutMs = value;
+    return this;
+  }
+
+  relocationPayloadChunkLimitBytes(value: number): this {
+    this.options.relocationPayloadChunkLimitBytes = value;
+    return this;
+  }
+
+  relocationInFlightPayloadBudgetBytes(value: number): this {
+    this.options.relocationInFlightPayloadBudgetBytes = value;
+    return this;
+  }
+
+  relocationNodeInFlightPayloadBudgetBytes(value: number): this {
+    this.options.relocationNodeInFlightPayloadBudgetBytes = value;
+    return this;
+  }
 }
 
 function defaultDispatchOptions(): ZLinkDispatchOptions {
