@@ -81,6 +81,10 @@ import { encodeRoutingIdStorageHex } from '../routing-id';
 
 const PREFIX = 'zlink:v11:';
 const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
+// These counters are store-wide fences.  They deliberately are not derived
+// from an authority identity: deleting and recreating an authority must never
+// reuse an incarnation or owner-transition generation.
+const AUTHORITY_GENERATIONS_KEY = storeKey(`${PREFIX}authority-generations`);
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_CREATION_TERMINAL_BYTES = 1024 * 1024;
@@ -97,6 +101,11 @@ interface AuthorityRecord {
   readonly terminal?: 'committed' | 'rejected' | 'failed' | 'aborted';
   readonly aggregate?: AggregateParticipantFenceRecord;
   readonly visibleStoreVersion?: string;
+}
+
+interface AuthorityGenerationRecord {
+  readonly objectGeneration: string;
+  readonly authorityOwnerGeneration: string;
 }
 
 interface CapacityRecord {
@@ -133,17 +142,23 @@ interface AggregateRecord {
 }
 
 interface OwnerRecord {
+  readonly recordVersion: 1;
   readonly ownerId: string;
   readonly leaseGeneration: string;
 }
 
-interface MeshRecord {
-  readonly generation: string;
-  readonly descriptor: ZLinkMeshNodeDescriptor;
-}
-
 interface DescriptorRecord<T> {
   readonly generation: string;
+  readonly descriptor: T;
+}
+
+interface CanonicalDescriptorRecord<T> {
+  readonly recordVersion: 1;
+  readonly generation: string;
+  readonly ownerId: string;
+  readonly leaseGeneration: string;
+  readonly lifecycleGeneration: string;
+  readonly descriptorRevision: string;
   readonly descriptor: T;
 }
 
@@ -187,7 +202,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       return { kind: 'missing', storeNow: result.storeNow };
     }
     return await this.projectAuthority(
-      decodeJson<AuthorityRecord>(result.value.bytes),
+      decodeAuthorityRecord(result.value.bytes),
       result.value.version,
       result.value.storeNow,
       signal
@@ -216,7 +231,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const encodedKey = authorityContractValueFromPreimage(item.key.value);
       if (!encodedKey.startsWith(prefix)) continue;
       const snapshot = await this.projectAuthority(
-        decodeJson<AuthorityRecord>(item.value.bytes),
+        decodeAuthorityRecord(item.value.bytes),
         item.value.version,
         item.value.storeNow,
         signal
@@ -248,7 +263,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') {
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       const snapshot = await this.projectAuthority(
         record,
         current.value.version,
@@ -540,7 +555,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           await this.abortAggregateStaging(fence, signal);
           return { kind: 'conflict' };
         }
-        const record = decodeJson<AuthorityRecord>(current.value.bytes);
+        const record = decodeAuthorityRecord(current.value.bytes);
         if (sameAggregateMarker(record.aggregate, fence, index, participant)) {
           installed.push({
             key: authorityRowKey,
@@ -582,29 +597,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           await this.abortAggregateStaging(fence, signal);
           return { kind: 'generationExhausted' };
         }
+        const targetAuthorityOwnerGeneration = participant.ownerTransition === 'newOwner'
+          ? record.snapshot.authorityOwnerGeneration + 1n
+          : record.snapshot.authorityOwnerGeneration;
         const marker: AggregateParticipantFenceRecord = {
-          aggregateId: fence.aggregateId.value,
-          aggregateGeneration: fence.aggregateGeneration,
-          index,
-          expectedStoreVersion: participant.expectedStoreVersion.value,
-          ownerTransition: participant.ownerTransition,
-          targetAuthorityOwnerGeneration:
-            participant.ownerTransition === 'newOwner'
-              ? record.snapshot.authorityOwnerGeneration + 1n
-              : record.snapshot.authorityOwnerGeneration,
-          authorityPayloadSha256: entry.authorityPayloadSha256,
-          membershipMutationSha256: entry.membershipMutationSha256
-        };
+            aggregateId: fence.aggregateId.value,
+            aggregateGeneration: fence.aggregateGeneration,
+            index,
+            expectedStoreVersion: participant.expectedStoreVersion.value,
+            ownerTransition: participant.ownerTransition,
+            targetAuthorityOwnerGeneration,
+            authorityPayloadSha256: entry.authorityPayloadSha256,
+            membershipMutationSha256: entry.membershipMutationSha256
+          };
         const stored = await this.provider.write({
-          conditions: [{
-            kind: 'version',
-            key: authorityRowKey,
-            expected: current.value.version
-          }],
+          conditions: [{ kind: 'version', key: authorityRowKey, expected: current.value.version }],
           mutations: [{
-            kind: 'put',
-            key: authorityRowKey,
-            bytes: encodeJson({
+            kind: 'put', key: authorityRowKey, bytes: encodeAuthorityRecord({
               ...record,
               aggregate: marker,
               visibleStoreVersion:
@@ -614,19 +623,21 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         }, signal);
         if (stored.kind === 'conflict') {
           const raced = await this.provider.read(authorityRowKey, signal);
-          if (raced.kind === 'found') {
-            const racedRecord = decodeJson<AuthorityRecord>(raced.value.bytes);
-            if (sameAggregateMarker(
-              racedRecord.aggregate,
-              fence,
-              index,
-              participant
-            )) {
-              installed.push({
-                key: authorityRowKey,
-                expectedStoreVersion: participant.expectedStoreVersion.value
-              });
-              continue;
+          if (raced.kind === 'found' && sameAggregateMarker(
+            decodeAuthorityRecord(raced.value.bytes).aggregate, fence, index, participant
+          )) {
+            installed.push({ key: authorityRowKey, expectedStoreVersion: participant.expectedStoreVersion.value });
+            continue;
+          }
+          // A peer can be in the middle of publishing this same aggregate.
+          // Do not abort its shared staging row merely because this attempt
+          // lost a marker CAS; re-enter and adopt its terminal state.
+          const aggregateRaced = await this.provider.read(rowKey, signal);
+          if (aggregateRaced.kind === 'found') {
+            const aggregateRecord = decodeJson<AggregateRecord>(aggregateRaced.value.bytes);
+            if (aggregateRecord.requestFingerprint === fingerprint
+              && (aggregateRecord.state === 'staging' || aggregateRecord.state === 'prepared')) {
+              return await this.prepareAggregate(request, signal);
             }
           }
           await this.clearAggregateMarkers(fence, installed, signal);
@@ -724,8 +735,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const rowKeyForParticipant = authorityKey(entry.authorityKey);
       const current = await this.provider.read(rowKeyForParticipant, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (!sameAggregateMarkerEntry(record.aggregate, fence, index, entry)) {
+        // A competing committer may already have published the aggregate and
+        // normalized this participant before this reader reached it.  The
+        // committed aggregate is the terminal outcome to adopt, not a stale
+        // failure caused by observing the post-normalization row.
+        const latest = await this.provider.read(rowKey, signal);
+        if (latest.kind === 'found') {
+          const latestAggregate = decodeJson<AggregateRecord>(latest.value.bytes);
+          if (latestAggregate.state === 'committed') {
+            await this.normalizeCommittedAggregate(fence, latestAggregate, signal);
+            return { kind: 'alreadyCommitted' };
+          }
+        }
         return { kind: 'stale' };
       }
       const [payload, membership] = await Promise.all([
@@ -922,7 +945,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         request.target.meshName,
         String(request.target.nodeRid)
       );
-      const generationRowKey = authorityGenerationKey(encodedAuthorityKey.value);
+      const generationRowKey = AUTHORITY_GENERATIONS_KEY;
       const [current, descriptorRead, leaseRead, capacityRead, generationRead] =
         await Promise.all([
           this.provider.read(rowKey, signal),
@@ -932,7 +955,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           this.provider.read(generationRowKey, signal)
         ]);
       if (current.kind === 'found') {
-        const record = decodeJson<AuthorityRecord>(current.value.bytes);
+        const record = decodeAuthorityRecord(current.value.bytes);
         const snapshot = authoritySnapshot(
           record.snapshot,
           current.value.version,
@@ -962,10 +985,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (!capacityAvailable(descriptor, request.capacity, capacity)) {
         return { kind: 'placementCapacityExhausted' };
       }
-      const generation = generationRead.kind === 'missing'
-        ? 1n
-        : BigInt(decodeText(generationRead.value.bytes)) + 1n;
-      if (generation > MAX_GENERATION) return { kind: 'generationExhausted' };
+      const generations = generationRead.kind === 'missing'
+        ? { objectGeneration: 0n, authorityOwnerGeneration: 0n }
+        : (() => {
+            const stored = decodeJson<AuthorityGenerationRecord>(generationRead.value.bytes);
+            return {
+              objectGeneration: BigInt(stored.objectGeneration),
+              authorityOwnerGeneration: BigInt(stored.authorityOwnerGeneration)
+            };
+          })();
+      const generation = generations.objectGeneration + 1n;
+      const authorityOwnerGeneration = generations.authorityOwnerGeneration + 1n;
+      if (generation > MAX_GENERATION || authorityOwnerGeneration > MAX_GENERATION) {
+        return { kind: 'generationExhausted' };
+      }
       const reservationId = randomUUID();
       const allocation: ZLinkPlacementAllocation = {
         state: 'reserved',
@@ -983,7 +1016,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot: {
           payload: Buffer.from(request.creatingPayload),
           objectGeneration: generation,
-          authorityOwnerGeneration: 1n,
+          authorityOwnerGeneration,
           ownerId: request.target.owner.ownerId,
           ownerLeaseGeneration: request.target.owner.leaseGeneration,
           allocation,
@@ -1004,7 +1037,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditionFor(generationRowKey, generationRead)
         ],
         mutations: [
-          { kind: 'put', key: rowKey, bytes: encodeJson(record) },
+          { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(record) },
           {
             kind: 'put',
             key: capacityRowKey,
@@ -1013,7 +1046,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               pending: addCapacity(capacity.pending, request.capacity)
             } satisfies CapacityRecord)
           },
-          { kind: 'put', key: generationRowKey, bytes: encodeText(String(generation)) }
+          {
+            kind: 'put',
+            key: generationRowKey,
+            bytes: encodeJson<AuthorityGenerationRecord>({
+              objectGeneration: generation.toString(),
+              authorityOwnerGeneration: authorityOwnerGeneration.toString()
+            })
+          }
         ]
       }, signal);
       if (result.kind === 'conflict') continue;
@@ -1038,7 +1078,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       signal?.throwIfAborted();
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (
         record.terminal === 'committed'
         && record.reservationId === request.reservationId
@@ -1089,7 +1129,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditionFor(capacityRowKey, capacityRead)
         ],
         mutations: [
-          { kind: 'put', key: rowKey, bytes: encodeJson(ready) },
+          { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(ready) },
           {
             kind: 'put',
             key: capacityRowKey,
@@ -1121,7 +1161,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       signal?.throwIfAborted();
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') return { kind: 'stale' };
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (
         record.reservationId !== request.reservationId
         || current.value.version.value !== request.expectedStoreVersion
@@ -1199,7 +1239,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (current.kind === 'missing') return { kind: 'stale' };
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (
         record.reservationId !== request.reservationId
         || current.value.version.value !== request.expectedStoreVersion
@@ -1238,7 +1278,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             {
               kind: 'put' as const,
               key: rowKey,
-              bytes: encodeJson({
+              bytes: encodeAuthorityRecord({
                 reservationId: request.reservationId,
                 terminal: 'committed',
                 snapshot: {
@@ -1300,8 +1340,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (version === undefined) {
         throw new Error('Actor creation completion did not return an authority row version.');
       }
-      const readyRecord = decodeJson<AuthorityRecord>(
-        encodeJson({
+      const readyRecord = decodeAuthorityRecord(
+        encodeAuthorityRecord({
           reservationId: request.reservationId,
           terminal: 'committed',
           snapshot: {
@@ -1365,10 +1405,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           {
             kind: 'put',
             key: ownerKey(ownerId),
-            bytes: encodeJson<OwnerRecord>({
-              ownerId,
-              leaseGeneration: generation.toString()
-            }),
+            bytes: encodeOwnerRecord(ownerId, generation),
             retentionMs: leaseTtlMs
           },
           {
@@ -1394,7 +1431,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkOwnerLeaseReadResult> {
     const result = await this.provider.read(ownerKey(ownerId), signal);
     if (result.kind === 'missing') return { kind: 'missing' };
-    const record = decodeJson<OwnerRecord>(result.value.bytes);
+    const record = decodeOwnerRecord(result.value.bytes);
     if (record.ownerId !== ownerId || result.value.expiresAt === undefined) {
       throw new Error('Location Store owner lease record is invalid.');
     }
@@ -1415,7 +1452,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const key = ownerKey(token.ownerId);
     const current = await this.provider.read(key, signal);
     if (current.kind === 'missing') return { kind: 'stale' };
-    const record = decodeJson<OwnerRecord>(current.value.bytes);
+    const record = decodeOwnerRecord(current.value.bytes);
     if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return { kind: 'stale' };
     const result = await this.provider.write({
       conditions: [{ kind: 'version', key, expected: current.value.version }],
@@ -1441,7 +1478,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const key = ownerKey(token.ownerId);
     const current = await this.provider.read(key, signal);
     if (current.kind === 'missing') return 'stale';
-    const record = decodeJson<OwnerRecord>(current.value.bytes);
+    const record = decodeOwnerRecord(current.value.bytes);
     if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return 'stale';
     const result = await this.provider.write({
       conditions: [{ kind: 'version', key, expected: current.value.version }],
@@ -1469,7 +1506,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     let generation = 1n;
     let rowCondition: ZLinkStoreCondition = { kind: 'missing', key: rowKey };
     if (current.kind === 'found') {
-      const record = decodeJson<MeshRecord>(current.value.bytes);
+      const record = decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(current.value.bytes);
       const stored = reviveMeshDescriptor(record.descriptor);
       generation = BigInt(record.generation);
       if (sameMeshDescriptor(stored, descriptor)) {
@@ -1511,10 +1548,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       mutations: [{
         kind: 'put',
         key: rowKey,
-        bytes: encodeJson<MeshRecord>({
-          generation: generation.toString(),
-          descriptor: persistMeshDescriptor(descriptor)
-        })
+        bytes: encodeCanonicalDescriptorRecord(generation, persistMeshDescriptor(descriptor))
       }]
     }, signal);
     if (result.kind === 'conflict') return rejected(result.storeNow);
@@ -1529,7 +1563,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const rowKey = meshKey(key.meshName, key.rid);
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return WriteStatus.IgnoredStale;
-    const descriptor = reviveMeshDescriptor(decodeJson<MeshRecord>(current.value.bytes).descriptor);
+    const descriptor = reviveMeshDescriptor(decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(current.value.bytes).descriptor);
     if (descriptor.ownerId !== owner.ownerId
       || descriptor.leaseGeneration !== owner.leaseGeneration) {
       return WriteStatus.IgnoredStale;
@@ -1558,7 +1592,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
     const items = await Promise.all(result.value.items.map(async item => {
       const descriptor = reviveMeshDescriptor(
-        decodeJson<MeshRecord>(item.value.bytes).descriptor
+        decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(item.value.bytes).descriptor
       );
       const capacityRead = await this.provider.read(
         capacityKey(descriptor.meshName, String(descriptor.rid)),
@@ -1987,7 +2021,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const current = await this.provider.read(candidate.key, signal);
       if (current.kind === 'missing'
         || current.value.version.value !== candidate.scanVersion.value) continue;
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (
         record.snapshot.ownerId !== owner.ownerId
         || record.snapshot.ownerLeaseGeneration !== owner.leaseGeneration
@@ -2121,7 +2155,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     let generation = 1n;
     let rowCondition: ZLinkStoreCondition = { kind: 'missing', key: rowKey };
     if (current.kind === 'found') {
-      const record = decodeJson<DescriptorRecord<T>>(current.value.bytes);
+      const record = decodeCanonicalDescriptorRecord<T>(current.value.bytes);
       const stored = revive(record.descriptor);
       generation = BigInt(record.generation);
       if (same(stored, descriptor)) {
@@ -2159,10 +2193,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       mutations: [{
         kind: 'put',
         key: rowKey,
-        bytes: encodeJson<DescriptorRecord<T>>({
-          generation: generation.toString(),
-          descriptor
-        })
+        bytes: encodeCanonicalDescriptorRecord(generation, descriptor)
       }]
     }, signal);
     if (result.kind === 'conflict') return rejected(result.storeNow);
@@ -2178,7 +2209,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return WriteStatus.IgnoredStale;
     const descriptor = revive(
-      decodeJson<DescriptorRecord<T>>(current.value.bytes).descriptor);
+      decodeCanonicalDescriptorRecord<T>(current.value.bytes).descriptor);
     if (descriptor.ownerId !== owner.ownerId
       || descriptor.leaseGeneration !== owner.leaseGeneration) {
       return WriteStatus.IgnoredStale;
@@ -2208,7 +2239,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
     return {
       items: result.value.items.map(item =>
-        revive(decodeJson<DescriptorRecord<T>>(item.value.bytes).descriptor)),
+        revive(decodeCanonicalDescriptorRecord<T>(item.value.bytes).descriptor)),
       continuationToken: result.value.nextCursor?.value
     };
   }
@@ -2444,7 +2475,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (current.kind === 'missing') {
           throw new Error('Committed aggregate participant authority is missing.');
         }
-        const record = decodeJson<AuthorityRecord>(current.value.bytes);
+        const record = decodeAuthorityRecord(current.value.bytes);
         if (record.aggregate === undefined) {
           if (
             !Buffer.from(record.snapshot.payload).equals(
@@ -2506,7 +2537,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           mutations: [{
             kind: 'put',
             key: rowKey,
-            bytes: encodeJson(normalized)
+            bytes: encodeAuthorityRecord(normalized)
           }]
         }, signal);
         if (result.kind === 'applied') return;
@@ -2594,7 +2625,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         continue;
       }
       const matching = result.value.items.filter(item => {
-        const record = decodeJson<AuthorityRecord>(item.value.bytes);
+        const record = decodeAuthorityRecord(item.value.bytes);
         return record.aggregate?.aggregateId === fence.aggregateId.value
           && record.aggregate.aggregateGeneration === fence.aggregateGeneration;
       });
@@ -2614,7 +2645,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     for (;;) {
       const current = await this.provider.read(key, signal);
       if (current.kind === 'missing') return;
-      const record = decodeJson<AuthorityRecord>(current.value.bytes);
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (
         record.aggregate === undefined
         || record.aggregate.aggregateId !== fence.aggregateId.value
@@ -2627,7 +2658,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         mutations: [{
           kind: 'put',
           key,
-          bytes: encodeJson({ ...record, aggregate: undefined } satisfies AuthorityRecord)
+          bytes: encodeAuthorityRecord({ ...record, aggregate: undefined } satisfies AuthorityRecord)
         }]
       }, signal);
       if (result.kind === 'applied') return;
@@ -3010,10 +3041,6 @@ function aggregateParticipantMembershipKey(
   );
 }
 
-function authorityGenerationKey(value: string) {
-  return storeKey(`${PREFIX}authority-generation:${encodeURIComponent(value)}`);
-}
-
 function capacityKey(meshName: string, nodeRid: string) {
   return storeKey(
     `${PREFIX}capacity:${encodeURIComponent(meshName)}:${encodeURIComponent(nodeRid)}`
@@ -3109,6 +3136,162 @@ function decodeJson<T>(value: Uint8Array): T {
     }
     return candidate;
   }) as T;
+}
+
+function requireRecordVersion(value: unknown, kind: string): void {
+  if (value === null || typeof value !== 'object'
+    || (value as { recordVersion?: unknown }).recordVersion !== 1) {
+    throw new Error(`Location Store ${kind} record has an unrecognized recordVersion.`);
+  }
+}
+
+function canonicalize(value: unknown): unknown {
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, canonicalize(item)]));
+  }
+  return value;
+}
+
+function reviveCanonical(value: unknown, key = ''): unknown {
+  const generationKeys = new Set([
+    'generation', 'leaseGeneration', 'ownerLeaseGeneration', 'objectGeneration',
+    'authorityOwnerGeneration', 'aggregateGeneration', 'lifecycleGeneration', 'descriptorRevision',
+    'nodeGeneration', 'applicationVersion', 'requestEncodedSize'
+  ]);
+  if (typeof value === 'string' && generationKeys.has(key)) return BigInt(value);
+  if (Array.isArray(value)) return value.map(item => reviveCanonical(item));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, reviveCanonical(item, name)]));
+  }
+  return value;
+}
+
+function decodeOwnerRecord(bytes: Uint8Array): OwnerRecord {
+  const record = decodeJson<OwnerRecord>(bytes);
+  requireRecordVersion(record, 'owner lease');
+  return record;
+}
+
+function encodeOwnerRecord(ownerId: string, leaseGeneration: bigint): Uint8Array {
+  return encodeJson<OwnerRecord>({ recordVersion: 1, ownerId, leaseGeneration: leaseGeneration.toString() });
+}
+
+function encodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
+  generation: bigint,
+  descriptor: T
+): Uint8Array {
+  return Buffer.from(JSON.stringify({
+    recordVersion: 1,
+    generation: generation.toString(),
+    ownerId: descriptor.ownerId,
+    leaseGeneration: descriptor.leaseGeneration.toString(),
+    lifecycleGeneration: descriptor.lifecycleGeneration.toString(),
+    descriptorRevision: descriptor.descriptorRevision.toString(),
+    descriptor: canonicalize(descriptor)
+  } satisfies CanonicalDescriptorRecord<unknown>), 'utf8');
+}
+
+function decodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(bytes: Uint8Array): CanonicalDescriptorRecord<T> {
+  const record = JSON.parse(decodeText(bytes)) as CanonicalDescriptorRecord<unknown>;
+  requireRecordVersion(record, 'descriptor');
+  return reviveCanonical(record) as CanonicalDescriptorRecord<T>;
+}
+
+function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
+  const snapshot = record.snapshot;
+  const allocation = snapshot.allocation;
+  const objectKind = allocation.objectKind === 'actor' ? 'actor' : 'spot';
+  const spotKind = objectKind === 'spot'
+    ? allocation.objectKind.replace(/_spot$/, '')
+    : undefined;
+  const envelope: Record<string, unknown> = {
+    recordVersion: 1,
+    payload: Buffer.from(snapshot.payload).toString('base64'),
+    objectGeneration: snapshot.objectGeneration.toString(),
+    authorityOwnerGeneration: snapshot.authorityOwnerGeneration.toString(),
+    ownerId: snapshot.ownerId,
+    ownerLeaseGeneration: snapshot.ownerLeaseGeneration.toString(),
+    allocation: {
+      state: allocation.state,
+      objectKind,
+      ...(spotKind === undefined ? {} : { spotKind }),
+      stableType: allocation.stableType,
+      target: {
+        meshName: allocation.descriptor.meshName,
+        nodeRid: String(allocation.descriptor.rid),
+        nodeGeneration: allocation.descriptorLifecycleGeneration.toString()
+      },
+      capacityBundle: {
+        actorSlots: allocation.capacity.actors,
+        spotSlots: allocation.capacity.spots,
+        spotType: allocation.capacity.spotType === undefined ? null : canonicalize(allocation.capacity.spotType)
+      }
+    },
+    pendingCreation: snapshot.pendingCreation === undefined ? null : {
+      reservationId: snapshot.pendingCreation.reservationId,
+      requestContentReference: snapshot.pendingCreation.requestContentReference,
+      requestSha256: Buffer.from(snapshot.pendingCreation.requestSha256).toString('hex'),
+      requestEncodedSize: snapshot.pendingCreation.requestEncodedSize.toString()
+    }
+  };
+  // These fields gate Node-only creation/aggregate recovery.  They are absent
+  // from normal authority values (including the golden vector), while the
+  // interoperable envelope above remains byte-canonical.
+  if (record.reservationId !== undefined) envelope.reservationId = record.reservationId;
+  if (record.terminal !== undefined) envelope.terminal = record.terminal;
+  if (record.aggregate !== undefined) envelope.aggregate = canonicalize(record.aggregate);
+  if (record.visibleStoreVersion !== undefined) envelope.visibleStoreVersion = record.visibleStoreVersion;
+  return Buffer.from(JSON.stringify(envelope), 'utf8');
+}
+
+function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
+  const value = JSON.parse(decodeText(bytes)) as Record<string, unknown>;
+  requireRecordVersion(value, 'authority');
+  const allocation = value.allocation as Record<string, unknown>;
+  const target = allocation.target as Record<string, unknown>;
+  const bundle = allocation.capacityBundle as Record<string, unknown>;
+  const pending = value.pendingCreation as Record<string, unknown> | null;
+  const objectKind = allocation.objectKind === 'actor'
+    ? 'actor'
+    : `${String(allocation.spotKind)}_spot`;
+  return {
+    reservationId: typeof value.reservationId === 'string' ? value.reservationId : undefined,
+    terminal: value.terminal as AuthorityRecord['terminal'],
+    aggregate: value.aggregate === undefined
+      ? undefined
+      : reviveCanonical(value.aggregate) as AggregateParticipantFenceRecord,
+    visibleStoreVersion: typeof value.visibleStoreVersion === 'string'
+      ? value.visibleStoreVersion : undefined,
+    snapshot: {
+      payload: Buffer.from(String(value.payload), 'base64'),
+      objectGeneration: BigInt(String(value.objectGeneration)),
+      authorityOwnerGeneration: BigInt(String(value.authorityOwnerGeneration)),
+      ownerId: String(value.ownerId),
+      ownerLeaseGeneration: BigInt(String(value.ownerLeaseGeneration)),
+      allocation: {
+        state: allocation.state as ZLinkPlacementAllocation['state'],
+        objectKind: objectKind as ZLinkPlacementAllocation['objectKind'],
+        stableType: String(allocation.stableType),
+        descriptor: { meshName: String(target.meshName), rid: String(target.nodeRid) as never },
+        descriptorLifecycleGeneration: BigInt(String(target.nodeGeneration)),
+        capacity: {
+          actors: Number(bundle.actorSlots),
+          spots: Number(bundle.spotSlots),
+          spotType: bundle.spotType === null ? undefined : reviveCanonical(bundle.spotType) as ZLinkCapacityVector['spotType']
+        }
+      },
+      pendingCreation: pending === null ? undefined : {
+        reservationId: String(pending.reservationId),
+        requestContentReference: String(pending.requestContentReference),
+        requestSha256: Buffer.from(String(pending.requestSha256), 'hex'),
+        requestEncodedSize: BigInt(String(pending.requestEncodedSize))
+      }
+    }
+  };
 }
 
 function createTerminalRecord(
@@ -3242,9 +3425,9 @@ function liveTargetDescriptor(
 ): ZLinkMeshNodeDescriptor | undefined {
   if (descriptorRead.kind === 'missing' || leaseRead.kind === 'missing') return undefined;
   const descriptor = reviveMeshDescriptor(
-    decodeJson<MeshRecord>(descriptorRead.value.bytes).descriptor
+    decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptorRead.value.bytes).descriptor
   );
-  const lease = decodeJson<OwnerRecord>(leaseRead.value.bytes);
+  const lease = decodeOwnerRecord(leaseRead.value.bytes);
   return descriptor.meshName === target.meshName
     && String(descriptor.rid) === String(target.nodeRid)
     && descriptor.lifecycleGeneration === target.nodeLifecycleGeneration
@@ -3378,7 +3561,7 @@ function sameLiveOwner(
   snapshot: StoredAuthoritySnapshot
 ): boolean {
   if (liveOwnerLeaseGeneration(lease) !== snapshot.ownerLeaseGeneration) return false;
-  const owner = decodeJson<OwnerRecord>((lease as Extract<ZLinkStoreReadResult, { kind: 'found' }>).value.bytes);
+  const owner = decodeOwnerRecord((lease as Extract<ZLinkStoreReadResult, { kind: 'found' }>).value.bytes);
   return owner.ownerId === snapshot.ownerId;
 }
 
@@ -3390,7 +3573,7 @@ function liveOwnerLeaseGeneration(
     || lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()) {
     return undefined;
   }
-  return BigInt(decodeJson<OwnerRecord>(lease.value.bytes).leaseGeneration);
+  return BigInt(decodeOwnerRecord(lease.value.bytes).leaseGeneration);
 }
 
 function canTakeOverStoredLocation(

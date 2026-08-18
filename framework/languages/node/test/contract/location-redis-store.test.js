@@ -516,6 +516,64 @@ test('redis-backed aggregate prepare commit and abort converge across repository
   }
 });
 
+test('in-memory aggregate prepare, commit, and abort converge across repository instances', async () => {
+  const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const recovery = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const sourceOwner = await source.claimOwnerLease('memory-source-owner', 60_000);
+  const targetOwner = await recovery.claimOwnerLease('memory-target-owner', 60_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') return;
+  const sourceTarget = {
+    meshName: 'memory-play', nodeRid: 'memory-source-node', nodeLifecycleGeneration: 1n,
+    owner: sourceOwner.token
+  };
+  const targetTarget = {
+    meshName: 'memory-play', nodeRid: 'memory-target-node', nodeLifecycleGeneration: 1n,
+    owner: targetOwner.token
+  };
+  for (const [repository, target] of [[source, sourceTarget], [recovery, targetTarget]]) {
+    const stored = await repository.updateMeshNode(
+      aggregateDescriptor(target, 16), frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+    );
+    assert.equal(stored.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
+  }
+  const snapshots = [];
+  for (let index = 0; index < 4; index++) {
+    snapshots.push(await createReadyUserSpot(source, `memory-room-${index}`, sourceTarget));
+  }
+  const request = aggregateRequest(
+    { value: '77777777-7777-4777-8777-777777777777' }, 1n, snapshots, targetTarget,
+    snapshots.map((_, index) => `memory-room-${index}`)
+  );
+  const prepares = await Promise.all([
+    source.prepareAggregate(request), recovery.prepareAggregate(request)
+  ]);
+  assert.deepEqual(prepares.map(value => value.kind).sort(), ['alreadyPrepared', 'prepared']);
+  const prepared = prepares.find(value => value.kind === 'prepared');
+  assert.ok(prepared);
+  if (prepared === undefined || prepared.kind !== 'prepared') return;
+  const commits = await Promise.all([
+    source.commitAggregate(prepared.fence), recovery.commitAggregate(prepared.fence)
+  ]);
+  assert.equal(commits.every(value =>
+    value.kind === 'committed' || value.kind === 'alreadyCommitted'), true);
+
+  const abortSnapshot = await createReadyUserSpot(source, 'memory-room-abort', sourceTarget);
+  const abortRequest = aggregateRequest(
+    { value: '88888888-8888-4888-8888-888888888888' }, 1n,
+    [abortSnapshot], targetTarget, ['memory-room-abort']
+  );
+  const abortPrepared = await source.prepareAggregate(abortRequest);
+  assert.equal(abortPrepared.kind, 'prepared');
+  if (abortPrepared.kind !== 'prepared') return;
+  const aborts = await Promise.all([
+    source.abortAggregate(abortPrepared.fence), recovery.abortAggregate(abortPrepared.fence)
+  ]);
+  assert.deepEqual(aborts.map(value => value.kind).sort(), ['aborted', 'alreadyAborted']);
+});
+
 test('redis opaque Relocation Store uses Framework-issued immutable references', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
@@ -642,6 +700,34 @@ test('redis opaque Location Store production write path reproduces the golden au
     assert.equal(Buffer.from(read.value.bytes).toString('hex'), vector.jsonBytesHex);
     assert.equal(read.value.version.value, vector.version);
     assert.equal(read.value.expiresAt, undefined);
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
+test('redis-backed production repository rejects an authority envelope without recordVersion', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const prefix = testPrefix('record-version');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  const authorityKey = encodeAuthorityKey('actor', 'legacy-record');
+  try {
+    const written = await store.write({
+      conditions: [{ kind: 'missing', key: key(authorityPreimage(authorityKey)) }],
+      mutations: [{
+        kind: 'put',
+        key: key(authorityPreimage(authorityKey)),
+        bytes: Buffer.from(JSON.stringify({ snapshot: {} }))
+      }]
+    });
+    assert.equal(written.kind, 'applied');
+    await assert.rejects(
+      repository.readAuthority(authorityKey),
+      /unrecognized recordVersion/
+    );
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);

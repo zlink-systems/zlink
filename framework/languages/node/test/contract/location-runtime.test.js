@@ -1576,6 +1576,38 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal(observed.items[0].entrySpotId, descriptor.entrySpotId);
   assert.equal(observed.items[0].leaseGeneration, claimed.token.leaseGeneration);
 
+  const reserved = await writer.reserve({
+    key: { kind: 'actor', globalId: 'canonical-actor' },
+    intent: {
+      stableType: 'Player',
+      requestContentReference: 'request:canonical-actor',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 16n
+    },
+    target: {
+      meshName: 'play',
+      nodeRid: rid('node-a'),
+      nodeLifecycleGeneration: 1n,
+      owner: claimed.token
+    },
+    capacity: { actors: 1, spots: 0 },
+    creatingPayload: Buffer.from([0xde, 0xad, 0xbe, 0xef])
+  });
+  assert.equal(reserved.kind, 'reserved');
+  const canonical = await provider.read({ value: 'authority\0actor\0canonical-actor' });
+  assert.equal(canonical.kind, 'found');
+  const envelope = JSON.parse(Buffer.from(canonical.value.bytes).toString('utf8'));
+  assert.equal(envelope.recordVersion, 1);
+  assert.equal(envelope.payload, '3q2+7w==');
+  assert.equal(envelope.objectGeneration, '1');
+  assert.equal(envelope.authorityOwnerGeneration, '1');
+  assert.deepEqual(envelope.allocation, {
+    state: 'reserved', objectKind: 'actor', stableType: 'Player',
+    target: { meshName: 'play', nodeRid: 'node-a', nodeGeneration: '1' },
+    capacityBundle: { actorSlots: 1, spotSlots: 0, spotType: null }
+  });
+  assert.equal(envelope.pendingCreation.requestSha256, Buffer.alloc(32, 1).toString('hex'));
+
   nowMs += 1_000;
   const renewed = await reader.renewOwnerLease(claimed.token, 30_000);
   assert.equal(renewed.kind, 'renewed');
@@ -1587,6 +1619,25 @@ test('production repository persists owner lease and MeshNode records through on
     internal.ZLinkLocationWriteStatus.Stored
   );
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
+});
+
+test('production repository rejects legacy public records without recordVersion', async () => {
+  const provider = new internal.ZLinkInMemoryProviderLocationStore();
+  const authorityKey = authorityKeys.encodeAuthorityKey('actor', 'legacy-record');
+  const written = await provider.write({
+    conditions: [{ kind: 'missing', key: { value: `authority\0actor\0legacy-record` } }],
+    mutations: [{
+      kind: 'put',
+      key: { value: `authority\0actor\0legacy-record` },
+      bytes: Buffer.from(JSON.stringify({ snapshot: {} }))
+    }]
+  });
+  assert.equal(written.kind, 'applied');
+  const repository = new internal.ZLinkLocationStoreRepository(provider);
+  await assert.rejects(
+    repository.readAuthority(authorityKey),
+    /unrecognized recordVersion/
+  );
 });
 
 test('production repository removes provider-owned records in one fenced conditional batch', async () => {
