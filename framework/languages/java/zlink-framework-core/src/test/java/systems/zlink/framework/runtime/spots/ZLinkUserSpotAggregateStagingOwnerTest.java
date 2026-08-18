@@ -204,7 +204,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
     }
 
     @Test
-    void applyDeltaFailureTwiceIsAnExplicitRelocationDataLost() {
+    void applyDeltaFailureTwiceIsAnExplicitRelocationInternalFailure() {
         RetryBackend backend = new RetryBackend();
         backend.restoreSpotFailuresRemaining = 2;
         ZLinkUserSpotAggregateStagingOwner owner =
@@ -227,10 +227,13 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             systems.zlink.framework.errors.ZLinkFrameworkException.class,
             outcome.getCause());
         assertEquals(
-            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                .INTERNAL_FAILURE,
             cause.kind(),
-            "an exhausted base/delta retry must be an explicit DataLost, "
-                + "not a generic failure");
+            "an exhausted base/delta retry is Capture/factory/restore/"
+                + "staging failing internally (spec 15 failure table) — "
+                + "InternalFailure, not DataLost, which stays reserved for "
+                + "chunk-assembly/checksum verification failures");
     }
 
     @Test

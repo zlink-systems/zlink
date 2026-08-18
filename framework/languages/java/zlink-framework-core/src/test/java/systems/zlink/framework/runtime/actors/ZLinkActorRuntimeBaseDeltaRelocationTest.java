@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,6 +22,8 @@ import systems.zlink.framework.actors.ZLinkActorBaseDeltaRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -141,7 +144,16 @@ final class ZLinkActorRuntimeBaseDeltaRelocationTest {
 
         assertEquals(2, applyDeltaCalls.get(),
             "exactly one retry before an explicit failure");
-        assertTrue(failure.getCause().getMessage()
+        var typed = assertInstanceOf(
+            ZLinkFrameworkException.class, failure.getCause());
+        assertEquals(
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            typed.kind(),
+            "an exhausted base/delta retry is Capture/factory/restore/"
+                + "staging failing internally (spec 15 failure table) — "
+                + "InternalFailure, not DataLost, which stays reserved for "
+                + "chunk-assembly/checksum verification failures");
+        assertTrue(typed.getCause().getMessage()
             .contains("delta application always fails"));
         assertEquals(1, destroys.get(),
             "the backend actor reference is released after the final failure");

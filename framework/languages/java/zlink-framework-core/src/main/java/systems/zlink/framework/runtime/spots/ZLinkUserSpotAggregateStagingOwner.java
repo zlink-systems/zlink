@@ -91,9 +91,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
      * restoreBase→applyDelta sequence exactly once on a brand-new instance
      * — mirroring the Actor runtime's retry-once contract. Exhausting the
      * retry (or any restore failure on the legacy, non-base path, which
-     * never retries) fails explicitly; a base/delta restore failure that
-     * survives the retry is reported as an explicit
-     * {@link ZLinkFrameworkErrorKind#DATA_LOST}, never a generic failure.
+     * never retries) fails explicitly. Capture/factory/restore/staging
+     * failures — including ApplyDelta retry-exhaustion — are
+     * {@link ZLinkFrameworkErrorKind#INTERNAL_FAILURE} per the spec 15
+     * failure table; {@code DATA_LOST} stays reserved for chunk-assembly
+     * or checksum verification failures and is never produced here — it is
+     * only preserved when the cause already carries that classification.
      */
     private CompletionStage<Object> prepareAndRestoreSpot(
         Request request,
@@ -114,19 +117,21 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     Throwable cause = unwrap(failure);
                     return CompletableFuture.failedFuture(
                         request.hasBaseApplicationState()
-                            ? relocationDataLost(cause)
+                            ? relocationInternalFailure(cause)
                             : cause);
                 }));
     }
 
-    private static ZLinkFrameworkException relocationDataLost(
+    private static ZLinkFrameworkException relocationInternalFailure(
         Throwable cause) {
-        if (cause instanceof ZLinkFrameworkException framework
-            && framework.kind() == ZLinkFrameworkErrorKind.DATA_LOST) {
+        if (cause instanceof ZLinkFrameworkException framework) {
+            //  The deeper layer already classified this failure (e.g. a
+            //  genuine chunk-assembly/checksum DATA_LOST) — preserve it
+            //  rather than relabeling it as a generic internal failure.
             return framework;
         }
         return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.DATA_LOST,
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
             "User Spot base/delta relocation restore failed twice; "
                 + "the target instance is discarded, not partially reused",
             cause);

@@ -1334,7 +1334,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
      * instead of the ordinary full Capture/Restore. A failure applying the
      * delta discards the partially restored instance and retries the whole
      * restoreBase→applyDelta sequence exactly once on a fresh instance
-     * before failing explicitly — no partial reuse.
+     * before failing explicitly — no partial reuse. Exhausting the retry is
+     * Capture/factory/restore/staging failing internally (spec 15 failure
+     * table) and is reported as {@link ZLinkFrameworkErrorKind
+     * #INTERNAL_FAILURE}; {@code DataLost} stays reserved for
+     * chunk-assembly/checksum verification failures and is only preserved
+     * when the underlying cause already carries that classification.
      */
     public CompletionStage<PreparedTransferredActor> prepareRelocatedActor(
         String actorId,
@@ -1447,10 +1452,28 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     base,
                     false);
             }
+            Throwable cause = unwrap(failure);
             return discardPreparedBackend(actorRef, context)
                 .thenCompose(ignored -> CompletableFuture.failedFuture(
-                    unwrap(failure)));
+                    base != null
+                        ? relocationInternalFailure(cause)
+                        : cause));
         });
+    }
+
+    private static ZLinkFrameworkException relocationInternalFailure(
+        Throwable cause) {
+        if (cause instanceof ZLinkFrameworkException framework) {
+            //  The deeper layer already classified this failure (e.g. a
+            //  genuine chunk-assembly/checksum DataLost) — preserve it
+            //  rather than relabeling it as a generic internal failure.
+            return framework;
+        }
+        return new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            "Actor base/delta relocation restore failed twice; the target "
+                + "instance is discarded, not partially reused",
+            cause);
     }
 
     public synchronized ZLinkActor publishPreparedTransferredActor(
