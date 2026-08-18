@@ -281,6 +281,17 @@ public sealed partial class StreamConnectorTests
 
         public ZlinkStreamConnectorOptions Options { get; }
 
+        public ZlinkStreamDiagnosticsLevel DiagnosticsLevel => Options.DiagnosticsLevel;
+
+        public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
+        {
+            if (!System.Enum.IsDefined(level))
+                throw new ZlinkStreamException(
+                    new ZlinkStreamError(ZlinkStreamErrorCode.ValidationFailed, "DiagnosticsLevel is invalid."));
+
+            Options.SetDiagnosticsLevelLive(level);
+        }
+
         public int PendingDispatchCount => 0;
 
         public int ReceivedCount(string name)

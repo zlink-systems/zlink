@@ -379,6 +379,28 @@ At `Off`, outbound frames create no flow pair (0x10 not set), and inbound flow f
 only the structural length check — value validation and flow scope installs are skipped.
 The request correlation is kept regardless of the level.
 
+The live level change from common spec §13 is exposed through the following read/write API on
+`IZlinkStreamConnector`. The connector never needs to be recreated.
+
+```csharp
+public interface IZlinkStreamConnector : IAsyncDisposable
+{
+    ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
+
+    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
+    // ...
+}
+```
+
+`DiagnosticsLevel` reads straight through to `Options.DiagnosticsLevel`, and it always matches
+the level most recently applied by `SetDiagnosticsLevel` (so does the value `Options` exposes).
+`SetDiagnosticsLevel` rejects an undefined enum value the same way construction-time option
+validation does, with `ZlinkStreamErrorCode.ValidationFailed`. The value is stored in an atomic
+cell (`Volatile.Read`/`Volatile.Write`), and every processing point (building an outbound frame,
+dispatching an inbound packet, etc.) reads the level **exactly once** at the start of that
+operation and judges the whole operation by that one value — a level change mid-processing never
+affects work already under way, only the next processing point that starts after it.
+
 **`.NET`-only option:**
 
 | Option | Default | Meaning |

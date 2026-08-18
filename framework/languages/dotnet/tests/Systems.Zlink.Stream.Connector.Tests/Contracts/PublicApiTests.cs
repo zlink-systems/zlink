@@ -151,6 +151,14 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(
             typeof(IZlinkStreamSequenceCall),
             typeof(IZlinkStreamConnector).GetMethod(nameof(IZlinkStreamConnector.WaitForSequence))!.ReturnType);
+        Assert.Equal(
+            typeof(ZlinkStreamDiagnosticsLevel),
+            typeof(IZlinkStreamConnector).GetProperty(nameof(IZlinkStreamConnector.DiagnosticsLevel))!.PropertyType);
+        AssertMethod(
+            typeof(IZlinkStreamConnector),
+            nameof(IZlinkStreamConnector.SetDiagnosticsLevel),
+            typeof(void),
+            (typeof(ZlinkStreamDiagnosticsLevel), false));
         AssertMethod(
             typeof(ZlinkStreamAssert),
             nameof(ZlinkStreamAssert.Ensure),

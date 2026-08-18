@@ -17,11 +17,16 @@ internal sealed class ZlinkStreamReceiveDispatcher(
 
     public async ValueTask DispatchPacketAsync(ZlinkStreamFrame frame, CancellationToken cancellationToken)
     {
+        // Read the diagnostics level exactly once for this packet's processing so a
+        // concurrent level change never splits header decode from flow-scope
+        // installation within the same dispatch.
+        var diagnosticsLevel = options.DiagnosticsLevel;
+
         // At Off, inbound flow fields are framing only: keep the structural length
         // checks but skip validation, allocation, and flow-context installation.
         var header = headerCodec.Decode(
             frame.Header,
-            options.DiagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off);
+            diagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off);
         inboundObservers.Enqueue(header, frame.Payload);
 
         if (header.Kind == ZlinkStreamMessageKind.Control)
@@ -41,7 +46,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
-        await DispatchTypedHandlersAsync(header, frame.Payload, cancellationToken).ConfigureAwait(false);
+        await DispatchTypedHandlersAsync(header, frame.Payload, diagnosticsLevel, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async ValueTask DispatchControlAsync(
@@ -79,6 +85,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     private async ValueTask DispatchTypedHandlersAsync(
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> wirePayload,
+        ZlinkStreamDiagnosticsLevel diagnosticsLevel,
         CancellationToken cancellationToken)
     {
         var payload = frameSender.DecompressIfNeeded(header, wirePayload);
@@ -100,7 +107,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             await callbacks.DispatchUserCallbackAsync(
                     async dispatchedToken =>
                     {
-                        using var flow = options.DiagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+                        using var flow = diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
                             ? null
                             : ZlinkStreamFlowContext.Enter(header.FlowId, header.FlowOrigin);
                         await handler.Invoke(message, dispatchedToken).ConfigureAwait(false);

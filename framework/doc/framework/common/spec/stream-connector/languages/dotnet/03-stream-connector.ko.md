@@ -308,6 +308,28 @@ public ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } // 기본 Err
 길이 검사만 유지한 채 값 검증과 flow scope 설치를 생략한다. Request correlation은 level과
 무관하게 유지된다.
 
+공통 스펙 §13의 실행 중 level 변경은 `IZlinkStreamConnector`의 다음 read/write API로
+노출한다. Connector를 다시 만들 필요는 없다.
+
+```csharp
+public interface IZlinkStreamConnector : IAsyncDisposable
+{
+    ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; }
+
+    void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
+    // ...
+}
+```
+
+`DiagnosticsLevel`은 `Options.DiagnosticsLevel`을 그대로 읽는 값이며 항상 최근에
+`SetDiagnosticsLevel`로 적용한 level과 일치한다(`Options`가 노출하는 값도 마찬가지다).
+`SetDiagnosticsLevel`은 정의되지 않은 enum 값을 생성 시점 옵션 검증과 동일하게
+`ZlinkStreamErrorCode.ValidationFailed`로 거부한다. 저장은 원자적 cell(`Volatile.Read`/
+`Volatile.Write`)로 이뤄지며, 각 처리 지점(outbound frame 생성, inbound packet 처리 등)은
+그 처리를 시작할 때 level을 **한 번만** 읽어 그 값으로 처리 전체를 판단한다 — 처리 도중
+level이 다시 바뀌어도 이미 시작한 처리에는 영향을 주지 않고, 그 다음 처리 지점부터
+새 값이 적용된다.
+
 **`.NET`에만 있는 option:**
 
 | option | 기본값 | 의미 |

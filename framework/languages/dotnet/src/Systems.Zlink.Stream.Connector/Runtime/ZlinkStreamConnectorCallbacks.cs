@@ -4,7 +4,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
     ZlinkStreamTaskRunner taskRunner,
     ZlinkStreamDispatchMode dispatchMode,
     int maxPendingDispatchCallbacks,
-    ZlinkStreamDiagnosticsLevel diagnosticsLevel = ZlinkStreamDiagnosticsLevel.Errors)
+    ZlinkStreamConnectorOptions options)
 {
     private readonly object _dispatchGate = new();
     private readonly LinkedList<QueuedCallback> _dispatchQueue = new();
@@ -217,6 +217,10 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                         var reply = await request().ConfigureAwait(false);
                         completion = _ =>
                         {
+                            // Read once here so the completion closure judges the
+                            // reply consistently even if the level changes again
+                            // before it runs.
+                            var diagnosticsLevel = options.DiagnosticsLevel;
                             using var flow = diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
                                 ? null
                                 : ZlinkStreamFlowContext.Enter(reply.FlowId, reply.FlowOrigin);
@@ -259,8 +263,9 @@ internal sealed class ZlinkStreamConnectorCallbacks(
 
     private IDisposable? EnterLifecycleFlow()
     {
-        // Lifecycle flows are trace-only; at Off no flow context is created.
-        return diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+        // Lifecycle flows are trace-only; at Off no flow context is created. One
+        // atomic read decides this single call.
+        return options.DiagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
             ? null
             : ZlinkStreamFlowContext.EnterNew(ZlinkStreamFlowOrigin.Lifecycle);
     }

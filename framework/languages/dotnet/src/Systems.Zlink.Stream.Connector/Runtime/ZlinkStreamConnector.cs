@@ -45,7 +45,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _taskRunner,
             options.DispatchMode,
             options.MaxPendingDispatchCallbacks,
-            options.DiagnosticsLevel);
+            options);
         _inboundObservers = new ZlinkStreamInboundObserverDispatcher(
             _taskRunner,
             _callbacks,
@@ -117,6 +117,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     public ZlinkStreamConnectorOptions Options { get; }
 
+    public ZlinkStreamDiagnosticsLevel DiagnosticsLevel => Options.DiagnosticsLevel;
+
     public int PendingDispatchCount => _callbacks.PendingDispatchCount;
 
     public IZlinkStreamLifecycleCall Connect { get; }
@@ -130,6 +132,17 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         ThrowIfDisposed();
         ValidateName(name);
         return _receivedMessages.Count(name);
+    }
+
+    public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
+    {
+        ThrowIfDisposed();
+        if (!Enum.IsDefined(level))
+            throw Error(ZlinkStreamErrorCode.ValidationFailed, "DiagnosticsLevel is invalid.");
+
+        // The change applies to processing points that read the level after this
+        // write; frames already built are not revisited (stream-connector spec §13).
+        Options.SetDiagnosticsLevelLive(level);
     }
 
     public IZlinkStreamSendCall Send(ZlinkStreamEncodedPayload payload)

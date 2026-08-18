@@ -1002,7 +1002,8 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32);
+            32,
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new List<byte>();
@@ -1046,7 +1047,8 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32);
+            32,
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         var writeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completedWrites = 0;
@@ -1090,7 +1092,7 @@ public sealed partial class StreamConnectorTests
         using var shutdown = new CancellationTokenSource();
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var pending = new ZlinkStreamPendingRequests();
-        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32);
+        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32, new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
             {
@@ -1168,7 +1170,7 @@ public sealed partial class StreamConnectorTests
         using var shutdown = new CancellationTokenSource();
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
         var pending = new ZlinkStreamPendingRequests();
-        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32);
+        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32, new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
             {
@@ -1239,7 +1241,7 @@ public sealed partial class StreamConnectorTests
         var receiveCount = 0;
         using var shutdown = new CancellationTokenSource();
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
-        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32);
+        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32, new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
             {
@@ -1307,7 +1309,7 @@ public sealed partial class StreamConnectorTests
         var connection = new FaultingCloseConnection(closeFailure);
         using var shutdown = new CancellationTokenSource();
         var taskRunner = new ZlinkStreamTaskRunner(shutdown.Token);
-        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32);
+        var callbacks = new ZlinkStreamConnectorCallbacks(taskRunner, ZlinkStreamDispatchMode.Immediate, 32, new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         ZlinkStreamConnectorLifecycle? lifecycle = null;
         lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
@@ -1841,7 +1843,8 @@ public sealed partial class StreamConnectorTests
         var callbacks = new ZlinkStreamConnectorCallbacks(
             taskRunner,
             ZlinkStreamDispatchMode.Immediate,
-            32);
+            32,
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") });
         var lifecycle = new ZlinkStreamConnectorLifecycle(
             new ZlinkStreamConnectorOptions
             {
