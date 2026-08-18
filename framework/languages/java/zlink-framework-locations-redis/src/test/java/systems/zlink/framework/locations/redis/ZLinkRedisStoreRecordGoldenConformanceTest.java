@@ -10,18 +10,34 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScriptOutputType;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
@@ -29,6 +45,12 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 
 /**
  * Drives the PRODUCTION Redis write/read path (not a from-scratch decoder)
@@ -161,6 +183,108 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
                     store.read(key, () -> false).toCompletableFuture().join(),
                     "tombstoned record still reads as found: " + name);
             }
+        }
+    }
+
+    /**
+     * Drives {@code ZLinkProviderLocationRepository.updateMeshNode} -- the
+     * actual production MeshNode descriptor writer, not a from-scratch
+     * encoder -- against the full-field {@code meshNodeDescriptor-normal}
+     * vector (21-location-runtime.md#2.4), then reads the raw stored bytes
+     * back and structurally compares them to the fixture's {@code decoded}
+     * JSON. {@code leaseGeneration} is the one field the fixture can't pin
+     * ahead of time (it's issued by the live owner-lease claim, still on
+     * its own pre-migration encoding until that record type's turn), so it
+     * is substituted with the real claimed value on both sides before the
+     * comparison.
+     */
+    @Test
+    void productionMeshNodeDescriptorWriteMatchesFullFieldVector()
+        throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+
+        JsonNode fixture = readTree(sharedFixturePath());
+        JsonNode keyVector = keyDerivationVector(fixture, "mesh-node-descriptor");
+        JsonNode expectedRecord = valueVector(fixture, "meshNodeDescriptor-normal")
+            .path("decoded");
+        JsonNode expectedDescriptor = expectedRecord.path("descriptor");
+
+        String storePrefix = "goldenconf-mesh:" + UUID.randomUUID();
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(storePrefix))) {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                        expectedRecord.path("ownerId").asText(),
+                        Duration.ofMinutes(5))
+                    .toCompletableFuture().get());
+
+            var descriptor = new ZLinkMeshNodeDescriptor(
+                expectedDescriptor.path("meshName").asText(),
+                RoutingId.fromHex(
+                    expectedDescriptor.path("routingIdHex").asText()),
+                Long.parseLong(
+                    expectedDescriptor.path("lifecycleGeneration").asText()),
+                Long.parseLong(
+                    expectedDescriptor.path("descriptorRevision").asText()),
+                expectedDescriptor.path("endpoint").asText(),
+                toChannelWeights(expectedDescriptor.path("channelWeights")),
+                Long.parseLong(
+                    expectedDescriptor.path("applicationVersion").asText()),
+                toCapabilities(
+                    expectedDescriptor.path("objectCapabilities")),
+                ZLinkMeshNodeObjectRole.SERVER,
+                Optional.of(expectedDescriptor.path("entrySpotId").asText()),
+                expectedDescriptor.path("placementWeight").asInt(),
+                toCapacity(expectedDescriptor.path("capacity")),
+                new ZLinkActivationConcurrency(
+                    expectedDescriptor.path("activationConcurrency")
+                        .path("active").asInt(),
+                    expectedDescriptor.path("activationConcurrency")
+                        .path("limit").asInt()),
+                Optional.empty(),
+                ZLinkFrameworkRuntimeState.SERVING,
+                expectedDescriptor.path("securityIdentity").asText(),
+                owner.token().ownerId(),
+                owner.token().leaseGeneration(),
+                Instant.ofEpochMilli(Long.parseLong(
+                    expectedDescriptor.path("updatedAtEpochMs").asText())));
+
+            var written = repository.updateMeshNode(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+            assertEquals(ZLinkLocationWriteStatus.STORED, written.status());
+
+            String preimage = "mesh-node\0" + descriptor.meshName() + "\0"
+                + descriptor.rid().toHex();
+            assertEquals(
+                keyVector.path("preimagePrintable").asText()
+                    .replace("\\u0000", "\0"),
+                preimage,
+                "mesh-node preimage does not match the golden vector");
+
+            var raw = assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(new ZLinkStoreKey(preimage), () -> false)
+                    .toCompletableFuture().get());
+            JsonNode actual = new ObjectMapper().readTree(raw.value().bytes());
+
+            String leaseGeneration =
+                Long.toString(owner.token().leaseGeneration());
+            ObjectNode expected = expectedRecord.deepCopy();
+            expected.put("leaseGeneration", leaseGeneration);
+            ((ObjectNode) expected.path("descriptor"))
+                .put("leaseGeneration", leaseGeneration);
+
+            assertEquals(
+                expected,
+                actual,
+                "canonical JSON field mismatch against the golden vector");
         }
     }
 
@@ -330,6 +454,85 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
             return true;
         }
         throw new IllegalStateException("invalid msgpack bool tag: " + tag);
+    }
+
+    private static JsonNode keyDerivationVector(JsonNode fixture, String record) {
+        for (JsonNode key : fixture.path("keyDerivation")) {
+            if (record.equals(key.path("record").asText())) {
+                return key;
+            }
+        }
+        throw new IllegalStateException(
+            "no keyDerivation vector named: " + record);
+    }
+
+    private static JsonNode valueVector(JsonNode fixture, String name) {
+        for (JsonNode vector : fixture.path("valueVectors")
+                .path("genericOpaqueRecord")) {
+            if (name.equals(vector.path("name").asText())) {
+                return vector;
+            }
+        }
+        throw new IllegalStateException("no value vector named: " + name);
+    }
+
+    private static Map<String, Integer> toChannelWeights(JsonNode node) {
+        Map<String, Integer> weights = new LinkedHashMap<>();
+        node.fields().forEachRemaining(
+            entry -> weights.put(entry.getKey(), entry.getValue().asInt()));
+        return weights;
+    }
+
+    private static List<ZLinkObjectCapability> toCapabilities(JsonNode node) {
+        List<ZLinkObjectCapability> capabilities = new ArrayList<>();
+        node.forEach(capability -> capabilities.add(new ZLinkObjectCapability(
+            objectKindFromWire(capability.path("objectKind").asText()),
+            capability.path("stableType").asText(),
+            policyFromWire(capability.path("policy").asText()),
+            capability.path("hasSnapshotAdapter").asBoolean(),
+            capability.path("limit").asInt())));
+        return capabilities;
+    }
+
+    private static ZLinkPlacementCapacity toCapacity(JsonNode node) {
+        List<ZLinkSpotTypeCapacity> spotTypes = new ArrayList<>();
+        node.path("spotTypes").forEach(spotType -> spotTypes.add(
+            new ZLinkSpotTypeCapacity(
+                objectKindFromWire(spotType.path("objectKind").asText()),
+                spotType.path("stableType").asText(),
+                toUsage(spotType))));
+        return new ZLinkPlacementCapacity(
+            toUsage(node.path("actors")),
+            toUsage(node.path("spots")),
+            spotTypes);
+    }
+
+    private static ZLinkCapacityUsage toUsage(JsonNode node) {
+        return new ZLinkCapacityUsage(
+            node.path("active").asInt(),
+            node.path("reserved").asInt(),
+            node.path("limit").asInt());
+    }
+
+    private static ZLinkPlacementObjectKind objectKindFromWire(String value) {
+        return switch (value) {
+            case "actor" -> ZLinkPlacementObjectKind.ACTOR;
+            case "userSpot" -> ZLinkPlacementObjectKind.USER_SPOT;
+            case "instanceSpot" -> ZLinkPlacementObjectKind.INSTANCE_SPOT;
+            default -> throw new IllegalStateException(
+                "unrecognized objectKind: " + value);
+        };
+    }
+
+    private static ZLinkObjectMaintenancePolicyKind policyFromWire(
+        String value) {
+        return switch (value) {
+            case "disabled" -> ZLinkObjectMaintenancePolicyKind.DISABLED;
+            case "recreate" -> ZLinkObjectMaintenancePolicyKind.RECREATE;
+            case "snapshot" -> ZLinkObjectMaintenancePolicyKind.SNAPSHOT;
+            default -> throw new IllegalStateException(
+                "unrecognized policy: " + value);
+        };
     }
 
     private static Path sharedFixturePath() {
