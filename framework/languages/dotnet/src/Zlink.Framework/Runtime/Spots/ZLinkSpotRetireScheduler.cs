@@ -319,18 +319,23 @@ internal sealed class ZLinkSpotRetireScheduler(
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"relocation_reserved spot={activation.SpotId} target={reservation.TargetDescriptor.Rid}");
 
-        //  Spec 15 §5: CaptureBase runs pre-seal, once the exact relocation
-        //  identity (SpotId/StableType/ObjectGeneration — already fixed by
-        //  the reservation above) is known, but before the seal freezes
-        //  the turn boundary CaptureDelta later captures against. Empty
-        //  for non-base/delta-capable adapters (legacy path unaffected).
-        var spotBaseState = await activation
-            .CaptureSpotInstanceBaseAsync(cancellationToken)
-            .ConfigureAwait(false);
-
         ZLinkSpotRelocationSeal admittedSeal;
+        byte[] spotBaseState;
         try
         {
+            //  Spec 15 §5: CaptureBase runs pre-seal, immediately before
+            //  the seal call, once the exact relocation identity
+            //  (SpotId/StableType/ObjectGeneration — already fixed by the
+            //  reservation above) is known — matching the actor path's
+            //  placement rather than capturing base ahead of an
+            //  ApplicationSignaled wait of arbitrary length, which would
+            //  needlessly widen the base-to-seal turn-boundary gap. Empty
+            //  for non-base/delta-capable adapters (legacy path
+            //  unaffected). Inside the try so a capture failure aborts the
+            //  reservation via the same catch below, instead of leaking it.
+            spotBaseState = await activation
+                .CaptureSpotInstanceBaseAsync(cancellationToken)
+                .ConfigureAwait(false);
             admittedSeal = activation.RelocationReadiness
                            == ZLinkSpotRelocationReadinessMode.ApplicationSignaled
                 ? await activation

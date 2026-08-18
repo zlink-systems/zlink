@@ -84,9 +84,11 @@ public sealed partial class EntrySpotActorDispatchTests
         //  to rebind a fresh instance onto an already-staged activation —
         //  unlike the Actor path, an apply failure cannot retry from
         //  RestoreBase on a fresh instance without redoing the whole
-        //  reservation/staging pipeline. It must fail fast with an
-        //  explicit relocationDataLost instead of reusing the
-        //  partially-applied instance.
+        //  reservation/staging pipeline. It must fail fast instead of
+        //  reusing the partially-applied instance. Spec 15 failure table:
+        //  an apply/restore failure is InternalFailure, not DataLost —
+        //  DataLost is reserved for verified checksum/assembly/digest
+        //  integrity failures.
         var adapter = new FailingApplyDeltaSpotAdapter();
         var activation = CreateSpotActivation(
             "base-delta-restore-fail",
@@ -98,7 +100,7 @@ public sealed partial class EntrySpotActorDispatchTests
         activation.AttachSpot(spot);
         await using var cleanup = activation;
 
-        var failure = await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
             () => activation.RestoreSpotRelocationStateAsync(
                     state: new byte[] { 4, 5 },
                     basePayload: new byte[] { 1, 2, 3 },
@@ -106,6 +108,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     CancellationToken.None)
                 .AsTask());
 
+        Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, failure.Kind);
         Assert.Contains("apply failed", failure.Message);
         Assert.Equal(["RestoreBase:3"], adapter.Calls);
     }

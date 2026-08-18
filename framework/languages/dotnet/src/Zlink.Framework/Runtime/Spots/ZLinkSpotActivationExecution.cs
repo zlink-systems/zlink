@@ -2259,13 +2259,27 @@ internal abstract partial class ZLinkSpotActivation
     /// is set (spec 15 §5), does RestoreBase→ApplyDelta; a failure discards
     /// the partially-applied instance instead of reusing it. Unlike the
     /// Actor path (<see cref="ZLinkActorCreationCoordinator"/>), this cannot
-    /// retry from RestoreBase on a fresh instance: the dotnet Spot
-    /// activation factory always constructs its POCO instance eagerly when
-    /// staging a relocation target (<c>invokeCreate</c> only gates the
-    /// app-level create callback), and exposes no hook to rebind a fresh
-    /// instance onto an already-staged activation short of redoing the
-    /// whole reservation/staging pipeline — so an apply failure here goes
-    /// straight to an explicit relocationDataLost.
+    /// retry from RestoreBase on a fresh instance and goes straight to an
+    /// explicit InternalFailure (spec 15 failure table — apply/restore
+    /// failures are InternalFailure, not DataLost). The structural
+    /// obstacle to a fresh-instance retry: <c>AttachUserSpotCore</c> /
+    /// <c>AttachInstanceSpotCore</c> (ZLinkSpotActivationConfiguration.cs
+    /// ~52-53, ~76-77) throw once <c>_spot</c> is non-null — an
+    /// activation accepts exactly one Spot instance for its lifetime — and
+    /// even bypassing that guard would not be enough:
+    /// <c>ZLinkSpotHandlerInvoker</c> (ZLinkSpotHandlerInvoker.cs
+    /// constructor, ~lines 7-14) captures the specific Spot instance by
+    /// value into a private field used for every subsequent packet/handler
+    /// dispatch, so swapping <c>_spot</c> alone would leave live dispatch
+    /// bound to the discarded, failed instance. A correct rebind would
+    /// need to reconstruct the handler invoker (and re-verify
+    /// <c>BindDescriptorsAsync</c>'s subscription/actor-join binding is
+    /// safe to run twice) — i.e. redo most of
+    /// <c>ZLinkSpotActivationFactory.CreateUserSpotAsync</c>'s
+    /// construction+bind portion, not just swap the POCO. This is a real
+    /// gap versus java/cpp/node parity, tracked as follow-up rather than
+    /// implemented here given the risk of a worse bug (dispatch routed to
+    /// a discarded instance) from a partial rebind.
     /// </summary>
     internal ValueTask RestoreSpotRelocationStateAsync(
         ReadOnlyMemory<byte> state,
@@ -2301,12 +2315,26 @@ internal abstract partial class ZLinkSpotActivation
                             ct)
                         .ConfigureAwait(false);
                 }
+                catch (ZLinkFrameworkException)
+                {
+                    //  An already-classified cause (e.g. a verified
+                    //  checksum/assembly integrity failure, which stays
+                    //  DataLost) keeps its own classification rather than
+                    //  being folded into InternalFailure below.
+                    throw;
+                }
                 catch (Exception applyFailure)
                 {
-                    throw new ZLinkRelocationDataLostException(
+                    //  Spec 15 failure table: an apply/restore failure is
+                    //  InternalFailure, not DataLost — DataLost is reserved
+                    //  for verified checksum/assembly/digest integrity
+                    //  failures, which this is not.
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InternalFailure,
                         $"SPOT '{activation.SpotId}' base/delta relocation "
                         + "apply failed: "
-                        + applyFailure.Message);
+                        + applyFailure.Message,
+                        innerException: applyFailure);
                 }
             },
             cancellationToken);

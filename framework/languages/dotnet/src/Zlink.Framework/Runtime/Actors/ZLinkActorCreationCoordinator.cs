@@ -325,11 +325,19 @@ internal sealed class ZLinkActorCreationCoordinator(
                 .ConfigureAwait(false);
             return actor;
         }
-        catch when (allowRetry)
+        catch (ZLinkFrameworkException) when (!allowRetry)
+        {
+            //  An already-classified cause (e.g. a verified
+            //  checksum/assembly integrity failure, which stays DataLost)
+            //  keeps its own classification on retry exhaustion.
+            throw;
+        }
+        catch (Exception applyFailure) when (allowRetry)
         {
             //  The failed instance is discarded here (never bound, never
             //  published) — the retry restores a fresh instance instead of
             //  reusing this partially applied one.
+            _ = applyFailure;
             return await CreateAndRestoreRelocatedActorAsync(
                     scopedServices,
                     factoryType,
@@ -341,6 +349,17 @@ internal sealed class ZLinkActorCreationCoordinator(
                     allowRetry: false,
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
+        catch (Exception applyFailure)
+        {
+            //  Spec 15 failure table: an apply/restore failure — including
+            //  retry exhaustion — is InternalFailure, not DataLost.
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InternalFailure,
+                $"Actor '{context.ActorId}' base/delta relocation apply "
+                + "failed after retry: "
+                + applyFailure.Message,
+                innerException: applyFailure);
         }
     }
 

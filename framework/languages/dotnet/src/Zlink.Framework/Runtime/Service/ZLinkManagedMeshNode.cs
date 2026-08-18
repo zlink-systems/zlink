@@ -5336,6 +5336,78 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 assembler));
     }
 
+    /// <summary>
+    /// Maps a target-side relocation Prepare failure to the closest wire
+    /// framework-error code the generated schema
+    /// (<see cref="ServiceWireConstants.FrameworkErrorCode"/>) defines
+    /// (mirrors the java reference mapping, commit 97fc074058). The wire
+    /// vocabulary predates the framework's typed error kinds and has no
+    /// one-to-one code for every kind, so several kinds share the nearest
+    /// fit. <see cref="ZLinkRelocationDataLostException"/> is dotnet's own
+    /// dedicated type for a verified checksum/assembly/digest integrity
+    /// failure (manifest mismatch, base-chunk checksum mismatch) — the one
+    /// case that keeps <c>RelocationDataLost</c>. An unclassified
+    /// exception (neither of the above) carries no evidence of integrity
+    /// loss and takes the generic opaque <c>RequestFailed</c> code.
+    /// <paramref name="objectKind"/> (1 = Actor, else Spot/Instance — spec
+    /// 28 §4.2's ObjectFence.kind) picks between an Actor- and
+    /// Spot-specific code where the schema splits by object kind.
+    /// </summary>
+    private static ServiceWireConstants.FrameworkErrorCode
+        ResolveRelocationFailedWireCode(Exception exception, byte objectKind)
+    {
+        if (exception is ZLinkRelocationDataLostException)
+            return ServiceWireConstants.FrameworkErrorCode.RelocationDataLost;
+        if (exception is not ZLinkFrameworkException framework)
+            return ServiceWireConstants.FrameworkErrorCode.RequestFailed;
+        return framework.Kind switch
+        {
+            ZLinkFrameworkErrorKind.DataLost =>
+                ServiceWireConstants.FrameworkErrorCode.RelocationDataLost,
+            ZLinkFrameworkErrorKind.Rejected =>
+                ServiceWireConstants.FrameworkErrorCode.RequestRejected,
+            ZLinkFrameworkErrorKind.ProtocolError =>
+                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+            //  No dedicated "capacity exceeded" wire code exists; a full
+            //  queue is the closest capacity-shaped signal.
+            ZLinkFrameworkErrorKind.CapacityExceeded =>
+                ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull,
+            //  No dedicated "deadline exceeded" wire code exists; a worker
+            //  timeout is the closest timeout-shaped signal.
+            ZLinkFrameworkErrorKind.DeadlineExceeded =>
+                ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
+            //  A stale generation/fence is the concrete cause of
+            //  InvalidOperation along this path (spec 15 failure table);
+            //  pick the object-kind-specific stale code.
+            ZLinkFrameworkErrorKind.InvalidOperation => objectKind == 1
+                ? ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                : ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+            //  No dedicated generic "unavailable" wire code exists; a
+            //  disconnected route is the closest "cannot reach/use the
+            //  target" signal.
+            ZLinkFrameworkErrorKind.Unavailable =>
+                ServiceWireConstants.FrameworkErrorCode.RouteNotConnected,
+            ZLinkFrameworkErrorKind.NotFound =>
+                ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound,
+            //  The only "already exists" wire code is Actor-specific; not
+            //  expected along this target-failure path, mapped for
+            //  completeness.
+            ZLinkFrameworkErrorKind.AlreadyExists =>
+                ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists,
+            ZLinkFrameworkErrorKind.TypeMismatch => objectKind == 1
+                ? ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+                : ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch,
+            //  No dedicated "not configured" wire code exists; a missing
+            //  configured handler is the closest analog.
+            ZLinkFrameworkErrorKind.NotConfigured =>
+                ServiceWireConstants.FrameworkErrorCode.HandlerNotFound,
+            //  No dedicated generic "internal failure" or "shutting down"
+            //  wire code exists; the generic opaque request-failure code
+            //  is the closest fit for both.
+            _ => ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+        };
+    }
+
     private async Task ProcessRelocationPrepareAsync(
         ICanonicalRelocationTarget target,
         Peer peer,
@@ -5441,8 +5513,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                 prepare.Target,
                                 prepare.Object,
                                 2,
-                                ServiceWireConstants.FrameworkErrorCode
-                                    .RelocationDataLost)),
+                                ResolveRelocationFailedWireCode(
+                                    exception,
+                                    prepare.Object.Kind))),
                         _stop?.Token ?? CancellationToken.None)
                     .ConfigureAwait(false);
             }
