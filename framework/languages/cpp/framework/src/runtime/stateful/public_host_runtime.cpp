@@ -3343,6 +3343,261 @@ task_t<void> public_host_runtime_t::retry_bound_session_replacements ()
     co_return;
 }
 
+void public_host_runtime_t::complete_relocation_assembly (
+  const relocation_attempt_key_t &key, pending_relocation_assembly_t pending)
+{
+    auto payload = pending.assembly.take_payload ();
+    std::vector<stateful::frozen_object_state_t> frozen;
+    stateful::inventory_digest_t inventory_digest{};
+    if (const auto single = stateful::maintenance_runtime_t::decode (payload)) {
+        frozen.push_back (single->first);
+        inventory_digest = single->second;
+    }
+    else if (const auto aggregate =
+               stateful::maintenance_runtime_t::decode_aggregate (payload)) {
+        frozen = aggregate->first;
+        inventory_digest = aggregate->second;
+    }
+    if (frozen.empty ())
+        return;
+    const auto stored_session_routes =
+      stateful::maintenance_runtime_t::decode_session_routes (payload);
+    if (!stored_session_routes)
+        return;
+
+    const auto local = status ();
+    std::vector<stateful::object_ref_t> sources;
+    std::vector<stateful::object_ref_t> targets;
+    std::vector<protocol::relocation_object_t> wire_objects;
+    bool principal_found = false;
+    for (const auto &saved : frozen) {
+        protocol::relocation_object_kind_t kind;
+        switch (saved.owner.kind) {
+        case stateful::object_kind_t::actor:
+            kind = protocol::relocation_object_kind_t::actor;
+            break;
+        case stateful::object_kind_t::user_spot:
+            kind = protocol::relocation_object_kind_t::user_spot;
+            break;
+        case stateful::object_kind_t::instance_spot:
+            kind = protocol::relocation_object_kind_t::instance_spot;
+            break;
+        default:
+            return;
+        }
+        if (saved.owner.authority_owner_generation
+            == std::numeric_limits<std::uint64_t>::max ())
+            return;
+        protocol::relocation_object_t wire_object{
+          kind, saved.stable_type, saved.owner.key,
+          saved.owner.object_generation,
+          saved.owner.authority_owner_generation};
+        principal_found = principal_found
+                          || wire_object == pending.prepare.object;
+        auto target = saved.owner;
+        target.node_id = local.routing_id ().to_string ();
+        ++target.authority_owner_generation;
+        sources.push_back (saved.owner);
+        targets.push_back (std::move (target));
+        wire_objects.push_back (std::move (wire_object));
+    }
+    if (!principal_found)
+        return;
+    for (std::size_t index = 0; index != stored_session_routes->size ();
+         ++index) {
+        const auto &route = (*stored_session_routes)[index];
+        const auto saved = std::find_if (
+          frozen.begin (), frozen.end (), [&route] (const auto &candidate) {
+              return candidate.owner.kind == stateful::object_kind_t::actor
+                     && candidate.owner.key == route.actor.actor_id
+                     && candidate.owner.object_generation
+                          == route.actor.object_generation;
+          });
+        const auto duplicate = std::find_if (
+          stored_session_routes->begin (),
+          stored_session_routes->begin ()
+            + static_cast<std::ptrdiff_t> (index),
+          [&route] (const auto &candidate) {
+              return candidate.actor == route.actor;
+          });
+        if (saved == frozen.end ()
+            || duplicate != stored_session_routes->begin ()
+                              + static_cast<std::ptrdiff_t> (index)
+            || route.relocation != pending.prepare.relocation
+            || route.coordinator != pending.prepare.coordinator
+            || route.sender_role != protocol::relocation_role_t::target
+            || route.route.action
+                 != protocol::session_relocation_route_action_t::commit
+            || route.route.previous_authority_owner_generation
+                 != saved->owner.authority_owner_generation
+            || route.route.target_authority_owner_generation
+                 != saved->owner.authority_owner_generation + 1
+            || route.route.target_node_routing_id != local.routing_id ().to_bytes ()
+            || route.route.target_node_generation
+                 != local.lifecycle_generation ())
+            return;
+    }
+
+    const stateful::relocation_restore_identity_t restore_identity{
+      "direct:" + std::to_string (pending.prepare.relocation.high) + ":"
+        + std::to_string (pending.prepare.relocation.low) + ":"
+        + std::to_string (pending.prepare.target_attempt_generation),
+      pending.prepare.payload_checksum_crc32c, inventory_digest};
+    std::size_t registered_count = 0;
+    for (; registered_count != targets.size (); ++registered_count) {
+        if (register_relocation_target_queue (
+              pending.prepare, targets[registered_count],
+              wire_objects[registered_count]))
+            continue;
+        for (std::size_t index = 0; index != registered_count; ++index) {
+            try {
+                (void) _relocation_wire->unregister_target (
+                  pending.prepare.relocation,
+                  pending.prepare.target_attempt_generation,
+                  wire_objects[index]);
+            }
+            catch (...) {
+            }
+        }
+        return;
+    }
+    stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
+    try {
+        restored = targets.size () == 1
+                     ? _objects.restore_relocation (frozen.front (),
+                                                    targets.front (),
+                                                    restore_identity, {})
+                     : _objects.restore_relocation_aggregate (
+                         frozen, targets, restore_identity, {});
+    }
+    catch (...) {
+        for (std::size_t index = 0; index != registered_count; ++index)
+            (void) _relocation_wire->unregister_target (
+              pending.prepare.relocation,
+              pending.prepare.target_attempt_generation, wire_objects[index]);
+        return;
+    }
+    if (restored != stateful::stateful_error_t::none
+        && restored != stateful::stateful_error_t::already_exists) {
+        for (std::size_t index = 0; index != registered_count; ++index)
+            (void) _relocation_wire->unregister_target (
+              pending.prepare.relocation,
+              pending.prepare.target_attempt_generation, wire_objects[index]);
+        return;
+    }
+
+    relocation_target_attempt_t attempt;
+    attempt.prepare = pending.prepare;
+    attempt.restore_identity = restore_identity;
+    attempt.sources = std::move (sources);
+    attempt.targets = std::move (targets);
+    attempt.wire_objects = std::move (wire_objects);
+    for (const auto &route : *stored_session_routes) {
+        attempt.session_routes.emplace_back ();
+        attempt.session_routes.back ().route = route;
+    }
+    attempt.ready = true;
+    attempt.attempt_expires_at = std::chrono::steady_clock::now ()
+                                 + relocation_attempt_retention;
+    {
+        std::lock_guard lock (_mutex);
+        if (!_relocation_target_attempts.emplace (key, std::move (attempt)).second)
+            return;
+    }
+    const auto ready_sent = _transport->reply_relocation_ready (
+      pending.request,
+      protocol::relocation_ready_t{pending.prepare.relocation,
+                                   pending.prepare.target_attempt_generation,
+                                   pending.prepare.coordinator,
+                                   pending.prepare.target,
+                                   pending.prepare.object,
+                                   protocol::relocation_role_t::target});
+    if (ready_sent) {
+        std::lock_guard lock (_mutex);
+        const auto found = _relocation_target_attempts.find (key);
+        if (found != _relocation_target_attempts.end ())
+            found->second.ready_fallback_at = std::chrono::steady_clock::now ()
+                                              + _relocation_cutover_wait;
+        return;
+    }
+    std::optional<relocation_target_attempt_t> aborted;
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = _relocation_target_attempts.find (key);
+        if (found != _relocation_target_attempts.end ()) {
+            aborted.emplace (std::move (found->second));
+            _relocation_target_attempts.erase (found);
+        }
+    }
+    if (!aborted)
+        return;
+    for (const auto &wire_object : aborted->wire_objects) {
+        try {
+            (void) _relocation_wire->unregister_target (
+              aborted->prepare.relocation,
+              aborted->prepare.target_attempt_generation, wire_object);
+        }
+        catch (...) {
+        }
+    }
+    try {
+        if (aborted->targets.size () == 1)
+            (void) _objects.abort_relocation_restore (
+              aborted->targets.front (), aborted->restore_identity);
+        else
+            (void) _objects.abort_relocation_restore_aggregate (
+              aborted->targets, aborted->restore_identity);
+    }
+    catch (...) {
+    }
+}
+
+bool public_host_runtime_t::register_relocation_target_queue (
+  const protocol::relocation_prepare_t &prepare,
+  const stateful::object_ref_t &target,
+  const protocol::relocation_object_t &wire_object)
+{
+    try {
+        return _relocation_wire->register_target ({
+          prepare.relocation, prepare.target_attempt_generation,
+          prepare.coordinator, prepare.source_node_routing_id,
+          prepare.source_node_generation, wire_object,
+          [this, target] (const protocol::relocation_data_t &data) {
+              const auto frozen_record = data.record;
+              return _stateful_dispatch
+                     && _stateful_dispatch->stage_relocated (
+                       target,
+                       {0, protocol::encode_frozen_record (frozen_record)},
+                       [this, data, frozen_record] (
+                         const std::optional<protocol::application_payload_t>
+                           &reply) {
+                           if (!frozen_record.reply_route_id)
+                               return true;
+                           const auto terminal_sequence =
+                             frozen_record.operation.low != 0
+                               ? frozen_record.operation.low
+                               : frozen_record.operation.high;
+                           const protocol::reply_relay_t relay{
+                             frozen_record.operation,
+                             *frozen_record.reply_route_id, data.relocation,
+                             data.target_attempt_generation, data.coordinator,
+                             1, terminal_sequence, reply ? 0u : 105u,
+                             reply ? protocol::framework_error_code::none
+                                   : protocol::framework_error_code::requestFailed};
+                           return _relocation_wire->register_terminal_target ({
+                             relay, frozen_record.source, reply,
+                             [] (protocol::reply_relay_ack_status_t) {
+                                 return true;
+                             }, [] { return true; },
+                             data.coordinator.node_routing_id});
+                       }) == stateful::stateful_error_t::none;
+          }, [] (const protocol::relocation_data_t &) {}});
+    }
+    catch (...) {
+        return false;
+    }
+}
+
 task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 {
     co_await retry_bound_session_replacements ();
@@ -3352,7 +3607,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     instance_spot_activation_materializer_t instance_materializer;
     std::shared_ptr<stateful::relocation_store_port_t>
       instance_relocations;
-    std::shared_ptr<stateful::relocation_store_port_t> relocation_store;
     location_owner_token_t instance_owner;
     std::function<std::optional<location_owner_token_t> ()>
       session_route_owner_resolver;
@@ -3368,7 +3622,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         actor_create_target = _actor_create_target;
         instance_materializer = _instance_spot_materializer;
         instance_relocations = _instance_spot_relocations;
-        relocation_store = _session_relocations;
         instance_owner = _instance_spot_owner;
         session_route_owner_resolver =
           _session_route_owner_resolver;
@@ -3378,6 +3631,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         bound_session_operations = _bound_session_operations;
     }
     expire_relocation_target_attempts ();
+    {
+        const auto now = std::chrono::steady_clock::now ();
+        std::lock_guard lock (_mutex);
+        for (auto pending = _relocation_assemblies.begin ();
+             pending != _relocation_assemblies.end ();) {
+            if (pending->second.expires_at > now) {
+                ++pending;
+                continue;
+            }
+            pending = _relocation_assemblies.erase (pending);
+        }
+    }
     poll_relocation_target_attempts ();
     flush_pending_session_relocation_seals ();
     std::size_t count = 0;
@@ -3589,342 +3854,82 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         continue;
                     }
 
-                    const auto payload =
-                      relocation_store->get (prepare->root->reference);
-                    if (!payload
-                        || stateful::maintenance_runtime_t::crc32c (
-                             *payload)
-                             != prepare->root->checksum_crc32c)
+                    if (prepare->payload_total_length == 0
+                        || prepare->payload_total_length
+                             > protocol::relocationLogicalBytes
+                        || prepare->payload_chunk_count == 0
+                        || prepare->payload_chunk_count
+                             > protocol::relocationChunkCount)
                         continue;
-
-                    std::vector<stateful::frozen_object_state_t> frozen;
-                    stateful::inventory_digest_t inventory_digest{};
-                    const auto stored_session_routes =
-                      stateful::maintenance_runtime_t::
-                        decode_session_routes (*payload);
-                    if (!stored_session_routes)
-                        continue;
-                    if (const auto single =
-                          stateful::maintenance_runtime_t::decode (
-                            *payload)) {
-                        frozen.push_back (single->first);
-                        inventory_digest = single->second;
-                    }
-                    else if (const auto aggregate =
-                               stateful::maintenance_runtime_t::
-                                 decode_aggregate (*payload)) {
-                        frozen = aggregate->first;
-                        inventory_digest = aggregate->second;
-                    }
-                    if (frozen.empty ())
-                        continue;
-
-                    std::vector<stateful::object_ref_t> targets;
-                    std::vector<stateful::object_ref_t> sources;
-                    std::vector<protocol::relocation_object_t>
-                      wire_objects;
-                    targets.reserve (frozen.size ());
-                    sources.reserve (frozen.size ());
-                    wire_objects.reserve (frozen.size ());
-                    bool valid = true;
-                    bool principal_found = false;
-                    for (const auto &saved : frozen) {
-                        protocol::relocation_object_kind_t kind;
-                        switch (saved.owner.kind) {
-                        case stateful::object_kind_t::actor:
-                            kind =
-                              protocol::relocation_object_kind_t::actor;
-                            break;
-                        case stateful::object_kind_t::user_spot:
-                            kind =
-                              protocol::relocation_object_kind_t::user_spot;
-                            break;
-                        case stateful::object_kind_t::instance_spot:
-                            kind =
-                              protocol::relocation_object_kind_t::
-                                instance_spot;
-                            break;
-                        default:
-                            valid = false;
-                            continue;
-                        }
-                        if (saved.owner.authority_owner_generation
-                            == std::numeric_limits<std::uint64_t>::max ()) {
-                            valid = false;
-                            break;
-                        }
-                        protocol::relocation_object_t wire_object{
-                          kind,
-                          saved.stable_type,
-                          saved.owner.key,
-                          saved.owner.object_generation,
-                          saved.owner.authority_owner_generation};
-                        principal_found =
-                          principal_found
-                          || wire_object == prepare->object;
-                        auto target = saved.owner;
-                        target.node_id = local.routing_id ().to_string ();
-                        ++target.authority_owner_generation;
-                        sources.push_back (saved.owner);
-                        wire_objects.push_back (std::move (wire_object));
-                        targets.push_back (std::move (target));
-                    }
-                    if (!valid || !principal_found
-                        || targets.size () != frozen.size ())
-                        continue;
-
-                    for (std::size_t index = 0;
-                         index != stored_session_routes->size (); ++index) {
-                        const auto &route = (*stored_session_routes)[index];
-                        const auto saved = std::find_if (
-                          frozen.begin (), frozen.end (),
-                          [&route] (const auto &candidate) {
-                              return candidate.owner.kind
-                                       == stateful::object_kind_t::actor
-                                     && candidate.owner.key
-                                          == route.actor.actor_id
-                                     && candidate.owner.object_generation
-                                          == route.actor.object_generation;
-                          });
-                        const auto duplicate = std::find_if (
-                          stored_session_routes->begin (),
-                          stored_session_routes->begin ()
-                            + static_cast<std::ptrdiff_t> (index),
-                          [&route] (const auto &candidate) {
-                              return candidate.actor == route.actor;
-                          });
-                        if (saved == frozen.end ()
-                            || duplicate
-                                 != stored_session_routes->begin ()
-                                      + static_cast<std::ptrdiff_t> (index)
-                            || route.relocation != prepare->relocation
-                            || route.coordinator != prepare->coordinator
-                            || route.sender_role
-                                 != protocol::relocation_role_t::target
-                            || route.route.action
-                                 != protocol::
-                                      session_relocation_route_action_t::commit
-                            || route.route.previous_authority_owner_generation
-                                 != saved->owner.authority_owner_generation
-                            || route.route.target_authority_owner_generation
-                                 != saved->owner.authority_owner_generation + 1
-                            || route.route.target_node_routing_id
-                                 != local.routing_id ().to_bytes ()
-                            || route.route.target_node_generation
-                                 != local.lifecycle_generation ()) {
-                            valid = false;
-                            break;
-                        }
-                    }
-                    if (!valid)
-                        continue;
-
-                    const stateful::relocation_restore_identity_t
-                      restore_identity{
-                        prepare->root->reference,
-                        prepare->root->checksum_crc32c,
-                        inventory_digest};
-
-                    std::size_t registered_count = 0;
-                    const auto rollback_target = [&] {
-                        for (std::size_t index = 0;
-                             index != registered_count; ++index) {
-                            try {
-                                (void) _relocation_wire
-                                  ->unregister_target (
-                                    prepare->relocation,
-                                    prepare->target_attempt_generation,
-                                    wire_objects[index]);
-                            }
-                            catch (...) {
-                            }
-                        }
-                        try {
-                            if (targets.size () == 1)
-                                (void) _objects.abort_relocation_restore (
-                                  targets.front (), restore_identity);
-                            else
-                                (void) _objects
-                                  .abort_relocation_restore_aggregate (
-                                    targets, restore_identity);
-                        }
-                        catch (...) {
-                        }
-                        if (_stateful_dispatch)
-                            for (const auto &target : targets) {
-                                try {
-                                    (void) _stateful_dispatch
-                                      ->discard_pending (target);
-                                }
-                                catch (...) {
-                                }
-                            }
-                    };
-
-                    for (std::size_t index = 0;
-                         index != targets.size (); ++index) {
-                        const auto target = targets[index];
-                        bool registered = false;
-                        try {
-                            registered = _relocation_wire->register_target ({
-                              prepare->relocation,
-                              prepare->target_attempt_generation,
-                              prepare->coordinator,
-                              prepare->source_node_routing_id,
-                              prepare->source_node_generation,
-                              wire_objects[index],
-                              [this, target] (
-                                const protocol::relocation_data_t &data) {
-                                  const auto frozen_record = data.record;
-                                  return _stateful_dispatch
-                                    && _stateful_dispatch
-                                         ->stage_relocated (
-                                           target,
-                                           {0,
-                                            protocol::encode_frozen_record (
-                                              frozen_record)},
-                                           [this, data, frozen_record] (
-                                             const std::optional<
-                                               protocol::
-                                                 application_payload_t>
-                                               &reply) {
-                                               if (!frozen_record.reply_route_id)
-                                                   return true;
-                                               const auto terminal_sequence =
-                                                 frozen_record.operation.low != 0
-                                                   ? frozen_record.operation.low
-                                                   : frozen_record.operation.high;
-                                               const protocol::reply_relay_t relay{
-                                                 frozen_record.operation,
-                                                 *frozen_record.reply_route_id,
-                                                 data.relocation,
-                                                 data.target_attempt_generation,
-                                                 data.coordinator,
-                                                 1,
-                                                 terminal_sequence,
-                                                 reply ? 0u : 105u,
-                                                 reply
-                                                   ? protocol::
-                                                       framework_error_code::none
-                                                   : protocol::
-                                                       framework_error_code::
-                                                         requestFailed};
-                                               if (!_relocation_wire
-                                                      ->register_terminal_target (
-                                                        {relay,
-                                                         frozen_record.source,
-                                                         reply,
-                                                         [] (
-                                                           protocol::
-                                                             reply_relay_ack_status_t) {
-                                                             return true;
-                                                         },
-                                                         [] { return true; },
-                                                         data.coordinator
-                                                           .node_routing_id}))
-                                                   return false;
-                                               return true;
-                                           })
-                                           == stateful::
-                                              stateful_error_t::none;
-                              },
-                              [] (const protocol::relocation_data_t &) {}});
-                        }
-                        catch (...) {
-                            registered = false;
-                        }
-                        if (!registered) {
-                            valid = false;
-                            break;
-                        }
-                        ++registered_count;
-                    }
-                    if (!valid) {
-                        rollback_target ();
-                        continue;
-                    }
-
-                    stateful::stateful_error_t restored =
-                      stateful::stateful_error_t::conflict;
-                    try {
-                        restored =
-                          targets.size () == 1
-                            ? _objects.restore_relocation (
-                                frozen.front (),
-                                targets.front (),
-                                restore_identity,
-                                {})
-                            : _objects.restore_relocation_aggregate (
-                                frozen,
-                                targets,
-                                restore_identity,
-                                {});
-                    }
-                    catch (...) {
-                        rollback_target ();
-                        continue;
-                    }
-                    if (restored != stateful::stateful_error_t::none
-                        && restored
-                             != stateful::stateful_error_t::already_exists) {
-                        rollback_target ();
-                        continue;
-                    }
-
-                    const auto ready_at =
-                      std::chrono::steady_clock::now ();
-                    bool inserted = false;
                     {
                         std::lock_guard lock (_mutex);
-                        relocation_target_attempt_t attempt;
-                        attempt.prepare = *prepare;
-                        attempt.restore_identity = restore_identity;
-                        attempt.sources = sources;
-                        attempt.targets = targets;
-                        attempt.wire_objects = wire_objects;
-                        for (const auto &route :
-                             *stored_session_routes) {
-                            attempt.session_routes.push_back ({
-                              route, false, {}});
-                        }
-                        attempt.ready = true;
-                        attempt.attempt_expires_at =
-                          ready_at + relocation_attempt_retention;
-                        inserted =
-                          _relocation_target_attempts.emplace (
-                            key, std::move (attempt)).second;
-                    }
-                    if (!inserted) {
-                        rollback_target ();
-                        continue;
-                    }
-
-                    const auto ready_sent =
-                      _transport->reply_relocation_ready (
-                        mailbox_record,
-                        protocol::relocation_ready_t{
-                          prepare->relocation,
-                          prepare->target_attempt_generation,
-                          prepare->coordinator,
-                          prepare->target,
-                          prepare->object,
-                          protocol::relocation_role_t::target});
-                    if (ready_sent) {
-                        std::lock_guard lock (_mutex);
-                        const auto found =
-                          _relocation_target_attempts.find (key);
-                        if (found != _relocation_target_attempts.end ())
-                            found->second.ready_fallback_at =
+                        const auto found = _relocation_assemblies.find (key);
+                        if (found != _relocation_assemblies.end ()) {
+                            if (found->second.prepare != *prepare)
+                                continue;
+                            found->second.expires_at =
                               std::chrono::steady_clock::now ()
-                              + _relocation_cutover_wait;
-                    }
-                    else {
-                        {
-                            std::lock_guard lock (_mutex);
-                            _relocation_target_attempts.erase (key);
+                              + relocation_assembly_retention;
+                            continue;
                         }
-                        rollback_target ();
+                        _relocation_assemblies.emplace (
+                          key, pending_relocation_assembly_t{
+                                 *prepare, std::move (mailbox_record),
+                                 stateful::relocation_state_assembly_t{
+                                   prepare->relocation,
+                                   prepare->target_attempt_generation,
+                                   prepare->coordinator, prepare->object,
+                                   {prepare->payload_total_length,
+                                    prepare->payload_chunk_count,
+                                    prepare->payload_checksum_crc32c}},
+                                 false,
+                                 std::chrono::steady_clock::now ()
+                                   + relocation_assembly_retention});
                     }
+                    continue;
+
+                }
+                if (wire.kind
+                    == protocol::command::relocationState) {
+                    if (mailbox_record.parts.size () != 1)
+                        continue;
+                    const auto control = protocol::decode_relocation_control (
+                      mailbox_record.parts.front ());
+                    const auto *state = std::get_if<protocol::relocation_state_t> (
+                      &control);
+                    if (!state || state->sender_role
+                                      != protocol::relocation_role_t::source
+                        || state->chunk_data.empty ())
+                        continue;
+                    const relocation_attempt_key_t key{
+                      state->relocation.high, state->relocation.low,
+                      state->target_attempt_generation};
+                    std::optional<pending_relocation_assembly_t> completed;
+                    {
+                        std::lock_guard lock (_mutex);
+                        const auto found = _relocation_assemblies.find (key);
+                        if (found == _relocation_assemblies.end ()
+                            || found->second.prepare.coordinator
+                                 != state->coordinator
+                            || found->second.prepare.object != state->object
+                            || found->second.prepare.source_node_routing_id
+                                 != mailbox_record.source_routing_id
+                            || found->second.prepare.source_node_generation
+                                 != mailbox_record.source_node_generation)
+                            continue;
+                        const auto accepted = found->second.assembly.accept (*state);
+                        if (accepted
+                            == stateful::relocation_assembly_result_t::conflict) {
+                            _relocation_assemblies.erase (found);
+                            continue;
+                        }
+                        if (accepted
+                            != stateful::relocation_assembly_result_t::completed)
+                            continue;
+                        completed.emplace (std::move (found->second));
+                        _relocation_assemblies.erase (found);
+                    }
+                    complete_relocation_assembly (key, std::move (*completed));
                     continue;
                 }
                 if (wire.kind
