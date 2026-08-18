@@ -413,10 +413,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     new ZLinkBackendActorRef(
                         targetNode.routingId(),
                         request.actorId(),
-                        request.objectGeneration()),
-                    request.hasBaseApplicationState()
-                        ? request.baseApplicationState()
-                        : null)
+                        request.objectGeneration()))
                 .thenApply(value -> value);
         }
 

@@ -64,7 +64,7 @@ final class ZLinkRelocationAdapterTypeMatcher {
      * with the concrete arguments the subtype supplied for them in
      * {@code actual} (e.g. resolving {@code TActor} in
      * {@code ZLinkActorRelocationAdapter<TActor>} to {@code TestActor} using
-     * {@code ZLinkActorBaseDeltaRelocationAdapter<TestActor>}'s argument).
+     * the concrete adapter subtype's argument).
      */
     private static Type substitute(
         Type type,

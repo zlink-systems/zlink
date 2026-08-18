@@ -65,7 +65,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
         List<Object> preparedActors = new ArrayList<>();
-        return prepareAndRestoreSpot(request, cancellation, true)
+        return prepareAndRestoreSpot(request, cancellation)
             .thenCompose(preparedSpot -> prepareActors(
                     preparedSpot,
                     request,
@@ -85,23 +85,18 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     /**
-     * Prepares a fresh Spot instance and restores it. When the request
-     * carries a pre-seal base (spec 15 §5), a restore failure discards the
-     * partially-restored instance and repeats the whole
-     * restoreBase→applyDelta sequence exactly once on a brand-new instance
-     * — mirroring the Actor runtime's retry-once contract. Exhausting the
-     * retry (or any restore failure on the legacy, non-base path, which
-     * never retries) fails explicitly. Capture/factory/restore/staging
-     * failures — including ApplyDelta retry-exhaustion — are
+     * Prepares a fresh Spot instance and restores it. A restore failure
+     * discards the partially-restored instance and fails explicitly — no
+     * retry, no partial reuse. Capture/factory/restore/staging failures are
      * {@link ZLinkFrameworkErrorKind#INTERNAL_FAILURE} per the spec 15
      * failure table; {@code DATA_LOST} stays reserved for chunk-assembly
      * or checksum verification failures and is never produced here — it is
-     * only preserved when the cause already carries that classification.
+     * only preserved when the cause already carries that classification
+     * (spec 07e0234db5).
      */
     private CompletionStage<Object> prepareAndRestoreSpot(
         Request request,
-        ZLinkRelocationCancellation cancellation,
-        boolean allowRetry) {
+        ZLinkRelocationCancellation cancellation) {
         return backend.prepareSpot(request)
             .thenCompose(preparedSpot -> backend.restoreSpot(
                     preparedSpot,
@@ -110,15 +105,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 .thenApply(ignored -> preparedSpot)
                 .exceptionallyCompose(failure -> {
                     backend.discardSpot(preparedSpot);
-                    if (request.hasBaseApplicationState() && allowRetry) {
-                        return prepareAndRestoreSpot(
-                            request, cancellation, false);
-                    }
                     Throwable cause = unwrap(failure);
                     return CompletableFuture.failedFuture(
-                        request.hasBaseApplicationState()
-                            ? relocationInternalFailure(cause)
-                            : cause);
+                        relocationInternalFailure(cause));
                 }));
     }
 
@@ -132,8 +121,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            "User Spot base/delta relocation restore failed twice; "
-                + "the target instance is discarded, not partially reused",
+            "User Spot relocation restore failed; the target instance is "
+                + "discarded, not partially reused",
             cause);
     }
 
@@ -781,32 +770,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         boolean restoreSpotSnapshot,
         byte[] timerEnvelope,
         List<ActorParticipant> actors,
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> acceptedJournal,
-        byte[] baseApplicationState) {
-        Request(
-            Class<? extends ZLinkSpot<?>> spotType,
-            String spotStableType,
-            String spotId,
-            long objectGeneration,
-            byte[] spotState,
-            boolean restoreSpotSnapshot,
-            byte[] timerEnvelope,
-            List<ActorParticipant> actors,
-            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
-                acceptedJournal) {
-            this(
-                spotType,
-                spotStableType,
-                spotId,
-                objectGeneration,
-                spotState,
-                restoreSpotSnapshot,
-                timerEnvelope,
-                actors,
-                acceptedJournal,
-                new byte[0]);
-        }
-
+        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> acceptedJournal) {
         Request {
             Objects.requireNonNull(spotType, "spotType");
             if (spotStableType == null || spotStableType.isBlank()
@@ -829,20 +793,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     List.copyOf(records)));
             acceptedJournal = Collections.unmodifiableMap(journalCopy);
             validateJournal(acceptedJournal);
-            baseApplicationState = Objects.requireNonNull(
-                baseApplicationState, "baseApplicationState").clone();
         }
 
         @Override public byte[] spotState() { return spotState.clone(); }
         @Override public byte[] timerEnvelope() { return timerEnvelope.clone(); }
-        @Override public byte[] baseApplicationState() {
-            return baseApplicationState.clone();
-        }
-
-        /** True when a base snapshot precedes the delta above. */
-        boolean hasBaseApplicationState() {
-            return baseApplicationState.length > 0;
-        }
     }
 
     static final class Staged {
@@ -944,24 +898,13 @@ final class ZLinkUserSpotAggregateStagingOwner {
             ZLinkRelocationCancellation cancellation) {
             var prepared = (ZLinkSpotLifecycle.PreparedUserSpot) value;
             Object spot = spots.preparedSpot(prepared);
-            CompletionStage<Void> restore = request.hasBaseApplicationState()
-                ? adapters.restoreSpotBase(
-                        request.spotStableType(),
-                        spot,
-                        request.baseApplicationState(),
-                        cancellation)
-                    .thenCompose(ignored -> adapters.applySpotDelta(
-                        request.spotStableType(),
-                        spot,
-                        request.spotState(),
-                        cancellation))
-                : request.restoreSpotSnapshot()
-                    ? adapters.restoreSpot(
-                        request.spotStableType(),
-                        spot,
-                        request.spotState(),
-                        cancellation)
-                    : CompletableFuture.completedFuture(null);
+            CompletionStage<Void> restore = request.restoreSpotSnapshot()
+                ? adapters.restoreSpot(
+                    request.spotStableType(),
+                    spot,
+                    request.spotState(),
+                    cancellation)
+                : CompletableFuture.completedFuture(null);
             return restore.thenRun(() -> {
                 validateJournal(request.acceptedJournal());
                 spots.stageReservedTimers(prepared, request.timerEnvelope());

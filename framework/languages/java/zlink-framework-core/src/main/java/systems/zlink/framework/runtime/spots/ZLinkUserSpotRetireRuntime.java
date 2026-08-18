@@ -586,7 +586,7 @@ public final class ZLinkUserSpotRetireRuntime {
         return lane.awaitUnitAdmission()
             .thenCompose(admitted ->
                 lane.source().prepare(
-                    spotId, targetPolicy, lane.client(), cancellation))
+                    spotId, targetPolicy, cancellation))
             .thenCompose(source -> {
                 requireExactCoreReady(
                     lane.node(), source.stageRequest().targetNodeRid(),
@@ -623,7 +623,7 @@ public final class ZLinkUserSpotRetireRuntime {
         return lane.awaitUnitAdmission()
             .thenCompose(admitted ->
                 lane.source().prepare(
-                    actorId, targetPolicy, lane.client(), cancellation))
+                    actorId, targetPolicy, cancellation))
             .thenCompose(source -> {
                 requireExactCoreReady(
                     lane.node(), source.stageRequest().targetNodeRid(),

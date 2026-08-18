@@ -405,8 +405,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             request.restoreSpotSnapshot(),
             request.relocationPayload(),
             request.participants(),
-            List.of(route),
-            request.baseApplicationState());
+            List.of(route));
     }
 
     @Override
@@ -978,8 +977,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 participant.objectGeneration(),
                 participant.sourceAuthorityOwnerGeneration(),
                 participant.restoreSnapshot(),
-                request.spotId(),
-                request.baseApplicationState());
+                request.spotId());
         ZLinkActorJoinRelocationPort.Admission directAdmission =
             actorJoin == null
                 ? null

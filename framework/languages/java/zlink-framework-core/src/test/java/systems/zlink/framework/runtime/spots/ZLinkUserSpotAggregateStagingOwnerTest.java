@@ -182,62 +182,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
     }
 
     @Test
-    void applyDeltaFailureDiscardsTheInstanceAndRetriesOnceOnAFreshInstance() {
-        RetryBackend backend = new RetryBackend();
-        backend.restoreSpotFailuresRemaining = 1;
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
-
-        owner.stage(baseRequest(), () -> false).toCompletableFuture().join();
-
-        assertEquals(2, backend.restoreSpotCalls);
-        assertEquals(2, backend.preparedSpotInstances.size());
-        assertNotSame(
-            backend.preparedSpotInstances.get(0),
-            backend.preparedSpotInstances.get(1),
-            "the retry must restore a fresh instance, not the partial one");
-        assertEquals(
-            List.of(
-                backend.preparedSpotInstances.get(0)),
-            backend.discardedSpotInstances,
-            "only the partially-restored first instance is discarded");
-    }
-
-    @Test
-    void applyDeltaFailureTwiceIsAnExplicitRelocationInternalFailure() {
-        RetryBackend backend = new RetryBackend();
-        backend.restoreSpotFailuresRemaining = 2;
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
-
-        CompletionException outcome = assertThrows(
-            CompletionException.class,
-            () -> owner.stage(baseRequest(), () -> false)
-                .toCompletableFuture().join());
-
-        assertEquals(2, backend.restoreSpotCalls,
-            "exactly one retry before an explicit failure");
-        assertEquals(2, backend.preparedSpotInstances.size());
-        assertNotSame(
-            backend.preparedSpotInstances.get(0),
-            backend.preparedSpotInstances.get(1));
-        assertEquals(2, backend.discardedSpotInstances.size(),
-            "both attempts must discard their instance, no partial reuse");
-        var cause = assertInstanceOf(
-            systems.zlink.framework.errors.ZLinkFrameworkException.class,
-            outcome.getCause());
-        assertEquals(
-            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                .INTERNAL_FAILURE,
-            cause.kind(),
-            "an exhausted base/delta retry is Capture/factory/restore/"
-                + "staging failing internally (spec 15 failure table) — "
-                + "InternalFailure, not DataLost, which stays reserved for "
-                + "chunk-assembly/checksum verification failures");
-    }
-
-    @Test
-    void legacyNonBaseRestoreFailureNeverRetries() {
+    void restoreFailureNeverRetriesAndIsAnExplicitRelocationInternalFailure() {
         RetryBackend backend = new RetryBackend();
         backend.restoreSpotFailuresRemaining = 1;
         ZLinkUserSpotAggregateStagingOwner owner =
@@ -249,27 +194,20 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 .toCompletableFuture().join());
 
         assertEquals(1, backend.restoreSpotCalls,
-            "the legacy, non-base path must not retry");
+            "a restore failure must not retry");
         assertEquals(1, backend.preparedSpotInstances.size());
         assertEquals(1, backend.discardedSpotInstances.size());
-        assertInstanceOf(IllegalStateException.class, outcome.getCause(),
-            "the legacy path must propagate the original failure unwrapped, "
-                + "not translate it into DataLost");
-    }
-
-    private static ZLinkUserSpotAggregateStagingOwner.Request baseRequest() {
-        ZLinkUserSpotAggregateStagingOwner.Request legacy = request();
-        return new ZLinkUserSpotAggregateStagingOwner.Request(
-            legacy.spotType(),
-            legacy.spotStableType(),
-            legacy.spotId(),
-            legacy.objectGeneration(),
-            legacy.spotState(),
-            legacy.restoreSpotSnapshot(),
-            legacy.timerEnvelope(),
-            legacy.actors(),
-            legacy.acceptedJournal(),
-            new byte[] {42});
+        var cause = assertInstanceOf(
+            systems.zlink.framework.errors.ZLinkFrameworkException.class,
+            outcome.getCause());
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                .INTERNAL_FAILURE,
+            cause.kind(),
+            "Capture/factory/restore/staging failing internally (spec 15 "
+                + "failure table) is InternalFailure, not DataLost, which "
+                + "stays reserved for chunk-assembly/checksum verification "
+                + "failures");
     }
 
     private static ZLinkUserSpotAggregateStagingOwner.Request request() {
@@ -422,7 +360,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             if (restoreSpotFailuresRemaining > 0) {
                 restoreSpotFailuresRemaining--;
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException("applyDelta failed"));
+                    new IllegalStateException("restore failed"));
             }
             return CompletableFuture.completedFuture(null);
         }

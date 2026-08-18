@@ -132,14 +132,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         String actorId,
         ZLinkRelocationTargetPolicy targetPolicy,
         ZLinkStoreCancellation cancellation) {
-        return prepare(actorId, targetPolicy, null, cancellation);
-    }
-
-    CompletionStage<PreparedSource> prepare(
-        String actorId,
-        ZLinkRelocationTargetPolicy targetPolicy,
-        ZLinkRelocationTransitionClient client,
-        ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(targetPolicy, "targetPolicy");
         Objects.requireNonNull(cancellation, "cancellation");
         ZLinkActor actor = activeActor(actorId, cancellation);
@@ -151,18 +143,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
         return admit(actorId, targetPolicy, cancellation)
             .thenCompose(admission -> sealAndCapture(
-                actor, admission, null, client, cancellation));
+                actor, admission, null, cancellation));
     }
 
     CompletionStage<PreparedSource> prepareDirectJoin(
         ZLinkActorJoinRelocationPort.Goal goal,
-        ZLinkStoreCancellation cancellation) {
-        return prepareDirectJoin(goal, null, cancellation);
-    }
-
-    CompletionStage<PreparedSource> prepareDirectJoin(
-        ZLinkActorJoinRelocationPort.Goal goal,
-        ZLinkRelocationTransitionClient client,
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(goal, "goal");
         Objects.requireNonNull(cancellation, "cancellation");
@@ -183,7 +168,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             .thenCompose(admission -> validateDirectTargetSpot(
                     goal, cancellation)
                 .thenCompose(ignored -> sealAndCapture(
-                    actor, admission, goal, client, cancellation)));
+                    actor, admission, goal, cancellation)));
     }
 
     CompletionStage<Void> preflight(
@@ -243,40 +228,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         ZLinkActor actor,
         Admission admission,
         ZLinkActorJoinRelocationPort.Goal directJoin,
-        ZLinkRelocationTransitionClient client,
-        ZLinkStoreCancellation cancellation) {
-        //  Identity generation and the base/delta capability check happen
-        //  before the seal so a capable adapter can capture the base
-        //  snapshot off the still-running Actor and stream it ahead of
-        //  PREPARE (spec 15 §5). The base is a snapshot of a moving target;
-        //  correctness rests entirely on the delta the post-seal capture
-        //  produces, never on the base itself reflecting the seal point.
-        UUID relocationId = directJoin == null
-            ? UUID.randomUUID()
-            : directJoin.relocationId();
-        boolean baseDeltaCapable = client != null
-            && client.supportsBaseTransfer()
-            && admission.owned().snapshotPolicy()
-            && adapters.hasActorBaseDeltaAdapter(admission.owned().stableType());
-        ZLinkRelocationCancellation relocationCancellation =
-            cancellation::isCancellationRequested;
-        CompletionStage<byte[]> preSealBase = baseDeltaCapable
-            ? adapters.captureActorBase(
-                admission.owned().stableType(), actor, relocationCancellation)
-            : CompletableFuture.completedFuture(null);
-        return preSealBase.thenCompose(base ->
-            sealAndCaptureAfterBase(
-                actor, admission, directJoin, client, relocationId,
-                baseDeltaCapable ? base : null, cancellation));
-    }
-
-    private CompletionStage<PreparedSource> sealAndCaptureAfterBase(
-        ZLinkActor actor,
-        Admission admission,
-        ZLinkActorJoinRelocationPort.Goal directJoin,
-        ZLinkRelocationTransitionClient client,
-        UUID relocationId,
-        byte[] base,
         ZLinkStoreCancellation cancellation) {
         return sealAtTurnBoundary(
                 admission.owned().actorId(),
@@ -293,12 +244,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         admission.owned().actorId());
                 ZLinkRelocationCancellation relocationCancellation =
                     cancellation::isCancellationRequested;
-                CompletionStage<byte[]> captured = base != null
-                    ? adapters.captureActorDelta(
-                        admission.owned().stableType(),
-                        actor,
-                        relocationCancellation)
-                    : admission.owned().snapshotPolicy()
+                CompletionStage<byte[]> captured =
+                    admission.owned().snapshotPolicy()
                         ? adapters.captureActor(
                             admission.owned().stableType(),
                             actor,
@@ -307,6 +254,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 return captured.thenCompose(state -> {
                     byte[] applicationState = Objects.requireNonNull(
                         state, "Actor Capture returned null").clone();
+                    UUID relocationId = directJoin == null
+                        ? UUID.randomUUID()
+                        : directJoin.relocationId();
                     String targetSpotId = directJoin == null
                         ? admission.target().entrySpotId().orElseThrow()
                         : directJoin.targetSpotId();
@@ -338,31 +288,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         : directJoin.advertisedReceiveChunkLimitBytes();
                     return sealSessionRoute(
                             admission.owned(), relocationId, capturedRoute)
-                        .thenCompose(sessionRoute -> sendBaseIfCaptured(
-                                client, admission, relocationId, base,
-                                advertisedReceiveChunkLimitBytes)
-                            .thenApply(ignored -> new PreparedSource(
-                                locations,
-                                actors,
-                                relocationReplies,
-                                sessionSealer,
-                                sessionRoute,
-                                seal,
-                                admission.owned(),
-                                admission.target(),
+                        .thenApply(sessionRoute -> new PreparedSource(
+                            locations,
+                            actors,
+                            relocationReplies,
+                            sessionSealer,
+                            sessionRoute,
+                            seal,
+                            admission.owned(),
+                            admission.target(),
+                            relocationId,
+                            applicationState,
+                            timerEnvelope,
+                            stageRequest(
+                                admission,
                                 relocationId,
-                                applicationState,
-                                timerEnvelope,
-                                stageRequest(
-                                    admission,
-                                    relocationId,
-                                    initialRoot,
-                                    sessionRoute.map(
-                                        SealedSessionRoute::route),
-                                    targetSpotId,
-                                    base,
-                                    advertisedReceiveChunkLimitBytes),
-                                targetSpotId)));
+                                initialRoot,
+                                sessionRoute.map(
+                                    SealedSessionRoute::route),
+                                targetSpotId,
+                                advertisedReceiveChunkLimitBytes),
+                            targetSpotId));
                 }).exceptionallyCompose(failure -> {
                     relocationReplies.resumeActorTimersAfterRelocationAbort(
                         admission.owned().actorId());
@@ -371,44 +317,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     return failed(unwrap(failure));
                 });
             });
-    }
-
-    /**
-     * Streams the base snapshot ahead of PREPARE (spec 15 §5, spec 28 §4.2).
-     * Sent after the seal completes and the exact stage request is fully
-     * determined, but the bytes themselves were captured pre-seal above.
-     */
-    private CompletionStage<Void> sendBaseIfCaptured(
-        ZLinkRelocationTransitionClient client,
-        Admission admission,
-        UUID relocationId,
-        byte[] base,
-        long advertisedReceiveChunkLimitBytes) {
-        if (base == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        Owned owned = admission.owned();
-        ZLinkMeshNodeDescriptor target = admission.target();
-        var coordinator = new ZLinkCanonicalRelocationProtocol.Coordinator(
-            owned.snapshot().ownerId(),
-            owned.snapshot().ownerLeaseGeneration(),
-            localNodeRid,
-            localNodeGeneration,
-            owned.snapshot().storeVersion());
-        var object = new ZLinkCanonicalRelocationProtocol.ObjectFence(
-            1,
-            owned.actorId(),
-            "",
-            owned.snapshot().objectGeneration(),
-            owned.snapshot().authorityOwnerGeneration());
-        return client.sendBase(
-            target.rid(),
-            new ZLinkSpotRetireControl.Fence(relocationId, 1),
-            coordinator,
-            object,
-            base,
-            advertisedReceiveChunkLimitBytes,
-            sessionRelocationSealTimeout);
     }
 
     private CompletionStage<Optional<ZLinkAsyncSerialQueue.RelocationSeal>>
@@ -687,7 +595,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         byte[] relocationPayload,
         Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
         String targetSpotId,
-        byte[] base,
         long advertisedReceiveChunkLimitBytes) {
         Owned actor = admission.owned();
         ZLinkMeshNodeDescriptor target = admission.target();
@@ -716,7 +623,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 actor.snapshot().objectGeneration(),
                 actor.snapshot().authorityOwnerGeneration())),
             sessionRoute.stream().toList(),
-            base == null ? new byte[0] : base,
             advertisedReceiveChunkLimitBytes);
     }
 

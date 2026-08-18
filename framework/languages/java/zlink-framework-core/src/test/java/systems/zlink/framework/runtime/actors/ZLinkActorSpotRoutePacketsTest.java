@@ -77,9 +77,9 @@ final class ZLinkActorSpotRoutePacketsTest {
     }
 
     /**
-     * Item 3 of the base/delta transfer pipeline (spec 15 §4.2): the Join
-     * Accepted admission reply carries the target's advertised relocation
-     * state chunk receive limit alongside {@code accepted}.
+     * Spec 15 §4.2: the Join Accepted admission reply carries the target's
+     * advertised relocation state chunk receive limit alongside
+     * {@code accepted}.
      */
     @Test
     void admissionReplyRoundTripsAcceptedAndAdvertisedChunkLimit() {

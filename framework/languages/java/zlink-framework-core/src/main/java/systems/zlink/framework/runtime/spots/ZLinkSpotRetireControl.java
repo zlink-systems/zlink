@@ -337,54 +337,12 @@ final class ZLinkSpotRetireControl {
         byte[] relocationPayload,
         List<ParticipantFence> participants,
         List<SessionRouteFence> sessionRoutes,
-        byte[] baseApplicationState,
         //  Source-side planning input only, never re-derived on the target:
         //  the target's advertised relocation state chunk receive limit
         //  (spec 15 §4.2) for this exact Direct Join, or 0 when not
         //  advertised (bounds this relocation's chunk size in addition to
         //  the node-local budget's effective chunk size).
         long advertisedReceiveChunkLimitBytes) {
-        StageRequest(
-            Fence fence,
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            String sourceOwnerId,
-            long sourceOwnerLeaseGeneration,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            String targetOwnerId,
-            long targetOwnerLeaseGeneration,
-            String meshName,
-            String spotId,
-            String stableType,
-            boolean instanceSpot,
-            boolean restoreSpotSnapshot,
-            byte[] relocationPayload,
-            List<ParticipantFence> participants,
-            List<SessionRouteFence> sessionRoutes,
-            byte[] baseApplicationState) {
-            this(
-                fence,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceOwnerId,
-                sourceOwnerLeaseGeneration,
-                targetNodeRid,
-                targetNodeGeneration,
-                targetOwnerId,
-                targetOwnerLeaseGeneration,
-                meshName,
-                spotId,
-                stableType,
-                instanceSpot,
-                restoreSpotSnapshot,
-                relocationPayload,
-                participants,
-                sessionRoutes,
-                baseApplicationState,
-                0L);
-        }
-
         StageRequest(
             Fence fence,
             RoutingId sourceNodeRid,
@@ -421,7 +379,7 @@ final class ZLinkSpotRetireControl {
                 relocationPayload,
                 participants,
                 sessionRoutes,
-                new byte[0]);
+                0L);
         }
 
         StageRequest(
@@ -472,8 +430,6 @@ final class ZLinkSpotRetireControl {
             requireText(stableType, "stableType");
             relocationPayload = Objects.requireNonNull(
                 relocationPayload, "relocationPayload").clone();
-            baseApplicationState = Objects.requireNonNull(
-                baseApplicationState, "baseApplicationState").clone();
             if (advertisedReceiveChunkLimitBytes < 0) {
                 throw new IllegalArgumentException(
                     "advertised receive chunk limit must not be negative");
@@ -535,16 +491,6 @@ final class ZLinkSpotRetireControl {
         }
 
         @Override
-        public byte[] baseApplicationState() {
-            return baseApplicationState.clone();
-        }
-
-        /** True when a base snapshot precedes the delta payload above. */
-        boolean hasBaseApplicationState() {
-            return baseApplicationState.length > 0;
-        }
-
-        @Override
         public boolean equals(Object other) {
             return other instanceof StageRequest that
                 && fence.equals(that.fence)
@@ -567,8 +513,6 @@ final class ZLinkSpotRetireControl {
                     relocationPayload, that.relocationPayload)
                 && participants.equals(that.participants)
                 && sessionRoutes.equals(that.sessionRoutes)
-                && Arrays.equals(
-                    baseApplicationState, that.baseApplicationState)
                 && advertisedReceiveChunkLimitBytes
                     == that.advertisedReceiveChunkLimitBytes;
         }
@@ -593,7 +537,6 @@ final class ZLinkSpotRetireControl {
                 Arrays.hashCode(relocationPayload),
                 participants,
                 sessionRoutes,
-                Arrays.hashCode(baseApplicationState),
                 advertisedReceiveChunkLimitBytes);
         }
 

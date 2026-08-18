@@ -201,51 +201,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     /**
-     * Item 5 of the base/delta transfer pipeline (spec 15 §5): base chunks
-     * streamed ahead of PREPARE are buffered by exact relocation identity,
-     * verified against the manifest's baseChecksumCrc32c once PREPARE
-     * arrives, and threaded into the target's stage request.
-     */
-    @Test
-    void baseChunksBeforePrepareAreVerifiedAndThreadedToTheStageRequest() {
-        Fixture fixture = fixture();
-        byte[] base = {5, 5, 5, 5, 5};
-        byte[] delta = {1};
-        var request = stageRequestWithBase(fixture, delta, base);
-
-        fixture.source.sendBase(
-                fixture.targetRid,
-                request.fence(),
-                new ZLinkCanonicalRelocationProtocol.Coordinator(
-                    fixture.sourceOwner.ownerId(),
-                    fixture.sourceOwner.leaseGeneration(),
-                    fixture.sourceRid,
-                    11,
-                    fixture.sourceSnapshot.storeVersion()),
-                new ZLinkCanonicalRelocationProtocol.ObjectFence(
-                    1,
-                    fixture.actorId,
-                    "",
-                    fixture.sourceSnapshot.objectGeneration(),
-                    fixture.sourceSnapshot.authorityOwnerGeneration()),
-                base,
-                0L,
-                Duration.ofSeconds(2))
-            .toCompletableFuture().join();
-        fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
-            .toCompletableFuture().join();
-
-        assertArrayEquals(base, fixture.endpoint.lastStaged.get()
-            .baseApplicationState());
-        assertArrayEquals(fixture.root(delta), fixture.endpoint.lastStaged.get()
-            .relocationPayload());
-    }
-
-    /**
-     * Item 3 of the base/delta transfer pipeline (spec 15 §4.2): the
-     * target's advertised relocation state chunk receive limit additionally
-     * bounds this relocation's chunk size — proven the same way node does,
-     * by observing more command 52 chunks for a small advertised limit than
+     * Spec 15 §4.2: the target's advertised relocation state chunk receive
+     * limit additionally bounds this relocation's chunk size — proven by
+     * observing more command 52 chunks for a small advertised limit than
      * for the unadvertised (node-budget-only) baseline over an identical
      * payload.
      */
@@ -284,48 +242,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 + " chunks");
         assertTrue(boundedChunks > baselineChunks,
             "the advertised limit measurably increases the chunk count");
-    }
-
-    @Test
-    void baseChecksumMismatchFailsExplicitlyAndNeverRestores() {
-        Fixture fixture = fixture();
-        byte[] base = {5, 5, 5, 5, 5};
-        byte[] wrongBase = {9, 9, 9, 9, 9};
-        var request = stageRequestWithBase(fixture, new byte[] {1}, base);
-
-        //  Send different bytes than the manifest's baseChecksumCrc32c
-        //  covers — a defect signal, not a transient loss (spec 28 §4.3).
-        fixture.source.sendBase(
-                fixture.targetRid,
-                request.fence(),
-                new ZLinkCanonicalRelocationProtocol.Coordinator(
-                    fixture.sourceOwner.ownerId(),
-                    fixture.sourceOwner.leaseGeneration(),
-                    fixture.sourceRid,
-                    11,
-                    fixture.sourceSnapshot.storeVersion()),
-                new ZLinkCanonicalRelocationProtocol.ObjectFence(
-                    1,
-                    fixture.actorId,
-                    "",
-                    fixture.sourceSnapshot.objectGeneration(),
-                    fixture.sourceSnapshot.authorityOwnerGeneration()),
-                wrongBase,
-                0L,
-                Duration.ofSeconds(2))
-            .toCompletableFuture().join();
-
-        var failure = org.junit.jupiter.api.Assertions.assertThrows(
-            java.util.concurrent.CompletionException.class,
-            () -> fixture.source.stage(
-                    fixture.targetRid, request, Duration.ofSeconds(2))
-                .toCompletableFuture().join());
-        assertEquals(
-            0, fixture.endpoint.staged.get(),
-            "a base checksum mismatch never reaches target Restore");
-        assertEquals(
-            List.of(ServiceWireConstants.COMMAND_RELOCATION_FAILED),
-            fixture.targetCommands);
     }
 
     @Test
@@ -369,79 +285,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
             .toCompletableFuture().join();
 
-        assertArrayEquals(new byte[0], fixture.endpoint.lastStaged.get()
-            .baseApplicationState());
-        assertEquals(false, fixture.endpoint.lastStaged.get()
-            .hasBaseApplicationState());
-    }
-
-    @Test
-    void baseChunksWithoutAPrepareAreEvictedByRetention() {
-        List<Runnable> scheduled = new CopyOnWriteArrayList<>();
-        Fixture fixture = fixture(
-            (deadline, cleanup) -> scheduled.add(cleanup));
-        byte[] base = {5, 5, 5, 5, 5};
-        var request = stageRequestWithBase(fixture, new byte[] {1}, base);
-
-        fixture.source.sendBase(
-                fixture.targetRid,
-                request.fence(),
-                new ZLinkCanonicalRelocationProtocol.Coordinator(
-                    fixture.sourceOwner.ownerId(),
-                    fixture.sourceOwner.leaseGeneration(),
-                    fixture.sourceRid,
-                    11,
-                    fixture.sourceSnapshot.storeVersion()),
-                new ZLinkCanonicalRelocationProtocol.ObjectFence(
-                    1,
-                    fixture.actorId,
-                    "",
-                    fixture.sourceSnapshot.objectGeneration(),
-                    fixture.sourceSnapshot.authorityOwnerGeneration()),
-                base,
-                0L,
-                Duration.ofSeconds(2))
-            .toCompletableFuture().join();
-        assertEquals(1, scheduled.size(),
-            "the first base chunk arms exactly one eviction");
-
-        //  Simulate the eviction window elapsing without a PREPARE ever
-        //  arriving — the normal outcome of a source-side seal failure
-        //  after base chunks are already on the wire.
-        scheduled.forEach(Runnable::run);
-
-        var failure = org.junit.jupiter.api.Assertions.assertThrows(
-            java.util.concurrent.CompletionException.class,
-            () -> fixture.source.stage(
-                    fixture.targetRid, request, Duration.ofSeconds(2))
-                .toCompletableFuture().join());
-        assertEquals(
-            0, fixture.endpoint.staged.get(),
-            "the evicted base cannot satisfy the manifest checksum");
-    }
-
-    private ZLinkSpotRetireControl.StageRequest stageRequestWithBase(
-        Fixture fixture,
-        byte[] delta,
-        byte[] base) {
-        return new ZLinkSpotRetireControl.StageRequest(
-            new ZLinkSpotRetireControl.Fence(fixture.relocationId, 1),
-            fixture.sourceRid, 11,
-            fixture.sourceOwner.ownerId(), fixture.sourceOwner.leaseGeneration(),
-            fixture.targetRid, 12,
-            fixture.targetOwner.ownerId(), fixture.targetOwner.leaseGeneration(),
-            "mesh", "target-entry", "actor-type", false, true,
-            fixture.root(delta),
-            List.of(new ZLinkSpotRetireControl.ParticipantFence(
-                fixture.authorityKey,
-                1,
-                fixture.actorId,
-                "actor-type",
-                true,
-                fixture.sourceSnapshot.objectGeneration(),
-                fixture.sourceSnapshot.authorityOwnerGeneration())),
-            List.of(),
-            base);
+        assertArrayEquals(fixture.root(new byte[] {1}),
+            fixture.endpoint.lastStaged.get().relocationPayload());
     }
 
     private Fixture fixture() {
@@ -450,8 +295,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
 
     /**
      * Builds one wired source/target pair with a committed source Actor
-     * authority ready for PREPARE — the shared setup underlying both the
-     * base/delta tests above and the plain-attempt test below.
+     * authority ready for PREPARE — the shared setup underlying the tests
+     * above.
      */
     private Fixture fixture(
         ZLinkCanonicalRelocationStateMachine.RetentionScheduler
@@ -601,7 +446,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     sourceSnapshot.objectGeneration(),
                     sourceSnapshot.authorityOwnerGeneration())),
                 List.of(),
-                new byte[0],
                 advertisedReceiveChunkLimitBytes);
         }
     }

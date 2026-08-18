@@ -1317,45 +1317,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             .ZLinkRelocationAdapterRegistry adapters,
         ZLinkRelocationCancellation cancellation,
         ZLinkBackendActorRef preparedActorRef) {
-        return prepareRelocatedActor(
-            actorId,
-            actorType,
-            applicationState,
-            restoreSnapshot,
-            adapters,
-            cancellation,
-            preparedActorRef,
-            null);
-    }
-
-    /**
-     * Base/delta overload (spec 15 §5): when {@code baseApplicationState} is
-     * present the target restores the base snapshot then applies the delta,
-     * instead of the ordinary full Capture/Restore. A failure applying the
-     * delta discards the partially restored instance and retries the whole
-     * restoreBase→applyDelta sequence exactly once on a fresh instance
-     * before failing explicitly — no partial reuse. Exhausting the retry is
-     * Capture/factory/restore/staging failing internally (spec 15 failure
-     * table) and is reported as {@link ZLinkFrameworkErrorKind
-     * #INTERNAL_FAILURE}; {@code DataLost} stays reserved for
-     * chunk-assembly/checksum verification failures and is only preserved
-     * when the underlying cause already carries that classification.
-     */
-    public CompletionStage<PreparedTransferredActor> prepareRelocatedActor(
-        String actorId,
-        String actorType,
-        byte[] applicationState,
-        boolean restoreSnapshot,
-        systems.zlink.framework.runtime.internal.relocation
-            .ZLinkRelocationAdapterRegistry adapters,
-        ZLinkRelocationCancellation cancellation,
-        ZLinkBackendActorRef preparedActorRef,
-        byte[] baseApplicationState) {
         requireActorId(actorId);
         Objects.requireNonNull(applicationState, "applicationState");
-        boolean hasBase = baseApplicationState != null
-            && baseApplicationState.length > 0;
-        if (restoreSnapshot || hasBase) {
+        if (restoreSnapshot) {
             Objects.requireNonNull(adapters, "adapters");
         }
         Objects.requireNonNull(cancellation, "cancellation");
@@ -1374,7 +1338,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 throw failure;
             }
         }
-        byte[] base = hasBase ? baseApplicationState.clone() : null;
         return attemptPrepareRelocatedActor(
             actorId,
             actorType,
@@ -1383,9 +1346,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             restoreSnapshot,
             adapters,
             cancellation,
-            actorRef,
-            base,
-            true);
+            actorRef);
     }
 
     private CompletionStage<PreparedTransferredActor>
@@ -1398,9 +1359,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             systems.zlink.framework.runtime.internal.relocation
                 .ZLinkRelocationAdapterRegistry adapters,
             ZLinkRelocationCancellation cancellation,
-            ZLinkBackendActorRef actorRef,
-            byte[] base,
-            boolean allowRetry) {
+            ZLinkBackendActorRef actorRef) {
         DefaultActorContext context = new DefaultActorContext(actorRef);
         context.beginMove();
         CompletionStage<PreparedTransferredActor> activation = ZLinkHandlerStages
@@ -1413,19 +1372,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             "actor factory returned null: " + actorId));
                 }
                 context.setActor(actor);
-                CompletionStage<Void> restore = base != null
-                    ? adapters.restoreActorBase(
-                            actorType, actor, base, cancellation)
-                        .thenCompose(ignored -> adapters.applyActorDelta(
-                            actorType, actor, applicationState.clone(),
-                            cancellation))
-                    : restoreSnapshot
-                        ? adapters.restoreActor(
-                            actorType,
-                            actor,
-                            applicationState.clone(),
-                            cancellation)
-                        : CompletableFuture.completedFuture(null);
+                CompletionStage<Void> restore = restoreSnapshot
+                    ? adapters.restoreActor(
+                        actorType,
+                        actor,
+                        applicationState.clone(),
+                        cancellation)
+                    : CompletableFuture.completedFuture(null);
                 return restore.thenApply(ignored ->
                     new PreparedTransferredActor(
                         actorId,
@@ -1435,32 +1388,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         actorRef));
             });
         return activation.exceptionallyCompose(failure -> {
-            if (base != null && allowRetry) {
-                //  Discard the local factory/Restore attempt only — the
-                //  backend actor reference stays reserved so a direct Join's
-                //  route fence keeps matching the retry.
-                context.clearAfterDestroy();
-                return attemptPrepareRelocatedActor(
-                    actorId,
-                    actorType,
-                    factoryType,
-                    applicationState,
-                    restoreSnapshot,
-                    adapters,
-                    cancellation,
-                    actorRef,
-                    base,
-                    false);
-            }
             Throwable cause = unwrap(failure);
             return discardPreparedBackend(actorRef, context)
                 .thenCompose(ignored -> CompletableFuture.failedFuture(
-                    base != null
-                        ? relocationInternalFailure(cause)
-                        : cause));
+                    relocationInternalFailure(cause)));
         });
     }
 
+    /**
+     * Spec 15's failure table: Capture/factory/restore/staging errors map to
+     * {@link ZLinkFrameworkErrorKind#INTERNAL_FAILURE}; {@code DataLost}
+     * stays reserved for chunk-assembly/checksum verification failures and
+     * is only preserved when the underlying cause already carries that
+     * classification (spec 07e0234db5).
+     */
     private static ZLinkFrameworkException relocationInternalFailure(
         Throwable cause) {
         if (cause instanceof ZLinkFrameworkException framework) {
@@ -1471,8 +1412,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            "Actor base/delta relocation restore failed twice; the target "
-                + "instance is discarded, not partially reused",
+            "Actor relocation restore failed; the target instance is "
+                + "discarded, not partially reused",
             cause);
     }
 

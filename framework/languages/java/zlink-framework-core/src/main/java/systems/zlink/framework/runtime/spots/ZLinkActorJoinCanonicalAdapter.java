@@ -83,7 +83,7 @@ final class ZLinkActorJoinCanonicalAdapter
         AtomicReference<ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource>
             preparedForDeadline = new AtomicReference<>();
         CompletionStage<Submission> operation =
-            lane.source().prepareDirectJoin(goal, lane.client(), cancellation)
+            lane.source().prepareDirectJoin(goal, cancellation)
                 .thenCompose(prepared -> {
                     preparedForDeadline.set(prepared);
                     return executeSource(lane, goal, timeout, prepared);
