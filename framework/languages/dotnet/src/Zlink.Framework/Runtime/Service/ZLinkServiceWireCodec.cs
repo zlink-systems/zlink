@@ -329,8 +329,6 @@ internal static partial class ZLinkServiceWireCodec
     {
         if (correlation == 0)
             throw new ArgumentOutOfRangeException(nameof(correlation));
-        if (tail.Length > ushort.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(tail));
         //  Schema terminal-failure-integrity (service-wire-v1.schema.json):
         //  never wire-encode a terminal/failure pair the schema forbids.
         if (terminalResult < 0
@@ -341,16 +339,21 @@ internal static partial class ZLinkServiceWireCodec
                 + "violates the service wire schema.",
                 nameof(failureCode));
 
+        //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
+        //  a conditional-union with NO `bodyLengthType`, so the selected case's
+        //  fields are written INLINE right after failureCode. There is no u16
+        //  tail length on the wire; an empty tail yields exactly 21 bytes.
+        //  (Contrast `actor-join-reply-tail` / `actor-create-terminal`, which do
+        //  declare `bodyLengthType: u16` and carry their own inner prefix.)
         var bytes = Prefix(
             ServiceWireConstants.Command.Reply,
             ServiceWireConstants.Flag.None,
-            sizeof(ulong) + sizeof(uint) + sizeof(uint) + sizeof(ushort) + tail.Length);
+            sizeof(ulong) + sizeof(uint) + sizeof(uint) + tail.Length);
         var span = bytes.AsSpan(5);
         BinaryPrimitives.WriteUInt64BigEndian(span, correlation);
         BinaryPrimitives.WriteInt32BigEndian(span[8..], terminalResult);
         BinaryPrimitives.WriteUInt32BigEndian(span[12..], failureCode);
-        BinaryPrimitives.WriteUInt16BigEndian(span[16..], checked((ushort)tail.Length));
-        tail.CopyTo(span[18..]);
+        tail.CopyTo(span[16..]);
         return bytes;
     }
 
@@ -372,7 +375,7 @@ internal static partial class ZLinkServiceWireCodec
             error = DecodeError.ForbiddenFlag;
             return false;
         }
-        if (bytes.Length < 23)
+        if (bytes.Length < 21)
         {
             error = DecodeError.TruncatedField;
             return false;
@@ -382,7 +385,6 @@ internal static partial class ZLinkServiceWireCodec
         var correlation = BinaryPrimitives.ReadUInt64BigEndian(span);
         var terminalResult = BinaryPrimitives.ReadInt32BigEndian(span[8..]);
         var failureCode = BinaryPrimitives.ReadUInt32BigEndian(span[12..]);
-        var tailLength = BinaryPrimitives.ReadUInt16BigEndian(span[16..]);
         if (correlation == 0)
         {
             error = DecodeError.InvalidField;
@@ -397,22 +399,15 @@ internal static partial class ZLinkServiceWireCodec
             error = DecodeError.InvalidField;
             return false;
         }
-        if (span.Length - 18 < tailLength)
-        {
-            error = DecodeError.TruncatedField;
-            return false;
-        }
-        if (span.Length - 18 > tailLength)
-        {
-            error = DecodeError.TrailingByte;
-            return false;
-        }
-
+        //  Inline tail: everything after failureCode belongs to the selected
+        //  `request-specific-tail` case and is validated by the per-operation
+        //  decoder (TryDecodeActorCreateReply, TryDecodeUserSpotReply, ...),
+        //  not here.
         record = new ReplyRecord(
             correlation,
             terminalResult,
             failureCode,
-            span.Slice(18, tailLength).ToArray());
+            span[16..].ToArray());
         error = DecodeError.None;
         return true;
     }
@@ -431,7 +426,7 @@ internal static partial class ZLinkServiceWireCodec
         if (!TryDecodePrefix(bytes, out var command, out var flags, out _)
             || command != ServiceWireConstants.Command.Reply
             || flags != ServiceWireConstants.Flag.None
-            || bytes.Length < 23)
+            || bytes.Length < 21)
             return false;
         var span = bytes[5..];
         var correlation = BinaryPrimitives.ReadUInt64BigEndian(span);

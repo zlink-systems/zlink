@@ -417,6 +417,24 @@ int main ()
     assert (reply.terminal_result == 0);
     assert (reply.failure_code == 0);
 
+    // GOLDEN - service-wire-v1.schema.json reply(20) byte layout.
+    // `request-specific-tail` is a conditional-union WITHOUT `bodyLengthType`,
+    // so the tail is written inline: prefix(5) + u64 correlation +
+    // u32 terminalResult + u32 failureCode + tail. An empty tail therefore
+    // yields exactly 21 bytes with no u16 tail-length field. These vectors are
+    // byte-identical across C++/Java/Node/.NET.
+    const std::vector<std::uint8_t> golden_empty_tail_reply{
+      0x5a, 0x4d, 0x01, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    assert (protocol::encode_reply_header (7, 0, 0)
+            == golden_empty_tail_reply);
+    assert (golden_empty_tail_reply.size () == 21);
+    const std::vector<std::uint8_t> golden_failure_reply{
+      0x5a, 0x4d, 0x01, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x08, 0x00, 0x00, 0x00, 0x66, 0x00, 0x00, 0x00, 0x0e};
+    assert (protocol::encode_reply_header (8, 102, 14)
+            == golden_failure_reply);
+
     // Every ClientServer framework error mapping must be a canonical reply
     // header pair accepted by every language's service-wire decoder.
     const std::vector<std::pair<

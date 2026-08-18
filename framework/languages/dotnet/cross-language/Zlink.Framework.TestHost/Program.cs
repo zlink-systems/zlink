@@ -365,9 +365,7 @@ internal sealed class SpotRouteClientScenarioHostedService(
             catch (ZLinkFrameworkException exception)
             {
                 // Terminal (a)-failure: recorded so the runner can pin
-                // known cross-language divergences (e.g. the C++/Java
-                // service-wire reply header without the u16 tail field is
-                // rejected here as ProtocolError).
+                // known cross-language divergences.
                 sink.Append(
                     $"spot-route-error|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}");
                 return;

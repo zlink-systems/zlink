@@ -108,32 +108,35 @@ export function encodeReplyHeader(
   tail: Uint8Array = Buffer.alloc(0)
 ): Buffer {
   validateReplyFields(correlation, terminalResult, failureCode);
-  if (tail.byteLength > 0xffff) fail('Reply tail exceeds u16.');
-  const result = Buffer.alloc(PREFIX_SIZE + 18 + tail.byteLength);
+  //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
+  //  a conditional-union with NO `bodyLengthType`, so the selected case's
+  //  fields are written INLINE right after failureCode. There is no u16 tail
+  //  length on the wire; an empty tail yields exactly 21 bytes. (Contrast
+  //  `actor-join-reply-tail`, which does declare `bodyLengthType: u16` and
+  //  therefore carries its own inner length prefix.)
+  const result = Buffer.alloc(PREFIX_SIZE + 16 + tail.byteLength);
   prefix(M6aServiceWireCommand.reply).copy(result);
   result.writeBigUInt64BE(correlation, PREFIX_SIZE);
   result.writeUInt32BE(terminalResult, PREFIX_SIZE + 8);
   result.writeUInt32BE(failureCode, PREFIX_SIZE + 12);
-  result.writeUInt16BE(tail.byteLength, PREFIX_SIZE + 16);
-  Buffer.from(tail).copy(result, PREFIX_SIZE + 18);
+  Buffer.from(tail).copy(result, PREFIX_SIZE + 16);
   return result;
 }
 
 export function decodeReplyHeader(frame: Uint8Array): ServiceReplyHeader {
   const header = decodeHeader(frame);
-  if (header.command !== M6aServiceWireCommand.reply || header.flags !== 0 || frame.byteLength < 23) {
+  if (header.command !== M6aServiceWireCommand.reply || header.flags !== 0 || frame.byteLength < 21) {
     fail('Invalid reply header.');
   }
   const bytes = asBuffer(frame);
-  const tailLength = bytes.readUInt16BE(PREFIX_SIZE + 16);
-  if (frame.byteLength !== PREFIX_SIZE + 18 + tailLength) {
-    fail('Invalid reply tail.');
-  }
+  //  Inline tail: everything after failureCode belongs to the selected
+  //  `request-specific-tail` case and is validated by the per-operation
+  //  decoder, not here.
   const result = {
     correlation: bytes.readBigUInt64BE(PREFIX_SIZE),
     terminalResult: bytes.readUInt32BE(PREFIX_SIZE + 8),
     failureCode: bytes.readUInt32BE(PREFIX_SIZE + 12),
-    tail: Buffer.from(bytes.subarray(PREFIX_SIZE + 18))
+    tail: Buffer.from(bytes.subarray(PREFIX_SIZE + 16))
   };
   validateReplyFields(result.correlation, result.terminalResult, result.failureCode);
   return result;

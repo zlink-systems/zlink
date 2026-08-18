@@ -80,6 +80,24 @@ final class ZLinkServiceM6AWireCodecTest {
         assertArrayEquals(payload.payload(), decoded.payload());
     }
 
+    //  GOLDEN — service-wire-v1.schema.json reply(20) byte layout.
+    //  `request-specific-tail` is a conditional-union WITHOUT `bodyLengthType`,
+    //  so the tail is written inline: prefix(5) + u64 correlation +
+    //  u32 terminalResult + u32 failureCode + tail. An empty tail therefore
+    //  yields exactly 21 bytes with no u16 tail-length field. This vector is
+    //  byte-identical across C++/Java/Node/.NET.
+    @Test
+    void goldenReplyHeaderPinsInlineSchemaTailByteLayout() {
+        byte[] reply = codec.encodeReplyHeader(7, 0, 0);
+        assertEquals(21, reply.length);
+        assertArrayEquals(
+            hex("5a4d01140000000000000000070000000000000000"),
+            reply);
+        assertArrayEquals(
+            hex("5a4d0114000000000000000008000000660000000e"),
+            codec.encodeReplyHeader(8, 102, 14));
+    }
+
     @Test
     void frameworkMultipartMatchesCanonicalProfileFixture() {
         try (Message first = Message.from(new byte[] {1, 2});

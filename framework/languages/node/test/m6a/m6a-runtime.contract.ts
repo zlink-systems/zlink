@@ -278,9 +278,30 @@ test('RouteMesh admission rejects malformed UTF-8 instead of replacing bytes', (
   );
 });
 
-test('reply header preserves the schema tail length field', () => {
+//  GOLDEN — service-wire-v1.schema.json reply(20) byte layout.
+//  `request-specific-tail` is a conditional-union WITHOUT `bodyLengthType`, so
+//  the tail is inline: prefix(5) + u64 correlation + u32 terminalResult +
+//  u32 failureCode + tail. Empty tail == exactly 21 bytes, no u16 length.
+//  These vectors are byte-identical across C++/Java/Node/.NET.
+test('golden: reply header pins the inline schema tail byte layout', () => {
+  assert.equal(
+    encodeReplyHeader(7n).toString('hex'),
+    '5a4d01140000000000000000070000000000000000'
+  );
+  assert.equal(encodeReplyHeader(7n).byteLength, 21);
+  assert.equal(
+    encodeReplyHeader(8n, 102, 14, Uint8Array.from([1, 2, 3])).toString('hex'),
+    '5a4d0114000000000000000008000000660000000e010203'
+  );
+  assert.equal(
+    encodeReplyHeader(8n, 102, 14, Uint8Array.from([1, 2, 3])).byteLength,
+    24
+  );
+});
+
+test('reply header round-trips the inline schema tail', () => {
   const empty = encodeReplyHeader(7n);
-  assert.equal(empty.byteLength, 23);
+  assert.equal(empty.byteLength, 21);
   assert.deepEqual(decodeReplyHeader(empty), {
     correlation: 7n,
     terminalResult: 0,

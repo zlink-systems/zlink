@@ -732,6 +732,38 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.NotEqual((int)peer.ChannelCount, mapped.Weight);
     }
 
+    //  GOLDEN — service-wire-v1.schema.json reply(20) byte layout.
+    //  `request-specific-tail` is a conditional-union WITHOUT `bodyLengthType`,
+    //  so the tail is written inline: prefix(5) + u64 correlation +
+    //  u32 terminalResult + u32 failureCode + tail. An empty tail therefore
+    //  yields exactly 21 bytes with no u16 tail-length field. These vectors are
+    //  byte-identical across C++/Java/Node/.NET.
+    [Fact]
+    public void Golden_ReplyHeader_PinsInlineSchemaTailByteLayout()
+    {
+        var empty = ZLinkServiceWireCodec.EncodeReply(7, 0, 0);
+        Assert.Equal(21, empty.Length);
+        Assert.Equal(
+            "5A4D01140000000000000000070000000000000000",
+            Convert.ToHexString(empty));
+
+        Assert.Equal(
+            "5A4D0114000000000000000008000000660000000E",
+            Convert.ToHexString(ZLinkServiceWireCodec.EncodeReply(8, 102, 14)));
+
+        var tailed = ZLinkServiceWireCodec.EncodeReply(
+            8, 102, 14, new byte[] { 1, 2, 3 });
+        Assert.Equal(24, tailed.Length);
+        Assert.Equal(
+            "5A4D0114000000000000000008000000660000000E010203",
+            Convert.ToHexString(tailed));
+
+        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
+            tailed, out var decoded, out var decodeError));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, decodeError);
+        Assert.Equal(new byte[] { 1, 2, 3 }, decoded.Tail);
+    }
+
     [Fact]
     public void ApplicationAndReplyRecords_RoundTripExactTerminalFields()
     {
