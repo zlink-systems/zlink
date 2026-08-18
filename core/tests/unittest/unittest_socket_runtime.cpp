@@ -6,6 +6,14 @@
 #include "sockets/common/socket_runtime.hpp"
 #include "utils/config.hpp"
 
+void setUp ()
+{
+}
+
+void tearDown ()
+{
+}
+
 namespace
 {
 void noop_send_ready_handler (void *subject_, void *userdata_)

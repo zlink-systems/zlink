@@ -5,11 +5,11 @@
   "abiMajor": 0,
   "runtime": {
     "path": "lib/libzlink.so.0.11.1",
-    "sha256": "a42974635d99810b237fcfd4b821d8e3cb15026e747d0b9ca88a4a2eba5d286e",
+    "sha256": "bd66559cf8242c56424393309467a49f10c685ab97a31b8f4e47f52dc0ec72f7",
     "soname": "libzlink.so.0"
   },
   "source": {
-    "revision": "408d6abf40dd20b12de218fe45b61eef3d826dda",
+    "revision": "7cae5d96ea20c6baeea3d6443b9ea5e9cd4b1720",
     "dirty": true
   },
   "files": [
@@ -35,7 +35,7 @@
     },
     {
       "path": "include/zlink/eventing/api.h",
-      "sha256": "0d7cc8c8e146da73761b820fe4b3e567904bbff2c69563c9b20ad73d101845cf"
+      "sha256": "dd70d398cd2816e7f97fb73c8c4f5d24ac08255d7c43776298b3b4e3496efe9f"
     },
     {
       "path": "include/zlink/message/api.h",
@@ -63,11 +63,11 @@
     },
     {
       "path": "lib/libzlink.a",
-      "sha256": "9ee1f26d3cfa82c58fd5c9725040b5d417ab8a1f02db075497023e1708f3c460"
+      "sha256": "da0586e4616a34a3fd046a75d16d24a0a49421e55739bfeddf79e7a32f3c743e"
     },
     {
       "path": "lib/libzlink.so.0.11.1",
-      "sha256": "a42974635d99810b237fcfd4b821d8e3cb15026e747d0b9ca88a4a2eba5d286e"
+      "sha256": "bd66559cf8242c56424393309467a49f10c685ab97a31b8f4e47f52dc0ec72f7"
     },
     {
       "path": "lib/pkgconfig/libzlink.pc",

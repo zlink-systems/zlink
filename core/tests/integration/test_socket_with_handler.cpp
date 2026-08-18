@@ -5,6 +5,14 @@
 
 #include <string.h>
 
+void setUp ()
+{
+}
+
+void tearDown ()
+{
+}
+
 namespace
 {
 void discard_stream_message (const zlink_routing_id_t *,

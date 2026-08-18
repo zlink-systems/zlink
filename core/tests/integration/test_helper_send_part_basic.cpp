@@ -49,7 +49,11 @@ void assert_recv_single (void *socket_, const char *payload_)
 
 void test_send_part_matches_aggregate_wire_shape ()
 {
+#ifdef ZLINK_HAVE_WINDOWS
+    TEST_ASSERT_TRUE (_putenv_s ("ZLINK_RECV_TLS_PAYLOAD_CAP", "8") == 0);
+#else
     TEST_ASSERT_TRUE (setenv ("ZLINK_RECV_TLS_PAYLOAD_CAP", "8", 1) == 0);
+#endif
 
     void *receiver = test_context_socket (ZLINK_SOCKET_DEALER);
     void *sender = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -84,6 +88,13 @@ void test_send_part_matches_aggregate_wire_shape ()
       zlink_send_part (sender, &helper2, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
 
     assert_recv_parts (receiver, "alpha", "beta", "gamma");
+    test_context_socket_close (sender);
+    test_context_socket_close (receiver);
+#ifdef ZLINK_HAVE_WINDOWS
+    TEST_ASSERT_TRUE (_putenv_s ("ZLINK_RECV_TLS_PAYLOAD_CAP", "") == 0);
+#else
+    TEST_ASSERT_TRUE (unsetenv ("ZLINK_RECV_TLS_PAYLOAD_CAP") == 0);
+#endif
 }
 
 void test_send_part_single_final_keeps_next_multipart_valid ()
@@ -120,6 +131,8 @@ void test_send_part_single_final_keeps_next_multipart_valid ()
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &helper2, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
     assert_recv_parts (receiver, "after", "single", "final");
+    test_context_socket_close (sender);
+    test_context_socket_close (receiver);
 }
 
 int main (void)
