@@ -4,6 +4,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/transport/endpoint_notation.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include "sha256.hpp"
@@ -2930,7 +2931,7 @@ class provider_location_repository_t final : public location_repository_t
         result.rid = zlink::routing_id_t::from_hex (value.at ("rid").get<std::string> ());
         result.lifecycle_generation = value.at ("lifecycleGeneration").get<std::uint64_t> ();
         result.descriptor_revision = value.at ("descriptorRevision").get<std::uint64_t> ();
-        result.endpoint = value.at ("endpoint").get<std::string> ();
+        result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
         if (value.contains ("entrySpotId") && !value.at ("entrySpotId").is_null ())
             result.entry_spot_id = value.at ("entrySpotId").get<std::string> ();
         result.channel_weights = value.at ("channelWeights").get<std::map<std::string, int>> ();
@@ -2988,7 +2989,7 @@ class provider_location_repository_t final : public location_repository_t
           zlink::routing_id_t::from_hex (value.at ("serverRid").get<std::string> ());
         result.lifecycle_generation = value.at ("lifecycleGeneration").get<std::uint64_t> ();
         result.descriptor_revision = value.at ("descriptorRevision").get<std::uint64_t> ();
-        result.endpoint = value.at ("endpoint").get<std::string> ();
+        result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
         result.weight = value.at ("weight").get<int> ();
         result.state = static_cast<framework_runtime_state_t> (value.at ("state").get<int> ());
         result.security_identity = value.at ("securityIdentity").get<std::string> ();
@@ -3020,7 +3021,7 @@ class provider_location_repository_t final : public location_repository_t
           zlink::routing_id_t::from_hex (value.at ("publisherRid").get<std::string> ());
         result.lifecycle_generation = value.at ("lifecycleGeneration").get<std::uint64_t> ();
         result.descriptor_revision = value.at ("descriptorRevision").get<std::uint64_t> ();
-        result.endpoint = value.at ("endpoint").get<std::string> ();
+        result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
         result.state = static_cast<framework_runtime_state_t> (value.at ("state").get<int> ());
         result.security_identity = value.at ("securityIdentity").get<std::string> ();
         result.owner_id = value.at ("ownerId").get<std::string> ();

@@ -2,6 +2,8 @@
 
 #include "runtime/channels/route_channel_runtime.hpp"
 
+#include "runtime/transport/endpoint_notation.hpp"
+
 #include <algorithm>
 #include <thread>
 #include <utility>
@@ -76,12 +78,13 @@ bool route_channel_runtime_t::connect (zlink::routing_id_t peer_rid, std::string
 
 bool route_channel_runtime_t::disconnect (const std::string &endpoint)
 {
+    const auto normalized_endpoint = runtime::transport::normalize_endpoint (endpoint);
     std::lock_guard lock (_mutex);
     const auto targets = _connections.targets ();
-    const bool removed = _connections.disconnect (endpoint);
+    const bool removed = _connections.disconnect (normalized_endpoint);
     if (removed) {
         for (const auto &target : targets) {
-            if (target.endpoint == endpoint && target.peer_rid) {
+            if (target.endpoint == normalized_endpoint && target.peer_rid) {
                 _ready_peer_rids.erase (target.peer_rid->to_string ());
             }
         }
@@ -117,7 +120,7 @@ void route_channel_runtime_t::mark_peer_disconnected (const zlink::routing_id_t 
 void route_channel_runtime_t::bind_endpoint (std::string endpoint)
 {
     std::lock_guard lock (_mutex);
-    _bind_endpoint = std::move (endpoint);
+    _bind_endpoint = runtime::transport::normalize_endpoint (endpoint);
 }
 
 const std::string &route_channel_runtime_t::bind_endpoint () const noexcept
@@ -128,7 +131,11 @@ const std::string &route_channel_runtime_t::bind_endpoint () const noexcept
 void route_channel_runtime_t::manual_connections (std::vector<std::string> endpoints)
 {
     std::lock_guard lock (_mutex);
-    _manual_connections = std::move (endpoints);
+    _manual_connections.clear ();
+    _manual_connections.reserve (endpoints.size ());
+    for (auto &endpoint : endpoints) {
+        _manual_connections.push_back (runtime::transport::normalize_endpoint (endpoint));
+    }
 }
 
 std::vector<std::string> route_channel_runtime_t::manual_connections () const

@@ -497,11 +497,8 @@ std::string stream_listener_advertised_endpoint (
         && bound_host.back () == ']')
         bound_host = bound_host.substr (1, bound_host.size () - 2);
     const auto host = advertise_host ? *advertise_host : bound_host;
-    const auto formatted_host = host.find (':') == std::string::npos
-                                  ? host
-                                  : (host.starts_with ("[") ? host
-                                                              : "[" + host + "]");
-    return scheme + formatted_host + ":" + port;
+    const auto formatted_host = transport::bracket_ipv6_host (host);
+    return transport::normalize_endpoint (scheme + formatted_host + ":" + port);
 }
 
 std::optional<std::string> socket_endpoint_text (const tcp::endpoint &endpoint)

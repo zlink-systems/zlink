@@ -2,6 +2,8 @@
 
 #include "runtime/configuration/endpoint_connections.hpp"
 
+#include "runtime/transport/endpoint_notation.hpp"
+
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <algorithm>
@@ -97,6 +99,10 @@ endpoint_connections_t::endpoint_connections_t () :
 void endpoint_connections_t::connect (std::string endpoint)
 {
     detail::require_endpoint (endpoint);
+    /* Write-time normalization (endpoint-notation policy §2.3): the
+     * application supplies this endpoint from outside the process, so it
+     * is normalized once here and stored/compared verbatim afterward. */
+    endpoint = runtime::transport::normalize_endpoint (endpoint);
     const std::lock_guard lock (_state->mutex);
     detail::require_manual (*_state);
     if (std::find (_state->endpoints.begin (), _state->endpoints.end (), endpoint)
@@ -112,6 +118,7 @@ void endpoint_connections_t::connect (std::string endpoint)
 void endpoint_connections_t::disconnect (std::string endpoint)
 {
     detail::require_endpoint (endpoint);
+    endpoint = runtime::transport::normalize_endpoint (endpoint);
     const std::lock_guard lock (_state->mutex);
     detail::require_manual (*_state);
     const auto found = std::find (_state->endpoints.begin (), _state->endpoints.end (), endpoint);

@@ -954,6 +954,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_endpoint_notation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_endpoint_notation.cpp)
+  target_compile_features(test_cpp_framework_endpoint_notation PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_endpoint_notation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  add_test(NAME test_cpp_framework_endpoint_notation
+    COMMAND test_cpp_framework_endpoint_notation)
+  set_tests_properties(test_cpp_framework_endpoint_notation PROPERTIES
+    LABELS "framework-unit;framework-foundation;protocol"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_authority_key_codec
     tests/Zlink.Framework.UnitTests/test_cpp_framework_authority_key_codec.cpp)
   target_compile_features(test_cpp_framework_authority_key_codec PRIVATE cxx_std_20)

@@ -17,6 +17,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
@@ -461,10 +462,26 @@ std::unique_ptr<stream_connection_t> make_tcp_connection (boost::asio::io_contex
 namespace
 {
 
+/* Case-insensitive scheme match: endpoint-notation policy §2.6 requires
+ * the scheme to be lowercased before the connector decides which
+ * transport handles it, so "TCP://host:1" is accepted the same as
+ * "tcp://host:1". Only the scheme portion (up to prefix.size()) is
+ * compared case-insensitively; the host/port that follows is untouched. */
+bool scheme_prefix_matches (const std::string &endpoint, std::string_view prefix) noexcept
+{
+    if (endpoint.size () < prefix.size ()) {
+        return false;
+    }
+    return std::equal (prefix.begin (), prefix.end (), endpoint.begin (),
+                       [] (unsigned char expected, unsigned char actual) {
+                           return expected == std::tolower (actual);
+                       });
+}
+
 std::optional<endpoint_parts_t> parse_host_port_endpoint (const std::string &endpoint,
                                                           std::string_view prefix)
 {
-    if (endpoint.rfind (std::string (prefix), 0) != 0) {
+    if (!scheme_prefix_matches (endpoint, prefix)) {
         return std::nullopt;
     }
     const auto host_start = prefix.size ();

@@ -16,6 +16,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/transport/endpoint_notation.hpp"
 #include "runtime/utils/uuid.hpp"
 #include "runtime/utils/relocation_id_generator.hpp"
 
@@ -35,6 +36,8 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+
+namespace mesh_endpoint_notation = zlink::framework::runtime::transport;
 
 namespace zlink::framework::detail
 {
@@ -339,7 +342,8 @@ mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
     spot_builder (spot_state)
 {
     listen_port = 0;
-    listen_endpoint = "tcp://" + bind_host + ":0";
+    listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+      "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (bind_host) + ":0");
 }
 
 void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
@@ -439,8 +443,9 @@ void mesh_node_runtime_t::start ()
         }
     }
     if (_state->listen_port) {
-        _state->listen_endpoint =
-          "tcp://" + _state->bind_host + ":" + std::to_string (*_state->listen_port);
+        _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+          "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+            + std::to_string (*_state->listen_port));
     }
     _state->spot_state->one_way_send_timeout = one_way_send_timeout (*_state);
     _state->spot_state->instance_spot_idle_timeout = _state->instance_spot_idle_timeout;
@@ -3489,7 +3494,9 @@ std::string mesh_node_runtime_t::listen_endpoint () const
     std::lock_guard lock (_state->mutex);
     if (_state->listen_port && !_state->bind_host_override) {
         if (const auto options = _state->framework_options.lock ()) {
-            return "tcp://" + options->bind_host + ":" + std::to_string (*_state->listen_port);
+            return mesh_endpoint_notation::normalize_endpoint (
+              "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (options->bind_host) + ":"
+                + std::to_string (*_state->listen_port));
         }
     }
     return _state->listen_endpoint;
@@ -3878,7 +3885,7 @@ mesh_node_builder_t &mesh_node_builder_t::listen (std::string endpoint)
     }
     std::lock_guard lock (_state->mutex);
     _state->listen_port.reset ();
-    _state->listen_endpoint = std::move (endpoint);
+    _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (endpoint);
     return *this;
 }
 
@@ -3886,7 +3893,9 @@ mesh_node_builder_t &mesh_node_builder_t::listen (std::uint16_t port)
 {
     std::lock_guard lock (_state->mutex);
     _state->listen_port = port;
-    _state->listen_endpoint = "tcp://" + _state->bind_host + ":" + std::to_string (port);
+    _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+      "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+        + std::to_string (port));
     return *this;
 }
 
@@ -3898,8 +3907,9 @@ mesh_node_builder_t &mesh_node_builder_t::set_bind_host (std::string host)
     _state->bind_host_override = host;
     _state->bind_host = std::move (host);
     if (_state->listen_port) {
-        _state->listen_endpoint =
-          "tcp://" + _state->bind_host + ":" + std::to_string (*_state->listen_port);
+        _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+          "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+            + std::to_string (*_state->listen_port));
     }
     return *this;
 }

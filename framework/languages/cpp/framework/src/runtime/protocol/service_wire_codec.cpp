@@ -2,6 +2,8 @@
 
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include "runtime/transport/endpoint_notation.hpp"
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -3587,8 +3589,8 @@ mesh::service_node_descriptor_t decode_route_mesh_admission (
       read_text8 (bytes, offset, "security identity");
     result.lifecycle_generation = read_u64 (bytes, offset);
     result.descriptor_revision = read_u64 (bytes, offset);
-    result.advertised_endpoint =
-      read_text16 (bytes, offset, "advertised endpoint", endpointBytes);
+    result.advertised_endpoint = transport::normalize_endpoint (
+      read_text16 (bytes, offset, "advertised endpoint", endpointBytes));
     const auto channel_count = read_u16 (bytes, offset);
     result.channels.reserve (channel_count);
     for (std::uint16_t index = 0; index < channel_count; ++index) {
@@ -3856,8 +3858,8 @@ client_server_server_admission_t decode_client_server_server_admission (
     result.security_identity =
       read_text8 (bytes, offset, "security identity");
     result.effective_max_message_bytes = read_u32 (bytes, offset);
-    result.advertised_endpoint =
-      read_text16 (bytes, offset, "advertised endpoint", endpointBytes);
+    result.advertised_endpoint = transport::normalize_endpoint (
+      read_text16 (bytes, offset, "advertised endpoint", endpointBytes));
     if (result.lifecycle_generation == 0
         || result.descriptor_revision == 0 || result.weight > 10000
         || result.effective_max_message_bytes == 0

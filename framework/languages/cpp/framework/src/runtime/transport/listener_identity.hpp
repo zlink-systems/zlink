@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/transport/endpoint_notation.hpp"
+
 #include <cstddef>
 #include <optional>
 #include <stdexcept>
@@ -156,7 +158,7 @@ inline std::string advertised_tcp_endpoint (
     if (!bound_endpoint.starts_with ("tcp://")
         || port_separator == std::string::npos || port_separator < 6) {
         if (!advertise_host)
-            return bound_endpoint;
+            return normalize_endpoint (bound_endpoint);
         throw std::invalid_argument (
           std::string (listener_kind) + " advertise host requires a TCP bind endpoint");
     }
@@ -168,20 +170,15 @@ inline std::string advertised_tcp_endpoint (
           std::string (listener_kind) + " wildcard bind host requires an advertise host");
     }
     if (!advertise_host)
-        return bound_endpoint;
+        return normalize_endpoint (bound_endpoint);
 
     const auto &configured_host = *advertise_host;
     if (is_wildcard_host (configured_host))
         throw std::invalid_argument (
           std::string (listener_kind)
           + " advertise host must be a remotely reachable, non-wildcard host");
-    const auto host = configured_host.find (':') == std::string::npos
-                        || (configured_host.size () >= 2
-                            && configured_host.front () == '['
-                            && configured_host.back () == ']')
-                        ? configured_host
-                        : "[" + configured_host + "]";
-    return "tcp://" + host + bound_endpoint.substr (port_separator);
+    const auto host = bracket_ipv6_host (configured_host);
+    return normalize_endpoint ("tcp://" + host + bound_endpoint.substr (port_separator));
 }
 
 } // namespace zlink::framework::runtime::transport
