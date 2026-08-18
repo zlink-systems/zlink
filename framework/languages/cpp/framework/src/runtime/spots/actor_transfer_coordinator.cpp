@@ -155,13 +155,16 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
     if (moving == _moves.end ()) {
         return handoff_append_result_t::not_moving;
     }
-    // The source preserves packets before authority commit. During target
-    // commit, packets admitted through the committed route are also retained
-    // until lifecycle activation and completion delivery establish the final
-    // serial order.
+    // The source preserves packets before authority commit. On the target,
+    // an arrival between admission Accepted and PREPARE (target_pending,
+    // spec 15 §4.2 step 2-4) parks here exactly like one that arrives during
+    // target_committing (after PREPARE, before lifecycle open) — both cases
+    // retain packets in the same per-actor backlog until the real Actor
+    // queue exists and can replay them in arrival order.
     if (moving->second.phase != actor_move_phase_t::source_reserved
         && moving->second.phase != actor_move_phase_t::local
         && moving->second.phase != actor_move_phase_t::source_remote
+        && moving->second.phase != actor_move_phase_t::target_pending
         && moving->second.phase != actor_move_phase_t::target_committing
         && moving->second.phase != actor_move_phase_t::reconcile) {
         return handoff_append_result_t::not_moving;
@@ -575,12 +578,27 @@ bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
                                                       pending_actor_admission_t admission)
 {
     std::lock_guard lock (_mutex);
-    if (_admissions.contains (transfer_id)
-        || _completed_admissions.contains (transfer_id)
-        || _moves.contains (admission.actor_key)) {
+    if (_admissions.contains (transfer_id) || _completed_admissions.contains (transfer_id)) {
         return false;
     }
     const auto actor_key = admission.actor_key;
+    if (const auto moving = _moves.find (actor_key); moving != _moves.end ()) {
+        if (moving->second.phase != actor_move_phase_t::target_pending
+            || moving->second.transfer_id == transfer_id) {
+            return false;
+        }
+        //  A newer exact identity (different RelocationId/transfer_id) for
+        //  the same object displaces an admission-time placeholder that has
+        //  not yet started PREPARE — the later attempt wins and any
+        //  arrivals it parked so far are discarded with it (spec 15 §4.2
+        //  "같은 object의 relocation temporary queue는 하나만 존재한다" /
+        //  "나중 attempt가 유효하며"). A placeholder already past
+        //  target_pending (mid-PREPARE/commit) is left alone here — it is
+        //  reclaimed by cleanup_expired on its own deadline instead.
+        _admissions.erase (moving->second.transfer_id);
+        _backlogs.erase (actor_key);
+        _moves.erase (moving);
+    }
     _moves.emplace (actor_key, move_state_t{actor_move_phase_t::target_pending, transfer_id});
     _admissions.emplace (std::move (transfer_id), std::move (admission));
     return true;
@@ -609,6 +627,7 @@ actor_transfer_coordinator_t::begin_commit (const std::string &transfer_id,
     }
     if (found->second.deadline <= std::chrono::steady_clock::now ()) {
         _moves.erase (found->second.actor_key);
+        _backlogs.erase (found->second.actor_key);
         _admissions.erase (found);
         return std::nullopt;
     }
@@ -789,11 +808,20 @@ void actor_transfer_coordinator_t::fail_commit (const std::string &transfer_id, 
     const auto actor_key = found->second.actor_key;
     _admissions.erase (found);
     if (reconcile) {
+        //  reconcile stays a "moving" phase try_append_backlog still parks
+        //  into, so any backlog accumulated since Accepted (target_pending)
+        //  is retained, not discarded, across the transition.
         auto &move = _moves[actor_key];
         move.phase = actor_move_phase_t::reconcile;
         move.transfer_id.clear ();
     } else {
+        //  Terminal failure (Rejected, invalid completion identity, prepare
+        //  failure with no reconcile): the move ends here, so any arrival
+        //  parked since Accepted must not be left stranded under a dead
+        //  actor_key for a later admission to inherit (spec 15 §4.2 cleanup
+        //  "exactly once").
         _moves.erase (actor_key);
+        _backlogs.erase (actor_key);
     }
 }
 
@@ -821,6 +849,7 @@ actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_p
           moving != _moves.end () && moving->second.phase == actor_move_phase_t::target_pending;
         if (can_expire && found->second.deadline <= now) {
             _moves.erase (moving);
+            _backlogs.erase (found->second.actor_key);
             removed.push_back (expired_actor_admission_t{found->first, found->second});
             found = _admissions.erase (found);
         } else {

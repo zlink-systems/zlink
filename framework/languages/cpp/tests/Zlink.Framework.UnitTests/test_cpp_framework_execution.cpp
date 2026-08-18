@@ -2497,6 +2497,180 @@ bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
            && (*replay)[2].metadata.at ("sequence") == "D1";
 }
 
+// Spec 15 §4.2 step 2-4: an arrival for the joining Actor between
+// OnActorJoin Accepted (target_pending) and PREPARE (target_committing)
+// must park in the relocation temporary queue instead of being dropped, and
+// PREPARE must migrate it into the real queue in order — ahead of anything
+// that arrives after PREPARE starts. This drives the production admission
+// entry points directly (try_add_admission / try_append_backlog /
+// begin_commit / complete_commit_and_take_backlog), the same level this
+// suite already uses for
+// verify_target_commit_stages_source_prefix_before_live_dispatch.
+bool verify_actor_join_prewarm_parks_arrival_before_prepare ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_transfer_coordinator_t coordinator;
+    const auto source = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-prewarm", 7);
+    pending_actor_admission_t admission{
+      .actor_key = "player:actor-prewarm",
+      .source_actor = source,
+      .source_spot_id = "source-spot",
+      .target_spot_id = "target-spot",
+      .deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30),
+      .completion_operation_id_high = 41,
+      .completion_operation_id_low = 43};
+    if (!coordinator.try_add_admission ("transfer-prewarm", admission)) {
+        return false;
+    }
+    // Accepted has returned to source; PREPARE has not run yet. An arrival
+    // for this exact Actor must park here (spec 15 §4.2 "temporary
+    // queue가 등록되어 있어도 ... application handler를 실행하지 않는다") —
+    // before the fix, target_pending was not in try_append_backlog's
+    // allowed-phase set and this call returned not_moving, letting
+    // relay_actor_packet fall through to entry-spot auto-join or a
+    // not-found failure instead of parking.
+    if (coordinator.phase ("player:actor-prewarm") != actor_move_phase_t::target_pending) {
+        return false;
+    }
+    const auto packet = [] (std::string sequence) {
+        handoff_packet_t value;
+        value.packet_name = "handoff";
+        value.metadata.emplace ("sequence", std::move (sequence));
+        return value;
+    };
+    if (coordinator.try_append_backlog ("player:actor-prewarm", packet ("EARLY"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    if (!coordinator.begin_commit ("transfer-prewarm", source, "target-spot")) {
+        return false;
+    }
+    if (coordinator.try_append_backlog (
+          "player:actor-prewarm", packet ("AFTER_PREPARE"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    const auto replay = coordinator.complete_commit_and_take_backlog (
+      "transfer-prewarm", source, "target-spot");
+    return replay && replay->size () == 2
+           && (*replay)[0].metadata.at ("sequence") == "EARLY"
+           && (*replay)[1].metadata.at ("sequence") == "AFTER_PREPARE";
+}
+
+// Spec 15 §4.2 "같은 object의 relocation temporary queue는 하나만 존재한다" /
+// "나중 attempt가 유효하며": a newer exact identity (different transfer_id)
+// for the same object displaces an admission-time placeholder that has not
+// started PREPARE yet, and any arrival parked for the displaced identity
+// does not leak into the new attempt's replay.
+bool verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_transfer_coordinator_t coordinator;
+    const auto source = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-evict", 7);
+    pending_actor_admission_t first{
+      .actor_key = "player:actor-evict",
+      .source_actor = source,
+      .source_spot_id = "source-spot",
+      .target_spot_id = "target-spot",
+      .deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30),
+      .completion_operation_id_high = 51,
+      .completion_operation_id_low = 53};
+    pending_actor_admission_t second = first;
+    second.completion_operation_id_low = 59;
+
+    if (!coordinator.try_add_admission ("transfer-evict-1", first)) {
+        return false;
+    }
+    const auto packet = [] (std::string sequence) {
+        handoff_packet_t value;
+        value.packet_name = "handoff";
+        value.metadata.emplace ("sequence", std::move (sequence));
+        return value;
+    };
+    if (coordinator.try_append_backlog ("player:actor-evict", packet ("STALE"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    // A newer exact identity for the same object arrives before the first
+    // reaches PREPARE — it must win, and the stale placeholder (including
+    // whatever it parked) must not survive.
+    if (!coordinator.try_add_admission ("transfer-evict-2", second)) {
+        return false;
+    }
+    if (coordinator.admission ("transfer-evict-1").has_value ()) {
+        return false;
+    }
+    if (coordinator.phase ("player:actor-evict") != actor_move_phase_t::target_pending) {
+        return false;
+    }
+    if (coordinator.try_append_backlog ("player:actor-evict", packet ("FRESH"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    if (!coordinator.begin_commit ("transfer-evict-2", source, "target-spot")) {
+        return false;
+    }
+    const auto replay = coordinator.complete_commit_and_take_backlog (
+      "transfer-evict-2", source, "target-spot");
+    return replay && replay->size () == 1
+           && (*replay)[0].metadata.at ("sequence") == "FRESH";
+}
+
+// Rejected/expiry/prepare-failure cleanup must release a parked backlog
+// exactly once — not strand it under the actor_key for a later, unrelated
+// admission to inherit (spec 15 §4.2 cleanup requirement).
+bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_transfer_coordinator_t coordinator;
+    const auto source = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-fail", 7);
+    pending_actor_admission_t admission{
+      .actor_key = "player:actor-fail",
+      .source_actor = source,
+      .source_spot_id = "source-spot",
+      .target_spot_id = "target-spot",
+      .deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30),
+      .completion_operation_id_high = 61,
+      .completion_operation_id_low = 63};
+    if (!coordinator.try_add_admission ("transfer-fail", admission)) {
+        return false;
+    }
+    handoff_packet_t stale;
+    stale.packet_name = "handoff";
+    stale.metadata.emplace ("sequence", "STRANDED");
+    if (coordinator.try_append_backlog ("player:actor-fail", stale)
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    if (!coordinator.begin_commit ("transfer-fail", source, "target-spot")) {
+        return false;
+    }
+    coordinator.fail_commit ("transfer-fail", false);
+    if (coordinator.phase ("player:actor-fail").has_value ()) {
+        return false;
+    }
+    // A later, unrelated admission for the same object must start clean.
+    pending_actor_admission_t retry = admission;
+    if (!coordinator.try_add_admission ("transfer-fail-retry", retry)) {
+        return false;
+    }
+    if (!coordinator.begin_commit ("transfer-fail-retry", source, "target-spot")) {
+        return false;
+    }
+    const auto replay = coordinator.complete_commit_and_take_backlog (
+      "transfer-fail-retry", source, "target-spot");
+    return replay && replay->empty ();
+}
+
 class actor_cutover_authority_t final
     : public zlink::framework::runtime::stateful::authority_relocation_port_t
 {
@@ -4558,6 +4732,18 @@ int main ()
     }
     if (!verify_target_commit_stages_source_prefix_before_live_dispatch ()) {
         return 94;
+    }
+    if (!verify_actor_join_prewarm_parks_arrival_before_prepare ()) {
+        std::cerr << "actor Join prewarm parking regression failed\n";
+        return 113;
+    }
+    if (!verify_actor_join_prewarm_newest_attempt_evicts_placeholder ()) {
+        std::cerr << "actor Join prewarm newest-attempt eviction regression failed\n";
+        return 114;
+    }
+    if (!verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()) {
+        std::cerr << "actor Join prewarm fail_commit backlog cleanup regression failed\n";
+        return 115;
     }
     if (!verify_actor_join_finalize_replies_after_target_activation ()) {
         std::cerr << "actor cutover dispatcher regression failed\n";
