@@ -602,6 +602,172 @@ internal static partial class ZLinkServiceWireCodec
             tail.ToArray());
     }
 
+    //  service-wire-v1.schema.json actor-join-reply-tail: reply(20) with
+    //  originalOperationKind actorJoin is a conditional-union keyed by a u32
+    //  `joinResult` discriminant (0 accepted / 1 rejected — matches
+    //  ActorJoinResult's wire values), body-length-prefixed with u16 and
+    //  covering only the selected case. Golden vectors:
+    //  framework/runtime/protocol/golden/actor-join-reply-v1.json.
+    internal static byte[] EncodeActorJoinReply(
+        ulong correlation,
+        RequestResult terminalResult,
+        ServiceWireConstants.FrameworkErrorCode failureCode,
+        ActorJoinReplyCompletion? completion)
+    {
+        if (terminalResult != RequestResult.Ok)
+        {
+            if (completion is not null)
+                throw new ArgumentException(
+                    "A failed reply cannot carry an Actor join tail.",
+                    nameof(completion));
+            return EncodeReply(correlation, (int)terminalResult, (uint)failureCode);
+        }
+        if (failureCode != ServiceWireConstants.FrameworkErrorCode.None
+            || completion is null)
+            throw new ArgumentOutOfRangeException(nameof(completion));
+
+        var selected = new WireWriter();
+        if (completion.JoinResult == ActorJoinResult.Accepted)
+        {
+            if (completion.Spot is not { } spot
+                || string.IsNullOrEmpty(spot.SpotId)
+                || spot.SpotGeneration == 0
+                || completion.MembershipEpoch == 0
+                || completion.ReceiveChunkLimitBytes > RelocationChunkBytesBound)
+                throw new ArgumentOutOfRangeException(nameof(completion));
+            selected.Text8(spot.SpotId);
+            selected.U64(spot.SpotGeneration);
+            selected.U64(completion.MembershipEpoch);
+            selected.U32(completion.ReceiveChunkLimitBytes);
+        }
+        else if (completion.JoinResult == ActorJoinResult.Rejected)
+        {
+            if (completion.MembershipEpoch != 0
+                || completion.ReceiveChunkLimitBytes != 0)
+                throw new ArgumentOutOfRangeException(nameof(completion));
+            var optional = new WireWriter();
+            if (completion.Spot is { } spot)
+            {
+                if (string.IsNullOrEmpty(spot.SpotId) || spot.SpotGeneration == 0)
+                    throw new ArgumentOutOfRangeException(nameof(completion));
+                optional.Text8(spot.SpotId);
+                optional.U64(spot.SpotGeneration);
+            }
+            selected.U8(completion.Spot is null ? (byte)0 : (byte)1);
+            selected.U16(checked((ushort)optional.Count));
+            selected.Bytes(optional.ToArray());
+        }
+        else
+        {
+            throw new ArgumentOutOfRangeException(nameof(completion));
+        }
+
+        var tail = new WireWriter();
+        tail.U32((uint)completion.JoinResult);
+        tail.U16(checked((ushort)selected.Count));
+        tail.Bytes(selected.ToArray());
+        return EncodeReply(
+            correlation,
+            (int)terminalResult,
+            (uint)failureCode,
+            tail.ToArray());
+    }
+
+    internal static bool TryDecodeActorJoinReply(
+        ReplyRecord reply,
+        out ActorJoinReplyCompletion? completion,
+        out DecodeError error)
+    {
+        completion = null;
+        if (reply.TerminalResult != (int)RequestResult.Ok)
+        {
+            if (reply.Tail.Length != 0)
+            {
+                error = DecodeError.InvalidField;
+                return false;
+            }
+            error = DecodeError.None;
+            return true;
+        }
+        if (reply.FailureCode != 0)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
+
+        var reader = new WireReader(reply.Tail);
+        if (!reader.TryU32(out var joinResultValue))
+            return DecodeFailure(ref reader, out error);
+        if (joinResultValue != (uint)ActorJoinResult.Accepted
+            && joinResultValue != (uint)ActorJoinResult.Rejected)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
+        if (!reader.TryU16(out var bodyLength))
+            return DecodeFailure(ref reader, out error);
+        var joinResult = (ActorJoinResult)joinResultValue;
+        var remainingBeforeBody = reader.Remaining;
+
+        if (joinResult == ActorJoinResult.Accepted)
+        {
+            if (!reader.TryText8(out var spotId)
+                || string.IsNullOrEmpty(spotId)
+                || !reader.TryU64(out var spotGeneration) || spotGeneration == 0
+                || !reader.TryU64(out var membershipEpoch) || membershipEpoch == 0
+                || !reader.TryU32(out var receiveChunkLimitBytes))
+                return DecodeFailure(ref reader, out error);
+            if (receiveChunkLimitBytes > RelocationChunkBytesBound)
+            {
+                error = DecodeError.InvalidField;
+                return false;
+            }
+            if (remainingBeforeBody - reader.Remaining != bodyLength)
+            {
+                error = DecodeError.InvalidField;
+                return false;
+            }
+            if (!End(ref reader, out error))
+                return false;
+            completion = new ActorJoinReplyCompletion(
+                joinResult,
+                new ActorJoinReplySpot(spotId, spotGeneration),
+                membershipEpoch,
+                receiveChunkLimitBytes);
+            return true;
+        }
+        else
+        {
+            if (!reader.TryU8(out var hasSpotByte) || hasSpotByte > 1
+                || !reader.TryU16(out var optionalLength))
+                return DecodeFailure(ref reader, out error);
+            var remainingBeforeOptional = reader.Remaining;
+            ActorJoinReplySpot? spot = null;
+            if (hasSpotByte == 1)
+            {
+                if (!reader.TryText8(out var spotId)
+                    || string.IsNullOrEmpty(spotId)
+                    || !reader.TryU64(out var spotGeneration) || spotGeneration == 0)
+                    return DecodeFailure(ref reader, out error);
+                spot = new ActorJoinReplySpot(spotId, spotGeneration);
+            }
+            if (remainingBeforeOptional - reader.Remaining != optionalLength)
+            {
+                error = DecodeError.InvalidField;
+                return false;
+            }
+            if (remainingBeforeBody - reader.Remaining != bodyLength)
+            {
+                error = DecodeError.InvalidField;
+                return false;
+            }
+            if (!End(ref reader, out error))
+                return false;
+            completion = new ActorJoinReplyCompletion(joinResult, spot, 0, 0);
+            return true;
+        }
+    }
+
     internal static bool TryDecodeActorCreateReply(
         ReplyRecord reply,
         string meshName,

@@ -8669,6 +8669,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out _);
             completion = actorDestroyCompletion;
         }
+        else if (pending.Kind == MeshOperationKind.ActorJoin)
+        {
+            //  service-wire-v1.schema.json actor-join-reply-tail: without
+            //  this branch a conformant reply(20)+actorJoin tail from a peer
+            //  falls through to TryDecodeUserSpotReply, which requires an
+            //  empty tail for any kind other than UserSpotCreate/Close and
+            //  would reject the frame as InvalidField.
+            decoded = ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                reply,
+                out var actorJoinCompletion,
+                out _);
+            completion = actorJoinCompletion;
+        }
         else
         {
             decoded = ZLinkServiceWireCodec.TryDecodeUserSpotReply(

@@ -12,5 +12,6 @@
 
     <ItemGroup>
         <ProjectReference Include="../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj"/>
     </ItemGroup>
 </Project>

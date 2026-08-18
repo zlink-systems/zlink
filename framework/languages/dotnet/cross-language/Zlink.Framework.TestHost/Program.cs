@@ -131,6 +131,204 @@ internal sealed class SpotStartupPublishHostedService(
     }
 }
 
+/// <summary>
+/// Entry-spot actor relocation scenario (spec 28-relocation-flow.ko.md:589-591):
+/// the actor is created via the entry spot's OnCreateActorAsync, which is
+/// the JoinEntrySpot admission-free placement (spec 15-spot-actor.ko.md:489)
+/// -- no OnActorJoin roundtrip, the only join shape usable cross-language
+/// today. A whole-node RelocateAsync() drain then moves it to the peer node,
+/// and a post-relocation probe confirms it answers on the new owner.
+/// </summary>
+internal sealed class RelocationActor(string actorId, IZLinkActorContext context) : IZLinkActor
+{
+    public string ActorId { get; } = actorId;
+    public IZLinkActorContext Context { get; } = context;
+    public byte[] ApplicationState { get; set; } = [];
+    public int StateVersion { get; set; }
+}
+
+internal sealed class RelocationActorFactory : IZLinkActorFactory<RelocationActor>
+{
+    public ValueTask<RelocationActor> CreateAsync(
+        IZLinkActorContext context, CancellationToken cancellationToken = default)
+    {
+        return ValueTask.FromResult(new RelocationActor(context.ActorId, context));
+    }
+}
+
+internal sealed class RelocationActorAdapter : IZLinkActorRelocationAdapter<RelocationActor>
+{
+    public ValueTask<byte[]> CaptureAsync(
+        RelocationActor actor, CancellationToken cancellationToken)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(actor.StateVersion);
+        writer.Write(actor.ApplicationState.Length);
+        writer.Write(actor.ApplicationState);
+        return ValueTask.FromResult(stream.ToArray());
+    }
+
+    public ValueTask RestoreAsync(
+        RelocationActor actor, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        using var stream = new MemoryStream(payload.ToArray());
+        using var reader = new BinaryReader(stream);
+        actor.StateVersion = reader.ReadInt32();
+        var length = reader.ReadInt32();
+        actor.ApplicationState = reader.ReadBytes(length);
+        if (actor.ApplicationState.Length != length)
+            throw new InvalidOperationException("relocation application state size changed during restore");
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed record CrossLangActorCreateReq(int StateVersion, int ApplicationStateBytes);
+
+internal sealed record CrossLangProbeReq(string Marker);
+
+internal sealed record CrossLangProbeRes(
+    string NodeRid, int StateVersion, int ApplicationStateBytes, string Marker);
+
+internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
+    : IZLinkEntrySpot<RelocationActor>
+{
+    public const string ActorType = "cross-lang-relocation-actor-type";
+
+    public IZLinkEntrySpotContext Context { get; } = context;
+
+    public void Configure()
+    {
+        Context.Handlers.AddHandler<RelocationProbeHandler>();
+    }
+
+    public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
+        RelocationActor actor, ZLinkMessage createRequest, CancellationToken cancellationToken)
+    {
+        if (!createRequest.IsEmpty)
+        {
+            var request = createRequest.Decode<CrossLangActorCreateReq>();
+            actor.StateVersion = request.StateVersion;
+            var state = new byte[Math.Max(0, request.ApplicationStateBytes)];
+            for (var index = 0; index < state.Length; index++) state[index] = (byte)(index % 251);
+            actor.ApplicationState = state;
+        }
+        return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
+    }
+
+    public ValueTask OnJoinedActorAsync(RelocationActor actor, CancellationToken cancellationToken)
+    {
+        _ = actor;
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask OnLeaveActorAsync(RelocationActor actor, CancellationToken cancellationToken)
+    {
+        _ = actor;
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class RelocationProbeHandler(TestHostEventSink sink)
+    : IZLinkEntrySpotActorRequestHandler<RelocationEntrySpot, RelocationActor, CrossLangProbeReq, CrossLangProbeRes>
+{
+    public ValueTask<CrossLangProbeRes> HandleAsync(
+        RelocationEntrySpot entrySpot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        CrossLangProbeReq request,
+        CancellationToken cancellationToken)
+    {
+        var nodeRid = entrySpot.Context.NodeRid.ToString();
+        sink.Append($"entry-spot-probe-served|node={nodeRid}|actor={actor.ActorId}");
+        return ValueTask.FromResult(new CrossLangProbeRes(
+            nodeRid, actor.StateVersion, actor.ApplicationState.Length, request.Marker));
+    }
+}
+
+internal sealed class EntryRelocationSourceHostedService(
+    IZLinkActorManager actors,
+    IZLinkFrameworkRuntime runtime,
+    TestHostEventSink sink,
+    string actorId,
+    int payloadBytes) : IHostedService
+{
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var created = await actors
+            .GetOrCreate(actorId, RelocationEntrySpot.ActorType)
+            .Request(new CrossLangActorCreateReq(1, payloadBytes))
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Async(cancellationToken);
+        var status = created switch
+        {
+            ZLinkActorCreateResult.Created => "created",
+            ZLinkActorCreateResult.Existing => "existing",
+            ZLinkActorCreateResult.Rejected => "rejected",
+            _ => "unknown"
+        };
+        sink.Append($"entry-spot-create|status={status}");
+        var ownerBefore = created switch
+        {
+            ZLinkActorCreateResult.Created c => c.Actor.NodeRid.ToString(),
+            ZLinkActorCreateResult.Existing e => e.Actor.NodeRid.ToString(),
+            _ => "none"
+        };
+        sink.Append($"entry-spot-owner-before|node={ownerBefore}");
+
+        var relocation = await runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                Deadline = TimeSpan.FromSeconds(30)
+            },
+            cancellationToken);
+        sink.Append($"relocate-result|outcome={relocation.Outcome}|reason={relocation.Reason}");
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+internal sealed class EntryRelocationTargetHostedService(
+    IZLinkActorClient actorClient,
+    TestHostEventSink sink,
+    string actorId,
+    string nodeRid) : IHostedService
+{
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
+        CrossLangProbeRes? lastReply = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                lastReply = await actorClient
+                    .RequestToActor(actorId, new CrossLangProbeReq("post-relocate-probe"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<CrossLangProbeRes>(cancellationToken);
+                if (lastReply.NodeRid == nodeRid) break;
+            }
+            catch (ZLinkFrameworkException)
+            {
+                // Actor may still be mid-relocation or not yet created; keep polling.
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        }
+
+        if (lastReply is null || lastReply.NodeRid != nodeRid)
+        {
+            sink.Append($"entry-spot-probe-timeout|last={lastReply?.NodeRid ?? "none"}");
+            return;
+        }
+        sink.Append(
+            $"entry-spot-probe|nodeRid={lastReply.NodeRid}|stateVersion={lastReply.StateVersion}"
+            + $"|applicationStateBytes={lastReply.ApplicationStateBytes}");
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
 internal sealed class TestHostEventSink(string? path)
 {
     private readonly object _gate = new();

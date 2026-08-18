@@ -82,6 +82,19 @@ internal sealed record ActorLocation(
 internal sealed record ActorJoinCompletion(
     ActorJoinResult JoinResult, ActorRef Actor, ActorLocation Location) : MeshRecordPayload;
 
+//  service-wire-v1.schema.json actor-join-reply-tail (reply(20),
+//  originalOperationKind actorJoin): the SPOT the joining Actor now belongs
+//  to, distinct from ActorLocation which additionally carries the Actor
+//  identity used by the in-process managed-mesh join path.
+internal readonly record struct ActorJoinReplySpot(
+    string SpotId, ulong SpotGeneration);
+
+internal sealed record ActorJoinReplyCompletion(
+    ActorJoinResult JoinResult,
+    ActorJoinReplySpot? Spot,
+    ulong MembershipEpoch,
+    uint ReceiveChunkLimitBytes) : MeshRecordPayload;
+
 internal sealed record MeshSendReadyData(
     MeshDestinationKind DestinationKind, RoutingId TargetNodeRid,
     string TargetSpotId, ActorRef TargetActor,

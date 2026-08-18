@@ -12,3 +12,4 @@ global using Zlink.Framework.Runtime.Messaging;
 global using Zlink.Framework.Contracts.Spots;
 global using Zlink.Framework.Contracts.Streams;
 global using Zlink.Framework.Contracts.Timers;
+global using Zlink.Framework.Locations.Redis;

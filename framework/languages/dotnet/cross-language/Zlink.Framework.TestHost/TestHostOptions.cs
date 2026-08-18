@@ -22,7 +22,15 @@ internal sealed record TestHostOptions(
     string? PublishTopic,
     string? PublishValue,
     string? AttachSpotPublisherChannel,
-    string? StreamEndpoint)
+    string? StreamEndpoint,
+    string? MeshName,
+    string? NodeRid,
+    string? BindEndpoint,
+    string? PeerEndpoint,
+    string? RedisEndpoint,
+    string? RedisKeyPrefix,
+    string? ActorId,
+    int? PayloadBytes)
 {
     public static TestHostOptions Parse(string[] args)
     {
@@ -76,6 +84,14 @@ internal sealed record TestHostOptions(
         public string? PublishValue { get; set; }
         public string? AttachSpotPublisherChannel { get; set; }
         public string? StreamEndpoint { get; set; }
+        public string? MeshName { get; set; }
+        public string? NodeRid { get; set; }
+        public string? BindEndpoint { get; set; }
+        public string? PeerEndpoint { get; set; }
+        public string? RedisEndpoint { get; set; }
+        public string? RedisKeyPrefix { get; set; }
+        public string? ActorId { get; set; }
+        public int? PayloadBytes { get; set; }
 
         public void Apply(string argument, Func<string> readValue)
         {
@@ -146,6 +162,30 @@ internal sealed record TestHostOptions(
                 case "--stream-endpoint":
                     StreamEndpoint = readValue();
                     break;
+                case "--mesh-name":
+                    MeshName = readValue();
+                    break;
+                case "--node-rid":
+                    NodeRid = readValue();
+                    break;
+                case "--bind-endpoint":
+                    BindEndpoint = readValue();
+                    break;
+                case "--peer-endpoint":
+                    PeerEndpoint = readValue();
+                    break;
+                case "--redis-endpoint":
+                    RedisEndpoint = readValue();
+                    break;
+                case "--redis-key-prefix":
+                    RedisKeyPrefix = readValue();
+                    break;
+                case "--actor-id":
+                    ActorId = readValue();
+                    break;
+                case "--payload-bytes":
+                    PayloadBytes = int.Parse(readValue(), CultureInfo.InvariantCulture);
+                    break;
             }
         }
 
@@ -173,7 +213,15 @@ internal sealed record TestHostOptions(
                 PublishTopic,
                 PublishValue,
                 AttachSpotPublisherChannel,
-                StreamEndpoint);
+                StreamEndpoint,
+                MeshName,
+                NodeRid,
+                BindEndpoint,
+                PeerEndpoint,
+                RedisEndpoint,
+                RedisKeyPrefix,
+                ActorId,
+                PayloadBytes);
         }
     }
 }

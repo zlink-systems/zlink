@@ -36,6 +36,12 @@ internal static class TestHostScenarioConfigurator
             case "spot-node":
                 ConfigureSpotNode(services, options);
                 return;
+            case "entry-spot-source":
+                ConfigureEntryRelocation(services, options, isSource: true);
+                return;
+            case "entry-spot-target":
+                ConfigureEntryRelocation(services, options, isSource: false);
+                return;
             case "stream-raw":
                 ConfigureStreamRawNode(services, options);
                 return;
@@ -249,6 +255,86 @@ internal static class TestHostScenarioConfigurator
                     options.AttachSpotPublisherChannel!,
                     options.PublishTopic!,
                     options.PublishValue ?? "startup"));
+    }
+
+    private static void ConfigureEntryRelocation(
+        IServiceCollection services, TestHostOptions options, bool isSource)
+    {
+        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
+        services.AddZLinkFramework(framework =>
+        {
+            var redisEndpoint = options.RedisEndpoint
+                                 ?? throw new InvalidOperationException(
+                                     "entry-spot-source/target mode requires --redis-endpoint.");
+            var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-relocation";
+            framework.AddLocationStore(new ZLinkRedisLocationStore(o =>
+            {
+                o.ConnectionString = redisEndpoint;
+                o.KeyPrefix = $"{keyPrefix}:location";
+            }));
+            framework.AddRelocationStore(new ZLinkRedisRelocationStore(o =>
+            {
+                o.ConnectionString = redisEndpoint;
+                o.KeyPrefix = $"{keyPrefix}:relocation";
+            }));
+
+            var meshName = options.MeshName
+                           ?? throw new InvalidOperationException(
+                               "entry-spot-source/target mode requires --mesh-name.");
+            var nodeRid = options.NodeRid
+                          ?? throw new InvalidOperationException(
+                              "entry-spot-source/target mode requires --node-rid.");
+            var mesh = framework.AddRouteMesh(meshName)
+                .Listen(options.BindEndpoint
+                        ?? throw new InvalidOperationException(
+                            "entry-spot-source/target mode requires --bind-endpoint."))
+                .SetRoutingId(RoutingId.From(nodeRid))
+                // Force deterministic placement: the source always wins
+                // actor creation, so the pre-relocation owner assertion is
+                // meaningful rather than an accident of the placement
+                // algorithm.
+                .SetPlacementWeight(isSource ? 100 : 0);
+            // Only the source dials out (mirrors ConfigureSpotRouteClient's
+            // connect pattern elsewhere in this file): once the ZMTP
+            // handshake completes the connection is bidirectional, so the
+            // target only needs to listen.
+            if (isSource)
+            {
+                mesh.PeerConnections.Connect(
+                    RoutingId.From(options.PeerRid
+                                   ?? throw new InvalidOperationException(
+                                       "entry-spot-source mode requires --peer-rid.")),
+                    options.PeerEndpoint
+                    ?? throw new InvalidOperationException(
+                        "entry-spot-source mode requires --peer-endpoint."));
+            }
+            mesh.Channel(meshName).Server();
+            var objects = mesh.Objects().Server();
+            objects.AddEntrySpot<RelocationEntrySpot>();
+            objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
+                RelocationEntrySpot.ActorType,
+                factory => factory.PreserveStateWith<RelocationActorAdapter>());
+        });
+
+        if (isSource)
+        {
+            services.AddHostedService(provider =>
+                new EntryRelocationSourceHostedService(
+                    provider.GetRequiredService<IZLinkActorManager>(),
+                    provider.GetRequiredService<IZLinkFrameworkRuntime>(),
+                    provider.GetRequiredService<TestHostEventSink>(),
+                    options.ActorId ?? "cross-lang-relocation-actor",
+                    options.PayloadBytes ?? 100000));
+        }
+        else
+        {
+            services.AddHostedService(provider =>
+                new EntryRelocationTargetHostedService(
+                    provider.GetRequiredService<IZLinkActorClient>(),
+                    provider.GetRequiredService<TestHostEventSink>(),
+                    options.ActorId ?? "cross-lang-relocation-actor",
+                    options.NodeRid ?? "dotnet-relocation-target"));
+        }
     }
 
     private static void ConfigureStreamRawNode(IServiceCollection services, TestHostOptions options)
