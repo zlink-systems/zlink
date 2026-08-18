@@ -718,7 +718,14 @@ test name differs, the meaning must be the same.
 The connector takes a diagnostics level as a creation-time option. The values and their
 meaning are the four values `Off`/`Errors`/`Normal`/`Detailed` of
 [Message flow tracing §4](../server/26-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope),
-and **the default is `Errors`.** Changing the level at runtime is not required.
+and **the default is `Errors`.** The connector is subject to the client connector rule of
+[Flow correlation §4](../server/27-flow-correlation.en.md#4-when-a-flow-is-created), so a
+runtime level change follows
+[Message flow tracing §4.1](../server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
+as is. The application can read and change the level without recreating the connector, the
+change applies from the processing points after it, and already-built frames are not
+retroactively changed. Each processing point reads the current level once and decides with
+that value.
 
 When the level is not `Off`, the connector keeps the current behavior: it creates and
 attaches `flow_id`/`flow_origin` to outbound frames (§4.2, flag `0x10`) and validates the

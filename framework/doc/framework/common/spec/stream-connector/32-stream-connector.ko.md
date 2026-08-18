@@ -626,7 +626,12 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 Connector는 생성 시점 option으로 diagnostics level을 받는다. 값과 의미는
 [Message flow tracing §4](../server/26-message-flow-tracing.ko.md#4-application은-기록-범위를-어떻게-정하는가)의
 네 값 `Off`·`Errors`·`Normal`·`Detailed`를 그대로 사용하며 **기본값은 `Errors`다.**
-실행 중 변경은 요구하지 않는다.
+Connector는 [Flow correlation §4](../server/27-flow-correlation.ko.md#4-flow를-만드는-시점)가
+말하는 client connector 규칙의 적용 대상이므로, 실행 중 level 변경도
+[Message flow tracing §4.1](../server/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을
+그대로 따른다. Application은 connector를 다시 만들지 않고 level을 읽고 바꿀 수 있으며,
+변경은 그 뒤의 처리 지점부터 적용한다. 이미 만들어진 frame에는 소급 적용하지 않는다.
+각 처리 지점은 현재 level을 한 번 읽어 그 값으로 판단한다.
 
 `Off`가 아니면 connector는 기존과 같이 outbound frame에 `flow_id`·`flow_origin`을
 생성·부착하고(§4.2, flag `0x10`), inbound frame의 flow 필드를 검증해 수신 message에
