@@ -30,7 +30,9 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
       const route_received_packet_t &received,
       const runtime::messaging::envelope_header_t &header,
       service_provider_t &services,
-      std::function<void (result_t<zlink::message_t>)> completion) const;
+      std::function<void (result_t<zlink::message_t>)> completion,
+      runtime::protocol::wire_operation_id_t inbound_operation = {},
+      std::uint64_t inbound_reply_route_id = 0) const;
 
   private:
     result_t<void> bind_actor_session_route (

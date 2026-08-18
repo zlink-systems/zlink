@@ -1243,7 +1243,7 @@ int main ()
              == std::string::npos
         && spot_route_packets_hpp.find ("__zlink.spot.actor.leave")
              != std::string::npos
-        && spot_route_dispatcher.find ("send_spot_mesh_parts_exact (")
+        && spot_route_dispatcher.find ("send_actor_leave_notification (")
              != std::string::npos
         && mesh_node_runtime.find ("completion_request") == std::string::npos
         && spot_runtime.find ("poll_deferred_actor_join_completions")

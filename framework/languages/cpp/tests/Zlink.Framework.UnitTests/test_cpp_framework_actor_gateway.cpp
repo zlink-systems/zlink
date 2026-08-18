@@ -5,6 +5,8 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/spots/spot_route_internal_dispatcher.hpp"
+#include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
@@ -2156,21 +2158,33 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     record_actor_route_unlocked (*node, key, target_route,
                                  target_actor.object_generation ());
 
+    // The caller's own identity (spec 28.en:584-591): a synthesized-fence
+    // relay must still forward these to the Message Follow relay, not the
+    // zero/empty placeholders that would silently skip the stale-cache
+    // notice back to whoever actually sent this probe.
+    const auto inbound_source_node_rid = zlink::routing_id_t::from ("probing-client");
+    const auto inbound_operation = runtime::protocol::wire_operation_id_t{111, 222};
+    constexpr std::uint64_t inbound_reply_route_id = 333;
+
     std::atomic_int relay_calls{0};
     spot_node_runtime_t spots (node);
     spots.on_actor_message_follow (
       [&] (const actor_ref_t &relayed_actor,
            const runtime::messaging::envelope_header_t &header,
            const zlink::message_t &, std::chrono::milliseconds,
-           const zlink::routing_id_t &,
+           const zlink::routing_id_t &source_node,
            const runtime::protocol::actor_route_fence_t &route,
            std::uint8_t hop_count,
-           const runtime::protocol::wire_operation_id_t &,
-           std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+           const runtime::protocol::wire_operation_id_t &operation,
+           std::uint64_t reply_route_id) -> task_t<std::optional<zlink::message_t>> {
           relay_calls.fetch_add (1, std::memory_order_acq_rel);
           if (relayed_actor.actor_id ().value () != "actor-remote-ok"
               || route != source_fence || hop_count != 0
-              || header.message_name != "after-transfer") {
+              || header.message_name != "after-transfer"
+              || source_node.to_bytes () != inbound_source_node_rid.to_bytes ()
+              || operation.high != inbound_operation.high
+              || operation.low != inbound_operation.low
+              || reply_route_id != inbound_reply_route_id) {
               co_return result_t<std::optional<zlink::message_t>>::failure (
                 framework_error_kind_t::internal_failure,
                 "unexpected relay arguments");
@@ -2187,7 +2201,9 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     auto relayed = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::request,
       "after-transfer", zlink::message_t::from (std::string ("probe")), provider,
-      serializers, std::move (metadata), nullptr);
+      serializers, std::move (metadata), nullptr, std::function<void ()>{},
+      std::function<void ()>{}, inbound_source_node_rid, inbound_operation,
+      inbound_reply_route_id);
 
     const auto outcome = finite_task_result (std::move (relayed));
     if (!outcome || !*outcome)
@@ -2376,6 +2392,247 @@ int reconcile_deadline_restores_actor_to_local_service ()
         return 5;
     if (node->actor_transfer_coordinator.phase (key).has_value ())
         return 4;
+    return 0;
+}
+
+int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace stateful = zlink::framework::runtime::stateful;
+
+    // Regression pin: the OnLeave notification travels node-level (not
+    // spot-addressed -- the source's Entry Spot is fixed to node lifecycle
+    // and is never published into mesh spot routing, so a spot-addressed
+    // send can never resolve it; that was ST-B1's "leave" marker never
+    // firing). This drives the actual production sender
+    // (spot_node_runtime_t::send_actor_leave_notification, reached via the
+    // same on_actor_leave_notification hook app.cpp wires to
+    // application_mesh->send_to_node) and the actual production receiver
+    // (spot_route_internal_dispatcher_t::dispatch_send ->
+    // submit_remote_actor_leave), connected by a stand-in for the wire hop.
+    // Asserts OnLeave reaches the source Entry Spot exactly once and that
+    // the just-landed completion-ordering gate (leave_completed) becomes
+    // reachable and true afterward.
+    serializer_registry_t serializers;
+
+    // SOURCE node ("actor-a"): the Entry Spot the Actor left from.
+    auto source_node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    source_node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 16, "leave-notify-source");
+    source_node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    source_node->channel_runtime->serializers = &serializers;
+
+    auto entry_spot = std::make_shared<spot_context_state_t> ();
+    entry_spot->node = source_node;
+    entry_spot->node_rid = node_rid_t::from_string ("actor-a");
+    entry_spot->spot_id = spot_id_t ("actor-a-entry");
+    entry_spot->spot_name = "entry";
+    entry_spot->spot_instance = std::make_shared<int> (1);
+    entry_spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    entry_spot->channel_runtime->serializers = &serializers;
+    entry_spot->serial_executor = source_node->worker_executor;
+    // spot_handle_t::status() only reads the object_ref_t it was
+    // constructed with, never the host, so a null host is a faithful stand
+    // -in here for the lifecycle_generation() check
+    // submit_remote_actor_leave makes.
+    const auto native_entry_spot = std::make_shared<service::spot_t> (
+      nullptr, stateful::object_ref_t{stateful::object_kind_t::user_spot,
+                                      "actor-a-entry", 7, 0, "mesh", "actor-a"});
+    entry_spot->native_spot = native_entry_spot;
+    source_node->spot_contexts_by_id.emplace (
+      entry_spot->spot_id, spot_context_access_t::create (entry_spot));
+
+    std::atomic_int leave_calls{0};
+    spot_actor_admission_callbacks_t admission_callbacks;
+    admission_callbacks.on_leave_actor =
+      [&leave_calls] (void *, void *) -> task_t<void> {
+          leave_calls.fetch_add (1, std::memory_order_release);
+          co_return;
+      };
+    entry_spot->actor_admissions.emplace (
+      std::type_index (typeid (int)), std::move (admission_callbacks));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) {
+        return std::make_shared<int> (1);
+    };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    source_node->actor_factories.emplace ("player", std::move (factory));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "leave-notify-actor", 7);
+    const auto key = std::string ("player:leave-notify-actor");
+    source_node->actor_instances.emplace (key, std::make_shared<int> (1));
+    source_node->actor_spot_ids.emplace (key, entry_spot->spot_id);
+    source_node->actor_generations.emplace (key, 7);
+
+    // Authority store: the committed relocation record
+    // submit_remote_actor_leave validates the OnLeave command against.
+    class fixed_authority_store_t final :
+        public stateful::authority_relocation_port_t
+    {
+      public:
+        std::optional<stateful::authority_relocation_reference_t> record;
+
+        stateful::authority_publish_result_t publish (
+          const stateful::object_ref_t &, const stateful::object_ref_t &,
+          location_owner_token_t, object_creation_target_t,
+          std::string, std::uint32_t, stateful::inventory_digest_t,
+          std::vector<std::byte> = {}) override
+        {
+            return {};
+        }
+        std::optional<stateful::authority_relocation_reference_t> read (
+          stateful::object_kind_t, const std::string &) override
+        {
+            return record;
+        }
+    };
+    auto authority = std::make_shared<fixed_authority_store_t> ();
+    authority->record = stateful::authority_relocation_reference_t{
+      .source = stateful::object_ref_t{stateful::object_kind_t::actor,
+                                       "leave-notify-actor", 7, 0, "", "actor-a"},
+      .target = stateful::object_ref_t{stateful::object_kind_t::actor,
+                                       "leave-notify-actor", 7, 5, "", "actor-b"},
+      .relocation_reference = "transfer-leave-notify",
+      .checksum_crc32c = 0,
+      .inventory_digest = {},
+      .target_owner = location_owner_token_t{"owner-b", 9},
+      .application_payload = {}};
+    source_node->relocation_authority = authority;
+
+    // A pending source cleanup for this transfer, exactly as
+    // complete_remote_actor_transfer would have pushed at commit -- gated
+    // on leave_completed (this session's completion-ordering fix).
+    const auto source_fence = runtime::protocol::actor_route_fence_t{
+      "leave-notify-actor", 7, zlink::routing_id_t::from ("actor-a").to_bytes (),
+      1, 1, 1};
+    const auto target_fence = runtime::protocol::actor_route_fence_t{
+      "leave-notify-actor", 7, zlink::routing_id_t::from ("actor-b").to_bytes (),
+      1, 5, 9};
+    source_node->pending_remote_source_cleanups.push_back (
+      spot_node_builder_state_t::pending_remote_source_cleanup_t{
+        .source_actor = actor,
+        .source_fence = source_fence,
+        .transfer_id = "transfer-leave-notify",
+        .target_spot_id = spot_id_t ("spot-b-target"),
+        .not_before = std::chrono::steady_clock::now (),
+        .leave_submitted = false,
+        .leave_completed = false,
+        .leave_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (30)});
+    source_node->actor_transfer_coordinator.activate_message_follow (
+      key, source_fence, test_actor_ref ("actor-b", "player", "leave-notify-actor", 7),
+      spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("spot-b-target"), "game"},
+      target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
+      "transfer-leave-notify");
+
+    // TARGET node ("actor-b"): only needs enough to hold the
+    // on_actor_leave_notification sender under test.
+    auto target_node = std::make_shared<spot_node_builder_state_t> ("actor-b");
+
+    spot_node_runtime_t source_spots (source_node);
+    spot_node_runtime_t target_spots (target_node);
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    actor_gateway_runtime_t source_gateway;
+
+    std::atomic_int notification_sends{0};
+    target_spots.on_actor_leave_notification (
+      [&] (const zlink::routing_id_t &target_node_rid,
+           std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
+          notification_sends.fetch_add (1, std::memory_order_release);
+          if (target_node_rid.to_string () != "actor-a")
+              co_return zlink::submit_result_t::not_found;
+          // Stand-in for the wire hop: RouteMesh delivers a node-level send
+          // to the receiving node's own dispatch_send exactly like this.
+          spot_route_internal_dispatcher_t dispatcher (
+            source_spots, source_gateway, route_client_t{}, serializers);
+          runtime::messaging::message_parts_t encoded (std::move (parts));
+          route_received_packet_t received{
+            zlink::routing_id_t::from ("actor-b"), std::nullopt,
+            std::move (encoded), std::nullopt};
+          const auto dispatched = dispatcher.dispatch_send (received, provider);
+          co_return dispatched ? zlink::submit_result_t::ok
+                                : zlink::submit_result_t::internal_error;
+      });
+
+    // Build the leave command exactly as dispatch_actor_commit_request's
+    // finalize branch does, and submit it through the production sender.
+    const auto leave_command = spot_actor_leave_route_command_t{
+      .transfer_id = "transfer-leave-notify",
+      .actor_node_rid = "actor-a",
+      .actor_type = "player",
+      .actor_id = "leave-notify-actor",
+      .actor_generation = 7,
+      .source_spot_id = "actor-a-entry",
+      .source_spot_generation = 7,
+      .target_spot_id = "spot-b-target",
+      .target_node_rid = "actor-b",
+      .target_node_generation = 1,
+      .target_authority_owner_generation = 5,
+      .target_owner_lease_generation = 9};
+    runtime::messaging::envelope_header_t leave_header;
+    leave_header.kind = runtime::messaging::message_kind_t::command;
+    leave_header.channel_name = "node";
+    leave_header.message_name = spot_actor_leave_route_command_t::packet_name;
+    auto leave_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
+      leave_header, leave_command, serializers);
+
+    auto sent = target_spots.send_actor_leave_notification (
+      zlink::routing_id_t::from ("actor-a"), std::move (leave_parts));
+    const auto sent_result = finite_task_result (std::move (sent));
+    if (!sent_result || !*sent_result
+        || sent_result->value () != zlink::submit_result_t::ok)
+        return 1;
+    if (notification_sends.load (std::memory_order_acquire) != 1)
+        return 2;
+
+    const auto leave_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (leave_calls.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < leave_deadline) {
+        std::this_thread::yield ();
+    }
+    if (leave_calls.load (std::memory_order_acquire) != 1)
+        return 3;
+
+    // leave_completed is set from the queued callback's own completion
+    // continuation, asynchronously; poll for it the same way.
+    const auto completion_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    bool completed = false;
+    while (std::chrono::steady_clock::now () < completion_deadline) {
+        const auto found = std::find_if (
+          source_node->pending_remote_source_cleanups.begin (),
+          source_node->pending_remote_source_cleanups.end (),
+          [] (const auto &candidate) {
+              return candidate.transfer_id == "transfer-leave-notify";
+          });
+        if (found != source_node->pending_remote_source_cleanups.end ()
+            && found->leave_completed) {
+            completed = true;
+            break;
+        }
+        std::this_thread::yield ();
+    }
+    if (!completed)
+        return 4;
+
+    // A duplicate delivery of the same command must not re-invoke OnLeave.
+    auto duplicate_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
+      leave_header, leave_command, serializers);
+    auto duplicate_sent = target_spots.send_actor_leave_notification (
+      zlink::routing_id_t::from ("actor-a"), std::move (duplicate_parts));
+    const auto duplicate_result = finite_task_result (std::move (duplicate_sent));
+    if (!duplicate_result || !*duplicate_result)
+        return 5;
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    if (leave_calls.load (std::memory_order_acquire) != 1)
+        return 6;
     return 0;
 }
 
@@ -3218,6 +3475,11 @@ int main ()
           reconcile_deadline_restores_actor_to_local_service ();
         reconcile_trap != 0) {
         return 320 + reconcile_trap;
+    }
+    if (const auto leave_notify =
+          leave_notification_travels_node_level_and_reaches_source_entry_spot_once ();
+        leave_notify != 0) {
+        return 330 + leave_notify;
     }
     if (const auto pending =
           disconnect_notification_survives_pending_dispatcher_completion ();

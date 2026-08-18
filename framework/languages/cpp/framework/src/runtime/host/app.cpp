@@ -1627,6 +1627,13 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                   co_return co_await application_mesh->send_to_node (
                     source_node, parts.items ()) == zlink::submit_result_t::ok;
               });
+            spot_runtime.on_actor_leave_notification (
+              [application_mesh] (
+                const zlink::routing_id_t &target_node,
+                std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
+                  co_return co_await application_mesh->send_to_node (
+                    target_node, parts);
+              });
         }
     }
     if (!mesh_nodes.empty ()

@@ -54,9 +54,6 @@ bool should_bind_actor_session_route (spot_inbound_message_t &metadata)
 task_t<void> submit_source_actor_leave_async (
   spot_node_runtime_t runtime,
   zlink::routing_id_t source_node_rid,
-  std::string source_spot_id,
-  std::uint64_t source_spot_generation,
-  std::string target_spot_id,
   std::optional<runtime::messaging::message_parts_t> leave_parts)
 {
     if (!leave_parts) {
@@ -64,10 +61,12 @@ task_t<void> submit_source_actor_leave_async (
           framework_error_kind_t::shutting_down,
           "source Actor leave transport is unavailable");
     }
-    co_await runtime.send_spot_mesh_parts_exact (
-      spot_id_t (target_spot_id), source_node_rid,
-      spot_id_t (source_spot_id), source_spot_generation,
-      std::move (*leave_parts));
+    // Node-level send: the source's Entry Spot is fixed to node lifecycle
+    // and never published into mesh spot routing, so a spot-addressed send
+    // (send_spot_mesh_parts_exact) cannot resolve it -- only the
+    // destination node's routing id is needed here.
+    (void) co_await runtime.send_actor_leave_notification (
+      source_node_rid, std::move (*leave_parts));
 }
 
 } // namespace
@@ -256,7 +255,9 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
   const route_received_packet_t &received,
   const runtime::messaging::envelope_header_t &header,
   service_provider_t &services,
-  std::function<void (result_t<zlink::message_t>)> completion) const
+  std::function<void (result_t<zlink::message_t>)> completion,
+  runtime::protocol::wire_operation_id_t inbound_operation,
+  std::uint64_t inbound_reply_route_id) const
 {
     if (!completion) {
         return false;
@@ -303,11 +304,18 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
             //  the move of `metadata` into the by-value parameter, so the
             //  marker could be read from a moved-from map.
             const auto relay_kind = actor_relay_kind_from_metadata (metadata);
-            auto relayed = runtime.manager ().relay_actor_packet (
+            // Thread the inbound caller's own identity through (spec 28.en:
+            // 584-591): relay_actor_packet's cold-probe synthesized follow
+            // (no incoming fence yet) still needs it to send the
+            // stale-cache notice back to the true original caller, not the
+            // zero/empty placeholders a dropped identity would leave.
+            auto relayed = runtime.relay_actor_packet (
               actor_ref, actor_gateway.actor_context (actor_ref),
               relay_kind, request.packet_name_value,
               zlink::message_t::from (request.payload), services, *_serializers,
-              std::move (metadata), follow_target ? &*follow_target : nullptr);
+              std::move (metadata), follow_target ? &*follow_target : nullptr,
+              std::function<void ()>{}, std::function<void ()>{},
+              received.source_node_rid, inbound_operation, inbound_reply_route_id);
             detail::observe_task_completion (
               relayed,
               [runtime, actor_gateway = std::move (actor_gateway), actor_ref,
@@ -673,10 +681,6 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
         std::function<task_t<void> ()> submit_source_leave;
         if (request.finalize) {
             const auto source_node_rid = received.source_node_rid;
-            const auto source_spot_id = request.source_spot_id;
-            const auto source_spot_generation =
-              request.source_spot_generation;
-            const auto target_spot_id = request.target_spot_id;
             const auto leave_command = spot_actor_leave_route_command_t{
               .transfer_id = request.transfer_id,
               .actor_node_rid = request.actor_node_rid,
@@ -698,7 +702,11 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                 runtime::messaging::envelope_header_t leave_header;
                 leave_header.kind =
                   runtime::messaging::message_kind_t::command;
-                leave_header.channel_name = "spot";
+                // Node-level, mirroring the actorHandoffTerminal
+                // notification: the source Entry Spot is never published
+                // into mesh spot routing, so this cannot travel as a
+                // spot-channel send -- see submit_source_actor_leave_async.
+                leave_header.channel_name = "node";
                 leave_header.message_name =
                   spot_actor_leave_route_command_t::packet_name;
                 leave_parts.emplace (
@@ -706,13 +714,10 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                     leave_header, leave_command, *serializers));
             }
             submit_source_leave =
-              [runtime, source_node_rid, source_spot_id,
-               source_spot_generation, target_spot_id,
+              [runtime, source_node_rid,
                leave_parts = std::move (leave_parts)] () mutable {
                   return submit_source_actor_leave_async (
-                    runtime, source_node_rid, source_spot_id,
-                    source_spot_generation, target_spot_id,
-                    std::move (leave_parts));
+                    runtime, source_node_rid, std::move (leave_parts));
               };
         }
         auto complete_committed =

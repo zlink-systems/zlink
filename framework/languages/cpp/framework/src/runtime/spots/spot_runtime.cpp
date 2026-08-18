@@ -7785,6 +7785,14 @@ void spot_node_runtime_t::on_actor_handoff_terminal (
     _state->actor_handoff_terminal_sender = std::move (sender);
 }
 
+void spot_node_runtime_t::on_actor_leave_notification (
+  std::function<task_t<zlink::submit_result_t> (
+    const zlink::routing_id_t &, std::vector<zlink::message_t>)> sender)
+{
+    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    _state->actor_leave_notification_sender = std::move (sender);
+}
+
 void spot_node_runtime_t::invalidate_message_follow_route (
   const runtime::protocol::message_follow_notice_t &notice)
 {
@@ -7829,7 +7837,11 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                          std::function<void ()>
                                            before_application_handler,
                                          std::function<void ()>
-                                           after_application_admission)
+                                           after_application_admission,
+                                         zlink::routing_id_t inbound_source_node_rid,
+                                         runtime::protocol::wire_operation_id_t
+                                           inbound_operation,
+                                         std::uint64_t inbound_reply_route_id)
 {
     // This member coroutine can be entered through a short-lived runtime
     // wrapper. Keep the node state in the frame for the terminal path below:
@@ -8104,12 +8116,17 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
             header.message_name = std::string (packet_name);
             header.content_type = metadata.content_type;
             header.metadata = metadata.values;
+            // The relay's own per-hop budget stays a fixed convention (see
+            // the equivalent dispatch_mesh_record relay a few thousand lines
+            // down, which hard-codes the same 30s independent of the
+            // inbound deadline); what must not be lost is the caller's own
+            // identity so the stale-cache notice below finds its way home.
             co_return co_await _state->actor_message_follow_relay (actor_ref, header, message,
                                                        std::chrono::seconds (30),
-                                                       zlink::routing_id_t::from (std::uint32_t{0}),
+                                                       inbound_source_node_rid,
                                                        *admitted_message_follow_target,
                                                        incoming_hop_count,
-                                                       runtime::protocol::wire_operation_id_t{}, 0);
+                                                       inbound_operation, inbound_reply_route_id);
         }
     }
 
@@ -9677,6 +9694,31 @@ task_t<void> spot_node_runtime_t::send_spot_mesh_parts_exact (
     }
 }
 
+task_t<zlink::submit_result_t> spot_node_runtime_t::send_actor_leave_notification (
+  const zlink::routing_id_t &target_node_rid,
+  runtime::messaging::message_parts_t parts) const
+{
+    std::function<task_t<zlink::submit_result_t> (
+      const zlink::routing_id_t &, std::vector<zlink::message_t>)>
+      sender;
+    {
+        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        sender = _state->actor_leave_notification_sender;
+    }
+    if (!sender) {
+        throw framework_exception_t (
+          framework_error_kind_t::not_configured,
+          "Actor OnLeave node notification transport is not configured");
+    }
+    auto native_parts = parts.items ();
+    if (native_parts.empty ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "Actor OnLeave notification requires at least one message part");
+    }
+    co_return co_await sender (target_node_rid, std::move (native_parts));
+}
+
 std::optional<std::uint64_t>
 spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_node_rid,
                                               const spot_id_t &target_spot_id) const
@@ -10019,7 +10061,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                       catch (...) {
                       }
                       deferred_terminal ();
-                  });
+                  },
+                  runtime::protocol::wire_operation_id_t{record.operation_id.high,
+                                                         record.operation_id.low},
+                  record.reply_route_id);
                 if (async_dispatched) {
                     if (terminal_deferred)
                         *terminal_deferred = true;

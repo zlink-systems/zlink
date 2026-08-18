@@ -4223,6 +4223,15 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     std::atomic_bool stop_dispatch{false};
     source_spots.set_route_client (route_client_t{});
     target_spots.set_route_client (route_client_t{});
+    // OnLeave travels node-level (the source Entry Spot is fixed to node
+    // lifecycle and is never published into mesh spot routing), mirroring
+    // how production (app.cpp) wires actor_leave_notification_sender to
+    // application_mesh->send_to_node.
+    target_spots.on_actor_leave_notification (
+      [&target] (const zlink::routing_id_t &node_rid,
+                std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
+          co_return co_await target.send_to_node (node_rid, parts);
+      });
     service_collection_t source_services;
     source_services.add_singleton<actor_gateway_runtime_t> ();
     auto source_provider = source_services.build_provider ();

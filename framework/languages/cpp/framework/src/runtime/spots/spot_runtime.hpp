@@ -143,6 +143,15 @@ class spot_node_builder_state_t
       std::uint64_t,
       const result_t<zlink::message_t> &)>
       actor_handoff_terminal_sender;
+    // The Entry Spot is fixed to node lifecycle (one per node, never
+    // relocates) and is intentionally not published into mesh spot routing,
+    // so an OnLeave notification back to a source Entry Spot cannot resolve
+    // through the normal spot-address send path. Node-level send (this
+    // callback, mirroring actor_handoff_terminal_sender) needs only the
+    // destination node's routing id, not a resolved spot address.
+    std::function<task_t<zlink::submit_result_t> (
+      const zlink::routing_id_t &, std::vector<zlink::message_t>)>
+      actor_leave_notification_sender;
     // Requests currently dispatched to each actor and not yet replied. Sampled
     // once per transfer right at the moving transition (runtime-metrics §4.3
     // pending_requests). Guarded by its own mutex: dispatch runs on the
@@ -911,6 +920,12 @@ class spot_node_runtime_t
       const spot_id_t &target_spot_id,
       std::uint64_t target_spot_generation,
       runtime::messaging::message_parts_t parts) const;
+    // Node-level send for the OnLeave notification -- see
+    // actor_leave_notification_sender's comment for why this cannot go
+    // through send_spot_mesh_parts_exact.
+    task_t<zlink::submit_result_t> send_actor_leave_notification (
+      const zlink::routing_id_t &target_node_rid,
+      runtime::messaging::message_parts_t parts) const;
     std::optional<std::uint64_t> resolve_spot_generation (
       const zlink::routing_id_t &target_node_rid,
       const spot_id_t &target_spot_id) const;
@@ -977,6 +992,9 @@ class spot_node_runtime_t
         const runtime::protocol::wire_operation_id_t &,
         std::uint64_t,
         const result_t<zlink::message_t> &)> sender);
+    void on_actor_leave_notification (
+      std::function<task_t<zlink::submit_result_t> (
+        const zlink::routing_id_t &, std::vector<zlink::message_t>)> sender);
     void invalidate_message_follow_route (
       const runtime::protocol::message_follow_notice_t &notice);
     spot_manager_t manager () const;
@@ -1174,7 +1192,18 @@ class spot_node_runtime_t
                         std::function<void ()>
                           before_application_handler = {},
                         std::function<void ()>
-                          after_application_admission = {});
+                          after_application_admission = {},
+                        // The inbound caller's own identity (spec 28.en:
+                        // 584-591): a synthesized-fence relay (a cold probe
+                        // with no incoming follow fence) must still forward
+                        // these to the Message Follow relay instead of the
+                        // zero/empty placeholders that skip its stale-cache
+                        // notice back to the true original caller.
+                        zlink::routing_id_t inbound_source_node_rid =
+                          zlink::routing_id_t::from (std::uint32_t{0}),
+                        runtime::protocol::wire_operation_id_t
+                          inbound_operation = {},
+                        std::uint64_t inbound_reply_route_id = 0);
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>
