@@ -73,7 +73,6 @@ import systems.zlink.framework.locations.ZLinkPageRequest;
  * The provider only sees versioned bytes and atomic conditions.</p>
  */
 final class ZLinkProviderDescriptorRepository {
-    private static final String PREFIX = "zlink:v11:";
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final int OWNER_LEASE_WRITE_RETRIES = 3;
     private static final int DEFAULT_MESH_PAGE = 100;
@@ -189,19 +188,8 @@ final class ZLinkProviderDescriptorRepository {
             descriptor.descriptorRevision(),
             descriptor,
             intent,
-            value -> encode(
-                value.generation(),
-                ZLinkLocationDescriptorCodec.serializeFanoutPublisher(
-                    value.descriptor())),
-            bytes -> {
-                Envelope envelope = decodeEnvelope(bytes);
-                return new StoredDescriptor<>(
-                    envelope.generation(),
-                    ZLinkLocationDescriptorCodec.deserializeFanoutPublisher(
-                        envelope.json(),
-                        0,
-                        extractUpdatedAt(envelope.json())));
-            },
+            value -> encodeFanoutPublisherRecord(value.descriptor()),
+            ZLinkProviderDescriptorRepository::decodeFanout,
             (current, next) ->
                 current.endpoint().equals(next.endpoint())
                     && current.securityIdentity().equals(
@@ -868,15 +856,85 @@ final class ZLinkProviderDescriptorRepository {
                         descriptor.path("updatedAtEpochMs").asText()))));
     }
 
+    // --- Fanout publisher descriptor canonical JSON
+    // (21-location-runtime.md#2.4) --- same fields as the ClientServer
+    // server descriptor minus `weight`.
+
+    private static byte[] encodeFanoutPublisherRecord(
+        ZLinkFanoutPublisherDescriptor descriptor) {
+        ObjectNode root = CANONICAL_JSON.createObjectNode();
+        root.put("recordVersion", 1);
+        root.put("ownerId", descriptor.ownerId());
+        root.put(
+            "leaseGeneration",
+            Long.toString(descriptor.leaseGeneration()));
+        root.put(
+            "descriptorRevision",
+            Long.toString(descriptor.descriptorRevision()));
+        ObjectNode payload = CANONICAL_JSON.createObjectNode();
+        payload.put("channelName", descriptor.channelName());
+        payload.put(
+            "publisherRoutingIdHex", descriptor.publisherRid().toHex());
+        payload.put(
+            "lifecycleGeneration",
+            Long.toString(descriptor.lifecycleGeneration()));
+        payload.put(
+            "descriptorRevision",
+            Long.toString(descriptor.descriptorRevision()));
+        payload.put("endpoint", descriptor.endpoint());
+        payload.put("state", stateWire(descriptor.state()));
+        payload.put("securityIdentity", descriptor.securityIdentity());
+        payload.put("ownerId", descriptor.ownerId());
+        payload.put(
+            "leaseGeneration",
+            Long.toString(descriptor.leaseGeneration()));
+        payload.put(
+            "updatedAtEpochMs",
+            Long.toString(descriptor.updatedAt().toEpochMilli()));
+        root.set("descriptor", payload);
+        try {
+            return CANONICAL_JSON.writeValueAsBytes(root);
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException(
+                "Failed to encode fanout publisher descriptor record",
+                error);
+        }
+    }
+
     private static StoredDescriptor<ZLinkFanoutPublisherDescriptor>
         decodeFanout(byte[] bytes) {
-        Envelope envelope = decodeEnvelope(bytes);
+        JsonNode root;
+        try {
+            root = CANONICAL_JSON.readTree(bytes);
+        } catch (IOException error) {
+            throw new IllegalStateException(
+                "Location descriptor record is invalid", error);
+        }
+        if (root.path("recordVersion").asInt(-1) != 1) {
+            throw new IllegalStateException(
+                "Location descriptor record has an unrecognized"
+                    + " recordVersion");
+        }
+        JsonNode descriptor = root.path("descriptor");
         return new StoredDescriptor<>(
-            envelope.generation(),
-            ZLinkLocationDescriptorCodec.deserializeFanoutPublisher(
-                envelope.json(),
-                0,
-                extractUpdatedAt(envelope.json())));
+            0,
+            new ZLinkFanoutPublisherDescriptor(
+                descriptor.path("channelName").asText(),
+                RoutingId.fromHex(
+                    descriptor.path("publisherRoutingIdHex").asText()),
+                Long.parseLong(
+                    descriptor.path("lifecycleGeneration").asText()),
+                Long.parseLong(
+                    descriptor.path("descriptorRevision").asText()),
+                descriptor.path("endpoint").asText(),
+                stateFromWire(descriptor.path("state").asText()),
+                descriptor.path("securityIdentity").asText(),
+                descriptor.path("ownerId").asText(),
+                Long.parseLong(
+                    descriptor.path("leaseGeneration").asText()),
+                Instant.ofEpochMilli(
+                    Long.parseLong(
+                        descriptor.path("updatedAtEpochMs").asText()))));
     }
 
     private static DescriptorIdentity identity(Object descriptor) {
@@ -931,60 +989,6 @@ final class ZLinkProviderDescriptorRepository {
                 == next.leaseGeneration();
     }
 
-    private static byte[] encode(long generation, String json) {
-        byte[] payload = json.getBytes(StandardCharsets.UTF_8);
-        return ByteBuffer.allocate(Long.BYTES + payload.length)
-            .putLong(generation)
-            .put(payload)
-            .array();
-    }
-
-    private static Envelope decodeEnvelope(byte[] bytes) {
-        if (bytes.length <= Long.BYTES) {
-            throw new IllegalStateException(
-                "Location descriptor record is invalid");
-        }
-        ByteBuffer input = ByteBuffer.wrap(bytes);
-        long generation = input.getLong();
-        byte[] payload = new byte[input.remaining()];
-        input.get(payload);
-        if (generation <= 0) {
-            throw new IllegalStateException(
-                "Location descriptor generation is invalid");
-        }
-        return new Envelope(
-            generation,
-            new String(payload, StandardCharsets.UTF_8));
-    }
-
-    private static long extractLifecycle(String json) {
-        try {
-            return new ObjectMapper()
-                .readTree(json)
-                .path("LifecycleGeneration")
-                .asLong();
-        } catch (JsonProcessingException error) {
-            throw new IllegalStateException(
-                "Location descriptor record is invalid",
-                error);
-        }
-    }
-
-    private static Instant extractUpdatedAt(String json) {
-        try {
-            return Instant.parse(
-                new ObjectMapper()
-                    .readTree(json)
-                    .path("UpdatedAt")
-                    .asText());
-        } catch (RuntimeException
-            | JsonProcessingException error) {
-            throw new IllegalStateException(
-                "Location descriptor record is invalid",
-                error);
-        }
-    }
-
     private static long decodeOwnerGeneration(byte[] bytes) {
         return ZLinkOwnerLeaseRecordCodec.decode(bytes).leaseGeneration();
     }
@@ -1029,20 +1033,19 @@ final class ZLinkProviderDescriptorRepository {
             + requireNoNul(channelName, "channelName") + "\0";
     }
 
+    // Canonical cross-language logical key preimage
+    // (21-location-runtime.md#2.4):
+    // "fanout-publisher\0{ChannelName}\0{hex(RoutingId)}".
     private static ZLinkStoreKey fanoutKey(
         String channelName,
         RoutingId rid) {
         return new ZLinkStoreKey(
-            fanoutPrefix(channelName) + segment(rid.toHex()));
+            fanoutPrefix(channelName) + rid.toHex());
     }
 
     private static String fanoutPrefix(String channelName) {
-        return PREFIX + "fanout:" + segment(channelName);
-    }
-
-    private static String segment(String value) {
-        return value.getBytes(StandardCharsets.UTF_8).length
-            + ":" + value + ":";
+        return "fanout-publisher\0"
+            + requireNoNul(channelName, "channelName") + "\0";
     }
 
     // A NUL-preimage segment's boundary is the NUL byte itself
@@ -1143,8 +1146,6 @@ final class ZLinkProviderDescriptorRepository {
     private static <T> CompletionStage<T> completed(T value) {
         return CompletableFuture.completedFuture(value);
     }
-
-    private record Envelope(long generation, String json) {}
 
     private record StoredDescriptor<T>(
         long generation,
