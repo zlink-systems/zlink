@@ -30,6 +30,7 @@ type AdmissionOptions = Pick<ZLinkSpotActivationLifecycleOptions,
   | 'createTopicMessage'
   | 'providerResolver'
   | 'runtimeEventPublisher'
+  | 'routeToActorJoinPrewarm'
 >;
 
 export class ZLinkSpotActorAdmissionCoordinator {
@@ -161,7 +162,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
         actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(this.options.boundSessionRuntime),
         providerResolver: this.options.providerResolver,
         messageSerializers: this.options.messageSerializers,
-        dispatchErrors: this.options.dispatchErrors
+        dispatchErrors: this.options.dispatchErrors,
+        routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
       }).dispatch(
         actorId,
         parts,

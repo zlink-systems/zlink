@@ -410,6 +410,13 @@ export class DefaultZLinkSpotManager {
         this.activations.register(activation);
         this.scheduleIdleSweep();
       },
+      //  Spec 15 §4.2 relocation temporary queue: production ingress
+      //  consults the same admission attempts registered on Accepted
+      //  (`formalRemoteActorAdmissions.begin`, in dispatchMeshActorJoin)
+      //  instead of dropping an arrival for an Actor that has not yet
+      //  cut over locally.
+      routeToActorJoinPrewarm: (actorId, objectGeneration, arrival) =>
+        this.formalRemoteActorAdmissions.routeIngress(actorId, objectGeneration, arrival),
       releaseLocation: (activation, meshName, spotId) => {
         if (activation.domain.kind === 'user') {
           return this.locationClaim.release(meshName, spotId);
@@ -2443,6 +2450,12 @@ export class DefaultZLinkSpotManager {
                 + `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
               );
             }
+            // Spec 15 §4.2 relocation temporary queue: arrivals parked at
+            // this target directly (not relayed through the source's
+            // ingress hold) migrate into the real Actor queue next, in the
+            // order they parked — after the relayed backlog above, before
+            // regular ingress opens.
+            await this.migrateActorJoinPrewarm(activation, actor, pendingTransfer.transferId);
             // This registry owns target lifecycle and saved backlog
             // reconciliation only. Session route readiness is enforced by
             // the Session binding aggregate after this boundary.
@@ -2670,6 +2683,43 @@ export class DefaultZLinkSpotManager {
       requestTerminal,
       messageFollowOrigin
     );
+  }
+
+  /**
+   * Spec 15 §4.2 relocation temporary queue: drains every arrival parked
+   * for this exact Actor Join admission attempt since Accepted, in order,
+   * dispatching each one for real now that the Actor has cut over locally.
+   * {@link ZLinkFormalRemoteActorAdmissionRegistry#completeMigration}
+   * synchronously snapshots the parked queue and flips the attempt to
+   * `migrated` before this method dispatches anything, so a racing arrival
+   * either lands in the snapshot or resolves the Actor directly through
+   * ordinary ingress — never both, never neither.
+   */
+  private async migrateActorJoinPrewarm(
+    activation: ZLinkSpotActivation,
+    actor: ZLinkActor,
+    transferId: string
+  ): Promise<void> {
+    const drained = this.formalRemoteActorAdmissions.completeMigration(transferId);
+    for (const arrival of drained) {
+      try {
+        const response = await this.dispatchActorPacket(
+          activation,
+          actor.context.actorId,
+          [
+            RuntimeMessage.from(arrival.header),
+            RuntimeMessage.from(arrival.payload)
+          ],
+          arrival.returnResponse,
+          arrival.remoteBoundSessionTarget,
+          arrival.fallbackActorRef,
+          arrival.requestTerminal
+        );
+        arrival.resolve(response);
+      } catch (error) {
+        arrival.reject(error);
+      }
+    }
   }
 
   private async dispatchMeshActorPacket(

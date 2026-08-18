@@ -69,6 +69,7 @@ import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { createInstanceSpotContext, createSpotContext } from './spot-context';
 import type { ZLinkSpotActorJoinDispatch, ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import { ZLinkSpotActorAdmissionCoordinator } from './spot-actor-admission-coordinator';
+import type { ZLinkRouteToActorJoinPrewarm } from './spot-actor-packet-dispatch';
 import { ZLinkSpotActivation, ZLinkSpotCloseOccupiedError } from './spot-activation-state';
 import type { ZLinkSpotLocationClaim } from './spot-location-claim';
 import type {
@@ -137,6 +138,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
     reason?: ZLinkSpotCloseReason
   ) => Promise<boolean>;
   readonly registerActivation: (activation: ZLinkSpotActivation) => void;
+  readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
   readonly releaseLocation: (
     activation: ZLinkSpotActivation,
     meshName: string,

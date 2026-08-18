@@ -61,6 +61,29 @@ export interface ZLinkActorPacketDelivery {
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
 }
 
+/**
+ * Spec 15 §4.2 relocation temporary queue: consulted when {@code
+ * resolveActor} finds nothing for an arrival that carries an exact object
+ * identity. Parks the arrival if an Actor Join admission attempt is in
+ * flight for {@code (actorId, objectGeneration)}, or reports not-found so
+ * the caller falls through to its existing missing-actor handling
+ * unchanged.
+ */
+export type ZLinkRouteToActorJoinPrewarm = (
+  actorId: string,
+  objectGeneration: bigint,
+  arrival: {
+    readonly header: Buffer;
+    readonly payload: Buffer;
+    readonly returnResponse: boolean;
+    readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
+    readonly fallbackActorRef?: ActorRef;
+    readonly requestTerminal?: ZLinkActorRequestTerminal;
+    readonly resolve: (value: unknown) => void;
+    readonly reject: (reason: unknown) => void;
+  }
+) => 'parked' | 'not-found';
+
 interface ZLinkSpotActorPacketDispatchOptions {
   readonly spot: ZLinkSpot | (() => ZLinkSpot);
   readonly spotId: () => string;
@@ -100,6 +123,7 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly providerResolver?: ZLinkProviderResolver;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
+  readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
 }
 
 export class ZLinkSpotActorPacketDispatch {
@@ -177,12 +201,14 @@ export class ZLinkSpotActorPacketDispatch {
       if (actor === undefined) {
         return this.handleMissingActor(
           actorId,
+          parts,
           header,
           messageKind,
           action,
           returnResponse,
           remoteBoundSessionTarget,
-          fallbackActorRef
+          fallbackActorRef,
+          requestTerminal
         );
       }
       if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
@@ -212,13 +238,36 @@ export class ZLinkSpotActorPacketDispatch {
 
   private async handleMissingActor(
     actorId: string,
+    parts: readonly Message[],
     header: ReturnType<typeof decodeStreamHeader>,
     messageKind: ZLinkDispatchMessageKind,
     action: ZLinkDispatchErrorAction,
     returnResponse: boolean,
     fallbackBoundSessionTarget: ZLinkRemoteBoundSessionTarget | undefined,
-    fallbackActorRef: ActorRef | undefined
-  ): Promise<undefined> {
+    fallbackActorRef: ActorRef | undefined,
+    requestTerminal: ZLinkActorRequestTerminal | undefined
+  ): Promise<unknown> {
+    if (
+      this.options.routeToActorJoinPrewarm !== undefined
+      && fallbackActorRef !== undefined
+      && parts.length >= 2
+      //  A Request without a terminal has no way to complete once
+      //  migrated later — parking it would leave the caller hanging
+      //  forever with no reply route. Fall through to the existing
+      //  missing-actor handling for that shape instead.
+      && (messageKind !== ZLinkDispatchMessageKind.ActorRequest || requestTerminal !== undefined)
+    ) {
+      const parked = this.parkForActorJoinPrewarm(
+        actorId,
+        parts,
+        messageKind,
+        returnResponse,
+        fallbackBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal
+      );
+      if (parked !== undefined) return parked;
+    }
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotActor,
       messageKind,
@@ -249,6 +298,76 @@ export class ZLinkSpotActorPacketDispatch {
       return undefined;
     }
     throw missingActorError;
+  }
+
+  /**
+   * Spec 15 §4.2 relocation temporary queue: parks one arrival for a
+   * missing Actor that carries an exact object identity, instead of
+   * dropping it (Send) or replying HandlerNotFound (Request). Returns
+   * {@code undefined} when no admission attempt owns this object — the
+   * caller falls through to its existing missing-actor handling unchanged.
+   * Header/payload are copied to owned buffers before parking so the
+   * arrival survives independently of the original {@link Message}
+   * lifetime.
+   */
+  private parkForActorJoinPrewarm(
+    actorId: string,
+    parts: readonly Message[],
+    messageKind: ZLinkDispatchMessageKind,
+    returnResponse: boolean,
+    remoteBoundSessionTarget: ZLinkRemoteBoundSessionTarget | undefined,
+    fallbackActorRef: ActorRef,
+    requestTerminal: ZLinkActorRequestTerminal | undefined
+  ): Promise<unknown> | undefined {
+    const isRequest = messageKind === ZLinkDispatchMessageKind.ActorRequest;
+    let resolve: (value: unknown) => void = () => undefined;
+    let reject: (reason: unknown) => void = () => undefined;
+    const result = new Promise<unknown>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    //  A Request's real reply must still travel through the exact mailbox
+    //  correlation the original caller captured in `requestTerminal` — not
+    //  through this method's own return value, which the caller only uses
+    //  to decide whether it still owes a reply itself. Wrapping keeps that
+    //  reply route intact across the (possibly much later) redelivery at
+    //  migration time while also releasing the original caller once the
+    //  real reply has gone out, so it never sends a premature empty one.
+    const wrappedRequestTerminal: ZLinkActorRequestTerminal | undefined =
+      requestTerminal === undefined
+        ? undefined
+        : Object.assign(
+            async (response: unknown, preparedReply?: unknown) => {
+              try {
+                await requestTerminal(response, preparedReply);
+                resolve(undefined);
+              } catch (error) {
+                reject(error);
+                throw error;
+              }
+            },
+            { prepare: requestTerminal.prepare }
+          );
+    const route = this.options.routeToActorJoinPrewarm!(
+      actorId,
+      fallbackActorRef.objectGeneration,
+      {
+        header: Buffer.from(parts[0].data()),
+        payload: Buffer.from(parts[1].data()),
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal: wrappedRequestTerminal,
+        resolve,
+        reject
+      }
+    );
+    if (route !== 'parked') return undefined;
+    //  A Send has no reply to wait for: the migrated redelivery still runs
+    //  in order later, but this caller's own await is done once parking is
+    //  confirmed.
+    if (!isRequest) resolve(undefined);
+    return result;
   }
 
   private createPayloadDecoder(
