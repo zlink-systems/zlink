@@ -71,6 +71,9 @@
       [발견·해소 2026-08-19]
 - [ ] **ST-A3 결정적 실패**(기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
       이슈, 원인 조사 필요 [발견 2026-08-19]
+- [ ] **ST-B1 후속: 소스 Entry Spot on_leave_actor 미발화**(409 해소 후 노출 —
+      relocation 완주하나 leave 콜백 부재, 스펙 15 lifecycle 계약 위반 후보) —
+      동일 에이전트 조사·수정 중, 타 언어 parity 방향 확인 포함 [발견 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
