@@ -49,6 +49,7 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
             "deadline",
             "relocationResult",
             "terminationResult",
+            "safeToShutdown",
             "capacity",
             "sequence",
             "observedAt");

@@ -483,8 +483,13 @@ final class ZLinkCanonicalRelocationStateMachine
             return CompletableFuture.completedFuture(null);
         }
 
-        attempt.assembler().assembled()
-            .thenCompose(payload -> reconstruct(prepare, payload))
+        resolvePendingBase(fence, prepare)
+            .thenCompose(baseBytes -> {
+                attempt.baseBytes(baseBytes);
+                return attempt.assembler().assembled();
+            })
+            .thenCompose(payload ->
+                reconstruct(prepare, payload, attempt.baseBytes()))
             .thenCompose(restore -> {
                 attempt.request().complete(restore.request());
                 return target.stage(restore.request())
@@ -520,6 +525,33 @@ final class ZLinkCanonicalRelocationStateMachine
                 return null;
             });
         return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Resolves the base snapshot buffered ahead of this PREPARE, if any,
+     * against the manifest's {@code baseChecksumCrc32c} (spec 15 §5, spec 28
+     * §4.2). {@code 0} means the manifest expects no base — an ordinary
+     * full Capture/Restore relocation.
+     */
+    private CompletionStage<byte[]> resolvePendingBase(
+        Fence fence,
+        ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        PendingBase pending = pendingBaseChunks.remove(fence);
+        long expected = prepare.manifest().baseChecksumCrc32c();
+        if (expected == 0) {
+            if (pending != null) {
+                return failed(new IllegalStateException(
+                    "relocation base payload was not expected by the"
+                        + " manifest"));
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+        if (pending == null || pending.checksumCrc32c() != expected) {
+            return failed(new IllegalStateException(
+                "relocation base payload checksum differs from the"
+                    + " manifest"));
+        }
+        return CompletableFuture.completedFuture(pending.assemble());
     }
 
     private CompletionStage<Void> publishReady(
@@ -957,14 +989,16 @@ final class ZLinkCanonicalRelocationStateMachine
                 request.sourceNodeRid(),
                 request.sourceNodeGeneration(),
                 ZLinkRelocationPayloadTransfer.manifest(
-                    payload, budget.effectiveChunkBytes()),
+                    payload, budget.effectiveChunkBytes(),
+                    request.baseApplicationState()),
                 envelope.applicationVersion());
         });
     }
 
     private CompletionStage<TargetRestore> reconstruct(
         ZLinkCanonicalRelocationProtocol.Prepare prepare,
-        byte[] payload) {
+        byte[] payload,
+        byte[] base) {
         Objects.requireNonNull(payload, "payload");
         CompletionStage<List<ZLinkAuthorityEntry>> inventory =
             prepare.object().kind() == 1
@@ -974,7 +1008,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkSpotRetireControl.TargetProfile profile =
                 Objects.requireNonNull(
                     target.applyTargetProfile(stageRequest(
-                        prepare, payload, entries),
+                        prepare, payload, entries, base),
                         localNodeGeneration),
                     "canonical target profile returned null");
             ZLinkSpotRetireControl.StageRequest request = profile.request();
@@ -1118,7 +1152,8 @@ final class ZLinkCanonicalRelocationStateMachine
     private ZLinkSpotRetireControl.StageRequest stageRequest(
         ZLinkCanonicalRelocationProtocol.Prepare prepare,
         byte[] rootBytes,
-        List<ZLinkAuthorityEntry> entries) {
+        List<ZLinkAuthorityEntry> entries,
+        byte[] base) {
         var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(rootBytes);
         if (envelope.relocationHigh()
                 != prepare.id().getMostSignificantBits()
@@ -1221,7 +1256,8 @@ final class ZLinkCanonicalRelocationStateMachine
             restorePrimary,
             rootBytes,
             participants,
-            List.of());
+            List.of(),
+            base == null ? new byte[0] : base);
     }
 
     private static void validateResolvedPrimary(
@@ -1501,6 +1537,62 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
+    /**
+     * Base snapshot chunks buffered ahead of PREPARE, keyed only by exact
+     * relocation identity — nothing else exists to fence them against yet
+     * (spec 15 §5, spec 28 §4.2). Ordinals arrive in order on the same
+     * connection; a duplicate resend of an already-accepted ordinal is
+     * idempotent, and anything else (gap, conflicting duplicate, a second
+     * transport source) invalidates the buffer.
+     */
+    private static final class PendingBase {
+        private final RoutingId source;
+        private final List<byte[]> chunks = new ArrayList<>();
+        private final java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+        private long totalLength;
+
+        PendingBase(RoutingId source) {
+            this.source = Objects.requireNonNull(source, "source");
+        }
+
+        RoutingId source() {
+            return source;
+        }
+
+        synchronized boolean accept(long chunkOrdinal, byte[] chunkData) {
+            Objects.requireNonNull(chunkData, "chunkData");
+            if (chunkOrdinal < 0 || chunkOrdinal > Integer.MAX_VALUE) {
+                return false;
+            }
+            int ordinal = (int) chunkOrdinal;
+            if (ordinal < chunks.size()) {
+                return java.util.Arrays.equals(chunks.get(ordinal), chunkData);
+            }
+            if (ordinal != chunks.size()) {
+                return false;
+            }
+            byte[] copy = chunkData.clone();
+            chunks.add(copy);
+            checksum.update(copy, 0, copy.length);
+            totalLength += copy.length;
+            return true;
+        }
+
+        synchronized byte[] assemble() {
+            byte[] result = new byte[(int) totalLength];
+            int offset = 0;
+            for (byte[] chunk : chunks) {
+                System.arraycopy(chunk, 0, result, offset, chunk.length);
+                offset += chunk.length;
+            }
+            return result;
+        }
+
+        synchronized long checksumCrc32c() {
+            return checksum.getValue();
+        }
+    }
+
     /** Retained copies for the cutover retransmission window (spec 28 §4.4). */
     private record RetainedSource(
         RoutingId targetNodeRid,
@@ -1578,6 +1670,7 @@ final class ZLinkCanonicalRelocationStateMachine
         private boolean committed;
         private volatile long committedNanos;
         private volatile byte[] receivedCutover;
+        private volatile byte[] baseBytes;
 
         TargetAttempt(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
             this.prepare = prepare;
@@ -1612,6 +1705,15 @@ final class ZLinkCanonicalRelocationStateMachine
 
         void receivedCutover(byte[] value) {
             receivedCutover = value.clone();
+        }
+
+        byte[] baseBytes() {
+            byte[] value = baseBytes;
+            return value == null ? null : value.clone();
+        }
+
+        void baseBytes(byte[] value) {
+            baseBytes = value == null ? null : value.clone();
         }
 
         CompletableFuture<ZLinkSpotRetireControl.StageRequest> request() {

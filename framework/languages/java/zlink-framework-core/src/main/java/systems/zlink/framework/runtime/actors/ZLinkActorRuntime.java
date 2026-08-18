@@ -1317,9 +1317,40 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             .ZLinkRelocationAdapterRegistry adapters,
         ZLinkRelocationCancellation cancellation,
         ZLinkBackendActorRef preparedActorRef) {
+        return prepareRelocatedActor(
+            actorId,
+            actorType,
+            applicationState,
+            restoreSnapshot,
+            adapters,
+            cancellation,
+            preparedActorRef,
+            null);
+    }
+
+    /**
+     * Base/delta overload (spec 15 §5): when {@code baseApplicationState} is
+     * present the target restores the base snapshot then applies the delta,
+     * instead of the ordinary full Capture/Restore. A failure applying the
+     * delta discards the partially restored instance and retries the whole
+     * restoreBase→applyDelta sequence exactly once on a fresh instance
+     * before failing explicitly — no partial reuse.
+     */
+    public CompletionStage<PreparedTransferredActor> prepareRelocatedActor(
+        String actorId,
+        String actorType,
+        byte[] applicationState,
+        boolean restoreSnapshot,
+        systems.zlink.framework.runtime.internal.relocation
+            .ZLinkRelocationAdapterRegistry adapters,
+        ZLinkRelocationCancellation cancellation,
+        ZLinkBackendActorRef preparedActorRef,
+        byte[] baseApplicationState) {
         requireActorId(actorId);
         Objects.requireNonNull(applicationState, "applicationState");
-        if (restoreSnapshot) {
+        boolean hasBase = baseApplicationState != null
+            && baseApplicationState.length > 0;
+        if (restoreSnapshot || hasBase) {
             Objects.requireNonNull(adapters, "adapters");
         }
         Objects.requireNonNull(cancellation, "cancellation");
@@ -1338,8 +1369,34 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 throw failure;
             }
         }
+        byte[] base = hasBase ? baseApplicationState.clone() : null;
+        return attemptPrepareRelocatedActor(
+            actorId,
+            actorType,
+            factoryType,
+            applicationState,
+            restoreSnapshot,
+            adapters,
+            cancellation,
+            actorRef,
+            base,
+            true);
+    }
+
+    private CompletionStage<PreparedTransferredActor>
+        attemptPrepareRelocatedActor(
+            String actorId,
+            String actorType,
+            Class<? extends ZLinkActorFactory> factoryType,
+            byte[] applicationState,
+            boolean restoreSnapshot,
+            systems.zlink.framework.runtime.internal.relocation
+                .ZLinkRelocationAdapterRegistry adapters,
+            ZLinkRelocationCancellation cancellation,
+            ZLinkBackendActorRef actorRef,
+            byte[] base,
+            boolean allowRetry) {
         DefaultActorContext context = new DefaultActorContext(actorRef);
-        ZLinkBackendActorRef finalActorRef = actorRef;
         context.beginMove();
         CompletionStage<PreparedTransferredActor> activation = ZLinkHandlerStages
             .fromSupplier(() -> createFactory(factoryType).create(context))
@@ -1351,25 +1408,49 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             "actor factory returned null: " + actorId));
                 }
                 context.setActor(actor);
-                CompletionStage<Void> restore = restoreSnapshot
-                    ? adapters.restoreActor(
-                        actorType,
-                        actor,
-                        applicationState.clone(),
-                        cancellation)
-                    : CompletableFuture.completedFuture(null);
+                CompletionStage<Void> restore = base != null
+                    ? adapters.restoreActorBase(
+                            actorType, actor, base, cancellation)
+                        .thenCompose(ignored -> adapters.applyActorDelta(
+                            actorType, actor, applicationState.clone(),
+                            cancellation))
+                    : restoreSnapshot
+                        ? adapters.restoreActor(
+                            actorType,
+                            actor,
+                            applicationState.clone(),
+                            cancellation)
+                        : CompletableFuture.completedFuture(null);
                 return restore.thenApply(ignored ->
                     new PreparedTransferredActor(
                         actorId,
                         actorType,
                         actor,
                         context,
-                        finalActorRef));
+                        actorRef));
             });
-        return activation.exceptionallyCompose(failure ->
-            discardPreparedBackend(finalActorRef, context)
+        return activation.exceptionallyCompose(failure -> {
+            if (base != null && allowRetry) {
+                //  Discard the local factory/Restore attempt only — the
+                //  backend actor reference stays reserved so a direct Join's
+                //  route fence keeps matching the retry.
+                context.clearAfterDestroy();
+                return attemptPrepareRelocatedActor(
+                    actorId,
+                    actorType,
+                    factoryType,
+                    applicationState,
+                    restoreSnapshot,
+                    adapters,
+                    cancellation,
+                    actorRef,
+                    base,
+                    false);
+            }
+            return discardPreparedBackend(actorRef, context)
                 .thenCompose(ignored -> CompletableFuture.failedFuture(
-                    unwrap(failure))));
+                    unwrap(failure)));
+        });
     }
 
     public synchronized ZLinkActor publishPreparedTransferredActor(

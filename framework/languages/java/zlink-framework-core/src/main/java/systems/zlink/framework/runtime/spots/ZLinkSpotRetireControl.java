@@ -336,7 +336,47 @@ final class ZLinkSpotRetireControl {
         boolean restoreSpotSnapshot,
         byte[] relocationPayload,
         List<ParticipantFence> participants,
-        List<SessionRouteFence> sessionRoutes) {
+        List<SessionRouteFence> sessionRoutes,
+        byte[] baseApplicationState) {
+        StageRequest(
+            Fence fence,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            String sourceOwnerId,
+            long sourceOwnerLeaseGeneration,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            String targetOwnerId,
+            long targetOwnerLeaseGeneration,
+            String meshName,
+            String spotId,
+            String stableType,
+            boolean instanceSpot,
+            boolean restoreSpotSnapshot,
+            byte[] relocationPayload,
+            List<ParticipantFence> participants,
+            List<SessionRouteFence> sessionRoutes) {
+            this(
+                fence,
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sourceOwnerId,
+                sourceOwnerLeaseGeneration,
+                targetNodeRid,
+                targetNodeGeneration,
+                targetOwnerId,
+                targetOwnerLeaseGeneration,
+                meshName,
+                spotId,
+                stableType,
+                instanceSpot,
+                restoreSpotSnapshot,
+                relocationPayload,
+                participants,
+                sessionRoutes,
+                new byte[0]);
+        }
+
         StageRequest(
             Fence fence,
             RoutingId sourceNodeRid,
@@ -385,6 +425,8 @@ final class ZLinkSpotRetireControl {
             requireText(stableType, "stableType");
             relocationPayload = Objects.requireNonNull(
                 relocationPayload, "relocationPayload").clone();
+            baseApplicationState = Objects.requireNonNull(
+                baseApplicationState, "baseApplicationState").clone();
             if (relocationPayload.length == 0) {
                 throw new IllegalArgumentException(
                     "relocation stage payload is required");
@@ -442,6 +484,16 @@ final class ZLinkSpotRetireControl {
         }
 
         @Override
+        public byte[] baseApplicationState() {
+            return baseApplicationState.clone();
+        }
+
+        /** True when a base snapshot precedes the delta payload above. */
+        boolean hasBaseApplicationState() {
+            return baseApplicationState.length > 0;
+        }
+
+        @Override
         public boolean equals(Object other) {
             return other instanceof StageRequest that
                 && fence.equals(that.fence)
@@ -463,7 +515,9 @@ final class ZLinkSpotRetireControl {
                 && Arrays.equals(
                     relocationPayload, that.relocationPayload)
                 && participants.equals(that.participants)
-                && sessionRoutes.equals(that.sessionRoutes);
+                && sessionRoutes.equals(that.sessionRoutes)
+                && Arrays.equals(
+                    baseApplicationState, that.baseApplicationState);
         }
 
         @Override
@@ -485,7 +539,8 @@ final class ZLinkSpotRetireControl {
                 restoreSpotSnapshot,
                 Arrays.hashCode(relocationPayload),
                 participants,
-                sessionRoutes);
+                sessionRoutes,
+                Arrays.hashCode(baseApplicationState));
         }
 
         /** CRC-32C of the whole encoded handoff payload (spec 28 §4.2). */

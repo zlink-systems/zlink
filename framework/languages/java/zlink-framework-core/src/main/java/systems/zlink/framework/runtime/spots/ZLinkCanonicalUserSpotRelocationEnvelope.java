@@ -303,7 +303,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             spotType, stage.stableType(), stage.spotId(), spotGeneration,
             spotState, stage.restoreSpotSnapshot(),
             ZLinkSpotTimerRelocationEnvelope.encodeCanonical(timers),
-            actors, frozen);
+            actors, frozen, stage.baseApplicationState());
     }
 
     private static long participantId(

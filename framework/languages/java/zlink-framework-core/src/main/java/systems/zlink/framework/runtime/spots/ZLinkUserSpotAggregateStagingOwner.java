@@ -730,7 +730,32 @@ final class ZLinkUserSpotAggregateStagingOwner {
         boolean restoreSpotSnapshot,
         byte[] timerEnvelope,
         List<ActorParticipant> actors,
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> acceptedJournal) {
+        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> acceptedJournal,
+        byte[] baseApplicationState) {
+        Request(
+            Class<? extends ZLinkSpot<?>> spotType,
+            String spotStableType,
+            String spotId,
+            long objectGeneration,
+            byte[] spotState,
+            boolean restoreSpotSnapshot,
+            byte[] timerEnvelope,
+            List<ActorParticipant> actors,
+            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+                acceptedJournal) {
+            this(
+                spotType,
+                spotStableType,
+                spotId,
+                objectGeneration,
+                spotState,
+                restoreSpotSnapshot,
+                timerEnvelope,
+                actors,
+                acceptedJournal,
+                new byte[0]);
+        }
+
         Request {
             Objects.requireNonNull(spotType, "spotType");
             if (spotStableType == null || spotStableType.isBlank()
@@ -753,10 +778,20 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     List.copyOf(records)));
             acceptedJournal = Collections.unmodifiableMap(journalCopy);
             validateJournal(acceptedJournal);
+            baseApplicationState = Objects.requireNonNull(
+                baseApplicationState, "baseApplicationState").clone();
         }
 
         @Override public byte[] spotState() { return spotState.clone(); }
         @Override public byte[] timerEnvelope() { return timerEnvelope.clone(); }
+        @Override public byte[] baseApplicationState() {
+            return baseApplicationState.clone();
+        }
+
+        /** True when a base snapshot precedes the delta above. */
+        boolean hasBaseApplicationState() {
+            return baseApplicationState.length > 0;
+        }
     }
 
     static final class Staged {
@@ -858,13 +893,24 @@ final class ZLinkUserSpotAggregateStagingOwner {
             ZLinkRelocationCancellation cancellation) {
             var prepared = (ZLinkSpotLifecycle.PreparedUserSpot) value;
             Object spot = spots.preparedSpot(prepared);
-            CompletionStage<Void> restore = request.restoreSpotSnapshot()
-                ? adapters.restoreSpot(
-                    request.spotStableType(),
-                    spot,
-                    request.spotState(),
-                    cancellation)
-                : CompletableFuture.completedFuture(null);
+            CompletionStage<Void> restore = request.hasBaseApplicationState()
+                ? adapters.restoreSpotBase(
+                        request.spotStableType(),
+                        spot,
+                        request.baseApplicationState(),
+                        cancellation)
+                    .thenCompose(ignored -> adapters.applySpotDelta(
+                        request.spotStableType(),
+                        spot,
+                        request.spotState(),
+                        cancellation))
+                : request.restoreSpotSnapshot()
+                    ? adapters.restoreSpot(
+                        request.spotStableType(),
+                        spot,
+                        request.spotState(),
+                        cancellation)
+                    : CompletableFuture.completedFuture(null);
             return restore.thenRun(() -> {
                 validateJournal(request.acceptedJournal());
                 spots.stageReservedTimers(prepared, request.timerEnvelope());

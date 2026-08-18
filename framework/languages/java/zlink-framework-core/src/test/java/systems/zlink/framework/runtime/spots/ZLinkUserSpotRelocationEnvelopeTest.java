@@ -147,7 +147,7 @@ final class ZLinkUserSpotRelocationEnvelopeTest {
             source, 1, "source-owner", 1,
             target, 2, "target-owner", 2,
             "mesh", "room-a", "room", false, restoreSpotSnapshot,
-            new byte[0], participants, List.of());
+            new byte[] {0}, participants, List.of());
     }
 
     private static final class TestSpot implements ZLinkSpot<ZLinkActor> {

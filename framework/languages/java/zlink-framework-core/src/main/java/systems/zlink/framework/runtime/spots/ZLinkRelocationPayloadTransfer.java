@@ -39,6 +39,18 @@ final class ZLinkRelocationPayloadTransfer {
     static ZLinkCanonicalRelocationProtocol.Manifest manifest(
         byte[] payload,
         int chunkLimitBytes) {
+        return manifest(payload, chunkLimitBytes, null);
+    }
+
+    /**
+     * Base/delta overload (spec 15 §5): {@code base} is {@code null} or
+     * empty for an ordinary full Capture/Restore relocation, in which case
+     * the manifest's {@code baseChecksumCrc32c} is 0.
+     */
+    static ZLinkCanonicalRelocationProtocol.Manifest manifest(
+        byte[] payload,
+        int chunkLimitBytes,
+        byte[] base) {
         Objects.requireNonNull(payload, "payload");
         if (chunkLimitBytes <= 0) {
             throw new IllegalArgumentException(
@@ -47,10 +59,14 @@ final class ZLinkRelocationPayloadTransfer {
         int chunkCount = payload.length == 0
             ? 0
             : (payload.length + chunkLimitBytes - 1) / chunkLimitBytes;
+        long baseChecksum = base == null || base.length == 0
+            ? 0
+            : crc32c(base);
         return new ZLinkCanonicalRelocationProtocol.Manifest(
             payload.length,
             chunkCount,
-            crc32c(payload));
+            crc32c(payload),
+            baseChecksum);
     }
 
     /** Splits the payload into ordinal-ordered chunks of the given size. */

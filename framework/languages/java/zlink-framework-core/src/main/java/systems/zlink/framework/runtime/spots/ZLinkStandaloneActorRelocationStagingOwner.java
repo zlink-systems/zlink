@@ -505,18 +505,49 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         long objectGeneration,
         long sourceAuthorityOwnerGeneration,
         boolean restoreSnapshot,
-        String targetSpotId) {
+        String targetSpotId,
+        byte[] baseApplicationState) {
+        Request(
+            UUID relocationId,
+            String actorId,
+            String stableType,
+            long objectGeneration,
+            long sourceAuthorityOwnerGeneration,
+            boolean restoreSnapshot,
+            String targetSpotId) {
+            this(
+                relocationId,
+                actorId,
+                stableType,
+                objectGeneration,
+                sourceAuthorityOwnerGeneration,
+                restoreSnapshot,
+                targetSpotId,
+                new byte[0]);
+        }
+
         Request {
             Objects.requireNonNull(relocationId, "relocationId");
             requireText(actorId, "actorId");
             requireText(stableType, "stableType");
             requireText(targetSpotId, "targetSpotId");
+            baseApplicationState = Objects.requireNonNull(
+                baseApplicationState, "baseApplicationState").clone();
             if (relocationId.equals(new UUID(0, 0))
                 || objectGeneration <= 0
                 || sourceAuthorityOwnerGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "Actor relocation identity and generations must be positive");
             }
+        }
+
+        @Override public byte[] baseApplicationState() {
+            return baseApplicationState.clone();
+        }
+
+        /** True when a base snapshot precedes the delta above. */
+        boolean hasBaseApplicationState() {
+            return baseApplicationState.length > 0;
         }
     }
 
@@ -721,7 +752,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     new ZLinkBackendActorRef(
                         targetNode.routingId(),
                         request.actorId(),
-                        request.objectGeneration()))
+                        request.objectGeneration()),
+                    request.hasBaseApplicationState()
+                        ? request.baseApplicationState()
+                        : null)
                 .thenApply(value -> value);
         }
 

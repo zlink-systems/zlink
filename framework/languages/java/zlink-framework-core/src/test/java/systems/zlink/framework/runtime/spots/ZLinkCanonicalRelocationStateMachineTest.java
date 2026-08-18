@@ -199,6 +199,307 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             "only the target command handler performs the owner CAS");
     }
 
+    /**
+     * Item 5 of the base/delta transfer pipeline (spec 15 §5): base chunks
+     * streamed ahead of PREPARE are buffered by exact relocation identity,
+     * verified against the manifest's baseChecksumCrc32c once PREPARE
+     * arrives, and threaded into the target's stage request.
+     */
+    @Test
+    void baseChunksBeforePrepareAreVerifiedAndThreadedToTheStageRequest() {
+        Fixture fixture = fixture();
+        byte[] base = {5, 5, 5, 5, 5};
+        byte[] delta = {1};
+        var request = stageRequestWithBase(fixture, delta, base);
+
+        fixture.source.sendBase(
+                fixture.targetRid,
+                request.fence(),
+                new ZLinkCanonicalRelocationProtocol.Coordinator(
+                    fixture.sourceOwner.ownerId(),
+                    fixture.sourceOwner.leaseGeneration(),
+                    fixture.sourceRid,
+                    11,
+                    fixture.sourceSnapshot.storeVersion()),
+                new ZLinkCanonicalRelocationProtocol.ObjectFence(
+                    1,
+                    fixture.actorId,
+                    "",
+                    fixture.sourceSnapshot.objectGeneration(),
+                    fixture.sourceSnapshot.authorityOwnerGeneration()),
+                base,
+                Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+
+        assertArrayEquals(base, fixture.endpoint.lastStaged.get()
+            .baseApplicationState());
+        assertArrayEquals(fixture.root(delta), fixture.endpoint.lastStaged.get()
+            .relocationPayload());
+    }
+
+    @Test
+    void baseChecksumMismatchFailsExplicitlyAndNeverRestores() {
+        Fixture fixture = fixture();
+        byte[] base = {5, 5, 5, 5, 5};
+        byte[] wrongBase = {9, 9, 9, 9, 9};
+        var request = stageRequestWithBase(fixture, new byte[] {1}, base);
+
+        //  Send different bytes than the manifest's baseChecksumCrc32c
+        //  covers — a defect signal, not a transient loss (spec 28 §4.3).
+        fixture.source.sendBase(
+                fixture.targetRid,
+                request.fence(),
+                new ZLinkCanonicalRelocationProtocol.Coordinator(
+                    fixture.sourceOwner.ownerId(),
+                    fixture.sourceOwner.leaseGeneration(),
+                    fixture.sourceRid,
+                    11,
+                    fixture.sourceSnapshot.storeVersion()),
+                new ZLinkCanonicalRelocationProtocol.ObjectFence(
+                    1,
+                    fixture.actorId,
+                    "",
+                    fixture.sourceSnapshot.objectGeneration(),
+                    fixture.sourceSnapshot.authorityOwnerGeneration()),
+                wrongBase,
+                Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+
+        var failure = org.junit.jupiter.api.Assertions.assertThrows(
+            java.util.concurrent.CompletionException.class,
+            () -> fixture.source.stage(
+                    fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture().join());
+        assertEquals(
+            0, fixture.endpoint.staged.get(),
+            "a base checksum mismatch never reaches target Restore");
+        assertEquals(
+            List.of(ServiceWireConstants.COMMAND_RELOCATION_FAILED),
+            fixture.targetCommands);
+    }
+
+    @Test
+    void unregisteredAdapterTakesTheUnchangedFullPayloadPath() {
+        Fixture fixture = fixture();
+        var request = fixture.request(new byte[] {1});
+
+        fixture.source.stage(fixture.targetRid, request, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+
+        assertArrayEquals(new byte[0], fixture.endpoint.lastStaged.get()
+            .baseApplicationState());
+        assertEquals(false, fixture.endpoint.lastStaged.get()
+            .hasBaseApplicationState());
+    }
+
+    @Test
+    void baseChunksWithoutAPrepareAreEvictedByRetention() {
+        List<Runnable> scheduled = new CopyOnWriteArrayList<>();
+        Fixture fixture = fixture(
+            (deadline, cleanup) -> scheduled.add(cleanup));
+        byte[] base = {5, 5, 5, 5, 5};
+        var request = stageRequestWithBase(fixture, new byte[] {1}, base);
+
+        fixture.source.sendBase(
+                fixture.targetRid,
+                request.fence(),
+                new ZLinkCanonicalRelocationProtocol.Coordinator(
+                    fixture.sourceOwner.ownerId(),
+                    fixture.sourceOwner.leaseGeneration(),
+                    fixture.sourceRid,
+                    11,
+                    fixture.sourceSnapshot.storeVersion()),
+                new ZLinkCanonicalRelocationProtocol.ObjectFence(
+                    1,
+                    fixture.actorId,
+                    "",
+                    fixture.sourceSnapshot.objectGeneration(),
+                    fixture.sourceSnapshot.authorityOwnerGeneration()),
+                base,
+                Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        assertEquals(1, scheduled.size(),
+            "the first base chunk arms exactly one eviction");
+
+        //  Simulate the eviction window elapsing without a PREPARE ever
+        //  arriving — the normal outcome of a source-side seal failure
+        //  after base chunks are already on the wire.
+        scheduled.forEach(Runnable::run);
+
+        var failure = org.junit.jupiter.api.Assertions.assertThrows(
+            java.util.concurrent.CompletionException.class,
+            () -> fixture.source.stage(
+                    fixture.targetRid, request, Duration.ofSeconds(2))
+                .toCompletableFuture().join());
+        assertEquals(
+            0, fixture.endpoint.staged.get(),
+            "the evicted base cannot satisfy the manifest checksum");
+    }
+
+    private ZLinkSpotRetireControl.StageRequest stageRequestWithBase(
+        Fixture fixture,
+        byte[] delta,
+        byte[] base) {
+        return new ZLinkSpotRetireControl.StageRequest(
+            new ZLinkSpotRetireControl.Fence(fixture.relocationId, 1),
+            fixture.sourceRid, 11,
+            fixture.sourceOwner.ownerId(), fixture.sourceOwner.leaseGeneration(),
+            fixture.targetRid, 12,
+            fixture.targetOwner.ownerId(), fixture.targetOwner.leaseGeneration(),
+            "mesh", "target-entry", "actor-type", false, true,
+            fixture.root(delta),
+            List.of(new ZLinkSpotRetireControl.ParticipantFence(
+                fixture.authorityKey,
+                1,
+                fixture.actorId,
+                "actor-type",
+                true,
+                fixture.sourceSnapshot.objectGeneration(),
+                fixture.sourceSnapshot.authorityOwnerGeneration())),
+            List.of(),
+            base);
+    }
+
+    private Fixture fixture() {
+        return fixture(null);
+    }
+
+    /**
+     * Builds one wired source/target pair with a committed source Actor
+     * authority ready for PREPARE — the shared setup underlying both the
+     * base/delta tests above and the plain-attempt test below.
+     */
+    private Fixture fixture(
+        ZLinkCanonicalRelocationStateMachine.RetentionScheduler
+            retentionScheduler) {
+        RoutingId sourceRid = RoutingId.from("source-node");
+        RoutingId targetRid = RoutingId.from("target-node");
+        String actorId = "actor-a";
+        String authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationOwnerToken sourceOwner = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            locations.claimOwnerLease("source-owner", Duration.ofMinutes(5))
+                .toCompletableFuture().join()).token();
+        ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            locations.claimOwnerLease("target-owner", Duration.ofMinutes(5))
+                .toCompletableFuture().join()).token();
+        locations.updateMeshNode(
+                descriptor(sourceRid, 11, sourceOwner, "source-entry"),
+                ZLinkLocationWriteIntent.NEW_CLAIM)
+            .toCompletableFuture().join();
+        locations.updateMeshNode(
+                descriptor(targetRid, 12, targetOwner, "target-entry"),
+                ZLinkLocationWriteIntent.NEW_CLAIM)
+            .toCompletableFuture().join();
+        byte[] sourceAuthority = actorAuthority(
+            actorId, sourceRid, sourceOwner).payload();
+        var reservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            locations.reserve(
+                    new ZLinkObjectReservationRequest(
+                        ZLinkPlacementObjectKind.ACTOR,
+                        authorityKey,
+                        "actor-type",
+                        "creation-root",
+                        new byte[32],
+                        32,
+                        new ZLinkMeshNodeDescriptorKey("mesh", sourceRid),
+                        11,
+                        sourceOwner,
+                        sourceAuthority,
+                        ZLinkPlacementCapacityBundle.actor(1)),
+                    OPEN)
+                .toCompletableFuture().join()).reservation();
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            locations.commit(reservation, sourceAuthority, OPEN)
+                .toCompletableFuture().join());
+        ZLinkAuthoritySnapshot sourceSnapshot = assertInstanceOf(
+            ZLinkAuthoritySnapshot.class,
+            locations.read(authorityKey, OPEN).toCompletableFuture().join());
+        var coordinator = new ZLinkAggregateRelocationCoordinator(locations);
+        UUID relocationId = UUID.randomUUID();
+        AtomicReference<ZLinkCanonicalRelocationStateMachine> source =
+            new AtomicReference<>();
+        AtomicReference<ZLinkCanonicalRelocationStateMachine> target =
+            new AtomicReference<>();
+        var sourceCommands = new CopyOnWriteArrayList<Integer>();
+        var targetCommands = new CopyOnWriteArrayList<Integer>();
+        CountingEndpoint endpoint = new CountingEndpoint();
+        if (retentionScheduler == null) {
+            source.set(new ZLinkCanonicalRelocationStateMachine(
+                node(sourceRid, 11, target, sourceCommands),
+                "mesh", "source-entry", locations, coordinator,
+                new CountingEndpoint()));
+            target.set(new ZLinkCanonicalRelocationStateMachine(
+                node(targetRid, 12, source, targetCommands),
+                "mesh", "target-entry", locations, coordinator, endpoint));
+        } else {
+            source.set(new ZLinkCanonicalRelocationStateMachine(
+                node(sourceRid, 11, target, sourceCommands),
+                "mesh", "source-entry", locations, coordinator,
+                new CountingEndpoint(), retentionScheduler));
+            target.set(new ZLinkCanonicalRelocationStateMachine(
+                node(targetRid, 12, source, targetCommands),
+                "mesh", "target-entry", locations, coordinator, endpoint,
+                retentionScheduler));
+        }
+        return new Fixture(
+            sourceRid, targetRid, actorId, authorityKey, sourceOwner,
+            targetOwner, sourceSnapshot, relocationId, source.get(),
+            target.get(), endpoint, sourceCommands, targetCommands);
+    }
+
+    private record Fixture(
+        RoutingId sourceRid,
+        RoutingId targetRid,
+        String actorId,
+        String authorityKey,
+        ZLinkLocationOwnerToken sourceOwner,
+        ZLinkLocationOwnerToken targetOwner,
+        ZLinkAuthoritySnapshot sourceSnapshot,
+        UUID relocationId,
+        ZLinkCanonicalRelocationStateMachine source,
+        ZLinkCanonicalRelocationStateMachine target,
+        CountingEndpoint endpoint,
+        List<Integer> sourceCommands,
+        List<Integer> targetCommands) {
+        byte[] root(byte[] applicationState) {
+            return ZLinkCanonicalActorRelocationEnvelope.encode(
+                relocationId,
+                actorId,
+                sourceSnapshot.objectGeneration(),
+                sourceSnapshot.authorityOwnerGeneration(),
+                true,
+                applicationState,
+                List.of());
+        }
+
+        ZLinkSpotRetireControl.StageRequest request(byte[] applicationState) {
+            return new ZLinkSpotRetireControl.StageRequest(
+                new ZLinkSpotRetireControl.Fence(relocationId, 1),
+                sourceRid, 11, sourceOwner.ownerId(),
+                sourceOwner.leaseGeneration(),
+                targetRid, 12, targetOwner.ownerId(),
+                targetOwner.leaseGeneration(),
+                "mesh", "target-entry", "actor-type", false, true,
+                root(applicationState),
+                List.of(new ZLinkSpotRetireControl.ParticipantFence(
+                    authorityKey,
+                    1,
+                    actorId,
+                    "actor-type",
+                    true,
+                    sourceSnapshot.objectGeneration(),
+                    sourceSnapshot.authorityOwnerGeneration())),
+                List.of());
+        }
+    }
+
     private static ZLinkAuthoritySnapshot actorAuthority(
         String actorId,
         RoutingId sourceRid,
@@ -285,11 +586,14 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         private final AtomicInteger staged = new AtomicInteger();
         private final AtomicInteger published = new AtomicInteger();
         private final AtomicInteger relayed = new AtomicInteger();
+        private final AtomicReference<ZLinkSpotRetireControl.StageRequest>
+            lastStaged = new AtomicReference<>();
 
         @Override
         public CompletionStage<Void> stage(
             ZLinkSpotRetireControl.StageRequest request) {
             staged.incrementAndGet();
+            lastStaged.set(request);
             return CompletableFuture.completedFuture(null);
         }
 
