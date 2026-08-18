@@ -419,7 +419,8 @@ void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value)
                           {"actorType", value.actor_type},
                           {"actorId", value.actor_id},
                           {"actorGeneration", value.actor_generation},
-                          {"payload", encode_base64 (value.payload)}};
+                          {"payload", encode_base64 (value.payload)},
+                          {"receiveChunkLimitBytes", value.receive_chunk_limit_bytes}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value)
@@ -430,6 +431,8 @@ void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value
     value.actor_id = json.at ("actorId").get<std::string> ();
     value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
     value.payload = decode_base64_field (json, "payload");
+    value.receive_chunk_limit_bytes =
+      json.value ("receiveChunkLimitBytes", std::uint64_t{0});
 }
 
 void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &value)
@@ -633,16 +636,18 @@ actor_ref_t actor_ref_from_spot_route (const spot_actor_commit_route_request_t &
 
 spot_actor_join_route_reply_t make_spot_actor_join_route_reply (const actor_join_reply_t &reply)
 {
-    return spot_actor_join_route_reply_t{.result_code = reply.result_code,
-                                         .actor_node_rid =
-                                           std::string (reply.actor.node_rid ().value ()),
-                                         .actor_type = std::string (
-                                           ::zlink::framework::detail::actor_ref_access_t::actor_type (
-                                             reply.actor)),
-                                         .actor_id = std::string (
-                                           reply.actor.actor_id ().value ()),
-                                         .actor_generation = reply.actor.object_generation (),
-                                         .payload = reply.reply.to_bytes ()};
+    return spot_actor_join_route_reply_t{
+      .result_code = reply.result_code,
+      .actor_node_rid = std::string (reply.actor.node_rid ().value ()),
+      .actor_type = std::string (
+        ::zlink::framework::detail::actor_ref_access_t::actor_type (
+          reply.actor)),
+      .actor_id = std::string (reply.actor.actor_id ().value ()),
+      .actor_generation = reply.actor.object_generation (),
+      .payload = reply.reply.to_bytes (),
+      /* This node's advertised inbound cap for direct-transfer relocation
+       * payload chunks bound for actors admitted here. */
+      .receive_chunk_limit_bytes = spot_actor_join_advertised_receive_chunk_limit_bytes};
 }
 
 actor_join_reply_t actor_join_reply_from_spot_route (const spot_actor_join_route_reply_t &reply)

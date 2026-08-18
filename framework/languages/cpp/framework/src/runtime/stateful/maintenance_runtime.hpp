@@ -457,7 +457,11 @@ class maintenance_runtime_t
       inventory_digest_t inventory_digest,
       const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
         &canonical_wire = std::nullopt,
-      std::stop_token cancellation = {});
+      std::stop_token cancellation = {},
+      /* Target-advertised inbound chunk-size cap (bytes), e.g. from a
+       * join reply; 0 = not advertised, this unit's local budget applies
+       * unchanged. */
+      std::uint64_t advertised_receive_chunk_limit_bytes = 0);
     relocation_result_t recover (
       object_kind_t kind,
       const std::string &key,
@@ -475,7 +479,8 @@ class maintenance_runtime_t
       inventory_digest_t inventory_digest,
       const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
         &canonical_wire = std::nullopt,
-      std::stop_token cancellation = {});
+      std::stop_token cancellation = {},
+      std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
     void attach_relocation_wire (
       raw_relocation_replay_coordinator_t &wire) noexcept;
@@ -499,6 +504,14 @@ class maintenance_runtime_t
 
     static std::uint32_t crc32c (
       const std::vector<std::uint8_t> &payload) noexcept;
+    /* min(local_limit_bytes, advertised>0 ? advertised : local_limit_bytes)
+     * — the direct-transfer chunk-plan cap applied when a target has
+     * advertised a receive_chunk_limit_bytes (e.g. via a join reply); 0
+     * for either side means "not advertised"/"unset", in which case the
+     * other side's value applies unchanged. */
+    static std::uint64_t apply_advertised_receive_chunk_limit (
+      std::uint64_t local_limit_bytes,
+      std::uint64_t advertised_receive_chunk_limit_bytes) noexcept;
     static std::vector<std::uint8_t> encode (
       const frozen_object_state_t &frozen,
       const inventory_digest_t &inventory_digest);

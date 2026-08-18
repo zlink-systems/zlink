@@ -130,6 +130,12 @@ struct spot_actor_join_route_request_t
     std::vector<std::uint8_t> actor_snapshot;
 };
 
+/* Advertised inbound chunk-size cap (bytes) this node offers for
+ * direct-transfer relocation payloads bound for actors admitted through
+ * spot_actor_join_route_reply_t. */
+inline constexpr std::uint64_t
+  spot_actor_join_advertised_receive_chunk_limit_bytes = 32768;
+
 struct spot_actor_join_route_reply_t
 {
     int result_code = 0;
@@ -138,6 +144,10 @@ struct spot_actor_join_route_reply_t
     std::string actor_id;
     std::uint64_t actor_generation = 0;
     std::vector<std::uint8_t> payload;
+    /* Advertised inbound chunk-size cap for direct-transfer relocation
+     * payloads bound for this target (0 = not advertised, tolerant
+     * decode). */
+    std::uint64_t receive_chunk_limit_bytes = 0;
 };
 
 struct spot_actor_packet_route_request_t

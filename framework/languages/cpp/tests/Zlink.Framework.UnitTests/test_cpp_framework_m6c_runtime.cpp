@@ -8,6 +8,9 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/spots/spot_route_packets.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <zlink/framework.hpp>
 
@@ -4910,6 +4913,91 @@ void test_relocation_hold_restores_without_dedicated_limits (
         (void) normal_lane_caps.abort_close_spot (*close_token);
 }
 
+void test_advertised_receive_chunk_limit_wiring (test_context_t &test)
+{
+    namespace spots = zlink::framework::detail;
+
+    /* Target advertises a fixed 32768-byte inbound cap on every actor
+     * join reply. */
+    test.require (
+      spots::spot_actor_join_advertised_receive_chunk_limit_bytes == 32768,
+      "join reply must advertise a 32768-byte receive chunk limit");
+
+    /* Round-trip: to_json/from_json preserve receiveChunkLimitBytes. */
+    {
+        spots::spot_actor_join_route_reply_t reply;
+        reply.result_code = 0;
+        reply.actor_node_rid = "node-a";
+        reply.actor_type = "demo.actor";
+        reply.actor_id = "actor-1";
+        reply.actor_generation = 7;
+        reply.payload = {1, 2, 3};
+        reply.receive_chunk_limit_bytes =
+          spots::spot_actor_join_advertised_receive_chunk_limit_bytes;
+
+        nlohmann::json encoded = reply;
+        const auto decoded = encoded.get<spots::spot_actor_join_route_reply_t> ();
+        test.require (
+          decoded.receive_chunk_limit_bytes == 32768,
+          "join reply round-trip must preserve receiveChunkLimitBytes");
+        test.require (
+          decoded.actor_id == "actor-1" && decoded.actor_generation == 7,
+          "join reply round-trip must preserve unrelated fields");
+    }
+
+    /* Tolerant decode: a peer on an older schema omits the field
+     * entirely; absence must decode to 0, not throw. */
+    {
+        nlohmann::json legacy{{"resultCode", 0},
+                              {"actorNodeRid", "node-a"},
+                              {"actorType", "demo.actor"},
+                              {"actorId", "actor-1"},
+                              {"actorGeneration", 7},
+                              {"payload", ""}};
+        const auto decoded =
+          legacy.get<spots::spot_actor_join_route_reply_t> ();
+        test.require (
+          decoded.receive_chunk_limit_bytes == 0,
+          "legacy join reply missing receiveChunkLimitBytes must decode as 0 (not advertised)");
+    }
+
+    /* Source-side consumption: min(configured, advertised>0?advertised:local)
+     * applied to the direct-transfer chunk-plan cap. */
+    test.require (
+      maintenance_runtime_t::apply_advertised_receive_chunk_limit (
+        262144, 0)
+        == 262144,
+      "advertised=0 (not advertised) must leave the local chunk cap unchanged");
+    test.require (
+      maintenance_runtime_t::apply_advertised_receive_chunk_limit (
+        262144, 32768)
+        == 32768,
+      "a smaller advertised cap must win over a larger local budget");
+    test.require (
+      maintenance_runtime_t::apply_advertised_receive_chunk_limit (
+        16384, 32768)
+        == 16384,
+      "a smaller local budget must still win over a larger advertised cap");
+
+    /* Chunk-split proof: the same payload plans into more chunks once
+     * capped by a smaller advertised limit. */
+    const std::vector<std::uint8_t> payload (20000, 0x5a);
+    const auto uncapped_limit =
+      maintenance_runtime_t::apply_advertised_receive_chunk_limit (
+        262144, 0);
+    const auto capped_limit =
+      maintenance_runtime_t::apply_advertised_receive_chunk_limit (
+        262144, 8192);
+    const auto chunk_count = [] (std::size_t total, std::uint64_t limit) {
+        return limit == 0 ? std::size_t{0}
+                          : (total + limit - 1) / limit;
+    };
+    test.require (
+      chunk_count (payload.size (), uncapped_limit) == 1
+        && chunk_count (payload.size (), capped_limit) == 3,
+      "an advertised cap smaller than the local budget must split the same payload into more chunks");
+}
+
 int main ()
 {
     test_context_t test;
@@ -4936,5 +5024,6 @@ int main ()
     test_aggregate_seal_failure_preserves_earlier_application_work (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_reservation_includes_active_work (test);
+    test_advertised_receive_chunk_limit_wiring (test);
     return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -505,6 +505,9 @@ struct maintenance_runtime_t::relocation_terminal_state_t
     std::vector<std::uint8_t> payload;
     relocation_payload_manifest_t manifest;
     std::uint64_t effective_chunk_limit = 0;
+    /* Target-advertised inbound chunk-size cap (bytes); 0 = not
+     * advertised. */
+    std::uint64_t advertised_receive_chunk_limit_bytes = 0;
     std::uint64_t budget_reserved = 0;
     std::chrono::steady_clock::time_point sealed_at{};
     /* SafeToShutdown pending-unit accounting: set once the unit is sealed
@@ -1114,7 +1117,8 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate (
   inventory_digest_t inventory_digest,
   const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
     &canonical_wire,
-  std::stop_token cancellation)
+  std::stop_token cancellation,
+  std::uint64_t advertised_receive_chunk_limit_bytes)
 {
     if (!canonical_wire) {
         return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
@@ -1127,6 +1131,8 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate (
         source, std::move (target_node_id), std::move (target_owner),
         encoded_upper_bound, inventory_digest, *canonical_wire, cancellation,
         std::make_shared<permit_t> (try_acquire ())});
+    state->advertised_receive_chunk_limit_bytes =
+      advertised_receive_chunk_limit_bytes;
     if (!*state->permit) {
         return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
           finish ({relocation_terminal_t::blocked,
@@ -1148,6 +1154,9 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
                                  ? _limits.payload_chunk_limit_bytes
                                  : protocol::relocationChunkBytes,
                                protocol::relocationChunkBytes);
+    state->effective_chunk_limit = apply_advertised_receive_chunk_limit (
+      state->effective_chunk_limit,
+      state->advertised_receive_chunk_limit_bytes);
     state->budget_reserved =
       std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
@@ -1507,7 +1516,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
   inventory_digest_t inventory_digest,
   const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
     &canonical_wire,
-  std::stop_token cancellation)
+  std::stop_token cancellation,
+  std::uint64_t advertised_receive_chunk_limit_bytes)
 {
     if (sources.size () < 2 || !canonical_wire || !_aggregate_authority) {
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
@@ -1533,11 +1543,16 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     auto state = std::make_shared<relocation_terminal_state_t> ();
     state->context = persisted_context;
+    state->advertised_receive_chunk_limit_bytes =
+      advertised_receive_chunk_limit_bytes;
     state->effective_chunk_limit =
       std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes
                                  ? _limits.payload_chunk_limit_bytes
                                  : protocol::relocationChunkBytes,
                                protocol::relocationChunkBytes);
+    state->effective_chunk_limit = apply_advertised_receive_chunk_limit (
+      state->effective_chunk_limit,
+      state->advertised_receive_chunk_limit_bytes);
     state->seal_attempt = seal_attempt;
     state->sealed_at = std::chrono::steady_clock::now ();
     state->pending_unit_token = begin_pending_relocation_unit ();
@@ -1648,6 +1663,15 @@ relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
 {
     std::lock_guard lock (_gate_mutex);
     return _gate;
+}
+
+std::uint64_t maintenance_runtime_t::apply_advertised_receive_chunk_limit (
+  std::uint64_t local_limit_bytes,
+  std::uint64_t advertised_receive_chunk_limit_bytes) noexcept
+{
+    if (advertised_receive_chunk_limit_bytes == 0)
+        return local_limit_bytes;
+    return std::min (local_limit_bytes, advertised_receive_chunk_limit_bytes);
 }
 
 std::uint32_t maintenance_runtime_t::crc32c (
