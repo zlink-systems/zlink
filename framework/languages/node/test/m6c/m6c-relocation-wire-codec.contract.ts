@@ -79,6 +79,40 @@ function sessionGolden(): readonly GoldenEntry[] {
   )) as { readonly canonical: readonly GoldenEntry[] }).canonical;
 }
 
+interface ActorJoinGoldenEntry {
+  readonly name: string;
+  readonly command: number;
+  readonly correlation: string;
+  readonly decoded: {
+    readonly joinResult: 'accepted' | 'rejected';
+    readonly spot?: { readonly spotId: string; readonly generation: string };
+    readonly membershipEpoch?: string;
+    readonly receiveChunkLimitBytes?: number;
+  };
+  readonly hex: string;
+}
+
+interface ActorJoinMalformedEntry {
+  readonly name: string;
+  readonly command: number;
+  readonly correlation: string;
+  readonly hex: string;
+  readonly error: string;
+}
+
+function actorJoinReplyGolden(): {
+  readonly canonical: readonly ActorJoinGoldenEntry[];
+  readonly malformed: readonly ActorJoinMalformedEntry[];
+} {
+  return JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/actor-join-reply-v1.json',
+    'utf8'
+  )) as {
+    readonly canonical: readonly ActorJoinGoldenEntry[];
+    readonly malformed: readonly ActorJoinMalformedEntry[];
+  };
+}
+
 function assertGoldenRoundTrip<T>(
   entry: GoldenEntry,
   expected: T,
@@ -306,6 +340,87 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     ...seal,
     senderRole: 'target'
   } as never), /sender role/);
+});
+
+test('actorJoin reply tail (command 20, actor-join-reply-tail) matches the shared golden vectors', () => {
+  const golden = actorJoinReplyGolden();
+
+  assert.deepEqual(golden.canonical.map(entry => entry.name), [
+    'actorJoinAcceptedTypical',
+    'actorJoinAcceptedAtRelocationChunkLimitBound',
+    'actorJoinAcceptedNotAdvertised',
+    'actorJoinRejectedWithSpot',
+    'actorJoinRejectedWithoutSpot'
+  ]);
+
+  for (const entry of golden.canonical) {
+    assert.equal(entry.command, 20, entry.name);
+    const correlation = BigInt(entry.correlation);
+    const encoded = Buffer.from(entry.hex, 'hex');
+    const decoded = decodeStatefulReply(encoded, correlation, 'actorJoin');
+    assert.equal(decoded.correlation, correlation, entry.name);
+    assert.equal(decoded.terminalResult, 0, entry.name);
+    assert.equal(decoded.failureCode, 0, entry.name);
+    assert.ok(decoded.tail && decoded.tail.kind === 'actorJoin', entry.name);
+    const tail = decoded.tail as {
+      readonly kind: 'actorJoin';
+      readonly joinResult: number;
+      readonly spot?: { readonly spotId: string; readonly generation: bigint };
+      readonly membershipEpoch?: bigint;
+      readonly receiveChunkLimitBytes?: number;
+    };
+    const expectedJoinResult = entry.decoded.joinResult === 'accepted' ? 0 : 1;
+    assert.equal(tail.joinResult, expectedJoinResult, entry.name);
+    if (entry.decoded.spot === undefined) {
+      assert.equal(tail.spot, undefined, entry.name);
+    } else {
+      assert.deepEqual(tail.spot, {
+        spotId: entry.decoded.spot.spotId,
+        generation: BigInt(entry.decoded.spot.generation)
+      }, entry.name);
+    }
+    if (entry.decoded.membershipEpoch !== undefined) {
+      assert.equal(tail.membershipEpoch, BigInt(entry.decoded.membershipEpoch), entry.name);
+    }
+    if (entry.decoded.receiveChunkLimitBytes !== undefined) {
+      assert.equal(tail.receiveChunkLimitBytes, entry.decoded.receiveChunkLimitBytes, entry.name);
+    }
+
+    // Round-trip: re-encoding the decoded value must reproduce the exact golden bytes.
+    const reencoded = encodeStatefulReply(
+      decoded.correlation,
+      decoded.terminalResult,
+      decoded.failureCode,
+      decoded.tail
+    );
+    assert.equal(reencoded.toString('hex'), entry.hex, entry.name);
+
+    // Truncating the frame by one byte must fail to decode.
+    assert.throws(
+      () => decodeStatefulReply(encoded.subarray(0, -1), correlation, 'actorJoin'),
+      Error,
+      entry.name
+    );
+
+    // Setting a forbidden flag must fail to decode.
+    const forbiddenFlag = Buffer.from(encoded);
+    forbiddenFlag[4] = 1;
+    assert.throws(
+      () => decodeStatefulReply(forbiddenFlag, correlation, 'actorJoin'),
+      Error,
+      entry.name
+    );
+  }
+
+  for (const entry of golden.malformed) {
+    assert.equal(entry.command, 20, entry.name);
+    const correlation = BigInt(entry.correlation);
+    assert.throws(
+      () => decodeStatefulReply(Buffer.from(entry.hex, 'hex'), correlation, 'actorJoin'),
+      Error,
+      entry.name
+    );
+  }
 });
 
 test('actorJoin accepted reply tail round-trips receiveChunkLimitBytes and ' +

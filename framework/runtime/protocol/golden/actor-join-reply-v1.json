@@ -1,0 +1,117 @@
+{
+  "format": "service-wire-v1 actor join reply tail (command 20, originalOperationKind actorJoin, type actor-join-reply-tail)",
+  "consumers": ["node"],
+  "notes": {
+    "receiveChunkLimitBytesBound": "actor-join-reply-tail's accepted-case receiveChunkLimitBytes field is declared as a plain u32 in the schema (service-wire-v1.schema.json:2279-2281), with no tighter bound on the field itself. The 67108864 bound used below is relocationStorageProfile.chunkDataMaximumBytes (service-wire-v1.schema.json:1336), the relocation state chunk-data ceiling every implementation reuses for this field (node RELOCATION_STATE_CHUNK_DATA_MAX_BYTES, cpp relocation_chunk_wire_limit_bytes, dotnet RelocationChunkBytesBound, java CHUNK_DATA_BYTES_BOUND — all 67_108_864). It is an application-level constraint layered on top of the wire type, not a schema-declared bound on the field.",
+    "nonzeroU64UpperBound": "nonzero-u64 fields (membershipEpoch, spot.generation) are declared with maximum 9223372036854775807 (int64 max) in the schema (service-wire-v1.schema.json:1652-1657). The node reader/writer (Reader.nonZeroU64, requirePositive in service-stateful-wire-codec.ts) only rejects zero and otherwise accepts the full uint64 range, so a value above int64 max would encode/decode without error on node today even though it exceeds the schema's declared maximum. No vector here exercises that value, to avoid asserting a rejection node does not perform; this is a known schema/node discrepancy, not something these fixtures paper over.",
+    "oldFormatTolerance": "node's decodeStatefulReply additionally tolerates an accepted-case body that ends right after membershipEpoch (omitting receiveChunkLimitBytes entirely), decoding it as receiveChunkLimitBytes=0 for compatibility with an unpatched encoder. The schema's accepted case requires all three fields with trailingBytes forbidden, so that shape is deliberately not included here (as canonical it would force the tolerance onto every consumer; as malformed it would fail node). It remains covered only by the node-specific unit test in m6c-relocation-wire-codec.contract.ts."
+  },
+  "canonical": [
+    {
+      "name": "actorJoinAcceptedTypical",
+      "command": 20,
+      "correlation": "42",
+      "decoded": {
+        "joinResult": "accepted",
+        "spot": { "spotId": "spot-1", "generation": "3" },
+        "membershipEpoch": "5",
+        "receiveChunkLimitBytes": 32768
+      },
+      "hex": "5a4d011400000000000000002a000000000000000000000000001b0673706f742d310000000000000003000000000000000500008000"
+    },
+    {
+      "name": "actorJoinAcceptedAtRelocationChunkLimitBound",
+      "command": 20,
+      "correlation": "9223372036854775807",
+      "decoded": {
+        "joinResult": "accepted",
+        "spot": { "spotId": "spot-max", "generation": "9223372036854775807" },
+        "membershipEpoch": "9223372036854775807",
+        "receiveChunkLimitBytes": 67108864
+      },
+      "hex": "5a4d0114007fffffffffffffff000000000000000000000000001d0873706f742d6d61787fffffffffffffff7fffffffffffffff04000000"
+    },
+    {
+      "name": "actorJoinAcceptedNotAdvertised",
+      "command": 20,
+      "correlation": "7",
+      "decoded": {
+        "joinResult": "accepted",
+        "spot": { "spotId": "spot-7", "generation": "1" },
+        "membershipEpoch": "1",
+        "receiveChunkLimitBytes": 0
+      },
+      "hex": "5a4d0114000000000000000007000000000000000000000000001b0673706f742d370000000000000001000000000000000100000000"
+    },
+    {
+      "name": "actorJoinRejectedWithSpot",
+      "command": 20,
+      "correlation": "8",
+      "decoded": {
+        "joinResult": "rejected",
+        "spot": { "spotId": "spot-2", "generation": "7" }
+      },
+      "hex": "5a4d0114000000000000000008000000000000000000000001001201000f0673706f742d320000000000000007"
+    },
+    {
+      "name": "actorJoinRejectedWithoutSpot",
+      "command": 20,
+      "correlation": "9",
+      "decoded": {
+        "joinResult": "rejected"
+      },
+      "hex": "5a4d01140000000000000000090000000000000000000000010003000000"
+    }
+  ],
+  "malformed": [
+    {
+      "name": "actorJoinAcceptedTruncatedReceiveChunkLimit",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011400000000000000002a000000000000000000000000001b0673706f742d3100000000000000030000000000000005000080",
+      "error": "truncated-field"
+    },
+    {
+      "name": "actorJoinAcceptedZeroMembershipEpoch",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011400000000000000002a000000000000000000000000001b0673706f742d310000000000000003000000000000000000008000",
+      "error": "invalid-field"
+    },
+    {
+      "name": "actorJoinInvalidJoinResultDiscriminant",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011400000000000000002a000000000000000000000002001b0673706f742d310000000000000003000000000000000500008000",
+      "error": "invalid-field"
+    },
+    {
+      "name": "actorJoinAcceptedReceiveChunkLimitExceedsBound",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011400000000000000002a000000000000000000000000001b0673706f742d310000000000000003000000000000000504000001",
+      "error": "invalid-field"
+    },
+    {
+      "name": "actorJoinAcceptedTrailingByte",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011400000000000000002a000000000000000000000000001b0673706f742d31000000000000000300000000000000050000800000",
+      "error": "trailing-byte"
+    },
+    {
+      "name": "actorJoinAcceptedForbiddenFlag",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011401000000000000002a000000000000000000000000001b0673706f742d310000000000000003000000000000000500008000",
+      "error": "forbidden-flag"
+    },
+    {
+      "name": "actorJoinAcceptedBodyLengthTooLarge",
+      "command": 20,
+      "correlation": "42",
+      "hex": "5a4d011400000000000000002a000000000000000000000000001f0673706f742d310000000000000003000000000000000500008000",
+      "error": "invalid-field"
+    }
+  ]
+}
