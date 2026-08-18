@@ -3,7 +3,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
@@ -53,6 +55,8 @@ import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec
 final class ZLinkUserSpotRetireTargetEndpoint
     implements ZLinkSpotRetireControl.TargetEndpoint,
         ZLinkInternalSpotNode.RelocationStagingIngressHandler {
+    private static final Logger LOGGER = Logger.getLogger(
+        ZLinkUserSpotRetireTargetEndpoint.class.getName());
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private static final ZLinkRelocationCancellation NOT_CANCELLED =
         () -> false;
@@ -443,6 +447,12 @@ final class ZLinkUserSpotRetireTargetEndpoint
         String contentType,
         Consumer<List<Message>> reply,
         Consumer<Throwable> failure) {
+        //  Only one relocation attempt can exist for a given standalone
+        //  Actor at a time (spec 15 §4.2 "같은 object의 relocation
+        //  temporary queue는 하나만 존재한다") — the registry evicts an
+        //  older exact identity, live stage included, before a newer one
+        //  is admitted or installed — so at most one candidate below can
+        //  ever match.
         ActorTargetStage standalone = actorStages.values().stream()
             .filter(candidate -> matchesSource(
                     candidate.request(), source)
@@ -454,6 +464,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
         if (standalone != null) {
             accepted = actorStaging.acceptIngress(
                 standalone.staged(), acceptedJournalRecord.get(), reply, failure);
+        } else if (actorJoin != null && tryRouteActorIngressToPrewarm(
+                header, acceptedJournalRecord, reply, failure)) {
+            //  No real stage installed yet, but a canonical Actor Join
+            //  admission already parked this arrival in the relocation
+            //  temporary queue (spec 15 §4.2) — PREPARE migrates it into
+            //  the real staged queue once it installs.
+            accepted = true;
         } else {
             TargetStage aggregate = stages.values().stream()
                 .filter(candidate -> matchesSource(
@@ -476,6 +493,32 @@ final class ZLinkUserSpotRetireTargetEndpoint
             parts.forEach(Message::close);
         }
         return accepted;
+    }
+
+    /**
+     * Routes one Actor ingress arrival through the canonical Actor Join
+     * prewarm registry (spec 15 §4.2) when no real stage is installed in
+     * {@link #actorStages} yet. Delivers straight into the real stage if
+     * PREPARE raced ahead and installed one between the caller's
+     * {@code actorStages} lookup and this call, parks the arrival in the
+     * relocation temporary queue if only the admission-time placeholder
+     * exists, or returns {@code false} if no attempt exists for the
+     * object at all. Only ActorId + ObjectGeneration are known at
+     * admission time — the full source/authority fence is not verified
+     * against a parked or racing-delivery arrival, matching what the
+     * spec's prewarm phase itself has available.
+     */
+    private boolean tryRouteActorIngressToPrewarm(
+        ZLinkServiceM6BWireCodec.ActorMessage header,
+        Supplier<byte[]> acceptedJournalRecord,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        var actor = header.target().actor();
+        var message = new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+            acceptedJournalRecord.get(), reply, failure);
+        var route = actorJoin.routeIngress(
+            actor.actorId(), actor.generation(), message);
+        return route != ZLinkActorJoinPrewarmRegistry.IngressRoute.NOT_FOUND;
     }
 
     private static boolean matchesSpotIngress(
@@ -942,22 +985,23 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 ? null
                 : actorJoin.findAdmission(request).orElse(null);
         if (directAdmission != null) {
-            //  Reuse the prewarm registered at admission time instead of
-            //  repeating registration (spec 15 §4.2). The real Staged
-            //  temporary queue this PREPARE builds below takes over from
-            //  here, so the placeholder prewarm is consumed exactly once.
+            //  Verify the object identity against the attempt registered
+            //  at admission time. The atomic install-and-migrate happens
+            //  below in stageStandaloneActor once the real Staged
+            //  temporary queue exists (spec 15 §4.2) — the placeholder is
+            //  not released here, so ingress keeps a place to park or
+            //  deliver arrivals for the entire span of this async stage.
             actorJoin.findPrewarm(request.fence().aggregateId())
-                .ifPresent(prewarmed -> {
-                    if (!prewarmed.objectKey().actorId().equals(
+                .ifPresent(attempt -> {
+                    if (!attempt.objectKey().actorId().equals(
                             participant.objectId())
-                        || prewarmed.objectKey().objectGeneration()
+                        || attempt.objectKey().objectGeneration()
                             != participant.objectGeneration()) {
                         throw new IllegalStateException(
                             "canonical Actor Join prewarm object identity "
                                 + "conflicts");
                     }
                 });
-            actorJoin.releasePrewarm(request.fence().aggregateId());
         }
         CompletionStage<ZLinkActorJoinCanonicalAdapter.PreviousMembership>
             previous = directAdmission == null
@@ -1165,6 +1209,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return actorStaging.discard(target.staged())
             .thenRun(() -> {
                 actorStages.remove(request.fence(), target);
+                if (target.directAdmission() != null) {
+                    //  Release the registry attempt so a later admission
+                    //  for the same object does not try to abort an
+                    //  already-discarded stage, and so its parked queue
+                    //  (empty by now — migration already drained it) is
+                    //  not left registered forever.
+                    actorJoin.releasePrewarm(request.fence().aggregateId());
+                }
             });
     }
 
@@ -1246,6 +1298,57 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         : request.sessionRoutes().getFirst()),
                     directAdmission,
                     previousMembership);
+                if (directAdmission == null) {
+                    if (actorStages.putIfAbsent(request.fence(), target)
+                        == null) {
+                        return CompletableFuture.<Void>completedFuture(null);
+                    }
+                    return actorStaging.discard(staged).thenCompose(ignored ->
+                        CompletableFuture.<Void>failedFuture(
+                            new IllegalStateException(
+                                "standalone Actor target stage already "
+                                    + "exists")));
+                }
+                //  Atomic transition (spec 15 §4.2): install the real
+                //  stage, migrate every arrival parked since Accepted
+                //  into it in order, then the placeholder attempt is
+                //  live — all under the prewarm registry's monitor, so
+                //  ingress never observes a window where the object is
+                //  neither parkable nor deliverable. Throws if a newer
+                //  exact identity for the same object already evicted
+                //  this attempt (spec 15 §4.2 "이전 identity의 늦은 chunk와
+                //  Restore는 조립에 연결하지 않고 폐기한다").
+                UUID relocationId = request.fence().aggregateId();
+                try {
+                    actorJoin.completeMigration(
+                        relocationId,
+                        parked -> actorStaging.acceptIngress(
+                            target.staged(),
+                            parked.record(),
+                            parked.reply(),
+                            parked.failure()),
+                        () -> {
+                            //  Newer exact identity evicted this attempt
+                            //  before publish committed: tear the
+                            //  installed (not yet published) stage down.
+                            //  Never block on the discard here — the
+                            //  registry monitor must stay non-blocking.
+                            if (actorStages.remove(request.fence(), target)) {
+                                actorStaging.discard(target.staged())
+                                    .exceptionally(failure -> {
+                                        LOGGER.warning(
+                                            "Actor Join newest-wins "
+                                                + "eviction failed to "
+                                                + "discard the displaced "
+                                                + "stage: " + failure);
+                                        return null;
+                                    });
+                            }
+                        });
+                } catch (IllegalStateException evicted) {
+                    return actorStaging.discard(staged).thenCompose(ignored ->
+                        CompletableFuture.<Void>failedFuture(evicted));
+                }
                 if (actorStages.putIfAbsent(request.fence(), target) == null) {
                     return CompletableFuture.<Void>completedFuture(null);
                 }

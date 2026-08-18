@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -213,7 +214,7 @@ final class ZLinkActorJoinCanonicalAdapter
             //  Register the relocation temporary queue and validate the
             //  factory for this object before Accepted returns to the
             //  source (spec 15 §4.2). A different RelocationId already
-            //  prewarmed for the same object is aborted first — newest
+            //  attempted the same object is evicted first — newest
             //  attempt wins (spec 15 §4.2 "같은 object의 relocation
             //  temporary queue는 하나만 존재한다").
             prewarm.register(
@@ -244,21 +245,52 @@ final class ZLinkActorJoinCanonicalAdapter
     }
 
     /**
-     * Looks up the prewarm registered at admission time so PREPARE
-     * (Restore) can reuse it instead of repeating registration (spec 15
-     * §4.2). Callers must still verify the object identity
-     * (ActorId + ObjectGeneration) matches before reuse.
+     * Looks up the attempt registered at admission time so PREPARE
+     * (Restore) can verify the object identity
+     * (ActorId + ObjectGeneration) before installing the real stage.
      */
-    Optional<ZLinkActorJoinPrewarmRegistry.Prewarm> findPrewarm(
+    Optional<ZLinkActorJoinPrewarmRegistry.Attempt> findPrewarm(
         UUID relocationId) {
         return prewarm.find(relocationId);
     }
 
     /**
-     * Releases the prewarm reserved at admission time. Callers use this
-     * once the prewarm has been consumed into the real staged Actor
-     * (normal PREPARE handling) or when the move is aborted for any
-     * other reason.
+     * Production ingress lookup (spec 15 §4.2): delivers straight into
+     * the real stage if PREPARE already installed one for this object,
+     * parks the arrival if only the admission-time placeholder exists,
+     * or reports not-found so the caller can fall through to other
+     * ingress handling.
+     */
+    ZLinkActorJoinPrewarmRegistry.IngressRoute routeIngress(
+        String actorId,
+        long objectGeneration,
+        ZLinkActorJoinPrewarmRegistry.ParkedMessage message) {
+        return prewarm.parkOrDeliver(actorId, objectGeneration, message);
+    }
+
+    /**
+     * Installs the real stage PREPARE produced and atomically migrates
+     * every arrival parked since admission into it, in order (spec 15
+     * §4.2). {@code liveAbort} tears the installed stage down if a newer
+     * exact identity for the same object evicts this attempt before
+     * publish commits.
+     *
+     * @throws IllegalStateException if this identity was evicted before
+     *     PREPARE reached this call — the late PREPARE for a dead
+     *     identity must be discarded, not installed.
+     */
+    void completeMigration(
+        UUID relocationId,
+        Consumer<ZLinkActorJoinPrewarmRegistry.ParkedMessage> deliver,
+        Runnable liveAbort) {
+        prewarm.completeMigration(relocationId, deliver, liveAbort);
+    }
+
+    /**
+     * Releases the attempt reserved at admission time. Callers use this
+     * once it has been consumed into the real staged Actor (normal
+     * PREPARE handling), when PREPARE is aborted, or for any other
+     * cleanup of the admission-time reservation.
      */
     void releasePrewarm(UUID relocationId) {
         prewarm.release(relocationId);
