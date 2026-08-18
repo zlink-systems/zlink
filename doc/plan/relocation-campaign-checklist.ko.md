@@ -112,7 +112,9 @@
       hashtag 리터럴 유지** — golden이 오독으로 brace-less 고정했던 것 정정
       `8a3804a110`. **java 슬라이스 1차 `326833810b`**(base64 제거=Lettuce codec
       문제였음·0x01 태그·PSETEX blob·프로덕션 encode conformance, 모듈 그린).
-      dotnet/node/cpp 슬라이스 에이전트 진행 중.
+      **node 1차 `eb3d74f6cc`**(키·opaque 로그·blob; envelope·시퀀스는 C-4b),
+      **cpp 완료 `e14bce0297`**(전면 재작성+hex→base64+encode 검증, location 7/7,
+      live redis 실키 확인). dotnet 슬라이스 게이트 대기 중.
 - [ ] C-4b node 마감: ① canonical JSON envelope 전환(값이 아직 구 필드 형태 —
       키는 맞으나 타 언어가 파싱 불가, location-store-repository.ts 3591줄 CAS 재작성),
       ② objectGeneration을 identity별 카운터→store 전역 시퀀스로(reserve() ~:965 —
