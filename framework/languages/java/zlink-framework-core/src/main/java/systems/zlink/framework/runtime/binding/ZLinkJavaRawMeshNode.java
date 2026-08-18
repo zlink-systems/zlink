@@ -5872,10 +5872,25 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             String expectedEndpoint = observed == null
                 ? expected == null ? null : expected.endpoint()
                 : observed.endpoint();
+            // No configured PeerIntent means this is an unconfigured inbound
+            // admission (a listen-only server accepting any client) -- fall
+            // back to "no constraint" (null), symmetric with expectedEndpoint
+            // and expectedLifecycleGeneration just above. The previous
+            // fallback compared the raw ZMTP transport identity
+            // (inbound.source()) against the peer's advertised
+            // securityIdentity, a field that is not the peer's routing id but
+            // a plaintext-transport placeholder ("default" -- see the .NET
+            // ZLinkServiceSecurityIdentity.Plaintext / ZLinkManagedMeshNode's
+            // matching unconfigured-inbound fallback). Those two values only
+            // ever coincided for Java-to-Java peers, where both ends happen
+            // to set their ZMTP identity to their own routing id string; a
+            // C++ (or any non-Java) peer connecting to an unconfigured Java
+            // RouteMesh listener therefore always failed this check and was
+            // immediately disconnected on every single admission attempt.
             String expectedSecurityIdentity =
                 observed == null
                 ? expected == null
-                    ? inbound.source().toString()
+                    ? null
                     : expected.expectedSecurityIdentity()
                 : observed.securityIdentity();
             long expectedLifecycleGeneration =

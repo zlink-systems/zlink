@@ -421,7 +421,15 @@ public final class ZLinkMeshApplicationDispatcher
         ChannelRequestHandlerRegistration channel = namespace.channelRequests.get(packetName);
         if ((token == null && !record.canReply())
             || (route == null && channel == null)) {
-            reject(record, "MeshNode request handler is not registered: " + packetName, claim);
+            // Mirrors the one-way TARGET_NOT_FOUND convention just above
+            // (submitLocalNodeSend) and every other cross-language host's
+            // route-mesh reply for an unregistered request handler: NOT_FOUND,
+            // not the reject(...) overload's INTERNAL_FAILURE default.
+            reject(
+                record,
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                "MeshNode request handler is not registered: " + packetName,
+                claim);
             return;
         }
         traceFlow(
@@ -501,6 +509,21 @@ public final class ZLinkMeshApplicationDispatcher
         }
     }
 
+    private void reject(
+        ZLinkMeshDispatchRecord record,
+        ZLinkFrameworkErrorKind kind,
+        String message,
+        ZLinkMeshDrainCoordinator.Claim claim) {
+        ReplyToken token = record.receive().replyToken();
+        try {
+            if (token != null || record.canReply()) {
+                replyError(record, token, kind, message);
+            }
+        } finally {
+            closeRecord(record, claim);
+        }
+    }
+
     private static void closeRecord(
         ZLinkMeshDispatchRecord record,
         ZLinkMeshDrainCoordinator.Claim claim) {
@@ -522,6 +545,14 @@ public final class ZLinkMeshApplicationDispatcher
         ReplyToken token,
         String message) {
         replyAndClose(record, token, ZLinkFrameworkErrorReply.create(message));
+    }
+
+    private void replyError(
+        ZLinkMeshDispatchRecord record,
+        ReplyToken token,
+        ZLinkFrameworkErrorKind kind,
+        String message) {
+        replyAndClose(record, token, ZLinkFrameworkErrorReply.create(kind, message));
     }
 
     private void replyError(
