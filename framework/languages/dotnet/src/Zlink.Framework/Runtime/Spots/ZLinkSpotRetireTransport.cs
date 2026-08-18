@@ -280,6 +280,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 checked((ulong)transferPayload.TotalLength),
                 checked((uint)transferPayload.ChunkCount),
                 transferPayload.ChecksumCrc32c,
+                0,
                 checked((ulong)registration.ApplicationVersion));
             _ = await canonical.PrepareCanonicalRelocationAsync(
                     reservation.TargetDescriptor.Rid,

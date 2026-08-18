@@ -51,6 +51,10 @@ public sealed class RuntimeMetricsTests
             ["zlink.relocation.bytes"] = (typeof(Histogram<>), "By"),
             ["zlink.relocation.interruption"] =
                 (typeof(Histogram<>), "s"),
+            ["zlink.relocation.target_resume"] = (typeof(Histogram<>), "s"),
+            ["zlink.relocation.route_convergence"] = (typeof(Histogram<>), "s"),
+            ["zlink.relocation.cutover_timeout"] =
+                (typeof(Counter<>), "{fallback}"),
             ["zlink.instance_spot.activations"] = (typeof(Counter<>), "{activation}"),
             ["zlink.instance_spot.activation.duration"] = (typeof(Histogram<>), "s"),
             ["zlink.instance_spot.pending.messages"] = (typeof(ObservableGauge<>), "{message}"),

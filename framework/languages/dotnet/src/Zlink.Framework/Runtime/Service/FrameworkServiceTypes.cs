@@ -326,6 +326,10 @@ internal interface ICanonicalRelocationTarget
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId authenticatedSourceNodeRid);
 
+    void ReadySubmissionFailed(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        RoutingId authenticatedSourceNodeRid);
+
     ValueTask AbortPreparedAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId authenticatedSourceNodeRid);

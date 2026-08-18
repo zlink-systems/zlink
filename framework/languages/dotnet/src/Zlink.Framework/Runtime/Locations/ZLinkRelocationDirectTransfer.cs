@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -12,6 +13,9 @@ namespace Zlink.Framework.Runtime.Locations;
 /// </summary>
 internal sealed class ZLinkRelocationTransferPayload
 {
+    private const uint EnvelopeMagic = 0x5a4c4452; // ZLDR
+    private const byte EnvelopeVersion = 1;
+    private const int InventoryDigestBytes = 32;
     private readonly byte[] _encoded;
 
     private ZLinkRelocationTransferPayload(byte[] encoded, int chunkBytes)
@@ -46,9 +50,7 @@ internal sealed class ZLinkRelocationTransferPayload
         ArgumentNullException.ThrowIfNull(envelope);
         if (effectiveChunkLimit <= 0)
             throw new ArgumentOutOfRangeException(nameof(effectiveChunkLimit));
-        using var stream = new MemoryStream();
-        ZLinkRelocationEnvelopeCodec.EncodeTo(stream, envelope);
-        var encoded = stream.ToArray();
+        var encoded = EncodeEnvelope(envelope);
         if (encoded.LongLength == 0)
             throw new InvalidOperationException(
                 "The relocation logical stream is empty.");
@@ -66,6 +68,48 @@ internal sealed class ZLinkRelocationTransferPayload
         return new ZLinkRelocationTransferPayload(
             encoded,
             checked((int)chunkBytes));
+    }
+
+    internal static ZLinkRelocationEnvelope DecodeEnvelope(
+        ReadOnlyMemory<byte> encoded)
+    {
+        if (encoded.Length < sizeof(uint) + 1 + InventoryDigestBytes)
+            throw new ZLinkRelocationDataLostException(
+                "The direct relocation envelope is truncated.");
+        var bytes = encoded.Span;
+        if (BinaryPrimitives.ReadUInt32BigEndian(bytes) != EnvelopeMagic
+            || bytes[sizeof(uint)] != EnvelopeVersion)
+            throw new ZLinkRelocationDataLostException(
+                "The direct relocation envelope framing is invalid.");
+        var digest = bytes.Slice(sizeof(uint) + 1, InventoryDigestBytes)
+            .ToArray();
+        var logical = bytes.Slice(sizeof(uint) + 1 + InventoryDigestBytes)
+            .ToArray();
+        if (logical.Length == 0)
+            throw new ZLinkRelocationDataLostException(
+                "The direct relocation envelope logical stream is empty.");
+        using var stream = new MemoryStream(logical, writable: false);
+        return ZLinkRelocationEnvelopeCodec.Decode(stream, digest);
+    }
+
+    private static byte[] EncodeEnvelope(ZLinkRelocationEnvelope envelope)
+    {
+        if (envelope.InventoryDigest.Length != InventoryDigestBytes)
+            throw new ArgumentOutOfRangeException(nameof(envelope));
+        using var logical = new MemoryStream();
+        ZLinkRelocationEnvelopeCodec.EncodeTo(logical, envelope);
+        if (logical.Length == 0)
+            throw new InvalidOperationException(
+                "The relocation logical stream is empty.");
+        var encoded = new byte[checked(
+            sizeof(uint) + 1 + InventoryDigestBytes + logical.Length)];
+        BinaryPrimitives.WriteUInt32BigEndian(encoded, EnvelopeMagic);
+        encoded[sizeof(uint)] = EnvelopeVersion;
+        envelope.InventoryDigest.Span.CopyTo(
+            encoded.AsSpan(sizeof(uint) + 1, InventoryDigestBytes));
+        logical.GetBuffer().AsSpan(0, checked((int)logical.Length)).CopyTo(
+            encoded.AsSpan(sizeof(uint) + 1 + InventoryDigestBytes));
+        return encoded;
     }
 
     internal ReadOnlyMemory<byte> Chunk(int ordinal)
@@ -184,7 +228,7 @@ internal sealed class ZLinkRelocationChunkAssembler
             if (ZLinkCrc32C.Compute(_buffer) != ChecksumCrc32c)
                 throw new ZLinkRelocationDataLostException(
                     "The relocation payload checksum does not match its manifest.");
-            return ZLinkRelocationEnvelopeCodec.Decode(_buffer);
+            return ZLinkRelocationTransferPayload.DecodeEnvelope(_buffer);
         }
     }
 }

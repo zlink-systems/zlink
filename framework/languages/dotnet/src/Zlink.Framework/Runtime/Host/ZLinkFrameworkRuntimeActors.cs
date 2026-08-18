@@ -965,6 +965,85 @@ internal sealed partial class ZLinkFrameworkRuntime
             CreateCanonicalRoutedActorCompletion(request, spotId, recovery),
             cancellationToken);
 
+    // Direct relocation has already verified and consumed its canonical
+    // payload at the target, so it intentionally has no Relocation Store
+    // reference to hand to the store-backed completion command above. The
+    // owner CAS remains the visibility boundary; continue with the same
+    // post-commit actor completion, replay and session-route sequence.
+    internal async ValueTask CompleteDirectCanonicalRoutedActorJoinAsync(
+        string spotId,
+        ZLinkActorRuntimeState actorState,
+        ZLinkRemoteActorJoinRequest request,
+        ZLinkActorRelocationRecoveryRecord recovery,
+        string targetMeshName,
+        CancellationToken cancellationToken)
+    {
+        var completion = CreateCanonicalRoutedActorCompletion(
+            request,
+            spotId,
+            recovery);
+        if (!_actorHandoffAdmissions.TryBeginCompletion(completion, spotId))
+            return;
+
+        try
+        {
+            // The target must be fully ready before the transferred Actor sees
+            // its public Join terminal. In particular, the callback can issue
+            // traffic immediately; delivering it before replay completion and
+            // the target-side admission/session handoff leaves that traffic
+            // behind the relocation seal.
+            await actorState.Handoff.WaitForTargetReplayCompletionAsync(
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await FinishRelocationTargetAsync(
+                    actorState,
+                    targetMeshName,
+                    request.HandoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (recovery.OperationIdHigh != 0
+                || recovery.OperationIdLow != 0)
+            {
+                var actor = actorState.Actor
+                            ?? throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.NotFound,
+                                $"Actor '{request.ActorId}' has no transferred instance for Join completion.");
+                var currentRef = actorState.NativeActorRef
+                                 ?? throw new ZLinkFrameworkException(
+                                     ZLinkFrameworkErrorKind.NotFound,
+                                     $"Actor '{request.ActorId}' has no current reference for Join completion.");
+                var reply = recovery.Reply.Length != 0
+                            && recovery.ReplyContentType is { } contentType
+                    ? ZLinkMessage.FromEncoded(
+                        contentType,
+                        recovery.Reply,
+                        Registration.Codecs)
+                    : null;
+                await actorState.ExecuteRelocationCompletionAsync(
+                        currentRef.Generation,
+                        token => actor.OnJoinCompletedAsync(
+                            new ZLinkActorJoinCompletion.Accepted(
+                                new ZLinkActorJoinOperationId(
+                                    recovery.OperationIdHigh,
+                                    recovery.OperationIdLow),
+                                currentRef.ToNative(targetMeshName),
+                                reply),
+                            token),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            actorState.Handoff.Complete(request.HandoffId);
+            _actorHandoffAdmissions.RecordCompletion(completion, spotId);
+            _actorHandoffAdmissions.Complete(request.HandoffId);
+        }
+        catch (Exception completionFailure)
+        {
+            _actorHandoffAdmissions.CancelCompletion(completion, spotId);
+            ExceptionDispatchInfo.Capture(completionFailure).Throw();
+            throw;
+        }
+    }
+
     internal async ValueTask AbortCanonicalRoutedActorJoinTargetAsync(
         string spotId,
         ZLinkActorRuntimeState actorState,
@@ -2375,7 +2454,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                             result.Reply,
                             Registration.Codecs,
                             request.DeadlineUnixTimeMilliseconds,
-                            reservation);
+                            reservation,
+                            ZLinkRemoteActorJoinPackets
+                                .ConservativeReceiveChunkLimitBytes);
                     },
                 cancellationToken)
             .ConfigureAwait(false);

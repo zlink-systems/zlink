@@ -934,7 +934,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkMeshNodeDescriptor target,
         ZLinkRelocationEnvelope envelope,
         ZLinkRelocationTransferPayload payload,
-        long applicationVersion)
+        long applicationVersion,
+        uint baseChecksumCrc32c = 0)
     {
         var relocationId = ToWireId(envelope.AggregateId);
         return new ZLinkServiceWireCodec.RelocationPrepareRecord(
@@ -963,6 +964,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             checked((ulong)payload.TotalLength),
             checked((uint)payload.ChunkCount),
             payload.ChecksumCrc32c,
+            baseChecksumCrc32c,
             checked((ulong)applicationVersion));
     }
 
@@ -1152,12 +1154,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     RemoveTargetStage(key, lease.Slot, stage);
                     return;
                 }
-                await AdvanceRemoteJoinTargetActivatedAsync(
+                await CompleteDirectRemoteJoinTargetAsync(
                         stage,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                await runtime.CompleteCanonicalRoutedActorJoinAsync(
-                        remoteJoinRecovery.TargetSpotId,
                         remoteJoinRequest,
                         remoteJoinRecovery,
                         cancellationToken)
@@ -1204,6 +1202,26 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 return false;
             stage.ValidateRetry(prepare, authenticatedSourceNodeRid);
             return stage.TryMarkReadySubmitted(
+                () => ReferenceEquals(lease.Slot.Stage, stage));
+        }
+    }
+
+    internal bool MarkTargetReadySubmissionFailed(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        RoutingId authenticatedSourceNodeRid)
+    {
+        var key = new AttemptKey(
+            prepare.RelocationId.High,
+            prepare.RelocationId.Low,
+            prepare.TargetAttemptGeneration);
+        if (!TryAcquireTargetAttempt(key, out var lease))
+            return false;
+        using (lease)
+        {
+            if (lease.Slot.Stage is not { } stage)
+                return false;
+            stage.ValidateRetry(prepare, authenticatedSourceNodeRid);
+            return stage.TryMarkReadySubmissionFailed(
                 () => ReferenceEquals(lease.Slot.Stage, stage));
         }
     }
@@ -1984,6 +2002,34 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 "Actor Join target activation phase is not recoverable.");
     }
 
+    // Direct transfer owns its verified payload in memory; unlike recovery it
+    // has no Relocation Store reference to advance. Start the canonical replay
+    // locally before asking the Runtime helper to wait for its terminal, then
+    // finish the target route and deliver the public Join completion.
+    private async ValueTask CompleteDirectRemoteJoinTargetAsync(
+        TargetStage stage,
+        ZLinkRemoteActorJoinRequest request,
+        ZLinkActorRelocationRecoveryRecord recovery,
+        CancellationToken cancellationToken)
+    {
+        await runtime.ActivateStandaloneActorRelocationTargetAsync(
+                stage.ActorState,
+                stage.TargetAuthority,
+                stage.Prepare.TargetAttemptGeneration,
+                stage.Envelope,
+                request.HandoffId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await runtime.CompleteDirectCanonicalRoutedActorJoinAsync(
+                recovery.TargetSpotId,
+                stage.ActorState,
+                request,
+                recovery,
+                stage.TargetAuthority.MeshName,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     internal async ValueTask ActivatePublishedTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         CancellationToken cancellationToken)
@@ -2761,6 +2807,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     throw DataLost(
                         "Standalone Actor READY submission has no prepared owner.");
                 _readySubmissionPhase = TargetReadySubmissionPhase.Submitted;
+                return true;
+            }
+        }
+
+        internal bool TryMarkReadySubmissionFailed(Func<bool> isCurrent)
+        {
+            lock (_readySubmissionGate)
+            {
+                if (!isCurrent()
+                    || _readySubmissionPhase != TargetReadySubmissionPhase.Pending)
+                    return false;
+                _readySubmissionPhase = TargetReadySubmissionPhase.None;
                 return true;
             }
         }

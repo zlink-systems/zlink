@@ -55,6 +55,26 @@ public sealed class ServiceWireRelocationCodecTests
                 24,
                 2,
                 0x29BC8795,
+                0,
+                1),
+            ZLinkServiceWireCodec.EncodeRelocationPrepare,
+            ZLinkServiceWireCodec.TryDecodeRelocationPrepare);
+
+        AssertGoldenRoundTrip(
+            "relocationPrepareRestoreWithBase",
+            new ZLinkServiceWireCodec.RelocationPrepareRecord(
+                relocation,
+                6,
+                coordinator,
+                target,
+                1,
+                objectRecord,
+                RoutingId.From("node-a"),
+                11,
+                24,
+                2,
+                0x29BC8795,
+                0x6E3E3B64,
                 1),
             ZLinkServiceWireCodec.EncodeRelocationPrepare,
             ZLinkServiceWireCodec.TryDecodeRelocationPrepare);
@@ -67,10 +87,17 @@ public sealed class ServiceWireRelocationCodecTests
         var coordinator = Coordinator();
         var objectRecord = Object();
 
-        foreach (var (name, ordinal, dataLength, firstByte) in new[]
+        foreach (var (name, stage, ordinal, dataLength, firstByte) in new[]
                  {
-                     ("relocationStateChunk", 0u, 16, (byte)0x00),
-                     ("relocationStateFinalChunk", 1u, 8, (byte)0x10)
+                     ("relocationStateBaseChunk",
+                         ZLinkServiceWireCodec.PayloadStageBase, 0u, 12,
+                         (byte)'b'),
+                     ("relocationStateChunk",
+                         ZLinkServiceWireCodec.PayloadStageFinal, 0u, 16,
+                         (byte)0x00),
+                     ("relocationStateFinalChunk",
+                         ZLinkServiceWireCodec.PayloadStageFinal, 1u, 8,
+                         (byte)0x10)
                  })
         {
             var golden = ReadRelocationControlGolden(name);
@@ -82,6 +109,7 @@ public sealed class ServiceWireRelocationCodecTests
             Assert.Equal(coordinator, decoded.Coordinator);
             Assert.Equal(1, decoded.SenderRole);
             Assert.Equal(objectRecord, decoded.Object);
+            Assert.Equal(stage, decoded.PayloadStage);
             Assert.Equal(ordinal, decoded.ChunkOrdinal);
             Assert.Equal(dataLength, decoded.ChunkData.Length);
             Assert.Equal(firstByte, decoded.ChunkData.Span[0]);
@@ -104,7 +132,9 @@ public sealed class ServiceWireRelocationCodecTests
                      ("relocationStateTruncatedChunkData",
                          ZLinkServiceWireCodec.DecodeError.TruncatedField),
                      ("relocationStateTrailingByte",
-                         ZLinkServiceWireCodec.DecodeError.TrailingByte)
+                         ZLinkServiceWireCodec.DecodeError.TrailingByte),
+                     ("relocationStateInvalidPayloadStage",
+                         ZLinkServiceWireCodec.DecodeError.InvalidField)
                  })
         {
             var malformed = ReadRelocationControlMalformed(name);
@@ -112,6 +142,30 @@ public sealed class ServiceWireRelocationCodecTests
                 malformed, out _, out var error));
             Assert.Equal(expected, error);
         }
+    }
+
+    [Fact]
+    public void Command_53_explicit_target_failure_round_trips_exact_fence()
+    {
+        var record = new ZLinkServiceWireCodec.RelocationFailedRecord(
+            new ZLinkServiceWireCodec.RelocationWireId(4, 5),
+            6,
+            Coordinator(),
+            Target(),
+            Object(),
+            2,
+            ServiceWireConstants.FrameworkErrorCode.RelocationDataLost);
+
+        var encoded = ZLinkServiceWireCodec.EncodeRelocationFailed(record);
+        Assert.Equal((byte)53, encoded[3]);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationFailed(
+            encoded, out var decoded, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(record, decoded);
+        encoded[^1] = 0;
+        Assert.False(ZLinkServiceWireCodec.TryDecodeRelocationFailed(
+            encoded, out _, out var invalid));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, invalid);
     }
 
     [Fact]
@@ -128,6 +182,18 @@ public sealed class ServiceWireRelocationCodecTests
                 "SenderRole"
             },
             PublicPropertyNames<ZLinkServiceWireCodec.RelocationReadyRecord>());
+        Assert.Equal(
+            new[]
+            {
+                "RelocationId",
+                "TargetAttemptGeneration",
+                "Coordinator",
+                "Target",
+                "Object",
+                "SenderRole",
+                "FailureCode"
+            },
+            PublicPropertyNames<ZLinkServiceWireCodec.RelocationFailedRecord>());
         Assert.Equal(
             new[]
             {
@@ -159,6 +225,7 @@ public sealed class ServiceWireRelocationCodecTests
                 "Coordinator",
                 "SenderRole",
                 "Object",
+                "PayloadStage",
                 "ChunkOrdinal",
                 "ChunkData"
             },
@@ -177,6 +244,7 @@ public sealed class ServiceWireRelocationCodecTests
                 "PayloadTotalLength",
                 "PayloadChunkCount",
                 "PayloadChecksumCrc32c",
+                "BaseChecksumCrc32c",
                 "ApplicationVersion"
             },
             PublicPropertyNames<ZLinkServiceWireCodec.RelocationPrepareRecord>());
@@ -241,6 +309,7 @@ public sealed class ServiceWireRelocationCodecTests
                 3, "Game.Instance", "instance-1", 9, 0),
             RoutingId.From("node-a"),
             11,
+            0,
             0,
             0,
             0,

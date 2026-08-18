@@ -700,17 +700,29 @@ public sealed class ActorRelocationProtocolTests
                 default,
                 ZLinkActorRemoteJoinRecoveryCodec.Encode(
                     recovery));
-        var wire = request with
+        var initialEnvelope = ZLinkRelocationTransferPayload.DecodeEnvelope(
+            ZLinkRelocationTransferPayload.Create(
+                ZLinkCanonicalActorRelocationWriter.CreateInitial(
+                    envelope,
+                    applicationVersion: 1),
+                effectiveChunkLimit: 1024).Encoded);
+        var matchingWire = request with
         {
-            RelocationAggregateGeneration = envelope.AggregateGeneration,
-            RelocationInventoryDigest = envelope.InventoryDigest.ToArray(),
+            RelocationAggregateGeneration = initialEnvelope.AggregateGeneration,
+            RelocationInventoryDigest = initialEnvelope.InventoryDigest.ToArray()
+        };
+        var loaded = ZLinkActorRelocationRoot.Load(matchingWire, initialEnvelope);
+        Assert.Equal("actor-1", loaded.Recovery.Request.ActorId);
+
+        var wire = matchingWire with
+        {
             TargetNodeRid =
                 RoutingId.From("other-target-node").ToBytes().ToArray()
         };
 
         var error = Assert.Throws<ZLinkFrameworkException>(() =>
         {
-            _ = ZLinkActorRelocationRoot.Load(wire, envelope);
+            _ = ZLinkActorRelocationRoot.Load(wire, initialEnvelope);
         });
 
         Assert.Equal(ZLinkFrameworkErrorKind.DataLost, error.Kind);
@@ -756,6 +768,98 @@ public sealed class ActorRelocationProtocolTests
         {
             ZLinkMessageParts.DisposeAll(parts);
         }
+    }
+
+    [Fact]
+    public void Admission_reply_round_trips_the_advertised_receive_chunk_limit()
+    {
+        var reply = new ZLinkRemoteActorAdmissionReply(
+            true,
+            ZLinkEnvelopeCodec.DefaultContentType,
+            [],
+            0,
+            "token",
+            0,
+            RoutingId.From("target-node").ToBytes().ToArray(),
+            1,
+            2,
+            3,
+            4,
+            ZLinkRemoteActorJoinPackets.ConservativeReceiveChunkLimitBytes);
+        var parts = ZLinkSpotReplyEnvelope.EncodeResponseParts(
+            "router",
+            ZLinkRemoteActorJoinPackets.AdmissionPacketName,
+            "correlation-1",
+            reply,
+            typeof(ZLinkRemoteActorAdmissionReply));
+        try
+        {
+            var decoded = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(
+                parts,
+                "actor-1",
+                "target-spot");
+            Assert.Equal(
+                ZLinkRemoteActorJoinPackets.ConservativeReceiveChunkLimitBytes,
+                decoded.ReceiveChunkLimitBytes);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public void Admission_reply_missing_the_receive_chunk_limit_field_decodes_as_not_advertised()
+    {
+        //  Legacy wire shape (no ReceiveChunkLimitBytes property at all —
+        //  as an older peer without this field would emit) must decode
+        //  tolerantly to "not advertised" rather than fail.
+        var reply = new ZLinkRemoteActorAdmissionReply(
+            true,
+            ZLinkEnvelopeCodec.DefaultContentType,
+            [],
+            0,
+            "token",
+            0,
+            RoutingId.From("target-node").ToBytes().ToArray(),
+            1,
+            2,
+            3,
+            4);
+        var parts = ZLinkSpotReplyEnvelope.EncodeResponseParts(
+            "router",
+            ZLinkRemoteActorJoinPackets.AdmissionPacketName,
+            "correlation-2",
+            reply,
+            typeof(ZLinkRemoteActorAdmissionReply));
+        try
+        {
+            var decoded = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(
+                parts,
+                "actor-1",
+                "target-spot");
+            Assert.Equal(0UL, decoded.ReceiveChunkLimitBytes);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Theory]
+    [InlineData(256 * 1024, 0UL, 256 * 1024L)]
+    [InlineData(256 * 1024, 32_768UL, 32_768L)]
+    [InlineData(16_384, 32_768UL, 16_384L)]
+    public void Effective_direct_transfer_chunk_limit_takes_the_minimum(
+        long configuredChunkLimit,
+        ulong advertisedReceiveChunkLimitBytes,
+        long expected)
+    {
+        Assert.Equal(
+            expected,
+            ZLinkRemoteActorJoinPackets.EffectiveDirectTransferChunkLimit(
+                configuredChunkLimit,
+                advertisedReceiveChunkLimitBytes));
     }
 
     // The Framework route dispatcher receives a framework-owned record. It owns a

@@ -101,6 +101,18 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
         }
     }
 
+    public void ReadySubmissionFailed(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        RoutingId authenticatedSourceNodeRid)
+    {
+        ValidateAttempt(prepare, authenticatedSourceNodeRid);
+        if (ObjectKind(prepare.Object.Kind) == ZLinkPlacementObjectKind.Actor
+            && standaloneActorRuntime is not null)
+            _ = standaloneActorRuntime.MarkTargetReadySubmissionFailed(
+                prepare,
+                authenticatedSourceNodeRid);
+    }
+
     public ValueTask AbortPreparedAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId authenticatedSourceNodeRid)

@@ -18,6 +18,24 @@ internal static class ZLinkRemoteActorJoinPackets
     private const long FrameworkMetadataUpperBound = 64L * 1024;
     private const long AcceptedJournalUpperBound = 16L * 1024 * 1024;
 
+    //  Spec 28 direct transfer: conservative receive-chunk-limit advertised
+    //  by a target admission accept. 0 (default) means not advertised — the
+    //  source then falls back to its own RelocationPayloadChunkLimit only.
+    internal const ulong ConservativeReceiveChunkLimitBytes = 32_768;
+
+    //  Spec 28 direct transfer chunk sizing: the source clamps to the
+    //  smaller of its own configured limit and the target's advertised
+    //  receive-chunk-limit. 0 (not advertised) is tolerated as unlimited —
+    //  the source falls back to its own configured limit only.
+    internal static long EffectiveDirectTransferChunkLimit(
+        long configuredChunkLimit,
+        ulong advertisedReceiveChunkLimitBytes) =>
+        advertisedReceiveChunkLimitBytes > 0
+            ? Math.Min(
+                configuredChunkLimit,
+                checked((long)advertisedReceiveChunkLimitBytes))
+            : configuredChunkLimit;
+
     public static IReadOnlyList<Message> EncodeAdmissionRequest(
         ZLinkEnvelopeHeader header,
         string actorId,
@@ -461,7 +479,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkMessage? reply,
         ZLinkCodecRegistryBuilder codecs,
         long deadlineUnixTimeMilliseconds = 0,
-        ZLinkActorRelocationReservation? reservation = null)
+        ZLinkActorRelocationReservation? reservation = null,
+        ulong receiveChunkLimitBytes = 0)
     {
         var replyContentType = ZLinkEnvelopeCodec.DefaultContentType;
         Message? encodedReply = null;
@@ -485,7 +504,8 @@ internal static class ZLinkRemoteActorJoinPackets
                 reservation?.TargetNodeGeneration ?? 0,
                 reservation?.TargetSpotGeneration ?? 0,
                 reservation?.TargetAuthorityOwnerGeneration ?? 0,
-                reservation?.TargetSpotAuthorityOwnerGeneration ?? 0);
+                reservation?.TargetSpotAuthorityOwnerGeneration ?? 0,
+                receiveChunkLimitBytes);
         }
     }
 
@@ -608,7 +628,8 @@ internal sealed record ZLinkRemoteActorAdmissionReply(
     ulong TargetNodeGeneration = 0,
     ulong TargetSpotGeneration = 0,
     ulong TargetAuthorityOwnerGeneration = 0,
-    ulong TargetSpotAuthorityOwnerGeneration = 0);
+    ulong TargetSpotAuthorityOwnerGeneration = 0,
+    ulong ReceiveChunkLimitBytes = 0);
 
 internal sealed record ZLinkRemoteActorAdmissionAbortRequest(
     string ActorId,
@@ -667,7 +688,8 @@ internal readonly record struct ZLinkActorRelocationReservation(
     ulong TargetNodeGeneration,
     ulong TargetSpotGeneration,
     ulong TargetAuthorityOwnerGeneration,
-    ulong TargetSpotAuthorityOwnerGeneration);
+    ulong TargetSpotAuthorityOwnerGeneration,
+    ulong ReceiveChunkLimitBytes = 0);
 
 internal sealed record ZLinkRemoteActorJoinReply(
     bool Accepted,

@@ -555,7 +555,8 @@ internal sealed class ZLinkActorRemoteJoiner(
             admissionReply.TargetNodeGeneration,
             admissionReply.TargetSpotGeneration,
             admissionReply.TargetAuthorityOwnerGeneration,
-            admissionReply.TargetSpotAuthorityOwnerGeneration);
+            admissionReply.TargetSpotAuthorityOwnerGeneration,
+            admissionReply.ReceiveChunkLimitBytes);
         setTargetReservation(new TargetAdmissionReservationRoute(
             actor.Context.ActorId,
             handoffId,
@@ -767,9 +768,16 @@ internal sealed class ZLinkActorRemoteJoiner(
         //  Direct transfer (spec 28 §4.2): the encoded envelope stays in
         //  source memory and is streamed as relocationState chunks — the
         //  Relocation Store holds no handoff payload.
+        //  Spec 28 direct transfer: clamp to the target's advertised
+        //  receive-chunk-limit in addition to this node's own configured
+        //  chunk limit.
+        var effectiveChunkLimit = ZLinkRemoteActorJoinPackets
+            .EffectiveDirectTransferChunkLimit(
+                registration.Locations.Options.RelocationPayloadChunkLimit,
+                targetReservation.ReceiveChunkLimitBytes);
         var transferPayload = ZLinkRelocationTransferPayload.Create(
             initialEnvelope,
-            registration.Locations.Options.RelocationPayloadChunkLimit);
+            effectiveChunkLimit);
         var prepared = new ZLinkPreparedRelocation(
             new ZLinkRelocationStored(
                 string.Empty,

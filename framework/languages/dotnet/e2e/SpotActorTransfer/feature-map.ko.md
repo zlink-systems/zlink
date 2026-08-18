@@ -14,6 +14,7 @@
 | ST-C1 | 구현 | target admission 뒤 source process 종료 시 transfer 실패와 복구를 검증한다. |
 | ST-C2 | 구현 | target commit 뒤 source process 종료 시 target actor가 유지됨을 검증한다. |
 | ST-C3 | 구현 | callback 실패와 transfer 실패의 public error 분류를 검증한다. |
+| ST-C4 | 미구현 | 직접 전송 payload checksum 불일치 시 target이 explicit relocationFailed로 종료하는지 검증하는 actual-process selector가 없다. |
 | ST-D1 | 구현 | target commit 전후 location row의 owner와 generation 전환 시점을 검증한다. |
 | ST-D2 | 구현 | stale source release가 새 generation location을 제거하지 못함을 검증한다. |
 | ST-E1B | 미구현 | Relocation mode별 binding route를 검증하는 actual-process selector가 없다. |

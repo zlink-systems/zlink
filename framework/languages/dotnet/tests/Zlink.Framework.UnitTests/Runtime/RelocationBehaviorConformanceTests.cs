@@ -584,15 +584,13 @@ public sealed class RelocationBehaviorConformanceTests
     }
 
     [Fact]
-    public async Task ActorJoin_target_ready_failure_rolls_back_before_exact_prepare_retry()
+    public async Task ActorJoin_target_ready_submit_failure_reuses_staging_on_exact_prepare_retry()
     {
         var trace = new RelocationBehaviorTrace();
         var transport = new CanonicalRelocationTransportProbe(
             trace,
             holdTargetReady: true,
-            failTargetReadyOnce: true,
-            holdTargetAbortRegistration: true,
-            holdRetriedTargetRollbackDestroy: true);
+            failTargetReadyOnce: true);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
             trace);
@@ -657,77 +655,24 @@ public sealed class RelocationBehaviorConformanceTests
             transport.ReleasePrepareCall.TrySetResult();
             await transport.TargetReadyFailureInjected.Task.WaitAsync(
                 TimeSpan.FromSeconds(3));
-            await transport.TargetAbortCallStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            var duplicate = transport.RetryPrepareAsync(
+            Assert.Equal(0, transport.TargetAbortCallCount);
+            Assert.False(trace.HasTargetAuthorityMutation);
+            var retry = transport.RetryPrepareAsync(
                     CancellationToken.None,
-                    TimeSpan.FromMilliseconds(500))
+                    TimeSpan.FromSeconds(3))
                 .AsTask();
-            await transport.DuplicateTargetPrepareRejected.Task.WaitAsync(
+            await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(
                 TimeSpan.FromSeconds(3));
-            var duplicateFailure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                async () => await duplicate);
-            await Task.Delay(TimeSpan.FromMilliseconds(1_100));
-            Assert.Equal(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                duplicateFailure.Kind);
-            Assert.Equal(1, transport.TargetAbortCallCount);
-            Assert.False(trace.HasTargetAuthorityMutation);
-            transport.ReleaseTargetAbortRegistration.TrySetResult();
-            await transport.TargetRollbackDestroyStarted.Task.WaitAsync(
+            transport.ReleaseTargetReadySend.TrySetResult();
+            _ = await retry.WaitAsync(TimeSpan.FromSeconds(3));
+            await transport.ReadyReplyReceived.Task.WaitAsync(
                 TimeSpan.FromSeconds(3));
-            await transport.TargetPrepareAborted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            Assert.False(trace.HasTargetAuthorityMutation);
-
-            var retryDuringCleanup = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                async () => await transport.RetryTargetPrepareAsync(
-                    CancellationToken.None));
-            Assert.Equal(
-                ZLinkFrameworkErrorKind.Unavailable,
-                retryDuringCleanup.Kind);
-            Assert.False(transport.TargetPreparedBeforeReadySend.Task.IsCompleted);
-
-            transport.ReleaseTargetRollbackDestroy.TrySetResult();
-            await transport.TargetRollbackDestroyCompleted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            await WaitUntilAsync(
-                () => !target.Runtime.TryGetCreatedActor(
-                    actorId,
-                    RelocationBehaviorHost.ActorType,
-                    out _));
-
-            using var retryDeadline = new CancellationTokenSource(
-                TimeSpan.FromSeconds(3));
-            _ = await RetryTargetPrepareAfterCleanupAsync(
-                transport,
-                retryDeadline.Token);
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.True(target.Runtime.TryGetCreatedActorState(
                 actorId,
                 RelocationBehaviorHost.ActorType,
                 out _));
-            await transport.AbortRetriedTargetPrepareAsync();
-            await transport.RetriedTargetRollbackDestroyStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            Assert.False(
-                transport.RetriedTargetRollbackDestroyCompleted.Task.IsCompleted);
-
-            var targetStop = target.Runtime
-                .StopAsync(CancellationToken.None)
-                .AsTask();
-            await WaitUntilAsync(() => !target.Runtime.IsStarted);
-            Assert.False(targetStop.IsCompleted);
-            transport.ReleaseRetriedTargetRollbackDestroy.TrySetResult();
-            await transport.RetriedTargetRollbackDestroyCompleted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            await targetStop.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.False(target.Runtime.TryGetCreatedActor(
-                actorId,
-                RelocationBehaviorHost.ActorType,
-                out _));
-            Assert.False(trace.HasTargetAuthorityMutation);
-            Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
+            await trace.WaitAsync("targetLifecycleStarted");
         }
         finally
         {
@@ -2108,6 +2053,11 @@ internal sealed class CanonicalRelocationTransportProbe
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             RoutingId authenticatedSourceNodeRid) =>
             inner.ReadySubmitted(prepare, authenticatedSourceNodeRid);
+
+        public void ReadySubmissionFailed(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            RoutingId authenticatedSourceNodeRid) =>
+            inner.ReadySubmissionFailed(prepare, authenticatedSourceNodeRid);
 
         public ValueTask AbortPreparedAsync(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
