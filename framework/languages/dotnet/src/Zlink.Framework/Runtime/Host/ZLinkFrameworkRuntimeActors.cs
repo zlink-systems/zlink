@@ -970,21 +970,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
     }
 
-    internal ValueTask CompleteCanonicalRoutedActorJoinAsync(
-        string spotId,
-        ZLinkRemoteActorJoinRequest request,
-        ZLinkActorRelocationRecoveryRecord recovery,
-        CancellationToken cancellationToken) =>
-        CompleteRoutedActorHandoffAsync(
-            spotId,
-            CreateCanonicalRoutedActorCompletion(request, spotId, recovery),
-            cancellationToken);
-
     // Direct relocation has already verified and consumed its canonical
     // payload at the target, so it intentionally has no Relocation Store
-    // reference to hand to the store-backed completion command above. The
-    // owner CAS remains the visibility boundary; continue with the same
-    // post-commit actor completion, replay and session-route sequence.
+    // reference to advance. The owner CAS remains the visibility boundary;
+    // continue with the same post-commit actor completion, replay and
+    // session-route sequence.
     internal async ValueTask CompleteDirectCanonicalRoutedActorJoinAsync(
         string spotId,
         ZLinkActorRuntimeState actorState,

@@ -1988,8 +1988,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         var actorRef = stage.ActorState.NativeActorRef
                        ?? throw DataLost(
                            "Standalone Actor target native reference is unavailable.");
+        var aggregateId = stage.Envelope.AggregateId.ToString("N");
         stage.ActorState.MarkRelocationSessionAuthorityCommitted(
-            stage.Envelope.AggregateId.ToString("N"),
+            aggregateId,
             actorRef,
             stage.TargetAuthorityOwnerGeneration,
             ZLinkMeshName.FromBoundary(
@@ -1997,10 +1998,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 nameof(stage.TargetAuthority.MeshName)),
             stage.TargetAuthority.NodeGeneration,
             stage.TargetAuthority.OwnerLeaseGeneration);
-        if (!stage.ActorState.Handoff.IsAuthorityCommitted(
-                stage.Envelope.AggregateId.ToString("N")))
+        if (!stage.ActorState.Handoff.IsAuthorityCommitted(aggregateId))
             stage.ActorState.Handoff.MarkAuthorityCommitted(
-                stage.Envelope.AggregateId.ToString("N"),
+                aggregateId,
                 stage.Participant.ObjectGeneration,
                 actorRef.Generation);
         if (stage.TargetActivation is { } activation
@@ -2009,61 +2009,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 actor,
                 stage.ActorState);
         stage.AuthorityPublished = true;
-    }
-
-    private async ValueTask AdvanceRemoteJoinTargetActivatedAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken)
-    {
-        if (!await IsCurrentTargetAttemptAsync(stage, cancellationToken)
-                .ConfigureAwait(false))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "A stale Actor Join target attempt cannot activate.",
-                retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
-        var targetOwner = new ZLinkLocationOwnerToken(
-            stage.TargetAuthority.OwnerId,
-            checked((long)stage.TargetAuthority.OwnerLeaseGeneration));
-        var progress = new ZLinkStandaloneActorRelocationProgressCoordinator(
-            registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException(
-                "Location Store is not registered."),
-            registration.Locations.ResolveRelocationStore()
-            ?? throw new ZLinkConfigurationException(
-                "Relocation Store is not registered."),
-            new ZLinkStandaloneActorRelocationTargetFence(
-                stage.Envelope.AggregateId,
-                stage.Prepare.TargetAttemptGeneration,
-                stage.TargetAuthority.NodeRid,
-                stage.TargetAuthority.NodeGeneration,
-                targetOwner));
-        var durable = await progress.ReadAsync(
-                stage.Envelope,
-                targetOwner,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (durable.Canonical?.Phase
-            == (byte)ZLinkStandaloneActorCanonicalPhase.Committed)
-            durable = await progress.AdvanceCanonicalPhaseAsync(
-                    stage.Envelope,
-                    ZLinkStandaloneActorCanonicalPhase.Committed,
-                    ZLinkStandaloneActorCanonicalPhase.Activating,
-                    targetOwner,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        if (durable.Canonical?.Phase
-            == (byte)ZLinkStandaloneActorCanonicalPhase.Activating)
-            durable = await progress.AdvanceCanonicalPhaseAsync(
-                    stage.Envelope,
-                    ZLinkStandaloneActorCanonicalPhase.Activating,
-                    ZLinkStandaloneActorCanonicalPhase.Activated,
-                    targetOwner,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        if (durable.Canonical?.Phase
-            != (byte)ZLinkStandaloneActorCanonicalPhase.Activated)
-            throw DataLost(
-                "Actor Join target activation phase is not recoverable.");
     }
 
     // Direct transfer owns its verified payload in memory; unlike recovery it
@@ -2092,35 +2037,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 stage.TargetAuthority.MeshName,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    internal async ValueTask ActivatePublishedTargetAsync(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        CancellationToken cancellationToken)
-    {
-        var key = new AttemptKey(
-            prepare.RelocationId.High,
-            prepare.RelocationId.Low,
-            prepare.TargetAttemptGeneration);
-        if (!TryAcquireTargetAttempt(key, out var lease))
-            throw DataLost(
-                "Standalone Actor target activation lost its published stage.");
-        using var attemptLease = lease;
-        await lease.Slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (lease.Slot.Stage is not { } stage
-                || !stage.AuthorityPublished)
-                throw DataLost(
-                    "Standalone Actor target activation lost its published stage.");
-            await ActivatePublishedTargetCoreAsync(stage, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            lease.Slot.Gate.Release();
-            CloseTargetAttemptIfEmpty(key, lease.Slot);
-        }
     }
 
     private async ValueTask ActivatePublishedTargetCoreAsync(
@@ -2935,31 +2851,52 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             ZLinkServiceWireCodec.RelocationDataRecord data,
             RoutingId authenticatedSourceNodeRid)
         {
-            if (AuthorityPublished
-                || SourceNodeRid != authenticatedSourceNodeRid
-                || data.SenderRole != 1
-                || data.RelocationId != Prepare.RelocationId
-                || data.TargetAttemptGeneration
-                   != Prepare.TargetAttemptGeneration
-                || data.Coordinator != Prepare.Coordinator
-                || data.Object != Prepare.Object)
+            if (AuthorityPublished)
                 throw DataLost(
                     "Standalone Actor command 31 changed its prepared attempt.");
+            ValidateExactAttemptFence(
+                authenticatedSourceNodeRid,
+                data.SenderRole,
+                data.RelocationId,
+                data.TargetAttemptGeneration,
+                data.Coordinator,
+                data.Object,
+                "Standalone Actor command 31 changed its prepared attempt.");
         }
 
         internal void ValidateCutover(
             ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
-            RoutingId authenticatedSourceNodeRid)
+            RoutingId authenticatedSourceNodeRid) =>
+            ValidateExactAttemptFence(
+                authenticatedSourceNodeRid,
+                cutover.SenderRole,
+                cutover.RelocationId,
+                cutover.TargetAttemptGeneration,
+                cutover.Coordinator,
+                cutover.Object,
+                "Standalone Actor command 34 changed its prepared attempt.");
+
+        //  Both command 31 (Data) and command 34 (Cutover) must still carry
+        //  the exact identity this target attempt was Prepared with — same
+        //  sender, same relocation/attempt/coordinator fence, same object.
+        //  Owning the comparison here keeps the two commands from drifting
+        //  when the fence grows a field.
+        private void ValidateExactAttemptFence(
+            RoutingId authenticatedSourceNodeRid,
+            byte senderRole,
+            ZLinkServiceWireCodec.RelocationWireId relocationId,
+            ulong targetAttemptGeneration,
+            ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator,
+            ZLinkServiceWireCodec.RelocationObjectRecord relocationObject,
+            string errorMessage)
         {
             if (SourceNodeRid != authenticatedSourceNodeRid
-                || cutover.SenderRole != 1
-                || cutover.RelocationId != Prepare.RelocationId
-                || cutover.TargetAttemptGeneration
-                   != Prepare.TargetAttemptGeneration
-                || cutover.Coordinator != Prepare.Coordinator
-                || cutover.Object != Prepare.Object)
-                throw DataLost(
-                    "Standalone Actor command 34 changed its prepared attempt.");
+                || senderRole != 1
+                || relocationId != Prepare.RelocationId
+                || targetAttemptGeneration != Prepare.TargetAttemptGeneration
+                || coordinator != Prepare.Coordinator
+                || relocationObject != Prepare.Object)
+                throw DataLost(errorMessage);
         }
     }
 

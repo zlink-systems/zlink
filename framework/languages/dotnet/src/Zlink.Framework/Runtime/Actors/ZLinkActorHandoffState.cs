@@ -918,8 +918,7 @@ internal sealed class ZLinkActorHandoffState(
     {
         lock (_gate)
         {
-            if (_sourcePhase != ZLinkActorSourceHandoffPhase.Capturing
-                || _sourceCaptureSealed)
+            if (!CanSealCaptureLocked())
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' source handoff capture cannot be sealed.");
             _sourceCaptureSealed = true;
@@ -939,8 +938,7 @@ internal sealed class ZLinkActorHandoffState(
         ArgumentNullException.ThrowIfNull(shutdownToken);
         lock (_gate)
         {
-            if (_sourcePhase != ZLinkActorSourceHandoffPhase.Capturing
-                || _sourceCaptureSealed)
+            if (!CanSealCaptureLocked())
             {
                 shutdownToken.Dispose();
                 throw new InvalidOperationException(
@@ -950,6 +948,12 @@ internal sealed class ZLinkActorHandoffState(
             PendingShutdownToken = shutdownToken;
         }
     }
+
+    //  Shared by both SealCapture overloads: a capture may be sealed exactly
+    //  once, and only while still in progress. Caller must hold _gate.
+    private bool CanSealCaptureLocked() =>
+        _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing
+        && !_sourceCaptureSealed;
 
     internal ZLinkActorHandoffCommitBoundary FreezeCaptureCommitBoundary()
     {

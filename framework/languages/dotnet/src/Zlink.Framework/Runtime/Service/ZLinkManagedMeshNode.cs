@@ -5631,14 +5631,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             state.Coordinator);
         if (state.PayloadStage == ZLinkServiceWireCodec.PayloadStageBase)
         {
-            SweepExpiredRelocationBaseChunks(TimeProvider.System.GetUtcNow());
+            var arrivedAt = TimeProvider.System.GetUtcNow();
+            SweepExpiredRelocationBaseChunks(arrivedAt);
             //  No manifest exists yet for a base chunk — it is buffered
             //  under its exact identity and only checksum-verified once the
             //  matching Prepare declares baseChecksumCrc32c (spec 15 §5).
             var buffer = _pendingRelocationBaseChunks.GetOrAdd(
                 key,
                 static (_, now) => new ZLinkRelocationBaseChunkBuffer(now),
-                TimeProvider.System.GetUtcNow());
+                arrivedAt);
             if (!buffer.Append(state.ChunkOrdinal, state.ChunkData.Span))
             {
                 _pendingRelocationBaseChunks.TryRemove(
