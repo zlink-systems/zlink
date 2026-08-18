@@ -25,6 +25,11 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   commit·pre-cutover abort command 44를 고정한다. 폐기한 completion reply command 45는 fixture에 없으며 수신하지 않는다.
 - `golden/authority-key-v1.json`: MeshName과 독립적인 global ActorId·SpotId를 canonical Store key로 만드는
   정상 encoding fixture
+- `golden/store-record-v1.json`: Location Store opaque record(21 §2.4, 22 §7)의 key 파생(logical key
+  preimage, SHA-256, Redis key 조립)과 value byte 표현(cmsgpack array + `0x01` format tag)을 mesh-node·
+  owner-lease·client-server·fanout-publisher·authority record(actor·spot 각각)별로 고정하는 golden fixture. Relocation Store
+  raw-bytes blob key(23 §8)도 함께 고정한다. `verify-service-wire-decoder-fixtures.mjs`가 실제 Redis Lua
+  `cmsgpack.pack` 출력과 byte 단위로 대조해 만든 독립 decoder로 이 fixture를 검증한다.
 - `golden/bound-session-replaced-v1.json`: command 51의 Actor authority source fence, 이전 session owner
   lifecycle·binding identity, malformed record와 재시작 전 lifecycle 거부를 고정하는 golden fixture
 - `golden/framework-multipart-v1.json`: Framework 내부에서 opaque message parts를 보관하는 multipart envelope의
@@ -45,6 +50,12 @@ contract amendment fixture 1개와 231가지 invalid mutation이 실제로
 conditional discriminator 오류, TLV 순서·required capability 제약 변경, relocation vector 불일치, durable
 magic·version·length·checksum·semantic·order·range 훼손, relocation graph·policy 오류와 fanout socket·beacon·deadline
 변경이 포함된다.
+
+`verify-service-wire-decoder-fixtures.mjs`는 위 schema self-test와 별도로 `golden/store-record-v1.json`도
+검증한다 — key 파생 6건(sha256 재계산과 Redis key 조립)과 value byte 벡터 5건(cmsgpack member를 schema가 아닌
+독립 decoder로 다시 decode해 원본과 byte 단위로 대조하고, JSON layer는 field 단위로 대조)이다. 이 cmsgpack
+byte 벡터 자체는 실제 Redis Lua `cmsgpack.pack` 출력과 수기로 대조해 만들었다 — 그 대조는 fixture를 만들 때 한
+번 수행한 수작업이며, 이 저장소의 상시 테스트는 아니다(향후 encode 방향 assertion을 추가할 여지가 있다).
 
 Framework error는 `none=0`, 그 외에는 `wire value = public error kind + 1`로 변환한다. Service wire에서
 사용하지 않는 public-only error에 대응하는 wire `23..32`는 예약 구간이다. `SpotGenerationStale`은

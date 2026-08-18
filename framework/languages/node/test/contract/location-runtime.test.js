@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -8,6 +9,64 @@ const internal = require('../../packages/framework/dist/internal');
 const authorityKeys = require(
   '../../packages/framework/dist/runtime/locations/authority-key-codec'
 );
+const msgpack = require('@msgpack/msgpack');
+
+// Target-contract pin for checklist C-3 (store record golden fixture). This
+// test consumes golden/store-record-v1.json directly — it is decode-side
+// only, independent of any production opaque-record store codec, because no
+// language has implemented the zlink-location-v3 opaque record write path
+// yet (checklist C-4). It stays green today: sha256 key derivation and
+// cmsgpack value decoding need nothing from C-4. Once a node production
+// codec exists, this test should be extended (or a sibling added) to also
+// exercise that codec against the same fixture.
+test('store record golden fixture: key derivation and value byte vectors decode as pinned', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.resolve(
+    __dirname,
+    '../../../../runtime/protocol/golden/store-record-v1.json'
+  ), 'utf8'));
+
+  for (const key of fixture.keyDerivation) {
+    const preimageBytes = Buffer.from(key.preimageHex, 'hex');
+    const sha256Hex = crypto.createHash('sha256').update(preimageBytes).digest('hex');
+    assert.equal(sha256Hex, key.sha256Hex, `sha256 mismatch: ${key.record}`);
+    assert.equal(
+      key.redisKey,
+      `${fixture.prefixExample}:${fixture.namespace}:${sha256Hex}`,
+      `redis key assembly mismatch: ${key.record}`
+    );
+  }
+
+  const relocationBlobBytes = Buffer.from(fixture.relocationBlob.rawBytesHex, 'hex');
+  assert.ok(relocationBlobBytes.length > 0);
+  assert.equal(
+    fixture.relocationBlob.redisKey,
+    `${fixture.prefixExample}:zlink-relocation-v1:blob:${fixture.relocationBlob.reference}`
+  );
+
+  for (const vector of fixture.valueVectors.genericOpaqueRecord) {
+    const fullBytes = Buffer.from(vector.fullValueHex, 'hex');
+    assert.equal(fullBytes[0], 0x01, `format tag mismatch: ${vector.name}`);
+    const decoded = msgpack.decode(fullBytes.subarray(1), { rawStrings: false });
+    assert.equal(decoded.length, 5, `member arity mismatch: ${vector.name}`);
+    const [originalKey, rawBytes, version, expiresAtMs, tombstone] = decoded;
+    assert.equal(
+      originalKey,
+      vector.originalKey.replace(/\\u0000/g, '\0'),
+      `originalKey mismatch: ${vector.name}`
+    );
+    assert.equal(
+      Buffer.from(rawBytes, 'utf8').toString('hex'),
+      vector.jsonBytesHex,
+      `rawBytes mismatch: ${vector.name}`
+    );
+    assert.equal(version, vector.version, `version mismatch: ${vector.name}`);
+    assert.equal(String(expiresAtMs), vector.expiresAtMs, `expiresAtMs mismatch: ${vector.name}`);
+    assert.equal(tombstone, vector.tombstone, `tombstone mismatch: ${vector.name}`);
+    if (!vector.tombstone) {
+      assert.deepEqual(JSON.parse(rawBytes), vector.decoded, `JSON field mismatch: ${vector.name}`);
+    }
+  }
+});
 
 test('authority key codec consumes the shared fixture and rejects non-canonical input', () => {
   const fixture = JSON.parse(fs.readFileSync(path.resolve(

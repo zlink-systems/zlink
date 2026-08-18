@@ -185,13 +185,14 @@ implementation matching each language's naming convention. Public options are
 limited to the connection, key namespace, and operation timeout needed to
 build the instance.
 
-A MeshNode descriptor, owner lease, ClientServer server descriptor, and
-fanout publisher descriptor must use the same opaque record representation
-regardless of language — otherwise a record one language writes can't be read
-by another. These four records **must** follow this storage scheme. The
-Redis key is `{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`, where
-`{prefix}` is the key namespace the provider specifies at registration and
-`preimage` is the per-record logical key preimage defined by
+A MeshNode descriptor, owner lease, ClientServer server descriptor, fanout
+publisher descriptor, and authority record must use the same opaque record
+representation regardless of language — otherwise a record one language
+writes can't be read by another. These five records **must** follow this
+storage scheme. The Redis key is
+`{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`, where `{prefix}`
+is the key namespace the provider specifies at registration and `preimage`
+is the per-record logical key preimage defined by
 [Location Runtime §2.4](21-location-runtime.en.md#24-how-different-languages-read-and-write-the-same-redis-record).
 The data structure is a Redis `ZSET`; each `Put` appends to the log with the
 provider's monotonically increasing `INCR` counter as the score — the member
@@ -200,20 +201,28 @@ array holding `{originalKey, rawBytes(value), version, expiresAtMs,
 tombstone}`, prefixed with a 1-byte format tag `0x01`. `rawBytes` carries the
 original bytes as-is, without re-encoding to base64. The provider fails
 explicitly on an unrecognized format tag rather than guessing how to read the
-value. The authority record hasn't converged onto this opaque record yet —
-until it does, the authority's storage scheme remains an implementation
-detail defined by the rest of this section (see the authority paragraph in
-[Location Runtime §2.4](21-location-runtime.en.md#24-how-different-languages-read-and-write-the-same-redis-record)).
+value.
 
-Outside these four records and their opaque record representation, the
+`cmsgpack` means the standard MessagePack encoding Redis's Lua `cmsgpack`
+library produces, and the array's five members use these MessagePack types —
+pinned explicitly because a generic encoder's defaults (for example a `bin`
+family for byte strings) don't match Lua `cmsgpack`'s output byte-for-byte.
+
+| Member | MessagePack type |
+|---|---|
+| `originalKey` | `str` family (fixstr/str8/str16/str32 by length) — never `bin` |
+| `rawBytes` | `str` family, same rule — Lua strings carry raw bytes without a separate binary type |
+| `version` | `str` family — an opaque `StoreVersion` string, not a number |
+| `expiresAtMs` | unsigned `int` family (positive fixint/uint8/uint16/uint32/uint64 by magnitude); `0` means no expiry |
+| `tombstone` | `bool` (`0xc2` false / `0xc3` true) |
+
+The outer array itself uses the `array` family (fixarray for 5 elements).
+
+Outside these five records and their opaque record representation, the
 following items are Redis provider implementation details, not part of the
 public contract.
 
-- The Redis key and hash-tag layout the authority record uses
-- The choice among HASH/SET/ZSET applied to the authority record
 - Lua script and transaction-splitting method
-- The authority record's private encoding and language-private secondary
-  indexes (for example, owner/stamp/kind indexes)
 - Connection lease, retry, and snapshot cursor implementation
 - Change stamp and polling optimization
 

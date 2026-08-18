@@ -387,10 +387,10 @@ isn't created for a nonexistent record.
 
 ### 2.4 How Different Languages Read And Write The Same Redis Record
 
-A MeshNode descriptor, owner lease, ClientServer server descriptor, and fanout publisher
-descriptor (§3) must be written to Redis through the same storage scheme regardless of
-language, so a runtime in one language can read a record another language wrote. This
-storage scheme is defined by the
+A MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
+descriptor, and authority record (§3, §2.2, §2.3) must be written to Redis through the same
+storage scheme regardless of language, so a runtime in one language can read a record
+another language wrote. This storage scheme is defined by the
 [Location Store provider's official Redis implementation](22-location-store-redis.en.md#7-registration-lifetime-and-the-official-redis-provider),
 which the framework calls an "opaque record." For each record, the framework builds a
 byte-exact fixed string (the "logical key preimage") and uses the lowercase hex
@@ -402,11 +402,20 @@ representation of its SHA-256 hash as the last segment of the Redis key.
 | Owner lease | `owner-lease\0{OwnerId}` |
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
+| Authority | `authority\0{actor \| spot}\0{Id}` |
 
 `{hex(RoutingId)}` is the lowercase hex representation of the RoutingId's raw bytes.
-`{MeshName}`, `{ChannelName}`, and `{OwnerId}` are UTF-8 bytes concatenated as-is, without a
-length prefix — only the `\0` bytes in the preimage fix the boundary between values, so
-`MeshName` and `ChannelName` themselves must not contain a `\0` byte.
+`{MeshName}`, `{ChannelName}`, `{OwnerId}`, and the authority's `{Id}` (the global ActorId or
+SpotId, §2.3) are UTF-8 bytes concatenated as-is, without a length prefix — only the `\0`
+bytes in the preimage fix the boundary between values, so `MeshName`, `ChannelName`, and
+`Id` themselves must not contain a `\0` byte (§2.3 already imposes this constraint on
+ActorId/SpotId). The authority preimage's second segment is the literal `actor` or `spot`
+naming the object kind — the same string Id is a different key for an actor than for a
+spot (e.g. `authority\0actor\0user:42` and `authority\0spot\0user:42` are different keys),
+and the Spot kinds (`Entry | User | Instance`) share this segment, so one Id has exactly
+one authority row (§2.3). The
+[store record golden fixture](../../../../../runtime/protocol/golden/store-record-v1.json)
+pins the key-derivation vectors for this preimage shape.
 
 Each record's value is a canonical JSON value the provider stores and compares only as
 bytes, without interpreting its meaning. It includes at least the following fields.
@@ -414,17 +423,37 @@ bytes, without interpreting its meaning. It includes at least the following fiel
 | Field | Meaning |
 |---|---|
 | `recordVersion` | The JSON structure version of this record. The current value is `1`. The framework, not the provider, checks this value; on an unrecognized value it fails explicitly instead of guessing how to read it. |
-| `ownerId`, `leaseGeneration` | The `(OwnerId, LeaseGeneration)` (§2.1) of the host that published this record. |
-| `descriptorRevision` | The Revision from §3. Absent from the owner lease record. |
-| `descriptor` | The MeshNode/ClientServer/fanout publisher descriptor content (§3). Absent from the owner lease record. |
+| `ownerId`, `leaseGeneration` | The `(OwnerId, LeaseGeneration)` (§2.1) of the host that published this record. The authority record instead uses the names `ownerId`/`ownerLeaseGeneration` (table below). |
+| `descriptorRevision` | The Revision from §3. Absent from the owner lease record and the authority record. |
+| `descriptor` | The MeshNode/ClientServer/fanout publisher descriptor content (§3). Absent from the owner lease record and the authority record. |
 
-Putting the authority record (§2.2, §2.3) on the same opaque record is also the goal, but as
-of this document's revision the per-language implementations haven't converged on one
-logical key yet — cpp and java each store the whole authority as one record, while dotnet
-splits it into separate meta, payload, and generation-counter keys. Until this difference
-converges to one logical-key shape, this document doesn't fix the authority's logical key
-preimage or canonical JSON schema. Until convergence, the authority record's Redis
-representation remains a provider-specific implementation detail.
+The authority record (§2.2, §2.3) sits on the opaque record as a single logical row
+addressed by one logical key — cpp, java, and node already store the whole authority as one
+record; only dotnet still splits it into separate meta, payload, and generation-counter
+keys. The real source of that difference isn't the key split but the meaning of
+`objectGeneration`: dotnet issues a value that increases monotonically per identity, while
+the other three languages issue it from one sequence shared Store-wide that increases
+monotonically. A Store-wide monotonic counter automatically guarantees per-identity
+monotonicity, so this document standardizes on the latter — **`objectGeneration` is issued
+from a Store-wide monotonic sequence.** Once dotnet converges on this standard, its
+per-identity generation key and the payload checksum field it kept to reconcile split reads
+are both slated for removal (a single opaque record is already byte-atomic, so a separate
+checksum is unnecessary).
+
+The authority record's canonical JSON includes at least the following fields. Except for
+`payload`, integer fields are written as JSON strings rather than JSON numbers, the same as
+the generation fields on the other records (because 64-bit values can exceed JSON number
+precision).
+
+| Field | Meaning |
+|---|---|
+| `recordVersion` | Same as above. The current value is `1`. |
+| `payload` | Application-defined opaque bytes whose meaning the framework doesn't interpret. Encoded in JSON as **base64**. As of this document's revision the cpp provider encodes this field as hex — that's a single language's implementation detail, not an existing cross-language agreement, and base64 is the standard. Converting cpp to base64 is C-4's (per-language store implementation convergence) responsibility. |
+| `objectGeneration` | The object's (§2.2) current generation. Issued from the Store-wide monotonic sequence defined above. |
+| `authorityOwnerGeneration` | The value distinguishing owner changes (§2.2). |
+| `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§2.1). |
+| `allocation` | Placement information (§2.3). Includes at least `state` (`reserved \| active`), `objectKind` (`actor \| spot`), `stableType`, `target` (`meshName`, `nodeRid`, `nodeGeneration`), and `capacityBundle` (the slots secured per kind, §2.3). |
+| `pendingCreation` | Creation-in-progress state (§6). `null` when absent; when present, includes at least `reservationId`, `requestContentReference`, `requestSha256` (hex), and `requestEncodedSize`. |
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage format
@@ -1288,7 +1317,7 @@ framework owns.
 | Data loss | If a payload stored in the Relocation Store is permanently missing or its checksum differs, it's `DataLost`. A checksum mismatch on a directly transmitted handoff payload is an explicit failure before restore, and a partially assembled payload is never restored. An already-changed owner isn't rolled back to the source. |
 | Move cancellation | On explicit cancellation before relay-ready is accepted, changes no Location Store value and discards the target temporary queue. If a bound Session seal exists, sends command 44 abort one-way before reopening the source queue and waits for no reply. Afterward, source queue doesn't reopen regardless of cutover-submit result. |
 | Store failure | During the grace period, only new discovery connections are blocked — the owner deadline isn't extended. Relocation CAS retries with the same key, version, and fence until Restore validity expires. On expiry, target removes the object and queue and sends no Session update. |
-| Store record interop (§2.4) | Per-language implementations of the MeshNode descriptor, owner lease, ClientServer server descriptor, and fanout publisher descriptor build the same Redis key from the same logical key preimage, and the same canonical JSON value. Each language runs a conformance test that consumes the key-derivation vectors and value byte vectors the store record golden fixture defines, and fails explicitly on an unrecognized `recordVersion`. |
+| Store record interop (§2.4) | Per-language implementations of the MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher descriptor, and authority record build the same Redis key from the same logical key preimage, and the same canonical JSON value. The authority's `objectGeneration` is issued from a Store-wide monotonic sequence. Each language runs a conformance test that consumes the key-derivation vectors and value byte vectors the store record golden fixture defines, and fails explicitly on an unrecognized `recordVersion`. |
 
 Permit, queue, timer, Session handoff, and host final-result verification are defined by
 [Host Relocation contract test](30-host-relocation-flow.en.md#14-contract-test-verification-requirements).

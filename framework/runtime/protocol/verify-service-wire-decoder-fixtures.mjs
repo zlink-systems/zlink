@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,10 @@ const sessionBarrierFixture = JSON.parse(fs.readFileSync(
 ));
 const actorJoinReplyFixture = JSON.parse(fs.readFileSync(
   path.join(root, "golden/actor-join-reply-v1.json"),
+  "utf8",
+));
+const storeRecordFixture = JSON.parse(fs.readFileSync(
+  path.join(root, "golden/store-record-v1.json"),
   "utf8",
 ));
 const commands = new Map(schema.commands.map((entry) => [entry.id, entry]));
@@ -489,11 +494,128 @@ for (const fixture of actorJoinReplyFixture.malformed) {
   }
 }
 
+// Independent, schema-derived check of golden/store-record-v1.json
+// (21-location-runtime.md#2.4, 22-location-store-redis.md#7). This decoder
+// shares no code with any language's opaque-record provider — it is a
+// from-scratch cmsgpack member decoder restricted to the exact MessagePack
+// type family cmsgpack.pack (Redis Lua) is known to emit (see the type table
+// in 22-location-store-redis.md#7), so it independently confirms both the
+// sha256 key-derivation layer and the cmsgpack value layer.
+function decodeCmsgpackMember(bytes) {
+  let offset = 0;
+  const need = (count) => {
+    if (offset + count > bytes.length) fail("truncated-field");
+  };
+  const byte = () => {
+    need(1);
+    return bytes[offset++];
+  };
+  const str = () => {
+    const tag = byte();
+    let length;
+    if ((tag & 0xe0) === 0xa0) length = tag & 0x1f;
+    else if (tag === 0xd9) length = byte();
+    else if (tag === 0xda) { need(2); length = bytes.readUInt16BE(offset); offset += 2; }
+    else if (tag === 0xdb) { need(4); length = bytes.readUInt32BE(offset); offset += 4; }
+    else fail("invalid-msgpack-str-tag");
+    need(length);
+    const value = bytes.subarray(offset, offset + length);
+    offset += length;
+    return value;
+  };
+  const uint = () => {
+    const tag = byte();
+    if ((tag & 0x80) === 0) return BigInt(tag);
+    if (tag === 0xcc) return BigInt(byte());
+    if (tag === 0xcd) { need(2); const v = bytes.readUInt16BE(offset); offset += 2; return BigInt(v); }
+    if (tag === 0xce) { need(4); const v = bytes.readUInt32BE(offset); offset += 4; return BigInt(v); }
+    if (tag === 0xcf) { need(8); const v = bytes.readBigUInt64BE(offset); offset += 8; return v; }
+    fail("invalid-msgpack-uint-tag");
+  };
+  const bool = () => {
+    const tag = byte();
+    if (tag === 0xc2) return false;
+    if (tag === 0xc3) return true;
+    fail("invalid-msgpack-bool-tag");
+  };
+  const arrayHead = () => {
+    const tag = byte();
+    if ((tag & 0xf0) === 0x90) return tag & 0x0f;
+    if (tag === 0xdc) { need(2); const v = bytes.readUInt16BE(offset); offset += 2; return v; }
+    if (tag === 0xdd) { need(4); const v = bytes.readUInt32BE(offset); offset += 4; return v; }
+    fail("invalid-msgpack-array-tag");
+  };
+  const count = arrayHead();
+  if (count !== 5) fail("invalid-opaque-member-arity");
+  const originalKey = str();
+  const rawBytes = str();
+  const version = str();
+  const expiresAtMs = uint();
+  const tombstone = bool();
+  if (offset !== bytes.length) fail("trailing-byte");
+  return {
+    originalKey: Buffer.from(originalKey).toString("utf8"),
+    rawBytesHex: Buffer.from(rawBytes).toString("hex"),
+    version: Buffer.from(version).toString("utf8"),
+    expiresAtMs: expiresAtMs.toString(),
+    tombstone,
+  };
+}
+
+for (const key of storeRecordFixture.keyDerivation) {
+  const preimageBytes = Buffer.from(key.preimageHex, "hex");
+  const sha256Hex = crypto.createHash("sha256").update(preimageBytes).digest("hex");
+  if (sha256Hex !== key.sha256Hex) {
+    throw new Error(`store record key derivation sha256 mismatch: ${key.record}`);
+  }
+  const expectedKey = `${storeRecordFixture.prefixExample}:${storeRecordFixture.namespace}:${sha256Hex}`;
+  if (expectedKey !== key.redisKey) {
+    throw new Error(`store record redis key assembly mismatch: ${key.record}`);
+  }
+}
+
+for (const vector of storeRecordFixture.valueVectors.genericOpaqueRecord) {
+  const fullBytes = Buffer.from(vector.fullValueHex, "hex");
+  if (fullBytes[0] !== 0x01) throw new Error(`store record format tag mismatch: ${vector.name}`);
+  const decoded = decodeCmsgpackMember(fullBytes.subarray(1));
+  const expectedOriginalKey = vector.originalKey.replace(/\\u0000/g, " ");
+  if (decoded.originalKey !== expectedOriginalKey
+      || decoded.rawBytesHex !== vector.jsonBytesHex
+      || decoded.version !== vector.version
+      || decoded.expiresAtMs !== vector.expiresAtMs
+      || decoded.tombstone !== vector.tombstone) {
+    throw new Error(`store record cmsgpack member mismatch: ${vector.name}`);
+  }
+  if (Buffer.from(vector.cmsgpackMemberHex, "hex").compare(fullBytes.subarray(1)) !== 0) {
+    throw new Error(`store record cmsgpack member/full byte mismatch: ${vector.name}`);
+  }
+  // JSON layer: field-compare the decoded object against the exact canonical
+  // bytes (not vice versa) so ordering never matters for this comparison,
+  // even though the byte-compare above already pinned one exact
+  // serialization for the cmsgpack layer (21-location-runtime.md#2.4).
+  if (!vector.tombstone) {
+    const parsed = JSON.parse(Buffer.from(vector.jsonBytesHex, "hex").toString("utf8"));
+    if (JSON.stringify(parsed) !== JSON.stringify(vector.decoded)) {
+      throw new Error(`store record JSON field mismatch: ${vector.name}`);
+    }
+  } else if (vector.jsonBytesHex.length !== 0) {
+    throw new Error(`store record tombstone must carry empty rawBytes: ${vector.name}`);
+  }
+}
+
+const relocationBlobBytes = Buffer.from(storeRecordFixture.relocationBlob.rawBytesHex, "hex");
+if (relocationBlobBytes.length === 0
+    || storeRecordFixture.relocationBlob.redisKey
+      !== `${storeRecordFixture.prefixExample}:zlink-relocation-v1:blob:${storeRecordFixture.relocationBlob.reference}`) {
+  throw new Error("store record relocation blob key mismatch");
+}
+
 console.log(
   `service wire decoder fixtures valid: canonical=${fixtures.canonical.length} `
     + `malformed=${fixtures.malformed.length} frameworkErrors=${fixtures.frameworkErrors.canonical.length} `
     + `frameworkErrorMalformed=${fixtures.frameworkErrors.malformed.length} probeEcho=pass `
     + `RelocationDataLost=wire35/public34 boundSessionReplaced=pass `
     + `sessionRelocationBarrier=${barrierRecords.size} `
+    + `storeRecord=${storeRecordFixture.keyDerivation.length}keys/${storeRecordFixture.valueVectors.genericOpaqueRecord.length}values `
     + `actorJoinReply=${actorJoinReplyFixture.canonical.length}/${actorJoinReplyFixture.malformed.length}`,
 );

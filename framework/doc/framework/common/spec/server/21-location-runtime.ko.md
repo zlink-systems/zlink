@@ -374,9 +374,9 @@ record를 유지한다. 복구를 담당하는 Framework 작업만 처음 읽은
 
 ### 2.4 여러 언어가 같은 Redis record를 읽고 쓰는 방법
 
-MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher
-descriptor(§3)는 언어가 달라도 같은 저장 방식을 통해 Redis에 기록해야 다른 언어의
-runtime이 그 record를 읽을 수 있다. 이 저장 방식을
+MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
+descriptor와 authority record(§3, §2.2, §2.3)는 언어가 달라도 같은 저장 방식을 통해
+Redis에 기록해야 다른 언어의 runtime이 그 record를 읽을 수 있다. 이 저장 방식을
 [Location Store provider의 공식 Redis 구현](22-location-store-redis.ko.md#7-등록-수명과-공식-redis-provider)이
 정의하며, Framework는 이를 "opaque record"라고 부른다. 각 record마다 byte 그대로
 고정한 문자열("logical key preimage")을 만들고, 이 preimage의 SHA-256 hash를 소문자
@@ -388,11 +388,19 @@ runtime이 그 record를 읽을 수 있다. 이 저장 방식을
 | Owner lease | `owner-lease\0{OwnerId}` |
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
+| Authority | `authority\0{actor \| spot}\0{Id}` |
 
 `{hex(RoutingId)}`는 RoutingId의 raw bytes를 소문자 16진수로 표기한 값이다.
-`{MeshName}`, `{ChannelName}`과 `{OwnerId}`는 UTF-8 bytes를 그대로 이어 붙이며 길이
-접두사를 붙이지 않는다 — preimage 안의 `\0` byte만으로 값의 경계를 고정하므로,
-`MeshName`이나 `ChannelName` 자체에는 `\0` byte를 허용하지 않는다.
+`{MeshName}`, `{ChannelName}`, `{OwnerId}`와 authority의 `{Id}`(전역 ActorId 또는
+SpotId, §2.3)는 UTF-8 bytes를 그대로 이어 붙이며 길이 접두사를 붙이지 않는다 —
+preimage 안의 `\0` byte만으로 값의 경계를 고정하므로, `MeshName`·`ChannelName`·
+`Id` 자체에는 `\0` byte를 허용하지 않는다(§2.3이 이미 ActorId·SpotId에 이 제약을
+둔다). Authority preimage의 두 번째 segment는 object 종류를 그대로 적은 literal
+`actor` 또는 `spot`이다 — 같은 문자열 Id라도 actor와 spot은 다른 key이며(예:
+`authority\0actor\0user:42`와 `authority\0spot\0user:42`는 다른 key다), Spot
+종류(`Entry | User | Instance`)는 이 segment를 공유해 한 Id당 하나의 authority
+row만 존재한다(§2.3). [Store record golden fixture](../../../../../runtime/protocol/golden/store-record-v1.json)가
+이 preimage 구조의 key 파생 벡터를 고정한다.
 
 각 record의 value는 provider가 의미를 해석하지 않고 bytes로만 저장·비교하는 canonical
 JSON 값이다. 최소한 다음 field를 포함한다.
@@ -400,17 +408,35 @@ JSON 값이다. 최소한 다음 field를 포함한다.
 | Field | 의미 |
 |---|---|
 | `recordVersion` | 이 record의 JSON 구조 버전이다. 현재 값은 `1`이다. Provider가 아니라 Framework가 이 값을 확인하며, 인식하지 못하는 값을 만나면 명시적으로 실패시키고 추측해서 읽지 않는다. |
-| `ownerId`, `leaseGeneration` | 이 record를 게시한 host의 `(OwnerId, LeaseGeneration)`(§2.1)이다. |
-| `descriptorRevision` | §3의 Revision이다. Owner lease record에는 없다. |
-| `descriptor` | MeshNode·ClientServer·fanout publisher 각각의 descriptor 내용(§3)이다. Owner lease record에는 없다. |
+| `ownerId`, `leaseGeneration` | 이 record를 게시한 host의 `(OwnerId, LeaseGeneration)`(§2.1)이다. Authority record는 대신 `ownerId`·`ownerLeaseGeneration`이라는 이름을 쓴다(아래 표). |
+| `descriptorRevision` | §3의 Revision이다. Owner lease record와 authority record에는 없다. |
+| `descriptor` | MeshNode·ClientServer·fanout publisher 각각의 descriptor 내용(§3)이다. Owner lease record와 authority record에는 없다. |
 
-Authority record(§2.2, §2.3)도 같은 opaque record 위에 올리는 것이 목표이지만, 이
-문서를 개정하는 시점 기준으로 언어별 구현이 아직 하나의 logical key로 수렴하지
-않았다 — cpp와 java는 authority 전체를 record 하나로 저장하지만 dotnet은
-meta·payload·generation counter를 서로 다른 key로 나눠 저장한다. 이 차이가
-해소되어 하나의 logical key 구조로 수렴할 때까지 authority의 logical key preimage와
-canonical JSON 스키마는 이 문서가 정하지 않는다. 수렴 전까지 authority record의 Redis
-표현은 계속 provider별 구현 세부로 남는다.
+Authority record(§2.2, §2.3)는 하나의 logical key가 가리키는 하나의 행(single logical
+row)으로 opaque record에 올린다 — cpp·java·node는 이미 authority 전체를 record
+하나로 저장하며, dotnet만 meta·payload·generation counter를 서로 다른 key로 나눠
+저장한다. 이 차이의 진짜 원인은 key 분할이 아니라 `objectGeneration`의 의미다:
+dotnet은 identity별로 독립적으로 단조 증가하는 값을 쓰지만, 나머지 세 언어는 Store
+전역에서 공유하는 하나의 단조 증가 sequence에서 발급한다. Store 전역 단조 카운터는
+같은 identity 안에서의 단조성을 자동으로 보장하므로, 이 문서는 후자를 표준으로
+정한다 — **`objectGeneration`은 Store 전역 단조 sequence에서 발급하는 값이다.**
+Dotnet이 이 표준으로 수렴하면 identity별 generation key와, 분할 읽기를 보정하려고
+따로 두던 payload checksum 필드는 모두 제거 대상이다(하나의 opaque record가 이미
+byte 단위로 원자적이므로 별도 checksum이 필요 없다).
+
+Authority record의 canonical JSON은 최소한 다음 field를 포함한다. `payload`를
+제외한 정수 field는 다른 record의 generation field와 마찬가지로 JSON number가 아닌
+JSON string으로 쓴다(64-bit 값이 JSON number 정밀도를 넘을 수 있으므로).
+
+| Field | 의미 |
+|---|---|
+| `recordVersion` | 위와 같다. 현재 값은 `1`이다. |
+| `payload` | Framework가 의미를 해석하지 않는 application 정의 opaque bytes다. JSON 안에서 **base64**로 인코딩한다. 이 문서를 개정하는 시점 기준으로 cpp provider는 이 field를 hex로 인코딩한다 — 하나의 언어별 구현 세부일 뿐 기존 언어 간 합의가 아니며, base64가 표준이다. cpp가 base64로 바뀌는 것은 C-4(언어별 store 구현 수렴)가 처리할 항목이다. |
+| `objectGeneration` | 이 object(§2.2)의 현재 generation이다. 위에서 정한 Store 전역 단조 sequence에서 발급한다. |
+| `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§2.2). |
+| `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§2.1). |
+| `allocation` | 배치 정보(§2.3)다. 최소한 `state`(`reserved \| active`), `objectKind`(`actor \| spot`), `stableType`, `target`(`meshName`, `nodeRid`, `nodeGeneration`)과 `capacityBundle`(종류별 확보한 slot 수, §2.3)을 포함한다. |
+| `pendingCreation` | 생성 진행 상태다(§6). 없으면 `null`이다. 있으면 최소한 `reservationId`, `requestContentReference`, `requestSha256`(hex)과 `requestEncodedSize`를 포함한다. |
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이
 opaque record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
@@ -1217,7 +1243,7 @@ Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, S
 | 데이터 손실 | Relocation Store에 저장한 payload가 영구적으로 없거나 checksum이 다르면 `DataLost`다. 직접 전송한 handoff payload의 checksum 불일치는 복원 전 명시적 실패이며 부분 조립 payload로 복원하지 않는다. 이미 변경한 owner를 source로 되돌리지 않는다. |
 | 이동 취소 | Relay-ready reply가 accepted 상태가 되기 전 명시적 취소에서 Location Store를 변경하지 않고 target temporary queue를 폐기한다. Bound Session seal이 있으면 command 44 abort를 one-way로 보낸 뒤 source queue를 다시 열며 적용 reply는 기다리지 않는다. 그 뒤에는 cutover submit 결과와 관계없이 source queue를 다시 열지 않는다. |
 | Store 장애 | 유예 시간에는 새 discovery connection만 막으며 owner deadline은 연장하지 않는다. Relocation CAS는 같은 key·version·fence로 Restore 유효시간까지 retry한다. 만료되면 target object와 queue를 제거하고 Session update를 보내지 않는다. |
-| Store record 상호 운용(§2.4) | MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher descriptor는 언어별 구현이 같은 logical key preimage로 같은 Redis key를 만들고, 같은 canonical JSON value를 만든다. 각 언어는 store record golden fixture가 정하는 key 파생 벡터와 value byte 벡터를 그대로 소비하는 conformance test를 실행하며, 인식하지 못하는 `recordVersion`은 명시적으로 실패시킨다. |
+| Store record 상호 운용(§2.4) | MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher descriptor와 authority record는 언어별 구현이 같은 logical key preimage로 같은 Redis key를 만들고, 같은 canonical JSON value를 만든다. Authority의 `objectGeneration`은 Store 전역 단조 sequence에서 발급한다. 각 언어는 store record golden fixture가 정하는 key 파생 벡터와 value byte 벡터를 그대로 소비하는 conformance test를 실행하며, 인식하지 못하는 `recordVersion`은 명시적으로 실패시킨다. |
 
 Permit, queue, timer, Session handoff와 host 최종 결과 검증은
 [Host relocation contract test](30-host-relocation-flow.ko.md#14-contract-test-검증-요구)가

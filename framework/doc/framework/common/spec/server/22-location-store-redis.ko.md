@@ -152,11 +152,12 @@ dispose한다. 여러 Store가 물리 connection을 공유할 때 중복 dispose
 공식 Redis extension package는 언어별 naming convention에 맞는 `RedisLocationStore` 구현을 제공한다.
 공개 options는 instance 생성에 필요한 connection, key namespace와 operation timeout으로 제한한다.
 
-MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher
-descriptor는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 — 그래야 한 언어가
-쓴 record를 다른 언어가 읽을 수 있다. 이 네 record는 다음 저장 방식을 **반드시**
-따른다. Redis key는 `{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`이며,
-`{prefix}`는 provider가 등록 시 지정하는 key namespace, `preimage`는
+MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
+descriptor와 authority record는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 —
+그래야 한 언어가 쓴 record를 다른 언어가 읽을 수 있다. 이 다섯 record는 다음 저장
+방식을 **반드시** 따른다. Redis key는
+`{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`이며, `{prefix}`는 provider가
+등록 시 지정하는 key namespace, `preimage`는
 [Location runtime §2.4](21-location-runtime.ko.md#24-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가
 정하는 record별 logical key preimage다. 자료구조는 Redis `ZSET`이며, `Put`마다 provider
 쪽 단조 증가 `INCR` counter를 score로 붙여 append-log로 기록한다 — 가장 큰 score의
@@ -164,18 +165,27 @@ member가 현재 값이다. Member value는 `{originalKey, rawBytes(value), vers
 expiresAtMs, tombstone}`를 담은 cmsgpack array 앞에 1-byte format tag `0x01`을 붙인
 값이다. `rawBytes`는 base64로 다시 인코딩하지 않은 원본 bytes를 그대로 담는다.
 Provider는 인식하지 못하는 format tag를 만나면 명시적으로 실패시키며, 값을 추측해서
-읽지 않는다. Authority record는 아직 이 opaque record로 수렴하지 않았다 — 수렴 전까지
-authority의 저장 방식은 이 절 나머지가 정의하는 implementation detail로 남는다
-([Location runtime §2.4](21-location-runtime.ko.md#24-여러-언어가-같은-redis-record를-읽고-쓰는-방법)의
-authority 관련 문단 참고).
+읽지 않는다.
 
-위 네 record와 그 opaque record 표현을 제외하면, 다음 항목은 Redis provider
+`cmsgpack`은 Redis Lua `cmsgpack` library가 만드는 표준 MessagePack 인코딩을 뜻하며,
+array의 다섯 member는 다음 MessagePack type을 쓴다 — 일반 encoder의 기본값(예: byte
+문자열에 `bin` family를 쓰는 선택)은 Lua `cmsgpack`의 출력과 byte 단위로 일치하지 않으므로
+명시적으로 고정한다.
+
+| Member | MessagePack type |
+|---|---|
+| `originalKey` | `str` family(길이에 따라 fixstr/str8/str16/str32) — `bin`이 아니다 |
+| `rawBytes` | `str` family, 같은 규칙 — Lua 문자열은 별도 binary type 없이 raw bytes를 담는다 |
+| `version` | `str` family — 숫자가 아닌 opaque `StoreVersion` 문자열이다 |
+| `expiresAtMs` | 부호 없는 `int` family(크기에 따라 positive fixint/uint8/uint16/uint32/uint64); `0`은 만료 없음을 뜻한다 |
+| `tombstone` | `bool`(`0xc2` false / `0xc3` true) |
+
+바깥 array 자체는 `array` family(요소 5개이므로 fixarray)를 쓴다.
+
+위 다섯 record와 그 opaque record 표현을 제외하면, 다음 항목은 Redis provider
 implementation detail이며 public contract가 아니다.
 
-- Authority record가 사용하는 Redis key와 hash tag layout
-- HASH·SET·ZSET 중 authority record에 적용하는 선택
 - Lua script와 transaction 분할 방식
-- Authority record의 private encoding과 언어 전용 보조 색인(예: owner·stamp·kind 색인)
 - Connection lease, retry와 snapshot cursor 구현
 - Change stamp와 polling 최적화
 
