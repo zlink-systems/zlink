@@ -41,11 +41,13 @@
       공유 계약·4시나리오·run_e2e 배선). SF-F2/F3에서 relocation 자체는 단대단
       완결 검증(F3는 Redis 중단 중 포함), 클린 패스는 아래 29초 공백 결함에 차단.
       결함 해소 후 4종 재실행으로 마감
-- [ ] **cpp relocation 후 ~29초 공백+후속 생성 무시(신규 2026-08-19, 재현 2/2)**:
-      source_cleanup→message_follow_route_removed 사이 ~29초 지연 후 신규 actor
-      create가 서버측 create_requested조차 미기록. 30초 기한 관례(cold-probe
-      deadline·reconcile 창)와 일치 — 완료 경로가 기한 만료를 동기 대기하는
-      직렬화 의심(성능 결함). SF-F3의 배치 재시도 5회 급증도 동일 범주 가능성
+- [x] **cpp relocation 후 정지 — 수정 완료 `65f56b12b0 대신 아래`**: 29초 자체는
+      스펙 명령의 30s Message Follow 창(비결함). 진짜 결함은 fence 없는 로컬
+      요청자의 파킹 요청이 pending 미기록→재생 terminal pending-miss로 응답 무음
+      폐기→요청자 영구 대기(gdb·계측 실증). 수정: 파킹 조건과 동일 조건으로
+      pending 기록(빈 fence 허용)+fence-less terminal은 활성 follow target 노드
+      검증으로 수용, 회귀 유닛 고정. SF-F2 단대단 통과, 게이트 43/43(기존
+      app_host SIGSEGV도 소멸) [발견·해소 2026-08-19]
 - [x] Bingo 재검증 (2026-08-19): node·kotlin 각 3회 클린 실행 6/6 첫 시도 그린,
       relocation 실행 확인(대체·route-ready·target_resume), 지문 재현 없음 —
       당시 미커밋 편집 트리가 원인으로 종결 (로그 scratchpad/sample-gates/*-recheck-*)
