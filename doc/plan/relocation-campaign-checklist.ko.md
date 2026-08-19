@@ -169,21 +169,18 @@
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] **sol 문서 예비 리뷰(2026-08-19, 기준 bec7a9e48a) — 11건 발견·전량 배정**:
-      ① [M] cmd-44를 "commit"으로 칭하는 문구 3곳(19/48/51) vs 28의 store-CAS
-      규범 모순 — 문서 수정(terra) ② **[C] node authority allocation 레코드
+      ① [M] cmd-44 "commit" 문구 모순 → **해소(`9077314a7e`)** ② **[C] node authority allocation 레코드
       비규범**(target/spotKind/capacityBundle vs 규범 descriptor/descriptor
       LifecycleGeneration/capacity; 골든 테스트가 encodeAuthorityRecord 우회로
-      거짓 그린) — node 수정(terra) ③ [H] cpp 28 발신 게이트 상시 닫힘(생산
+      거짓 그린) → **해소 `52caf2aaca`**(규범 형태 수렴+골든이 실제 writer 구동) ③ [H] cpp 28 발신 게이트 상시 닫힘(생산
       경로 JSON 고정) — C-7 라이브 검증 결과와 함께 wire join 생산 선택 여부
       최종 판정 ④ [H] cpp cmd-44 재전송이 스펙 18 §487(무재시도 one-way) 위반
       — cpp interface 문서(06:191)가 구계약(고정 간격 재전송) 잔존, 공통 스펙
       우선: cpp 재전송 제거+문서 정정(C-7 후) ⑤ [H] node managed-stream bind
-      기한 소진이 RouteNotConnected→Unavailable(별도 사이트) — node 수정(terra)
-      ⑥ [H] node 공개 Session-Actor 인터페이스가 문서와 불일치(dispatch relay
-      overload 부재·비문서 bind(ZLinkActor) 노출) — node 수정(terra) ⑦ [M] 스펙
-      21 구현 상태 주석 낡음(dotnet 분할/cpp hex — 이미 수렴) — 문서(terra)
-      ⑧ [M] cpp/dotnet/java bind reference에 DeadlineExceeded 완료 누락 —
-      문서(terra) ⑨ [H] config-10 Track E1A~C/G/H/I 미구현·⑪ [H] config-6
+      기한 소진 오분류 → **해소 `52caf2aaca`**(DeadlineExceeded+cause 보존)
+      ⑥ [H] node 공개 Session-Actor 인터페이스 불일치 → **해소 `52caf2aaca`**
+      (bind=ActorRef 전용, relay(dispatch,…) overload 신설) ⑦ [M] 스펙 21 상태 주석 → **해소(`9077314a7e`)** ⑧ [M] bind reference
+      DeadlineExceeded 누락 → **해소(4언어 en/ko, 문서 커밋)** ⑨ [H] config-10 Track E1A~C/G/H/I 미구현·⑪ [H] config-6
       26중 14만 지원 — **F(e2e_inventory backlog, 사용자 확정 별도 세션) 범위로
       분류** ⑩ [H] ST-C4 checksum variant — 기존 B 항목에서 추적 중
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
