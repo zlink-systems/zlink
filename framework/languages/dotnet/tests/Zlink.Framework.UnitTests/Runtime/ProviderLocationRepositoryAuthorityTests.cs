@@ -10,6 +10,11 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    private static readonly ZLinkStoreKey ObjectCounterKey =
+        new("zlink:v11:object-counter");
+    private static readonly ZLinkStoreKey AuthorityOwnerCounterKey =
+        new("zlink:v11:authority-owner-counter");
+
     [Fact]
     public async Task OwnerClaimResponseLossReconcilesTheAppliedLease()
     {
@@ -836,6 +841,112 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                     result.Reservation.AuthorityOwnerGeneration)
                 .Distinct()
                 .Count());
+    }
+
+    [Fact]
+    public async Task ReserveUsesGoldenNextToIssueCountersAsBareDecimal()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "counter-golden-owner");
+        var descriptor = Descriptor("target", owner);
+        _ = await repository.UpdateMeshNodeAsync(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        await SeedCounterAsync(provider, ObjectCounterKey, "7");
+        await SeedCounterAsync(provider, AuthorityOwnerCounterKey, "7");
+
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation("actor:counter-golden", descriptor, owner)));
+
+        Assert.Equal(7UL, reserved.Reservation.ObjectGeneration);
+        Assert.Equal(7UL, reserved.Reservation.AuthorityOwnerGeneration);
+        Assert.Equal("8", await ReadCounterAsync(provider, ObjectCounterKey));
+        Assert.Equal("8", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+    }
+
+    [Fact]
+    public async Task ReserveBootstrapsAbsentGenerationCountersAtOne()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "counter-bootstrap-owner");
+        var descriptor = Descriptor("target", owner);
+        _ = await repository.UpdateMeshNodeAsync(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation("actor:counter-bootstrap", descriptor, owner)));
+
+        Assert.Equal(1UL, reserved.Reservation.ObjectGeneration);
+        Assert.Equal(1UL, reserved.Reservation.AuthorityOwnerGeneration);
+        Assert.Equal("2", await ReadCounterAsync(provider, ObjectCounterKey));
+        Assert.Equal("2", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+    }
+
+    [Fact]
+    public async Task ReserveReturnsGenerationExhaustedWithoutMutatingCounter()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "counter-exhausted-owner");
+        var descriptor = Descriptor("target", owner);
+        _ = await repository.UpdateMeshNodeAsync(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        await SeedCounterAsync(provider, ObjectCounterKey, long.MaxValue.ToString());
+        var request = Reservation("actor:counter-exhausted", descriptor, owner);
+
+        Assert.IsType<ZLinkObjectReserveResult.GenerationExhausted>(
+            await repository.ReserveAsync(request));
+        Assert.Equal(
+            long.MaxValue.ToString(),
+            await ReadCounterAsync(provider, ObjectCounterKey));
+        Assert.IsType<ZLinkStoreReadResult.Missing>(
+            await provider.ReadAsync(
+                ZLinkProviderLocationRepository.AuthorityMetaKey(request.Key)));
+    }
+
+    [Fact]
+    public async Task AggregateNewOwnerBlockStoresTheNextGenerationAfterItsRange()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var sourceOwner = await ClaimAsync(repository, "counter-block-source");
+        var targetOwner = await ClaimAsync(repository, "counter-block-target");
+        var source = Descriptor("source", sourceOwner);
+        var target = Descriptor("target", targetOwner);
+        _ = await repository.UpdateMeshNodeAsync(source, ZLinkLocationWriteIntent.NewClaim);
+        _ = await repository.UpdateMeshNodeAsync(target, ZLinkLocationWriteIntent.NewClaim);
+        var participants = new List<ZLinkAggregateParticipant>();
+        for (var index = 0; index < 2; index++)
+        {
+            var create = Reservation($"actor:counter-block:{index}", source, sourceOwner);
+            var reservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+                await repository.ReserveAsync(create));
+            var created = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(
+                    reservation.Reservation,
+                    new byte[] { 0xA1 })).Snapshot;
+            participants.Add(new ZLinkAggregateParticipant(
+                create.Key,
+                created.StoreVersion,
+                ZLinkAuthorityGenerationTransition.NewOwner,
+                new byte[] { 0xA2 },
+                new byte[] { 0xA3 }));
+        }
+        await SeedCounterAsync(provider, AuthorityOwnerCounterKey, "7");
+
+        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+            await repository.PrepareAggregateAsync(
+                AggregateRequest(participants, target, targetOwner)));
+
+        Assert.Equal(7UL, prepared.TargetAuthorityOwnerGenerations[participants[0].Key]);
+        Assert.Equal(8UL, prepared.TargetAuthorityOwnerGenerations[participants[1].Key]);
+        Assert.Equal("9", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
     }
 
     [Fact]
@@ -2309,6 +2420,37 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.ClaimOwnerLeaseAsync(
                 ownerId,
                 leaseTtl ?? TimeSpan.FromMinutes(2))).Token;
+
+    private static async ValueTask SeedCounterAsync(
+        IZLinkLocationStore store,
+        ZLinkStoreKey key,
+        string value)
+    {
+        var existing = await store.ReadAsync(key);
+        ZLinkStoreCondition condition = existing switch
+        {
+            ZLinkStoreReadResult.Missing => new ZLinkStoreCondition.Missing(key),
+            ZLinkStoreReadResult.Found found =>
+                new ZLinkStoreCondition.Version(key, found.Value.Version),
+            _ => throw new InvalidOperationException()
+        };
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await store.WriteAsync(new ZLinkStoreWriteRequest(
+                [condition],
+                [new ZLinkStoreMutation.Put(
+                    key,
+                    Encoding.UTF8.GetBytes(value),
+                    null)])));
+    }
+
+    private static async ValueTask<string> ReadCounterAsync(
+        IZLinkLocationStore store,
+        ZLinkStoreKey key)
+    {
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await store.ReadAsync(key));
+        return Encoding.UTF8.GetString(found.Value.Bytes.Span);
+    }
 
     private static ZLinkMeshNodeDescriptor Descriptor(
         string node,

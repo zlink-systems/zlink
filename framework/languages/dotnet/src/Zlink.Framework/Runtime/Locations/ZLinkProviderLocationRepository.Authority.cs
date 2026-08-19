@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Buffers.Binary;
+using System.Globalization;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -306,9 +307,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                     .ConfigureAwait(false);
             nextAuthorityOwnerGeneration =
                 put.TargetAuthorityOwnerGeneration == 0
-                    ? counter.Value == long.MaxValue
+                    ? counter.Value == MaximumGeneration
                         ? 0
-                        : counter.Value + 1
+                        : counter.Value
                     : put.TargetAuthorityOwnerGeneration;
             if (nextAuthorityOwnerGeneration == 0)
                 return new ZLinkAuthorityCompareExchangeResult
@@ -317,13 +318,15 @@ internal sealed partial class ZLinkProviderLocationRepository
                     <= current.Meta.AuthorityOwnerGeneration
                 || nextAuthorityOwnerGeneration > long.MaxValue)
                 return Conflict(current);
-            if (nextAuthorityOwnerGeneration > counter.Value)
+            if (nextAuthorityOwnerGeneration >= counter.Value)
             {
+                if (nextAuthorityOwnerGeneration == MaximumGeneration)
+                    return new ZLinkAuthorityCompareExchangeResult
+                        .GenerationExhausted();
                 AddCondition(conditions, counter.Condition);
                 mutations.Add(new ZLinkStoreMutation.Put(
                     AuthorityOwnerGenerationCounterKey(),
-                    Encode(new AuthorityOwnerGenerationCounter(
-                        nextAuthorityOwnerGeneration)),
+                    EncodeGenerationCounter(nextAuthorityOwnerGeneration + 1),
                     null));
             }
         }
@@ -484,12 +487,12 @@ internal sealed partial class ZLinkProviderLocationRepository
         var authorityCounter =
             await ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
                 .ConfigureAwait(false);
-        if (objectCounter.Value == long.MaxValue
-            || authorityCounter.Value == long.MaxValue)
+        if (objectCounter.Value == MaximumGeneration
+            || authorityCounter.Value == MaximumGeneration)
             return new ZLinkObjectReserveResult.GenerationExhausted();
 
-        var objectGeneration = objectCounter.Value + 1;
-        var authorityOwnerGeneration = authorityCounter.Value + 1;
+        var objectGeneration = objectCounter.Value;
+        var authorityOwnerGeneration = authorityCounter.Value;
         var reservationId = Guid.NewGuid().ToString("N");
         var allocation = new ZLinkPlacementAllocation(
             ZLinkPlacementAllocationState.Reserved,
@@ -546,13 +549,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                         null),
                     new ZLinkStoreMutation.Put(
                         ObjectGenerationCounterKey(),
-                        Encode(new ObjectGenerationCounter(
-                            objectGeneration)),
+                        EncodeGenerationCounter(objectGeneration + 1),
                         null),
                     new ZLinkStoreMutation.Put(
                         AuthorityOwnerGenerationCounterKey(),
-                        Encode(new AuthorityOwnerGenerationCounter(
-                            authorityOwnerGeneration)),
+                        EncodeGenerationCounter(authorityOwnerGeneration + 1),
                         null)
                 ]),
                 cancellationToken)
@@ -1166,17 +1167,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         var newOwnerCount = request.Participants.Count(static participant =>
             participant.OwnerTransition
             == ZLinkAuthorityGenerationTransition.NewOwner);
-        var authorityHighWater = authorities
-            .Select(static authority => authority!)
-            .Select(static authority =>
-                authority.Meta.AuthorityOwnerGeneration)
-            .Append(authorityCounter.Value)
-            .Max();
         if (newOwnerCount > 0
-            && authorityHighWater
+            && authorityCounter.Value
             > (ulong)long.MaxValue - (ulong)newOwnerCount)
             return new ZLinkAggregatePrepareResult.GenerationExhausted();
-        var nextIssuedGeneration = authorityHighWater;
+        var nextIssuedGeneration = authorityCounter.Value;
         var targetAuthorityOwnerGenerations =
             new Dictionary<ZLinkAuthorityKey, ulong>(
                 request.Participants.Count);
@@ -1188,7 +1183,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             targetAuthorityOwnerGenerations[participant.Key] =
                 participant.OwnerTransition
                 == ZLinkAuthorityGenerationTransition.NewOwner
-                    ? checked(++nextIssuedGeneration)
+                    ? checked(nextIssuedGeneration++)
                     : currentGeneration;
         }
         try
@@ -1304,8 +1299,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 null),
             new ZLinkStoreMutation.Put(
                 AuthorityOwnerGenerationCounterKey(),
-                Encode(new AuthorityOwnerGenerationCounter(
-                    nextIssuedGeneration)),
+                EncodeGenerationCounter(nextIssuedGeneration),
                 null)
         };
             ZLinkStoreWriteResult result;
@@ -4523,12 +4517,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             ZLinkStoreReadResult.Missing =>
                 new AuthorityOwnerGenerationCounterState(
-                    0,
+                    1,
                     new ZLinkStoreCondition.Missing(key)),
             ZLinkStoreReadResult.Found found =>
                 new AuthorityOwnerGenerationCounterState(
-                    Decode<AuthorityOwnerGenerationCounter>(
-                        found.Value.Bytes).Value,
+                    DecodeGenerationCounter(found.Value.Bytes),
                     new ZLinkStoreCondition.Version(
                         key,
                         found.Value.Version)),
@@ -4555,12 +4548,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             ZLinkStoreReadResult.Missing =>
                 new ObjectGenerationCounterState(
-                    0,
+                    1,
                     new ZLinkStoreCondition.Missing(key)),
             ZLinkStoreReadResult.Found found =>
                 new ObjectGenerationCounterState(
-                    Decode<ObjectGenerationCounter>(
-                        found.Value.Bytes).Value,
+                    DecodeGenerationCounter(found.Value.Bytes),
                     new ZLinkStoreCondition.Version(
                         key,
                         found.Value.Version)),
@@ -4852,6 +4844,30 @@ internal sealed partial class ZLinkProviderLocationRepository
             value,
             ZLinkJsonSerializerOptions.Default);
 
+    private static byte[] EncodeGenerationCounter(ulong value) =>
+        Encoding.UTF8.GetBytes(value.ToString(CultureInfo.InvariantCulture));
+
+    private static ulong DecodeGenerationCounter(ReadOnlyMemory<byte> bytes)
+    {
+        var text = Encoding.UTF8.GetString(bytes.Span);
+        if (!ulong.TryParse(
+                text,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var value)
+            || value is 0 or > MaximumGeneration
+            || !string.Equals(
+                text,
+                value.ToString(CultureInfo.InvariantCulture),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The Location Store generation counter is not canonical decimal.");
+        }
+
+        return value;
+    }
+
     // Authority-record reader (spec 21 §420-425: every opaque record reader
     // MUST fail on an unrecognized recordVersion instead of guessing how to
     // read it). Same fail-closed shape as DecodeDescriptor/DecodeOwner.
@@ -4901,13 +4917,13 @@ internal sealed partial class ZLinkProviderLocationRepository
     }
 
     private static ZLinkStoreKey AuthorityOwnerGenerationCounterKey() =>
-        Key($"{AuthorityPrefix}owner-generation-counter");
+        Key($"{Prefix}authority-owner-counter");
 
     // Store-wide monotonic sequence for ObjectGeneration (checklist C-2b) --
     // a sibling to AuthorityOwnerGenerationCounterKey, not a per-identity
     // counter.
     private static ZLinkStoreKey ObjectGenerationCounterKey() =>
-        Key($"{AuthorityPrefix}object-generation-counter");
+        Key($"{Prefix}object-counter");
 
     private const string AuthorityCanonicalPreimagePrefix = "authority\0";
 
@@ -5265,13 +5281,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         CapacityRecord Record,
         ZLinkStoreCondition Condition);
 
-    private sealed record AuthorityOwnerGenerationCounter(ulong Value);
-
     private sealed record AuthorityOwnerGenerationCounterState(
         ulong Value,
         ZLinkStoreCondition Condition);
-
-    private sealed record ObjectGenerationCounter(ulong Value);
 
     private sealed record ObjectGenerationCounterState(
         ulong Value,
