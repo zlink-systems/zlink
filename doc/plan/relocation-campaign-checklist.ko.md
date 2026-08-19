@@ -73,7 +73,9 @@
       :349), node=fire-and-forget errorSink만·무유형(actor-packet-relay.ts:546).
       스펙 32 일반 원칙(기한 내 미완료=DeadlineExceeded)상 cpp가 규범 —
       **판정: 3언어를 소진 시 DeadlineExceeded 유형화로 정렬**(스펙 무변경).
-      java·node 정렬 에이전트 투입, dotnet은 push-relay 수정 후
+      **node 완료 `6a5b42b098`**(양 경로 유형화, cause 보존, 136/136·82/82),
+      **java 완료 `c835984c89`**(4개소: retry 소진+route-wait 3곳, 테스트 4종,
+      모듈 게이트 그린). dotnet만 잔여 — push-relay 수정 후 투입
 - [ ] **ST-C2 session bind 실패 — 근본 원인 확정(2026-08-19)**: `8bae89dc0f`가
       stream_host_service의 stale-route bind 재시도(무효화→route 변경 대기→재진입,
       5s 기한)를 삭제하며 기계를 죽은 코드로 방치(retryable_outcome 미사용,
