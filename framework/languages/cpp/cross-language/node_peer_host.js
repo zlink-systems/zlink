@@ -87,8 +87,13 @@ async function channelServer() {
     imports: [nestjs.ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
+        /* RouteMesh 10.x (1de8f43917) replaced enableServer(endpoint) with the
+         * server().setBindHost(host).listen(port) role builder. */
+        const serverEndpoint = new URL(require_('server-endpoint'));
         builder.addClientServerChannel(require_('channel-name'))
-          .enableServer(require_('server-endpoint'))
+          .server()
+          .setBindHost(serverEndpoint.hostname)
+          .listen(Number(serverEndpoint.port))
           .addRequestHandler('TestHostProfileRequest', ProfileRequestHandler)
           .addSendHandler('TestHostProfileSend', ProfileSendHandler);
         return builder.build();
@@ -108,8 +113,11 @@ async function channelClient() {
   Module({
     imports: [nestjs.ZLinkModule.forRootFactory({
       useFactory: () => nestjs.zlinkFramework()
+        /* RouteMesh 10.x (1de8f43917): enableClient(endpoint) is now
+         * client().connect(endpoint). */
         .addClientServerChannel(require_('channel-name'))
-        .enableClient(require_('server-endpoint'))
+        .client()
+        .connect(require_('server-endpoint'))
         .build()
     })]
   })(ClientModule);
@@ -586,9 +594,27 @@ async function messageFollow() {
     nodeRoot,
     'packages/framework/dist/runtime/backend/node/node-raw-mesh-backend.js'
   ));
+  /* The raw backend constructor now requires an explicit binding port and the
+   * host Application Job Queue (ownership-alignment work); mirror the m6a/m6b
+   * contract tests' standalone construction. */
+  const { ZLinkNodeRawBindingPort } = require(path.join(
+    nodeRoot,
+    'packages/framework/dist/runtime/backend/node/node-raw-binding-port.js'
+  ));
+  const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require(path.join(
+    nodeRoot,
+    'packages/framework/dist/runtime/host/application-job-queue.js'
+  ));
   const localRid = require_('node-rid');
   const peerRid = require_('peer-rid');
-  const backend = new ZLinkNodeRawMeshBackend('message-follow', localRid);
+  const backend = new ZLinkNodeRawMeshBackend(
+    'message-follow',
+    localRid,
+    new ZLinkNodeRawBindingPort(),
+    new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 2_048n }, () => 1n)
+    )
+  );
   let sent = false;
   let received = false;
   let finished = false;

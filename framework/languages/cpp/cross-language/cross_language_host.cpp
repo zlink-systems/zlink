@@ -828,8 +828,14 @@ int main (int argc, char **argv)
                 return;
             }
             if (mode == "channel-publisher") {
+                /* The discovery-capable publisher start path now requires an
+                 * explicit routing id even for a manually-bound publisher
+                 * (fanout_location_runtime::start_publisher validation);
+                 * give the host a fixed one so the stage can run. */
                 options.add_fanout_channel (require ("channel-name"))
-                  .enable_publisher (require ("publisher-endpoint"));
+                  .enable_publisher (require ("publisher-endpoint"))
+                  .set_routing_id (
+                    zlink::routing_id_t::from ("cpp-cross-publisher"));
                 return;
             }
             if (mode == "stream-server") {

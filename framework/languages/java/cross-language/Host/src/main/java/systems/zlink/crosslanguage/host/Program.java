@@ -10,6 +10,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -131,8 +132,13 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer crossLanguageFramework(
         HostArgs args,
-        ZLinkRedisLocationStore locationStore,
-        ZLinkRedisRelocationStore relocationStore) {
+        ObjectProvider<ZLinkRedisLocationStore> locationStoreProvider,
+        ObjectProvider<ZLinkRedisRelocationStore> relocationStoreProvider) {
+        // The store beans are null in modes without --redis-endpoint
+        // (spot-route, channel); ObjectProvider keeps them optional so those
+        // modes can still wire this configurer.
+        ZLinkRedisLocationStore locationStore = locationStoreProvider.getIfAvailable();
+        ZLinkRedisRelocationStore relocationStore = relocationStoreProvider.getIfAvailable();
         return options -> {
             String mode = args.mode();
             if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {
@@ -233,15 +239,18 @@ public final class Program {
     ApplicationRunner entryRelocationRunner(
         HostArgs args,
         EventSink sink,
-        ZLinkActorManager actors,
-        ZLinkActorClient actorClient,
+        ObjectProvider<ZLinkActorManager> actorsProvider,
+        ObjectProvider<ZLinkActorClient> actorClientProvider,
         ZLinkFrameworkLifecycle lifecycle) {
+        // Actor beans only exist in the entry-spot modes (the framework
+        // exposes them when actor factories are registered); keep them
+        // optional so the spot-route/channel modes can still boot.
         return applicationArguments -> {
             String mode = args.mode();
             if ("entry-spot-source".equals(mode)) {
-                runEntryRelocationSource(args, sink, actors, lifecycle);
+                runEntryRelocationSource(args, sink, actorsProvider.getObject(), lifecycle);
             } else if ("entry-spot-target".equals(mode)) {
-                runEntryRelocationTarget(args, sink, actorClient);
+                runEntryRelocationTarget(args, sink, actorClientProvider.getObject());
             }
         };
     }
@@ -303,6 +312,11 @@ public final class Program {
 
     private static void runEntryRelocationTarget(
         HostArgs args, EventSink sink, ZLinkActorClient actorClient) {
+        // ApplicationRunners execute inside SpringApplication.run(), BEFORE
+        // main() writes the ready file -- but this runner polls for up to 60s
+        // for a probe that the harness only triggers AFTER seeing the ready
+        // file. Write it up front so the source side can start.
+        writeReadyFile(args);
         String actorId = args.option("actor-id", "cross-lang-relocation-actor");
         String nodeRid = args.require("node-rid");
         long deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos();
