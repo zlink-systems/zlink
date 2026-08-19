@@ -339,6 +339,7 @@
       명문+21 §2.4 포인터+골든 갱신(cpp 골든 시드 {json}→행2개). 폐기 리터럴
       5종 1회 flush 필요(물리 키=sha256(논리키) — ops 노트 필수). 슬라이스:
       **spec+golden+java 완료 `51f0c1d4ea`**, **node 완료 `4dc7a7eae7`**,
+      **cpp 완료 `10e5451594`(4언어 수렴 종결 — golden byte-exact·redis 라이브 그린)**,
       **dotnet 완료 `edcaf60637`(게이트 1776/1779 인가만·conformance 9/9)** — cpp(최대·
       last→next 플립)만 잔여, envelope 수렴 종료 후 투입
 - [ ] **node discovery-sharing 회귀(신규 2026-08-19, 청정 HEAD 재현 확인)**:
