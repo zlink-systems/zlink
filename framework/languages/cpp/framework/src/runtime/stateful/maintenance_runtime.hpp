@@ -229,6 +229,8 @@ struct relocation_unit_t
                             const relocation_unit_t &) = default;
 };
 
+enum class relocation_reason_t;
+
 struct eligible_relocation_unit_t
 {
     relocation_unit_t unit;
@@ -257,7 +259,7 @@ struct eligible_relocation_unit_t
          * relocation-envelope-v1 payload deliberately has no session-route
          * section, and command 44 commit must still originate from the
          * target runtime (20 §5), so the target stages them here. */
-        std::function<task_t<bool> (
+        std::function<task_t<relocation_reason_t> (
           const std::vector<frozen_object_state_t> &,
           const relocation_payload_manifest_t &,
           const std::vector<protocol::session_relocation_route_t> &)>
@@ -577,7 +579,7 @@ class maintenance_runtime_t
       const eligible_relocation_unit_t::canonical_wire_context_t &context,
       const relocation_ingress_batch_t &batch,
       relocation_reason_t &failure_reason) const;
-    task_t<bool> prepare_target (
+    task_t<relocation_reason_t> prepare_target (
       const eligible_relocation_unit_t::canonical_wire_context_t &context,
       const std::vector<frozen_object_state_t> &participants,
       const relocation_payload_manifest_t &manifest);

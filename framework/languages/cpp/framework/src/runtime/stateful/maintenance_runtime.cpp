@@ -441,20 +441,20 @@ maintenance_runtime_t::build_boundary_records (
     return records;
 }
 
-task_t<bool> maintenance_runtime_t::prepare_target (
+task_t<relocation_reason_t> maintenance_runtime_t::prepare_target (
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
   const std::vector<frozen_object_state_t> &participants,
   const relocation_payload_manifest_t &manifest)
 {
-    bool target_prepared = false;
+    auto reason = relocation_reason_t::restore_failed;
     try {
-        target_prepared = co_await context.prepare_target (
+        reason = co_await context.prepare_target (
           participants, manifest, context.session_routes);
     }
     catch (...) {
-        target_prepared = false;
+        reason = relocation_reason_t::restore_failed;
     }
-    co_return target_prepared;
+    co_return reason;
 }
 
 std::uint64_t maintenance_runtime_t::effective_in_flight_budget () const noexcept
@@ -920,22 +920,22 @@ task_t<bool> maintenance_runtime_t::relocate_prepare_target (
       state->inventory_digest, state->manifest});
     auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
     auto output = completion->task ();
-    auto prepared = std::make_shared<task_t<bool>> (prepare_target (
+    auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
       state->context, {state->seal_attempt.seal.participants.front ()},
       state->manifest));
     detail::observe_task_completion (
       *prepared, [this, state, completion, prepared] (
-                   const result_t<bool> &settled) {
+                   const result_t<relocation_reason_t> &settled) {
           if (!settled) {
               completion->complete (detail::propagate_failure<bool> (
                 settled, "relocation target preparation failed"));
               return;
           }
-          if (!settled.value ()) {
+          if (settled.value () != relocation_reason_t::none) {
               (void) _objects.abort_relocation_before_cutover (
                 state->seal_attempt.seal.token);
               state->result.emplace (finish ({relocation_terminal_t::blocked,
-                                      relocation_reason_t::restore_failed,
+                                      settled.value (),
                                       std::nullopt}));
               completion->complete (result_t<bool>::success (false));
               return;
@@ -1203,23 +1203,25 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->budget_reserved =
       std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
-    auto prepared = std::make_shared<task_t<bool>> (prepare_target (
+    auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
       persisted_context, seal.participants, state->manifest));
     const auto chunks_sent =
       co_await relocate_send_state_chunks (state);
     release_transfer_budget (state->budget_reserved);
     state->budget_reserved = 0;
-    bool target_prepared = false;
+    auto target_prepare_reason = relocation_reason_t::restore_failed;
     try {
-        target_prepared = co_await *prepared;
+        target_prepare_reason = co_await *prepared;
     }
     catch (...) {
-        target_prepared = false;
+        target_prepare_reason = relocation_reason_t::restore_failed;
     }
-    if (!target_prepared || !chunks_sent) {
+    if (target_prepare_reason != relocation_reason_t::none || !chunks_sent) {
         (void) _objects.abort_relocation_before_cutover (seal.token);
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-                relocation_reason_t::restore_failed, {}};
+                target_prepare_reason != relocation_reason_t::none
+                  ? target_prepare_reason
+                  : relocation_reason_t::restore_failed, {}};
     }
     const target_only_cas_t handoff{
       sources, target_node_id, target_owner,

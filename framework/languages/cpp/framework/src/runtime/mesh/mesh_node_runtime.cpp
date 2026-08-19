@@ -1127,7 +1127,7 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
           const runtime::stateful::relocation_payload_manifest_t &manifest,
           const std::vector<runtime::protocol::session_relocation_route_t>
             &session_routes)
-          -> task_t<bool> {
+          -> task_t<runtime::stateful::relocation_reason_t> {
             runtime::protocol::relocation_object_kind_t kind;
             switch (source.kind) {
                 case runtime::stateful::object_kind_t::actor:
@@ -1140,7 +1140,7 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
                     kind = runtime::protocol::relocation_object_kind_t::instance_spot;
                     break;
                 default:
-                    co_return false;
+                    co_return runtime::stateful::relocation_reason_t::restore_failed;
             }
             co_return co_await _node->prepare_relocation_remote (
               target.rid,
@@ -1160,7 +1160,7 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
                 manifest.checksum_crc32c,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
-              std::chrono::seconds (5), nullptr, session_routes);
+              std::chrono::seconds (5), session_routes);
         },
       .send_state_chunk =
         [this, target] (const runtime::protocol::relocation_state_t &chunk)
@@ -1374,7 +1374,7 @@ mesh_node_runtime_t::relocate_application_unit (
           const runtime::stateful::relocation_payload_manifest_t &manifest,
           const std::vector<runtime::protocol::session_relocation_route_t>
             &session_routes)
-          -> task_t<bool> {
+          -> task_t<runtime::stateful::relocation_reason_t> {
             runtime::protocol::relocation_object_kind_t kind;
             switch (sources[principal_index].kind) {
                 case object_kind_t::actor:
@@ -1387,7 +1387,7 @@ mesh_node_runtime_t::relocate_application_unit (
                     kind = runtime::protocol::relocation_object_kind_t::instance_spot;
                     break;
                 default:
-                    co_return false;
+                    co_return runtime::stateful::relocation_reason_t::restore_failed;
             }
             co_return co_await _node->prepare_relocation_remote (
               target.rid,
@@ -1408,7 +1408,7 @@ mesh_node_runtime_t::relocate_application_unit (
                 manifest.checksum_crc32c,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
-              std::chrono::seconds (5), nullptr, session_routes);
+              std::chrono::seconds (5), session_routes);
         },
       .send_state_chunk =
         [this, target] (const runtime::protocol::relocation_state_t &chunk)

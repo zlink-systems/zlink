@@ -2061,15 +2061,29 @@ framework_error_kind_t classify_relocation_failure_code (
     return map_relocation_failure_code (wire_code);
 }
 
-task_t<bool> public_host_runtime_t::prepare_relocation_remote (
+stateful::relocation_reason_t classify_relocation_failure_reason (
+  std::uint32_t wire_code) noexcept
+{
+    switch (map_relocation_failure_code (wire_code)) {
+        case framework_error_kind_t::data_lost:
+            return stateful::relocation_reason_t::checksum_mismatch;
+        case framework_error_kind_t::capacity_exceeded:
+            return stateful::relocation_reason_t::permit_unavailable;
+        case framework_error_kind_t::deadline_exceeded:
+            return stateful::relocation_reason_t::turn_active;
+        default:
+            return stateful::relocation_reason_t::restore_failed;
+    }
+}
+
+task_t<stateful::relocation_reason_t> public_host_runtime_t::prepare_relocation_remote (
   const zlink::routing_id_t &target_node,
   protocol::relocation_prepare_t prepare,
   std::chrono::milliseconds timeout,
-  framework_error_kind_t *failure_kind,
   std::vector<protocol::session_relocation_route_t> session_routes)
 {
     if (timeout <= std::chrono::milliseconds::zero ())
-        co_return false;
+        co_return stateful::relocation_reason_t::restore_failed;
     const auto response =
       co_await _transport->request_relocation_prepare (
         target_node.to_bytes (), prepare, timeout,
@@ -2086,12 +2100,11 @@ task_t<bool> public_host_runtime_t::prepare_relocation_remote (
           "relocation-prepare-failed",
           "wire_failure_code=" + std::to_string (response.failed->failure_code)
             + " kind=" + std::to_string (static_cast<int> (kind)));
-        if (failure_kind)
-            *failure_kind = kind;
-        co_return false;
+        co_return classify_relocation_failure_reason (
+          response.failed->failure_code);
     }
     if (!response.ready)
-        co_return false;
+        co_return stateful::relocation_reason_t::restore_failed;
     const auto &ready = *response.ready;
     if (ready.relocation != prepare.relocation
         || ready.target_attempt_generation
@@ -2100,8 +2113,8 @@ task_t<bool> public_host_runtime_t::prepare_relocation_remote (
         || ready.target != prepare.target
         || ready.object != prepare.object
         || ready.sender_role != protocol::relocation_role_t::target)
-        co_return false;
-    co_return true;
+        co_return stateful::relocation_reason_t::restore_failed;
+    co_return stateful::relocation_reason_t::none;
 }
 
 task_t<bool> public_host_runtime_t::cutover_relocation_remote (
@@ -3517,6 +3530,140 @@ task_t<void> public_host_runtime_t::retry_bound_session_replacements ()
     co_return;
 }
 
+void public_host_runtime_t::reply_relocation_assembly_failure (
+  const pending_relocation_assembly_t &pending,
+  protocol::framework_error_code code)
+{
+    (void) _transport->reply_relocation_failed (
+      pending.request,
+      protocol::relocation_failed_t{
+        pending.prepare.relocation,
+        pending.prepare.target_attempt_generation,
+        pending.prepare.coordinator,
+        pending.prepare.target,
+        pending.prepare.object,
+        protocol::relocation_role_t::target,
+        static_cast<std::uint32_t> (code)});
+}
+
+void public_host_runtime_t::discard_relocation_assembly_staging (
+  const pending_relocation_assembly_t &pending,
+  const relocation_assembly_staging_t &staging) noexcept
+{
+    for (const auto &wire_object : staging.wire_objects) {
+        try {
+            (void) _relocation_wire->unregister_target (
+              pending.prepare.relocation,
+              pending.prepare.target_attempt_generation, wire_object);
+        }
+        catch (...) {
+        }
+    }
+}
+
+bool public_host_runtime_t::restore_relocation_assembly (
+  const pending_relocation_assembly_t &pending,
+  const relocation_assembly_staging_t &staging)
+{
+    stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
+    try {
+        restored = staging.targets.size () == 1
+                     ? _objects.restore_relocation (
+                         staging.frozen.front (), staging.targets.front (),
+                         staging.restore_identity, {})
+                     : _objects.restore_relocation_aggregate (
+                         staging.frozen, staging.targets,
+                         staging.restore_identity, {});
+    }
+    catch (...) {
+        discard_relocation_assembly_staging (pending, staging);
+        reply_relocation_assembly_failure (
+          pending, protocol::framework_error_code::requestFailed);
+        return false;
+    }
+    if (restored == stateful::stateful_error_t::none
+        || restored == stateful::stateful_error_t::already_exists)
+        return true;
+    discard_relocation_assembly_staging (pending, staging);
+    reply_relocation_assembly_failure (
+      pending, protocol::framework_error_code::requestFailed);
+    return false;
+}
+
+void public_host_runtime_t::activate_relocation_assembly (
+  const relocation_attempt_key_t &key,
+  const pending_relocation_assembly_t &pending,
+  relocation_assembly_staging_t staging)
+{
+    relocation_target_attempt_t attempt;
+    attempt.prepare = pending.prepare;
+    attempt.restore_identity = staging.restore_identity;
+    attempt.sources = std::move (staging.sources);
+    attempt.targets = std::move (staging.targets);
+    attempt.wire_objects = std::move (staging.wire_objects);
+    for (const auto &route : staging.session_routes) {
+        attempt.session_routes.emplace_back ();
+        attempt.session_routes.back ().route = route;
+    }
+    attempt.ready = true;
+    attempt.attempt_expires_at = std::chrono::steady_clock::now ()
+                                 + relocation_attempt_retention;
+    {
+        std::lock_guard lock (_mutex);
+        if (!_relocation_target_attempts.emplace (key, std::move (attempt)).second) {
+            reply_relocation_assembly_failure (
+              pending, protocol::framework_error_code::requestFailed);
+            return;
+        }
+    }
+    const auto ready_sent = _transport->reply_relocation_ready (
+      pending.request,
+      protocol::relocation_ready_t{pending.prepare.relocation,
+                                   pending.prepare.target_attempt_generation,
+                                   pending.prepare.coordinator,
+                                   pending.prepare.target,
+                                   pending.prepare.object,
+                                   protocol::relocation_role_t::target});
+    if (ready_sent) {
+        std::lock_guard lock (_mutex);
+        const auto found = _relocation_target_attempts.find (key);
+        if (found != _relocation_target_attempts.end ())
+            found->second.ready_fallback_at = std::chrono::steady_clock::now ()
+                                              + _relocation_cutover_wait;
+        return;
+    }
+    std::optional<relocation_target_attempt_t> aborted;
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = _relocation_target_attempts.find (key);
+        if (found != _relocation_target_attempts.end ()) {
+            aborted.emplace (std::move (found->second));
+            _relocation_target_attempts.erase (found);
+        }
+    }
+    if (!aborted)
+        return;
+    for (const auto &wire_object : aborted->wire_objects) {
+        try {
+            (void) _relocation_wire->unregister_target (
+              aborted->prepare.relocation,
+              aborted->prepare.target_attempt_generation, wire_object);
+        }
+        catch (...) {
+        }
+    }
+    try {
+        if (aborted->targets.size () == 1)
+            (void) _objects.abort_relocation_restore (
+              aborted->targets.front (), aborted->restore_identity);
+        else
+            (void) _objects.abort_relocation_restore_aggregate (
+              aborted->targets, aborted->restore_identity);
+    }
+    catch (...) {
+    }
+}
+
 void public_host_runtime_t::complete_relocation_assembly (
   const relocation_attempt_key_t &key, pending_relocation_assembly_t pending)
 {
@@ -3530,19 +3677,9 @@ void public_host_runtime_t::complete_relocation_assembly (
     // as maintenance_runtime.cpp's aggregate path already does for the
     // equivalent restore_failed case (relocation_terminal_t::blocked, not
     // data_lost).
-    const auto reply_failure = [&] (
-      protocol::framework_error_code code =
-        protocol::framework_error_code::relocationDataLost) {
-        (void) _transport->reply_relocation_failed (
-          pending.request,
-          protocol::relocation_failed_t{
-            pending.prepare.relocation,
-            pending.prepare.target_attempt_generation,
-            pending.prepare.coordinator,
-            pending.prepare.target,
-            pending.prepare.object,
-            protocol::relocation_role_t::target,
-            static_cast<std::uint32_t> (code)});
+    const auto reply_failure = [&] (protocol::framework_error_code code =
+                                      protocol::framework_error_code::relocationDataLost) {
+        reply_relocation_assembly_failure (pending, code);
     };
     auto payload = pending.assembly.take_payload ();
     /* The direct-transfer payload is exactly the schema's
@@ -3699,11 +3836,13 @@ void public_host_runtime_t::complete_relocation_assembly (
         reply_failure ();
         return;
     }
-    auto frozen = std::move (*materialized);
+    relocation_assembly_staging_t staging;
+    staging.frozen = std::move (*materialized);
+    auto &frozen = staging.frozen;
 
-    std::vector<stateful::object_ref_t> sources;
-    std::vector<stateful::object_ref_t> targets;
-    std::vector<protocol::relocation_object_t> wire_objects;
+    auto &sources = staging.sources;
+    auto &targets = staging.targets;
+    auto &wire_objects = staging.wire_objects;
     bool principal_found = false;
     for (const auto &saved : frozen) {
         protocol::relocation_object_kind_t kind;
@@ -3762,7 +3901,7 @@ void public_host_runtime_t::complete_relocation_assembly (
      * schema payload has no session-route section). Validate each staged
      * route against the reconstructed participants and this exact prepare
      * before command 44 leaves this target after CAS and queue opening. */
-    std::vector<protocol::session_relocation_route_t> staged_session_routes;
+    auto &staged_session_routes = staging.session_routes;
     for (std::size_t part = 1; part < pending.request.parts.size (); ++part) {
         protocol::session_relocation_route_t route;
         try {
@@ -3808,7 +3947,7 @@ void public_host_runtime_t::complete_relocation_assembly (
         staged_session_routes.push_back (std::move (route));
     }
 
-    const stateful::relocation_restore_identity_t restore_identity{
+    staging.restore_identity = {
       "direct:" + std::to_string (pending.prepare.relocation.high) + ":"
         + std::to_string (pending.prepare.relocation.low) + ":"
         + std::to_string (pending.prepare.target_attempt_generation),
@@ -3835,106 +3974,12 @@ void public_host_runtime_t::complete_relocation_assembly (
         reply_failure (protocol::framework_error_code::requestFailed);
         return;
     }
-    stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
-    try {
-        restored = targets.size () == 1
-                     ? _objects.restore_relocation (frozen.front (),
-                                                    targets.front (),
-                                                    restore_identity, {})
-                     : _objects.restore_relocation_aggregate (
-                         frozen, targets, restore_identity, {});
-    } catch (...) {
-        // The factory/restore path threw — an internal restore failure,
-        // not a verified payload integrity failure.
-        for (std::size_t index = 0; index != registered_count; ++index)
-            (void) _relocation_wire->unregister_target (
-              pending.prepare.relocation,
-              pending.prepare.target_attempt_generation, wire_objects[index]);
-        reply_failure (protocol::framework_error_code::requestFailed);
+    // Factory/restore failures are staging failures, not payload-integrity
+    // failures; the helper tears down every queue it registered first.
+    if (!restore_relocation_assembly (pending, staging))
         return;
-    }
-    if (restored != stateful::stateful_error_t::none
-        && restored != stateful::stateful_error_t::already_exists) {
-        // Same class as maintenance_runtime.cpp's aggregate restore-failed
-        // path (relocation_terminal_t::blocked, not data_lost): the retried
-        // restore is still rejected (conflict/type_mismatch/generation_stale
-        // etc.) — an internal restore failure, not a payload integrity one.
-        for (std::size_t index = 0; index != registered_count; ++index)
-            (void) _relocation_wire->unregister_target (
-              pending.prepare.relocation,
-              pending.prepare.target_attempt_generation, wire_objects[index]);
-        reply_failure (protocol::framework_error_code::requestFailed);
-        return;
-    }
 
-    relocation_target_attempt_t attempt;
-    attempt.prepare = pending.prepare;
-    attempt.restore_identity = restore_identity;
-    attempt.sources = std::move (sources);
-    attempt.targets = std::move (targets);
-    attempt.wire_objects = std::move (wire_objects);
-    for (const auto &route : staged_session_routes) {
-        attempt.session_routes.emplace_back ();
-        attempt.session_routes.back ().route = route;
-    }
-    attempt.ready = true;
-    attempt.attempt_expires_at = std::chrono::steady_clock::now ()
-                                 + relocation_attempt_retention;
-    {
-        std::lock_guard lock (_mutex);
-        if (!_relocation_target_attempts.emplace (key, std::move (attempt)).second) {
-            // A duplicate attempt-key registration is a bookkeeping
-            // conflict, not a payload integrity failure.
-            reply_failure (protocol::framework_error_code::requestFailed);
-            return;
-        }
-    }
-    const auto ready_sent = _transport->reply_relocation_ready (
-      pending.request,
-      protocol::relocation_ready_t{pending.prepare.relocation,
-                                   pending.prepare.target_attempt_generation,
-                                   pending.prepare.coordinator,
-                                   pending.prepare.target,
-                                   pending.prepare.object,
-                                   protocol::relocation_role_t::target});
-    if (ready_sent) {
-        std::lock_guard lock (_mutex);
-        const auto found = _relocation_target_attempts.find (key);
-        if (found != _relocation_target_attempts.end ())
-            found->second.ready_fallback_at = std::chrono::steady_clock::now ()
-                                              + _relocation_cutover_wait;
-        return;
-    }
-    std::optional<relocation_target_attempt_t> aborted;
-    {
-        std::lock_guard lock (_mutex);
-        const auto found = _relocation_target_attempts.find (key);
-        if (found != _relocation_target_attempts.end ()) {
-            aborted.emplace (std::move (found->second));
-            _relocation_target_attempts.erase (found);
-        }
-    }
-    if (!aborted)
-        return;
-    for (const auto &wire_object : aborted->wire_objects) {
-        try {
-            (void) _relocation_wire->unregister_target (
-              aborted->prepare.relocation,
-              aborted->prepare.target_attempt_generation, wire_object);
-        }
-        catch (...) {
-        }
-    }
-    try {
-        if (aborted->targets.size () == 1)
-            (void) _objects.abort_relocation_restore (
-              aborted->targets.front (), aborted->restore_identity);
-        else
-            (void) _objects.abort_relocation_restore_aggregate (
-              aborted->targets, aborted->restore_identity);
-    }
-    catch (...) {
-    }
+    activate_relocation_assembly (key, pending, std::move (staging));
 }
 
 bool public_host_runtime_t::register_relocation_target_queue (

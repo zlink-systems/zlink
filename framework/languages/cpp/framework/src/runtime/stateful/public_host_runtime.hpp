@@ -281,6 +281,8 @@ bound_session_bind_admission_t classify_bound_session_bind_admission (
 // failure-code mapping can be pinned directly by a test.
 framework_error_kind_t classify_relocation_failure_code (
   std::uint32_t wire_code) noexcept;
+stateful::relocation_reason_t classify_relocation_failure_reason (
+  std::uint32_t wire_code) noexcept;
 
 struct actor_join_completion_t
 {
@@ -842,11 +844,10 @@ class public_host_runtime_t :
     /* session_routes: prebuilt bound-session command-44 commit records the
      * target stages beside the Restore request (the schema payload carries
      * no session-route section) and sends after CAS and queue opening. */
-    task_t<bool> prepare_relocation_remote (
+    task_t<stateful::relocation_reason_t> prepare_relocation_remote (
       const zlink::routing_id_t &target_node,
       protocol::relocation_prepare_t prepare,
       std::chrono::milliseconds timeout,
-      framework_error_kind_t *failure_kind = nullptr,
       std::vector<protocol::session_relocation_route_t> session_routes = {});
     task_t<bool> cutover_relocation_remote (
       const zlink::routing_id_t &target_node,
@@ -1171,6 +1172,15 @@ class public_host_runtime_t :
         bool principal_registered = false;
         std::chrono::steady_clock::time_point expires_at{};
     };
+    struct relocation_assembly_staging_t
+    {
+        std::vector<stateful::frozen_object_state_t> frozen;
+        std::vector<stateful::object_ref_t> sources;
+        std::vector<stateful::object_ref_t> targets;
+        std::vector<protocol::relocation_object_t> wire_objects;
+        std::vector<protocol::session_relocation_route_t> session_routes;
+        stateful::relocation_restore_identity_t restore_identity;
+    };
     std::map<relocation_attempt_key_t, pending_relocation_assembly_t>
       _relocation_assemblies;
     static constexpr auto relocation_assembly_retention =
@@ -1181,6 +1191,20 @@ class public_host_runtime_t :
     void complete_relocation_assembly (
       const relocation_attempt_key_t &key,
       pending_relocation_assembly_t pending);
+    void reply_relocation_assembly_failure (
+      const pending_relocation_assembly_t &pending,
+      protocol::framework_error_code code =
+        protocol::framework_error_code::relocationDataLost);
+    void discard_relocation_assembly_staging (
+      const pending_relocation_assembly_t &pending,
+      const relocation_assembly_staging_t &staging) noexcept;
+    bool restore_relocation_assembly (
+      const pending_relocation_assembly_t &pending,
+      const relocation_assembly_staging_t &staging);
+    void activate_relocation_assembly (
+      const relocation_attempt_key_t &key,
+      const pending_relocation_assembly_t &pending,
+      relocation_assembly_staging_t staging);
     bool register_relocation_target_queue (
       const protocol::relocation_prepare_t &prepare,
       const stateful::object_ref_t &target,
