@@ -503,9 +503,11 @@
       (스키마 무변경·4언어 가독), node sealed session fences=cpp 선례대로
       prepare 요청의 언어 내부 sideband 프레임(교차 언어 bound-session은 전
       쌍 미지원 — 본문은 disc1 청정) — 구현 2라운드: **node sideband 완결 `9e97afbf42`**(ZLNI 내부 프레임,
-      본문 disc1, 82/82·39/39); dotnet frozen-record 이관은 구현·컴파일 완료
-      (예약 packet __zlink.actor.routed_join.recovery) 후 conformance 정체+
-      스테이지 DeadlineExceeded 디버깅 중(frozen2).
+      본문 disc1, 82/82·39/39); dotnet frozen-record 이관: conformance 9/9 복구(빈 disc1 recovery의
+      EndOfStream 폴백 등 3건 수정), **target이 node stream 완전 스테이징+
+      Ready(31) 발신 성공**. node Ready-leg: bare 단일 프레임 제어가 M6A
+      2-frame 가정에 오폐기되던 ingress 수정. 현 잔여: 이번 런에서 52(state)
+      청크 미도달 신증상 — state-leg 디버깅 중.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
