@@ -551,6 +551,7 @@ export class ZLinkActorPacketRelay {
     const reply = await this.requestRemoteTarget<{
       readonly ok?: boolean;
       readonly error?: unknown;
+      readonly errorKind?: unknown;
       readonly acknowledged?: boolean;
       readonly response?: { readonly acknowledged?: boolean };
     }>(
@@ -561,12 +562,19 @@ export class ZLinkActorPacketRelay {
       signal
     );
     if (reply.ok === false || (reply.response?.acknowledged !== true && reply.acknowledged !== true)) {
-      //  Spec 32-framework-error-model: DeadlineExceeded(7). The acknowledged
-      //  bind confirmation is a deadline-bounded wait; exhausting it without an
-      //  acknowledgement surfaces the typed framework classification (the
-      //  reply's failure is preserved as the cause), matching the C++ runtime.
+      //  An {ok:false} (or unacknowledged) reply here is an immediate remote
+      //  rejection — the transport wait itself throws on timeout — so spec 32
+      //  reserves DeadlineExceeded for the deadline path and this reply
+      //  surfaces the remote failure's own classification instead: decode the
+      //  reply's errorKind when it carries a valid framework kind, else
+      //  RequestFailed, matching how other acknowledged relay replies map
+      //  {ok:false} (actorRelayError / remoteRelayErrorKind).
+      const remoteKind = Object.values(ZLinkFrameworkInternalErrorKind)
+        .includes(reply.errorKind as ZLinkFrameworkInternalErrorKind)
+        ? reply.errorKind as ZLinkFrameworkInternalErrorKind
+        : ZLinkFrameworkInternalErrorKind.RequestFailed;
       throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        remoteKind,
         `Actor '${actor.actorId}' did not acknowledge its remote session binding: ${JSON.stringify(reply)}`,
         reply.error
       );

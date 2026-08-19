@@ -697,8 +697,12 @@ test('remote actor session binding uses a non-correlated command over the actor 
   assert.equal(routed[0].request.boundSessionSpotId, 'session-node');
 });
 
-test('acknowledged remote actor session bind exhaustion surfaces a typed DeadlineExceeded', async () => {
-  //  Spec 32-framework-error-model: DeadlineExceeded(7).
+test('acknowledged remote actor session bind nack surfaces the remote failure classification', async () => {
+  //  Spec 32-framework-error-model: an immediate {ok:false} reply is a remote
+  //  rejection, not a deadline elapse — DeadlineExceeded(7) is reserved for
+  //  failing to complete within the deadline. The reply's own errorKind is
+  //  decoded when valid; a reply without one maps to RequestFailed, matching
+  //  the acknowledged-reply convention (actorRelayError/remoteRelayErrorKind).
   const actorRef = {
     nodeRid: 'actor-node',
     actorId: 'actor-bind-deadline',
@@ -722,8 +726,13 @@ test('acknowledged remote actor session bind exhaustion surfaces a typed Deadlin
       };
     }
   });
-  const lastFailure = 'bind confirmation was not admitted before its deadline';
-  host.routeTransport.request = async () => ({ ok: false, error: lastFailure });
+  const lastFailure = 'actor does not hold a current session binding';
+  let replyErrorKind = framework.ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
+  host.routeTransport.request = async () => ({
+    ok: false,
+    error: lastFailure,
+    ...(replyErrorKind === undefined ? {} : { errorKind: replyErrorKind })
+  });
 
   await assert.rejects(
     host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
@@ -733,16 +742,77 @@ test('acknowledged remote actor session bind exhaustion surfaces a typed Deadlin
     ),
     (error) => {
       assert.ok(error instanceof framework.ZLinkFrameworkException);
-      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      //  The remote reply's own kind is decoded — never DeadlineExceeded here.
+      assert.notEqual(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
       assert.equal(
         framework.internalFrameworkErrorKind(error),
-        framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+        framework.ZLinkFrameworkInternalErrorKind.ActorSessionNotBound
       );
       assert.equal(error.cause, lastFailure);
       assert.match(error.message, /did not acknowledge its remote session binding/);
       return true;
     }
   );
+
+  //  A nack without a decodable errorKind still stays off the deadline
+  //  classification and falls back to RequestFailed.
+  replyErrorKind = undefined;
+  await assert.rejects(
+    host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+      actorRef,
+      'session-node',
+      'session-rid'
+    ),
+    (error) => {
+      assert.ok(error instanceof framework.ZLinkFrameworkException);
+      assert.notEqual(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      assert.equal(
+        framework.internalFrameworkErrorKind(error),
+        framework.ZLinkFrameworkInternalErrorKind.RequestFailed
+      );
+      return true;
+    }
+  );
+});
+
+test('managed stream actor bind reports a failed acknowledged confirmation to the error sink', async () => {
+  //  Spec 20 (session binding): a failed bind notice never rolls back the
+  //  already-current binding but must produce bounded diagnostics — the typed
+  //  failure is observed through the runtime error sink, not silently
+  //  discarded.
+  const socket = new FakeStreamSocket();
+  const reported = [];
+  const confirmationFailure = new framework.ZLinkFrameworkException(
+    framework.ZLinkFrameworkErrorKind.InvalidOperation,
+    'remote session binding was rejected'
+  );
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    confirmRemoteActorSessionBinding: async (_actor, _sessionRid, _signal, options) => {
+      assert.equal(options.waitForAcknowledgement, true);
+      throw confirmationFailure;
+    },
+    errorSink: () => ({
+      reportRuntimeTaskException(taskName, error) {
+        reported.push({ taskName, error });
+      }
+    })
+  });
+  const context = runtime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
+  );
+
+  const actor = await context.actors.bind({
+    nodeRid: 'node-remote',
+    actorId: 'actor-confirm-nack-observed',
+    generation: 1n
+  });
+
+  //  The binding itself stays current.
+  assert.equal(context.actors.find('actor-confirm-nack-observed'), actor);
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0].taskName, 'remote session binding confirmation');
+  assert.equal(reported[0].error, confirmationFailure);
 });
 
 test('fire-and-forget remote actor session bind retry exhaustion reports a typed DeadlineExceeded', async () => {

@@ -36,6 +36,9 @@ export interface ZLinkSessionActorCoordinatorOptions {
     signal?: AbortSignal,
     options?: { readonly waitForAcknowledgement?: boolean }
   ) => Promise<void>;
+  readonly errorSink?: () => {
+    reportRuntimeTaskException(taskName: string, error: unknown): void;
+  } | undefined;
   readonly metrics?: ZLinkRuntimeMetrics;
 }
 
@@ -165,14 +168,21 @@ export class ZLinkSessionActorCoordinator {
         undefined,
         { waitForAcknowledgement }
       );
-      const ignoreFailure = () => {
-        // Confirmation admission is retried independently by the relay. A
-        // failed notice cannot roll back the already-current binding.
+      const reportFailure = (error: unknown) => {
+        // Spec 20 §binding: a failed bind notice never restores or removes
+        // the already-current binding — it produces bounded diagnostics
+        // instead. The fire-and-forget branch is retried independently by
+        // the relay; either way the typed failure is reported through the
+        // runtime error sink, not silently discarded.
+        this.options.errorSink?.()?.reportRuntimeTaskException(
+          'remote session binding confirmation',
+          error
+        );
       };
       if (waitForAcknowledgement) {
-        await confirmation.catch(ignoreFailure);
+        await confirmation.catch(reportFailure);
       } else {
-        void confirmation.catch(ignoreFailure);
+        void confirmation.catch(reportFailure);
       }
     }
     return sessionActor;

@@ -394,6 +394,7 @@ export class ZLinkFrameworkRuntimeHost implements
         ?? zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs,
       metrics: this.metrics,
       flowCreationEnabled: () => this.flowCreationEnabled(),
+      errorSink: () => this.errorSink ?? this.preStartErrorSink,
       nativeActorNodeProvider: () => this.spotNodeRuntime?.primaryMeshNode,
       nativeActorMeshNameProvider: () => this.meshRouters.primaryMeshName(),
       actorAuthorityFenceResolver: async (actorId, signal) => {

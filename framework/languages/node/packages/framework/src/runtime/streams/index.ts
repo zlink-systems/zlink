@@ -128,6 +128,9 @@ export interface ZLinkStreamBindingRuntimeOptions {
     signal?: AbortSignal,
     options?: { readonly waitForAcknowledgement?: boolean }
   ) => Promise<void>;
+  readonly errorSink?: () => {
+    reportRuntimeTaskException(taskName: string, error: unknown): void;
+  } | undefined;
   readonly relay?: (actor: ZLinkSessionActor, header: ZLinkStreamFrameHeader, payload: Message, signal?: AbortSignal) => Promise<boolean>;
   readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
   readonly flowCreationEnabled?: () => boolean;
