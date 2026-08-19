@@ -2,8 +2,7 @@ import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } fr
 import type {
   ZLinkMessageSerializer,
   RoutingId,
-  ZLinkSession,
-  ZLinkSessionDispatchContext
+  ZLinkSession
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import {
@@ -48,7 +47,7 @@ import {
   ZLinkManagedStream,
   type ZLinkNativeSessionRoute
 } from './managed-stream';
-import { DefaultZLinkSessionContext } from './session-context';
+import { createSessionDispatchContext, DefaultZLinkSessionContext } from './session-context';
 import { ZLinkStreamSessionSerialExecutor } from './session-serial-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import { ownedMessage } from './stream-message-utils';
@@ -167,14 +166,6 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends ZLinkStreamSession
   readonly nodeName?: string;
   readonly monitor?: ZLinkBackendSocketMonitor;
   readonly applicationJobQueue: ApplicationJobQueuePort;
-}
-
-function createDispatchContext(header: ZLinkStreamFrameHeader): ZLinkSessionDispatchContext {
-  return {
-    packetName: header.name,
-    metadata: header.metadata,
-    canReply: header.requestSeq !== undefined
-  };
 }
 
 export class ZLinkStreamSessionRuntime {
@@ -547,7 +538,7 @@ export class ZLinkStreamSessionRuntime {
           sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
         });
         await session.onDispatch?.(
-          createDispatchContext(inboundHeader),
+          createSessionDispatchContext(inboundHeader),
           wrapFrameworkPayloadMessage(
             dispatchPayload,
             this.options.messageSerializers,

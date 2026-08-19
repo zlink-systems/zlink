@@ -424,9 +424,10 @@ export class ZLinkManagedStream implements ZLinkStream {
         if (Date.now() >= deadline) {
           const status = service.status();
           throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
             `STREAM session '${this.sessionId}' was not admitted before the actor bind deadline `
-            + `(active sessions ${status.sessionCount}).`
+            + `(active sessions ${status.sessionCount}).`,
+            error
           );
         }
         await waitForSessionAdmission(signal);

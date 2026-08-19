@@ -656,9 +656,10 @@ export class ZLinkStreamBindingRuntime {
   async relay(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    dispatchHeader?: ZLinkStreamFrameHeader
   ): Promise<ZLinkSubmitResult> {
-    return await this.boundActorRelay.relay(actor, payload, signal);
+    return await this.boundActorRelay.relay(actor, payload, signal, dispatchHeader);
   }
 
   async notifyDisconnected(actor: DefaultZLinkSessionActor, signal?: AbortSignal): Promise<void> {

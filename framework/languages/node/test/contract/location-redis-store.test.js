@@ -1,10 +1,9 @@
 const assert = require('node:assert/strict');
-const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
-const { createClient, RESP_TYPES } = require('redis');
+const { createClient } = require('redis');
 const framework = require('../../packages/framework/dist');
 const redisLocations = require('../../packages/framework-locations-redis/dist');
 const frameworkInternal = require('../../packages/framework/dist/internal');
@@ -635,7 +634,7 @@ test('redis Store validates exact public bounds', async () => {
   await location.dispose();
 });
 
-test('redis opaque Location Store production write path reproduces the golden authority record byte-for-byte', async (t) => {
+test('redis-backed repository writes the golden canonical authority allocation envelope', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
   const golden = JSON.parse(fs.readFileSync(
@@ -649,57 +648,81 @@ test('redis opaque Location Store production write path reproduces the golden au
     item => item.name === 'authority-actor-normal'
   );
   assert.ok(vector);
-  const keyEntry = golden.keyDerivation.find(item => item.record === 'authority-actor');
-  assert.ok(keyEntry);
-
   const prefix = testPrefix('golden-conformance');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
   try {
-    const target = key('authority\0actor\0user:42');
-    const jsonBytes = Buffer.from(vector.jsonBytesHex, 'hex');
-    assert.equal(jsonBytes.toString('utf8').length > 0, true);
-
-    // Drive the sequence counter (the ZSET score and `version`) to the
-    // fixture's exact value (9) through the real write() path -- the
-    // fixture's version numbers are provider sequence values, not
-    // caller-supplied identifiers, so this is the only way to reproduce
-    // them byte-for-byte from production code rather than poking Redis
-    // directly.
-    for (let index = 0; index < 8; index++) {
-      const padKey = key(`golden-conformance-pad-${index}`);
-      const result = await store.write({
-        conditions: [{ kind: 'missing', key: padKey }],
-        mutations: [{ kind: 'put', key: padKey, bytes: Buffer.from('pad') }]
-      });
-      assert.equal(result.kind, 'applied');
-    }
-
-    const written = await store.write({
-      conditions: [{ kind: 'missing', key: target }],
-      mutations: [{ kind: 'put', key: target, bytes: jsonBytes }]
-    });
-    assert.equal(written.kind, 'applied');
-    assert.equal(written.putVersions[0].version.value, vector.version);
-
-    // {prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}
-    // (21-location-runtime.md#2.4, 22-location-store-redis.md#7).
-    const digest = createHash('sha256').update(target.value, 'utf8').digest('hex');
-    assert.equal(digest, keyEntry.sha256Hex);
-    const rowKey = `${prefix}:{zlink-location-v3}:opaque:${digest}`;
-
-    const members = await fixture.client.sendCommand(
-      ['ZREVRANGE', rowKey, '0', '0'],
-      { typeMapping: { [RESP_TYPES.BLOB_STRING]: Buffer } }
+    const owner = await repository.claimOwnerLease('owner-a', 60_000);
+    assert.equal(owner.kind, 'claimed');
+    if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
+    const routingId = {
+      toHex: () => vector.decoded.allocation.descriptor.routingIdHex,
+      toString: () => vector.decoded.allocation.descriptor.routingIdHex
+    };
+    const target = {
+      meshName: vector.decoded.allocation.descriptor.meshName,
+      nodeRid: routingId,
+      nodeLifecycleGeneration: 1n,
+      owner: owner.token
+    };
+    const descriptor = aggregateDescriptor(target, 0);
+    descriptor.populationCapacity.actors.limit = vector.decoded.allocation.capacity.actors;
+    descriptor.objectCapabilities = [{
+      objectKind: 'actor', stableType: vector.decoded.allocation.stableType,
+      policy: 'snapshot', hasSnapshotAdapter: true, limit: vector.decoded.allocation.capacity.actors
+    }];
+    assert.equal(
+      (await repository.updateMeshNode(
+        descriptor,
+        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      )).status,
+      frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
-    assert.equal(members.length, 1);
-    const stored = Buffer.from(members[0]);
-    assert.equal(stored.toString('hex'), vector.fullValueHex);
+    const authorityKey = encodeAuthorityKey('actor', 'user:42');
+    const reserved = await repository.reserve({
+      key: { kind: 'actor', globalId: 'user:42' },
+      intent: {
+        stableType: vector.decoded.allocation.stableType,
+        requestContentReference: 'golden-authority-request',
+        requestSha256: Buffer.alloc(32, 1),
+        requestEncodedSize: 16n
+      },
+      target,
+      creatingPayload: Buffer.from(vector.decoded.payload, 'base64'),
+      capacity: { actors: vector.decoded.allocation.capacity.actors, spots: 0 }
+    });
+    assert.equal(reserved.kind, 'reserved');
+    if (reserved.kind !== 'reserved') throw new Error('authority reserve failed');
+    const committed = await repository.commit({
+      key: { kind: 'actor', globalId: 'user:42' },
+      reservationId: reserved.reservationId,
+      expectedStoreVersion: reserved.creating.storeVersion.value,
+      target,
+      readyPayload: Buffer.from(vector.decoded.payload, 'base64')
+    });
+    assert.equal(committed.kind, 'committed');
 
-    const read = await store.read(target);
+    // Read the opaque row written by reserve()/commit(), rather than injecting
+    // fixture bytes into the provider. Dynamic Store-wide generations and the
+    // lease token are intentionally compared by type; every fixed envelope
+    // field must match the authoritative golden allocation exactly.
+    const read = await store.read(key(authorityPreimage(authorityKey)));
     assert.equal(read.kind, 'found');
-    assert.equal(Buffer.from(read.value.bytes).toString('hex'), vector.jsonBytesHex);
-    assert.equal(read.value.version.value, vector.version);
-    assert.equal(read.value.expiresAt, undefined);
+    const stored = JSON.parse(Buffer.from(read.value.bytes).toString('utf8'));
+    const canonicalStored = Object.fromEntries(
+      Object.keys(vector.decoded).map((field) => [field, stored[field]])
+    );
+    assert.deepEqual(canonicalStored, {
+      ...vector.decoded,
+      objectGeneration: String(stored.objectGeneration),
+      authorityOwnerGeneration: String(stored.authorityOwnerGeneration),
+      ownerLeaseGeneration: String(stored.ownerLeaseGeneration)
+    });
+    assert.match(stored.objectGeneration, /^\d+$/);
+    assert.match(stored.authorityOwnerGeneration, /^\d+$/);
+    assert.match(stored.ownerLeaseGeneration, /^\d+$/);
+    assert.equal('target' in stored.allocation, false);
+    assert.equal('capacityBundle' in stored.allocation, false);
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);

@@ -10,6 +10,7 @@ import type {
   ZLinkSessionActors,
   ZLinkSessionClient,
   ZLinkSessionContext,
+  ZLinkSessionDispatchContext,
   ZLinkSessionHandlerRegistry,
   ZLinkSessionPacketHandler,
   ZLinkSessionReplyCall,
@@ -80,7 +81,12 @@ interface ZLinkSessionContextRuntime {
     actorRef: ActorRef,
     signal?: AbortSignal
   ): Promise<DefaultZLinkSessionActor>;
-  relay(actor: DefaultZLinkSessionActor, payload: ZLinkMessage, signal?: AbortSignal): Promise<ZLinkSubmitResult>;
+  relay(
+    actor: DefaultZLinkSessionActor,
+    payload: ZLinkMessage,
+    signal?: AbortSignal,
+    dispatchHeader?: ZLinkStreamFrameHeader
+  ): Promise<ZLinkSubmitResult>;
   notifyDisconnected(actor: DefaultZLinkSessionActor, signal?: AbortSignal): Promise<void>;
 }
 
@@ -491,8 +497,32 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
     this.currentRef = ref;
   }
 
-  async relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
-    const result = await this.runtime.relay(this, payload, signal);
+  async relay(payload: ZLinkMessage, signal?: AbortSignal): Promise<void>;
+  async relay(
+    dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage,
+    signal?: AbortSignal
+  ): Promise<void>;
+  async relay(
+    dispatchOrPayload: ZLinkSessionDispatchContext | ZLinkMessage,
+    payloadOrSignal?: ZLinkMessage | AbortSignal,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const dispatch = isSessionDispatchContext(dispatchOrPayload)
+      ? dispatchOrPayload
+      : undefined;
+    let payload: ZLinkMessage;
+    let relaySignal: AbortSignal | undefined;
+    let header: ZLinkStreamFrameHeader | undefined;
+    if (dispatch === undefined) {
+      payload = dispatchOrPayload as ZLinkMessage;
+      relaySignal = payloadOrSignal as AbortSignal | undefined;
+    } else {
+      payload = payloadOrSignal as ZLinkMessage;
+      relaySignal = signal;
+      header = sessionDispatchHeader(dispatch);
+    }
+    const result = await this.runtime.relay(this, payload, relaySignal, header);
     requireOneWayCompletion(
       result,
       'Session Actor relay',
@@ -503,6 +533,32 @@ export class DefaultZLinkSessionActor implements ZLinkSessionActor {
   notifyDisconnected(signal?: AbortSignal): Promise<void> {
     return this.runtime.notifyDisconnected(this, signal);
   }
+}
+
+const SESSION_DISPATCH_HEADERS = new WeakMap<ZLinkSessionDispatchContext, ZLinkStreamFrameHeader>();
+
+export function createSessionDispatchContext(header: ZLinkStreamFrameHeader): ZLinkSessionDispatchContext {
+  const dispatch: ZLinkSessionDispatchContext = {
+    packetName: header.name,
+    metadata: header.metadata,
+    canReply: header.requestSeq !== undefined
+  };
+  SESSION_DISPATCH_HEADERS.set(dispatch, header);
+  return dispatch;
+}
+
+function isSessionDispatchContext(value: unknown): value is ZLinkSessionDispatchContext {
+  return value !== null && typeof value === 'object'
+    && typeof (value as ZLinkSessionDispatchContext).packetName === 'string'
+    && 'canReply' in value;
+}
+
+function sessionDispatchHeader(dispatch: ZLinkSessionDispatchContext): ZLinkStreamFrameHeader {
+  const header = SESSION_DISPATCH_HEADERS.get(dispatch);
+  if (header === undefined) {
+    throw new Error('Session actor relay dispatch must be the context supplied to the active session handler.');
+  }
+  return header;
 }
 
 export class DefaultZLinkBoundSession implements ZLinkBoundSession {

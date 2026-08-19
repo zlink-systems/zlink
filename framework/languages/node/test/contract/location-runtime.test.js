@@ -1603,8 +1603,9 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal(envelope.authorityOwnerGeneration, '1');
   assert.deepEqual(envelope.allocation, {
     state: 'reserved', objectKind: 'actor', stableType: 'Player',
-    target: { meshName: 'play', nodeRid: 'node-a', nodeGeneration: '1' },
-    capacityBundle: { actorSlots: 1, spotSlots: 0, spotType: null }
+    descriptor: { meshName: 'play', routingIdHex: Buffer.from('node-a').toString('hex') },
+    descriptorLifecycleGeneration: '1',
+    capacity: { actors: 1, spots: 0, spotType: null }
   });
   assert.equal(envelope.pendingCreation.requestSha256, Buffer.alloc(32, 1).toString('hex'));
 

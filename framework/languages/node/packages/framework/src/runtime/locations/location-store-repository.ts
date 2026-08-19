@@ -77,7 +77,7 @@ import { storeKey } from './in-memory-provider-location-store';
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
 import type { RoutingId } from '../../contracts/Common/CoreTypes';
-import { encodeRoutingIdStorageHex } from '../routing-id';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
 const PREFIX = 'zlink:v11:';
 const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
@@ -324,7 +324,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             versionCondition(descriptorKey, descriptorRead),
             versionCondition(ownerKey(mutation.targetOwner.ownerId), targetLeaseRead)
           ],
-          mutations: [{ kind: 'put', key: rowKey, bytes: encodeJson(nextRecord) }]
+          mutations: [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord) }]
         }, signal);
         if (result.kind === 'conflict') continue;
         const storeVersion = result.putVersions.find(entry =>
@@ -400,7 +400,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 } satisfies CapacityRecord)
               }
             ]
-          : [{ kind: 'put', key: rowKey, bytes: encodeJson(nextRecord!) }]
+          : [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) }]
       }, signal);
       if (result.kind === 'conflict') continue;
       const storeVersion = result.putVersions.find(entry =>
@@ -3204,10 +3204,6 @@ function decodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(bytes: Uint8
 function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
   const snapshot = record.snapshot;
   const allocation = snapshot.allocation;
-  const objectKind = allocation.objectKind === 'actor' ? 'actor' : 'spot';
-  const spotKind = objectKind === 'spot'
-    ? allocation.objectKind.replace(/_spot$/, '')
-    : undefined;
   const envelope: Record<string, unknown> = {
     recordVersion: 1,
     payload: Buffer.from(snapshot.payload).toString('base64'),
@@ -3217,25 +3213,20 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
     ownerLeaseGeneration: snapshot.ownerLeaseGeneration.toString(),
     allocation: {
       state: allocation.state,
-      objectKind,
-      ...(spotKind === undefined ? {} : { spotKind }),
+      objectKind: canonicalPlacementObjectKind(allocation.objectKind),
       stableType: allocation.stableType,
-      target: {
+      descriptor: {
         meshName: allocation.descriptor.meshName,
-        nodeRid: String(allocation.descriptor.rid),
-        nodeGeneration: allocation.descriptorLifecycleGeneration.toString()
+        routingIdHex: encodeRoutingIdStorageHex(allocation.descriptor.rid)
       },
-      capacityBundle: {
-        actorSlots: allocation.capacity.actors,
-        spotSlots: allocation.capacity.spots,
-        spotType: allocation.capacity.spotType === undefined ? null : canonicalize(allocation.capacity.spotType)
-      }
+      descriptorLifecycleGeneration: allocation.descriptorLifecycleGeneration.toString(),
+      capacity: canonicalAuthorityCapacity(allocation.capacity)
     },
     pendingCreation: snapshot.pendingCreation === undefined ? null : {
       reservationId: snapshot.pendingCreation.reservationId,
       requestContentReference: snapshot.pendingCreation.requestContentReference,
       requestSha256: Buffer.from(snapshot.pendingCreation.requestSha256).toString('hex'),
-      requestEncodedSize: snapshot.pendingCreation.requestEncodedSize.toString()
+      requestEncodedSize: Number(snapshot.pendingCreation.requestEncodedSize)
     }
   };
   // These fields gate Node-only creation/aggregate recovery.  They are absent
@@ -3252,12 +3243,10 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
   const value = JSON.parse(decodeText(bytes)) as Record<string, unknown>;
   requireRecordVersion(value, 'authority');
   const allocation = value.allocation as Record<string, unknown>;
-  const target = allocation.target as Record<string, unknown>;
-  const bundle = allocation.capacityBundle as Record<string, unknown>;
+  const descriptor = allocation.descriptor as Record<string, unknown>;
+  const capacity = allocation.capacity as Record<string, unknown>;
   const pending = value.pendingCreation as Record<string, unknown> | null;
-  const objectKind = allocation.objectKind === 'actor'
-    ? 'actor'
-    : `${String(allocation.spotKind)}_spot`;
+  const objectKind = runtimePlacementObjectKind(String(allocation.objectKind));
   return {
     reservationId: typeof value.reservationId === 'string' ? value.reservationId : undefined,
     terminal: value.terminal as AuthorityRecord['terminal'],
@@ -3276,12 +3265,20 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
         state: allocation.state as ZLinkPlacementAllocation['state'],
         objectKind: objectKind as ZLinkPlacementAllocation['objectKind'],
         stableType: String(allocation.stableType),
-        descriptor: { meshName: String(target.meshName), rid: String(target.nodeRid) as never },
-        descriptorLifecycleGeneration: BigInt(String(target.nodeGeneration)),
+        descriptor: {
+          meshName: String(descriptor.meshName),
+          rid: decodeRoutingId(
+            String(descriptor.routingIdHex),
+            descriptor.routingIdHex
+          )
+        },
+        descriptorLifecycleGeneration: BigInt(String(allocation.descriptorLifecycleGeneration)),
         capacity: {
-          actors: Number(bundle.actorSlots),
-          spots: Number(bundle.spotSlots),
-          spotType: bundle.spotType === null ? undefined : reviveCanonical(bundle.spotType) as ZLinkCapacityVector['spotType']
+          actors: Number(capacity.actors),
+          spots: Number(capacity.spots),
+          spotType: capacity.spotType === null
+            ? undefined
+            : decodeAuthoritySpotType(capacity.spotType)
         }
       },
       pendingCreation: pending === null ? undefined : {
@@ -3292,6 +3289,56 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
       }
     }
   };
+}
+
+function canonicalPlacementObjectKind(kind: ZLinkPlacementAllocation['objectKind']): string {
+  switch (kind) {
+    case 'actor': return 'actor';
+    case 'user_spot': return 'userSpot';
+    case 'instance_spot': return 'instanceSpot';
+  }
+}
+
+function runtimePlacementObjectKind(kind: string): ZLinkPlacementAllocation['objectKind'] {
+  switch (kind) {
+    case 'actor': return 'actor';
+    case 'userSpot': return 'user_spot';
+    case 'instanceSpot': return 'instance_spot';
+    default: throw new Error(`Location Store authority record has an invalid allocation objectKind '${kind}'.`);
+  }
+}
+
+function canonicalAuthorityCapacity(capacity: ZLinkCapacityVector): Record<string, unknown> {
+  return {
+    actors: capacity.actors,
+    spots: capacity.spots,
+    spotType: capacity.spotType === undefined
+      ? null
+      : {
+          objectKind: canonicalPlacementObjectKind(capacity.spotType.objectKind),
+          stableType: capacity.spotType.stableType,
+          count: capacity.spotType.count
+        }
+  };
+}
+
+function decodeAuthoritySpotType(value: unknown): ZLinkCapacityVector['spotType'] {
+  const spotType = value as Record<string, unknown>;
+  return {
+    objectKind: runtimeSpotPlacementObjectKind(String(spotType.objectKind)),
+    stableType: String(spotType.stableType),
+    count: Number(spotType.count)
+  };
+}
+
+function runtimeSpotPlacementObjectKind(
+  kind: string
+): Exclude<ZLinkPlacementAllocation['objectKind'], 'actor'> {
+  const objectKind = runtimePlacementObjectKind(kind);
+  if (objectKind === 'actor') {
+    throw new Error('Location Store authority capacity spotType cannot be an actor.');
+  }
+  return objectKind;
 }
 
 function createTerminalRecord(

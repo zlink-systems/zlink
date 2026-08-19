@@ -15,6 +15,9 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const {
+  createSessionDispatchContext
+} = require('../../packages/framework/dist/runtime/streams/session-context');
+const {
   ZLinkNativeFallbackBoundSession
 } = require('../../packages/framework/dist/runtime/streams/native-fallback-bound-session');
 const {
@@ -164,6 +167,101 @@ test('managed stream binds Session Actors through the Framework service without 
   assert.equal(typeof rawStreamSocket.bindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.unbindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.sendBoundActor, 'undefined');
+});
+
+test('managed stream bind admission deadline preserves the route failure as a typed DeadlineExceeded', async () => {
+  const routeFailure = Object.assign(new Error('remote route is not connected'), {
+    result: SubmitResult.NotConnected
+  });
+  const service = {
+    start() {}, shutdown() { return 0; }, close() {},
+    status() {
+      return {
+        state: 2, lifecycleGeneration: 1n, sessionCount: 4n,
+        bindingCount: 0n, pendingMessageCount: 0n, pendingByteCount: 0n, lastError: 0
+      };
+    },
+    lookupActor() { return { low: 1n }; },
+    bindActor() { throw routeFailure; },
+    unbindActor() { throw new Error('not used'); },
+    bindings() { return []; }, sendToActor() { return 0; }
+  };
+  const stream = new framework.ZLinkManagedStream(
+    { send() { return true; }, disconnectPeer() {}, recv() { return undefined; } },
+    'session-rid',
+    undefined,
+    service,
+    {
+      submit(operation) {
+        const result = operation();
+        return Promise.resolve({
+          terminalResult: 0,
+          failureErrno: 0,
+          operationKind: 0,
+          kindData: result?.low === 1n
+            ? {
+                kind: 'actorLookupCompletion',
+                location: { actor: { actorId: 'actor-deadline', generation: 1n, nodeRid: 'node-a' } }
+              }
+            : null,
+          parts: []
+        });
+      }
+    }
+  );
+
+  await assert.rejects(
+    stream.bindActor({
+      actorId: 'actor-deadline', objectGeneration: 1n, meshName: 'play', nodeRid: 'node-a'
+    }, 0),
+    (error) => {
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      assert.equal(
+        framework.internalFrameworkErrorKind(error),
+        framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+      );
+      assert.equal(error.cause, routeFailure);
+      assert.match(error.message, /actor bind deadline/);
+      return true;
+    }
+  );
+});
+
+test('session actor dispatch relay preserves the supplied request correlation', async () => {
+  const relayed = [];
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory(),
+    async relay(_actor, header) {
+      relayed.push(header);
+      return true;
+    }
+  });
+  const context = runtime.createSessionContext(fakeStream('dispatch-relay', 'dispatch-relay-rid'));
+  const actor = await context.actors.bind({
+    nodeRid: 'node-a', actorId: 'actor-dispatch-relay', generation: 1n
+  });
+  const header = {
+    kind: connector.ZlinkStreamMessageKind.Request,
+    codec: connector.ZlinkStreamCodec.Json,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: 'CorrelatedRelay',
+    metadata: connector.ZlinkStreamMetadataMap.empty,
+    requestSeq: 81n
+  };
+  context.enterDispatch(header);
+  try {
+    await actor.relay(
+      createSessionDispatchContext(header),
+      framework.ZLinkMessage.fromEncoded(
+        framework.ZLinkEncodedPayload.from(Buffer.from('{"relay":true}'))
+      )
+    );
+  } finally {
+    context.exitDispatch();
+  }
+  assert.equal(relayed.length, 1);
+  assert.equal(relayed[0].requestSeq, 81n);
+  assert.equal(relayed[0].name, 'CorrelatedRelay');
 });
 
 test('managed stream treats an actor-destroy stale unbind as idempotent cleanup', async () => {

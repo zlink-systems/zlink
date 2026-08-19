@@ -839,6 +839,8 @@ test('actor declarations resolve global ActorId calls and expose fluent manager 
   assert.match(actorRef, /readonly objectGeneration: bigint/);
   assert.match(actorRef, /readonly meshName: string/);
   assert.doesNotMatch(declarations, /\bZLinkActorRefSnapshot\b/);
+  assert.match(sessionActors, /bind\(actor: ActorRef, signal\?: AbortSignal\): Promise<ZLinkSessionActor>/);
+  assert.doesNotMatch(sessionActors, /bind\(actor: ZLinkActor \| ActorRef/);
   assert.match(sessionActors, /bindOrGet\(actor: ActorRef, signal\?: AbortSignal\): Promise<ZLinkSessionActor>/);
 });
 
@@ -860,6 +862,10 @@ test('one-way call declarations complete without exposing transport admission re
   assert.match(sessionSendCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
   assert.match(sessionReplyCall, /submit\(signal\?: AbortSignal\): Promise<void>/);
   assert.match(sessionActor, /relay\(payload: ZLinkMessage, signal\?: AbortSignal\): Promise<void>/);
+  assert.match(
+    sessionActor,
+    /relay\(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal\?: AbortSignal\): Promise<void>/
+  );
   assert.doesNotMatch(declarations, /ZLinkSubmitResult|ZLinkPublishResult|ZLinkSubmitStatus|ZLinkLogicalMulticastDetail/);
   for (const call of [sendCall, fanoutPublishCall, publishCall, actorSendCall,
     boundSessionSendCall, sessionSendCall, sessionReplyCall]) {

@@ -48,9 +48,12 @@ export class ZLinkBoundActorRelaySender {
   async relay(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    dispatchHeader?: ZLinkStreamFrameHeader
   ): Promise<ZLinkSubmitResult> {
-    const header = this.currentHeader(actor);
+    const header = dispatchHeader === undefined
+      ? this.currentHeader(actor)
+      : this.requireDispatchHeader(actor, dispatchHeader);
     if (
       header.kind === ZLinkStreamMessageKind.Request
       && header.requestSeq !== undefined
@@ -141,6 +144,17 @@ export class ZLinkBoundActorRelaySender {
     const header = this.routes.requireRoute(actor.actorId).context.dispatchHeader;
     if (header === undefined) {
       throw new Error('Session actor relay requires an active stream dispatch.');
+    }
+    return header;
+  }
+
+  private requireDispatchHeader(
+    actor: DefaultZLinkSessionActor,
+    header: ZLinkStreamFrameHeader
+  ): ZLinkStreamFrameHeader {
+    this.routes.requireCurrentToken(actor.actorId, actor.bindingToken);
+    if (this.routes.requireRoute(actor.actorId).context.dispatchHeader !== header) {
+      throw new Error('Session actor relay dispatch is not active for this bound actor.');
     }
     return header;
   }
