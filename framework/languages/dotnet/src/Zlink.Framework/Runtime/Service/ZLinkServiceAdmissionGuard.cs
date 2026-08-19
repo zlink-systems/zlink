@@ -66,10 +66,9 @@ internal static class ZLinkServiceAdmissionGuard
             expectedEndpoint,
             incoming.AdvertisedEndpoint,
             StringComparison.Ordinal)
-        && string.Equals(
+        && SecurityIdentityMatches(
             expectedSecurityIdentity,
-            incoming.SecurityIdentity,
-            StringComparison.Ordinal)
+            incoming.SecurityIdentity)
         && (expectedLifecycleGeneration == 0
             || expectedLifecycleGeneration
                 == incoming.LifecycleGeneration);
@@ -89,6 +88,18 @@ internal static class ZLinkServiceAdmissionGuard
             expectedSecurityIdentity,
             authenticatedSecurityIdentity,
             StringComparison.Ordinal);
+
+    // C++ RouteMesh descriptors retain their historical unauthenticated
+    // identity spelling ("default"). The actual ROUTER transport is still
+    // plaintext, so accept that wire spelling only for the plaintext
+    // expectation; authenticated identities remain exact-match only.
+    private static bool SecurityIdentityMatches(string expected, string actual) =>
+        string.Equals(expected, actual, StringComparison.Ordinal)
+        || (string.Equals(
+                expected,
+                ZLinkServiceSecurityIdentity.Plaintext,
+                StringComparison.Ordinal)
+            && string.Equals(actual, "default", StringComparison.Ordinal));
 
     internal static ZLinkServiceDuplicateConnectionDecision SelectConnection(
         RoutingId localRid,

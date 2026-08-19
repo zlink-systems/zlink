@@ -145,6 +145,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private long _localOwnerLeaseGeneration = 1;
     private ZLinkServiceWireCodec.RequestSourceFence _localRequestSourceFence;
     private readonly ZLinkMeshChannelSelection _channelSelection = new();
+    // Completed by the receive loop whenever an admission/descriptor change
+    // rebuilds the channel target snapshot. Direct channel requests wait on
+    // this edge instead of racing the initial Hello/Admit exchange.
+    private TaskCompletionSource _channelSelectionChanged =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _queuedMessages;
     private long _queuedBytes;
     private int _readyPosted;
@@ -7934,20 +7939,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        if (!TrySelectChannelTarget(channelName, out var targetRid))
-            //  Spec 07-channel-topology:414-415 — when no admitted remote
-            //  Server has positive weight the call "ends with no target", and
-            //  spec 32:87 classifies a target that doesn't exist as NotFound.
-            //  Reuse the sync path's three-way selection-failure classification
-            //  (draining -> Terminated, known-but-not-ready -> NotConnected,
-            //  no target/member -> NotFound) instead of collapsing every
-            //  selection failure to NotConnected/Unavailable.
-            throw new ZlinkSubmitException(ChannelSelectionFailureResult(channelName) switch
-            {
-                SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
-                SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
-                _ => ZlinkSubmitException.ErrorCode.NotFound
-            });
+        var targetRid = await WaitForChannelTargetAsync(
+                channelName,
+                timeout,
+                cancellationToken)
+            .ConfigureAwait(false);
         var peer = RequireDirectPeer(targetRid);
         var operationId = NextStandaloneOperationId();
         var reply = await RequestDirectWireAsync(
@@ -9107,13 +9103,77 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return _channelSelection.TrySelect(channelName, out targetRid);
     }
 
+    private async ValueTask<RoutingId> WaitForChannelTargetAsync(
+        string channelName,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var effectiveTimeout = timeout > TimeSpan.Zero
+            ? timeout
+            : TimeSpan.FromSeconds(30);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _stop?.Token ?? CancellationToken.None);
+        deadline.CancelAfter(effectiveTimeout);
+        while (true)
+        {
+            Task changed;
+            SubmitResult failure;
+            string failureReason;
+            var waitForSelectionChange = false;
+            lock (_gate)
+            {
+                if (_channelSelection.TrySelect(channelName, out var targetRid))
+                    return targetRid;
+                failure = ChannelSelectionFailureResultUnderLock(channelName);
+                failureReason = ChannelSelectionFailureReasonUnderLock(channelName);
+                // Only a first admission epoch can make this request
+                // selectable. A known peer that lost its admitted route is
+                // already Unavailable, and weight-zero/local-only membership
+                // has no eligible target under spec 08 §3.2.
+                waitForSelectionChange =
+                    CanChannelTargetStillMaterializeUnderLock(channelName);
+                changed = waitForSelectionChange
+                    ? _channelSelectionChanged.Task
+                    : Task.CompletedTask;
+            }
+
+            if (!waitForSelectionChange)
+            {
+                ZLinkRuntimeMetrics.RecordChannelSelectionFailure(
+                    _meshName,
+                    channelName,
+                    failureReason);
+                throw new ZlinkSubmitException(failure switch
+                {
+                    SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
+                    SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
+                    _ => ZlinkSubmitException.ErrorCode.NotFound
+                });
+            }
+            try
+            {
+                await changed.WaitAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    $"Channel '{channelName}' did not become selectable before its deadline.");
+            }
+        }
+    }
+
     //  Spec 08 §7 treats a ChannelName with no selectable target as NotFound.
     //  A weight-zero or draining member is excluded before submission, so it
     //  is not a transport connection failure. The declaration check is kept
     //  separately for monitoring and failure metrics.
     private SubmitResult ChannelSelectionFailureResult(string channelName)
     {
-        var reason = ChannelSelectionFailureReason(channelName);
+        string reason;
+        lock (_gate)
+            reason = ChannelSelectionFailureReasonUnderLock(channelName);
         ZLinkRuntimeMetrics.RecordChannelSelectionFailure(
             _meshName,
             channelName,
@@ -9129,23 +9189,51 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private string ChannelSelectionFailureReason(string channelName)
     {
         lock (_gate)
+            return ChannelSelectionFailureReasonUnderLock(channelName);
+    }
+
+    private SubmitResult ChannelSelectionFailureResultUnderLock(string channelName) =>
+        ChannelSelectionFailureReasonUnderLock(channelName) switch
         {
-            if (_state == MeshNodeState.Draining)
-                return "draining";
-            //  Spec 08 §3.2 step 4 removes a weight-zero target from selection,
-            //  but the target remains a declared member for monitoring and
-            //  connection intent reconciliation. A previously admitted peer
-            //  that is now connecting is a known target whose route is not
-            //  ready, so it maps to Unavailable instead of NotFound.
-            if (!_channelSelection.IsDeclared(channelName))
-                return "no_member";
-            return _peersByIntent.Values.Any(peer =>
-                    !peer.Admitted
-                    && peer.State != MeshPeerState.Closed
-                    && peer.Channels.ContainsKey(channelName))
-                ? "not_ready"
-                : "no_target";
-        }
+            "draining" => SubmitResult.Terminated,
+            "not_ready" => SubmitResult.NotConnected,
+            _ => SubmitResult.NotFound
+        };
+
+    private bool CanChannelTargetStillMaterializeUnderLock(string channelName) =>
+        _peersByIntent.Values.Any(peer =>
+            !peer.Admitted
+            && peer.State != MeshPeerState.Closed
+            // A previously admitted peer retains its logical RID while it
+            // reconnects. That route is presently unavailable, rather than a
+            // prospective startup candidate for this request.
+            && peer.RoutingId.IsEmpty
+            && (peer.Channels.ContainsKey(channelName)
+                // Before the first Hello/Admit, an explicitly configured
+                // outbound peer has no descriptor yet. Its first admission
+                // can still declare this channel before the deadline.
+                || (peer.Direction == ZLinkServiceConnectionDirection.Outbound
+                    && peer.ExpectedRid is not null
+                    && peer.State is MeshPeerState.Configured
+                        or MeshPeerState.Connecting)));
+
+    private string ChannelSelectionFailureReasonUnderLock(string channelName)
+    {
+        if (_state == MeshNodeState.Draining)
+            return "draining";
+        //  Spec 08 §3.2 step 4 removes a weight-zero target from selection,
+        //  but the target remains a declared member for monitoring and
+        //  connection intent reconciliation. A previously admitted peer
+        //  that is now connecting is a known target whose route is not
+        //  ready, so it maps to Unavailable instead of NotFound.
+        if (!_channelSelection.IsDeclared(channelName))
+            return "no_member";
+        return _peersByIntent.Values.Any(peer =>
+                !peer.Admitted
+                && peer.State != MeshPeerState.Closed
+                && peer.Channels.ContainsKey(channelName))
+            ? "not_ready"
+            : "no_target";
     }
 
     private void RebuildChannelSelectionPlansUnderLock()
@@ -9161,6 +9249,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         foreach (var peer in _peersByIntent.Values)
             channelNames.UnionWith(peer.Channels.Keys);
         _channelSelection.Rebuild(channelNames, BuildChannelTargetsUnderLock);
+        var previous = _channelSelectionChanged;
+        _channelSelectionChanged =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        previous.TrySetResult();
     }
 
     private ZLinkMeshChannelTarget[] BuildChannelTargetsUnderLock(

@@ -618,6 +618,12 @@ public sealed class ServiceRuntimeFoundationTests
             ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
+        Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+            "tcp://127.0.0.1:7070",
+            ZLinkServiceSecurityIdentity.Plaintext,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            current.LifecycleGeneration,
+            current with { SecurityIdentity = "default" }));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7071",
             ZLinkServiceSecurityIdentity.Plaintext,
@@ -1259,6 +1265,87 @@ public sealed class ServiceRuntimeFoundationTests
         }
         sourceBatch.Reset();
         Assert.False(sourceClaim.Receive(sourceBatch, RecvFlags.DontWait));
+    }
+
+    [Fact]
+    public async Task ManagedNode_DirectChannelRequest_WaitsForInboundTargetAdmission()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "orders");
+        await using var target = new ZLinkManagedMeshNode(context, "orders");
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"channel-wait-source-{suffix}");
+        var targetRid = RoutingId.From($"channel-wait-target-{suffix}");
+        var sourceEndpoint = $"inproc://channel-wait-source-{suffix}";
+        var targetEndpoint = $"inproc://channel-wait-target-{suffix}";
+
+        source.SetRoutingId(sourceRid);
+        source.SetBind(sourceEndpoint);
+        source.ConnectPeer(targetEndpoint, targetRid);
+        source.Start();
+
+        using var requestPart = Message.From(new byte[] { 1, 2, 3 });
+        var request = source.RequestToChannelDirectAsync(
+            "source",
+            "worker",
+            [requestPart],
+            SendFlags.None,
+            ReadOnlyMemory<byte>.Empty,
+            TimeSpan.FromSeconds(3),
+            CancellationToken.None).AsTask();
+
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.AddChannel("worker");
+        target.Start();
+
+        using var ready = new MeshReadyBatch();
+        await WaitUntilAsync(() =>
+        {
+            ready.Reset();
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            return ready.Count == 1;
+        });
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(MeshRecordKind.ChannelRequest, received[0].Kind);
+        using var replyPart = Message.From(new byte[] { 9, 8, 7 });
+        Assert.Equal(SubmitResult.Ok, received[0].Reply([replyPart]));
+
+        var reply = await request;
+        try
+        {
+            Assert.Equal(new byte[] { 9, 8, 7 }, Assert.Single(reply).ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(reply);
+        }
+    }
+
+    [Fact]
+    public async Task ManagedNode_DirectChannelRequest_WithoutTarget_IsNotFound()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "orders");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetRoutingId(RoutingId.From($"channel-timeout-source-{suffix}"));
+        source.SetBind($"inproc://channel-timeout-source-{suffix}");
+        source.Start();
+
+        using var requestPart = Message.From(new byte[] { 1 });
+        var error = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await source.RequestToChannelDirectAsync(
+                "source",
+                "worker",
+                [requestPart],
+                SendFlags.None,
+                ReadOnlyMemory<byte>.Empty,
+                TimeSpan.FromSeconds(3),
+                CancellationToken.None));
+
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, error.Result);
     }
 
     [Fact]
