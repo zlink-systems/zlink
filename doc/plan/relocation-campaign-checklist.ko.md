@@ -580,6 +580,22 @@
       autoconnect 소비계층이 admitted peer를 재dial해 generation 회전시키는
       지점 수정(스펙 근거·수정후 검증·타 언어 대칭 확인) + spec 51 §5
       구체화(양방향 probe 의무·admitted epoch 고정, 4언어 전파).
+      **spec 51 §5 구체화 완료·전파 `<이 커밋>`**: en+ko + schema livenessProfile
+      4필드 + validator 정확계약, codegen churn 없음(liveness는 비생성 프로필).
+      **dotnet generation-churn 수정 완료(genfix, 2026-08-20)**: ⓐ
+      ManagedMeshNode.cs — 이미 admitted된 outbound peer는 재dial 시 새 intent
+      대신 재사용(§5 admitted epoch 고정; 재사용은 Admitted일 때만이라 실제
+      disconnect 후 새 generation 발급=강등 보존) ⓑ ZLinkMeshPeerAdmission.cs —
+      exact.Admitted면 반복 hello/admit을 기존 peer로 idempotent 매핑(§5) ⓒ
+      회귀 테스트(반복 admission generation 비회전 pin). **검증: 3방향 relocation
+      전부 그린**(dotnet→java `Relocated|None`+target stateVersion=1|100KB,
+      java→dotnet, node→dotnet), 트레이스에 dotnet control generation=1 고정·
+      java command 6 수신·probe 2~4 진행 확인, conformance 9/9, 신규 테스트 통과.
+      스펙 준수 직접 검증 완료(§5+13-mesh-node §7.1 인용 정합). **잔여
+      CERT 블로커 = DeferredActorJoinDurabilityTests 2건(legacyRecovery
+      False/True)** — cert1 최초 실행에서도 실패한 **선재 회귀**(durable-join
+      phase/frozen-recovery 기원, genfix 무관), 별도 수정 진행 중. 이후
+      java+dotnet+genfix 전체 배치 커밋(게이트 sanctioned-3만).
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
