@@ -691,6 +691,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             opened.options().sendHwm(routerHighWaterMark);
             opened.options().recvHwm(routerReceiveHighWaterMark);
+            // RouteMesh admission is peer-initiated when automatic discovery
+            // chooses the other node as the deterministic dialer. Enable the
+            // ZMTP probe on this ROUTER before bind so that an inbound,
+            // store-expected connection is promoted to a usable route and
+            // its HELLO reaches this node's admission pump. Node configures
+            // the same option on every raw mesh router.
+            opened.options().probe(true);
             opened.bind(bindEndpoint);
             String boundEndpoint = opened.options().lastEndpoint();
             if (boundEndpoint != null && !boundEndpoint.isBlank()) {
@@ -5940,6 +5947,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     expectedSecurityIdentity,
                     expectedLifecycleGeneration,
                     descriptor)) {
+                streamTrace(STREAM_TRACE
+                    ? "admission-rejected reason=expected-route-mismatch"
+                        + " source=" + inbound.source()
+                        + " fields=" + expectedRouteMismatchFields(
+                            expectedEndpoint,
+                            expectedSecurityIdentity,
+                            expectedLifecycleGeneration,
+                            descriptor)
+                    : null);
                 rejectedPeers.add(inbound.source());
                 if (inboundPair == null) {
                     trySendAdmissionControl(
@@ -6804,6 +6820,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 .thenComparingLong(PeerIntent::createdAtMs))
             .findFirst()
             .orElse(null);
+    }
+
+    static String expectedRouteMismatchFields(
+        String expectedEndpoint,
+        String expectedSecurityIdentity,
+        long expectedLifecycleGeneration,
+        ZLinkServiceNodeDescriptor incoming) {
+        List<String> fields = new ArrayList<>(3);
+        if (expectedEndpoint != null
+            && !expectedEndpoint.equals(incoming.advertisedEndpoint())) {
+            fields.add("endpoint");
+        }
+        if (expectedSecurityIdentity != null
+            && !expectedSecurityIdentity.equals(incoming.securityIdentity())) {
+            fields.add("security-identity");
+        }
+        if (expectedLifecycleGeneration != 0
+            && expectedLifecycleGeneration
+                != incoming.lifecycleGeneration()) {
+            fields.add("lifecycle-generation");
+        }
+        return String.join(",", fields);
     }
 
     private String registerTransportConnection(

@@ -568,6 +568,55 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void inboundHelloFromStoreExpectedPeerIsAdmittedWithoutLocalDial()
+        throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-store-expected-local");
+        RoutingId peerRid = RoutingId.from("jvm-store-expected-peer");
+        String localEndpoint = "inproc://jvm-store-expected-local-"
+            + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-store-expected-peer-"
+            + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = meshNode(context);
+             var peer = meshNode(context)) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+
+            // Location-store reconciliation has observed the peer, but this
+            // node is not the deterministic auto-connect initiator. The
+            // remote peer therefore dials us and its HELLO must still pass
+            // the descriptor fence and receive ADMIT.
+            local.observePeerAdmissionExpectation(
+                peerRid,
+                peerEndpoint,
+                peer.status().lifecycleGeneration(),
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+            peer.connectPeer(localEndpoint, localRid);
+
+            awaitState(local, MeshPeerState.ADMITTED);
+            awaitState(peer, MeshPeerState.ADMITTED);
+        }
+    }
+
+    @Test
+    void expectedRouteMismatchDiagnosticNamesEveryDifferentField() {
+        ZLinkServiceNodeDescriptor incoming =
+            descriptor(RoutingId.from("jvm-mismatch-peer"));
+
+        assertEquals(
+            "endpoint,security-identity,lifecycle-generation",
+            ZLinkJavaRawMeshNode.expectedRouteMismatchFields(
+                "inproc://jvm-other-peer",
+                "unexpected-identity",
+                2,
+                incoming));
+    }
+
+    @Test
     void descriptorFenceReplacesEndpointOnlyIntent() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-descriptor-replace-local");
         RoutingId peerRid = RoutingId.from("jvm-descriptor-replace-peer");

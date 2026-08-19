@@ -424,6 +424,19 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
 
     }
 
+    private static String admissionSecurityIdentity(
+        ZLinkAutoConnectPlanner.Target target) {
+        String identity = target.metadata().getOrDefault(
+            ZLinkAutoConnectPlanner.SECURITY_IDENTITY_METADATA_KEY,
+            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+        // Older store rows say "plaintext", but current RouteMesh
+        // descriptors encode the canonical wire placeholder "default".
+        // This is a transport-mode label, not an authenticated identity.
+        return "plaintext".equals(identity)
+            ? ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY
+            : identity;
+    }
+
     private static final class MeshNodeExecutor implements ZLinkAutoConnectExecutor {
         private final ZLinkInternalMeshNode node;
         private final Set<String> manualEndpoints;
@@ -459,15 +472,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 target.nodeRid(),
                 target.endpoint(),
                 target.lifecycleGeneration(),
-                //  A row without the metadata key falls back to the shared
-                //  plaintext-transport identity every language encodes in
-                //  its admission descriptor -- never to the routing id,
-                //  which no peer ever puts in that field.
-                target.metadata().getOrDefault(
-                    ZLinkAutoConnectPlanner
-                        .SECURITY_IDENTITY_METADATA_KEY,
-                    ZLinkServiceNodeDescriptor
-                        .PLAINTEXT_SECURITY_IDENTITY));
+                admissionSecurityIdentity(target));
         }
 
         @Override
@@ -488,11 +493,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                         target.endpoint(),
                         target.nodeRid(),
                         target.lifecycleGeneration(),
-                        target.metadata().getOrDefault(
-                            ZLinkAutoConnectPlanner
-                                .SECURITY_IDENTITY_METADATA_KEY,
-                            ZLinkServiceNodeDescriptor
-                                .PLAINTEXT_SECURITY_IDENTITY))
+                        admissionSecurityIdentity(target))
                     : node.connectPeer(target.endpoint());
                 connectionIntents.put(
                     target.endpoint(),
