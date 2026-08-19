@@ -205,9 +205,9 @@ internal sealed class ZLinkChannelReceiveLoop(
             && StringComparer.Ordinal.Equals(
                 hello.ChannelName,
                 identity.ChannelName.Value)
-            && StringComparer.Ordinal.Equals(
-                hello.SecurityIdentity,
-                identity.SecurityIdentity);
+            && ZLinkClientServerControlProtocol.SecurityIdentityMatches(
+                identity.SecurityIdentity,
+                hello.SecurityIdentity);
         var negotiatedMaximumMessageBytes = accepted
             ? Math.Min(
                 hello!.NormalizedEffectiveMaxMessageBytes,

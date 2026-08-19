@@ -1182,9 +1182,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         || !StringComparer.Ordinal.Equals(
                             admission.AdvertisedEndpoint,
                             expected.Endpoint)
-                        || !StringComparer.Ordinal.Equals(
-                            admission.SecurityIdentity,
-                            expected.SecurityIdentity)))
+                        || !ZLinkClientServerControlProtocol.SecurityIdentityMatches(
+                            expected.SecurityIdentity,
+                            admission.SecurityIdentity)))
                 {
                     lock (_gate)
                     {

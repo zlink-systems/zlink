@@ -9213,9 +9213,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // outbound peer has no descriptor yet. Its first admission
                 // can still declare this channel before the deadline.
                 || (peer.Direction == ZLinkServiceConnectionDirection.Outbound
-                    && peer.ExpectedRid is not null
-                    && peer.State is MeshPeerState.Configured
-                        or MeshPeerState.Connecting)));
+                    && peer.State is (MeshPeerState.Configured
+                        or MeshPeerState.Connecting))));
 
     private string ChannelSelectionFailureReasonUnderLock(string channelName)
     {

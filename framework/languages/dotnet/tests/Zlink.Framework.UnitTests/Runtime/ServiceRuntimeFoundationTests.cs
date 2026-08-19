@@ -1006,7 +1006,9 @@ public sealed class ServiceRuntimeFoundationTests
 
         source.SetRoutingId(sourceRid);
         source.SetBind(sourceEndpoint);
-        source.ConnectPeer(targetEndpoint, targetRid);
+        // Cross-language manual ClientServer peers declare only an endpoint;
+        // their RID and channel membership arrive in the first admission.
+        source.ConnectPeer(targetEndpoint);
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
         var sourceLifecycleGeneration = source.Status().LifecycleGeneration;

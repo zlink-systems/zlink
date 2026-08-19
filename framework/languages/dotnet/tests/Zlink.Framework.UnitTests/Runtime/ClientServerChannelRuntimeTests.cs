@@ -1212,15 +1212,19 @@ public sealed class ClientServerChannelRuntimeTests
                 "plaintext",
                 4096));
         Assert.Equal(
-            "5A4D010100020000001701001404776F726B0109706C61696E7465787400001000",
+            "5A4D010100020000001501001204776F726B010764656661756C7400001000",
             Convert.ToHexString(hello.AsReadOnlyMemory().Span));
         Assert.True(
             ZLinkClientServerControlProtocol.TryDecodeHello(
                 [hello],
                 out var decodedHello));
         Assert.Equal("work", decodedHello!.ChannelName);
-        Assert.Equal("plaintext", decodedHello.SecurityIdentity);
+        Assert.Equal("default", decodedHello.SecurityIdentity);
         Assert.Equal(4096U, decodedHello.NormalizedEffectiveMaxMessageBytes);
+        Assert.True(ZLinkClientServerControlProtocol.SecurityIdentityMatches(
+            "plaintext", "default"));
+        Assert.False(ZLinkClientServerControlProtocol.SecurityIdentityMatches(
+            "authenticated-client", "default"));
 
         using var admit = ZLinkClientServerControlProtocol.EncodeAdmission(
             new ZLinkClientServerControlProtocol.Admission(
@@ -1241,6 +1245,7 @@ public sealed class ClientServerChannelRuntimeTests
         Assert.Equal(3UL, decodedAdmission.LifecycleGeneration);
         Assert.Equal(7UL, decodedAdmission.DescriptorRevision);
         Assert.Equal(75, decodedAdmission.Weight);
+        Assert.Equal("default", decodedAdmission.SecurityIdentity);
         Assert.Equal("tcp://127.0.0.1:7002", decodedAdmission.AdvertisedEndpoint);
 
         using var update = ZLinkClientServerControlProtocol.EncodeUpdate(

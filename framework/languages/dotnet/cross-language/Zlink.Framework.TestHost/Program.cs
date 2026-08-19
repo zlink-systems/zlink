@@ -659,7 +659,7 @@ internal sealed class ChannelSubscriptionEventHandler(TestHostEventSink sink)
         CancellationToken cancellationToken)
     {
         _ = cancellationToken;
-        sink.Append(@event.Value);
+        sink.Append($"profile.changed:{@event.Value}");
         return ValueTask.CompletedTask;
     }
 }

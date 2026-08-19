@@ -61,12 +61,12 @@ internal static class TestHostScenarioConfigurator
             var meshName = options.ChannelName
                            ?? throw new InvalidOperationException(
                                "Channel server mode requires --channel-name.");
-            var mesh = framework.AddRouteMesh(meshName)
-                .Listen(options.ServerEndpoint
-                        ?? throw new InvalidOperationException(
-                            "Channel server mode requires --server-endpoint."))
-                .SetRoutingId(RoutingId.From("dotnet-channel-server"));
-            var channel = mesh.Channel(meshName).Server();
+            var serverEndpoint = options.ServerEndpoint
+                                 ?? throw new InvalidOperationException(
+                                     "Channel server mode requires --server-endpoint.");
+            var channel = framework.AddClientServerChannel(meshName)
+                .Server()
+                .Listen(new Uri(serverEndpoint).Port);
             channel
                 .AddRequestHandler<TestHostProfileRequestHandler, TestHostProfileRequest, TestHostProfileReply>();
             channel.AddSendHandler<TestHostProfileSendHandler, TestHostProfileSend>();
@@ -81,11 +81,9 @@ internal static class TestHostScenarioConfigurator
             var meshName = options.ChannelName
                            ?? throw new InvalidOperationException(
                                "Channel client mode requires --channel-name.");
-            var mesh = framework.AddRouteMesh(meshName)
-                .Listen(0)
-                .SetRoutingId(RoutingId.From("dotnet-channel-client"));
-            mesh.Channel(meshName).Client();
-            mesh.PeerConnections.Connect(
+            framework.AddClientServerChannel(meshName)
+                .Client()
+                .Connect(
                 options.ServerEndpoint
                 ?? throw new InvalidOperationException(
                     "Channel client mode requires --server-endpoint."));

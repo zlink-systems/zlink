@@ -42,7 +42,7 @@ internal static class ZLinkClientServerControlProtocol
         var role = new Writer();
         role.Text8(hello.ChannelName);
         role.U8(ClientToServerDirection);
-        role.Text8(hello.SecurityIdentity);
+        role.Text8(ToWireSecurityIdentity(hello.SecurityIdentity));
         role.NonZeroU32(hello.NormalizedEffectiveMaxMessageBytes);
         return EncodeAdmission(HelloCommand, ClientRole, role);
     }
@@ -75,7 +75,7 @@ internal static class ZLinkClientServerControlProtocol
         role.NonZeroU64(admission.DescriptorRevision);
         role.U32(checked((uint)admission.Weight));
         role.U8(RuntimeStateToWire(admission.State));
-        role.Text8(admission.SecurityIdentity);
+        role.Text8(ToWireSecurityIdentity(admission.SecurityIdentity));
         role.NonZeroU32(admission.NormalizedEffectiveMaxMessageBytes);
         role.Text16(admission.AdvertisedEndpoint);
         return EncodeAdmission(command, ServerRole, role);
@@ -101,6 +101,20 @@ internal static class ZLinkClientServerControlProtocol
             && span[1] == Magic1
             && span[2] == WireMajor;
     }
+
+    // C++ retains "default" as the wire spelling for an unauthenticated
+    // ClientServer peer. It denotes the same plaintext transport as this
+    // runtime's explicit identity; configured authenticated identities stay
+    // exact-match only.
+    internal static bool SecurityIdentityMatches(string expected, string actual) =>
+        string.Equals(expected, actual, StringComparison.Ordinal)
+        || (string.Equals(expected, "plaintext", StringComparison.Ordinal)
+            && string.Equals(actual, "default", StringComparison.Ordinal));
+
+    private static string ToWireSecurityIdentity(string identity) =>
+        string.Equals(identity, "plaintext", StringComparison.Ordinal)
+            ? "default"
+            : identity;
 
     internal static bool TryDecodeHello(
         IReadOnlyList<Message> parts,
