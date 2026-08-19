@@ -483,6 +483,33 @@ void verify_topology_snapshot_and_connection_fence ()
     assert (!topology.select ("alpha"));
 }
 
+// RouteMesh admission's capability is part of the wire descriptor contract.
+// Keeping the default bound to the generated schema constant prevents a C++
+// peer from sending a descriptor that a newer language rejects before its
+// identity guard can run.
+void verify_route_mesh_descriptor_uses_generated_capability ()
+{
+    const auto local = descriptor ("generated-capability-local");
+    assert (local.protocol_capabilities.size () == 2);
+    assert (local.protocol_capabilities.at (0) == "framework-service-v12");
+    assert (local.protocol_capabilities.at (1)
+            == protocol::required_capability);
+    mesh::service_topology_registry_t topology (local);
+    (void) topology;
+
+    auto stale = local;
+    stale.protocol_capabilities = {"framework-service-v12"};
+    bool rejected = false;
+    try {
+        mesh::service_topology_registry_t invalid (std::move (stale));
+        (void) invalid;
+    }
+    catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert (rejected);
+}
+
 void verify_duplicate_connection_survivor_is_symmetric ()
 {
     auto lower = descriptor ("aa");
@@ -2763,6 +2790,7 @@ int main ()
     verify_actor_create_retry_timeout_is_unavailable ();
     verify_actor_create_from_dispatch_thread_does_not_block ();
     verify_topology_snapshot_and_connection_fence ();
+    verify_route_mesh_descriptor_uses_generated_capability ();
     verify_duplicate_connection_survivor_is_symmetric ();
     verify_lifecycle_token_requires_current_discovery_expectation ();
     verify_physical_candidates_preserve_survivor ();

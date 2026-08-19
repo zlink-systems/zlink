@@ -374,8 +374,9 @@ int main ()
           protocol::command::update}) {
         const auto encoded =
           protocol::encode_route_mesh_admission (kind, admission_descriptor);
-        // The RouteMesh schema does not reserve four bytes for a message-size limit.
-        assert (encoded.size () == 179);
+        // The RouteMesh schema does not reserve four bytes for a message-size
+        // limit; the v12+v13 capability advertisement is part of this wire size.
+        assert (encoded.size () == 201);
         assert (protocol::decode_route_mesh_admission (
                   encoded, kind, admission_descriptor.node_routing_id)
                 == admission_descriptor);

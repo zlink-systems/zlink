@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <service_wire_constants.hpp>
+
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -53,7 +55,12 @@ struct service_node_descriptor_t
     service_node_state_t state = service_node_state_t::preparing;
     std::string security_identity = "default";
     std::int64_t application_version = 0;
-    std::vector<std::string> protocol_capabilities{"framework-service-v12"};
+    // v13 is the current schema capability. Keep v12 advertised during the
+    // rolling cross-language migration: older Node peers still require it,
+    // while newer peers require v13. The vector remains byte-sorted on wire.
+    std::vector<std::string> protocol_capabilities{
+      "framework-service-v12",
+      zlink::framework::runtime::protocol::required_capability};
     service_object_role_t object_role = service_object_role_t::none;
     int placement_weight = 100;
     std::uint32_t active_capacity_limit = 10000;
