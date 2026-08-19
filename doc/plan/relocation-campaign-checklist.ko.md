@@ -514,7 +514,12 @@
       steady row를 envelope/prepare fence로 검증해 수용.
       **🎉 node→dotnet 교차 언어 relocation 최초 단대단 통과(2026-08-20)**:
       40→52×4→Ready→Cutover→Relocated, target liveness probe 정상
-      (stateVersion=1, 100KB 상태). dotnet 게이트 완주 후 대배치 커밋 예정.
+      (stateVersion=1, 100KB 상태). dotnet 게이트에서 신규 회귀 5건 → 전부 해소(내부 내구성 보존, frozen
+      root 재정렬) 후 **대배치 커밋 `ceba563439`** — node→dotnet 그린 재확인.
+      relocation 3쌍 수용 런: node→dotnet GREEN / java 양방향은 java 결함 2건
+      정밀 특정 — ⓐ java source가 Prepare 발신 전 admission 대기 정지
+      ⓑ java target의 inventory-vs-root 불일치 거부 + command 53 수신 미지원.
+      하니스 수정 커밋 `fa9d892614`, java 수정 잡 가동 중.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
