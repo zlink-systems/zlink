@@ -322,11 +322,11 @@ Framework가 object와 owner의 generation을 증가하는 counter로 발급한�
 `StoreVersion`만 provider가 발급한다. ActorRef와 SpotRef는 ObjectGeneration을
 사용한다.
 
-Framework가 발급하는 generation의 최댓값은 `2^63-1`이다. 다음 값이 필요하면
-`GenerationExhausted`이며 Store를 변경하지 않는다. 반복 호출도 같은 결과다.
-Framework는 해당 authority를 오류 상태로 기록하고
-network command를 보내지 않는다. Counter를 0으로 되돌리거나 범위를 넘어 다시
-사용하지 않는다.
+저장하는 generation 범위는 `1..2^63-1`이며 `2^63-1`은 소진 sentinel로 저장만 하고
+발급하지 않는다. 따라서 발급 범위는 `1..2^63-2`다. 저장한 counter가 sentinel이면 다음
+발급은 `GenerationExhausted`이며 Store를 변경하지 않는다. 반복 호출도 같은 결과다.
+Framework는 해당 authority를 오류 상태로 기록하고 network command를 보내지 않는다.
+Counter를 0으로 되돌리거나 범위를 넘어 다시 사용하지 않는다.
 
 ### 2.3 현재 위치 record에 저장하는 값
 

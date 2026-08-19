@@ -337,10 +337,12 @@ moving an object to another node, since it's the same object continuing.
 The framework issues object and owner generations as increasing counters. Only
 `StoreVersion` is issued by the provider. ActorRef and SpotRef use ObjectGeneration.
 
-The maximum value for a framework-issued generation is `2^63-1`. If the next value is
-needed, it's `GenerationExhausted`, and the Store isn't changed. Repeated calls give the
-same result. The framework records that authority as an error state and doesn't send a
-network command. The counter isn't reset to 0 or reused past the range.
+The stored generation range is `1..2^63-1`; `2^63-1` is the exhausted sentinel and is
+never issued. The issued range is therefore `1..2^63-2`. Once the stored counter is the
+sentinel, a further issuance is `GenerationExhausted`, and the Store isn't changed.
+Repeated calls give the same result. The framework records that authority as an error
+state and doesn't send a network command. The counter isn't reset to 0 or reused past
+the range.
 
 ### 2.3 Values Stored In The Current Location Record
 

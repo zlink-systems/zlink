@@ -842,13 +842,10 @@
           "admitAndUpdateRole": "server",
           "direction": "clientToServer",
           "clientToServerCommands": [
-            "channelSend",
-            "channelRequest",
             "livenessProbe",
             "livenessAck"
           ],
           "serverToClientCommands": [
-            "reply",
             "livenessProbe",
             "livenessAck",
             "update",
@@ -1244,7 +1241,9 @@
     "authorityOwnerToken": "framework-ownerId-plus-provider-authorityOwnerGeneration",
     "delete": "remove-row-with-no-per-key-generation-or-version-tombstone",
     "scanTombstone": "retain-only-until-all-older-active-scan-leases-finish-or-expire",
-    "generationMaximum": "9223372036854775807",
+    "storedGenerationRange": "1..9223372036854775807",
+    "generationMaximum": "9223372036854775806",
+    "exhaustedStoredGeneration": "9223372036854775807",
     "overflow": "GenerationExhausted-non-retriable-no-row-index-or-counter-mutation-or-consumption",
     "opaquePayloadGenerationDuplication": "forbidden"
   },
@@ -1265,7 +1264,9 @@
       "ownerId",
       "leaseGeneration"
     ],
-    "generationRange": "1..9223372036854775807",
+    "storedGenerationRange": "1..9223372036854775807",
+    "generationRange": "1..9223372036854775806",
+    "exhaustedStoredGeneration": "9223372036854775807",
     "generationSource": "one-durable-global-counter-per-provider-transaction-domain",
     "operations": {
       "claimOwnerLease": {
@@ -6269,6 +6270,13 @@
     {
       "name": "saved-work-vector",
       "kind": "vector",
+      "participantIdDerivation": {
+        "inventory": "location-authority-key-inventory",
+        "inventoryOrder": "canonical-authority-key-bytes",
+        "authorityKeyEncoding": "utf-8",
+        "indexBase": 0,
+        "participantIdFormula": "index-plus-one"
+      },
       "countType": {
         "$ref": "u32"
       },
@@ -6461,6 +6469,13 @@
     {
       "name": "relocation-participant-application-state-vector",
       "kind": "vector",
+      "participantIdDerivation": {
+        "inventory": "location-authority-key-inventory",
+        "inventoryOrder": "canonical-authority-key-bytes",
+        "authorityKeyEncoding": "utf-8",
+        "indexBase": 0,
+        "participantIdFormula": "index-plus-one"
+      },
       "countType": {
         "$ref": "u32"
       },
@@ -6531,6 +6546,13 @@
     {
       "name": "relocation-timer-registration-vector",
       "kind": "vector",
+      "participantIdDerivation": {
+        "inventory": "location-authority-key-inventory",
+        "inventoryOrder": "canonical-authority-key-bytes",
+        "authorityKeyEncoding": "utf-8",
+        "indexBase": 0,
+        "participantIdFormula": "index-plus-one"
+      },
       "countType": {
         "$ref": "u32"
       },
@@ -6592,6 +6614,13 @@
     {
       "name": "relocation-pending-timer-tick-vector",
       "kind": "vector",
+      "participantIdDerivation": {
+        "inventory": "location-authority-key-inventory",
+        "inventoryOrder": "canonical-authority-key-bytes",
+        "authorityKeyEncoding": "utf-8",
+        "indexBase": 0,
+        "participantIdFormula": "index-plus-one"
+      },
       "countType": {
         "$ref": "u32"
       },
@@ -6787,6 +6816,23 @@
     "encoding": "canonical-big-endian-field-stream-without-monolithic-provider-envelope",
     "body": {
       "$ref": "relocation-envelope-v1"
+    },
+    "generatedObjectTree": {
+      "root": {
+        "$ref": "relocation-envelope-v1"
+      },
+      "applicationStates": {
+        "$ref": "relocation-participant-application-state-vector"
+      },
+      "savedWork": {
+        "$ref": "saved-work-vector"
+      },
+      "timerRegistrations": {
+        "$ref": "relocation-timer-registration-vector"
+      },
+      "pendingTimerTicks": {
+        "$ref": "relocation-pending-timer-tick-vector"
+      }
     },
     "maximumBytes": {
       "$bound": "relocationLogicalBytes"

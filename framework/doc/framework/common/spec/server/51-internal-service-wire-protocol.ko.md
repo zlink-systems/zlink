@@ -41,13 +41,16 @@ title: "51. Service wire protocol"
 
 `framework/runtime/protocol/service-wire-v1.schema.json`은 Framework service wire의 유일한 규범 wire
 정본이다. 이 schema가 command ID, frame·logical stream layout, enum 값, field bound, durable format과
-semantic constraint를 고정한다. C++·.NET·JVM·Node.js codec과 상수는 이 schema에서 생성하며, 손으로 작성한
-encode/decode 구현은 허용하지 않는다.
+semantic constraint를 고정한다. C++·.NET·JVM·Node.js의 각 codec과 상수 surface는 이 schema에서
+생성해야 한다. W-2가 surface별 생성된 구현으로 교체를 완료할 때까지는 기존에 손으로 작성한 codec을
+전환 구현으로 유지한다. 새 wire surface 또는 변경한 wire surface는 반드시 생성을 거쳐야 하며 새 손작성
+encode/decode 경로를 추가해서는 안 된다.
 
 따라서 wire 차이는 review를 거친 schema 변경으로만 생길 수 있다. Runtime은 source에서 layout을 갈라
 정의하거나, local compatibility encoding을 추가하거나, schema field를 다르게 해석해서는 안 된다. Schema
 self-test, generated-asset check, decoder-fixture check와 schema의 golden fixture가 언어 간 conformance
-수단이다. 생성된 모든 codec은 선언한 같은 bytes와 failure를 만들고 받아들여야 한다.
+수단이다. 생성된 모든 codec과 교체 전의 전환 손작성 codec은 선언한 같은 bytes와 failure를 만들고
+받아들여야 한다.
 
 ### 계층별 규범 형식
 

@@ -43,15 +43,19 @@ title: "51. Service wire protocol"
 `framework/runtime/protocol/service-wire-v1.schema.json` is the sole normative
 wire authority for the Framework service wire. It fixes command IDs, frame and
 logical-stream layout, enum values, field bounds, durable formats, and semantic
-constraints. C++/.NET/JVM/Node.js codecs and their constants are generated from
-that schema; handwritten encode/decode implementations are prohibited.
+constraints. Each C++/.NET/JVM/Node.js codec and constant surface MUST be
+generated from that schema. Until W-2 completes the generated swap for a
+surface, its existing handwritten codec remains the transitional implementation;
+new or changed wire surfaces MUST go through generation and MUST NOT add a new
+handwritten encode/decode path.
 
 Consequently, a wire divergence is possible only through a reviewed schema
 change. A runtime must not fork a layout, add a local compatibility encoding, or
 reinterpret a schema field in source. The schema self-test, generated-asset
 check, decoder-fixture check, and the schema's golden fixtures are the
-cross-language conformance mechanism: every generated codec must accept and
-produce the same declared bytes and failures.
+cross-language conformance mechanism: every generated codec, and every
+transitional handwritten codec until its swap, must accept and produce the same
+declared bytes and failures.
 
 ### Normative format by layer
 

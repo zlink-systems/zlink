@@ -1580,8 +1580,8 @@ function validateSemanticConstraints(constraints, contexts, fail) {
           helloRole: "client",
           admitAndUpdateRole: "server",
           direction: "clientToServer",
-          clientToServerCommands: ["channelSend", "channelRequest", "livenessProbe", "livenessAck"],
-          serverToClientCommands: ["reply", "livenessProbe", "livenessAck", "update", "reject"],
+          clientToServerCommands: ["livenessProbe", "livenessAck"],
+          serverToClientCommands: ["livenessProbe", "livenessAck", "update", "reject"],
           allOtherServiceCommands: "protocol-error",
         },
       },
@@ -2895,6 +2895,46 @@ function validateGoldenOrder(entries, key, location, fail) {
   }
 }
 
+function validateParticipantAuthorityKeyInventory(inventory, decoded, location, fail) {
+  if (!Array.isArray(inventory) || inventory.length < 3) {
+    fail(`${location}.participantAuthorityKeyInventory`, "must exercise three or more participants");
+    return;
+  }
+  for (let index = 0; index < inventory.length; index += 1) {
+    const entry = inventory[index];
+    if (!isObject(entry) || typeof entry.authorityKeyUtf8Fixture !== "string"
+        || Buffer.byteLength(entry.authorityKeyUtf8Fixture, "utf8") === 0
+        || BigInt(entry.participantId) !== BigInt(index + 1)) {
+      fail(`${location}.participantAuthorityKeyInventory`, "must map each non-empty authority key to one plus its zero-based index");
+      return;
+    }
+    if (index > 0 && Buffer.compare(
+      Buffer.from(inventory[index - 1].authorityKeyUtf8Fixture, "utf8"),
+      Buffer.from(entry.authorityKeyUtf8Fixture, "utf8"),
+    ) >= 0) {
+      fail(`${location}.participantAuthorityKeyInventory`, "must be strictly sorted by UTF-8 authority-key bytes");
+      return;
+    }
+  }
+  const expectedParticipantIds = inventory.map((entry) => String(entry.participantId));
+  const applicationParticipantIds = decoded.applicationStates.map((entry) => String(entry.participantId));
+  if (JSON.stringify(applicationParticipantIds) !== JSON.stringify(expectedParticipantIds)) {
+    fail(`${location}.decoded.applicationStates`, "must cover the canonical derived participant IDs in inventory order");
+  }
+  const validParticipantIds = new Set(expectedParticipantIds);
+  for (const vector of [
+    decoded.applicationStates,
+    decoded.savedWork,
+    decoded.timerRegistrations,
+    decoded.pendingTimerTicks,
+  ]) {
+    if (vector.some((entry) => !validParticipantIds.has(String(entry.participantId)))) {
+      fail(`${location}.decoded`, "participant vectors must reference only IDs derived from the authority-key inventory");
+      return;
+    }
+  }
+}
+
 function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
   if (formatName === "authority-payload-v1") {
     if (decoded.operationKind !== "steady"
@@ -3153,6 +3193,12 @@ function validateRelocationLogicalFixture(schema, schemaPath) {
         fail(`${location}.decoded`, "does not re-encode to the logical bytes");
       }
       validateGoldenFixtureSemantics(profile.name, decoded, `${location}.decoded`, fail);
+      validateParticipantAuthorityKeyInventory(
+        fixture.participantAuthorityKeyInventory,
+        decoded,
+        location,
+        fail,
+      );
 
       const chunkFixture = JSON.parse(fs.readFileSync(path.resolve(
         path.dirname(schemaPath),
@@ -3197,6 +3243,7 @@ function runRelocationLogicalFixtureSelfTests(schema, schemaPath) {
   const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
   const tests = [
     ["saved work and timer reuse participant order", (candidate) => {
+      candidate.decoded.pendingTimerTicks[0].participantId = candidate.decoded.savedWork[0].participantId;
       candidate.decoded.pendingTimerTicks[0].order = candidate.decoded.savedWork[0].order;
     }],
     ["participant application states omitted", (candidate) => {
@@ -3204,6 +3251,9 @@ function runRelocationLogicalFixtureSelfTests(schema, schemaPath) {
     }],
     ["participant application states out of order", (candidate) => {
       candidate.decoded.applicationStates.reverse();
+    }],
+    ["participant authority-key inventory violates derived ID", (candidate) => {
+      candidate.participantAuthorityKeyInventory[1].participantId = "7";
     }],
   ];
   for (const [label, mutate] of tests) {
@@ -3214,6 +3264,12 @@ function runRelocationLogicalFixtureSelfTests(schema, schemaPath) {
     const errors = [];
     validateGoldenFixtureSemantics(
       profile.name,
+      decoded,
+      `logical-fixture-self-test:${label}`,
+      (location, message) => errors.push(`${location}: ${message}`),
+    );
+    validateParticipantAuthorityKeyInventory(
+      candidate.participantAuthorityKeyInventory,
       decoded,
       `logical-fixture-self-test:${label}`,
       (location, message) => errors.push(`${location}: ${message}`),
@@ -5007,6 +5063,24 @@ function validateServiceInvariants(schema, types, fail) {
       ].includes(field.name))) {
     fail("$.types", "relocation application state must use the participant-indexed opaque state vector");
   }
+  const participantIdDerivation = {
+    inventory: "location-authority-key-inventory",
+    inventoryOrder: "canonical-authority-key-bytes",
+    authorityKeyEncoding: "utf-8",
+    indexBase: 0,
+    participantIdFormula: "index-plus-one",
+  };
+  for (const name of [
+    "relocation-participant-application-state-vector",
+    "saved-work-vector",
+    "relocation-timer-registration-vector",
+    "relocation-pending-timer-tick-vector",
+  ]) {
+    if (JSON.stringify(types.get(name)?.participantIdDerivation)
+        !== JSON.stringify(participantIdDerivation)) {
+      fail("$.types", `${name} must derive participantId from the UTF-8-byte-sorted canonical authority-key inventory`);
+    }
+  }
   requireFields(relocationEnvelope?.fields, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "object", $ref: "relocation-object-identity" },
@@ -5528,7 +5602,9 @@ function validateAuthorityStoreGenerationProfile(profile, fail) {
     authorityOwnerToken: "framework-ownerId-plus-provider-authorityOwnerGeneration",
     delete: "remove-row-with-no-per-key-generation-or-version-tombstone",
     scanTombstone: "retain-only-until-all-older-active-scan-leases-finish-or-expire",
-    generationMaximum: "9223372036854775807",
+    storedGenerationRange: "1..9223372036854775807",
+    generationMaximum: "9223372036854775806",
+    exhaustedStoredGeneration: "9223372036854775807",
     overflow: "GenerationExhausted-non-retriable-no-row-index-or-counter-mutation-or-consumption",
     opaquePayloadGenerationDuplication: "forbidden",
   };
@@ -5558,7 +5634,9 @@ function validateOwnerLeaseAuthorityProfile(profile, fail) {
   const expected = {
     ownerId: "framework-generated-lifecycle-unique-not-application-configurable-or-reusable",
     token: ["ownerId", "leaseGeneration"],
-    generationRange: "1..9223372036854775807",
+    storedGenerationRange: "1..9223372036854775807",
+    generationRange: "1..9223372036854775806",
+    exhaustedStoredGeneration: "9223372036854775807",
     generationSource: "one-durable-global-counter-per-provider-transaction-domain",
     operations: {
       claimOwnerLease: {

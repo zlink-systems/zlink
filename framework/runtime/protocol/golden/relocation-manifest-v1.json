@@ -1,18 +1,18 @@
 {
   "format": "relocation-manifest-v1",
   "consumers": ["cpp", "dotnet", "jvm", "node"],
-  "encodedHex": "5a4c544d0100000000004b0100000000000001a2820b23b220000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000000010000000000076368756e6b2d3000000000000001a2820b23b2d7e49b63",
+  "encodedHex": "5a4c544d0100000000004b0100000000000001b3ae320bc320000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000000010000000000076368756e6b2d3000000000000001b3ae320bc358502c19",
   "decoded": {
     "logicalFormatVersion": 1,
-    "totalLength": "418",
-    "totalChecksumCrc32c": 2181768114,
+    "totalLength": "435",
+    "totalChecksumCrc32c": 2922515395,
     "inventoryDigestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "chunks": [
       {
         "order": 0,
         "referenceUtf8Fixture": "chunk-0",
-        "length": "418",
-        "checksumCrc32c": 2181768114
+        "length": "435",
+        "checksumCrc32c": 2922515395
       }
     ]
   }
