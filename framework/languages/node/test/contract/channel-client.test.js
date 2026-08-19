@@ -28,6 +28,9 @@ const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require
 const serviceWire = require(
   '../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec'
 );
+const {
+  keepChannelRequestAlive
+} = require('../../packages/framework/dist/runtime/channels/channel-outbound-operations');
 
 function dispatchOptions() {
   return framework.createFrameworkOptions((options) => {
@@ -42,6 +45,76 @@ const reservedPorts = new Set();
 test.afterEach(async () => {
   // Native socket teardown completes its monitor callbacks asynchronously.
   await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test('pending channel requests keep the Node event loop alive until they settle', async () => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  let keepalive;
+  let cleared;
+  let resolveReply;
+  const reply = new Promise(resolve => {
+    resolveReply = resolve;
+  });
+  global.setTimeout = (callback, delay) => {
+    assert.equal(delay, 0x7fffffff);
+    keepalive = { callback, delay, ref: true };
+    return keepalive;
+  };
+  global.clearTimeout = timer => {
+    cleared = timer;
+  };
+  try {
+    const pending = keepChannelRequestAlive(reply);
+    assert.equal(keepalive.ref, true);
+    assert.equal(cleared, undefined);
+    resolveReply('reply');
+    assert.equal(await pending, 'reply');
+    assert.equal(cleared, keepalive);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('two in-process ClientServer nodes deliver a delayed reply to an awaited client request', async () => {
+  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  const serverRegistration = framework.createFrameworkRegistration({
+    channels: {
+      delayed: {
+        server: { bind: endpoint },
+        requestHandlers: [{
+          packetName: 'Ping',
+          handler: {
+            async handle(payload) {
+              await new Promise(resolve => setTimeout(resolve, 25));
+              return { value: payload.value };
+            }
+          }
+        }]
+      }
+    }
+  });
+  const clientRegistration = framework.createFrameworkRegistration({
+    channels: { delayed: { client: { manualConnections: [endpoint] } } }
+  });
+  const server = new framework.ZLinkFrameworkRuntimeHost({ registration: serverRegistration });
+  const clientRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: clientRegistration });
+  const client = new framework.DefaultZLinkChannelClient(
+    clientRegistration,
+    clientRuntime.channelTransport
+  );
+  try {
+    await server.start();
+    await clientRuntime.start();
+    const reply = await client.requestToChannel('delayed', typedPacket('Ping', { value: 'delayed' }))
+      .timeout(1_000)
+      .submit();
+    assert.deepEqual(reply, { value: 'delayed' });
+  } finally {
+    await clientRuntime.stop();
+    await server.stop();
+  }
 });
 
 test('two Node RouteMesh nodes round-trip a channel request and retain the pending submit', async () => {

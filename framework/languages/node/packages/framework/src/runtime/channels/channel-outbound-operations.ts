@@ -35,6 +35,7 @@ import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
 
 const ZLINK_SEND_DONT_WAIT = 1 as ZLinkBackendSendFlags;
+const CHANNEL_REQUEST_LOOP_KEEPALIVE_MS = 0x7fff_ffff;
 
 //  Shared default for the dominant no-metadata call; avoids a Map allocation
 //  per outbound operation.
@@ -145,10 +146,10 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return runWithOutboundFlow(
+    return keepChannelRequestAlive(runWithOutboundFlow(
       this.dispatchServices.flowCreationEnabled(),
       () => this.requestScoped<TReply>(channelName, packetName, request, timeoutMs, signal, metadata)
-    );
+    ));
   }
 
   private async requestScoped<TReply>(
@@ -544,6 +545,16 @@ export class ZLinkChannelOutboundOperations {
       else this.pendingRequests.set(channel, remaining);
     }
   }
+}
+
+/**
+ * A ClientServer DEALER's request progress poller is intentionally unref'ed.
+ * The public request promise is live work, however, so it needs its own
+ * ref'ed handle until reply, cancellation, timeout, or failure settles it.
+ */
+export function keepChannelRequestAlive<T>(request: Promise<T>): Promise<T> {
+  const keepalive = setTimeout(() => {}, CHANNEL_REQUEST_LOOP_KEEPALIVE_MS);
+  return request.finally(() => clearTimeout(keepalive));
 }
 
 function isSubmitDeadline(error: unknown): boolean {
