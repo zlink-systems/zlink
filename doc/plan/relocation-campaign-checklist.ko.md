@@ -294,12 +294,17 @@
       admit은 hello 요청의 reply로만 가능, java도 seq 진영(3:1)이라 cpp 단독
       이탈 확정. cpp를 seq-프레임으로 정렬(레코드 byte 불변), plain hello는
       protocol error, node와 양방향 admission 상호운용 실증.
-      **후속 [C] 발견·판정: ClientServer app 레코드 방언 분열** — cpp raw 경로는
-      binary 18/19/20, node/java/dotnet은 만장일치 JSON channel-envelope(0xF2).
-      mesh 연결의 binary 명령은 교차 언어 실증(spot-route 그린)되나 ClientServer
-      연결은 envelope가 실계약 — **판정: cpp가 envelope로 수렴+스펙 51 문구
-      한정 개정**(fanout 2-frame publish 동일, enable_publisher discovery 강제
-      루트 수정 포함) — 프레이밍 에이전트 속행
+      **후속 [C] 방언 분열 → 해소 `e7a2e6a86d`**: cpp ClientServer/fanout를
+      JSON channel-envelope로 수렴(사실 확인: 18/19/20은 RouteMesh 연결에서
+      교차 언어 live — 스펙 51에 한정 명문), enable_publisher discovery 강제
+      루트 수정(스토어리스 publisher), sol3 ⑦ 연결 세대 fence 동봉(동일
+      endpoint 교체 pin). 게이트 43/43, **cpp↔node 채널·fanout 양방향 그린**+
+      dotnet pub→cpp sub 그린. **잔여 귀속(신규 3건)**: (a) dotnet 서버가
+      request-frame hello 무응답(node 재현 — dotnet 결함) (b) dotnet 클라이언트
+      WaitForChannelTargetAsync가 hello 발신 전 NotFound(:9147→:7942)
+      (c) dotnet publish 핸들러 topic 미전파(cpp-publish 수신·dispatch는 정상)
+      (d) node: 채널 클라이언트 pending 요청이 event loop 미유지(9281b375b1의
+      hold 미포괄 경로, node↔node HEAD 재현) — dotnet·node 투입
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
