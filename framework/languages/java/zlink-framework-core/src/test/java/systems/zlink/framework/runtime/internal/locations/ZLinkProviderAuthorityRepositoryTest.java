@@ -162,6 +162,54 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void reserveRejectsNonCanonicalObjectAndOwnerCounterRecords()
+        throws Exception {
+        for (String counterName : List.of(
+                "zlink:v11:object-counter",
+                "zlink:v11:authority-owner-counter")) {
+            for (String invalid : List.of("01", "+1", "0", "", " 1")) {
+                var provider = new ZLinkInMemoryProviderLocationStore();
+                var owner = ((ZLinkOwnerLeaseClaimed)
+                    new ZLinkProviderOwnerLeaseRepository(provider)
+                        .claim("owner-counter", Duration.ofMinutes(1))
+                        .toCompletableFuture().get()).token();
+                var descriptors = new ZLinkProviderDescriptorRepository(provider);
+                var descriptor = capacityDescriptor(owner);
+                assertEquals(
+                    ZLinkLocationWriteStatus.STORED,
+                    descriptors.updateMeshNode(
+                            descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture().get().status());
+                provider.write(
+                        new ZLinkStoreWriteRequest(
+                            List.of(),
+                            List.of(new ZLinkStorePut(
+                                new ZLinkStoreKey(counterName),
+                                invalid.getBytes(
+                                    java.nio.charset.StandardCharsets.UTF_8),
+                                null))),
+                        () -> false)
+                    .toCompletableFuture().get();
+
+                var failure = assertThrows(
+                    java.util.concurrent.ExecutionException.class,
+                    () -> new ZLinkProviderAuthorityRepository(provider, descriptors)
+                        .reserve(
+                            capacityRequest(
+                                ZLinkAuthorityKeyCodec.spot("spot-counter"),
+                                descriptor,
+                                owner),
+                            () -> false)
+                        .toCompletableFuture().get());
+                assertInstanceOf(IllegalStateException.class, failure.getCause());
+                assertEquals(
+                    "Location Store counter is invalid",
+                    failure.getCause().getMessage());
+            }
+        }
+    }
+
+    @Test
     void nearCeilingAggregateCounterBlockReturnsTypedExhaustion()
         throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();

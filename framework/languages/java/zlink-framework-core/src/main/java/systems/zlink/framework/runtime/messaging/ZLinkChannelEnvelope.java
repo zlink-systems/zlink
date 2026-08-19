@@ -330,14 +330,13 @@ public final class ZLinkChannelEnvelope {
     }
 
     /**
-     * Maps a wire {@code errorCode} back to the public kind. Accepts the 13
-     * canonical snake_case names and, for interoperability with peers that
-     * emit numeric kinds, an integer in {@code 0..12}; anything else is
-     * {@code INTERNAL_FAILURE}.
+     * Maps a wire {@code errorCode} back to the public kind. Only the 13
+     * canonical snake_case names are valid; an uninterpretable error reply is
+     * a protocol error.
      */
     public static ZLinkFrameworkErrorKind errorKindFromCode(String errorCode) {
         if (errorCode == null || errorCode.isBlank()) {
-            return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+            return ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
         }
         switch (errorCode) {
             case "not_found": return ZLinkFrameworkErrorKind.NOT_FOUND;
@@ -356,14 +355,7 @@ public final class ZLinkChannelEnvelope {
             default:
                 break;
         }
-        try {
-            int value = Integer.parseInt(errorCode.trim());
-            if (value >= 0 && value <= 12) {
-                return ZLinkFrameworkErrorKind.fromValue(value);
-            }
-        } catch (NumberFormatException ignored) {
-        }
-        return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+        return ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
     }
 
     public static int flowOriginWireValue(ZLinkFlowOrigin origin) {

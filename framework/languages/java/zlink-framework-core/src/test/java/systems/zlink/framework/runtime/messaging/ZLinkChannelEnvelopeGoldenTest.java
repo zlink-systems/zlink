@@ -107,18 +107,18 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     @Test
-    void errorCodeDecodeAcceptsNumericPeerKindsAndDefaultsUnknown() {
+    void errorCodeDecodeRejectsNumericMissingAndUnknownPeerKinds() {
         assertEquals(
-            ZLinkFrameworkErrorKind.NOT_FOUND,
+            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
             ZLinkChannelEnvelope.errorKindFromCode("0"));
         assertEquals(
-            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
             ZLinkChannelEnvelope.errorKindFromCode("12"));
         assertEquals(
-            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
             ZLinkChannelEnvelope.errorKindFromCode("no_such_code"));
         assertEquals(
-            ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
             ZLinkChannelEnvelope.errorKindFromCode(null));
     }
 

@@ -237,10 +237,10 @@ final class ZLinkProviderOwnerLeaseRepository {
             throw new IllegalStateException(
                 "Location Store owner counter is invalid", failure);
         }
-        if (value <= 0) {
+        if (value <= 0 || !Long.toString(value).equals(text)) {
             // 0 is never issued; values past 2^63-1 are outside the
-            // spec's counter range (generation exhaustion caps at
-            // 2^63-1), so a signed-negative bit pattern is invalid too.
+            // spec's counter range (generation exhaustion caps at 2^63-1),
+            // and the stored value must be its bare canonical decimal form.
             throw new IllegalStateException(
                 "Location Store owner counter is invalid");
         }

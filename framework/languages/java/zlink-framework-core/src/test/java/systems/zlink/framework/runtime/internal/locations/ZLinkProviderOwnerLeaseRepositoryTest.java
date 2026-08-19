@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -127,6 +128,34 @@ final class ZLinkProviderOwnerLeaseRepositoryTest {
         assertArrayEquals(
             "6".getBytes(java.nio.charset.StandardCharsets.UTF_8),
             counter.value().bytes());
+    }
+
+    @Test
+    void claimsRejectNonCanonicalOwnerCounterRecords() throws Exception {
+        for (String invalid : java.util.List.of("01", "+1", "0", "", " 1")) {
+            var provider = new systems.zlink.framework.runtime.locations
+                .ZLinkInMemoryProviderLocationStore();
+            var counterKey = new ZLinkStoreKey("zlink:v11:owner-counter");
+            provider.write(
+                    new ZLinkStoreWriteRequest(
+                        java.util.List.of(),
+                        java.util.List.of(new ZLinkStorePut(
+                            counterKey,
+                            invalid.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            null))),
+                    () -> false)
+                .toCompletableFuture().get();
+
+            var failure = assertThrows(
+                java.util.concurrent.ExecutionException.class,
+                () -> new ZLinkProviderOwnerLeaseRepository(provider)
+                    .claim("owner-a", Duration.ofMinutes(1))
+                    .toCompletableFuture().get());
+            assertInstanceOf(IllegalStateException.class, failure.getCause());
+            assertEquals(
+                "Location Store owner counter is invalid",
+                failure.getCause().getMessage());
+        }
     }
 
     @Test
