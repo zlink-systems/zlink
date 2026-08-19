@@ -37,7 +37,11 @@
       통상 reservation 경합이지 config-10이 계약한 "동일 relocation identity의
       checksum/길이 불일치" assembly 충돌이 아님 — 계약 fault point 경유 재작성
       필요(cpp 트랙 배정)
-- [ ] cpp e2e Track F — 구현 `284d78ca74`, 재실행(2026-08-19, e38c63fcf3 트리):
+- [x] cpp e2e Track F — **완료**: 구현 `284d78ca74`, relay 응답 3중 결함 수정
+      후 SF-F2·F3·F7(3회)·F11 전부 그린, 4종 기본 all 게이트 편입(스킵 목록
+      제거). 잔여 관찰: RelocateReq 최초 전달이 20s 요청 기한까지 지연 후 재시도
+      착지 의심(부하 시 2회, 유휴 그린) — 하단 관찰 항목. 이력(2026-08-19,
+      e38c63fcf3 트리):
       **SF-F2 2회·SF-F3 그린, 기본 all 게이트 편입**(run_e2e 정직화 — sol ⑥ 해소,
       스킵 명시 출력). **SF-F7 3/3·SF-F11 잔여 실패 = 신규 결함**: relocation·
       증거 전부 그린 후 교차 노드 message-follow relay의 probe 응답이 caller
@@ -120,6 +124,10 @@
       [D에서 승격 2026-08-19]
 - [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
       포함) [D에서 승격 2026-08-19]
+- [ ] **관찰(저순위): RelocateReq 최초 전달 ~20s 지연 의심** — location_committed
+      →RelocateReq 수신 간격이 harness 기본 요청 기한(20s)과 정확 일치 2회 관측
+      (부하 하), 첫 전달이 기한 만료까지 침묵 후 재시도 착지 가설. 유휴 재실행
+      그린 — 재발 시 전달 경로 추적
 - [x] **[C] SIGFPE 크래시 수정**: actor Join relocation 시 소스 노드 크래시 —
       moved-from unordered_map<string,optional<message_t>> emplace(bucket_count 0),
       spot_runtime.cpp:3596 완료 경로 × task.hpp:259 continuation 경합, 간헐(2/4).
