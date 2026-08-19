@@ -143,7 +143,10 @@
 - [ ] C-4e dotnet store 마감 유닛(2026-08-19 신설, d55d568e6b 이월): ① authority
       키를 canonical preimage로(대량 테스트 fixture가 raw 키 직생성 — 이관 범위 산정
       필요), ② descriptor 하위 객체 전-필드 표 정렬(중첩 레코드 다수·공개 enum 위험)
-- [ ] C-4d cpp store 마감 유닛(2026-08-19 신설 — 앞선 'cpp 완료' 판정 정정):
+- [x] C-4d cpp store 마감 — **완료 `bc3b27a750`**: storeVersion을 provider 버전
+      유도로 재설계(예측 카운터 6콜사이트 삭제, 소비자 무변경 검증), envelope 정렬,
+      routing id hex 오변환 실버그 수정, 실제-writer 골든(mesh·authority-actor),
+      게이트 42/43 ×2(app_host 기존)·redis 라이브 그린. 원 항목:(2026-08-19 신설 — 앞선 'cpp 완료' 판정 정정):
       cpp의 mesh/authority 실제 writer가 golden 비정합(여분 storeVersion이
       public_host_runtime의 wire-echo 펜스로 load-bearing, target/bundle/mesh
       필드명 다수 발산). 수정 유닛: envelope 필드 정렬 + storeVersion 펜싱을
