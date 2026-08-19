@@ -297,8 +297,18 @@
       decode 크래시) ⑦ **[H] java u64 signed parse**(Long.parseLong에 전범위
       u64 → java↔dotnet ~50% 실패; ZLinkProviderDescriptorRepository:648,
       ZLinkRedisRelocationStore:224, ZLinkRedisOpaqueLocationStore:855)
-      ⑧ **[H] dotnet이 java 기록 lease/counter 값 파싱 실패**(개행/빈 문자열
-      FormatException — 기록측 vs 파싱측 판정 필요). 원 항목: (JoinEntrySpot
+      ⑧ **[H] dotnet이 java 기록 lease/counter 값 파싱 실패** → **판정·해소
+      `06da32b233`**: java가 owner-counter를 raw 8바이트 이진으로 기록(3언어는
+      십진 문자열) — 기록 근본 수정+byte-exact 테스트, u64 unsigned 전수 소탕
+      (파스·포맷·비교·nonzero 가드 확장, core 1060/1060·redis live 22/22).
+      기존 store의 구 이진 counter 행은 1회 flush 필요.
+      ⑨ **[C] 신규: store-global 시퀀스 counter 키 3계열 발산** — java
+      `zlink:v11:counter:object`/`counter:authority-owner`, dotnet
+      `zlink:v11:authority:object-generation-counter`/`owner-generation-counter`,
+      cpp·node는 `zlink:v11:authority-generations` JSON 객체. objectGeneration
+      교차 언어 단조성 불성립. 스펙 21/22가 시퀀스는 규범화했으나 키·표현 미정의
+      (공백) — 4언어 실태 조사 후 canonical 스킴 확정·수렴(hashtag 도메인 내
+      same-slot 원자성 요건 고려). 원 항목: (JoinEntrySpot
       경로 우선, 기존 opt-in 스테이지 2907df293f/c43758fc05 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
 - [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
