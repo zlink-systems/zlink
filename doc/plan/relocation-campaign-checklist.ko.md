@@ -32,11 +32,18 @@
 
 ## B. 원 캠페인(M9) 잔여 검증 게이트
 
-- [ ] cpp e2e ST-C4: 작성된 identity-conflict variant를 안정화된 트리에서 실행·그린
-      확인 후 커밋 (checksum variant는 test seam 부재로 정직한 부분 — C-4와 연계)
-- [ ] cpp e2e Track F 신설: SF-F2·F3·F7·F11을 DiscoveryRegistryHa에 구현
-      (relocation-capable 노드 역할 추가, SpotActorTransfer fail-injection 패턴 이식;
-      SF-F3는 별도 relocation store 컨테이너 다운, SF-F7은 chunk/budget 옵션 축소)
+- [x] cpp e2e ST-C4 — **완료 `284d78ca74`**: identity-conflict variant 3/3 그린
+      (청정 독점 재빌드). checksum variant는 wire seam 부재로 정직한 부분 판정
+      유지, feature-map에 기록
+- [ ] cpp e2e Track F 신설 — **구현 랜딩 `284d78ca74`**(relocation 노드 역할·
+      공유 계약·4시나리오·run_e2e 배선). SF-F2/F3에서 relocation 자체는 단대단
+      완결 검증(F3는 Redis 중단 중 포함), 클린 패스는 아래 29초 공백 결함에 차단.
+      결함 해소 후 4종 재실행으로 마감
+- [ ] **cpp relocation 후 ~29초 공백+후속 생성 무시(신규 2026-08-19, 재현 2/2)**:
+      source_cleanup→message_follow_route_removed 사이 ~29초 지연 후 신규 actor
+      create가 서버측 create_requested조차 미기록. 30초 기한 관례(cold-probe
+      deadline·reconcile 창)와 일치 — 완료 경로가 기한 만료를 동기 대기하는
+      직렬화 의심(성능 결함). SF-F3의 배치 재시도 5회 급증도 동일 범주 가능성
 - [x] Bingo 재검증 (2026-08-19): node·kotlin 각 3회 클린 실행 6/6 첫 시도 그린,
       relocation 실행 확인(대체·route-ready·target_resume), 지문 재현 없음 —
       당시 미커밋 편집 트리가 원인으로 종결 (로그 scratchpad/sample-gates/*-recheck-*)
