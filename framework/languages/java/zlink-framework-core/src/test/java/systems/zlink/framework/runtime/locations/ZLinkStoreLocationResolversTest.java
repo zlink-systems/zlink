@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 final class ZLinkStoreLocationResolversTest {
     private static final Instant NOW =
@@ -280,6 +281,50 @@ final class ZLinkStoreLocationResolversTest {
             resolvers.resolveActor("actor-a")
                 .toCompletableFuture().join().authorityOwnerGeneration());
         assertEquals(3, reads.get());
+    }
+
+    @Test
+    void foreignActorPayloadUsesCanonicalOuterAuthorityRoute() {
+        RoutingId foreignNode = RoutingId.from("dotnet-owner");
+        ZLinkAuthoritySnapshot snapshot = new ZLinkAuthoritySnapshot(
+            "foreign-v1",
+            new byte[] {0x44, 0x4f, 0x54, 0x4e, 0x45, 0x54},
+            29,
+            31,
+            "foreign-owner",
+            37,
+            new ZLinkPlacementAllocation(
+                ZLinkPlacementAllocationState.ACTIVE,
+                ZLinkPlacementObjectKind.ACTOR,
+                "PlayerActor",
+                new ZLinkMeshNodeDescriptorKey("foreign-mesh", foreignNode),
+                41,
+                ZLinkPlacementCapacityBundle.actor(1)),
+            NOW);
+        ZLinkLocationRepository store = repository((method, arguments) -> switch (method) {
+            case "read" -> CompletableFuture.completedFuture(snapshot);
+            case "readOwnerLease" -> CompletableFuture.completedFuture(
+                new ZLinkOwnerLeaseFound(
+                    new ZLinkLocationOwnerToken("foreign-owner", 37),
+                    NOW.plusSeconds(30), NOW));
+            default -> throw new UnsupportedOperationException(method);
+        });
+        var resolvers = new ZLinkStoreLocationResolvers(
+            ZLinkRegisteredLocationStores.fromUnified(store),
+            new ZLinkLocationOptions());
+
+        var route = resolvers.resolveActor("foreign-actor")
+            .toCompletableFuture().join();
+
+        assertEquals("foreign-actor", route.actorRef().actorId());
+        assertEquals(29, route.actorRef().objectGeneration());
+        assertEquals("foreign-mesh", route.meshName());
+        assertEquals(foreignNode, route.nodeRid());
+        assertEquals(41, route.targetNodeGeneration());
+        assertEquals(ZLinkSpotKind.ENTRY, route.locationKind());
+        assertEquals("", route.spotId());
+        assertEquals(31, route.authorityOwnerGeneration());
+        assertEquals(37, route.ownerLeaseGeneration());
     }
 
     @Test

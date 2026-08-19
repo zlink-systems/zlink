@@ -29,6 +29,7 @@ import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
@@ -201,26 +202,17 @@ public final class Program {
                 var mesh = bindEndpoint == null || bindEndpoint.isBlank()
                     ? options.addRouteMesh(channel).listen()
                     : options.addRouteMesh(channel).listen(bindEndpoint);
-                // RegistryMessaging e2e convention: every route mesh member
-                // exposes the channel server role, and peers connect by
-                // endpoint; the routing id is learned from admission. This
-                // is the same blind connect(endpoint) the C++ host uses.
-                //
-                // An earlier attempt to switch this to the
-                // connect(RoutingId, endpoint) overload regressed
-                // Java<->C++ with kind=unavailable, because
-                // ZLinkJavaRawMeshNode.connectPeer(endpoint, rid) fenced the
-                // peer's securityIdentity against the peer's ROUTING ID
-                // instead of the plaintext-transport placeholder every
-                // language actually encodes -- so a declared peer id
-                // rejected every non-Java peer. That framework bug is fixed
-                // (see ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
-                // the blind connect stays because it now admits against
-                // every peer language on its own.
+                // A direct node request names the peer RID. Declare that
+                // same RID here so the pre-send classifier retains the
+                // configured route while native admission is completing;
+                // endpoint-only intents can otherwise remain unaddressable
+                // when their monitor edge has not supplied a remote RID.
                 mesh.setRoutingId(
                     RoutingId.from(args.option("node-rid", "java-spot-route-client")));
-                mesh.channelName(channel).server();
-                mesh.peerConnections().connect(args.require("server-endpoint"));
+                mesh.channelName(channel).client();
+                mesh.peerConnections().connect(
+                    RoutingId.from(args.require("peer-rid")),
+                    args.require("server-endpoint"));
             }
         };
     }
@@ -241,6 +233,7 @@ public final class Program {
         EventSink sink,
         ObjectProvider<ZLinkActorManager> actorsProvider,
         ObjectProvider<ZLinkActorClient> actorClientProvider,
+        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider,
         ZLinkFrameworkLifecycle lifecycle) {
         // Actor beans only exist in the entry-spot modes (the framework
         // exposes them when actor factories are registered); keep them
@@ -250,7 +243,8 @@ public final class Program {
             if ("entry-spot-source".equals(mode)) {
                 runEntryRelocationSource(args, sink, actorsProvider.getObject(), lifecycle);
             } else if ("entry-spot-target".equals(mode)) {
-                runEntryRelocationTarget(args, sink, actorClientProvider.getObject());
+                runEntryRelocationTarget(
+                    args, sink, actorClientProvider.getObject(), runtimeOptionsProvider.getObject());
             }
         };
     }
@@ -311,7 +305,10 @@ public final class Program {
     }
 
     private static void runEntryRelocationTarget(
-        HostArgs args, EventSink sink, ZLinkActorClient actorClient) {
+        HostArgs args,
+        EventSink sink,
+        ZLinkActorClient actorClient,
+        ZLinkRouteMeshRuntimeOptions runtimeOptions) {
         // ApplicationRunners execute inside SpringApplication.run(), BEFORE
         // main() writes the ready file -- but this runner polls for up to 60s
         // for a probe that the harness only triggers AFTER seeing the ready
@@ -329,6 +326,13 @@ public final class Program {
                     .submit(CrossLangProbeRes.class)
                     .toCompletableFuture()
                     .get(7, TimeUnit.SECONDS);
+                // Keep this target excluded while the source creates the
+                // actor, then make it a relocation candidate after the
+                // source authority answers. This preserves deterministic
+                // initial ownership without leaving no eligible target.
+                if (!nodeRid.equals(lastReply.nodeRid())) {
+                    runtimeOptions.mesh(args.require("mesh-name")).setPlacementWeight(100);
+                }
                 if (nodeRid.equals(lastReply.nodeRid())) {
                     break;
                 }

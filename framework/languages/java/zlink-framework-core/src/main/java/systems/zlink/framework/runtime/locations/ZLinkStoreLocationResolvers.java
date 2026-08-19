@@ -294,8 +294,14 @@ public final class ZLinkStoreLocationResolvers
             || !authority.actorId().equals(actorId)
             || !authority.ownerId().equals(snapshot.ownerId())
             || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
-            actorRoutes.remove(actorId);
-            return CompletableFuture.completedFuture(null);
+            ActorRoute canonical = projectCanonicalActor(snapshot, actorId);
+            if (canonical == null) {
+                actorRoutes.remove(actorId);
+                return CompletableFuture.completedFuture(null);
+            }
+            return admitPositiveRoute(
+                actorRoutes, actorId, canonical, snapshot.ownerId(),
+                snapshot.ownerLeaseGeneration(), snapshot.storeVersion());
         }
         ActorRoute route = new ActorRoute(
             new ActorRef(actorId, snapshot.objectGeneration(), authority.meshName(), authority.nodeRid()),
@@ -309,6 +315,35 @@ public final class ZLinkStoreLocationResolvers
         return admitPositiveRoute(
             actorRoutes, actorId, route, snapshot.ownerId(),
             snapshot.ownerLeaseGeneration(), snapshot.storeVersion());
+    }
+
+    // The authority payload is implementation-private. Cross-language route
+    // resolution instead relies on the canonical outer allocation row.
+    private static ActorRoute projectCanonicalActor(
+        ZLinkAuthoritySnapshot snapshot,
+        String actorId) {
+        if (snapshot.objectGeneration() <= 0
+            || snapshot.ownerLeaseGeneration() <= 0
+            || actorId == null
+            || actorId.isBlank()
+            || snapshot.allocation().stableType().isBlank()
+            || snapshot.allocation().descriptor().meshName().isBlank()) {
+            return null;
+        }
+        RoutingId nodeRid = snapshot.allocation().descriptor().rid();
+        return new ActorRoute(
+            new ActorRef(
+                actorId,
+                snapshot.objectGeneration(),
+                snapshot.allocation().descriptor().meshName(),
+                nodeRid),
+            ZLinkSpotKind.ENTRY,
+            "",
+            snapshot.allocation().descriptor().meshName(),
+            nodeRid,
+            snapshot.allocation().descriptorLifecycleGeneration(),
+            snapshot.authorityOwnerGeneration(),
+            snapshot.ownerLeaseGeneration());
     }
 
     private <V> CompletionStage<V> admitPositiveRoute(
