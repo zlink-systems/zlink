@@ -509,8 +509,12 @@
       2-frame 가정에 오폐기되던 ingress 수정. 이후 연쇄 해소: 52 흐름 복구, node bare 제어 ingress 2건(단일 프레임
       오폐기·stateful 번호 겹침), infrastructure 도메인 독립 드레인(드레인 중
       기아 차단), dotnet 중복 Prepare 단일 assembler 소유 — **Cutover(34)까지
-      도달**. 최종 차단: dotnet precommit의 durable phase 2 요구 vs node source
-      미전진 — spec 52+java 기준 판정 잡(phase-leg) 가동 중.
+      도달**. phase 판정: spec 52 §4.2 — CUTOVER 후 owner-변경 CAS는 target 전유,
+      dotnet phase-1/2는 자기 소스의 복구 보조일 뿐(외국 소스 요구 불가) →
+      steady row를 envelope/prepare fence로 검증해 수용.
+      **🎉 node→dotnet 교차 언어 relocation 최초 단대단 통과(2026-08-20)**:
+      40→52×4→Ready→Cutover→Relocated, target liveness probe 정상
+      (stateVersion=1, 100KB 상태). dotnet 게이트 완주 후 대배치 커밋 예정.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
