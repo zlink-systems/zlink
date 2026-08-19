@@ -178,7 +178,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..25
 | 41 | reserved (`relocationReserved`) | 제거된 relocation별 capacity reservation ACK |
 | 42 | `sessionRelocationSeal` | session ingress seal 요청 |
 | 43 | `sessionRelocationSealed` | Session seal 응답 |
-| 44 | `sessionRelocationRoute` | target commit 또는 source의 relay-ready accepted 전 abort를 적용하는 one-way Session route control |
+| 44 | `sessionRelocationRoute` | target route switch 또는 source의 relay-ready accepted 전 abort를 적용하는 one-way Session route update control |
 | 45 | reserved (`sessionRelocationRouted`) | 제거된 Session route 적용 응답 command |
 | 46 | `replyRelayAck` | relayed terminal result ACK |
 | 47 | `userSpotCreate` | 미리 확보한 자리에 remote User Spot을 만든다 |
@@ -579,8 +579,8 @@ Session seal을 복원한다. 그 뒤 submit 실패는 source를 복원하지 �
 - Session route는 Session owner의 current Session과 binding에서만 검증한다.
 - Command 42는 current binding을 seal하고 command 43은 exact seal 설치 결과만 반환한다.
   Command 43은 Session message sequence나 high-water를 전달하지 않는다.
-- Command 44는 commit이면 target runtime이, relay-ready reply가 accepted 상태가 되기 전 abort이면 source coordinator가 `[send]`로
-  전달한다. Commit은 relocation identity, current binding generation,
+- Command 44는 session-route update이면 target runtime이, relay-ready reply가 accepted 상태가 되기 전 abort이면 source coordinator가 `[send]`로
+  전달한다. Route update는 relocation identity, current binding generation,
   ActorId·ObjectGeneration과 target route를 포함한다. Session owner는 Location Store나 Actor
   authority mirror를 다시 읽지 않는다.
 - Session owner는 route와 current `ActorRef` snapshot을 target으로 바꾸고, seal 중 보관한

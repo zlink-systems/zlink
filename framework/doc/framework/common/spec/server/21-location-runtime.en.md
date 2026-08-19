@@ -501,18 +501,9 @@ minus `weight`.
 | `ownerId`, `leaseGeneration` | Same values as the top-level fields above. |
 | `updatedAtEpochMs` | The time recorded in the Store at update. |
 
-The authority record (§2.2, §2.3) sits on the opaque record as a single logical row
-addressed by one logical key — cpp, java, and node already store the whole authority as one
-record; only dotnet still splits it into separate meta, payload, and generation-counter
-keys. The real source of that difference isn't the key split but the meaning of
-`objectGeneration`: dotnet issues a value that increases monotonically per identity, while
-the other three languages issue it from one sequence shared Store-wide that increases
-monotonically. A Store-wide monotonic counter automatically guarantees per-identity
-monotonicity, so this document standardizes on the latter — **`objectGeneration` is issued
-from a Store-wide monotonic sequence.** Once dotnet converges on this standard, its
-per-identity generation key and the payload checksum field it kept to reconcile split reads
-are both slated for removal (a single opaque record is already byte-atomic, so a separate
-checksum is unnecessary).
+The authority record (§2.2, §2.3) is one opaque-record row addressed by one logical key in all
+four languages. **`objectGeneration` is issued from a Store-wide monotonic sequence**, which
+also guarantees per-identity monotonicity.
 
 The authority record's canonical JSON includes at least the following fields. Except for
 `payload`, integer fields are written as JSON strings rather than JSON numbers, the same as
@@ -522,7 +513,7 @@ precision).
 | Field | Meaning |
 |---|---|
 | `recordVersion` | Same as above. The current value is `1`. |
-| `payload` | Application-defined opaque bytes whose meaning the framework doesn't interpret. Encoded in JSON as **base64**. As of this document's revision the cpp provider encodes this field as hex — that's a single language's implementation detail, not an existing cross-language agreement, and base64 is the standard. Converting cpp to base64 is C-4's (per-language store implementation convergence) responsibility. |
+| `payload` | Application-defined opaque bytes whose meaning the framework doesn't interpret. Encoded in JSON as **base64** in all four languages. |
 | `objectGeneration` | The object's (§2.2) current generation. Issued from the Store-wide monotonic sequence defined above. |
 | `authorityOwnerGeneration` | The value distinguishing owner changes (§2.2). |
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§2.1). |

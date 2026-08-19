@@ -300,7 +300,7 @@ by [Session-Actor Dispatch §4](20-session-actor-dispatch.en.md#4-how-a-session-
 If a bound Actor relocates, the physical STREAM socket and Session object stay in place.
 Target Actor dispatch opens only after Restore, target-only owner/membership CAS, queue
 merge, regular-route switch, and lifecycle callbacks finish. Target runtime then sends
-command 44 `sessionRelocationRoute` commit one-way so Session owner updates the stored
+command 44 `sessionRelocationRoute` route update one-way so Session owner updates the stored
 binding route to target owner. The bound-session current Actor location snapshot changes
 to target MeshName/NodeRid while keeping the same ActorId/ObjectGeneration. A different
 Actor's route and snapshot on the same Session don't change. Session owner validates exact

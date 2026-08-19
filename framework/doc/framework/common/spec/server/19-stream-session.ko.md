@@ -263,7 +263,7 @@ callback에서 client에 중복 연결 안내를 보낼 수 있지만 connection
 Bound Actor가 relocation되면 physical STREAM socket과 Session object는 그대로 유지한다.
 Target Actor의 Restore, target-only owner·membership CAS, queue 병합, regular route 전환과
 lifecycle callback을 끝낸 뒤 Target Actor dispatch를 연다. 그 뒤 target runtime이 command 44
-`sessionRelocationRoute` commit을 one-way로 보내 Session owner가 보관한 binding route를 target
+`sessionRelocationRoute` route update를 one-way로 보내 Session owner가 보관한 binding route를 target
 owner로 갱신한다. Route switch와 함께 bound-session current Actor location snapshot도 같은
 ActorId·ObjectGeneration을 유지한 채 target MeshName·NodeRid로 갱신한다. 같은 Session에서
 relocation 대상에 포함되지 않은 다른 Actor의 route와 location snapshot은 바꾸지 않는다.

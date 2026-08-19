@@ -102,7 +102,8 @@ IZLinkSessionActor bound = await Context.Actors.BindOrGetAsync(actorRef, ct);
 **완료 결과.** `BindAsync`는 매번 새 binding을 만든다. `BindOrGetAsync`는 이미 bound된 같은
 incarnation이 있으면 그것을 반환한다. Binding은 `ActorRef.ActorId + ObjectGeneration`의 exact
 incarnation 하나로 고정된다. Mapping이 없으면 `NotFound`, generation이 다르면
-`InvalidOperation`, pre-commit seal 중이면 `Unavailable`이다. `Find(actorId)`로 이미 bound된
+`InvalidOperation`, pre-commit seal 중이면 `Unavailable`이다. Bind retry가 deadline 안에 완료되지
+않으면 `DeadlineExceeded`로 끝난다. `Find(actorId)`로 이미 bound된
 handle을 동기 조회할 수 있다.
 
 **선택 기준.** Actor가 이 client 연결로 직접 push해야 할 때 bind한다. Relocation이 일어나도

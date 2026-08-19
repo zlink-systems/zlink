@@ -121,7 +121,8 @@ ZLinkSessionActor bound = sessionContext.actors().bindOrGet(actorRef)
 already-bound one if the same incarnation is already bound. A binding is fixed to one exact
 incarnation of `actorId + objectGeneration`. No active Message Follow route completes with
 `NOT_FOUND`, a differing generation with `INVALID_OPERATION`, and a pre-commit seal in progress
-with `UNAVAILABLE`. `find(actorId)` synchronously queries an already-bound handle, and `bound()`
+with `UNAVAILABLE`. Bind retries that do not complete within the deadline finish with
+`DEADLINE_EXCEEDED`. `find(actorId)` synchronously queries an already-bound handle, and `bound()`
 returns the full list bound to the current session.
 
 **When to use.** Bind when an Actor must push directly over this client connection. Even across

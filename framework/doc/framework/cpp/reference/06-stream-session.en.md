@@ -130,6 +130,7 @@ in the messaging-execution category.
 already-bound one if the same incarnation is already bound. A binding is fixed to one exact
 incarnation of `actor_id + object_generation`. No mapping completes with `not_found`, a differing
 generation with `invalid_operation`, and a pre-commit seal in progress with `unavailable`.
+Bind retries that do not complete within the deadline finish with `deadline_exceeded`.
 `find(actor_id)` synchronously queries an already-bound handle, and `bound()` returns the full
 list bound to the current session.
 

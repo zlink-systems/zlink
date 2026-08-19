@@ -192,7 +192,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 41 | reserved (`relocationReserved`) | Removed relocation-specific capacity-reservation ACK |
 | 42 | `sessionRelocationSeal` | Session ingress seal request |
 | 43 | `sessionRelocationSealed` | Session seal response |
-| 44 | `sessionRelocationRoute` | One-way Session-route control for target commit or source abort before relay-ready is accepted |
+| 44 | `sessionRelocationRoute` | One-way Session-route update control for target route switch or source abort before relay-ready is accepted |
 | 45 | reserved (`sessionRelocationRouted`) | Removed Session-route application response command |
 | 46 | `replyRelayAck` | Relayed terminal result ACK |
 | 47 | `userSpotCreate` | Creates a remote User Spot in an already-reserved slot |
@@ -640,8 +640,8 @@ late relay runs before new direct target messages.
   binding.
 - Command 42 seals the current binding; command 43 returns only the exact seal-install
   result. Command 43 carries no Session-message sequence or high-water.
-- Command 44 is sent by target runtime for commit and by source coordinator for an abort
-  before relay-ready is accepted. Commit carries relocation identity, current binding generation,
+- Command 44 is sent by target runtime for the session-route update and by source coordinator for an abort
+  before relay-ready is accepted. The route update carries relocation identity, current binding generation,
   ActorId/ObjectGeneration, and target route. The Session owner doesn't re-read the
   Location Store or Actor authority mirror.
 - The Session owner changes the route and current `ActorRef` snapshot to the target,

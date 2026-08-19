@@ -484,17 +484,9 @@ field에서 `weight`만 뺀 형태다.
 | `ownerId`, `leaseGeneration` | 위 최상위 field와 같은 값이다. |
 | `updatedAtEpochMs` | Store에 기록한 갱신 시각이다. |
 
-Authority record(§2.2, §2.3)는 하나의 logical key가 가리키는 하나의 행(single logical
-row)으로 opaque record에 올린다 — cpp·java·node는 이미 authority 전체를 record
-하나로 저장하며, dotnet만 meta·payload·generation counter를 서로 다른 key로 나눠
-저장한다. 이 차이의 진짜 원인은 key 분할이 아니라 `objectGeneration`의 의미다:
-dotnet은 identity별로 독립적으로 단조 증가하는 값을 쓰지만, 나머지 세 언어는 Store
-전역에서 공유하는 하나의 단조 증가 sequence에서 발급한다. Store 전역 단조 카운터는
-같은 identity 안에서의 단조성을 자동으로 보장하므로, 이 문서는 후자를 표준으로
-정한다 — **`objectGeneration`은 Store 전역 단조 sequence에서 발급하는 값이다.**
-Dotnet이 이 표준으로 수렴하면 identity별 generation key와, 분할 읽기를 보정하려고
-따로 두던 payload checksum 필드는 모두 제거 대상이다(하나의 opaque record가 이미
-byte 단위로 원자적이므로 별도 checksum이 필요 없다).
+Authority record(§2.2, §2.3)는 네 언어 모두 하나의 logical key가 가리키는 하나의
+opaque-record 행으로 저장한다. **`objectGeneration`은 Store 전역 단조 sequence에서
+발급하며**, 이 방식은 identity별 단조성도 보장한다.
 
 Authority record의 canonical JSON은 최소한 다음 field를 포함한다. `payload`를
 제외한 정수 field는 다른 record의 generation field와 마찬가지로 JSON number가 아닌
@@ -503,7 +495,7 @@ JSON string으로 쓴다(64-bit 값이 JSON number 정밀도를 넘을 수 있�
 | Field | 의미 |
 |---|---|
 | `recordVersion` | 위와 같다. 현재 값은 `1`이다. |
-| `payload` | Framework가 의미를 해석하지 않는 application 정의 opaque bytes다. JSON 안에서 **base64**로 인코딩한다. 이 문서를 개정하는 시점 기준으로 cpp provider는 이 field를 hex로 인코딩한다 — 하나의 언어별 구현 세부일 뿐 기존 언어 간 합의가 아니며, base64가 표준이다. cpp가 base64로 바뀌는 것은 C-4(언어별 store 구현 수렴)가 처리할 항목이다. |
+| `payload` | Framework가 의미를 해석하지 않는 application 정의 opaque bytes다. 네 언어 모두 JSON 안에서 **base64**로 인코딩한다. |
 | `objectGeneration` | 이 object(§2.2)의 현재 generation이다. 위에서 정한 Store 전역 단조 sequence에서 발급한다. |
 | `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§2.2). |
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§2.1). |

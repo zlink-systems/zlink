@@ -108,7 +108,8 @@ IZLinkSessionActor bound = await Context.Actors.BindOrGetAsync(actorRef, ct);
 **Completion.** `BindAsync` always creates a new binding. `BindOrGetAsync` returns the existing
 one if the same incarnation is already bound. A binding is fixed to one exact incarnation of
 `ActorRef.ActorId + ObjectGeneration`. It is `NotFound` if there is no mapping, `InvalidOperation`
-if the generation differs, and `Unavailable` while a pre-commit seal is in progress.
+if the generation differs, and `Unavailable` while a pre-commit seal is in progress. Bind retries
+that do not complete within the deadline finish with `DeadlineExceeded`.
 `Find(actorId)` can synchronously look up an already-bound handle.
 
 **When to use it.** Bind when an Actor needs to push directly over this client connection. Even

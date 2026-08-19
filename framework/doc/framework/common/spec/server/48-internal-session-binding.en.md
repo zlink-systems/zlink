@@ -212,7 +212,7 @@ Only the target runs the Location Store owner CAS. If cutover doesn't arrive wit
 1,000 ms, it records a `cutover_timeout` Warning and starts the same CAS procedure. Once
 CAS succeeds, the target merges saved work, pre-boundary relay, and remaining temporary
 work in order and switches to the regular route. After required lifecycle callbacks, it
-opens dispatch and sends command 44 commit to the Session owner. The
+opens dispatch and sends command 44 session-route update to the Session owner. The
 aggregate changes the route and current `ActorRef` snapshot to the target, submits held
 Session messages to the new route, and releases the seal. Command 44 has no reply and
 reserved command 45 is neither sent nor accepted.

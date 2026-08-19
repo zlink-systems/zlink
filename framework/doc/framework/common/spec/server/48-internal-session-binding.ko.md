@@ -170,7 +170,7 @@ transport, deadline과 cancellation 제한은 그대로 적용한다.
 Target만 Location Store owner CAS를 실행한다. Cutover가 1,000 ms 안에 오지 않으면
 `cutover_timeout` Warning을 기록하고 같은 CAS 절차를 시작한다. CAS가 성공하면 target queue를
 saved work, boundary 전 relay와 나머지 temporary work 순서로 병합하고 regular route로 전환한다.
-필요한 lifecycle callback 뒤 dispatch를 열고 target runtime이 command 44 commit을 Session owner에게
+필요한 lifecycle callback 뒤 dispatch를 열고 target runtime이 command 44 session-route update를 Session owner에게
 `[send]`로 전달한다. Aggregate는 route와
 current `ActorRef` snapshot을 target으로 바꾸고, 보관한 Session message를 새 route로 제출한 뒤
 seal을 해제한다. Command 44에 대한 reply는 없고 reserved command 45를 보내거나 accept하지 않는다.

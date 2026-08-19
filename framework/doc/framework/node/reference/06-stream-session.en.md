@@ -131,7 +131,8 @@ const bound = await sessionContext.actors.bindOrGet(actorRef);
 already-bound one if the same incarnation is already bound. A binding is fixed to one exact
 incarnation of `actorId + objectGeneration`. No active Message Follow route completes with
 `NotFound`, a differing generation with `InvalidOperation`, and a pre-commit seal in progress
-with `Unavailable`. `find(actorId)` synchronously queries an already-bound handle, and `bound`
+with `Unavailable`. Bind retries that do not complete within the deadline finish with
+`DeadlineExceeded`. `find(actorId)` synchronously queries an already-bound handle, and `bound`
 returns the full list bound to the current session.
 
 **When to use.** Bind when an Actor must push directly over this client connection. Even across
