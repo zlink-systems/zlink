@@ -277,8 +277,29 @@
 - [x] C-6 dotnet actorJoin 발신 — **완료(terra 구현 + sonnet 검증·수정)**: 디코더
       오류 분류 버그 수정, cpp와 byte 레이아웃 완전 일치 검증, 게이트 닫힘 증명
       (generation-0 계약 의존 — 전용 게이트 테스트는 D급 후속), 1756/1759 그린
-- [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 (JoinEntrySpot 경로 우선,
-      C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
+- [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 — **1차 라이브 검증
+      (2026-08-19, HEAD bec7a9e48a) 결과: 기본 게이트 8/19 적색 + relocation 3쌍
+      전부 store 계층 실패. 하니스 드리프트 수정 `dec1c2dd9a`(message-follow
+      구주장은 드리프트로 판명·그린). 결함 8군 전량 배정:**
+      ① **[C] ClientServer admission 프레이밍 분열**: cpp는 hello/admit을 plain
+      frame으로, node/dotnet은 RequestSeq 프레임 요구(무seq hello 무시/폐기) —
+      cpp↔node/dotnet channel 3스테이지 전멸. 규범 판정+정렬 필요(스펙 대조)
+      ② **[H] dotnet channel direct 경로가 admission-ready 대기 없이 즉시
+      NotFound**(dotnet↔dotnet도 실패, RequestToChannelDirectAsync:7945)
+      ③ **[H] node channel reply 상관 회귀**(node↔node: 서버 처리 완료, 클라이언트
+      promise 미해결·루프 드레인 exit 0) ④ **[H] cpp fanout publisher 강제
+      discovery 경로**(enable_publisher가 discovery=true 고정, channel_runtime
+      :982)+cpp→X fanout 미전달 잔존(X→cpp는 정상) ⑤ **[H] cpp↔dotnet spot-route
+      양방향 실패**(타 조합 전부 그린 — dotnet admission 의심, 42ddf3d2f4/
+      8bae89dc0f 후보) ⑥ **[C] node mesh-node descriptor 스키마 미수렴**(rid/
+      populationCapacity/updatedAt ISO vs 규범 routingIdHex/capacity/
+      updatedAtEpochMs/lifecycleGeneration — C-3b 74a0ed04da 위반; node→dotnet
+      decode 크래시) ⑦ **[H] java u64 signed parse**(Long.parseLong에 전범위
+      u64 → java↔dotnet ~50% 실패; ZLinkProviderDescriptorRepository:648,
+      ZLinkRedisRelocationStore:224, ZLinkRedisOpaqueLocationStore:855)
+      ⑧ **[H] dotnet이 java 기록 lease/counter 값 파싱 실패**(개행/빈 문자열
+      FormatException — 기록측 vs 파싱측 판정 필요). 원 항목: (JoinEntrySpot
+      경로 우선, 기존 opt-in 스테이지 2907df293f/c43758fc05 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
 - [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
       ① [H] cpp 28 수신 승인 전용 위반 → **해소 `938f68a658`**: admit_wire_actor_
