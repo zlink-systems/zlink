@@ -369,26 +369,19 @@ class provider_location_repository_t final : public location_repository_t
                 }
             }
 
-            auto generations = read (generation_counter_key);
-            std::uint64_t object_generation = 0;
-            std::uint64_t next_owner_generation = 0;
-            if (const auto *generation = std::get_if<store_found_t> (&generations)) {
-                const auto counters = parse_json (generation->value.bytes);
-                object_generation = counters.at ("objectGeneration").get<std::uint64_t> ();
-                next_owner_generation =
-                  counters.at ("authorityOwnerGeneration").get<std::uint64_t> ();
-            }
+            auto owner_generations = read (authority_owner_counter_key);
+            const auto next_owner_generation = counter_next_value (owner_generations);
             if (next_owner_generation >= max_generation)
                 return completed (
                   authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-            snapshot.authority_owner_generation = ++next_owner_generation;
+            snapshot.authority_owner_generation = next_owner_generation;
             snapshot.owner = retarget->target.owner;
             snapshot.allocation.target = retarget->target;
             snapshot.payload = std::move (retarget->payload);
             store_write_request_t write_request;
             write_request.conditions = {
               version_condition (row_key, found->value.version),
-              condition_for (generation_counter_key, generations),
+              condition_for (authority_owner_counter_key, owner_generations),
               version_condition (key_owner (retarget->target.owner.owner_id),
                                  target_descriptor->owner_provider_version),
               version_condition (source_descriptor->key, source_descriptor->provider_version)};
@@ -400,10 +393,8 @@ class provider_location_repository_t final : public location_repository_t
                   version_condition (target_descriptor->key, target_descriptor->provider_version));
             write_request.mutations = {
               store_put_t{row_key, encode_authority (snapshot), std::nullopt},
-              store_put_t{generation_counter_key,
-                          to_bytes (json_t{{"objectGeneration", object_generation},
-                                           {"authorityOwnerGeneration", next_owner_generation}}
-                                      .dump ()),
+              store_put_t{authority_owner_counter_key,
+                          to_bytes (std::to_string (next_owner_generation + 1)),
                           std::nullopt},
               store_put_t{source_descriptor->key, encode_target_record (*source_descriptor),
                           std::nullopt}};
@@ -592,18 +583,12 @@ class provider_location_repository_t final : public location_repository_t
         if (!adjust_capacity (target->descriptor, request.capacity_bundle, 1, 0))
             return completed (object_reserve_result_t{object_placement_capacity_exhausted_t{}});
 
-        auto generations = read (generation_counter_key);
-        std::uint64_t object_generation = 0;
-        std::uint64_t owner_generation_value = 0;
-        if (const auto *found = std::get_if<store_found_t> (&generations)) {
-            const auto record = parse_json (found->value.bytes);
-            object_generation = record.at ("objectGeneration").get<std::uint64_t> ();
-            owner_generation_value = record.at ("authorityOwnerGeneration").get<std::uint64_t> ();
-        }
+        auto object_generations = read (object_counter_key);
+        auto owner_generations = read (authority_owner_counter_key);
+        const auto object_generation = counter_next_value (object_generations);
+        const auto owner_generation_value = counter_next_value (owner_generations);
         if (object_generation >= max_generation || owner_generation_value >= max_generation)
             return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
-        ++object_generation;
-        ++owner_generation_value;
 
         const auto reservation_key = key_reservation (request.key);
         auto old_reservation = read (reservation_key);
@@ -642,16 +627,17 @@ class provider_location_repository_t final : public location_repository_t
         auto reservation_record = encode_reservation (request, fence, creating, "prepared");
         auto written = write (
           {{missing_condition (authority_key), missing_condition (reservation_key),
-            condition_for (generation_counter_key, generations),
+            condition_for (object_counter_key, object_generations),
+            condition_for (authority_owner_counter_key, owner_generations),
             version_condition (target->key, target->provider_version),
             version_condition (key_owner (request.target.owner.owner_id),
                                target->owner_provider_version)},
            {store_put_t{authority_key, encode_authority (creating), std::nullopt},
             store_put_t{reservation_key, to_bytes (reservation_record.dump ()), std::nullopt},
-            store_put_t{generation_counter_key,
-                        to_bytes (json_t{{"objectGeneration", object_generation},
-                                         {"authorityOwnerGeneration", owner_generation_value}}
-                                    .dump ()),
+            store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
+                        std::nullopt},
+            store_put_t{authority_owner_counter_key,
+                        to_bytes (std::to_string (owner_generation_value + 1)),
                         std::nullopt},
             store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
         const auto *applied = std::get_if<store_write_applied_t> (&written);
@@ -1209,15 +1195,11 @@ class provider_location_repository_t final : public location_repository_t
             return completed (aggregate_commit_result_t::generation_exhausted);
         std::uint64_t owner_generation_start = 0;
         if (status == "prepared") {
-            auto generations = read (generation_counter_key);
-            std::uint64_t next_owner_generation = 0;
-            if (const auto *generation = std::get_if<store_found_t> (&generations))
-                next_owner_generation =
-                  parse_json (generation->value.bytes).at ("authorityOwnerGeneration")
-                    .get<std::uint64_t> ();
+            auto owner_generations = read (authority_owner_counter_key);
+            const auto next_owner_generation = counter_next_value (owner_generations);
             if (next_owner_generation > max_generation - participant_count)
                 return completed (aggregate_commit_result_t::generation_exhausted);
-            owner_generation_start = next_owner_generation + 1;
+            owner_generation_start = next_owner_generation;
         } else {
             owner_generation_start =
               record.value ("ownerGenerationStart", std::uint64_t{0});
@@ -1315,17 +1297,9 @@ class provider_location_repository_t final : public location_repository_t
         if (!commit_pages)
             return completed (aggregate_commit_result_t::stale);
         if (status == "prepared") {
-            auto generations = read (generation_counter_key);
-            std::uint64_t object_generation = 0;
-            std::uint64_t current_owner_generation = 0;
-            if (const auto *generation = std::get_if<store_found_t> (&generations)) {
-                const auto counters = parse_json (generation->value.bytes);
-                object_generation = counters.at ("objectGeneration").get<std::uint64_t> ();
-                current_owner_generation =
-                  counters.at ("authorityOwnerGeneration").get<std::uint64_t> ();
-            }
-            if (current_owner_generation + participant_count
-                != owner_generation_start + participant_count - 1)
+            auto owner_generations = read (authority_owner_counter_key);
+            const auto current_owner_generation = counter_next_value (owner_generations);
+            if (current_owner_generation != owner_generation_start)
                 return completed (aggregate_commit_result_t::stale);
             record["status"] = "committing";
             record["ownerGenerationStart"] = owner_generation_start;
@@ -1333,13 +1307,11 @@ class provider_location_repository_t final : public location_repository_t
             record["commitPageCount"] = commit_pages->size ();
             auto transition = write (
               {{version_condition (row_key, stored->value.version),
-                condition_for (generation_counter_key, generations)},
+                condition_for (authority_owner_counter_key, owner_generations)},
                {store_put_t{row_key, to_bytes (record.dump ()), std::nullopt},
-                store_put_t{generation_counter_key,
-                            to_bytes (json_t{{"objectGeneration", object_generation},
-                                              {"authorityOwnerGeneration",
-                                               current_owner_generation + participant_count}}
-                                        .dump ()),
+                store_put_t{authority_owner_counter_key,
+                            to_bytes (std::to_string (current_owner_generation
+                                                      + participant_count)),
                             std::nullopt}}});
             if (!std::holds_alternative<store_write_applied_t> (transition))
                 return completed (aggregate_commit_result_t::stale);
@@ -1712,14 +1684,11 @@ class provider_location_repository_t final : public location_repository_t
     static constexpr std::uint64_t max_generation =
       static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     inline static const store_key_t counter_key{std::string (prefix) + "owner-counter"};
-    // The 21-location-runtime.md#2.4 Store-wide monotonic sequence that
-    // issues `objectGeneration` (and, alongside it, AuthorityOwnerGeneration
-    // -- kept in the same record so both counters advance in the same
-    // atomic batch as the authority row they gate). The key name itself is
-    // provider-private; only the "one sequence, Store-wide" semantics and
-    // the exhaustion/non-zero rules below are the cross-language contract.
-    inline static const store_key_t generation_counter_key{std::string (prefix)
-                                                           + "authority-generations"};
+    // Spec 22 §7's Store-wide, next-to-issue counters.  These are canonical
+    // cross-language rows: bare decimal bytes, not canonical JSON records.
+    inline static const store_key_t object_counter_key{std::string (prefix) + "object-counter"};
+    inline static const store_key_t authority_owner_counter_key{
+      std::string (prefix) + "authority-owner-counter"};
 
     struct stored_target_t
     {
@@ -2097,7 +2066,26 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::int64_t parse_i64 (const std::vector<std::byte> &value)
     {
-        return std::stoll (to_string (value));
+        const auto decimal = to_string (value);
+        if (decimal.empty () || decimal.front () == '0'
+            || !std::all_of (decimal.begin (), decimal.end (),
+                             [] (unsigned char character) {
+                                 return character >= '0' && character <= '9';
+                             }))
+            throw std::invalid_argument ("counter is not canonical decimal");
+        const auto parsed = std::stoll (decimal);
+        if (parsed <= 0)
+            throw std::invalid_argument ("counter is outside its valid range");
+        return parsed;
+    }
+
+    // Counter rows deliberately bypass parse_canonical_record(): §7 assigns
+    // them a bare-decimal representation with no recordVersion envelope.
+    static std::uint64_t counter_next_value (const store_read_result_t &counter)
+    {
+        if (const auto *found = std::get_if<store_found_t> (&counter))
+            return static_cast<std::uint64_t> (parse_i64 (found->value.bytes));
+        return 1;
     }
 
     static std::int64_t owner_generation (const std::vector<std::byte> &value)

@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <string>
 #include <utility>
@@ -331,6 +332,16 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     const auto reserved = repository.reserve (request).result ().value ();
     const auto *reservation = std::get_if<object_reserved_t> (&reserved);
     ASSERT_NE (reservation, nullptr);
+    // Missing canonical counter rows bootstrap at issue 1 and are stored as
+    // bare next-to-issue decimals in the same reserve batch.
+    EXPECT_EQ (std::get<store_found_t> (
+                 provider.read ({"zlink:v11:object-counter"}).result ().value ())
+                 .value.bytes,
+               bytes ("2"));
+    EXPECT_EQ (std::get<store_found_t> (
+                 provider.read ({"zlink:v11:authority-owner-counter"}).result ().value ())
+                 .value.bytes,
+               bytes ("2"));
     // store_version is the provider's own opaque per-key version
     // (checklist C-4d), not a per-record counter reset to "1" -- assert it
     // round-trips to a live re-read instead of pinning a literal that
@@ -427,6 +438,12 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     ASSERT_NE (aggregate_fence, nullptr);
     EXPECT_EQ (reopened.commit_aggregate (aggregate_fence->fence).result ().value (),
                aggregate_commit_result_t::committed);
+    // The two-participant aggregate issues 4 and 5 after reserve/retarget/
+    // reserve, then stores the next-to-issue value 6 in one transition batch.
+    EXPECT_EQ (std::get<store_found_t> (
+                 provider.read ({"zlink:v11:authority-owner-counter"}).result ().value ())
+                 .value.bytes,
+               bytes ("6"));
     const auto aggregated_actor = reopened.read_authority (actor_key).result ().value ();
     ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (aggregated_actor));
     EXPECT_EQ (std::get<authority_snapshot_t> (aggregated_actor).payload,
@@ -518,6 +535,41 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
                                     .result ()
                                     .value ();
     ASSERT_TRUE (std::holds_alternative<object_committed_t> (recreated_commit));
+
+    // A stored INT64_MAX is exhausted before an aggregate record transition;
+    // neither its counter bytes nor the gated authority record may change.
+    const auto exhausted_actor = std::get<authority_snapshot_t> (
+      reopened.read_authority (actor_key).result ().value ());
+    const auto exhausted_spot = std::get<authority_snapshot_t> (
+      reopened.read_authority (spot_key).result ().value ());
+    auto exhausted_aggregate = abort_aggregate;
+    exhausted_aggregate.aggregate_id.value[15] = std::byte{5};
+    exhausted_aggregate.participants[0].expected_store_version = exhausted_actor.store_version;
+    exhausted_aggregate.participants[1].expected_store_version = exhausted_spot.store_version;
+    const auto exhausted_prepared =
+      reopened.prepare_aggregate (exhausted_aggregate).result ().value ();
+    const auto *exhausted_fence = std::get_if<aggregate_prepared_t> (&exhausted_prepared);
+    ASSERT_NE (exhausted_fence, nullptr);
+    const store_key_t authority_counter_key{"zlink:v11:authority-owner-counter"};
+    const auto counter_before = std::get<store_found_t> (
+      provider.read (authority_counter_key).result ().value ());
+    const auto maximum = std::to_string (std::numeric_limits<std::int64_t>::max ());
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider.write ({.conditions = {store_version_condition_t{authority_counter_key,
+                                                                 counter_before.value.version}},
+                       .mutations = {store_put_t{authority_counter_key, bytes (maximum),
+                                                  std::nullopt}}})
+        .result ()
+        .value ()));
+    EXPECT_EQ (reopened.commit_aggregate (exhausted_fence->fence).result ().value (),
+               aggregate_commit_result_t::generation_exhausted);
+    EXPECT_EQ (std::get<store_found_t> (provider.read (authority_counter_key).result ().value ())
+                 .value.bytes,
+               bytes (maximum));
+    EXPECT_EQ (std::get<authority_snapshot_t> (
+                 reopened.read_authority (actor_key).result ().value ())
+                 .store_version,
+               exhausted_actor.store_version);
 
 }
 

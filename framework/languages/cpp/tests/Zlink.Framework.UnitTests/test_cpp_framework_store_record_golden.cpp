@@ -25,6 +25,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Checklist C-4 (cpp store-record convergence): reuse the production
@@ -46,6 +47,12 @@
 
 namespace
 {
+
+std::vector<std::byte> bytes (std::string_view value)
+{
+    const auto *first = reinterpret_cast<const std::byte *> (value.data ());
+    return {first, first + value.size ()};
+}
 
 std::vector<std::uint8_t> from_hex (const std::string &value)
 {
@@ -598,22 +605,19 @@ int main ()
         // authority-actor-normal (index 5): reserve then commit an actor
         // against the mesh node above, reaching state=active with
         // pendingCreation reset to null -- exactly what reserve()+commit()
-        // legitimately produce. The private authority-generations counter
-        // (provider-private, same idea as the owner-lease counter) is
-        // pre-seeded so the post-increment objectGeneration/
-        // authorityOwnerGeneration land on the golden's "7"/"3".
-        const store_key_t generations_key{"zlink:v11:authority-generations"};
-        const auto generations_seed =
-          nlohmann::json{{"objectGeneration", 6}, {"authorityOwnerGeneration", 2}}.dump ();
-        std::vector<std::byte> generations_bytes (generations_seed.size ());
-        for (std::size_t index = 0; index < generations_seed.size (); ++index)
-            generations_bytes[index] = static_cast<std::byte> (generations_seed[index]);
-        assert (std::holds_alternative<store_write_applied_t> (
-          store
-            .write ({.conditions = {store_missing_condition_t{generations_key}},
-                     .mutations = {store_put_t{generations_key, generations_bytes, std::nullopt}}})
-            .result ()
-            .value ()));
+        // legitimately produce. Spec 22 §7's golden counter vectors seed
+        // the next values 7 and 3, then require bare-decimal rows 8 and 4.
+        const auto seed_counter = [&] (std::string_view key, std::string_view value) {
+            assert (std::holds_alternative<store_write_applied_t> (
+              store
+                .write ({.conditions = {store_missing_condition_t{store_key_t{std::string (key)}}},
+                         .mutations = {store_put_t{store_key_t{std::string (key)},
+                                                    bytes (value), std::nullopt}}})
+                .result ()
+                .value ()));
+        };
+        seed_counter ("zlink:v11:object-counter", "7");
+        seed_counter ("zlink:v11:authority-owner-counter", "3");
 
         object_creation_target_t target{"main", node_rid_t::from_string (rid_raw), 1,
                                         claim->token};
@@ -628,6 +632,12 @@ int main ()
         assert (reservation != nullptr);
         assert (reservation->fence.object_generation == 7);
         assert (reservation->fence.authority_owner_generation == 3);
+        const auto object_counter = std::get<store_found_t> (
+          store.read ({"zlink:v11:object-counter"}).result ().value ());
+        const auto authority_owner_counter = std::get<store_found_t> (
+          store.read ({"zlink:v11:authority-owner-counter"}).result ().value ());
+        assert (object_counter.value.bytes == bytes ("8"));
+        assert (authority_owner_counter.value.bytes == bytes ("4"));
 
         const auto ready_payload = base64_decode ("3q2+78r+8A0=");
         const auto committed =
