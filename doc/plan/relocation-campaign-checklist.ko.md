@@ -560,9 +560,26 @@
       ⓓ flake는 정숙 단독 3연속 0.486s/상한 0.450s — 부하 무관, 기존 인가
       유지 ⓔ **dotnet→java 정숙 재현 실패(신규 회귀)**: source 4×Blocked|
       DeadlineExceeded, target probe-timeout|last=none(활성화 이전 단계) —
-      reloc4 그린 이후의 dotnet 변경(cert1 커밋확인 디코드 분기 / cert2
-      assembler 제거)이 후보 → **cert3 집중 회귀 사냥 가동 중**. 통과 시
-      java+dotnet 누적 배치 커밋.
+      reloc4 그린 이후의 dotnet 변경이 후보로 지목됐으나 **전부 반증**
+      (cert1 디코드 분기 무력화해도 동일, assembler 제거는 target=java라 발화
+      불가). **근본 원인 확정(2026-08-20, Claude 직접 트레이스 진단,
+      보존 run dir /tmp/tmp.9eU3qHf8Li)**: liveness가 아니라 **dotnet
+      connection generation 처닝**. ① admission은 성공(dotnet이 java Admit
+      수신·수락) ② java가 probe(bare control, seq=null) 전송→dotnet 수신→
+      SendControl로 ack(`control_send_submitted`) ③ 그러나 dotnet의
+      peer.ConnectionGeneration이 **1→12로 계속 증가**(각 ~63 전송), 모든
+      infra control(self-probe ~37 + ack 625)이 최신 churned epoch로 나감 ④
+      java 연결 uuid는 `14b1c06f` **단일 고정** → gen2+ 프레임 전부 미수신,
+      java probe는 probe=1에서 영영 미advance ⑤ 양측 liveness 미확정 →
+      relocate target-not-ready → 4× DeadlineExceeded. green 방향(java/node→
+      dotnet)은 dotnet이 **수락측**이라 dial churn 없음 → dotnet이 source로
+      dial할 때만 발현. **스펙 앵커**: spec 51 §5 probe/ack은
+      `admitted-physical-connection-lifetime`을 타야 하는데 dotnet이
+      superseded epoch로 전송 = 위반. **cert1/2/3 국소 패치는 이 경로와
+      무관** — 두더지잡기 종료, 근본 원인 단일화. 후속: dotnet
+      autoconnect 소비계층이 admitted peer를 재dial해 generation 회전시키는
+      지점 수정(스펙 근거·수정후 검증·타 언어 대칭 확인) + spec 51 §5
+      구체화(양방향 probe 의무·admitted epoch 고정, 4언어 전파).
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
