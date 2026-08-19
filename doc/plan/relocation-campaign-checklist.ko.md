@@ -66,13 +66,24 @@
 - [ ] harness 기본 `all` 스테이지 깨끗한 단독 재실행 (동시 에이전트 경합으로 1차
       판정불가; message-follow "Raw MeshNode requires the host Application Job Queue"
       사전 실패 주장 포함 확인)
-- [ ] cpp bind-session 재시도 소진 분류(deadline_exceeded로 갱신됨, `46ef4b0f03`)의
-      교차 언어 parity 확인 — java/node/dotnet의 동일 시나리오 분류 대조
-- [ ] **ST-C2 session bind 실패(신규 2026-08-19, 재현 2/2)**: 시나리오 초입
-      `bound_session_t` 생성(scenario_context.hpp ~434)에서 `bind_actor_session_req_t`
-      stream 요청이 성공 응답을 못 받음 — commit 어휘 수정(`9973345552`)과 무관한
-      별도 결함. bind-session 경로(위 항목 `46ef4b0f03` 분류 변경)와 동일 경로
-      가능성 — 함께 조사
+- [ ] cpp bind-session 재시도 소진 분류 교차 언어 parity — **조사 완료·판정
+      (2026-08-19): 4언어 전부 발산.** cpp=deadline_exceeded(46ef4b0f03),
+      java=마지막 raw 예외 누출(ZLinkActorRetryScheduler:164), dotnet=마지막
+      ZLinkFrameworkException 재던짐(보통 Unavailable, ZLinkSessionActorCoordinator
+      :349), node=fire-and-forget errorSink만·무유형(actor-packet-relay.ts:546).
+      스펙 32 일반 원칙(기한 내 미완료=DeadlineExceeded)상 cpp가 규범 —
+      **판정: 3언어를 소진 시 DeadlineExceeded 유형화로 정렬**(스펙 무변경).
+      java·node 정렬 에이전트 투입, dotnet은 push-relay 수정 후
+- [ ] **ST-C2 session bind 실패 — 근본 원인 확정(2026-08-19)**: `8bae89dc0f`가
+      stream_host_service의 stale-route bind 재시도(무효화→route 변경 대기→재진입,
+      5s 기한)를 삭제하며 기계를 죽은 코드로 방치(retryable_outcome 미사용,
+      bind_attempt=retry 무호출) → ST-C2 유일의 교차 노드 bind가 생성 직후
+      authority 수렴 경합의 일시적 stale(conflict+actorLocationStale)에 1차
+      종결. dotnet/java는 동일 경합을 재시도로 통과(주석 명문). **수정 방향:
+      죽은 재시도 기계 재배선(stale=무효화+≤1s 대기+retry, not_ready=단기 재시도,
+      기존 5s 기한이 deadline_exceeded 소진 보장)** — cpp 29초 공백 에이전트
+      종료 후 투입. H2(수신측 fence read nullopt·5s 하드코딩 margin)는 재시도
+      복원 후 트레이스로 판별
 - [x] cpp standalone actor 직접 relocation 복원 갭 — **판정 완료(2026-08-19): cpp
       실결함.** 4언어·스펙 모두 "타깃의 기존 Entry Spot으로 이동"이 계약인데 cpp만
       restore에 target_spot=nullopt 하드코딩(stateful_object_runtime.cpp:1584),
