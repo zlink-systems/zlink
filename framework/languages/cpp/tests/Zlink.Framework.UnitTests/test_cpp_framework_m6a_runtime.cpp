@@ -6,6 +6,9 @@
 #include "runtime/locations/service_descriptor_registry.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include <zlink/Contracts/Core/context.hpp>
+#include <zlink/Contracts/Core/routing_id.hpp>
+#include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
@@ -1278,6 +1281,68 @@ void verify_manual_and_automatic_classic_fanout ()
           == zlink::framework::framework_error_kind_t::internal_failure;
     }
     assert (reserved_rejected);
+}
+
+void verify_client_server_plain_hello_is_rejected ()
+{
+    /* Spec 51 §4 (ClientServer direction): admission rides the Core
+     * request/reply envelope — the server answers hello only on the reply
+     * of the client's request. A plain routed hello cannot be answered
+     * and must end as a protocol error instead of a raw routed admit. */
+    protocol::client_server_server_admission_t server_descriptor{
+      "client-server-plain",
+      bytes ("server-p"),
+      41,
+      1,
+      100,
+      mesh::service_node_state_t::preparing,
+      "security-p",
+      16u * 1024u * 1024u,
+      "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server (
+      {{server_descriptor}});
+    server.start ();
+
+    auto context = std::make_shared<zlink::context_t> ();
+    zlink::dealer_socket_t dealer (*context);
+    dealer.set_routing_id (zlink::routing_id_t::from (bytes ("client-p")));
+    dealer.connect (server.endpoint ());
+    zlink::framework::detail::backend::raw_dealer_port_t port (dealer);
+    const zlink::framework::detail::backend::raw_message_t hello_message{
+      protocol::encode_client_server_client_admission (
+        protocol::command::hello,
+        {server_descriptor.channel_name,
+         "security-p",
+         16u * 1024u * 1024u})};
+    const auto send_deadline = std::chrono::steady_clock::now () + 5s;
+    bool sent = false;
+    while (!sent && std::chrono::steady_clock::now () < send_deadline) {
+        try {
+            sent = await_task (port.send (hello_message));
+        }
+        catch (const std::exception &) {
+            /* The physical connection may not be ready yet. */
+        }
+        if (!sent)
+            std::this_thread::sleep_for (10ms);
+    }
+    assert (sent);
+
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    auto result = client_server::client_server_pump_result_t::no_data;
+    while (result == client_server::client_server_pump_result_t::no_data
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) server.drain_monitor_events (
+          std::chrono::steady_clock::now ());
+        result = server.pump_one (std::chrono::steady_clock::now ())
+                   .result ()
+                   .value ();
+        if (result == client_server::client_server_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (result
+            == client_server::client_server_pump_result_t::protocol_error);
+    port.close ();
 }
 
 void verify_client_server_independent_raw_path ()
@@ -2613,6 +2678,7 @@ int main ()
     verify_liveness_reuses_probe_and_fences_reconnect ();
     verify_location_descriptor_cas_snapshot_and_watch ();
     verify_manual_and_automatic_classic_fanout ();
+    verify_client_server_plain_hello_is_rejected ();
     verify_client_server_independent_raw_path ();
     verify_client_server_admits_before_monitor_drain ();
     verify_client_server_weighted_selection ();

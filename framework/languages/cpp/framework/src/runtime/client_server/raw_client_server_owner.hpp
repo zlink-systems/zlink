@@ -161,6 +161,20 @@ class raw_client_server_client_t
     std::size_t pending_request_count () const noexcept;
 
   private:
+    struct control_reply_state_t;
+
+    void begin_admission_request (
+      const std::shared_ptr<detail::backend::raw_dealer_port_t> &port);
+    void begin_probe_request (
+      const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
+      std::uint64_t probe_id);
+    bool apply_pending_control_replies (
+      mesh::service_liveness_registry_t::clock_t::time_point now);
+    client_server_pump_result_t accept_server_admission (
+      const detail::backend::raw_bytes_t &frame,
+      protocol::command kind,
+      mesh::service_liveness_registry_t::clock_t::time_point now);
+
     raw_client_server_client_options_t _options;
     mutable std::mutex _mutex;
     std::mutex _socket_mutex;
@@ -169,6 +183,7 @@ class raw_client_server_client_t
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_dealer_port_t> _port;
+    std::shared_ptr<control_reply_state_t> _control_replies;
     std::atomic_size_t _pending_requests{0};
     mesh::service_liveness_registry_t _liveness;
     std::vector<std::uint8_t> _connection_id;

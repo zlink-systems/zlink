@@ -33,6 +33,24 @@ namespace
 // admissible when Auto HWM selected a smaller default.
 constexpr std::uint64_t client_server_wire_hwm_margin = 64u * 1024u;
 
+// Spec 51 §4 (ClientServer direction): the client starts hello and
+// livenessProbe as Core dealer requests; admit/reject and the probe ACK
+// travel back only as the matching request reply. These bounds cap how long
+// one control request may stay outstanding before the client retries (hello)
+// or lets the liveness deadline decide (probe).
+constexpr std::chrono::milliseconds client_server_admission_timeout{5000};
+constexpr std::chrono::milliseconds client_server_probe_request_timeout{5000};
+
+// Owns the control record and port for the lifetime of one asynchronous
+// dealer control request so the caller does not need to keep them alive.
+task_t<detail::backend::raw_request_completion_t> request_control_record (
+  std::shared_ptr<detail::backend::raw_dealer_port_t> port,
+  detail::backend::raw_message_t parts,
+  std::chrono::milliseconds timeout)
+{
+    co_return co_await port->request (parts, timeout);
+}
+
 bool client_server_trace_enabled ()
 {
     const char *value = std::getenv ("ZLINK_CPP_CLIENT_SERVER_TRACE");
@@ -417,7 +435,13 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
               });
         }
         if (header.kind == protocol::command::hello) {
-            if (received->parts.size () != 1) {
+            //  Spec 51 §4 (ClientServer direction): the server sends only
+            //  reply, liveness, update, and reject. Admission therefore
+            //  travels as the reply of the client's hello request — a hello
+            //  without a request sequence cannot be answered and is a
+            //  protocol error.
+            if (received->parts.size () != 1
+                || !received->request_sequence) {
                 co_return client_server_pump_result_t::protocol_error;
             }
             const auto client =
@@ -437,9 +461,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                      != _options.descriptor.security_identity) {
                 const detail::backend::raw_message_t reject_message{
                   protocol::encode_reject (3)};
-                (void) co_await port->send (
-                  received->source_routing_id,
-                  reject_message);
+                (void) port->reply (*received, reject_message);
                 co_return client_server_pump_result_t::infrastructure;
             }
             {
@@ -453,8 +475,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             const detail::backend::raw_message_t admit_message{
               protocol::encode_client_server_server_admission (
                 protocol::command::admit, _options.descriptor)};
-            const auto admitted = co_await port->send (
-              received->source_routing_id, admit_message);
+            const auto admitted = port->reply (*received, admit_message);
             if (!admitted) {
                 co_return client_server_pump_result_t::protocol_error;
             }
@@ -496,8 +517,15 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                     liveness.probe_id)};
                 if (!acknowledged)
                     co_return client_server_pump_result_t::protocol_error;
-                const auto ack_sent = co_await port->send (
-                  received->source_routing_id, ack_message);
+                //  A request-framed probe is acknowledged on its reply leg;
+                //  a raw probe keeps the raw routed ACK.
+                bool ack_sent = false;
+                if (received->request_sequence) {
+                    ack_sent = port->reply (*received, ack_message);
+                } else {
+                    ack_sent = co_await port->send (
+                      received->source_routing_id, ack_message);
+                }
                 if (!ack_sent) {
                     co_return client_server_pump_result_t::protocol_error;
                 }
@@ -675,12 +703,28 @@ bool raw_client_server_server_t::byte_vector_less_t::operator() (
       left.begin (), left.end (), right.begin (), right.end ());
 }
 
+// Completed admission/probe request replies parked by the asynchronous
+// completion callbacks until the pump loop applies them. The callbacks
+// capture only this shared state (never the owning client), so a completion
+// arriving after the client is destroyed writes into an orphaned state and
+// is dropped.
+struct raw_client_server_client_t::control_reply_state_t
+{
+    std::mutex mutex;
+    bool admission_in_flight = false;
+    std::optional<detail::backend::raw_request_completion_t> admission;
+    std::vector<std::pair<std::uint64_t,
+                          detail::backend::raw_request_completion_t>>
+      probes;
+};
+
 raw_client_server_client_t::raw_client_server_client_t (
   raw_client_server_client_options_t options,
   std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
     _context (
-      context ? std::move (context) : std::make_shared<zlink::context_t> ())
+      context ? std::move (context) : std::make_shared<zlink::context_t> ()),
+    _control_replies (std::make_shared<control_reply_state_t> ())
 {
     if (_options.client_routing_id.empty ()
         || _options.admission.channel_name.empty ()
@@ -847,10 +891,10 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                 _ready = false;
             }
             if (port) {
-                const detail::backend::raw_message_t hello_message{
-                  protocol::encode_client_server_client_admission (
-                    protocol::command::hello, _options.admission)};
-                (void) co_await port->send (hello_message);
+                //  Spec 51 §4 (ClientServer direction): hello starts as a
+                //  Core dealer request; the admit/reject decision arrives
+                //  only as that request's reply.
+                begin_admission_request (port);
             }
         } else if (event->event == zlink::monitor_event::disconnected) {
             trace_client_server_lazy (
@@ -894,6 +938,9 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
     if (!port) {
         co_return client_server_pump_result_t::no_data;
     }
+    if (apply_pending_control_replies (now)) {
+        co_return client_server_pump_result_t::infrastructure;
+    }
     const auto received = port->try_receive ();
     if (!received) {
         co_return client_server_pump_result_t::no_data;
@@ -910,56 +957,8 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
             if (received->size () != 1) {
                 co_return client_server_pump_result_t::protocol_error;
             }
-            const auto server =
-              protocol::decode_client_server_server_admission (
-                received->front (), header.kind);
-            std::vector<std::uint8_t> connection;
-            bool invalid = false;
-            bool ready = false;
-            {
-                std::lock_guard lock (_mutex);
-                const auto identity_is_not_pinned =
-                  _options.expected_server.server_routing_id.empty ()
-                  && _options.expected_server.lifecycle_generation == 0;
-                invalid =
-                  server.channel_name
-                      != _options.expected_server.channel_name
-                    || (!identity_is_not_pinned
-                        && (server.server_routing_id
-                              != _options.expected_server.server_routing_id
-                            || server.lifecycle_generation
-                                 != _options.expected_server.lifecycle_generation))
-                    || server.security_identity
-                         != _options.expected_server.security_identity
-                    || server.advertised_endpoint
-                         != _options.expected_server.advertised_endpoint
-                    || server.descriptor_revision
-                         < _options.expected_server.descriptor_revision
-                    || server.server_routing_id.empty ()
-                    || server.lifecycle_generation == 0
-                    || _connection_id.empty ();
-                if (!invalid) {
-                    _options.expected_server = server;
-                    _ready =
-                      server.state == mesh::service_node_state_t::serving
-                      && server.weight > 0;
-                    ready = _ready;
-                    connection = _connection_id;
-                }
-            }
-            if (invalid)
-                co_return client_server_pump_result_t::protocol_error;
-            trace_client_server_lazy (
-              "client-admitted",
-              [&] {
-                  return "endpoint=" + server.advertised_endpoint
-                         + " channel=" + server.channel_name + " client="
-                         + routing_id_label (_options.client_routing_id)
-                         + " ready=" + (ready ? "true" : "false");
-              });
-            _liveness.admit (
-              server.server_routing_id, connection, now);
-            co_return client_server_pump_result_t::infrastructure;
+            co_return accept_server_admission (
+              received->front (), header.kind, now);
         }
         if (header.kind == protocol::command::reject) {
             (void) protocol::decode_reject (received->front ());
@@ -1021,10 +1020,10 @@ raw_client_server_client_t::tick_liveness (
     }
     if (port) {
         for (const auto &probe : result.probes) {
-            const detail::backend::raw_message_t probe_message{
-              protocol::encode_liveness (
-                protocol::command::livenessProbe, probe.probe_id)};
-            (void) co_await port->send (probe_message);
+            //  Spec 51 §4 (ClientServer direction): the client-initiated
+            //  probe rides the Core dealer request envelope; its ACK is the
+            //  matching reply.
+            begin_probe_request (port, probe.probe_id);
         }
     }
     if (!result.timed_out_nodes.empty ()) {
@@ -1038,6 +1037,222 @@ std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
 raw_client_server_client_t::next_liveness_activity () const
 {
     return _liveness.next_activity ();
+}
+
+client_server_pump_result_t
+raw_client_server_client_t::accept_server_admission (
+  const detail::backend::raw_bytes_t &frame,
+  protocol::command kind,
+  mesh::service_liveness_registry_t::clock_t::time_point now)
+{
+    const auto server =
+      protocol::decode_client_server_server_admission (frame, kind);
+    std::vector<std::uint8_t> connection;
+    bool invalid = false;
+    bool ready = false;
+    {
+        std::lock_guard lock (_mutex);
+        const auto identity_is_not_pinned =
+          _options.expected_server.server_routing_id.empty ()
+          && _options.expected_server.lifecycle_generation == 0;
+        invalid =
+          server.channel_name
+              != _options.expected_server.channel_name
+            || (!identity_is_not_pinned
+                && (server.server_routing_id
+                      != _options.expected_server.server_routing_id
+                    || server.lifecycle_generation
+                         != _options.expected_server.lifecycle_generation))
+            || server.security_identity
+                 != _options.expected_server.security_identity
+            || server.advertised_endpoint
+                 != _options.expected_server.advertised_endpoint
+            || server.descriptor_revision
+                 < _options.expected_server.descriptor_revision
+            || server.server_routing_id.empty ()
+            || server.lifecycle_generation == 0
+            || _connection_id.empty ();
+        if (!invalid) {
+            _options.expected_server = server;
+            _ready =
+              server.state == mesh::service_node_state_t::serving
+              && server.weight > 0;
+            ready = _ready;
+            connection = _connection_id;
+        }
+    }
+    if (invalid)
+        return client_server_pump_result_t::protocol_error;
+    trace_client_server_lazy (
+      "client-admitted",
+      [&] {
+          return "endpoint=" + server.advertised_endpoint
+                 + " channel=" + server.channel_name + " client="
+                 + routing_id_label (_options.client_routing_id)
+                 + " ready=" + (ready ? "true" : "false");
+      });
+    _liveness.admit (server.server_routing_id, connection, now);
+    return client_server_pump_result_t::infrastructure;
+}
+
+void raw_client_server_client_t::begin_admission_request (
+  const std::shared_ptr<detail::backend::raw_dealer_port_t> &port)
+{
+    {
+        std::lock_guard lock (_control_replies->mutex);
+        if (_control_replies->admission_in_flight)
+            return;
+        _control_replies->admission_in_flight = true;
+    }
+    protocol::client_server_client_admission_t admission;
+    {
+        std::lock_guard lock (_mutex);
+        admission = _options.admission;
+    }
+    trace_client_server_lazy (
+      "client-admission-request",
+      [&] { return "channel=" + admission.channel_name; });
+    detail::backend::raw_message_t hello_message{
+      protocol::encode_client_server_client_admission (
+        protocol::command::hello, admission)};
+    auto running = std::make_shared<
+      task_t<detail::backend::raw_request_completion_t>> (
+        request_control_record (port,
+                                std::move (hello_message),
+                                client_server_admission_timeout));
+    detail::observe_task_completion (
+      *running,
+      [state = _control_replies, running] (
+        const result_t<detail::backend::raw_request_completion_t> &settled) {
+          trace_client_server_lazy (
+            "client-admission-complete",
+            [&] {
+                return std::string ("settled=")
+                       + (settled ? "true" : "false")
+                       + (settled
+                            ? " result="
+                                + std::to_string (static_cast<int> (
+                                    settled.value ().result))
+                                + " parts="
+                                + std::to_string (
+                                    settled.value ().parts.size ())
+                            : std::string ());
+            });
+          std::lock_guard lock (state->mutex);
+          state->admission_in_flight = false;
+          if (settled) {
+              state->admission.emplace (settled.value ());
+          } else {
+              state->admission.emplace (
+                detail::backend::raw_request_completion_t{
+                  detail::backend::raw_request_result_t::failed, {}});
+          }
+      });
+}
+
+void raw_client_server_client_t::begin_probe_request (
+  const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
+  std::uint64_t probe_id)
+{
+    detail::backend::raw_message_t probe_message{
+      protocol::encode_liveness (
+        protocol::command::livenessProbe, probe_id)};
+    auto running = std::make_shared<
+      task_t<detail::backend::raw_request_completion_t>> (
+        request_control_record (port,
+                                std::move (probe_message),
+                                client_server_probe_request_timeout));
+    detail::observe_task_completion (
+      *running,
+      [state = _control_replies, running, probe_id] (
+        const result_t<detail::backend::raw_request_completion_t> &settled) {
+          if (!settled)
+              return;
+          std::lock_guard lock (state->mutex);
+          state->probes.emplace_back (probe_id, settled.value ());
+      });
+}
+
+bool raw_client_server_client_t::apply_pending_control_replies (
+  mesh::service_liveness_registry_t::clock_t::time_point now)
+{
+    std::optional<detail::backend::raw_request_completion_t> admission;
+    std::vector<std::pair<std::uint64_t,
+                          detail::backend::raw_request_completion_t>>
+      probes;
+    {
+        std::lock_guard lock (_control_replies->mutex);
+        admission.swap (_control_replies->admission);
+        probes.swap (_control_replies->probes);
+    }
+    bool progressed = false;
+    if (admission) {
+        progressed = true;
+        if (admission->result == detail::backend::raw_request_result_t::ok
+            && admission->parts.size () == 1) {
+            try {
+                const auto header =
+                  protocol::decode_header (admission->parts.front ());
+                if (header.kind == protocol::command::admit) {
+                    (void) accept_server_admission (
+                      admission->parts.front (), header.kind, now);
+                } else if (header.kind == protocol::command::reject) {
+                    (void) protocol::decode_reject (
+                      admission->parts.front ());
+                    std::lock_guard lock (_mutex);
+                    _ready = false;
+                } else {
+                    trace_client_server (
+                      "client-admission-invalid-reply");
+                }
+            }
+            catch (const protocol::service_wire_error_t &) {
+                trace_client_server ("client-admission-malformed-reply");
+            }
+        } else {
+            //  The request failed or timed out. Retry while the physical
+            //  connection is still current and admission has not happened.
+            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
+            bool retry = false;
+            {
+                std::lock_guard lock (_mutex);
+                retry = !_closed && !_ready && !_connection_id.empty ();
+                if (retry)
+                    port = _port;
+            }
+            if (retry && port)
+                begin_admission_request (port);
+        }
+    }
+    for (const auto &probe : probes) {
+        progressed = true;
+        if (probe.second.result != detail::backend::raw_request_result_t::ok
+            || probe.second.parts.size () != 1) {
+            continue;
+        }
+        try {
+            const auto liveness =
+              protocol::decode_liveness (probe.second.parts.front ());
+            if (liveness.kind != protocol::command::livenessAck
+                || liveness.probe_id != probe.first) {
+                continue;
+            }
+            std::vector<std::uint8_t> connection;
+            std::vector<std::uint8_t> server_routing_id;
+            {
+                std::lock_guard lock (_mutex);
+                connection = _connection_id;
+                server_routing_id =
+                  _options.expected_server.server_routing_id;
+            }
+            (void) _liveness.acknowledge (
+              server_routing_id, connection, liveness.probe_id, now);
+        }
+        catch (const protocol::service_wire_error_t &) {
+            trace_client_server ("client-probe-malformed-reply");
+        }
+    }
+    return progressed;
 }
 
 task_t<zlink::submit_result_t> raw_client_server_client_t::send (
