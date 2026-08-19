@@ -367,19 +367,18 @@
       교차 lifecycle 충돌·오귀속 가능, cpp 큐) ② [M] parking-node 폴백이 구
       송신자에 대해 미소유 노드로 오배송+가변 relay 메타(비인증) — cpp 큐
       ③ [H] cpp bind 재시도가 STREAM 실행 스레드 동기 점유(기아 위험, 비동기
-      스케줄링으로 이전 — cpp 큐) ④ [H] node acknowledged bind 실패가 공개
-      바인딩 성공 반환(spec 20 §127-170 최초 bind는 owner 수락 선행 필요 vs
-      기존 판정의 §rollback 금지 — 두 조항 정밀 재독으로 최초/재바인드 구분
-      판정, node 투입) ⑤ [H] java cmd-44 순서 역전(spec 15 §523-532: 완료·
+      스케줄링으로 이전 — cpp 큐) ④ [H] node acknowledged bind 실패 → **해소 `53fcdc55dc`**: 스펙 20 정밀 재독 —
+      최초 bind는 owner terminal 성공 후에만 route 저장(§127-153)이라 실패 시
+      공개 실패+임시 바인딩 해제, relocation 44 갱신만 보고-전용(§389-438).
+      기존 판정의 과일반화 정정 ⑤ [H] java cmd-44 순서 역전(spec 15 §523-532: 완료·
       dispatch 개방 후 44 발신, CAS 후 44 손실은 seal timeout 회복 — join 실패
       결합 제거, 기존 판정 정정 필요, java 투입 예정) ⑥ [M] dotnet
       recordVersion 부재 필드 수용(DTO 기본값 1 — java/node는 존재 요구, 존재
       검증 추가, dotnet 큐) ⑦ [H] cpp 늦은 admit/probe 응답이 현재 연결에 적용
       (spec 51 §275-312: 구 pair 이벤트 격리 — 연결 세대 캡처·비교, envelope
-      에이전트 편입) ⑧ [H] counter 2^63-1 경계 미수렴+스펙 22 자체 모순(v=최대
-      시 규칙 충돌; node owner-counter는 2^63 기록) — **판정: 저장값 2^63-1=소진
-      (최대 발급 2^63-2, java/dotnet 다수 해석 채택)**, 스펙 문구 정정+node
-      owner-counter 정렬 투입 ⑨ [M] java 집계 범위 소진이 ArithmeticException
+      에이전트 편입) ⑧ [H] counter 경계 → **해소 `53fcdc55dc`**: 스펙 22 경계 문구 정정(저장 1..2^63-1,
+      2^63-1=무변경 소진, 최대 발급 2^63-2)+node owner-counter 정렬, 경계
+      무변경 테스트 ⑨ [M] java 집계 범위 소진이 ArithmeticException
       (typed GenerationExhausted로, java 투입 예정)
 - [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
