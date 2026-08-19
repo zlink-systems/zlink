@@ -722,16 +722,17 @@ final class ZLinkProviderAuthorityRepository {
                 request,
                 fence,
                 cancellation))
-            .thenCompose(marked -> {
-                if (!marked) {
+            .thenCompose(markers -> {
+                if (!markers.installed()) {
                     CompletionStage<Boolean> cleanup = ownsStaging
                         ? abortOwnedAggregateStaging(
                             fence,
                             staging.value().version().value(),
                             cancellation)
                         : completed(false);
-                    return cleanup.thenApply(ignored ->
-                        new ZLinkAggregateConflict());
+                    return cleanup.thenApply(ignored -> markers.exhausted()
+                        ? new ZLinkAggregateGenerationExhausted()
+                        : new ZLinkAggregateConflict());
                 }
                 return provider.write(
                         new ZLinkStoreWriteRequest(
@@ -1401,7 +1402,7 @@ final class ZLinkProviderAuthorityRepository {
             == participant.sourceAuthorityOwnerGeneration();
     }
 
-    private CompletionStage<Boolean> installAggregateMarkers(
+    private CompletionStage<AggregateMarkerInstallation> installAggregateMarkers(
         ZLinkAggregatePrepareRequest request,
         ZLinkAggregateFence fence,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation
@@ -1417,6 +1418,9 @@ final class ZLinkProviderAuthorityRepository {
                 counterConditions,
                 cancellation)
             .thenCompose(counter -> {
+                if (counter.exhausted()) {
+                    return completed(AggregateMarkerInstallation.exhaustedResult());
+                }
                 CompletionStage<Boolean> chain = completed(true);
                 List<ZLinkStoreKey> installed = new ArrayList<>();
                 long[] nextOwnerGeneration = {counter.value()};
@@ -1530,12 +1534,12 @@ final class ZLinkProviderAuthorityRepository {
                     });
                 }
                 return chain.thenCompose(ok -> ok
-                    ? completed(true)
+                    ? completed(AggregateMarkerInstallation.installedResult())
                     : clearAggregateMarkers(
                             fence,
                             installed,
                             cancellation)
-                        .thenApply(ignored -> false));
+                        .thenApply(ignored -> AggregateMarkerInstallation.conflictResult()));
             });
     }
 
@@ -1784,7 +1788,12 @@ final class ZLinkProviderAuthorityRepository {
             long value = read instanceof ZLinkStoreReadFound found
                 ? decodeLong(found.value().bytes())
                 : 1L;
-            long next = Math.addExact(value, count);
+            // Spec 22 §7: the stored value is next-to-issue.  A block of n
+            // is valid only when value + n is at most Long.MAX_VALUE.
+            if (value > Long.MAX_VALUE - count) {
+                return Counter.exhaustedResult();
+            }
+            long next = value + count;
             conditions.add(read instanceof ZLinkStoreReadFound found
                 ? new ZLinkStoreVersionCondition(
                     key, found.value().version())
@@ -2789,6 +2798,21 @@ final class ZLinkProviderAuthorityRepository {
         boolean exhausted) {
         private static Counter exhaustedResult() {
             return new Counter(0, List.of(), true);
+        }
+    }
+    private record AggregateMarkerInstallation(
+        boolean installed,
+        boolean exhausted) {
+        private static AggregateMarkerInstallation installedResult() {
+            return new AggregateMarkerInstallation(true, false);
+        }
+
+        private static AggregateMarkerInstallation conflictResult() {
+            return new AggregateMarkerInstallation(false, false);
+        }
+
+        private static AggregateMarkerInstallation exhaustedResult() {
+            return new AggregateMarkerInstallation(false, true);
         }
     }
     private record Counters(

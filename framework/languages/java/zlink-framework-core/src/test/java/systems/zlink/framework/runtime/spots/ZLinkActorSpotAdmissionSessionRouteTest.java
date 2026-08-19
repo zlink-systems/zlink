@@ -1,16 +1,14 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -27,12 +25,9 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
 /**
- * Spec 20 §5 step 5 / spec 52 §5: the target runtime submits command 44 as
- * part of its post-commit completion sequence. dotnet awaits the session
- * route commit inside the join completion and cpp fails the join route
- * reply when the route activation fails, so the Java direct-Join target
- * must fail the join attempt when the command-44 submission fails instead
- * of accepting a join whose cross-node pushes would silently drop.
+ * Spec 15 §4.2 steps 7-8 and spec 20 §5: the target completes the Join and
+ * opens dispatch before submitting one-way command 44. A failed submission is
+ * diagnostic-only because the Session seal timeout owns the recovery.
  */
 final class ZLinkActorSpotAdmissionSessionRouteTest {
     private static final RoutingId TARGET_NODE = RoutingId.from("target-node");
@@ -49,35 +44,34 @@ final class ZLinkActorSpotAdmissionSessionRouteTest {
     }
 
     @Test
-    void failedCommand44SubmissionFailsTheJoinRouteSwitchStage()
+    void failedCommand44SubmissionDoesNotFailTheCommittedJoin()
         throws Exception {
         IllegalStateException transportDown =
             new IllegalStateException("Session owner is unreachable");
+        List<String> calls = new ArrayList<>();
         ZLinkActorSpotAdmission admission = admission(
-            CompletableFuture.failedFuture(transportDown));
+            CompletableFuture.failedFuture(transportDown), calls);
 
-        CompletionStage<Void> outcome = admission.startBoundSessionRouteUpdate(
-            request(),
-            spotNode(targetActor()),
-            routeUpdate());
+        String outcome = admission.submitBoundSessionRouteAfterJoin(
+                CompletableFuture.completedFuture("joined")
+                    .thenApply(join -> {
+                        calls.add("join-terminal");
+                        return join;
+                    }),
+                request(),
+                spotNode(targetActor()),
+                routeUpdate())
+            .toCompletableFuture()
+            .get(2, TimeUnit.SECONDS);
 
-        CompletableFuture<Void> settled = outcome.toCompletableFuture();
-        CompletionException failure = assertThrows(
-            CompletionException.class,
-            () -> {
-                try {
-                    settled.get(2, TimeUnit.SECONDS);
-                } catch (java.util.concurrent.ExecutionException wrapped) {
-                    throw new CompletionException(wrapped.getCause());
-                }
-            });
-        assertSame(transportDown, failure.getCause(),
-            "a failed command-44 submission must fail the join attempt "
-                + "instead of being swallowed as a warning");
+        assertEquals("joined", outcome);
+        assertEquals(List.of("join-terminal", "send-route"), calls,
+            "command 44 submission must start only after the Join terminal");
     }
 
     @Test
-    void supersededRouteSwitchFailsTheJoinAttemptTyped() {
+    void supersededRouteSwitchIsReportedWithoutChangingTheJoinTerminal()
+        throws Exception {
         ZLinkActorSpotAdmission admission = admission(
             CompletableFuture.completedFuture(null));
 
@@ -88,12 +82,7 @@ final class ZLinkActorSpotAdmissionSessionRouteTest {
             spotNode(null),
             routeUpdate());
 
-        CompletableFuture<Void> settled = outcome.toCompletableFuture();
-        assertTrue(settled.isCompletedExceptionally(),
-            "a superseded route switch must fail the join attempt");
-        CompletionException failure = assertThrows(
-            CompletionException.class, settled::join);
-        assertInstanceOf(ZLinkConfigurationException.class, failure.getCause());
+        assertNull(outcome.toCompletableFuture().get(2, TimeUnit.SECONDS));
     }
 
     @Test
@@ -118,6 +107,12 @@ final class ZLinkActorSpotAdmissionSessionRouteTest {
 
     private ZLinkActorSpotAdmission admission(
         CompletionStage<Void> routeSendOutcome) {
+        return admission(routeSendOutcome, null);
+    }
+
+    private ZLinkActorSpotAdmission admission(
+        CompletionStage<Void> routeSendOutcome,
+        List<String> calls) {
         runtime = new ZLinkActorRuntime(
             spotNode(targetActor()),
             Map.of(),
@@ -129,7 +124,7 @@ final class ZLinkActorSpotAdmissionSessionRouteTest {
                 new Class<?>[] {ZLinkInternalMeshNode.class},
                 (proxy, method, arguments) ->
                     "sendSessionRelocationRoute".equals(method.getName())
-                        ? routeSendOutcome
+                        ? sent(calls, routeSendOutcome)
                         : defaultValue(method.getReturnType()));
         ZLinkActorSpotAdmission admission = new ZLinkActorSpotAdmission();
         admission.attach(
@@ -137,6 +132,15 @@ final class ZLinkActorSpotAdmissionSessionRouteTest {
             () -> false,
             new ZLinkSessionRelocationPeerClient(meshNode));
         return admission;
+    }
+
+    private static CompletionStage<Void> sent(
+        List<String> calls,
+        CompletionStage<Void> outcome) {
+        if (calls != null) {
+            calls.add("send-route");
+        }
+        return outcome;
     }
 
     private static ZLinkInternalSpotNode spotNode(

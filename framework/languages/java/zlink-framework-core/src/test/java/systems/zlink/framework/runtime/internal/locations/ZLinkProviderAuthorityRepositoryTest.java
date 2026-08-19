@@ -162,6 +162,60 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void nearCeilingAggregateCounterBlockReturnsTypedExhaustion()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owner = ((ZLinkOwnerLeaseClaimed)
+            new ZLinkProviderOwnerLeaseRepository(provider)
+                .claim("owner-a", Duration.ofMinutes(1))
+                .toCompletableFuture().get()).token();
+        String authorityA = ZLinkAuthorityKeyCodec.actor("ceiling-a");
+        String authorityB = ZLinkAuthorityKeyCodec.actor("ceiling-b");
+        var keyA = authorityKey(authorityA);
+        var keyB = authorityKey(authorityB);
+        var seeded = (systems.zlink.framework.locationprovider
+                .ZLinkStoreWriteApplied) provider.write(
+                    new ZLinkStoreWriteRequest(
+                        List.of(),
+                        List.of(
+                            new ZLinkStorePut(keyA, encodedAuthorityRecord(), null),
+                            new ZLinkStorePut(keyB, encodedAuthorityRecord(), null),
+                            new ZLinkStorePut(
+                                new ZLinkStoreKey(
+                                    "zlink:v11:authority-owner-counter"),
+                                Long.toString(Long.MAX_VALUE - 1).getBytes(
+                                    java.nio.charset.StandardCharsets.UTF_8),
+                                null))),
+                    () -> false).toCompletableFuture().get();
+        var request = new ZLinkAggregatePrepareRequest(
+            new UUID(0, 12),
+            1,
+            List.of(
+                new ZLinkAggregateParticipant(
+                    authorityA, 1, 1, seeded.putVersions().get(keyA).value(),
+                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                    new byte[] {1}, new byte[] {2}),
+                new ZLinkAggregateParticipant(
+                    authorityB, 1, 1, seeded.putVersions().get(keyB).value(),
+                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                    new byte[] {3}, new byte[] {4})),
+            new byte[32],
+            new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
+            1,
+            ZLinkPlacementCapacityBundle.actor(1),
+            owner);
+
+        var result = new ZLinkProviderAuthorityRepository(provider)
+            .prepareAggregate(request, () -> false).toCompletableFuture().get();
+
+        assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
+        assertCounterValue(
+            provider,
+            "zlink:v11:authority-owner-counter",
+            Long.toString(Long.MAX_VALUE - 1));
+    }
+
+    @Test
     void aggregateMarkerRoundTripPreservesCompletionCounters()
         throws ReflectiveOperationException {
         var request = new ZLinkAggregatePrepareRequest(

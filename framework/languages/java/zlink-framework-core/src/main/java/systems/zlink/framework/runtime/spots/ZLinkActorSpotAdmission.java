@@ -563,19 +563,13 @@ final class ZLinkActorSpotAdmission {
                             committed.tenure().ownerLeaseGeneration()),
                         sessionRoute.command().session());
                 }
-                // Command 44 is one-way and is submitted by the target after
-                // target authority and the local route are installed. Its
-                // submission is part of this Join attempt (spec 20 §5 step 5,
-                // spec 52 §5): dotnet awaits the route commit inside the
-                // completion and cpp fails the Join route reply when the
-                // route activation fails, so a Java submission failure must
-                // fail the attempt loudly instead of accepting a Join whose
-                // cross-node pushes would silently drop.
-                return startBoundSessionRouteUpdate(
-                    request,
-                    primaryNode,
-                    sessionRoute)
-                    .thenCompose(ignoredRouteSwitch -> ZLinkAsyncSerialQueue
+                // Spec 15 §4.2 steps 7-8 and spec 20 §5: the target Join
+                // terminal and dispatch opening are committed before the
+                // one-way command 44 is submitted. A lost command 44 is
+                // recovered by the Session seal timeout and cannot undo the
+                // already-committed target join.
+                return submitBoundSessionRouteAfterJoin(
+                    ZLinkAsyncSerialQueue
                     .yieldCurrent(CompletableFuture.completedFuture(null))
                     .thenCompose(ignored -> {
                         boolean entryTarget = spotSurface instanceof ZLinkEntrySpot<?>;
@@ -633,7 +627,10 @@ final class ZLinkActorSpotAdmission {
                             .thenApply(replies -> new RoutedJoin(
                                 actorRef,
                                 ZLinkSpotActorJoinResult.accept(), replies));
-                    }));
+                    }),
+                    request,
+                    primaryNode,
+                    sessionRoute);
             });
         return attempt.exceptionallyCompose(error -> {
             if (aggregateCommitted.get()) {
@@ -714,8 +711,8 @@ final class ZLinkActorSpotAdmission {
         return new BoundSessionRouteUpdate(command, targetActor);
     }
 
-    //  Package-private for the unit test pinning that a failed command-44
-    //  submission fails the Join attempt instead of being swallowed.
+    // Package-private for the regression test pinning that command-44 is
+    // submitted after the committed Join and never changes its terminal.
     CompletionStage<Void> startBoundSessionRouteUpdate(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
@@ -729,9 +726,20 @@ final class ZLinkActorSpotAdmission {
                 new ZLinkConfigurationException(
                     "direct-Join Session route handoff was superseded");
             reportBoundSessionRouteUpdateFailure(request, superseded);
-            return CompletableFuture.failedFuture(superseded);
+            return CompletableFuture.completedFuture(null);
         }
         return switchBoundSessionRoute(request, update);
+    }
+
+    <T> CompletionStage<T> submitBoundSessionRouteAfterJoin(
+        CompletionStage<T> completedJoin,
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        ZLinkInternalSpotNode primaryNode,
+        BoundSessionRouteUpdate update) {
+        return completedJoin.thenApply(join -> {
+            startBoundSessionRouteUpdate(request, primaryNode, update);
+            return join;
+        });
     }
 
     private void reportBoundSessionRouteUpdateFailure(
@@ -758,9 +766,7 @@ final class ZLinkActorSpotAdmission {
                 if (failure != null) {
                     reportBoundSessionRouteUpdateFailure(
                         request, failure);
-                    throw failure instanceof CompletionException completion
-                        ? completion
-                        : new CompletionException(failure);
+                    return (Void) null;
                 }
                 requireActors().traceActorTransferMarker(
                     "session_route_switched",
