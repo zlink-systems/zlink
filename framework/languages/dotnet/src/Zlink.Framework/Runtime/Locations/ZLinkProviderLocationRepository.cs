@@ -104,7 +104,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         .ConfigureAwait(false);
                     if (read is ZLinkStoreReadResult.Found found)
                     {
-                        var record = Decode<OwnerRecord>(found.Value.Bytes);
+                        var record = DecodeOwner(found.Value.Bytes);
                         if (string.Equals(
                                 record.OwnerId,
                                 ownerId,
@@ -148,7 +148,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         if (result is ZLinkStoreReadResult.Missing)
             return new ZLinkOwnerLeaseReadResult.Missing();
         var found = ((ZLinkStoreReadResult.Found)result).Value;
-        var record = Decode<OwnerRecord>(found.Bytes);
+        var record = DecodeOwner(found.Bytes);
         if (!string.Equals(record.OwnerId, ownerId, StringComparison.Ordinal)
             || found.ExpiresAt is null)
         {
@@ -175,7 +175,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (current is not ZLinkStoreReadResult.Found found)
             return new ZLinkOwnerLeaseRenewResult.Stale();
-        if (Decode<OwnerRecord>(found.Value.Bytes).LeaseGeneration
+        if (DecodeOwner(found.Value.Bytes).LeaseGeneration
             != token.LeaseGeneration)
             return new ZLinkOwnerLeaseRenewResult.Stale();
 
@@ -211,7 +211,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (current is not ZLinkStoreReadResult.Found found)
             return ZLinkOwnerLeaseReleaseResult.Stale;
-        if (Decode<OwnerRecord>(found.Value.Bytes).LeaseGeneration
+        if (DecodeOwner(found.Value.Bytes).LeaseGeneration
             != token.LeaseGeneration)
             return ZLinkOwnerLeaseReleaseResult.Stale;
         var result = await provider.WriteAsync(
@@ -240,7 +240,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (lease is not ZLinkStoreReadResult.Found liveLease)
             return ZLinkLocationWriteResult.IgnoredStale;
-        if (Decode<OwnerRecord>(liveLease.Value.Bytes).LeaseGeneration
+        if (DecodeOwner(liveLease.Value.Bytes).LeaseGeneration
             != descriptor.LeaseGeneration)
             return ZLinkLocationWriteResult.IgnoredStale;
 
@@ -583,7 +583,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         var lease = await provider.ReadAsync(leaseKey, cancellationToken)
             .ConfigureAwait(false);
         if (lease is not ZLinkStoreReadResult.Found liveLease
-            || Decode<OwnerRecord>(liveLease.Value.Bytes).LeaseGeneration
+            || DecodeOwner(liveLease.Value.Bytes).LeaseGeneration
             != leaseGeneration)
             return ZLinkLocationWriteResult.IgnoredStale;
 
@@ -836,11 +836,13 @@ internal sealed partial class ZLinkProviderLocationRepository(
     // Descriptor records (mesh-node/client-server/fanout-publisher) check
     // recordVersion explicitly (21-location-runtime.md#2.4: "The framework,
     // not the provider, checks this value; on an unrecognized value it
-    // fails explicitly instead of guessing how to read it"). Scoped to
-    // DescriptorRecord<T> rather than folded into the generic Decode<T>
-    // above, since Decode<T> is also used for the owner-lease record, whose
-    // own recordVersion check is a pre-existing gap outside this closure
-    // item's scope.
+    // fails explicitly instead of guessing how to read it"). The owner-lease
+    // record gets the same fail-closed check through DecodeOwner below, and
+    // the authority record through DecodeAuthorityMeta in the Authority
+    // partial. Writers always emit recordVersion (the DTOs carry it as an
+    // always-serialized init property), so validating the deserialized
+    // value suffices: a value defaulted from a missing field is 1, which is
+    // by construction a record this reader understands.
     private static DescriptorRecord<T> DecodeDescriptor<T>(
         ReadOnlyMemory<byte> bytes)
     {
@@ -848,6 +850,19 @@ internal sealed partial class ZLinkProviderLocationRepository(
         if (record.RecordVersion != 1)
             throw new InvalidDataException(
                 "The Location Store descriptor record has an unrecognized"
+                + " recordVersion.");
+        return record;
+    }
+
+    // Owner-lease record reader (spec 21 §420-425: every opaque record
+    // reader MUST fail on an unrecognized recordVersion instead of
+    // guessing how to read it).
+    private static OwnerRecord DecodeOwner(ReadOnlyMemory<byte> bytes)
+    {
+        var record = Decode<OwnerRecord>(bytes);
+        if (record.RecordVersion != 1)
+            throw new InvalidDataException(
+                "The Location Store owner lease record has an unrecognized"
                 + " recordVersion.");
         return record;
     }

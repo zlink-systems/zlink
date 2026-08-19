@@ -104,7 +104,11 @@ internal sealed class ZLinkBoundSessionService(
     {
         var result = await SubmitFrameAsync(actorId, frame, cancellationToken)
             .ConfigureAwait(false);
-        if (result.Status != ZLinkOneWaySubmitStatus.Submitted)
+        //  SkippedNotBound is the designed stale-binding drop: the session
+        //  was replaced while the frame sat in the deferred queue, so there
+        //  is nothing to deliver and nothing failed.
+        if (result.Status is not ZLinkOneWaySubmitStatus.Submitted
+            and not ZLinkOneWaySubmitStatus.SkippedNotBound)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 $"Deferred bound-session submit completed with '{result.Status}'.");

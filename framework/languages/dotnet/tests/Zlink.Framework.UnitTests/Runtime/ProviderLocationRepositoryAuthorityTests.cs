@@ -32,6 +32,64 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task AuthorityReadFailsClosedOnAnUnrecognizedRecordVersion()
+    {
+        //  Spec 21 §420-425: every opaque record reader MUST fail on an
+        //  unrecognized recordVersion instead of guessing how to read it.
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var key = ZLinkAuthorityKeyCodec.EncodeActor("record-version-actor");
+        var metaKey = ZLinkProviderLocationRepository.AuthorityMetaKey(key);
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(new ZLinkStoreWriteRequest(
+                [],
+                [new ZLinkStoreMutation.Put(
+                    metaKey,
+                    Encoding.UTF8.GetBytes(
+                        """
+                        {"recordVersion":2,"payload":"","objectGeneration":"1",
+                        "authorityOwnerGeneration":"1","ownerId":"owner",
+                        "ownerLeaseGeneration":"1"}
+                        """.ReplaceLineEndings(string.Empty)),
+                    null)])));
+
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await repository.ReadAuthorityAsync(key));
+    }
+
+    [Fact]
+    public async Task OwnerLeaseReadFailsClosedOnAnUnrecognizedRecordVersion()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await repository.ClaimOwnerLeaseAsync(
+                "record-version-owner",
+                TimeSpan.FromMinutes(2)));
+
+        var ownerKey =
+            ZLinkProviderLocationRepository.OwnerKey("record-version-owner");
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await provider.ReadAsync(ownerKey));
+        var row = JsonNode.Parse(
+            Encoding.UTF8.GetString(found.Value.Bytes.Span))!;
+        //  The canonical envelope writer always emits recordVersion, so
+        //  validating the deserialized value is a complete check.
+        Assert.Equal(1, (int)row["recordVersion"]!);
+        row["recordVersion"] = 9;
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(new ZLinkStoreWriteRequest(
+                [new ZLinkStoreCondition.Version(ownerKey, found.Value.Version)],
+                [new ZLinkStoreMutation.Put(
+                    ownerKey,
+                    Encoding.UTF8.GetBytes(row.ToJsonString()),
+                    TimeSpan.FromMinutes(2))])));
+
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await repository.ReadOwnerLeaseAsync("record-version-owner"));
+    }
+
+    [Fact]
     public async Task DescriptorPagingUsesTheBoundedProviderSnapshotCursor()
     {
         var inner = new ZLinkInMemoryProviderLocationStore();

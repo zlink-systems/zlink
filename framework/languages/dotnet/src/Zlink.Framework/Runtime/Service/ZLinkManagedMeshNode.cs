@@ -5705,6 +5705,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch (Exception exception)
         {
+            //  A failed cutover ends the relocation for this object; it must
+            //  be loud, not only visible behind ZLINK_DEBUG_FRAMEWORK_TASKS=1
+            //  (regression f859696dc7). Always-on error trace with the object
+            //  identity, mirroring ZLinkRuntimeErrorSink's process-failure
+            //  convention, in addition to the debug task trace and the
+            //  protocol-error monitor count.
+            System.Diagnostics.Trace.TraceError(
+                "ZLink relocation cutover failed for object '{0}' (kind {1},"
+                + " relocation {2}, source node {3}): {4}",
+                cutover.Object.ObjectId,
+                cutover.Object.Kind,
+                cutover.RelocationId,
+                sourceNodeRid,
+                exception);
             ZLinkFrameworkDebugLog.TaskFailure(
                 "canonical-relocation-cutover",
                 exception);

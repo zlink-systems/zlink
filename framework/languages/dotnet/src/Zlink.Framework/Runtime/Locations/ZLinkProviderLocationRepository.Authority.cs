@@ -609,7 +609,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         else
         {
             var ownerFound = (ZLinkStoreReadResult.Found)ownerRead;
-            var owner = Decode<OwnerRecord>(ownerFound.Value.Bytes);
+            var owner = DecodeOwner(ownerFound.Value.Bytes);
             if (!string.Equals(
                     owner.OwnerId,
                     current.Snapshot.OwnerId,
@@ -4194,7 +4194,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             knownMeta = null;
             if (first is ZLinkStoreReadResult.Missing) return null;
             var found = ((ZLinkStoreReadResult.Found)first).Value;
-            var meta = Decode<AuthorityMeta>(found.Bytes);
+            var meta = DecodeAuthorityMeta(found.Bytes);
             ReadOnlyMemory<byte> payloadBytes = meta.Payload;
             if (projectCommittedAggregate
                 && meta.AggregateFence is { } aggregateFence)
@@ -4370,7 +4370,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 cancellationToken)
             .ConfigureAwait(false);
         if (read is not ZLinkStoreReadResult.Found found) return null;
-        var record = Decode<OwnerRecord>(found.Value.Bytes);
+        var record = DecodeOwner(found.Value.Bytes);
         return record.OwnerId == token.OwnerId
                && record.LeaseGeneration == token.LeaseGeneration
             ? new StoredOwner(token, found.Value.Version)
@@ -4851,6 +4851,20 @@ internal sealed partial class ZLinkProviderLocationRepository
         JsonSerializer.SerializeToUtf8Bytes(
             value,
             ZLinkJsonSerializerOptions.Default);
+
+    // Authority-record reader (spec 21 §420-425: every opaque record reader
+    // MUST fail on an unrecognized recordVersion instead of guessing how to
+    // read it). Same fail-closed shape as DecodeDescriptor/DecodeOwner.
+    private static AuthorityMeta DecodeAuthorityMeta(
+        ReadOnlyMemory<byte> bytes)
+    {
+        var meta = Decode<AuthorityMeta>(bytes);
+        if (meta.RecordVersion != 1)
+            throw new InvalidDataException(
+                "The Location Store authority record has an unrecognized"
+                + " recordVersion.");
+        return meta;
+    }
 
     // Checklist C-2b / 21-location-runtime.md#2.4: the authority record is
     // one logical opaque row addressed by one key. cpp/java/node already

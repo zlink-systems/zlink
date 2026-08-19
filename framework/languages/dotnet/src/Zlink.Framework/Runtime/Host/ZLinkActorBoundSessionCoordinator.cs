@@ -1323,8 +1323,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 expectedBindingToken,
                 StringComparison.Ordinal))
         {
+            //  Designed stale-binding drop (same contract as the sync
+            //  SendIfBoundTo path), reported honestly: nothing was
+            //  submitted, so this must not read as a delivery signal.
             return ValueTask.FromResult(new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Submitted));
+                ZLinkOneWaySubmitStatus.SkippedNotBound));
         }
         return SendCurrentAsync(
             state,
