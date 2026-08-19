@@ -61,13 +61,14 @@
       무실패 유실. cutover 완료가 remote-join replay를 직접 구동하도록 수정(store
       복구 경로 반사), 회귀 테스트 A/B 고정+ProtocolErrors 불증가 단언.
       **후속(D급 기록): ① cutover 사망이 debug 게이트 로그+카운터로만 관측 —
-      명시 실패(error sink) 강화 필요, SendIfBoundToAsync의 무바인딩 Submitted
-      동일(→dotnet 마감 유닛에 편입) ② cpp/java 동일 실수 점검 **완료(2026-08-19):
+      명시 실패 강화 **해소 `f2dfa809e8`**(cutover 사망 always-on TraceError;
+      SendIfBoundToAsync는 SkippedNotBound 신설로 정직화, 설계상 drop 유지) ② cpp/java 동일 실수 점검 **완료(2026-08-19):
       양쪽 구조적 면역**(cpp는 actor 경로에 maintenance import 개념 자체 부재+
       전 단계 인라인 complete(failure)로 loud, java는 admission 분기에서 kind
       판별+direct 전용 헬퍼). 단 java 신규 위험 발견: command 44 라우트 전환이
       fire-and-forget warn-and-swallow(ZLinkActorSpotAdmission:568/729/749) —
-      join accept 후 교차 노드 push 무음 유실로 퇴화 가능, 강화 에이전트 투입**
+      join accept 후 교차 노드 push 무음 유실로 퇴화 가능 → **해소(java: cmd-44
+      단계를 join 체인에 편입, 스펙 20 §5/52 §5·dotnet/cpp 동순서, 테스트 고정)**
 - [x] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest(22/22),
       CurrentManagerFakeBackendTest(1/1), FORBIDDEN_SAMPLE_PATTERN rg 스윕(508파일
       0건) — 3/3 그린, live redis, run_samples.sh 동일 호출 재현 [2026-08-19]
@@ -80,7 +81,7 @@
 - [ ] harness 기본 `all` 스테이지 깨끗한 단독 재실행 (동시 에이전트 경합으로 1차
       판정불가; message-follow "Raw MeshNode requires the host Application Job Queue"
       사전 실패 주장 포함 확인)
-- [ ] cpp bind-session 재시도 소진 분류 교차 언어 parity — **조사 완료·판정
+- [x] cpp bind-session 재시도 소진 분류 교차 언어 parity — **조사 완료·판정
       (2026-08-19): 4언어 전부 발산.** cpp=deadline_exceeded(46ef4b0f03),
       java=마지막 raw 예외 누출(ZLinkActorRetryScheduler:164), dotnet=마지막
       ZLinkFrameworkException 재던짐(보통 Unavailable, ZLinkSessionActorCoordinator
@@ -257,7 +258,8 @@
       ⑤ [H] ST-C4 계약 variant 미검증(B 섹션에 반영) ⑥ [H] run_e2e.sh가 Track F
       미실행인데 집계 성공 보고(:68-73) — cpp 트랙 ⑦ [M] dotnet authority/owner-
       lease 리더 recordVersion 미검증(spec 21 §420-425 fail-closed), cpp는 부재
-      버전 허용 — 각 언어 마감 ⑧ [M] node acknowledged 경로가 즉시 거부를
+      버전 허용 — 각 언어 마감 → **dotnet 해소 `f2dfa809e8`**(owner-lease 8개소+
+      authority 깔때기 fail-closed, 테스트 2종; cpp 잔여는 cpp 마감에 편입) ⑧ [M] node acknowledged 경로가 즉시 거부를
       DeadlineExceeded로 오분류+production이 예외 폐기(session-actor-coordinator
       :168) → **해소: nack은 응답 errorKind 디코드(RequestFailed 폴백),
       DeadlineExceeded는 transport 기한 경로 전용; swallow는 스펙 20 근거로
