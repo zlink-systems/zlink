@@ -332,8 +332,14 @@
       payload는 4언어 미수렴 — java=스키마 stream(기준), dotnet=ZLDR wire 누출
       (제거 진행·conformance 재검증 중), node=사설 JSON v3(projection 레이어
       구현 중), cpp=custom recoverable wrapper+magic(별도 슬라이스 필요),
-      스펙 28 §4.2는 형식 미명시(공백 — stream 명문화 필요). admission11:
-      dotnet 마감+node projection 진행 중
+      스펙 28 §4.2는 형식 미명시(공백 — W-5에서 명문화 진행 중).
+      **현재 진행(2026-08-19 야간)**: ⓛ dotnet conformance hang(fallback-commit
+      테스트) 전용 근본 규명 — 덤프 분석 잡 가동 ⓜ node projection 2라운드 —
+      판정: 스키마 무변경, target이 store에서 정렬 authority inventory 재구성
+      (participantId=정렬 index+1, java 기준)하는 resolver 구현 중 ⓝ cpp
+      envelope 슬라이스는 W-3(생성 코덱 스왑)에 흡수 — 별도 수작업 안 함.
+      **C-7 최종 수용은 W-4와 통합**: 생성 코덱 위에서 전 매트릭스 그린이
+      캠페인의 상호운용 수용 기준
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
