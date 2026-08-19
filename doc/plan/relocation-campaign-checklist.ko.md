@@ -42,8 +42,9 @@
       당시 미커밋 편집 트리가 원인으로 종결 (로그 scratchpad/sample-gates/*-recheck-*)
 - [ ] dotnet 샘플 6종 실행 (Bingo, DeliveryDispatch, GameQuest, ShoppingMall,
       SupportChat, TicTacToe — 종료 코드 로그)
-- [ ] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest,
-      CurrentManagerFakeBackendTest, FORBIDDEN_SAMPLE_PATTERN rg 스윕 (run_samples.sh 상단부)
+- [x] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest(22/22),
+      CurrentManagerFakeBackendTest(1/1), FORBIDDEN_SAMPLE_PATTERN rg 스윕(508파일
+      0건) — 3/3 그린, live redis, run_samples.sh 동일 호출 재현 [2026-08-19]
 - [ ] RelocationBehaviorConformanceTests(dotnet) batch hang 근본 원인·처분
 - [ ] dotnet TicTacToe JoinGameNotify timeout(exit 134) 조용한 머신에서 재현 조사
       (샘플 게이트 1차는 PASS였음 — 재현 안 되면 종결 기록)
