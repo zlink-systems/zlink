@@ -57,7 +57,7 @@ final class ZLinkActorSpotAdmission {
     private record BoundSessionFence(long bindingGeneration) {
     }
 
-    private record BoundSessionRouteUpdate(
+    record BoundSessionRouteUpdate(
         ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
         ZLinkBackendActorRef targetActor) {
     }
@@ -564,12 +564,18 @@ final class ZLinkActorSpotAdmission {
                         sessionRoute.command().session());
                 }
                 // Command 44 is one-way and is submitted by the target after
-                // target authority and the local route are installed.
-                startBoundSessionRouteUpdate(
+                // target authority and the local route are installed. Its
+                // submission is part of this Join attempt (spec 20 §5 step 5,
+                // spec 52 §5): dotnet awaits the route commit inside the
+                // completion and cpp fails the Join route reply when the
+                // route activation fails, so a Java submission failure must
+                // fail the attempt loudly instead of accepting a Join whose
+                // cross-node pushes would silently drop.
+                return startBoundSessionRouteUpdate(
                     request,
                     primaryNode,
-                    sessionRoute);
-                return ZLinkAsyncSerialQueue
+                    sessionRoute)
+                    .thenCompose(ignoredRouteSwitch -> ZLinkAsyncSerialQueue
                     .yieldCurrent(CompletableFuture.completedFuture(null))
                     .thenCompose(ignored -> {
                         boolean entryTarget = spotSurface instanceof ZLinkEntrySpot<?>;
@@ -627,7 +633,7 @@ final class ZLinkActorSpotAdmission {
                             .thenApply(replies -> new RoutedJoin(
                                 actorRef,
                                 ZLinkSpotActorJoinResult.accept(), replies));
-                    });
+                    }));
             });
         return attempt.exceptionallyCompose(error -> {
             if (aggregateCommitted.get()) {
@@ -708,22 +714,24 @@ final class ZLinkActorSpotAdmission {
         return new BoundSessionRouteUpdate(command, targetActor);
     }
 
-    private void startBoundSessionRouteUpdate(
+    //  Package-private for the unit test pinning that a failed command-44
+    //  submission fails the Join attempt instead of being swallowed.
+    CompletionStage<Void> startBoundSessionRouteUpdate(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
         BoundSessionRouteUpdate update) {
         if (update == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         if (draining.getAsBoolean()
             || routeSwitchSuperseded(primaryNode, update.targetActor())) {
-            reportBoundSessionRouteUpdateFailure(
-                request,
+            ZLinkConfigurationException superseded =
                 new ZLinkConfigurationException(
-                    "direct-Join Session route handoff was superseded"));
-            return;
+                    "direct-Join Session route handoff was superseded");
+            reportBoundSessionRouteUpdateFailure(request, superseded);
+            return CompletableFuture.failedFuture(superseded);
         }
-        switchBoundSessionRoute(request, primaryNode, update);
+        return switchBoundSessionRoute(request, update);
     }
 
     private void reportBoundSessionRouteUpdateFailure(
@@ -738,25 +746,27 @@ final class ZLinkActorSpotAdmission {
                 + failure);
     }
 
-    private void switchBoundSessionRoute(
+    private CompletionStage<Void> switchBoundSessionRoute(
         ZLinkActorSpotRoutePackets.TransferRequest request,
-        ZLinkInternalSpotNode primaryNode,
         BoundSessionRouteUpdate update) {
         requireActors().traceActorTransferMarker(
             "session_route_update_started",
             request.actorId(),
             request.transferId());
-        sessionRoutes.sendRoute(update.command())
-            .whenComplete((ignored, failure) -> {
+        return sessionRoutes.sendRoute(update.command())
+            .handle((ignored, failure) -> {
                 if (failure != null) {
                     reportBoundSessionRouteUpdateFailure(
                         request, failure);
-                    return;
+                    throw failure instanceof CompletionException completion
+                        ? completion
+                        : new CompletionException(failure);
                 }
                 requireActors().traceActorTransferMarker(
                     "session_route_switched",
                     request.actorId(),
                     request.transferId());
+                return (Void) null;
             });
     }
 
