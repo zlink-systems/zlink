@@ -299,12 +299,12 @@
       교차 언어 live — 스펙 51에 한정 명문), enable_publisher discovery 강제
       루트 수정(스토어리스 publisher), sol3 ⑦ 연결 세대 fence 동봉(동일
       endpoint 교체 pin). 게이트 43/43, **cpp↔node 채널·fanout 양방향 그린**+
-      dotnet pub→cpp sub 그린. **잔여 귀속(신규 3건)**: (a) dotnet 서버가
-      request-frame hello 무응답(node 재현 — dotnet 결함) (b) dotnet 클라이언트
-      WaitForChannelTargetAsync가 hello 발신 전 NotFound(:9147→:7942)
-      (c) dotnet publish 핸들러 topic 미전파(cpp-publish 수신·dispatch는 정상)
-      (d) node: 채널 클라이언트 pending 요청이 event loop 미유지(9281b375b1의
-      hold 미포괄 경로, node↔node HEAD 재현) — dotnet·node 투입
+      dotnet pub→cpp sub 그린. **잔여 귀속 4건 전부 해소**: (a)(b)(c) dotnet `8f6b421cbf` — TestHost 채널 모드가
+      RouteMesh였던 것 정정+hello reply-leg admit+신원 wire 정규화+endpoint-only
+      후보 인정+topic은 선언 소유 판정(공개 API 무변경), cpp↔dotnet 채널
+      양방향+fanout 스테이지 라이브 그린, 게이트 1776/1779
+      (d) node — 채널 outbound 요청에 ref keepalive 소유 `03330e9140`(하니스
+      keepalive 불요화). **C-7 채널·fanout 매트릭스 전 쌍 그린 도달**
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
