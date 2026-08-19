@@ -1198,6 +1198,10 @@ class public_host_runtime_t :
     void discard_relocation_assembly_staging (
       const pending_relocation_assembly_t &pending,
       const relocation_assembly_staging_t &staging) noexcept;
+    void unregister_relocation_wire_targets (
+      const protocol::relocation_id_t &relocation,
+      std::uint64_t target_attempt_generation,
+      const std::vector<protocol::relocation_object_t> &wire_objects) noexcept;
     bool restore_relocation_assembly (
       const pending_relocation_assembly_t &pending,
       const relocation_assembly_staging_t &staging);

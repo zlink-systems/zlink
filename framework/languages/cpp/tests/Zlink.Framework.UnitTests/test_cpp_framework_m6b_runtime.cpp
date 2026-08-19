@@ -6412,6 +6412,12 @@ void verify_relocation_failure_code_classification_is_distinct ()
               static_cast<std::uint32_t> (
                 protocol::framework_error_code::relocationDataLost))
             == stateful::relocation_reason_t::checksum_mismatch);
+    // A remote node's full queue is not a source permit failure (spec 32:
+    // foreign capacity classifies as Unavailable).
+    assert (host::classify_relocation_failure_reason (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::workerQueueFull))
+            == stateful::relocation_reason_t::restore_failed);
     assert (host::classify_relocation_failure_code (
               static_cast<std::uint32_t> (
                 protocol::framework_error_code::relocationDataLost))

@@ -2067,8 +2067,10 @@ stateful::relocation_reason_t classify_relocation_failure_reason (
     switch (map_relocation_failure_code (wire_code)) {
         case framework_error_kind_t::data_lost:
             return stateful::relocation_reason_t::checksum_mismatch;
-        case framework_error_kind_t::capacity_exceeded:
-            return stateful::relocation_reason_t::permit_unavailable;
+        // capacity_exceeded here is the REMOTE node's full queue (spec 32
+        // classifies another node's capacity as Unavailable) — it must not
+        // surface as a source-owned permit failure, so it falls through to
+        // restore_failed with the other remote-side terminal codes.
         case framework_error_kind_t::deadline_exceeded:
             return stateful::relocation_reason_t::turn_active;
         default:
@@ -3550,11 +3552,20 @@ void public_host_runtime_t::discard_relocation_assembly_staging (
   const pending_relocation_assembly_t &pending,
   const relocation_assembly_staging_t &staging) noexcept
 {
-    for (const auto &wire_object : staging.wire_objects) {
+    unregister_relocation_wire_targets (pending.prepare.relocation,
+                                        pending.prepare.target_attempt_generation,
+                                        staging.wire_objects);
+}
+
+void public_host_runtime_t::unregister_relocation_wire_targets (
+  const protocol::relocation_id_t &relocation,
+  std::uint64_t target_attempt_generation,
+  const std::vector<protocol::relocation_object_t> &wire_objects) noexcept
+{
+    for (const auto &wire_object : wire_objects) {
         try {
             (void) _relocation_wire->unregister_target (
-              pending.prepare.relocation,
-              pending.prepare.target_attempt_generation, wire_object);
+              relocation, target_attempt_generation, wire_object);
         }
         catch (...) {
         }
@@ -3643,15 +3654,9 @@ void public_host_runtime_t::activate_relocation_assembly (
     }
     if (!aborted)
         return;
-    for (const auto &wire_object : aborted->wire_objects) {
-        try {
-            (void) _relocation_wire->unregister_target (
-              aborted->prepare.relocation,
-              aborted->prepare.target_attempt_generation, wire_object);
-        }
-        catch (...) {
-        }
-    }
+    unregister_relocation_wire_targets (aborted->prepare.relocation,
+                                        aborted->prepare.target_attempt_generation,
+                                        aborted->wire_objects);
     try {
         if (aborted->targets.size () == 1)
             (void) _objects.abort_relocation_restore (
