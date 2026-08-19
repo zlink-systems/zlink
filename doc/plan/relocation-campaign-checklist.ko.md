@@ -75,10 +75,14 @@
 - [x] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest(22/22),
       CurrentManagerFakeBackendTest(1/1), FORBIDDEN_SAMPLE_PATTERN rg 스윕(508파일
       0건) — 3/3 그린, live redis, run_samples.sh 동일 호출 재현 [2026-08-19]
-- [ ] RelocationBehaviorConformanceTests(dotnet) hang 근본 원인·처분 — **특성
-      갱신(2026-08-19)**: batch 전용 아님, `ActorJoin_uses_ordered_one_way_cutover
-      _before_target_CAS`는 solo에서도 hang(수정 전 코드 A/B로 기존 결함 확증),
-      +3건 실패도 pre-existing. cutover 수정 후 클래스가 더 멀리 진행됨
+- [x] RelocationBehaviorConformanceTests(dotnet) — **해소 `86ed4a02f6`**: hang은
+      "실패 join의 rollback replay가 mailbox turn 영구 파킹→Dispose 대기" 위장.
+      실제 결함 3건 수정: ① 직접 join이 durable row를 Committed 이상 미전진(+
+      pointer/CRC 불일치) → Activated 전진+steady 정규화를 Join terminal 이전에,
+      ② READY Pending 중복을 fault 대신 멱등 attach, ③ steady 행 leave 수용.
+      낡은 fixture 3건 스펙 재정렬(ZLDR decode·READY 보존·leave 이벤트 재바인딩).
+      9/9 무행, 전체 게이트 1770/1773(인가 실패만). **잠복 위험 D급 기록**: join
+      실패 회귀 시 captured-frame replay가 동일 파킹으로 suite hang 위장 가능
 - [x] dotnet TicTacToe JoinGameNotify timeout 재현 조사 — **재분류(2026-08-19)**:
       부하 flake 아님, 위 `6fa7d6aab8` push-relay 회귀의 결정적 증상으로 흡수 종결
 - [ ] harness 기본 `all` 스테이지 깨끗한 단독 재실행 (동시 에이전트 경합으로 1차
