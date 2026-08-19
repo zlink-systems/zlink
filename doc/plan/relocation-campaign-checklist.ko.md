@@ -383,9 +383,9 @@
       공개 실패+임시 바인딩 해제, relocation 44 갱신만 보고-전용(§389-438).
       기존 판정의 과일반화 정정 ⑤ [H] java cmd-44 순서 → **해소 `bb6ac7b00c`**: Join terminal 후 44 발신+실패 탈결합
       (기존 판정 정정), 순서·탈결합 pin 테스트. **파생 2건**: (a) java Bingo
-      잔여 wedge — READY 발행 AggregateConflict 시 target.abort가 actor stage
-      제거 후 동일 request 재시도가 requireActorStage에서 무한 실패(별개
-      target-stage retry/abort lifecycle 결함, 후속 투입) (b) dotnet도 동일
+      wedge → **해소 `d219b87b1b`**: retryable READY conflict는 stage 보존·발행 핸들만
+      해제(스펙 52 §4.2·dotnet parity), abort는 Restore 만료 시에만. Bingo
+      3회+kotlin 1회 그린 (b) dotnet도 동일
       스펙 독법상 44를 Join terminal 앞에 발신(FinishRelocationTarget 내부) —
       sol 3차 배치1 clean 판정과 상충, dotnet 슬라이스에서 재검증 ⑥ [M] dotnet
       recordVersion 부재 필드 수용(DTO 기본값 1 — java/node는 존재 요구, 존재
