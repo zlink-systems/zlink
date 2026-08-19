@@ -26,11 +26,14 @@ inline void scenario_runner_t::run_st_b3_scenario ()
     require (probe.node_rid == "actor-b", "ST-B3 probe expected actor-b, got " + probe.node_rid);
     require (probe.state_version == 0, "ST-B3 default empty target state expected 0, got "
                                          + std::to_string (probe.state_version));
+    // The relocation commit is a single Location Store CAS, not a mesh
+    // commit_request/commit_ack packet exchange (dead since 8bae89dc0f,
+    // "align admission and relocation ownership") -- it is observed once,
+    // on the target, as message_flow|<actor>|location_committed| (checked
+    // below in the _nodes.b sequence, in order before joined).
     assert_evidence_sequence (_nodes.a,
                               {"transfer|" + actor_id + "|transfer_out_empty_default|no-adapter",
-                               "transfer|" + actor_id + "|leave|31",
-                               "message_flow|" + actor_id + "|commit_request|",
-                               "message_flow|" + actor_id + "|commit_ack|"});
+                               "transfer|" + actor_id + "|leave|31"});
     wait_evidence (_nodes.a, {"ST-B3|" + actor_id + "|success_reply|" + spot_id});
     assert_evidence_sequence (
       _nodes.b, {"ST-B3|" + actor_id + "|admission|",
@@ -41,7 +44,7 @@ inline void scenario_runner_t::run_st_b3_scenario ()
     wait_evidence (_nodes.a, {"message_flow|" + actor_id + "|source_cleanup|"});
     assert_correlated_transfer_markers (
       {&_nodes.a, &_nodes.b}, actor_id,
-      {"commit_request", "location_committed", "commit_ack", "source_cleanup"});
+      {"location_committed", "source_cleanup"});
 }
 
 } // namespace

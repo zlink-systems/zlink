@@ -34,7 +34,11 @@ inline void scenario_runner_t::run_st_c2_scenario ()
     // "Source down after commit" means after the whole transfer, including the
     // completion leg that opens target admission. Shutting down inside the
     // commit->completion window is a different (uncovered) failure mode.
-    wait_evidence (_nodes.a, {"message_flow|" + actor_id + "|commit_ack|"});
+    // The relocation commit is a single Location Store CAS observed once,
+    // on the target, as message_flow|<actor>|location_committed| -- there
+    // is no source-side commit_ack packet any more (dead since 8bae89dc0f,
+    // "align admission and relocation ownership").
+    wait_evidence (_nodes.b, {"message_flow|" + actor_id + "|location_committed|"});
     const auto before_shutdown = get_actor_ref (_nodes.b, actor_id);
     require (before_shutdown.node_rid == "actor-b",
              "ST-C2 target ref expected actor-b, got " + before_shutdown.node_rid);

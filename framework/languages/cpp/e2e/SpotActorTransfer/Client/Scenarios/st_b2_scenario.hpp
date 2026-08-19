@@ -20,7 +20,13 @@ inline void scenario_runner_t::run_st_b2_scenario ()
 
     auto join_task = std::async (
       std::launch::async, [&] { return join_actor (_nodes.a, actor_id, {"ST-B2", spot_id}); });
-    wait_evidence (_nodes.a, {"message_flow|" + actor_id + "|commit_ack|"});
+    // The relocation commit is a single Location Store CAS observed once,
+    // on the target, as message_flow|<actor>|location_committed| -- there
+    // is no source-side commit_ack packet any more (dead since 8bae89dc0f,
+    // "align admission and relocation ownership"). Waiting on the target's
+    // commit here preserves the original intent: proceed only after the
+    // commit has succeeded, then confirm source cleanup has not run yet.
+    wait_evidence (_nodes.b, {"message_flow|" + actor_id + "|location_committed|"});
     const auto join = join_task.get ();
     require (join.accepted, "ST-B2 join was rejected.");
     require_no_contains (get_evidence (_nodes.a), "message_flow|" + actor_id + "|source_cleanup|",
