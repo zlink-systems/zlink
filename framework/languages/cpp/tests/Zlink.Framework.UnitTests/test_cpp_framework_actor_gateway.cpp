@@ -2611,8 +2611,10 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     std::atomic_bool terminal_was_failure{false};
     node->actor_handoff_terminal_sender =
       [&terminal_calls, &terminal_was_failure] (
-        const zlink::routing_id_t &, const runtime::protocol::wire_operation_id_t &,
-        std::uint64_t, const result_t<zlink::message_t> &completed) -> task_t<bool> {
+        const zlink::routing_id_t &, const zlink::routing_id_t &,
+        const runtime::protocol::wire_operation_id_t &, std::uint64_t,
+        const runtime::protocol::actor_route_fence_t &,
+        const result_t<zlink::message_t> &completed) -> task_t<bool> {
           terminal_calls.fetch_add (1, std::memory_order_acq_rel);
           terminal_was_failure.store (!completed, std::memory_order_release);
           co_return true;
@@ -2620,9 +2622,38 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     std::map<std::string, std::string> terminal_metadata;
     terminal_metadata[std::string (actor_handoff_source_node_key)] =
       zlink::routing_id_t::from ("remote-caller-node").to_hex ();
+    terminal_metadata[std::string (actor_handoff_parking_node_key)] =
+      zlink::routing_id_t::from ("actor-a").to_hex ();
     terminal_metadata[std::string (actor_handoff_operation_high_key)] = "111";
     terminal_metadata[std::string (actor_handoff_operation_low_key)] = "222";
     terminal_metadata[std::string (actor_handoff_reply_route_key)] = "333";
+    // This backlog belongs to actor-a, so its terminal is delivered through
+    // actor-a's parked reply entry rather than re-sent to the remote caller.
+    // Keep a real local reply token here: after terminal identity gained the
+    // parking-node and initiating-fence dimensions, a hand-written backlog
+    // with no matching pending entry only exercises the intentional drop.
+    std::atomic_int local_reply_calls{0};
+    auto reply_host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        .mesh = {
+          .descriptor = {
+            .mesh_name = "reconcile-indeterminate",
+            .node_routing_id = zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    host::reply_token_t local_reply;
+    local_reply.host = std::move (reply_host);
+    local_reply.local_reply = [&local_reply_calls] (const std::vector<zlink::message_t> &) {
+        local_reply_calls.fetch_add (1, std::memory_order_acq_rel);
+        return true;
+    };
+    node->pending_handoff_requests.emplace (
+      spot_node_builder_state_t::pending_handoff_request_key_t{
+        zlink::routing_id_t::from ("remote-caller-node").to_hex (), 111, 222, {}},
+      spot_node_builder_state_t::pending_handoff_request_t{
+        actor, {}, 333, std::move (local_reply), {},
+        std::chrono::steady_clock::now () + std::chrono::seconds (30)});
     (void) node->actor_transfer_coordinator.try_append_backlog (
       key, handoff_packet_t{"FastFailProbe", {}, "application/octet-stream",
                             terminal_metadata, true});
@@ -2651,9 +2682,10 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
         return 3;
     if (*node->actor_transfer_coordinator.phase (key) != actor_move_phase_t::reconcile)
         return 4;
-    if (terminal_calls.load (std::memory_order_acquire) != 1)
+    if (terminal_calls.load (std::memory_order_acquire) != 0
+        || local_reply_calls.load (std::memory_order_acquire) != 1)
         return 7;
-    if (!terminal_was_failure.load (std::memory_order_acquire))
+    if (terminal_was_failure.load (std::memory_order_acquire))
         return 8;
 
     // A fresh request still cannot reach the handler -- it parks again
@@ -3747,7 +3779,7 @@ int parked_request_reply_case (const std::string &requester_rid)
     while (std::chrono::steady_clock::now () < park_deadline) {
         {
             std::lock_guard<std::recursive_mutex> lock (node->mutex);
-            pending_recorded = node->pending_handoff_requests.contains ({41, 43});
+            pending_recorded = !node->pending_handoff_requests.empty ();
         }
         if (pending_recorded)
             break;
@@ -3801,7 +3833,7 @@ int parked_request_reply_case (const std::string &requester_rid)
         return 7;
     {
         std::lock_guard<std::recursive_mutex> lock (node->mutex);
-        if (node->pending_handoff_requests.contains ({41, 43}))
+        if (!node->pending_handoff_requests.empty ())
             return 8;
     }
     return 0;
@@ -3811,6 +3843,48 @@ int parked_request_without_route_fence_receives_reply_after_replay ()
 {
     // Requester local to the parking node (the SF-F2 shape).
     return parked_request_reply_case ("actor-a");
+}
+
+int same_operation_from_distinct_source_lifecycles_has_distinct_pending_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto node = std::make_shared<spot_node_builder_state_t> ("parking-node");
+    const auto actor = test_actor_ref ("parking-node", "player", "same-operation", 1);
+    const auto first_fence = runtime::protocol::actor_route_fence_t{
+      "same-operation", 1, zlink::routing_id_t::from ("owner-a").to_bytes (), 4, 9, 12};
+    const auto second_fence = runtime::protocol::actor_route_fence_t{
+      "same-operation", 1, zlink::routing_id_t::from ("owner-b").to_bytes (), 5, 10, 13};
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    const spot_node_builder_state_t::pending_handoff_request_key_t first{
+      zlink::routing_id_t::from ("source-lifecycle-a").to_hex (), 71, 73, first_fence};
+    const spot_node_builder_state_t::pending_handoff_request_key_t second{
+      zlink::routing_id_t::from ("source-lifecycle-b").to_hex (), 71, 73, second_fence};
+    node->pending_handoff_requests.emplace (
+      first, spot_node_builder_state_t::pending_handoff_request_t{
+               actor, first_fence, 101, {}, {}, deadline});
+    node->pending_handoff_requests.emplace (
+      second, spot_node_builder_state_t::pending_handoff_request_t{
+                actor, second_fence, 202, {}, {}, deadline});
+
+    // A terminal reconstructing each source lifecycle identity reaches only
+    // its own reply route, despite sharing the exact OperationId pair.
+    const auto first_terminal = node->pending_handoff_requests.find (first);
+    const auto second_terminal = node->pending_handoff_requests.find (second);
+    if (node->pending_handoff_requests.size () != 2
+        || first_terminal == node->pending_handoff_requests.end ()
+        || second_terminal == node->pending_handoff_requests.end ()
+        || first_terminal->second.reply_route_id != 101
+        || second_terminal->second.reply_route_id != 202) {
+        return 1;
+    }
+    node->pending_handoff_requests.erase (first_terminal);
+    return node->pending_handoff_requests.size () == 1
+           && node->pending_handoff_requests.contains (second)
+      ? 0
+      : 2;
 }
 
 int parked_cross_node_request_terminal_returns_to_parking_node ()
@@ -4025,6 +4099,11 @@ int main ()
           parked_request_without_route_fence_receives_reply_after_replay ();
         parked_reply != 0) {
         return 360 + parked_reply;
+    }
+    if (const auto scoped_terminal =
+          same_operation_from_distinct_source_lifecycles_has_distinct_pending_terminal ();
+        scoped_terminal != 0) {
+        return 365 + scoped_terminal;
     }
     if (const auto follow_reply =
           relayed_request_without_deferred_terminal_receives_follow_reply ();

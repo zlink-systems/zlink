@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -860,6 +861,11 @@ int main ()
     const auto log_path = std::filesystem::temp_directory_path () / "zlink_cpp_framework_app.log";
     const auto rotating_log_path =
       std::filesystem::temp_directory_path () / "zlink_cpp_framework_app_rotating.log";
+    std::error_code log_cleanup_error;
+    std::filesystem::remove (log_path, log_cleanup_error);
+    if (log_cleanup_error) {
+        return 63;
+    }
     {
         std::ofstream existing_rotating_log (rotating_log_path);
         existing_rotating_log << "old";

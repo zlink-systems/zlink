@@ -135,12 +135,42 @@ class spot_node_builder_state_t
         runtime::messaging::envelope_header_t request_header;
         std::chrono::steady_clock::time_point deadline;
     };
-    std::map<std::pair<std::uint64_t, std::uint64_t>, pending_handoff_request_t>
+    /* Spec 51 scopes an OperationId to the initiating source-owner lifecycle,
+     * not process-wide. Keep the initiating source node and route fence in
+     * the durable pending identity so identical operation pairs from a
+     * restarted/concurrent source cannot settle each other's reply token. */
+    struct pending_handoff_request_key_t
+    {
+        std::string source_node_rid;
+        std::uint64_t operation_high = 0;
+        std::uint64_t operation_low = 0;
+        runtime::protocol::actor_route_fence_t source_fence;
+
+        bool operator< (const pending_handoff_request_key_t &other) const
+        {
+            return std::tie (source_node_rid, operation_high, operation_low,
+                             source_fence.actor_id, source_fence.object_generation,
+                             source_fence.target_node_routing_id,
+                             source_fence.target_node_generation,
+                             source_fence.authority_owner_generation,
+                             source_fence.owner_lease_generation)
+                   < std::tie (other.source_node_rid, other.operation_high,
+                               other.operation_low, other.source_fence.actor_id,
+                               other.source_fence.object_generation,
+                               other.source_fence.target_node_routing_id,
+                               other.source_fence.target_node_generation,
+                               other.source_fence.authority_owner_generation,
+                               other.source_fence.owner_lease_generation);
+        }
+    };
+    std::map<pending_handoff_request_key_t, pending_handoff_request_t>
       pending_handoff_requests;
     std::function<task_t<bool> (
       const zlink::routing_id_t &,
+      const zlink::routing_id_t &,
       const runtime::protocol::wire_operation_id_t &,
       std::uint64_t,
+      const runtime::protocol::actor_route_fence_t &,
       const result_t<zlink::message_t> &)>
       actor_handoff_terminal_sender;
     // The Entry Spot is fixed to node lifecycle (one per node, never
@@ -989,8 +1019,10 @@ class spot_node_runtime_t
     void on_actor_handoff_terminal (
       std::function<task_t<bool> (
         const zlink::routing_id_t &,
+        const zlink::routing_id_t &,
         const runtime::protocol::wire_operation_id_t &,
         std::uint64_t,
+        const runtime::protocol::actor_route_fence_t &,
         const result_t<zlink::message_t> &)> sender);
     void on_actor_leave_notification (
       std::function<task_t<zlink::submit_result_t> (

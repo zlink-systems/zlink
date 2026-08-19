@@ -468,29 +468,56 @@ inline constexpr std::string_view actor_handoff_terminal_error_message_key =
 
 struct handoff_terminal_route_t
 {
+    // Destination: the node that recorded the pending reply token.
     zlink::routing_id_t source_node;
+    // Initiating owner identity, used only to select that pending entry.
+    zlink::routing_id_t source_owner_node;
     runtime::protocol::wire_operation_id_t operation;
     std::uint64_t reply_route_id = 0;
+    runtime::protocol::actor_route_fence_t source_fence;
+    zlink::routing_id_t parking_node;
 };
+
+std::optional<runtime::protocol::actor_route_fence_t>
+handoff_actor_route (const std::map<std::string, std::string> &metadata);
+
+detail::spot_node_builder_state_t::pending_handoff_request_key_t
+handoff_pending_key (const zlink::routing_id_t &source_node,
+                     const runtime::protocol::wire_operation_id_t &operation,
+                     runtime::protocol::actor_route_fence_t source_fence)
+{
+    return {source_node.to_hex (), operation.high, operation.low, std::move (source_fence)};
+}
+
+void report_handoff_terminal_drop (
+  const std::shared_ptr<detail::spot_node_builder_state_t> &state,
+  std::string_view reason)
+{
+    runtime::runtime_metrics_t metrics (state->monitoring);
+    metrics.counter ("zlink.actor.handoff_terminal.dropped", "{terminal}", 1,
+                     {{"reason", std::string (reason)}});
+    if (std::getenv ("ZLINK_CPP_HANDOFF_TRACE")) {
+        std::cerr << "zlink-cpp-handoff-terminal dropped reason=" << reason << '\n';
+    }
+}
 
 std::optional<handoff_terminal_route_t> handoff_terminal_route (
   const std::map<std::string, std::string> &metadata)
 {
-    /* The terminal answers the pending handoff entry, which lives on the
-     * parking node. The source-node key names the original requester and is
-     * only a valid terminal destination when the requester was local to the
-     * parking node (it then equals the parking node); older senders that
-     * stamped no parking key fall back to it. */
     const auto parking =
       handoff_routing_id (metadata, detail::actor_handoff_parking_node_key);
     const auto source = handoff_routing_id (metadata, detail::actor_handoff_source_node_key);
     const auto high = handoff_u64 (metadata, detail::actor_handoff_operation_high_key);
     const auto low = handoff_u64 (metadata, detail::actor_handoff_operation_low_key);
     const auto reply_route = handoff_u64 (metadata, detail::actor_handoff_reply_route_key);
-    if ((!parking && !source) || !high || !low || (!*high && !*low) || !reply_route)
+    const auto source_fence = handoff_actor_route (metadata).value_or (
+      runtime::protocol::actor_route_fence_t{});
+    /* Clean-break policy: a terminal without the recording parking-node key
+     * is explicitly dropped. It must never be redirected to the requester. */
+    if (!parking || !source || !high || !low || (!*high && !*low) || !reply_route)
         return std::nullopt;
-    return handoff_terminal_route_t{parking ? *parking : *source,
-                                    {*high, *low}, *reply_route};
+    return handoff_terminal_route_t{*parking, *source, {*high, *low}, *reply_route,
+                                    std::move (source_fence), *parking};
 }
 
 task_t<bool> send_handoff_terminal (
@@ -498,16 +525,21 @@ task_t<bool> send_handoff_terminal (
   const std::optional<handoff_terminal_route_t> &route,
   const result_t<zlink::message_t> &completed)
 {
-    if (!route)
+    if (!route) {
+        report_handoff_terminal_drop (state, "missing_parking_node");
         co_return true;
+    }
     if (route->source_node.to_string () == detail::effective_spot_node_rid (state->snapshot)) {
         std::optional<detail::spot_node_builder_state_t::pending_handoff_request_t> pending;
         {
             std::lock_guard<std::recursive_mutex> lock (state->mutex);
             const auto found = state->pending_handoff_requests.find (
-              {route->operation.high, route->operation.low});
+              handoff_pending_key (route->source_owner_node, route->operation,
+                                   route->source_fence));
             if (found == state->pending_handoff_requests.end ()
-                || found->second.reply_route_id != route->reply_route_id) {
+                || found->second.reply_route_id != route->reply_route_id
+                || route->parking_node.to_string ()
+                     != detail::effective_spot_node_rid (state->snapshot)) {
                 co_return true;
             }
             pending = std::move (found->second);
@@ -534,7 +566,8 @@ task_t<bool> send_handoff_terminal (
     if (!state->actor_handoff_terminal_sender)
         co_return false;
     co_return co_await state->actor_handoff_terminal_sender (
-      route->source_node, route->operation, route->reply_route_id, completed);
+      route->source_node, route->source_owner_node, route->operation,
+      route->reply_route_id, route->source_fence, completed);
 }
 
 void order_bound_session_handoff (std::vector<detail::handoff_packet_t> &backlog)
@@ -7946,8 +7979,10 @@ void spot_node_runtime_t::on_actor_message_follow (
 void spot_node_runtime_t::on_actor_handoff_terminal (
   std::function<task_t<bool> (
     const zlink::routing_id_t &,
+    const zlink::routing_id_t &,
     const runtime::protocol::wire_operation_id_t &,
     std::uint64_t,
+    const runtime::protocol::actor_route_fence_t &,
     const result_t<zlink::message_t> &)> sender)
 {
     std::lock_guard<std::recursive_mutex> lock (_state->mutex);
@@ -10087,24 +10122,25 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         }
         if (node_record && record.kind == service::record_kind_t::node_send
             && header.value ().message_name == actor_handoff_terminal_packet) {
-            const auto high = handoff_u64 (
-              header.value ().metadata, detail::actor_handoff_operation_high_key);
-            const auto low = handoff_u64 (
-              header.value ().metadata, detail::actor_handoff_operation_low_key);
-            const auto reply_route = handoff_u64 (
-              header.value ().metadata, detail::actor_handoff_reply_route_key);
+            const auto terminal_route = handoff_terminal_route (header.value ().metadata);
             const auto success = handoff_u64 (
               header.value ().metadata, actor_handoff_terminal_success_key);
-            if (!high || !low || (!*high && !*low) || !reply_route || !success
-                || *success > 1) {
+            if (!terminal_route || !success || *success > 1) {
+                if (!terminal_route)
+                    report_handoff_terminal_drop (_state, "missing_parking_node");
                 return true;
             }
             std::optional<spot_node_builder_state_t::pending_handoff_request_t> pending;
             {
                 std::lock_guard<std::recursive_mutex> lock (_state->mutex);
-                const auto found = _state->pending_handoff_requests.find ({*high, *low});
+                const auto found = _state->pending_handoff_requests.find (
+                  handoff_pending_key (terminal_route->source_owner_node,
+                                       terminal_route->operation,
+                                       terminal_route->source_fence));
                 if (found == _state->pending_handoff_requests.end ()
-                    || found->second.reply_route_id != *reply_route) {
+                    || found->second.reply_route_id != terminal_route->reply_route_id
+                    || terminal_route->parking_node.to_string ()
+                         != detail::effective_spot_node_rid (_state->snapshot)) {
                     return true;
                 }
                 // The terminal must come from the node the parked request was
@@ -10574,8 +10610,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         auto actor_context = actor_gateway.actor_context (actor, record.source_binding_generation);
         const bool semantic_send =
           header.value ().kind == runtime::messaging::message_kind_t::command;
-        const auto handoff_operation = std::pair{record.operation_id.high,
-                                                 record.operation_id.low};
+        const auto handoff_operation = runtime::protocol::wire_operation_id_t{
+          record.operation_id.high, record.operation_id.low};
+        const auto handoff_source_fence = record.actor_route.value_or (
+          runtime::protocol::actor_route_fence_t{});
+        const auto handoff_pending = handoff_pending_key (
+          record.source_node_rid, handoff_operation, handoff_source_fence);
         bool deferred_handoff_request = false;
         /* A request that carries an operation id travels with a handoff
          * terminal route naming THIS node as the parking node (see the relay
@@ -10608,11 +10648,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             }
             if (_state->pending_handoff_requests.size () < 1024) {
                 const auto [_, inserted] = _state->pending_handoff_requests.emplace (
-                  handoff_operation,
+                  handoff_pending,
                   spot_node_builder_state_t::pending_handoff_request_t{
-                    actor,
-                    record.actor_route.value_or (
-                      runtime::protocol::actor_route_fence_t{}),
+                    actor, handoff_source_fence,
                     record.reply_route_id, record.reply_token,
                     header.value (),
                     now + std::chrono::seconds (30)});
@@ -10702,6 +10740,26 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     follow_header.metadata.insert_or_assign (
                       std::string (detail::actor_handoff_reply_route_key),
                       std::to_string (record.reply_route_id));
+                    if (record.actor_route) {
+                        const auto &route = *record.actor_route;
+                        follow_header.metadata.insert_or_assign (
+                          std::string (detail::actor_handoff_route_actor_id_key), route.actor_id);
+                        follow_header.metadata.insert_or_assign (
+                          std::string (detail::actor_handoff_route_object_generation_key),
+                          std::to_string (route.object_generation));
+                        follow_header.metadata.insert_or_assign (
+                          std::string (detail::actor_handoff_route_target_node_key),
+                          zlink::routing_id_t::from (route.target_node_routing_id).to_hex ());
+                        follow_header.metadata.insert_or_assign (
+                          std::string (detail::actor_handoff_route_target_node_generation_key),
+                          std::to_string (route.target_node_generation));
+                        follow_header.metadata.insert_or_assign (
+                          std::string (detail::actor_handoff_route_authority_generation_key),
+                          std::to_string (route.authority_owner_generation));
+                        follow_header.metadata.insert_or_assign (
+                          std::string (detail::actor_handoff_route_lease_generation_key),
+                          std::to_string (route.owner_lease_generation));
+                    }
                 }
                 return _state->actor_message_follow_relay (
                   actor, follow_header, body.value (), std::chrono::seconds (30),
@@ -10781,7 +10839,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             return false;
         detail::observe_task_completion (
           relayed,
-          [state = _state, deferred_handoff_request, handoff_operation,
+          [state = _state, deferred_handoff_request, handoff_pending,
            request_header, reply_token = record.reply_token,
            terminal_claimed, terminal_owner]
           (const result_t<std::optional<zlink::message_t>> &result) mutable {
@@ -10801,7 +10859,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               if (!parked && deferred_handoff_request) {
                   try {
                       std::lock_guard<std::recursive_mutex> lock (state->mutex);
-                      state->pending_handoff_requests.erase (handoff_operation);
+                      state->pending_handoff_requests.erase (handoff_pending);
                   }
                   catch (...) {
                   }

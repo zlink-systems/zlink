@@ -1594,8 +1594,10 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
             spot_runtime.on_actor_handoff_terminal (
               [application_mesh] (
                 const zlink::routing_id_t &source_node,
+                const zlink::routing_id_t &source_owner_node,
                 const runtime::protocol::wire_operation_id_t &operation,
                 std::uint64_t reply_route_id,
+                const runtime::protocol::actor_route_fence_t &source_fence,
                 const result_t<zlink::message_t> &terminal) -> task_t<bool> {
                   runtime::messaging::client_call_codec_t codec;
                   auto header = codec.create_envelope (
@@ -1610,6 +1612,33 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                   header.metadata.insert_or_assign (
                     std::string (detail::actor_handoff_reply_route_key),
                     std::to_string (reply_route_id));
+                  header.metadata.insert_or_assign (
+                    std::string (detail::actor_handoff_source_node_key),
+                    source_owner_node.to_hex ());
+                  header.metadata.insert_or_assign (
+                    std::string (detail::actor_handoff_parking_node_key),
+                    source_node.to_hex ());
+                  if (!source_fence.actor_id.empty ()) {
+                      header.metadata.insert_or_assign (
+                        std::string (detail::actor_handoff_route_actor_id_key),
+                        source_fence.actor_id);
+                      header.metadata.insert_or_assign (
+                        std::string (detail::actor_handoff_route_object_generation_key),
+                        std::to_string (source_fence.object_generation));
+                      header.metadata.insert_or_assign (
+                        std::string (detail::actor_handoff_route_target_node_key),
+                        zlink::routing_id_t::from (
+                          source_fence.target_node_routing_id).to_hex ());
+                      header.metadata.insert_or_assign (
+                        std::string (detail::actor_handoff_route_target_node_generation_key),
+                        std::to_string (source_fence.target_node_generation));
+                      header.metadata.insert_or_assign (
+                        std::string (detail::actor_handoff_route_authority_generation_key),
+                        std::to_string (source_fence.authority_owner_generation));
+                      header.metadata.insert_or_assign (
+                        std::string (detail::actor_handoff_route_lease_generation_key),
+                        std::to_string (source_fence.owner_lease_generation));
+                  }
                   header.metadata.insert_or_assign (
                     "__zlink.actorHandoffTerminalSuccess", terminal ? "1" : "0");
                   if (!terminal) {

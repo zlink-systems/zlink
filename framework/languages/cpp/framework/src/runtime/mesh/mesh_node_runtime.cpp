@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
@@ -3271,14 +3272,14 @@ mesh_node_runtime_t::refresh_application_actor_route (
     return resolve_application_actor_route (actor);
 }
 
-std::optional<runtime::spot_address_t>
+task_t<std::optional<runtime::spot_address_t>>
 mesh_node_runtime_t::wait_for_application_actor_route_change (
   const actor_ref_t &actor,
   const runtime::spot_address_t &stale_route,
   std::chrono::milliseconds timeout) const
 {
     if (timeout <= std::chrono::milliseconds::zero ())
-        return std::nullopt;
+        co_return std::nullopt;
     const auto changed = [&stale_route] (
       const runtime::spot_address_t &candidate) {
         return candidate.node_rid != stale_route.node_rid
@@ -3296,11 +3297,11 @@ mesh_node_runtime_t::wait_for_application_actor_route_change (
         const auto candidate =
           resolve_application_actor_route (actor);
         if (candidate && changed (*candidate))
-            return candidate;
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            co_return candidate;
+        co_await detail::delay (std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
     const auto candidate = resolve_application_actor_route (actor);
-    return candidate && changed (*candidate)
+    co_return candidate && changed (*candidate)
       ? candidate
       : std::optional<runtime::spot_address_t>{};
 }

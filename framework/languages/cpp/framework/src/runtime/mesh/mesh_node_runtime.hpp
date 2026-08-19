@@ -408,7 +408,7 @@ class mesh_node_runtime_t
     refresh_application_actor_route (
       const actor_ref_t &actor,
       const runtime::spot_address_t &stale_route) const;
-    std::optional<runtime::spot_address_t>
+    task_t<std::optional<runtime::spot_address_t>>
     wait_for_application_actor_route_change (
       const actor_ref_t &actor,
       const runtime::spot_address_t &stale_route,

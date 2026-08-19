@@ -11,6 +11,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 
 #include <nlohmann/json.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -2009,7 +2010,7 @@ class stream_host_service_t::listener_t
                       detail::application_actor_session_bind_outcome_t::
                         actor_not_ready)
                     && remaining > std::chrono::milliseconds::zero ()) {
-                    std::this_thread::sleep_for (
+                    co_await detail::delay (
                       std::min (remaining, std::chrono::milliseconds (10)));
                     co_await bind_actor_session (
                       transport_connection, session_rid, actor, replacement,
@@ -2276,11 +2277,11 @@ class stream_host_service_t::listener_t
                  * before re-entering the bind. */
                 (void) _mesh_node->refresh_application_actor_route (
                   actor, *actor_route);
-                (void) _mesh_node->wait_for_application_actor_route_change (
+                (void) co_await _mesh_node->wait_for_application_actor_route_change (
                   actor, *actor_route,
                   std::min (remaining, std::chrono::milliseconds (1000)));
             } else {
-                std::this_thread::sleep_for (
+                co_await detail::delay (
                   std::min (remaining, std::chrono::milliseconds (10)));
             }
             co_await bind_actor_session (
