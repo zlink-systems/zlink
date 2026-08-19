@@ -497,8 +497,14 @@
       ⑵의 진범 연쇄: 방향 비대칭 반증 → **참가자 상태 본문의 3방언**(dotnet=
       disc2+ZLRP recovery 레코드, java=disc1 raw state, node=disc1+ZLAS 세션
       래핑) — **판정: disc1 raw 불투명 상태가 규범(java 기준, 앱 바이트 불간섭
-      원칙)**, dotnet ZLRP·node ZLAS는 로컬 유도/재구성으로 전환(digest 판정
-      패턴) — 구현 잡 가동. ⑴ java Hello 무응답 잡 병행 중
+      원칙)**, dotnet ZLRP·node ZLAS는 로컬 유도/재구성으로 전환. 1차 구현에서
+      load-bearing 2건 정직 STOP → **보완 판정**: dotnet OperationRecovery(원
+      join 요청+reply bytes)=진행 중 작업이므로 savedWork frozen record로 운반
+      (스키마 무변경·4언어 가독), node sealed session fences=cpp 선례대로
+      prepare 요청의 언어 내부 sideband 프레임(교차 언어 bound-session은 전
+      쌍 미지원 — 본문은 disc1 청정) — 구현 2라운드 가동.
+      ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
+      신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
       ① [C] 스펙의 4언어 stream 주장 vs frozen 시점 java만 부합 — **처분: 스펙=
       판정된 목표 계약(dotnet은 이후 18598a85db로 수렴, node 진행 중, cpp=W-3)**,
