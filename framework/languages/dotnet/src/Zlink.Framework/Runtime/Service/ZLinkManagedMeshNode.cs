@@ -2346,7 +2346,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var localTargets = _spots.Values
             .Where(spot => spot.Matches(channelName, topic))
-            .OrderBy(static spot => spot.RoutingId.ToHex(), StringComparer.Ordinal)
+            .OrderBy(static spot => spot.RoutingId, ZLinkRoutingIdOrder.Instance)
             .ToArray();
         foreach (var spot in localTargets)
         {

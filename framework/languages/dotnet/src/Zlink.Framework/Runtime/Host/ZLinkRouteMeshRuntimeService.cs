@@ -734,8 +734,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             lock (_gate)
                 return _descriptors.Values
                     .OrderBy(
-                        static descriptor => descriptor.Rid.ToHex(),
-                        StringComparer.Ordinal)
+                        static descriptor => descriptor.Rid,
+                        ZLinkRoutingIdOrder.Instance)
                     .ToArray();
         }
 

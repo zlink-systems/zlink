@@ -244,3 +244,18 @@ internal static class ZLinkSpotIdDictionaryExtensions
             ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
             out value!);
 }
+
+/// <summary>
+///     Orders <see cref="RoutingId" /> values by their raw bytes. This is the
+///     same total order as sorting the lowercase-hex renderings ordinally
+///     (each byte maps to two hex digits whose char codes grow with the
+///     nibble value, and a byte-prefix is a hex-prefix), without allocating
+///     a hex string per comparison.
+/// </summary>
+internal sealed class ZLinkRoutingIdOrder : IComparer<RoutingId>
+{
+    internal static ZLinkRoutingIdOrder Instance { get; } = new();
+
+    public int Compare(RoutingId x, RoutingId y) =>
+        x.ToBytes().SequenceCompareTo(y.ToBytes());
+}

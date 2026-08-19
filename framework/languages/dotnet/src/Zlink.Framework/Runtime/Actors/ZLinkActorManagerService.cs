@@ -241,7 +241,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             .ConfigureAwait(false);
         var placementEligible = descriptors
             .Where(candidate => IsEligibleCandidate(candidate, actorType))
-            .OrderBy(static candidate => candidate.Rid.ToHex(), StringComparer.Ordinal)
+            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToList();
         var eligible = FilterRouteReadyCandidates(source, placementEligible);
         var encoded = createRequest.Encode(runtime.Registration.Codecs);
@@ -290,8 +290,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 placementEligible = descriptors
                     .Where(candidate => IsEligibleCandidate(candidate, actorType))
                     .OrderBy(
-                        static candidate => candidate.Rid.ToHex(),
-                        StringComparer.Ordinal)
+                        static candidate => candidate.Rid,
+                        ZLinkRoutingIdOrder.Instance)
                     .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
                 continue;
@@ -394,8 +394,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 placementEligible = descriptors
                     .Where(candidate => IsEligibleCandidate(candidate, actorType))
                     .OrderBy(
-                        static candidate => candidate.Rid.ToHex(),
-                        StringComparer.Ordinal)
+                        static candidate => candidate.Rid,
+                        ZLinkRoutingIdOrder.Instance)
                     .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
                 continue;
@@ -537,8 +537,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 placementEligible = descriptors
                     .Where(candidate => IsEligibleCandidate(candidate, actorType))
                     .OrderBy(
-                        static candidate => candidate.Rid.ToHex(),
-                        StringComparer.Ordinal)
+                        static candidate => candidate.Rid,
+                        ZLinkRoutingIdOrder.Instance)
                     .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
                 continue;

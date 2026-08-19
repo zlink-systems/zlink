@@ -130,7 +130,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 && candidate.PlacementWeight > 0
                 && selection.Matches(candidate)
                 && IsCompatibleTarget(candidate, registration, inventory, kind))
-            .OrderBy(static candidate => candidate.Rid.ToHex(), StringComparer.Ordinal)
+            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToArray();
         var target = targets.FirstOrDefault(candidate =>
             candidate.LeaseGeneration > 0
@@ -727,10 +727,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         TargetStage stage,
         ZLinkRelocationEnvelope authoritative)
     {
-        var stagedSpot = stage.Envelope.Participants.Single(
-            static participant => participant.ObjectKind
-                is ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot);
+        var stagedSpot = stage.SpotParticipant;
         var authoritativeSpot = authoritative.Participants.Single(
             static participant => participant.ObjectKind
                 is ZLinkPlacementObjectKind.UserSpot
@@ -761,7 +758,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     static record => new ZLinkRelocationQueuedJob(
                         record.AcceptedSequence,
                         record.Payload.ToArray()))
-                .ToArray();
+                .ToList();
             return true;
         }
     }
@@ -986,22 +983,17 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             if (Volatile.Read(ref stage.AuthorityPublished) != 0)
                 throw new InvalidDataException(
                     "Command 31 arrived after target cutover.");
-            var spot = stage.Envelope.Participants.Single(
-                static participant => participant.ObjectKind is
-                    ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot);
+            var spot = stage.SpotParticipant;
             var previous = stage.HeldRecords.Count == 0
                 ? spot.AcceptedJobs
                     .Select(static job => job.AcceptedSequence)
                     .DefaultIfEmpty(0UL)
                     .Max()
                 : stage.HeldRecords[^1].AcceptedSequence;
-            stage.HeldRecords = [
-                .. stage.HeldRecords,
+            stage.HeldRecords.Add(
                 new ZLinkRelocationQueuedJob(
                     checked(previous + 1),
-                    data.FrozenRecord.Encoded.ToArray())
-            ];
+                    data.FrozenRecord.Encoded.ToArray()));
             stage.TrackRelayRecord(data.FrozenRecord.Encoded.Span);
         }
         return ValueTask.CompletedTask;
@@ -1096,10 +1088,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"Command {command} has no prepared target.",
                 ZLinkRetryAdvice.DoNotRetry);
-        var spot = stage.Envelope.Participants.Single(
-            static participant => participant.ObjectKind is
-                ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot);
+        var spot = stage.SpotParticipant;
         var expectedKind = checked((byte)spot.ObjectKind);
         var expectedStableType = spot.ObjectKind
                                  == ZLinkPlacementObjectKind.InstanceSpot
@@ -1596,10 +1585,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             registration.Locations.ResolveRelocationStore()
             ?? throw new ZLinkConfigurationException(
                 "Relocation Store is not registered.");
-        var stagedSpot = stage.Envelope.Participants.Single(
-            static participant => participant.ObjectKind
-                is ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot);
+        var stagedSpot = stage.SpotParticipant;
         var read = await authorityStore.ReadAuthorityAsync(
                 stagedSpot.AuthorityKey,
                 cancellationToken)
@@ -2544,11 +2530,30 @@ internal sealed record TargetStage(
     public int LocalCatalogPublished;
     public int RelocationReadyDelivered;
     private int _sessionRouteConvergenceRunning;
+    private ZLinkRelocationParticipantEnvelope? _spotParticipant;
     public SemaphoreSlim PublishGate { get; } = new(1, 1);
+
+    //  The stage's SPOT participant is fixed once the immutable Envelope is
+    //  staged — resolve the single-scan once and reuse the materialized
+    //  result instead of re-interpreting the same query per consumer (the
+    //  command-31 path re-ran it for every inbound record).
+    internal ZLinkRelocationParticipantEnvelope SpotParticipant =>
+        _spotParticipant ??= Envelope.Participants.Single(
+            static participant => participant.ObjectKind
+                is ZLinkPlacementObjectKind.UserSpot
+                or ZLinkPlacementObjectKind.InstanceSpot);
     public object HeldGate { get; } = new();
     public byte[]? HeldDigest;
     public byte[]? HeldRelayDigest;
-    public IReadOnlyList<ZLinkRelocationQueuedJob> HeldRecords = [];
+    //  Guarded by HeldGate — append and read under the gate; use
+    //  SnapshotHeldRecords for lock-free consumption.
+    public List<ZLinkRelocationQueuedJob> HeldRecords = [];
+
+    internal ZLinkRelocationQueuedJob[] SnapshotHeldRecords()
+    {
+        lock (HeldGate)
+            return [.. HeldRecords];
+    }
     private uint _relayCrcState = uint.MaxValue;
     private ulong _relayRecordCount;
 

@@ -165,8 +165,8 @@ internal sealed class ZLinkFanoutRuntimeService : IZLinkFanoutRuntime, IDisposab
                         location));
 
             var ordered = publishers
-                .OrderBy(static entry => entry.PublisherRid.ToHex(),
-                    StringComparer.Ordinal)
+                .OrderBy(static entry => entry.PublisherRid,
+                    ZLinkRoutingIdOrder.Instance)
                 .ThenBy(static entry => entry.LifecycleGeneration)
                 .ToArray();
             var next = new ZLinkFanoutChannelSnapshot(

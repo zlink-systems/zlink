@@ -155,7 +155,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             .Where(candidate => IsEligibleInstanceCandidate(
                 candidate,
                 address.InstanceSpotType))
-            .OrderBy(static candidate => candidate.Rid.ToHex(), StringComparer.Ordinal)
+            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToArray();
         var selected = ZLinkWeightedSelector.Select(
             eligible,

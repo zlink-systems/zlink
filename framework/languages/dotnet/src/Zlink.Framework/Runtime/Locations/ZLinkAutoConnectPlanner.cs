@@ -137,7 +137,7 @@ internal static class ZLinkAutoConnectPlanner
 
         if (local.NodeRid is { Size: > 0 } localRid)
         {
-            var byRid = string.CompareOrdinal(localRid.ToHex(), descriptor.Rid.ToHex());
+            var byRid = ZLinkRoutingIdOrder.Instance.Compare(localRid, descriptor.Rid);
             if (byRid != 0)
             {
                 return byRid < 0;

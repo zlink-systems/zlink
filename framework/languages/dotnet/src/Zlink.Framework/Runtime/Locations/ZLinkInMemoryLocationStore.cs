@@ -256,7 +256,7 @@ internal partial class ZLinkInMemoryLocationStore :
                 .Where(row => StringComparer.Ordinal.Equals(
                     row.ChannelName,
                     channelName))
-                .OrderBy(static row => row.ServerRid.ToHex(), StringComparer.Ordinal)
+                .OrderBy(static row => row.ServerRid, ZLinkRoutingIdOrder.Instance)
                 .ToArray();
             var items = rows.Skip(offset).Take(pageSize).ToArray();
             var next = offset + items.Length < rows.Length
@@ -362,7 +362,7 @@ internal partial class ZLinkInMemoryLocationStore :
                 .Where(row => StringComparer.Ordinal.Equals(
                     row.ChannelName,
                     channelName))
-                .OrderBy(static row => row.PublisherRid.ToHex(), StringComparer.Ordinal)
+                .OrderBy(static row => row.PublisherRid, ZLinkRoutingIdOrder.Instance)
                 .ToArray();
             var items = rows.Skip(offset).Take(pageSize).ToArray();
             var next = offset + items.Length < rows.Length

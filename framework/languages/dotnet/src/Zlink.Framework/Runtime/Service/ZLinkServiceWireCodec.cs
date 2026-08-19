@@ -2452,11 +2452,8 @@ internal static partial class ZLinkServiceWireCodec
             U16((ushort)encoded.Length);
             Bytes(encoded);
         }
-        internal void Bytes(ReadOnlySpan<byte> value)
-        {
-            foreach (var item in value)
-                _bytes.Add(item);
-        }
+        internal void Bytes(ReadOnlySpan<byte> value) =>
+            _bytes.AddRange(value);
         internal void Tlv(byte id, ReadOnlySpan<byte> value)
         {
             U8(id);
@@ -2471,7 +2468,9 @@ internal static partial class ZLinkServiceWireCodec
         }
         internal byte[] ToArray() => _bytes.ToArray();
         internal void CopyTo(Span<byte> destination) =>
-            _bytes.ToArray().CopyTo(destination);
+            System.Runtime.InteropServices.CollectionsMarshal
+                .AsSpan(_bytes)
+                .CopyTo(destination);
     }
 
     private ref struct WireReader

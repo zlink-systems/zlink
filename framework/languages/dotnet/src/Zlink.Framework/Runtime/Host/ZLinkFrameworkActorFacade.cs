@@ -147,7 +147,7 @@ internal sealed class ZLinkFrameworkActorFacade(
             .Where(candidate => ZLinkActorManagerService.IsEligibleCandidate(
                 candidate,
                 actorType))
-            .OrderBy(static candidate => candidate.Rid.ToHex(), StringComparer.Ordinal)
+            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToArray();
         var target = ZLinkWeightedSelector.Select(
                          eligible,
