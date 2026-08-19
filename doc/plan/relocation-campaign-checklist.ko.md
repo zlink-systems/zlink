@@ -318,6 +318,17 @@
       승격 로직 작업 ⓕ **최심층: actor authority payload 방언**(node=JSON 신원
       envelope vs dotnet resolver=binary ZLAU 전용 → source NotFound) — golden
       §2.4 canonical authority와의 정합 판정 포함 계속 진행 중(admission6)
+      ⓖ authority payload 판정: node JSON은 canonical 외부 행의 응용 정의
+      payload(제3 방언 아님) — payload 코덱은 구현 사설, 외국 writer는 외부 행
+      (allocation·objectGeneration·owner fence)으로 해석. dotnet resolver를
+      canonical 외부 행 폴백으로 수정 ⓗ node source 정체 규명: admission이
+      아니라 target Ready(31) 대기 — dotnet이 30/52를 미처리 ⓘ **판정 A**:
+      relocation control(30/52)은 bare service-wire가 계약(java/dotnet 기준) —
+      node의 NodeSend(16) 래핑 제거, dotnet의 임시 unwrap 철회 ⓙ **판정 B**:
+      직접 전송 wire payload는 스키마의 relocation-envelope-v1 logical stream
+      ('provider envelope 없이' 명시, java 부합) — dotnet의 ZLDR+digest wire
+      누출을 logical stream으로 정정(내부 보관형은 자유), node JSON→logical
+      stream, 스펙 28 §4.2 문구 스키마 정합(admission10 진행 중)
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
