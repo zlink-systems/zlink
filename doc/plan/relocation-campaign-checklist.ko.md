@@ -318,8 +318,14 @@
       4언어 모두 충족). authority\0 스캔 프리픽스 밖 유지. 스펙 22 §7 규범
       명문+21 §2.4 포인터+골든 갱신(cpp 골든 시드 {json}→행2개). 폐기 리터럴
       5종 1회 flush 필요(물리 키=sha256(논리키) — ops 노트 필수). 슬라이스:
-      spec+golden+java(선행), cpp(최대·last→next 플립), dotnet(인코딩+플립),
-      node(키·코덱·플립) — 각 트리 점유 해제 순서대로 투입 원 항목: (JoinEntrySpot
+      **spec+golden+java 완료 `51f0c1d4ea`**, **node 완료 `4dc7a7eae7`**(golden
+      실기록 byte 검증+typed 소진), cpp(최대·last→next 플립)·dotnet(인코딩+플립)
+      잔여 — 트리 점유 해제 순서대로 투입
+- [ ] **node discovery-sharing 회귀(신규 2026-08-19, 청정 HEAD 재현 확인)**:
+      location-runtime "shares ClientServer and fanout discovery through only
+      opaque Store primitives"가 stored 기대에 ignoredStale 수신(:1923) —
+      canonical descriptor 수렴(9281b375b1)발 의심. 테스트 낡음 vs 코드 결함
+      판정 필요 원 항목: (JoinEntrySpot
       경로 우선, 기존 opt-in 스테이지 2907df293f/c43758fc05 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
 - [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
