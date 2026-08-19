@@ -450,6 +450,15 @@
       follow가 op identity/deadline/source/reply-route 4값 미보존(전문 에이전트),
       [M] cpp Lua point-read 0x01 미검증(cpp store 에이전트), [M] golden 테스트가
       실제 producer 미구동+dotnet brace-less 잔재(각 언어 마감에 편입)
+- [ ] **C-9e sol 전체 문서 스펙-갭 사전 리뷰(2026-08-20, PRELIMINARY) — 11건
+      루트, 최종 HEAD에서 경량 재확인 필요**: 최우선 3건 = ⓐ node canonical
+      authority records ⓑ cpp command-28 origination ⓒ cpp command-44 재시도
+      제거+문서 정정. 그 외: config-10 ST-C4 checksum-mismatch 계약 미구현
+      (B 잔여와 동일 항목), config-6 문서 26 시나리오 vs cpp 러너 14
+      (SF-B3·C3·C4·C5·C5A·F1·F4~F6·F8~F10·G1·G2 부재 — F 트랙/후속 세션 배정).
+      가이드의 base/delta 제거 반영은 CLEAN. 전체 로그: codex job
+      task-msznsgj3-5bgtlk. sol4-③ cpp error-envelope 잔여분은 terra
+      cpp-err 잡 가동 중(2026-08-20).
 - [x] C-10 node relocationFailed 세분화 — **완료**: java 기준표(97fc074058)와
       전 행 정합(22행 conformance 테스트 고정), 82/82 그린. 초안의 (15/33/34)는
       실제 기준 매핑으로 대체(34는 어느 언어도 인코딩 안 함; InvalidOp→21/33).
@@ -524,8 +533,21 @@
       fixture endianness → **java→dotnet relocation 단대단 통과(2번째 쌍!)**.
       dotnet→java 연쇄: inventory 필드 불일치 규명 — dotnet이 root object에
       스펙의 actor ID 대신 authority key 기록 → 정정, **java target 활성화+
-      probe 응답 도달**. 잔여 1: dotnet source 터미널(target 성공 후
-      RelocationFailed→RuntimeNotReady) — 최종 레그(reloc4) 가동 중.
+      probe 응답 도달**. dotnet source 터미널(target 성공 후
+      RelocationFailed→RuntimeNotReady) → **해소(reloc4, 2026-08-20)**:
+      원인 = cutover 후 dotnet source가 IsExactCommittedTargetAuthority에서
+      target-사설 canonical progress payload 디코드를 요구 — java row에서
+      디코드 실패→RelocationFailed 오판. 수정: 외부 authority row 자체
+      (object gen·authority gen+1·owner/lease·descriptor·lifecycle gen)로
+      커밋 확인(ZLinkStandaloneActorRelocationRuntime.cs:473), malformed
+      canonical payload는 throw 대신 false(ZLinkCanonicalRelocationAuthorityState
+      .cs:239). **dotnet→java 단대단 통과(3번째 쌍!)**: source
+      relocate-result|outcome=Relocated|reason=None + java target
+      stateVersion=1|100KB. → **relocation 3쌍 전 방향 개별 그린 달성**.
+      잔여: 인증 스윕(cert1 terra 가동 중) — dotnet 유닛 회귀 2건
+      (RelocationRuntimeTests 골든/projection, root object actorId 정정의
+      후속 기대값) 수정 + 3-stage 연속 그린 + java core + conformance 9/9,
+      그 후 java+dotnet 누적 배치 커밋.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
