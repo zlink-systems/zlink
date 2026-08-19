@@ -17,6 +17,8 @@ import type {
   ZLinkLocationOwnerToken
 } from '../../contracts/Locations';
 import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
   ZLinkSpotRelocationReadinessMode,
@@ -159,6 +161,7 @@ import {
   type ServiceWireRelocationCoordinatorFence,
   type ServiceWireRelocationObject,
 } from '../foundation/service-stateful-wire-codec';
+import { ServiceWireFrameworkErrorCode } from '../foundation/service-wire-constants.generated';
 import { BoundedReplayMap } from './bounded-replay-map';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 import {
@@ -799,7 +802,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // restore or staging): this is terminal. Send relocationFailed
       // (command 53) once and remember it so an identical Prepare resend
       // replays the same response instead of retrying the restore.
-      const failed = relocationFailed(request, relocationFailedFailureCode(error));
+      const failed = relocationFailed(
+        request, relocationFailedFailureCode(error, request.object.kind)
+      );
       this.targetReadyFailures.set(operationKey, {
         fingerprint: stringifyWire(request),
         response: failed
@@ -4323,22 +4328,87 @@ function wireIdText(value: { readonly high: bigint; readonly low: bigint }): str
   return `${value.high}:${value.low}`;
 }
 
-/** Wire failureCode for a chunk-assembly or checksum-verification failure (spec 15 §4). */
-const RELOCATION_DATA_LOST_FAILURE_CODE = 35;
-/** Wire failureCode for a factory/restore/staging internal failure (spec 15 §4). */
-const RELOCATION_INTERNAL_FAILURE_CODE = 17;
-
 /**
  * Tags a target-side restore failure as data loss (chunk assembly or
  * checksum verification) so relocationFailed reports failureCode 35 rather
  * than the generic internal-failure code (spec 15 §4).
  */
-class ServiceRelocationDataLostError extends Error {}
+export class ServiceRelocationDataLostError extends Error {}
 
-function relocationFailedFailureCode(error: unknown): number {
-  return error instanceof ServiceRelocationDataLostError
-    ? RELOCATION_DATA_LOST_FAILURE_CODE
-    : RELOCATION_INTERNAL_FAILURE_CODE;
+/**
+ * Maps a target-side relocation Prepare failure to the closest wire
+ * framework-error code the generated schema
+ * ({@link ServiceWireFrameworkErrorCode}) defines — mirrors the java
+ * reference mapping (commit 97fc074058) and the dotnet/cpp ports. The wire
+ * vocabulary predates the framework's typed error kinds and has no
+ * one-to-one code for every kind, so several kinds share the nearest fit
+ * (documented per case below); unresolvable vocabulary gaps belong at the
+ * schema level, not invented here. {@link ServiceRelocationDataLostError}
+ * is this runtime's dedicated tag for a verified checksum/assembly/digest
+ * integrity failure — the case that keeps relocationDataLost(35). An
+ * unclassified error carries no evidence of integrity loss and takes the
+ * generic opaque requestFailed(17). `objectKind` (the Prepare's
+ * ObjectFence.kind, spec 28 §4.2) picks between an Actor- and
+ * Spot-specific code where the schema splits by object kind.
+ */
+export function relocationFailedFailureCode(
+  error: unknown,
+  objectKind: ServiceWireRelocationObject['kind']
+): number {
+  if (error instanceof ServiceRelocationDataLostError) {
+    return ServiceWireFrameworkErrorCode.relocationDataLost;
+  }
+  if (!(error instanceof ZLinkFrameworkException)) {
+    return ServiceWireFrameworkErrorCode.requestFailed;
+  }
+  switch (error.kind) {
+    case ZLinkFrameworkErrorKind.DataLost:
+      return ServiceWireFrameworkErrorCode.relocationDataLost;
+    case ZLinkFrameworkErrorKind.Rejected:
+      return ServiceWireFrameworkErrorCode.requestRejected;
+    case ZLinkFrameworkErrorKind.ProtocolError:
+      return ServiceWireFrameworkErrorCode.requestProtocolError;
+    //  No dedicated "capacity exceeded" wire code exists; a full queue is
+    //  the closest capacity-shaped signal.
+    case ZLinkFrameworkErrorKind.CapacityExceeded:
+      return ServiceWireFrameworkErrorCode.workerQueueFull;
+    //  No dedicated "deadline exceeded" wire code exists; a worker timeout
+    //  is the closest timeout-shaped signal.
+    case ZLinkFrameworkErrorKind.DeadlineExceeded:
+      return ServiceWireFrameworkErrorCode.workerTimedOut;
+    //  A stale generation/fence is the concrete cause of InvalidOperation
+    //  along this path (spec 15 failure table); pick the
+    //  object-kind-specific stale code.
+    case ZLinkFrameworkErrorKind.InvalidOperation:
+      return objectKind === 'actor'
+        ? ServiceWireFrameworkErrorCode.actorLocationStale
+        : ServiceWireFrameworkErrorCode.spotGenerationStale;
+    //  No dedicated generic "unavailable" wire code exists; a disconnected
+    //  route is the closest "cannot reach/use the target" signal.
+    case ZLinkFrameworkErrorKind.Unavailable:
+      return ServiceWireFrameworkErrorCode.routeNotConnected;
+    case ZLinkFrameworkErrorKind.NotFound:
+      return ServiceWireFrameworkErrorCode.requestTargetNotFound;
+    //  The only "already exists" wire code is Actor-specific; not expected
+    //  along this target-failure path, mapped for completeness.
+    case ZLinkFrameworkErrorKind.AlreadyExists:
+      return ServiceWireFrameworkErrorCode.actorAlreadyExists;
+    case ZLinkFrameworkErrorKind.TypeMismatch:
+      return objectKind === 'actor'
+        ? ServiceWireFrameworkErrorCode.actorTypeMismatch
+        : ServiceWireFrameworkErrorCode.spotTypeMismatch;
+    //  No dedicated "not configured" wire code exists; a missing configured
+    //  handler is the closest analog.
+    case ZLinkFrameworkErrorKind.NotConfigured:
+      return ServiceWireFrameworkErrorCode.handlerNotFound;
+    //  No dedicated generic "internal failure" or "shutting down" wire code
+    //  exists; the generic opaque request-failure code is the closest fit
+    //  for both (ShuttingDown included — re-judged 2026-08-19, C-10).
+    case ZLinkFrameworkErrorKind.ShuttingDown:
+    case ZLinkFrameworkErrorKind.InternalFailure:
+    default:
+      return ServiceWireFrameworkErrorCode.requestFailed;
+  }
 }
 
 function relocationStagingId(value: {
