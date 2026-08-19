@@ -304,7 +304,13 @@
       후보 인정+topic은 선언 소유 판정(공개 API 무변경), cpp↔dotnet 채널
       양방향+fanout 스테이지 라이브 그린, 게이트 1776/1779
       (d) node — 채널 outbound 요청에 ref keepalive 소유 `03330e9140`(하니스
-      keepalive 불요화). **C-7 채널·fanout 매트릭스 전 쌍 그린 도달**
+      keepalive 불요화). **C-7 채널·fanout 매트릭스 전 쌍 그린 도달**.
+      **최종 스윕 1차(2026-08-19): NOT-CLEAN — admission descriptor 계층 신규
+      5건**: cpp→node spot-route 호스트 침묵, node→dotnet relocation
+      invalidDescriptor 거부, java→dotnet DEADLINE_EXCEEDED, dotnet→java
+      TargetUnavailable, java→node spot-route not_found(java-cross 첫 실행).
+      capability v13 수렴의 잔여 상호작용 의심(java v12-only 광고 가능성 등) —
+      4언어 통합 진단·수정 잡 투입, 산출물 scratchpad/c7-final 보존
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
