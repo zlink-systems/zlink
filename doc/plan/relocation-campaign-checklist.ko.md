@@ -493,7 +493,12 @@
       java↔dotnet 양방향 차단; 자동 발견 인바운드 admission 경로) ⑵ node→dotnet:
       admission은 되나 dotnet이 relocation prepare control을 30s 무ACK(~120회
       재전송; dotnet relocation 세션 무활동) + node 인바운드 서비싱 수 초 지연
-      (probe 10/12 timeout 후 완료) — 2잡 투입
+      (probe 10/12 timeout 후 완료 → node poll 즉시 연속 배치 수정 `c360ad2601`).
+      ⑵의 진범 연쇄: 방향 비대칭 반증 → **참가자 상태 본문의 3방언**(dotnet=
+      disc2+ZLRP recovery 레코드, java=disc1 raw state, node=disc1+ZLAS 세션
+      래핑) — **판정: disc1 raw 불투명 상태가 규범(java 기준, 앱 바이트 불간섭
+      원칙)**, dotnet ZLRP·node ZLAS는 로컬 유도/재구성으로 전환(digest 판정
+      패턴) — 구현 잡 가동. ⑴ java Hello 무응답 잡 병행 중
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
       ① [C] 스펙의 4언어 stream 주장 vs frozen 시점 java만 부합 — **처분: 스펙=
       판정된 목표 계약(dotnet은 이후 18598a85db로 수렴, node 진행 중, cpp=W-3)**,
