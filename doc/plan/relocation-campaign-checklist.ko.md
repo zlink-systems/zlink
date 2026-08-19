@@ -88,8 +88,14 @@
       **수정 완료 `4437f886a8`**: OnLeave를 node 레벨 알림으로(3번째 entry-spot
       주소성 갭 해소, exactly-once 테스트) + [H] cold-probe relay 3/4 identity 보존
       (deadline은 30s 관례 — 절대기한 전달 메커니즘 부재, D급 후속 기록).
-      [C] reconcile 3분기(store 조회 기반)는 spot_id 조기 캡처 판정으로 진행 중
-      [발견·해소 2026-08-19]
+      [C] reconcile 3분기(store 조회 기반) 랜딩 `653af3f8ab`.
+      **재검증(2026-08-19, 청정 재빌드 sha256 9066811…)**: leave 마커 3/3 존재 —
+      leave 수정 유효 확인. 잔여 실패는 시나리오가 base `8bae89dc0f`에서 제거된
+      `commit_request`/`commit_ack` wire packet 어휘를 단언하는 harness 노후화
+      (commit=mesh packet→store CAS 재구조화; 스펙·타언어에 해당 어휘 전무 확인).
+      **판정: ST-B1/B2/B3/C2 시나리오+feature-map을 `location_committed` 기반
+      증거로 갱신(의도 보존: commit-before-joined 순서·correlation) — e2e
+      에이전트 진행 중** [발견·해소 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
