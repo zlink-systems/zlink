@@ -306,9 +306,20 @@
       `zlink:v11:counter:object`/`counter:authority-owner`, dotnet
       `zlink:v11:authority:object-generation-counter`/`owner-generation-counter`,
       cpp·node는 `zlink:v11:authority-generations` JSON 객체. objectGeneration
-      교차 언어 단조성 불성립. 스펙 21/22가 시퀀스는 규범화했으나 키·표현 미정의
-      (공백) — 4언어 실태 조사 후 canonical 스킴 확정·수렴(hashtag 도메인 내
-      same-slot 원자성 요건 고려). 원 항목: (JoinEntrySpot
+      교차 언어 단조성 불성립. **조사 완료·판정(2026-08-19): Scheme A 채택** —
+      정정 2건(해시태그는 provider의 opaque 키 매핑이 자동 부여 → 명명은 순수
+      상호운용 결정; INCR은 이 계층에 부재 → CAS되는 값 인코딩만 논점) 위에서,
+      4언어가 유일하게 이미 수렴한 owner-counter 관례를 확장: **bare UTF-8
+      canonical 십진(부호·선행0·envelope 없음)·next-to-issue(부재=1 발급,
+      v 발급 후 v+1 CAS, 블록 n: v..v+n-1 발급 후 v+n)·범위 1..2^63-1·소진 시
+      typed generationExhausted(java throw 정정)** 형제 3행: `zlink:v11:owner-
+      counter`(불변), `zlink:v11:object-counter`, `zlink:v11:authority-owner-
+      counter`. counter 변이는 게이트하는 레코드와 동일 조건부 배치 필수(현행
+      4언어 모두 충족). authority\0 스캔 프리픽스 밖 유지. 스펙 22 §7 규범
+      명문+21 §2.4 포인터+골든 갱신(cpp 골든 시드 {json}→행2개). 폐기 리터럴
+      5종 1회 flush 필요(물리 키=sha256(논리키) — ops 노트 필수). 슬라이스:
+      spec+golden+java(선행), cpp(최대·last→next 플립), dotnet(인코딩+플립),
+      node(키·코덱·플립) — 각 트리 점유 해제 순서대로 투입 원 항목: (JoinEntrySpot
       경로 우선, 기존 opt-in 스테이지 2907df293f/c43758fc05 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
 - [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
