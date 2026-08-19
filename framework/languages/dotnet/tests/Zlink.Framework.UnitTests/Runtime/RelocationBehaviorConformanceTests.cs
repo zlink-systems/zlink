@@ -867,6 +867,19 @@ public sealed class RelocationBehaviorConformanceTests
             .Async();
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
+        //  Regression pin (6fa7d6aab8): the direct remote-join cutover once
+        //  activated the canonical-maintenance replay against the remote-join
+        //  import, threw, and died as a detached task whose only surface was
+        //  a target-side ProtocolError — the session route was never
+        //  committed and the cross-node push (actor node != session node)
+        //  vanished without any error. The target monitor must therefore end
+        //  this join with no new protocol errors.
+        using var targetMonitor = target.Runtime
+            .GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+            .Node.OpenMeshMonitor();
+        var targetProtocolErrorsBeforeJoin =
+            targetMonitor.Status().ProtocolErrors;
+
         var join = source.Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
@@ -904,6 +917,9 @@ public sealed class RelocationBehaviorConformanceTests
                 actorId,
                 out var routedBinding));
             Assert.NotNull(routedBinding.AppliedCanonicalRelocationRoute);
+            Assert.Equal(
+                targetProtocolErrorsBeforeJoin,
+                targetMonitor.Status().ProtocolErrors);
         }
         finally
         {

@@ -1961,23 +1961,17 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     }
 
     // Direct transfer owns its verified payload in memory; unlike recovery it
-    // has no Relocation Store reference to advance. Start the canonical replay
-    // locally before asking the Runtime helper to wait for its terminal, then
-    // finish the target route and deliver the public Join completion.
+    // has no Relocation Store reference to advance. The stage always carries a
+    // remote-join import (Handoff.Import), never a canonical maintenance
+    // import, so the canonical activation helper does not apply here — the
+    // Runtime helper drives the imported replay itself, then finishes the
+    // target route and delivers the public Join completion.
     private async ValueTask CompleteDirectRemoteJoinTargetAsync(
         TargetStage stage,
         ZLinkRemoteActorJoinRequest request,
         ZLinkActorRelocationRecoveryRecord recovery,
         CancellationToken cancellationToken)
     {
-        await runtime.ActivateStandaloneActorRelocationTargetAsync(
-                stage.ActorState,
-                stage.TargetAuthority,
-                stage.Prepare.TargetAttemptGeneration,
-                stage.Envelope,
-                request.HandoffId,
-                cancellationToken)
-            .ConfigureAwait(false);
         await runtime.CompleteDirectCanonicalRoutedActorJoinAsync(
                 recovery.TargetSpotId,
                 stage.ActorState,

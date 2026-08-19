@@ -997,6 +997,25 @@ internal sealed partial class ZLinkFrameworkRuntime
             // traffic immediately; delivering it before replay completion and
             // the target-side admission/session handoff leaves that traffic
             // behind the relocation seal.
+            //
+            // A direct remote join always holds a remote-join import
+            // (Handoff.Import), never a canonical maintenance import, so this
+            // completion path owns the replay drive itself: the durable and
+            // relayed frames already sit in the import queue
+            // (Import/AppendPreparedImport) and there is no trailing
+            // completion batch in the direct protocol.
+            var target = ResolveActorHandoffTarget(spotId)
+                         ?? throw new ZLinkFrameworkException(
+                             ZLinkFrameworkErrorKind.NotFound,
+                             $"Actor '{request.ActorId}' handoff target '{spotId}' "
+                             + "is not active during direct completion.");
+            actorState.Handoff.PrepareImportedReplay([]);
+            await ReplayFinalTransferredActorHandoffAsync(
+                    target,
+                    actorState,
+                    request.HandoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
             await actorState.Handoff.WaitForTargetReplayCompletionAsync(
                     cancellationToken)
                 .ConfigureAwait(false);
