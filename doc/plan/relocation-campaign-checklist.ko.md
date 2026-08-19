@@ -460,6 +460,17 @@
       pre-Prepare=base/delta 제거로 소멸, wire 어휘=현행 유지 확정, actorJoin
       originate=구현 중)
 
+## W. wire 코덱 생성기 (사용자 확정 2026-08-19 — 파일럿 병행, 전면 채택은 후속)
+
+- [ ] W-1 생성기 파일럿: service-wire-v1.schema.json → 4언어 encode/decode 함수
+      생성(1차 범위: relocation-envelope-v1 + 파일럿 명령 1개). 기존 상수·
+      self-test 생성 파이프라인의 확장. 순수 추가 작업(런타임 무접촉) — 검증은
+      java/dotnet의 수렴 완료 구현과 byte 대조
+- [ ] W-2 node·cpp envelope 슬라이스의 byte 계층을 생성 코덱으로 소비(수작업
+      이중화 방지; 의미론 매핑·inventory resolver는 언어별 유지)
+- [ ] W-3 전면 채택(기수렴 wire 표면 전체 교체)은 캠페인 후 별도 캠페인 —
+      성능 무손실 원칙(고정 레이아웃 유지, 생성만 추가)
+
 ## E. 확정 후속 단계 (사용자 승격 2026-08-19 — 완료 조건 포함, C 완료 후 착수)
 
 - [x] E-1 dotnet 성능 패스 — **완료 `42ddf3d2f4`**: 6건 전부(중복 lock 10개소 해체, byte-wise
