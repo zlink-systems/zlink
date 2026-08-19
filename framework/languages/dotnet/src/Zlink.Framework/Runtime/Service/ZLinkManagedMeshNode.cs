@@ -5062,12 +5062,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             && IsAllowedInfrastructureControlCommand(
                 (ServiceWireConstants.Command)head[3]))
         {
-            if (!IsAllowedInfrastructureControl(received.Parts, out var command)
-                || !HasCurrentInfrastructureControlSource(sourceRid, command)
-                || !ProcessInfrastructureControl(
-                    sourceRid,
-                    received.Parts,
-                    head))
+            var allowed = IsAllowedInfrastructureControl(
+                received.Parts, out var command);
+            var currentSource = allowed
+                && HasCurrentInfrastructureControlSource(sourceRid, command);
+            ZLinkFrameworkDebugLog.InboundCommand(
+                $"mesh={_meshName} source={sourceRid} command={(byte)head[3]} "
+                + $"name={command} parts={received.Parts.Count} bytes="
+                + $"{ZLinkReceiveBatchBudget.MeasureParts(received.Parts)} "
+                + $"allowed={allowed} current_source={currentSource}");
+            var processed = allowed
+                && currentSource
+                && ProcessInfrastructureControl(sourceRid, received.Parts, head);
+            if (!processed)
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
         }

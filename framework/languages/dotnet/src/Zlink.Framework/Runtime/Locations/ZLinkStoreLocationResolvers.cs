@@ -236,7 +236,7 @@ internal sealed class ZLinkStoreLocationResolvers :
             storeToken => _store.ReadAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(key.ActorId),
                 storeToken)).ConfigureAwait(false);
-        var raw = ProjectActor(authority);
+        var raw = ProjectActor(authority, key.ActorId);
         var (row, liveRowPresent) = await _liveRows.ResolveWithPresenceAsync(
             raw,
             static row => row.OwnerId,
@@ -522,7 +522,8 @@ internal sealed class ZLinkStoreLocationResolvers :
     }
 
     private static ZLinkResolvedActorLocation? ProjectActor(
-        ZLinkAuthorityReadResult authority)
+        ZLinkAuthorityReadResult authority,
+        string actorId)
     {
         if (authority is not ZLinkAuthorityReadResult.Found found)
             return null;
@@ -546,7 +547,7 @@ internal sealed class ZLinkStoreLocationResolvers :
                 || actor.State != ZLinkActorAuthorityState.Ready
                 || actor.MeshName
                    != snapshot.Allocation.Descriptor.MeshName)
-                return null;
+                return ProjectCanonicalActor(snapshot, actorId);
             return new ZLinkResolvedActorLocation(
                 actor.MeshName,
                 actor.ActorId,
@@ -581,6 +582,43 @@ internal sealed class ZLinkStoreLocationResolvers :
             actor.CurrentSpotId,
             actor.CurrentSpotGeneration,
             actor.CurrentSpotKind,
+            snapshot.AuthorityOwnerGeneration,
+            snapshot.OwnerId,
+            snapshot.OwnerLeaseGeneration,
+            snapshot.StoreNow,
+            snapshot.AuthorityOwnerGeneration);
+    }
+
+    // The outer authority row is the cross-language contract: payload is
+    // application-defined opaque bytes (21-location-runtime §2.4).  Keep the
+    // native codec for its membership projection, but never require a foreign
+    // writer's payload dialect merely to resolve the owner route.
+    private static ZLinkResolvedActorLocation? ProjectCanonicalActor(
+        ZLinkAuthoritySnapshot snapshot,
+        string actorId)
+    {
+        if (snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
+            || snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || snapshot.ObjectGeneration == 0
+            || snapshot.OwnerLeaseGeneration <= 0
+            || string.IsNullOrWhiteSpace(actorId)
+            || string.IsNullOrWhiteSpace(snapshot.Allocation.StableType)
+            || string.IsNullOrWhiteSpace(snapshot.Allocation.Descriptor.MeshName))
+            return null;
+        var nodeRid = snapshot.Allocation.Descriptor.Rid;
+        if (nodeRid.IsEmpty)
+            return null;
+        return new ZLinkResolvedActorLocation(
+            snapshot.Allocation.Descriptor.MeshName,
+            actorId,
+            snapshot.Allocation.StableType,
+            new ActorRef(actorId, snapshot.ObjectGeneration,
+                snapshot.Allocation.Descriptor.MeshName, nodeRid),
+            nodeRid,
+            snapshot.Allocation.DescriptorLifecycleGeneration,
+            string.Empty,
+            0,
+            ZLinkSpotKind.Entry,
             snapshot.AuthorityOwnerGeneration,
             snapshot.OwnerId,
             snapshot.OwnerLeaseGeneration,

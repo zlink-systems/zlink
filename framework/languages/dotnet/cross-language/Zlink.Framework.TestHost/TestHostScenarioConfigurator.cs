@@ -319,8 +319,10 @@ internal static class TestHostScenarioConfigurator
             services.AddHostedService(provider =>
                 new EntryRelocationTargetHostedService(
                     provider.GetRequiredService<IZLinkActorClient>(),
+                    provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
                     provider.GetRequiredService<TestHostEventSink>(),
                     options.ActorId ?? "cross-lang-relocation-actor",
+                    options.MeshName ?? "cross.relocation",
                     // The source's routing id is fixed and known by the
                     // caller (this node's own id is framework-assigned, see
                     // the comment above); a probe reply is only proof of an

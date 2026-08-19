@@ -1832,9 +1832,9 @@ internal sealed class CanonicalRelocationTransportProbe
         .PrepareAsync(
             _prepare ?? throw new InvalidOperationException(
                 "No canonical prepare was captured."),
-            //  Direct transfer frames the envelope with the ZLDR header and
-            //  inventory digest (spec 28 §4.2); decode through the transfer
-            //  payload codec, not the bare envelope codec.
+            //  Direct transfer carries the schema relocation-envelope-v1
+            //  logical stream. Decode it through the transfer payload codec
+            //  so the probe follows the production wire boundary.
             ZLinkRelocationTransferPayload.DecodeEnvelope(
                 (_preparePayload ?? throw new InvalidOperationException(
                     "No canonical prepare payload was captured.")).Encoded),

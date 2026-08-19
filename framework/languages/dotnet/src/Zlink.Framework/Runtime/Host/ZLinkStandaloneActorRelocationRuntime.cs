@@ -1802,6 +1802,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             {
                 RelocationAggregateId = envelope.AggregateId,
                 RelocationAggregateGeneration = envelope.AggregateGeneration,
+                // The direct relocation-envelope-v1 logical stream carries no
+                // provider inventory envelope.  Its decoded digest is the
+                // pending sentinel; ZLinkActorRelocationRoot reconstructs the
+                // derived digest from frozen recovery before using the root.
                 RelocationInventoryDigest = envelope.InventoryDigest.ToArray(),
                 HandoffFrames = []
             };

@@ -42,6 +42,18 @@ internal static class ZLinkFrameworkDebugLog
         if (TasksEnabled) Write($"[zlink-framework] task '{taskName}' failed: {exception}");
     }
 
+    /// <summary>
+    /// Emits a raw Mesh infrastructure-command ingress decision when task
+    /// diagnostics are enabled. This deliberately stays separate from the
+    /// high-volume spot-discovery switch: it is a short-lived wire diagnosis
+    /// aid, not normal topology telemetry.
+    /// </summary>
+    public static void InboundCommand(string message)
+    {
+        if (TasksEnabled)
+            Write("[zlink-framework] inbound-command " + message);
+    }
+
     public static void UnhandledCallbackFailure(Exception exception)
     {
         if (TasksEnabled)

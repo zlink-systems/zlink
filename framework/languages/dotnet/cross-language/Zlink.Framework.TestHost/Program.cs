@@ -306,18 +306,33 @@ internal sealed class EntryRelocationSourceHostedService(
 
 internal sealed class EntryRelocationTargetHostedService(
     IZLinkActorClient actorClient,
+    IZLinkRouteMeshRuntimeOptions runtimeOptions,
     TestHostEventSink sink,
     string actorId,
+    string meshName,
     string sourceNodeRid) : IHostedService
 {
     // This node's own routing id is framework-assigned (Object-role MeshNodes
     // cannot use a fixed routing id -- see ConfigureEntryRelocation), so a
     // probe reply proves an owner transition only once it stops coming from
     // the known SOURCE node rid, not by matching a predicted id of our own.
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
+        _ = ProbeAsync(cancellationToken);
+        return Task.CompletedTask;
+    }
+
+    private async Task ProbeAsync(CancellationToken cancellationToken)
+    {
+        // The source starts only after this target writes its ready file.
+        // Keep deterministic initial placement for its short create turn,
+        // then make this descriptor eligible before the source's first
+        // five-second relocation attempt.
+        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        runtimeOptions.Mesh(meshName).PlacementWeight = 100;
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
         CrossLangProbeRes? lastReply = null;
+        string? lastFailure = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
             try
@@ -328,16 +343,19 @@ internal sealed class EntryRelocationTargetHostedService(
                     .Async<CrossLangProbeRes>(cancellationToken);
                 if (lastReply.NodeRid != sourceNodeRid) break;
             }
-            catch (ZLinkFrameworkException)
+            catch (ZLinkFrameworkException failure)
             {
                 // Actor may still be mid-relocation or not yet created; keep polling.
+                lastFailure = $"{failure.Kind}:{failure.Message}";
             }
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
 
         if (lastReply is null || lastReply.NodeRid == sourceNodeRid)
         {
-            sink.Append($"entry-spot-probe-timeout|last={lastReply?.NodeRid ?? "none"}");
+            sink.Append(
+                $"entry-spot-probe-timeout|last={lastReply?.NodeRid ?? "none"}"
+                + $"|failure={lastFailure ?? "none"}");
             return;
         }
         sink.Append(

@@ -30,8 +30,6 @@ internal static class ZLinkActorRelocationRoot
         if (envelope.AggregateId != wire.RelocationAggregateId
             || envelope.AggregateGeneration
             != wire.RelocationAggregateGeneration
-            || !envelope.InventoryDigest.Span.SequenceEqual(
-                wire.RelocationInventoryDigest)
             || envelope.Participants.Count != 1
             || envelope.Participants[0].AuthorityKey != key)
             throw DataLost(
@@ -94,10 +92,20 @@ internal static class ZLinkActorRelocationRoot
                 canonical.AuthorityPayload,
                 ReadOnlyMemory<byte>.Empty)
         ]);
-        if (!envelope.InventoryDigest.Span.SequenceEqual(
+        // The direct-transfer payload is exactly relocation-envelope-v1.  Its
+        // logical stream deliberately has no provider inventory envelope, so
+        // reconstruct the derived inventory digest from the frozen canonical
+        // participant recovery and compare that value with the join fence.
+        // (The former ZLDR wrapper was the only source of this redundant copy.)
+        // Direct transfer persists the pending all-zero reference in the
+        // frozen Join recovery.  That sentinel has no inventory fence to
+        // compare; every non-sentinel fence must still match exactly.
+        if (wire.RelocationInventoryDigest.Any(static value => value != 0)
+            && !wire.RelocationInventoryDigest.AsSpan().SequenceEqual(
                 expectedInventoryDigest))
             throw DataLost(
                 $"Actor '{wire.ActorId}' relocation inventory mutation is invalid.");
+        envelope = envelope with { InventoryDigest = expectedInventoryDigest };
         if (!string.Equals(
                 recovery.Request.ActorId,
                 wire.ActorId,
