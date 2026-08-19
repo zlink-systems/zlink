@@ -1923,6 +1923,16 @@ test('production repository shares ClientServer and fanout discovery through onl
   assert.equal(renewed.status, internal.ZLinkLocationWriteStatus.Stored);
   assert.equal((await writer.listClientServers('orders')).items[0].weight, 250);
 
+  // The binding's RoutingId object and the canonical row's routing-id hex
+  // describe the same opaque identity.  A fresh renew must not be demoted to
+  // stale merely because the row was round-tripped through the canonical codec.
+  const renewedPublisher = await reader.updateFanoutPublisher(
+    { ...publisher, descriptorRevision: 2n },
+    internal.ZLinkLocationWriteIntent.Renew
+  );
+  assert.equal(renewedPublisher.status, internal.ZLinkLocationWriteStatus.Stored);
+  assert.equal((await writer.listFanoutPublishers('events')).items[0].descriptorRevision, 2n);
+
   assert.equal(await reader.removeAllByOwner(claimed.token), 2n);
   assert.equal((await writer.listClientServers('orders')).items.length, 0);
   assert.equal((await writer.listFanoutPublishers('events')).items.length, 0);

@@ -3980,9 +3980,15 @@ function descriptorFingerprint(
   descriptor: OwnedDescriptor,
   omitted: readonly string[]
 ): string {
-  const copy = { ...descriptor } as Record<string, unknown>;
-  for (const key of omitted) delete copy[key];
-  return Buffer.from(encodeJson(copy)).toString('base64');
+  // Descriptor rows are canonicalized through routing-id hex.  Comparing the
+  // in-memory shape here would distinguish a binding RoutingId instance from
+  // the equivalent ID revived from a canonical row, incorrectly rejecting a
+  // legitimate renew as stale.
+  const canonical = canonicalDescriptor(descriptor);
+  for (const key of omitted) {
+    delete canonical[key === 'updatedAt' ? 'updatedAtEpochMs' : key];
+  }
+  return Buffer.from(encodeJson(canonical)).toString('base64');
 }
 
 function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescriptor): void {
