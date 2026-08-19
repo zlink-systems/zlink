@@ -13,8 +13,19 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 final class ZLinkM6ARuntimeContractTest {
+    @Test
+    void descriptorUsesTheGeneratedV13AdmissionCapability() {
+        assertEquals(
+            ServiceWireConstants.REQUIRED_CAPABILITY,
+            ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
+        assertEquals(
+            "framework-service-v13",
+            ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
+    }
+
     @Test
     void topologyFencesStaleConnectionsAndSelectsOnlyServingPositiveWeight() {
         var topology = new ZLinkServiceTopologyRegistry(

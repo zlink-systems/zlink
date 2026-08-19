@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 /** Immutable descriptor owned by the Framework RouteMesh runtime. */
 public record ZLinkServiceNodeDescriptor(
@@ -24,7 +25,12 @@ public record ZLinkServiceNodeDescriptor(
     int pendingCapacityLimit,
     int activeCapacityUsed,
     int pendingCapacityUsed) {
-    public static final String REQUIRED_CAPABILITY = "framework-service-v12";
+    /**
+     * Admission must be fenced by the generated service-wire capability, not
+     * a hand-maintained revision string.  Other runtimes reject v12-only
+     * descriptors before publishing a RouteMesh peer.
+     */
+    public static final String REQUIRED_CAPABILITY = ServiceWireConstants.REQUIRED_CAPABILITY;
 
     /**
      * Shared admission identity of the plaintext ROUTER transport. The
