@@ -3009,8 +3009,55 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ? pending
                 : throw new ZlinkSubmitException(
                     ZlinkSubmitException.ErrorCode.Backpressured);
-        if (targetNodeRid != _routingId
-            || !TryGetActor(actorRef, out var actor)
+        if (targetNodeRid != _routingId)
+        {
+            // The hosted Framework path still originates its JSON admission
+            // envelope.  This lower-level path chooses service-wire only for
+            // a peer whose Spot authority fence was explicitly observed.
+            if (!TryGetActor(actorRef, out var remoteActor)
+                || !_observedSpotAuthorities.TryGetValue(
+                    new ObservedSpotAuthorityKey(
+                        targetNodeRid, targetSpotId, targetSpotGeneration),
+                    out var targetAuthority))
+            {
+                CompleteManagedOperation(operation, RequestResult.NotFound, 0,
+                    Array.Empty<Message>());
+                return operation.OperationId;
+            }
+            Peer? peer;
+            lock (_gate)
+                _peersByRid.TryGetValue(targetNodeRid, out peer);
+            if (peer is null || !peer.Admitted
+                || peer.LifecycleGeneration != targetAuthority.TargetNodeGeneration)
+            {
+                CompleteManagedOperation(operation, RequestResult.NotConnected, 0,
+                    Array.Empty<Message>());
+                return operation.OperationId;
+            }
+
+            var actorLease = checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration));
+            operation.ActorJoinOrigin = new ActorJoinOrigin(
+                actorRef, targetNodeRid, targetSpotId, targetSpotGeneration);
+            var head = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+                new ActorJoinRequest(
+                    operation.OperationId.Low, actorRef, _lifecycleGeneration,
+                    remoteActor.AuthorityOwnerGeneration, actorLease, entry,
+                    targetSpotId, targetSpotGeneration, targetNodeRid,
+                    targetAuthority.TargetNodeGeneration,
+                    targetAuthority.AuthorityOwnerGeneration,
+                    targetAuthority.OwnerLeaseGeneration));
+            var wire = new List<ReadOnlyMemory<byte>> { head };
+            if (requestParts is { Count: > 0 })
+                wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(requestParts));
+            if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, wire))
+                CompleteManagedOperation(operation, RequestResult.Backpressured, 0,
+                    Array.Empty<Message>());
+            else
+                Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetNodeRid);
+            return operation.OperationId;
+        }
+
+        if (!TryGetActor(actorRef, out var actor)
             || !_spots.TryGetValue(
                 ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
                 out var targetSpot)
@@ -8563,7 +8610,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 reply,
                 out var actorJoinCompletion,
                 out _);
-            completion = actorJoinCompletion;
+            if (decoded
+                && actorJoinCompletion is not null
+                && pending.ActorJoinOrigin is { } origin)
+            {
+                var spot = actorJoinCompletion.Spot;
+                var remoteActor = new ActorRef(
+                    origin.Actor.ActorId,
+                    origin.Actor.ObjectGeneration,
+                    _meshName,
+                    origin.TargetNodeRid);
+                completion = new ActorJoinCompletion(
+                    actorJoinCompletion.JoinResult,
+                    remoteActor,
+                    new ActorLocation(
+                        remoteActor,
+                        spot?.SpotId ?? origin.TargetSpotId,
+                        spot?.SpotGeneration ?? origin.TargetSpotGeneration,
+                        actorJoinCompletion.MembershipEpoch),
+                    actorJoinCompletion.ReceiveChunkLimitBytes);
+            }
+            else
+                completion = actorJoinCompletion;
         }
         else
         {
@@ -9807,6 +9875,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ? new(TaskCreationOptions.RunContinuationsAsynchronously)
                 : null;
         internal ulong DeadlineUnixMs { get; set; }
+        internal ActorJoinOrigin? ActorJoinOrigin { get; set; }
         internal CancellationToken Token => _timeout.Token;
         internal bool TryComplete()
         {
@@ -9829,6 +9898,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _timeout.Dispose();
         }
     }
+
+    private readonly record struct ActorJoinOrigin(
+        ActorRef Actor,
+        RoutingId TargetNodeRid,
+        string TargetSpotId,
+        ulong TargetSpotGeneration);
 
     private readonly record struct ManagedRequestCompletion(
         RequestResult Result,

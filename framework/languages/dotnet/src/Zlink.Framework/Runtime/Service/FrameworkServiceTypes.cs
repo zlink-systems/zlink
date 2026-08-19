@@ -80,7 +80,8 @@ internal sealed record ActorLocation(
     ActorRef Actor, string SpotId, ulong SpotGeneration, ulong MembershipEpoch);
 
 internal sealed record ActorJoinCompletion(
-    ActorJoinResult JoinResult, ActorRef Actor, ActorLocation Location) : MeshRecordPayload;
+    ActorJoinResult JoinResult, ActorRef Actor, ActorLocation Location,
+    uint ReceiveChunkLimitBytes = 0) : MeshRecordPayload;
 
 //  service-wire-v1.schema.json actor-join-reply-tail (reply(20),
 //  originalOperationKind actorJoin): the SPOT the joining Actor now belongs
@@ -88,6 +89,23 @@ internal sealed record ActorJoinCompletion(
 //  identity used by the in-process managed-mesh join path.
 internal readonly record struct ActorJoinReplySpot(
     string SpotId, ulong SpotGeneration);
+
+// service-wire-v1 actorJoin(28) request: the actor and target Spot are each
+// carried with their route fences.  This remains internal because the public
+// Framework join API continues to use the normal JSON admission envelope.
+internal readonly record struct ActorJoinRequest(
+    ulong Correlation,
+    ActorRef Actor,
+    ulong ActorNodeGeneration,
+    ulong ActorAuthorityOwnerGeneration,
+    ulong ActorOwnerLeaseGeneration,
+    bool Entry,
+    string TargetSpotId,
+    ulong TargetSpotGeneration,
+    RoutingId TargetNodeRid,
+    ulong TargetNodeGeneration,
+    ulong TargetAuthorityOwnerGeneration,
+    ulong TargetOwnerLeaseGeneration);
 
 internal sealed record ActorJoinReplyCompletion(
     ActorJoinResult JoinResult,

@@ -1055,7 +1055,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             completion?.Actor.ToBackend() ?? fallback,
             completion?.Location.SpotId ?? string.Empty,
             completion?.Location.MembershipEpoch ?? 0,
-            0,
+            completion?.ReceiveChunkLimitBytes ?? 0,
             record.FailureErrno);
     }
 
@@ -1070,7 +1070,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             targetNodeRid,
             completion?.Location.SpotId ?? string.Empty,
             completion?.Location.MembershipEpoch ?? 0,
-            0,
+            completion?.ReceiveChunkLimitBytes ?? 0,
             record.FailureErrno);
     }
 

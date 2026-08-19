@@ -9,6 +9,50 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ServiceWireActorJoinReplyCodecTests
 {
     [Fact]
+    public void Request_round_trips_the_schema_actor_and_spot_route_fences()
+    {
+        var actorNode = RoutingId.From(new byte[] { 1, 2, 3 });
+        var targetNode = RoutingId.From(new byte[] { 4, 5, 6 });
+        var request = new ActorJoinRequest(
+            42,
+            new ActorRef("actor-1", 7, "mesh", actorNode),
+            8,
+            9,
+            10,
+            Entry: true,
+            "spot-1",
+            11,
+            targetNode,
+            12,
+            13,
+            14);
+
+        var encoded = ZLinkServiceWireCodec.EncodeActorJoinRequest(request);
+
+        Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
+            encoded, "mesh", out var decoded, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(request, decoded.Request);
+    }
+
+    [Fact]
+    public void Request_rejects_a_non_bool_entry_discriminant()
+    {
+        var encoded = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+            new ActorJoinRequest(
+                1,
+                new ActorRef("actor", 1, "mesh", RoutingId.From(new byte[] { 1 })),
+                1, 1, 1, false, "spot", 1,
+                RoutingId.From(new byte[] { 2 }), 1, 1, 1));
+        // Prefix (5), correlation (8), actor text/ref/fence (1+5+8+2+8+8+8).
+        encoded[53] = 2;
+
+        Assert.False(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
+            encoded, "mesh", out _, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, error);
+    }
+
+    [Fact]
     public void Accepted_canonical_vectors_round_trip_field_for_field()
     {
         AssertAcceptedRoundTrip(

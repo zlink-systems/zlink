@@ -68,6 +68,9 @@ internal static partial class ZLinkServiceWireCodec
     internal readonly record struct ActorDestroyOperationRecord(
         ActorDestroyOperation Operation);
 
+    internal readonly record struct ActorJoinRequestRecord(
+        ActorJoinRequest Request);
+
     internal readonly record struct InstanceSpotActivationRecord(
         InstanceSpotActivationOperation Operation,
         bool HasMetadata);
@@ -671,6 +674,104 @@ internal static partial class ZLinkServiceWireCodec
             (int)terminalResult,
             (uint)failureCode,
             tail.ToArray());
+    }
+
+    // actorJoin(28) has no request-tail union: correlation, actor-route-fence,
+    // bool8 entry, then spot-route-fence.  There is deliberately no request
+    // golden vector yet; this is derived directly from service-wire-v1.schema.
+    internal static byte[] EncodeActorJoinRequest(ActorJoinRequest request)
+    {
+        if (request.Correlation == 0
+            || string.IsNullOrEmpty(request.Actor.ActorId)
+            || request.Actor.ObjectGeneration == 0
+            || request.ActorNodeGeneration == 0
+            || request.ActorAuthorityOwnerGeneration == 0
+            || request.ActorOwnerLeaseGeneration == 0
+            || string.IsNullOrEmpty(request.TargetSpotId)
+            || request.TargetSpotGeneration == 0
+            || request.TargetNodeRid.IsEmpty
+            || request.TargetNodeGeneration == 0
+            || request.TargetAuthorityOwnerGeneration == 0
+            || request.TargetOwnerLeaseGeneration == 0)
+            throw new ArgumentOutOfRangeException(nameof(request));
+
+        var body = new WireWriter();
+        body.U64(request.Correlation);
+        body.Text8(request.Actor.ActorId);
+        body.U64(request.Actor.ObjectGeneration);
+        body.Rid(request.Actor.NodeRid);
+        body.U64(request.ActorNodeGeneration);
+        body.U64(request.ActorAuthorityOwnerGeneration);
+        body.U64(request.ActorOwnerLeaseGeneration);
+        body.U8(request.Entry ? (byte)1 : (byte)0);
+        body.Text8(request.TargetSpotId);
+        body.U64(request.TargetSpotGeneration);
+        body.Rid(request.TargetNodeRid);
+        body.U64(request.TargetNodeGeneration);
+        body.U64(request.TargetAuthorityOwnerGeneration);
+        body.U64(request.TargetOwnerLeaseGeneration);
+        var result = Prefix(ServiceWireConstants.Command.ActorJoin,
+            ServiceWireConstants.Flag.None, body.Count);
+        body.CopyTo(result.AsSpan(5));
+        return result;
+    }
+
+    internal static bool TryDecodeActorJoinRequest(
+        ReadOnlySpan<byte> bytes,
+        string meshName,
+        out ActorJoinRequestRecord record,
+        out DecodeError error)
+    {
+        record = default;
+        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
+            return false;
+        if (command != ServiceWireConstants.Command.ActorJoin)
+        {
+            error = DecodeError.UnknownCommand;
+            return false;
+        }
+        if (flags != ServiceWireConstants.Flag.None)
+        {
+            error = DecodeError.ForbiddenFlag;
+            return false;
+        }
+        var reader = new WireReader(bytes[5..]);
+        if (!reader.TryU64(out var correlation) || correlation == 0
+            || !reader.TryText8(out var actorId)
+            || !reader.TryU64(out var actorGeneration) || actorGeneration == 0
+            || !reader.TryRid(out var actorNodeRid)
+            || !reader.TryU64(out var actorNodeGeneration) || actorNodeGeneration == 0
+            || !reader.TryU64(out var actorAuthority) || actorAuthority == 0
+            || !reader.TryU64(out var actorLease) || actorLease == 0
+            // entryByte's bool8 range (0/1) is checked below, after the full
+            // frame is parsed, so an out-of-range value is reported as
+            // InvalidField rather than being masked by leftover unread bytes
+            // (which would otherwise misclassify it as TrailingByte).
+            || !reader.TryU8(out var entryByte)
+            || !reader.TryText8(out var targetSpotId)
+            || !reader.TryU64(out var targetSpotGeneration) || targetSpotGeneration == 0
+            || !reader.TryRid(out var targetNodeRid)
+            || !reader.TryU64(out var targetNodeGeneration) || targetNodeGeneration == 0
+            || !reader.TryU64(out var targetAuthority) || targetAuthority == 0
+            || !reader.TryU64(out var targetLease) || targetLease == 0
+            || reader.Remaining != 0)
+        {
+            error = reader.Truncated ? DecodeError.TruncatedField
+                : reader.Remaining != 0 ? DecodeError.TrailingByte : DecodeError.InvalidField;
+            return false;
+        }
+        if (entryByte > 1)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
+        record = new ActorJoinRequestRecord(new ActorJoinRequest(
+            correlation, new ActorRef(actorId, actorGeneration, meshName, actorNodeRid),
+            actorNodeGeneration, actorAuthority, actorLease, entryByte != 0,
+            targetSpotId, targetSpotGeneration, targetNodeRid, targetNodeGeneration,
+            targetAuthority, targetLease));
+        error = DecodeError.None;
+        return true;
     }
 
     internal static bool TryDecodeActorJoinReply(
