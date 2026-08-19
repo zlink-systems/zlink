@@ -126,14 +126,16 @@
       도 제거됨. dotnet 수렴 시 검증 필수: "현재+1" 산술 가정 CAS 전수 확인,
       PayloadSha256(분할 읽기 보정용)도 함께 제거. §2.4 authority 절 확장은 C-3에
       포함(golden에 authority 스키마 필요).
-- [ ] **C-3b descriptor payload 전-필드 규범 스키마 고정(2026-08-19 신설, 3언어
+- [x] **C-3b descriptor payload 전-필드 규범 스키마 고정(2026-08-19 신설, 3언어
       차단 해소)**: golden의 descriptor는 예시 최소형 — node/dotnet/java가 각자 형태
       발명 중이던 것을 java 정찰이 적발. 스펙 21 §2.3 논리 계약+4언어 실제 타입에서
       규범 필드 도출→§2.4 JSON 스키마 명문화→golden 전-필드 벡터→4언어 골든 갱신.
       **완료 `74a0ed04da`**(§2.4 전-필드 표+golden 6키/7값, 중복 generation 규범
       제외 판정, 4언어 골든 무변경 그린)
 - [x] C-3 store 레코드 golden fixture — `bdc3e8a8c5`: 6키/5값 벡터(redis Lua cmsgpack 실검증), 21 §2.4 authority 스키마·22 §7 확장, 4언어 소비 테스트 즉시 그린. C-4 명시 이월: cpp authority payload hex→base64, encode측 스탠딩 테스트
-- [ ] C-4 4언어 store 구현 수렴 — 진행: **키 브레이스 판정(2026-08-19): Cluster
+- [x] C-4 4언어 store 구현 수렴 — **완료(2026-08-19)**: java C-4a·node C-4b·
+      dotnet C-4c/e·cpp C-4d 전 슬라이스 마감, 4언어 실제-writer 골든 conformance
+      그린. 진행 기록: **키 브레이스 판정(2026-08-19): Cluster
       hashtag 리터럴 유지** — golden이 오독으로 brace-less 고정했던 것 정정
       `8a3804a110`. **java 슬라이스 1차 `326833810b`**(base64 제거=Lettuce codec
       문제였음·0x01 태그·PSETEX blob·프로덕션 encode conformance, 모듈 그린).
@@ -152,9 +154,10 @@
 - [x] C-4c dotnet Lua byte 정합 — **확정·수정 `d55d568e6b`**: 무태그 cmsgpack,
       -1 센티널, 정수 tombstone, 빈 tombstone version 전부 실재 → 수정·라이브 byte
       검증 [node 예측 적중]
-- [ ] C-4e dotnet store 마감 유닛(2026-08-19 신설, d55d568e6b 이월): ① authority
-      키를 canonical preimage로(대량 테스트 fixture가 raw 키 직생성 — 이관 범위 산정
-      필요), ② descriptor 하위 객체 전-필드 표 정렬(중첩 레코드 다수·공개 enum 위험)
+- [x] C-4e dotnet store 마감 유닛 — **완료**: ① authority 키 canonical preimage
+      `0c418de4b5`(fixture 4개소 이관, fault-injection double 2건), ② descriptor
+      전-필드 표 정렬 `a7309bb96d`(C-4f: DescriptorRecord recordVersion 도입·중복
+      generation 제거를 provider VersionOf로, 실제-writer 골든 3종)
 - [x] C-4d cpp store 마감 — **완료 `bc3b27a750`**: storeVersion을 provider 버전
       유도로 재설계(예측 카운터 6콜사이트 삭제, 소비자 무변경 검증), envelope 정렬,
       routing id hex 오변환 실버그 수정, 실제-writer 골든(mesh·authority-actor),
