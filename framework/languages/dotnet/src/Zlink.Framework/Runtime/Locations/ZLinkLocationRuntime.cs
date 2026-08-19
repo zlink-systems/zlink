@@ -341,7 +341,12 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         var stamped = descriptor with
         {
             OwnerId = ownerToken.OwnerId,
-            LeaseGeneration = ownerToken.LeaseGeneration
+            LeaseGeneration = ownerToken.LeaseGeneration,
+            // The canonical opaque descriptor stores the timestamp of this
+            // write. Stamp the payload before the provider persists it;
+            // updating only the local observation from result.UpdatedAt
+            // leaves DateTimeOffset's default value in Redis.
+            UpdatedAt = _time.GetUtcNow()
         };
         var result = await ExecuteLocationWriteAsync(
                 () => _store.UpdateMeshNodeAsync(stamped, intent, cancellationToken),

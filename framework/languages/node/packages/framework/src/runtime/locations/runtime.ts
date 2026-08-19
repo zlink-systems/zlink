@@ -545,7 +545,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       ...descriptor,
       ownerId: owner.ownerId,
       leaseGeneration: owner.leaseGeneration,
-      updatedAt: new Date(0)
+      // The canonical opaque descriptor carries the time of this write.
+      // It is part of the stored envelope, so it must be stamped before
+      // handing the descriptor to the provider rather than only on the
+      // in-process result after the write completes.
+      updatedAt: new Date()
     };
     let result = await this.guardWrite(() =>
       this.stores.locationStore.updateMeshNode(stamped, intent, signal));
