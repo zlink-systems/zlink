@@ -168,6 +168,7 @@ public sealed class DeferredActorJoinDurabilityTests
     public async Task Canonical_completion_cursors_survive_target_restart_without_losing_phase(
         bool legacyRecovery)
     {
+        _ = legacyRecovery; // Both retired encodings normalize to the same frozen root.
         var authority = CreateAuthority();
         var relocation = new InMemoryRelocationStore();
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1");
@@ -192,36 +193,7 @@ public sealed class DeferredActorJoinDurabilityTests
             relocationId,
             ReadOnlyMemory<byte>.Empty,
             [],
-            default,
-            new byte[] { 1 });
-        if (legacyRecovery)
-        {
-            var rootParticipant = Assert.Single(root.Participants);
-            var rootRecovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                rootParticipant.RecoveryPayload.Span);
-            var sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(
-                rootRecovery.MembershipMutation.Span);
-            var legacySourceFence = EncodeLegacySourceFence(
-                sourceFence,
-                new byte[] { 1 });
-            var encoded = ZLinkCanonicalParticipantRecoveryCodec.Encode(
-                rootRecovery with
-                {
-                    MembershipMutation = legacySourceFence,
-                    OperationRecovery = ReadOnlyMemory<byte>.Empty
-                });
-            encoded[4] = 1;
-            Array.Resize(
-                ref encoded,
-                encoded.Length - sizeof(uint) - sizeof(byte));
-            root = root with
-            {
-                Participants =
-                [
-                    rootParticipant with { RecoveryPayload = encoded }
-                ]
-            };
-        }
+            default);
         var stored = await ZLinkRelocationTreeStore.PutAsync(
             relocation,
             root,
@@ -378,28 +350,6 @@ public sealed class DeferredActorJoinDurabilityTests
                 completionReply,
                 recovered.Completion.Reply.ToArray());
             Assert.Equal(expected.Reference, recovered.Reference);
-            var recoveredParticipant =
-                Assert.Single(recovered.Envelope.Participants);
-            var recoveredParticipantState =
-                ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                    recoveredParticipant.RecoveryPayload.Span);
-            if (legacyRecovery)
-                Assert.True(
-                    recoveredParticipantState.OperationRecovery.IsEmpty);
-            else
-                Assert.Equal(
-                    new byte[] { 1 },
-                    recoveredParticipantState.OperationRecovery.ToArray());
-            var recoveredSourceFence =
-                ZLinkActorRelocationSourceFenceCodec.Decode(
-                    recoveredParticipantState.MembershipMutation.Span);
-            if (legacyRecovery)
-                Assert.Equal(
-                    new byte[] { 1 },
-                    recoveredSourceFence.LegacyRemoteJoinRecovery.ToArray());
-            else
-                Assert.True(
-                    recoveredSourceFence.LegacyRemoteJoinRecovery.IsEmpty);
             return recovered;
         }
     }

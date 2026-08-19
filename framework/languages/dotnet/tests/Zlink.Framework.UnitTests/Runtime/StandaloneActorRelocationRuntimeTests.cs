@@ -1384,13 +1384,18 @@ public sealed class StandaloneActorRelocationRuntimeTests
             CancellationToken.None);
         var participant = Assert.Single(identity.Participants);
         var target = TargetDescriptor();
-        var targetAuthority = ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-            ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                    participant.RecoveryPayload.Span)
-                .AuthorityPayload.Span,
-            out var decoded)
-            ? decoded
-            : throw new InvalidDataException();
+        var targetAuthority = SourceActorAuthority() with
+        {
+            State = ZLinkActorAuthorityState.Ready,
+            CurrentSpotId = target.EntrySpotId!,
+            CurrentSpotGeneration = target.LifecycleGeneration,
+            CurrentSpotKind = ZLinkSpotKind.Entry,
+            OwnerId = target.OwnerId,
+            OwnerLeaseGeneration = checked((ulong)target.LeaseGeneration),
+            MeshName = target.MeshName,
+            NodeRid = target.Rid,
+            NodeGeneration = target.LifecycleGeneration
+        };
         var id = new byte[16];
         relocationId.TryWriteBytes(id, bigEndian: true, out _);
         var canonicalPayload = ZLinkCanonicalRelocationAuthorityStateCodec

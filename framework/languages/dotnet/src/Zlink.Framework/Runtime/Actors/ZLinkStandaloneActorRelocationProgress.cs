@@ -121,6 +121,28 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             var payload = current.Canonical is { } canonical
                 ? canonical.SteadyAuthorityPayload
                 : LegacySteadyPayload(current.Authority.Payload, current.Phase);
+            // Direct transfer (spec 52 §3.1.7) carries the immutable root on
+            // command 52 rather than through the Relocation Store.  Its
+            // canonical authority has no tree pointer to load or delete.
+            if (current.Canonical is { RelocationReference.Length: 0 })
+            {
+                var direct = await authorityStore.CompareExchangeAuthorityAsync(
+                        identity.Participants.Single().AuthorityKey,
+                        current.Authority.StoreVersion,
+                        new ZLinkAuthorityMutation.Put(
+                            payload,
+                            ZLinkAuthorityGenerationTransition.Preserve,
+                            null,
+                            null),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (direct is ZLinkAuthorityCompareExchangeResult.Stored)
+                    return;
+                if (direct is ZLinkAuthorityCompareExchangeResult.Conflict)
+                    continue;
+                throw new InvalidOperationException(
+                    "Authority Store rejected direct standalone Actor steady normalization.");
+            }
             if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                     current.Authority.Payload.Span,
                     out var publication))
@@ -174,10 +196,28 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             .ConfigureAwait(false);
         if (read is not ZLinkAuthorityReadResult.Found found
             || found.Snapshot.OwnerId != targetOwner.OwnerId
-            || found.Snapshot.OwnerLeaseGeneration != targetOwner.LeaseGeneration
-            || !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                found.Snapshot.Payload.Span,
-                out var publication)
+            || found.Snapshot.OwnerLeaseGeneration != targetOwner.LeaseGeneration)
+            throw new ZLinkRelocationDataLostException(
+                "Standalone Actor relocation authority changed during replay.");
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                found.Snapshot.Payload.Span, out var directCanonical)
+            && directCanonical.RelocationReference.Length == 0)
+        {
+            if (directCanonical.RelocationHigh != identity.CanonicalRelocationHigh
+                || directCanonical.RelocationLow != identity.CanonicalRelocationLow)
+                throw new ZLinkRelocationDataLostException(
+                    "Standalone Actor direct-transfer authority changed its relocation identity.");
+            ValidateCanonicalFence(found.Snapshot, directCanonical);
+            return new ZLinkStandaloneActorRelocationProgress(
+                found.Snapshot,
+                CanonicalPhase(identity, directCanonical),
+                identity)
+            {
+                Canonical = directCanonical
+            };
+        }
+        if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
+                found.Snapshot.Payload.Span, out var publication)
             || publication.AggregateId != identity.AggregateId)
             throw new ZLinkRelocationDataLostException(
                 "Standalone Actor relocation authority changed during replay.");
@@ -201,18 +241,13 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                     out canonical)
                 || canonical.RelocationReference != publication.Reference
                 || canonical.RelocationChecksumCrc32c != publication.ChecksumCrc32c
-                || !ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                    ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                            root.Participants.Single().RecoveryPayload.Span)
-                        .AuthorityPayload.Span,
-                    out var rootPhase))
+                || !ZLinkActorAuthorityPayloadCodec.TryDecode(
+                    canonical.SteadyAuthorityPayload.Span,
+                    out _))
                 throw new ZLinkRelocationDataLostException(
-                    "Standalone Actor canonical authority or immutable phase seed is invalid.");
+                    "Standalone Actor canonical authority or target phase seed is invalid.");
             ValidateCanonicalFence(found.Snapshot, canonical);
-            phase = rootPhase with
-            {
-                Phase = CanonicalActorPhase(canonical.Phase)
-            };
+            phase = CanonicalPhase(identity, canonical);
         }
         else if (!ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
                      publication.ApplicationPayload.Span,
@@ -261,6 +296,22 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "Standalone Actor relocation target attempt fence changed.",
                 retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
+    }
+
+    private static ZLinkActorRelocationAuthorityPayload CanonicalPhase(
+        ZLinkRelocationEnvelope identity,
+        ZLinkCanonicalRelocationAuthorityProjection canonical)
+    {
+        if (!ZLinkActorAuthorityPayloadCodec.TryDecode(
+                canonical.SteadyAuthorityPayload.Span,
+                out var authority))
+            throw new ZLinkRelocationDataLostException(
+                "Standalone Actor canonical steady authority is invalid.");
+        return new ZLinkActorRelocationAuthorityPayload(
+            identity.AggregateId,
+            CanonicalActorPhase(canonical.Phase),
+            default,
+            ZLinkActorAuthorityPayloadCodec.Encode(authority));
     }
 
     private static ZLinkActorRelocationAuthorityPhase CanonicalActorPhase(

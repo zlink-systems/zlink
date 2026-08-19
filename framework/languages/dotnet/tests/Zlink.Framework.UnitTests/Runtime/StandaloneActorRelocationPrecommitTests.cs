@@ -137,6 +137,50 @@ public sealed class StandaloneActorRelocationPrecommitTests
     }
 
     [Fact]
+    public async Task Target_cutover_accepts_a_fenced_foreign_source_authority()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var sourceOwner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await store.ClaimOwnerLeaseAsync("foreign-source", TimeSpan.FromMinutes(1))).Token;
+        var targetOwner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await store.ClaimOwnerLeaseAsync("foreign-target", TimeSpan.FromMinutes(1))).Token;
+        var source = Descriptor(RoutingId.From("foreign-source"), sourceOwner);
+        var target = Descriptor(RoutingId.From("foreign-target"), targetOwner);
+        await store.UpdateMeshNodeAsync(source, ZLinkLocationWriteIntent.NewClaim);
+        await store.UpdateMeshNodeAsync(target, ZLinkLocationWriteIntent.NewClaim);
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var reservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await store.ReserveAsync(new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.Actor, key, "Game.Actor", $"intent:{actorId}",
+                SHA256.HashData("intent"u8), 6,
+                new ZLinkMeshNodeDescriptorKey("mesh", source.Rid), source.LifecycleGeneration,
+                sourceOwner, new byte[] { 1 }, new ZLinkCapacityVector(1, 0, null))));
+        var sourceAuthority = Authority(actorId, source, sourceOwner);
+        var steady = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await store.CommitAsync(reservation.Reservation,
+                ZLinkActorAuthorityPayloadCodec.Encode(sourceAuthority))).Snapshot;
+        var relocationId = Guid.NewGuid();
+        var envelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
+            ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
+                steady, sourceAuthority, target, relocationId,
+                ReadOnlyMemory<byte>.Empty, [], default), applicationVersion: 1);
+        var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
+            steady, sourceAuthority, target, envelope,
+            ZLinkRelocationTransferPayload.Create(envelope, 1024), applicationVersion: 1);
+
+        var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store)
+            .CommitTargetAsync(steady, envelope, prepare,
+                Authority(actorId, target, targetOwner), CancellationToken.None);
+
+        Assert.Equal(targetOwner.OwnerId, committed.OwnerId);
+        Assert.Equal(steady.AuthorityOwnerGeneration + 1,
+            committed.AuthorityOwnerGeneration);
+        Assert.Equal((byte)ZLinkStandaloneActorCanonicalPhase.Committed,
+            Projection(committed).Phase);
+    }
+
+    [Fact]
     public async Task Startup_recovery_aborts_exact_preparing_after_source_lease_expires()
     {
         var time = new ManualTimeProvider();

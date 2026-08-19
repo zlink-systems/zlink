@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -172,6 +173,28 @@ internal sealed class RelocationActorAdapter : IZLinkActorRelocationAdapter<Relo
     public ValueTask RestoreAsync(
         RelocationActor actor, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        // Node's cross-language relocation host writes its fixture state as
+        // JSON metadata, a newline, then the byte-exact application body.
+        // Keep the native little-endian fixture form for .NET sources while
+        // accepting that published Node test-host representation here.
+        var encoded = payload.Span;
+        if (!encoded.IsEmpty && encoded[0] == (byte)'{')
+        {
+            var separator = encoded.IndexOf((byte)'\n');
+            if (separator < 0)
+                throw new InvalidDataException(
+                    "Node relocation payload header is missing.");
+            using var header = JsonDocument.Parse(encoded[..separator].ToArray());
+            actor.StateVersion = header.RootElement
+                .GetProperty("stateVersion").GetInt32();
+            var nodeLength = header.RootElement
+                .GetProperty("applicationStateBytes").GetInt32();
+            actor.ApplicationState = encoded[(separator + 1)..].ToArray();
+            if (actor.ApplicationState.Length != nodeLength)
+                throw new InvalidDataException(
+                    "Node relocation application state size changed during restore.");
+            return ValueTask.CompletedTask;
+        }
         using var stream = new MemoryStream(payload.ToArray());
         using var reader = new BinaryReader(stream);
         actor.StateVersion = reader.ReadInt32();

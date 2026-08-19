@@ -382,10 +382,9 @@ public sealed class ActorRelocationProtocolTests
         var restored = ZLinkRelocationEnvelopeCodec.Decode(
             ZLinkRelocationEnvelopeCodec.Encode(canonical));
         var restoredParticipant = Assert.Single(restored.Participants);
-        var restoredPayload = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            restoredParticipant.RecoveryPayload.Span).OperationRecovery;
-        var restoredRecovery =
-            ZLinkActorRemoteJoinRecoveryCodec.Decode(restoredPayload.Span);
+        Assert.True(ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+            Assert.Single(restoredParticipant.AcceptedJobs).Payload.Span,
+            out _, out var restoredRecovery));
 
         Assert.Equal(requestPayload, restoredRecovery.Request.Request);
         Assert.Equal(replyPayload, restoredRecovery.Reply);

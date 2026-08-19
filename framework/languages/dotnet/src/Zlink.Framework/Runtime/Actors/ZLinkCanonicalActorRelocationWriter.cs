@@ -27,7 +27,26 @@ internal static class ZLinkCanonicalActorRelocationWriter
 
         var accepted = participant.AcceptedJobs
             .OrderBy(static job => job.AcceptedSequence)
-            .ToArray();
+            .ToList();
+        // Older in-process roots carried the routed-join recovery in ZLRP.
+        // The frozen kind-1 body cannot carry that private field, so project a
+        // valid record into saved-work before serialization. New producers
+        // already do this in CreateImmutableRoot and are left byte-for-byte
+        // unchanged.
+        if (!participant.RecoveryPayload.IsEmpty
+            && !accepted.Any(static job =>
+                ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                    job.Payload.Span, out _, out _))
+            && TryReadLegacyRemoteJoinRecovery(
+                participant.RecoveryPayload.Span, out var source, out var remote))
+        {
+            accepted.Add(ZLinkActorRemoteJoinRecoverySavedWork.Create(
+                accepted.Count == 0
+                    ? 1UL
+                    : checked(accepted[^1].AcceptedSequence + 1),
+                source,
+                remote));
+        }
         using var stream = new MemoryStream();
         stream.Write(inventory.AggregateId.ToByteArray(bigEndian: true));
         stream.WriteByte((byte)ZLinkPlacementObjectKind.Actor);
@@ -44,22 +63,19 @@ internal static class ZLinkCanonicalActorRelocationWriter
 
         U32(stream, 1);
         U64(stream, 1);
-        stream.WriteByte(participant.RecoveryPayload.IsEmpty ? (byte)1 : (byte)2);
+        // Discriminator 1 is always raw application state. Recovery is frozen
+        // saved-work, so ZLRP is never part of the canonical wire body.
+        stream.WriteByte(1);
         using (var state = new MemoryStream())
         {
             U64(state, checked((ulong)participant.ApplicationState.Length));
             state.Write(participant.ApplicationState.Span);
-            if (!participant.RecoveryPayload.IsEmpty)
-            {
-                U64(state, checked((ulong)participant.RecoveryPayload.Length));
-                state.Write(participant.RecoveryPayload.Span);
-            }
             U64(stream, checked((ulong)state.Length));
             state.Position = 0;
             state.CopyTo(stream);
         }
 
-        U32(stream, checked((uint)accepted.Length));
+        U32(stream, checked((uint)accepted.Count));
         foreach (var job in accepted)
         {
             if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
@@ -125,4 +141,34 @@ internal static class ZLinkCanonicalActorRelocationWriter
 
     private static void I64(Stream stream, long value) =>
         U64(stream, checked((ulong)value));
+
+    private static bool TryReadLegacyRemoteJoinRecovery(
+        ReadOnlySpan<byte> encoded,
+        out ZLinkActorRelocationSourceFence source,
+        out ReadOnlyMemory<byte> remote)
+    {
+        source = default!;
+        remote = default;
+        try
+        {
+            var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(encoded);
+            source = ZLinkActorRelocationSourceFenceCodec.Decode(
+                recovery.MembershipMutation.Span);
+            if (recovery.OperationRecovery.IsEmpty
+                && source.LegacyRemoteJoinRecovery.IsEmpty)
+                return false;
+            remote = ZLinkActorRemoteJoinRecoveryCodec.Encode(
+                ZLinkActorRemoteJoinRecoveryCodec.Decode(
+                    recovery.OperationRecovery.Span,
+                    source.LegacyRemoteJoinRecovery.Span));
+            return true;
+        }
+        catch (Exception error) when (error is InvalidDataException
+                                      or EndOfStreamException
+                                      or ArgumentException
+                                      or OverflowException)
+        {
+            return false;
+        }
+    }
 }

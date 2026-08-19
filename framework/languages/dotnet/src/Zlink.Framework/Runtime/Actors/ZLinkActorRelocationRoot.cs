@@ -38,25 +38,30 @@ internal static class ZLinkActorRelocationRoot
         if (participant.ObjectKind != ZLinkPlacementObjectKind.Actor
             || participant.ObjectGeneration != wire.ActorGeneration
             || participant.AuthorityOwnerGeneration
-            != wire.ActorAuthorityOwnerGeneration
-            || participant.RecoveryPayload.IsEmpty)
+            != wire.ActorAuthorityOwnerGeneration)
             throw DataLost(
                 $"Actor '{wire.ActorId}' relocation participant fences are invalid.");
 
         ZLinkActorRelocationRecoveryRecord recovery;
         ZLinkActorHandoffFrame[] frames;
-        ZLinkCanonicalParticipantRecovery canonical;
+        ZLinkCanonicalParticipantRecovery? canonical = null;
         try
         {
-            canonical =
-                ZLinkCanonicalParticipantRecoveryCodec.Decode(
+            if (!participant.RecoveryPayload.IsEmpty)
+            {
+                canonical = ZLinkCanonicalParticipantRecoveryCodec.Decode(
                     participant.RecoveryPayload.Span);
-            var sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(
-                canonical.MembershipMutation.Span);
-            recovery = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-                canonical.OperationRecovery.Span,
-                sourceFence.LegacyRemoteJoinRecovery.Span);
+                var sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(
+                    canonical.MembershipMutation.Span);
+                recovery = ZLinkActorRemoteJoinRecoveryCodec.Decode(
+                    canonical.OperationRecovery.Span,
+                    sourceFence.LegacyRemoteJoinRecovery.Span);
+            }
+            else if (!TryReadSavedRecovery(participant, out recovery))
+                throw new InvalidDataException();
             frames = participant.AcceptedJobs
+                .Where(static job => !ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                    job.Payload.Span, out _, out _))
                 .OrderBy(static job => job.AcceptedSequence)
                 .Select((job, index) =>
                     ZLinkCanonicalActorAcceptedJournal.Decode(
@@ -73,17 +78,17 @@ internal static class ZLinkActorRelocationRoot
                 retryAdvice: ZLinkRetryAdvice.DoNotRetry,
                 error);
         }
-        if (canonical.AuthorityKey != participant.AuthorityKey
+        if (canonical is not null && (canonical.AuthorityKey != participant.AuthorityKey
             || canonical.ObjectKind != participant.ObjectKind
             || canonical.ObjectGeneration != participant.ObjectGeneration
             || canonical.AuthorityOwnerGeneration
                != participant.AuthorityOwnerGeneration
             || !StringComparer.Ordinal.Equals(
                 canonical.StableType,
-                wire.ActorType))
+                wire.ActorType)))
             throw DataLost(
                 $"Actor '{wire.ActorId}' canonical participant recovery fences are invalid.");
-        var expectedInventoryDigest = ZLinkAggregateInventoryDigest.Compute(
+        var expectedInventoryDigest = canonical is null ? envelope.InventoryDigest : ZLinkAggregateInventoryDigest.Compute(
         [
             new ZLinkAggregateRelocationParticipant(
                 participant,
@@ -102,7 +107,7 @@ internal static class ZLinkActorRelocationRoot
         // compare; every non-sentinel fence must still match exactly.
         if (wire.RelocationInventoryDigest.Any(static value => value != 0)
             && !wire.RelocationInventoryDigest.AsSpan().SequenceEqual(
-                expectedInventoryDigest))
+                expectedInventoryDigest.Span))
             throw DataLost(
                 $"Actor '{wire.ActorId}' relocation inventory mutation is invalid.");
         envelope = envelope with { InventoryDigest = expectedInventoryDigest };
@@ -163,6 +168,19 @@ internal static class ZLinkActorRelocationRoot
             participant,
             recovery,
             frames);
+    }
+
+    private static bool TryReadSavedRecovery(
+        ZLinkRelocationParticipantEnvelope participant,
+        out ZLinkActorRelocationRecoveryRecord recovery)
+    {
+        recovery = default!;
+        var records = participant.AcceptedJobs.Where(job =>
+            ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                job.Payload.Span, out _, out _)).ToArray();
+        return records.Length == 1
+            && ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                records[0].Payload.Span, out _, out recovery);
     }
 
     internal static ZLinkRelocationManifestReference Reference(

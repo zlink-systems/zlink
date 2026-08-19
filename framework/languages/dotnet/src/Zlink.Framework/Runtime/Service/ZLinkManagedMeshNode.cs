@@ -5331,15 +5331,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             prepare.TargetAttemptGeneration,
             prepare.Coordinator);
         ZLinkRelocationChunkAssembler assembler;
+        var createdAssembly = false;
         try
         {
+            var candidate = new ZLinkRelocationChunkAssembler(
+                prepare.PayloadTotalLength,
+                prepare.PayloadChunkCount,
+                prepare.PayloadChecksumCrc32c);
             assembler = _inboundRelocationAssemblies.GetOrAdd(
-                assemblyKey,
-                static (_, manifest) => new ZLinkRelocationChunkAssembler(
-                    manifest.PayloadTotalLength,
-                    manifest.PayloadChunkCount,
-                    manifest.PayloadChecksumCrc32c),
-                prepare);
+                assemblyKey, candidate);
+            createdAssembly = ReferenceEquals(assembler, candidate);
             if (!assembler.MatchesManifest(
                     prepare.PayloadTotalLength,
                     prepare.PayloadChunkCount,
@@ -5355,14 +5356,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
             return;
         }
-        RunInboundOperation(
-            () => ProcessRelocationPrepareAsync(
-                target,
-                peer,
-                sourceNodeRid,
-                prepare,
-                assemblyKey,
-                assembler));
+        // A Prepare is retried while the source waits for Ready.  The first
+        // command owns the single assembler and waiter; duplicate commands
+        // must not start parallel restore attempts after the chunks complete.
+        if (createdAssembly)
+            RunInboundOperation(
+                () => ProcessRelocationPrepareAsync(
+                    target,
+                    peer,
+                    sourceNodeRid,
+                    prepare,
+                    assemblyKey,
+                    assembler));
     }
 
     /// <summary>

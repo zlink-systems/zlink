@@ -759,22 +759,26 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         sourceFence.LeaseGeneration,
                         sourceFence.NodeRid,
                         sourceFence.NodeGeneration)),
-                remoteJoinRecovery,
+                ReadOnlyMemory<byte>.Empty,
                 maintenancePolicy));
+        var savedWork = new List<ZLinkRelocationQueuedJob>();
+        if (!remoteJoinRecovery.IsEmpty)
+            savedWork.Add(ZLinkActorRemoteJoinRecoverySavedWork.Create(
+                1, ZLinkActorRelocationSourceFenceCodec.Decode(
+                    ZLinkCanonicalParticipantRecoveryCodec.Decode(recovery).MembershipMutation.Span),
+                remoteJoinRecovery));
+        savedWork.AddRange(acceptedRecords
+            .OrderBy(static accepted => accepted.Frame.ArrivalIndex)
+            .Select((accepted, index) => new ZLinkRelocationQueuedJob(
+                checked((ulong)index + (remoteJoinRecovery.IsEmpty ? 1UL : 2UL)),
+                ZLinkCanonicalActorAcceptedJournal.Encode(accepted, sourceActor))));
         var participant = new ZLinkRelocationParticipantEnvelope(
             ZLinkActorAuthorityPayloadCodec.AuthorityKey(sourceAuthority.ActorId),
             ZLinkPlacementObjectKind.Actor,
             sourceSnapshot.ObjectGeneration,
             sourceSnapshot.AuthorityOwnerGeneration,
             applicationState,
-            acceptedRecords
-                .OrderBy(static accepted => accepted.Frame.ArrivalIndex)
-                .Select((accepted, index) => new ZLinkRelocationQueuedJob(
-                    checked((ulong)index + 1),
-                    ZLinkCanonicalActorAcceptedJournal.Encode(
-                        accepted,
-                        sourceActor)))
-                .ToArray(),
+            savedWork,
             [],
             RecoveryPayload: recovery)
         {
@@ -1729,16 +1733,137 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         var participant = envelope.Participants.SingleOrDefault()
                           ?? throw DataLost(
                               "Standalone Actor relocation must contain one participant.");
-        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            participant.RecoveryPayload.Span);
-        var sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(
-            recovery.MembershipMutation.Span);
-        var remoteJoinRecovery = recovery.OperationRecovery.IsEmpty
-                                 && sourceFence.LegacyRemoteJoinRecovery.IsEmpty
-            ? null
-            : ZLinkActorRemoteJoinRecoveryCodec.Decode(
-                recovery.OperationRecovery.Span,
-                sourceFence.LegacyRemoteJoinRecovery.Span);
+        // Canonical Node writers identify the sole Actor participant by its
+        // object id.  .NET location APIs use the canonical actor authority
+        // key, so normalize that transport spelling before every store fence
+        // and target-progress operation below.
+        if (StringComparer.Ordinal.Equals(
+                participant.AuthorityKey.Value, prepare.Object.ObjectId))
+        {
+            participant = participant with
+            {
+                AuthorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(
+                    prepare.Object.ObjectId)
+            };
+            envelope = envelope with { Participants = [participant] };
+        }
+        ZLinkCanonicalParticipantRecovery recovery;
+        ZLinkActorRelocationSourceFence sourceFence;
+        ZLinkActorRelocationRecoveryRecord? remoteJoinRecovery = null;
+        try
+        {
+            recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
+                participant.RecoveryPayload.Span);
+            sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(
+                recovery.MembershipMutation.Span);
+            if (!recovery.OperationRecovery.IsEmpty
+                || !sourceFence.LegacyRemoteJoinRecovery.IsEmpty)
+                remoteJoinRecovery = ZLinkActorRemoteJoinRecoveryCodec.Decode(
+                    recovery.OperationRecovery.Span,
+                    sourceFence.LegacyRemoteJoinRecovery.Span);
+        }
+        // The canonical kind-1 state body deliberately has no ZLRP field.
+        // Decoding that empty legacy field fails at its first read with
+        // EndOfStreamException, while malformed non-empty records report
+        // InvalidDataException.  Both cases may be the saved-work migration.
+        catch (Exception error) when (
+            error is InvalidDataException or EndOfStreamException)
+        {
+            if (TryReadRoutedJoinSavedWork(
+                    participant, out sourceFence, out var savedRecovery))
+            {
+                remoteJoinRecovery = savedRecovery;
+                var store = registration.Locations.ResolveStore()
+                            ?? throw new ZLinkConfigurationException(
+                                "Standalone Actor relocation requires a Location Store.");
+                var source = await store.ReadAuthorityAsync(
+                        participant.AuthorityKey, cancellationToken)
+                    .ConfigureAwait(false);
+                if (source is not ZLinkAuthorityReadResult.Found found
+                    || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                        found.Snapshot.Payload.Span, out var sourceAuthority))
+                    throw DataLost("Standalone Actor routed-join recovery source authority is unavailable.");
+                var target = sourceAuthority with
+                {
+                    State = ZLinkActorAuthorityState.Ready,
+                    CurrentSpotId = savedRecovery.TargetSpotId,
+                    CurrentSpotGeneration = savedRecovery.TargetSpotGeneration,
+                    OwnerId = prepare.Target.OwnerId,
+                    OwnerLeaseGeneration = prepare.Target.OwnerLeaseGeneration,
+                    NodeRid = prepare.Target.NodeRid,
+                    NodeGeneration = prepare.Target.NodeGeneration
+                };
+                var derivedRelocating = ZLinkActorRelocationAuthorityPayloadCodec.Encode(
+                    new ZLinkActorRelocationAuthorityPayload(
+                        envelope.AggregateId,
+                        ZLinkActorRelocationAuthorityPhase.Activated,
+                        ZLinkRemoteActorJoinPackets.DecodeBoundSessionRoute(
+                            savedRecovery.Request),
+                        ZLinkActorAuthorityPayloadCodec.Encode(target)));
+                recovery = new ZLinkCanonicalParticipantRecovery(
+                    participant.AuthorityKey, participant.ObjectKind,
+                    participant.ObjectGeneration, participant.AuthorityOwnerGeneration,
+                    found.Snapshot.StoreVersion, sourceAuthority.StableType, derivedRelocating,
+                    ZLinkActorRelocationSourceFenceCodec.Encode(sourceFence),
+                    ReadOnlyMemory<byte>.Empty,
+                    ZLinkObjectMaintenancePolicyKind.Snapshot);
+            }
+            else if (participant.RecoveryPayload.IsEmpty)
+            {
+                // Whole-node relocation has no routed-join record.  Its frozen
+                // body is raw state, and command 40 carries the exact source
+                // fence while the target entry spot is local and generation
+                // fenced.  Reconstruct only that derived recovery projection.
+                var targetNode = runtime.GetSpotNodeRuntime(prepare.Target.NodeRid);
+                var store = registration.Locations.ResolveStore()
+                            ?? throw new ZLinkConfigurationException(
+                                "Standalone Actor relocation requires a Location Store.");
+                var source = await store.ReadAuthorityAsync(
+                        participant.AuthorityKey, cancellationToken)
+                    .ConfigureAwait(false);
+                if (source is not ZLinkAuthorityReadResult.Found found
+                    || string.IsNullOrWhiteSpace(
+                        found.Snapshot.Allocation.StableType))
+                    throw DataLost(
+                        "Standalone Actor canonical recovery source authority is unavailable.");
+                var stableType = found.Snapshot.Allocation.StableType;
+                sourceFence = new ZLinkActorRelocationSourceFence(
+                    prepare.Coordinator.OwnerId,
+                    prepare.Coordinator.LeaseGeneration,
+                    prepare.SourceNodeRid,
+                    prepare.SourceNodeGeneration);
+                var target = new ZLinkActorAuthorityPayload(
+                    ZLinkActorAuthorityState.Ready,
+                    stableType,
+                    prepare.Object.ObjectId,
+                    targetNode.EntrySpotId,
+                    prepare.Target.NodeGeneration,
+                    ZLinkSpotKind.Entry,
+                    prepare.Target.OwnerId,
+                    prepare.Target.OwnerLeaseGeneration,
+                    targetNode.Node.MeshStatus().MeshName,
+                    prepare.Target.NodeRid,
+                    prepare.Target.NodeGeneration);
+                var derivedRelocating = ZLinkActorRelocationAuthorityPayloadCodec.Encode(
+                    new ZLinkActorRelocationAuthorityPayload(
+                        envelope.AggregateId,
+                        ZLinkActorRelocationAuthorityPhase.Activated,
+                        default,
+                        ZLinkActorAuthorityPayloadCodec.Encode(target)));
+                recovery = new ZLinkCanonicalParticipantRecovery(
+                    participant.AuthorityKey, participant.ObjectKind,
+                    participant.ObjectGeneration, participant.AuthorityOwnerGeneration,
+                    found.Snapshot.StoreVersion, stableType,
+                    derivedRelocating,
+                    ZLinkActorRelocationSourceFenceCodec.Encode(sourceFence),
+                    ReadOnlyMemory<byte>.Empty,
+                    ZLinkObjectMaintenancePolicyKind.Snapshot);
+            }
+            else
+            {
+                throw;
+            }
+        }
         var effectiveTargetAuthorityOwnerGeneration =
             remoteJoinRecovery?.TargetAuthorityOwnerGeneration
             ?? targetAuthorityOwnerGeneration;
@@ -1907,6 +2032,24 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     .ConfigureAwait(false);
             throw;
         }
+    }
+
+    internal static bool TryReadRoutedJoinSavedWork(
+        ZLinkRelocationParticipantEnvelope participant,
+        out ZLinkActorRelocationSourceFence source,
+        out ZLinkActorRelocationRecoveryRecord recovery)
+    {
+        source = default!;
+        recovery = default!;
+        var matches = participant.AcceptedJobs
+            .Where(job => ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                job.Payload.Span, out _, out _))
+            .ToArray();
+        if (matches.Length != 1
+            || !ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                matches[0].Payload.Span, out source, out recovery))
+            return false;
+        return true;
     }
 
     internal static ZLinkSpotActivation? ResolveTargetMembership(
@@ -2575,6 +2718,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         try
         {
             return jobs.OrderBy(static job => job.AcceptedSequence)
+                .Where(static job => !ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                    job.Payload.Span, out _, out _))
                 .Select(job => ZLinkCanonicalActorAcceptedJournal.Decode(
                         job.Payload.Span,
                         checked((long)job.AcceptedSequence))
@@ -3256,14 +3401,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                        ?? throw new ZLinkRelocationDataLostException(
                            "Standalone Actor target reference is unavailable during replay.");
         var initialParticipant = identity.Participants.Single();
-        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            initialParticipant.RecoveryPayload.Span);
-        var source = ZLinkActorRelocationSourceFenceCodec.Decode(
-            recovery.MembershipMutation.Span);
-        var sourceActor = new ZLinkBackendActorRef(
-            source.NodeRid,
-            actorState.ActorId,
-            initialParticipant.ObjectGeneration);
         var targetOwner = RequireStandaloneActorTargetOwner();
         var coordinator = CreateStandaloneActorProgressCoordinator(
             targetAuthority,
@@ -3275,12 +3412,37 @@ internal sealed partial class ZLinkFrameworkRuntime
                 targetOwner,
                 cancellationToken)
             .ConfigureAwait(false);
-
+        ZLinkActorRelocationSourceFence source;
+        if (!initialParticipant.RecoveryPayload.IsEmpty)
+        {
+            var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
+                initialParticipant.RecoveryPayload.Span);
+            source = ZLinkActorRelocationSourceFenceCodec.Decode(
+                recovery.MembershipMutation.Span);
+        }
+        else if (!ZLinkStandaloneActorRelocationRuntime.TryReadRoutedJoinSavedWork(
+                     initialParticipant, out source, out _))
+        {
+            if (progress.Canonical is not { } canonical)
+                throw new ZLinkRelocationDataLostException(
+                    "Standalone Actor replay has no canonical source fence.");
+            source = new ZLinkActorRelocationSourceFence(
+                canonical.State.SourceOwnerId,
+                canonical.State.SourceOwnerLeaseGeneration,
+                RoutingId.From(canonical.State.SourceNodeRid),
+                canonical.State.SourceNodeGeneration);
+        }
+        var sourceActor = new ZLinkBackendActorRef(
+            source.NodeRid,
+            actorState.ActorId,
+            initialParticipant.ObjectGeneration);
         var pipeline = new ZLinkActorInboundPipeline(
             this,
             new ZLinkEntrySpotActorInboundEndpoint(this));
         var participant = progress.Root.Participants.Single();
         var pendingJobs = participant.AcceptedJobs
+            .Where(static job => !ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
+                job.Payload.Span, out _, out _))
             .OrderBy(static candidate => candidate.AcceptedSequence)
             .ToArray();
         var barrier = actorState.ReserveHandoffRestoreBarrier();
