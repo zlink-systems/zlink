@@ -2,9 +2,11 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
@@ -12,6 +14,8 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -19,6 +23,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
@@ -291,6 +297,45 @@ final class ZLinkBoundActorRouteContractTest {
             clientReply.get().kind());
         assertEquals(Optional.of(41L),
             clientReply.get().requestSequence());
+    }
+
+    @Test
+    void relocationRouteNeverReadySurfacesDeadlineExceeded() {
+        ZLinkBoundActor actor = new ZLinkBoundActor(
+            null,
+            RoutingId.from("session"),
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-a"), "actor-1", 7),
+            "game",
+            Optional.empty(),
+            null,
+            new UnsupportedSerializer(),
+            0,
+            1,
+            ignored -> false,
+            null,
+            true,
+            ZLinkStreamCodec.JSON,
+            new ZLinkSessionRelayHeaders(),
+            null,
+            () -> true,
+            operation -> operation.apply(1),
+            ZLinkRelayMetadataPolicy.EMPTY);
+
+        CompletionException observed = assertThrows(
+            CompletionException.class,
+            () -> actor.prepareNativeActorRoute(
+                    new ZLinkBackendActorRef(
+                        RoutingId.from("actor-node-b"), "actor-1", 7),
+                    Duration.ZERO)
+                .toCompletableFuture()
+                .join());
+
+        ZLinkFrameworkException framework = assertInstanceOf(
+            ZLinkFrameworkException.class, observed.getCause());
+        assertEquals(
+            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, framework.kind());
+        assertInstanceOf(TimeoutException.class, framework.getCause());
     }
 
     private static ZLinkBoundActor actor(boolean currentBinding) {

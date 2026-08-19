@@ -26,6 +26,8 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
@@ -168,9 +170,19 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 timeout,
                 () -> routeReady.test(targetActor.nodeRid()),
                 () -> {},
-                () -> new TimeoutException(
-                    "remote bound session route was not ready before timeout: "
-                        + targetActor.actorId())))
+                () -> {
+                    String message =
+                        "remote bound session route was not ready before"
+                            + " timeout: " + targetActor.actorId();
+                    //  Spec 32-framework-error-model:90 — a route wait past
+                    //  its deadline is DeadlineExceeded, not a raw language
+                    //  timeout. The TimeoutException cause is kept for
+                    //  diagnostics.
+                    return new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        message,
+                        new TimeoutException(message));
+                }))
             .thenRun(() -> relocationTrace("route-ready", targetActor))
             .thenCompose(ignored -> stream.relocateBoundActor(
                     sessionRid,

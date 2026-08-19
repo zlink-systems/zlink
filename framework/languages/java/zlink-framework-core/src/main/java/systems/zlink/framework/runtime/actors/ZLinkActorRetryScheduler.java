@@ -10,6 +10,9 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+
 final class ZLinkActorRetryScheduler {
     private static final Duration RELAY_RETRY_DELAY = Duration.ofMillis(10);
     private static final Duration ROUTE_RETRY_DELAY = Duration.ofMillis(20);
@@ -161,8 +164,20 @@ final class ZLinkActorRetryScheduler {
                             result.complete(null);
                             return;
                         }
-                        if (!retryableFailure.test(error) || System.nanoTime() >= deadline) {
+                        if (!retryableFailure.test(error)) {
                             result.completeExceptionally(error);
+                            return;
+                        }
+                        if (System.nanoTime() >= deadline) {
+                            //  Spec 32-framework-error-model:90 — retryable
+                            //  bind attempts that exhaust their deadline
+                            //  surface DeadlineExceeded; the last attempt's
+                            //  failure stays observable as the cause.
+                            result.completeExceptionally(new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                "bind retries did not complete within their"
+                                    + " deadline",
+                                error));
                             return;
                         }
                         scheduleRelay(this);

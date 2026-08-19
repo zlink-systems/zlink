@@ -24,6 +24,8 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 
 import systems.zlink.framework.streams.ZLinkStreamCodec;
@@ -126,9 +128,19 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             timeout,
             () -> routeReady.test(targetActor.nodeRid()),
             () -> {},
-            () -> new TimeoutException(
-                "remote bound session route was not ready before timeout: "
-                    + actorId));
+            () -> {
+                String message =
+                    "remote bound session route was not ready before timeout: "
+                        + actorId;
+                //  Spec 32-framework-error-model:90 — an operation that does
+                //  not complete within its deadline is DeadlineExceeded, not a
+                //  raw language timeout. The TimeoutException cause is kept
+                //  for diagnostics.
+                return new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    message,
+                    new TimeoutException(message));
+            });
     }
 
     private CompletionStage<Void> relayBoundSessionBind(

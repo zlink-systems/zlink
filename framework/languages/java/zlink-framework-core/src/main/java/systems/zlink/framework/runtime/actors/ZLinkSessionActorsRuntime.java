@@ -2273,9 +2273,18 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 + " actorNode=" + ref.nodeRid()
                 + " actorId=" + ref.actorId()
                 + " generation=" + ref.generation() : null),
-            () -> new TimeoutException(
-                "session relay route was not ready before timeout: "
-                    + ref.actorId()));
+            () -> {
+                String message =
+                    "session relay route was not ready before timeout: "
+                        + ref.actorId();
+                //  Spec 32-framework-error-model:90 — a route wait past its
+                //  deadline is DeadlineExceeded, not a raw language timeout.
+                //  The TimeoutException cause is kept for diagnostics.
+                return new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    message,
+                    new TimeoutException(message));
+            });
     }
 
     private static void trace(String message) {
