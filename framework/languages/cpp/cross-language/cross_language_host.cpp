@@ -539,7 +539,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
 
         /* (a) round trip; the peer handshake is asynchronous, so transient
          * unavailability is retried until the deadline. */
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (15);
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (60);
         while (true) {
             auto reply = routes
                            .request_to_node (_channel, target,

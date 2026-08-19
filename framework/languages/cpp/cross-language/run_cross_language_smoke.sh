@@ -39,9 +39,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The java-cross and relocation* stages never spawn the C++ host (java-cross
-# is Java<->Node and Java<->.NET only; relocation is Node<->.NET only;
-# relocation-java-dotnet is Java<->.NET only), so none of them require the
+# The java-cross and relocation stages never spawn the C++ host (java-cross
+# is Java<->Node and Java<->.NET only; relocation covers Node<->.NET and
+# Java<->.NET), so none of them require the
 # C++ binary to be built.
 if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation" ]] \
@@ -179,6 +179,9 @@ stage_cpp_client_dotnet_channel_server() {
     --server-endpoint "${endpoint}" \
     --event-file "${events}"
   wait_for_ready "${RUN_DIR}/dotnet-channel-server.ready" 180
+  # The ready file confirms that the host has built its listener, while the
+  # C++ client's selectable-target snapshot is populated asynchronously.
+  sleep 16
   start_cpp cpp-channel-client channel-client \
     --channel-name profiles \
     --server-endpoint "${endpoint}" \
@@ -1073,6 +1076,8 @@ stage_dotnet_source_java_target_relocation() {
 
 run_relocation_stages() {
   stage_node_source_dotnet_target_relocation
+  stage_java_source_dotnet_target_relocation
+  stage_dotnet_source_java_target_relocation
 }
 
 run_java_dotnet_relocation_stages() {
