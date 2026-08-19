@@ -246,12 +246,10 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
         var current = await provider.ReadAsync(rowKey, cancellationToken)
             .ConfigureAwait(false);
-        ulong generation = 1;
         ZLinkStoreCondition rowCondition;
         if (current is ZLinkStoreReadResult.Found found)
         {
-            var record = Decode<MeshRecord>(found.Value.Bytes);
-            generation = record.Generation;
+            var record = DecodeDescriptor<ZLinkMeshNodeDescriptor>(found.Value.Bytes);
             var stored = record.Descriptor;
             var renew = intent == ZLinkLocationWriteIntent.Renew
                         && stored.OwnerId == descriptor.OwnerId
@@ -270,7 +268,6 @@ internal sealed partial class ZLinkProviderLocationRepository(
                     .ConfigureAwait(false);
                 if (previousOwner is ZLinkStoreReadResult.Found)
                     return ZLinkLocationWriteResult.IgnoredStale;
-                generation = checked(generation + 1);
             }
             rowCondition = new ZLinkStoreCondition.Version(
                 rowKey,
@@ -284,8 +281,10 @@ internal sealed partial class ZLinkProviderLocationRepository(
         }
 
         var encodedDescriptor = JsonSerializer.SerializeToUtf8Bytes(
-            new MeshRecord(
-                generation,
+            new DescriptorRecord<ZLinkMeshNodeDescriptor>(
+                descriptor.OwnerId,
+                descriptor.LeaseGeneration,
+                descriptor.DescriptorRevision,
                 descriptor),
             ZLinkJsonSerializerOptions.Default);
         return await WriteDescriptorWithReconciliationAsync(
@@ -304,7 +303,6 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         null)
                 ]),
                 encodedDescriptor,
-                generation,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -319,7 +317,9 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (current is not ZLinkStoreReadResult.Found found)
             return ZLinkLocationWriteStatus.IgnoredStale;
-        var descriptor = Decode<MeshRecord>(found.Value.Bytes).Descriptor;
+        var descriptor =
+            DecodeDescriptor<ZLinkMeshNodeDescriptor>(found.Value.Bytes)
+                .Descriptor;
         if (descriptor.OwnerId != owner.OwnerId
             || descriptor.LeaseGeneration != owner.LeaseGeneration)
         {
@@ -350,7 +350,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
         return await ListCompleteSnapshotPageAsync(
                 MeshPrefix(meshName),
                 page,
-                static bytes => Decode<MeshRecord>(bytes).Descriptor,
+                static bytes =>
+                    DecodeDescriptor<ZLinkMeshNodeDescriptor>(bytes).Descriptor,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -376,6 +377,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             descriptor.DescriptorRevision,
             descriptor,
             intent,
+            static d => d.LifecycleGeneration,
             static (current, next) =>
                 current.Endpoint == next.Endpoint
                 && current.SecurityIdentity == next.SecurityIdentity,
@@ -423,6 +425,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             descriptor.DescriptorRevision,
             descriptor,
             intent,
+            static d => d.LifecycleGeneration,
             static (current, next) =>
                 current.Endpoint == next.Endpoint
                 && current.SecurityIdentity == next.SecurityIdentity,
@@ -473,7 +476,9 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 owner,
                 static bytes =>
                 {
-                    var descriptor = Decode<MeshRecord>(bytes).Descriptor;
+                    var descriptor =
+                        DecodeDescriptor<ZLinkMeshNodeDescriptor>(bytes)
+                            .Descriptor;
                     return new ZLinkLocationOwnerToken(
                         descriptor.OwnerId,
                         descriptor.LeaseGeneration);
@@ -485,8 +490,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 owner,
                 static bytes =>
                 {
-                    var descriptor = Decode<
-                        DescriptorRecord<ZLinkClientServerServerDescriptor>>(
+                    var descriptor = DecodeDescriptor<
+                        ZLinkClientServerServerDescriptor>(
                             bytes).Descriptor;
                     return new ZLinkLocationOwnerToken(
                         descriptor.OwnerId,
@@ -499,8 +504,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 owner,
                 static bytes =>
                 {
-                    var descriptor = Decode<
-                        DescriptorRecord<ZLinkFanoutPublisherDescriptor>>(
+                    var descriptor = DecodeDescriptor<
+                        ZLinkFanoutPublisherDescriptor>(
                             bytes).Descriptor;
                     return new ZLinkLocationOwnerToken(
                         descriptor.OwnerId,
@@ -570,6 +575,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ulong descriptorRevision,
         T descriptor,
         ZLinkLocationWriteIntent intent,
+        Func<T, ulong> lifecycleGenerationOf,
         Func<T, T, bool> immutableFieldsEqual,
         CancellationToken cancellationToken)
     {
@@ -583,12 +589,10 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
         var current = await provider.ReadAsync(rowKey, cancellationToken)
             .ConfigureAwait(false);
-        ulong generation = 1;
         ZLinkStoreCondition rowCondition;
         if (current is ZLinkStoreReadResult.Found found)
         {
-            var record = Decode<DescriptorRecord<T>>(found.Value.Bytes);
-            generation = record.Generation;
+            var record = DecodeDescriptor<T>(found.Value.Bytes);
             var storedOwner = record.OwnerId;
             var storedLeaseGeneration = record.LeaseGeneration;
             var storedOwnerLease = await provider.ReadAsync(
@@ -603,12 +607,11 @@ internal sealed partial class ZLinkProviderLocationRepository(
             if (intent == ZLinkLocationWriteIntent.Renew
                 && (storedOwner != ownerId
                     || storedLeaseGeneration != leaseGeneration
-                    || record.LifecycleGeneration != lifecycleGeneration
+                    || lifecycleGenerationOf(record.Descriptor)
+                    != lifecycleGeneration
                     || descriptorRevision <= record.DescriptorRevision
                     || !immutableFieldsEqual(record.Descriptor, descriptor)))
                 return ZLinkLocationWriteResult.IgnoredStale;
-            if (intent != ZLinkLocationWriteIntent.Renew)
-                generation = checked(generation + 1);
             rowCondition = new ZLinkStoreCondition.Version(
                 rowKey,
                 found.Value.Version);
@@ -622,10 +625,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
         var encodedDescriptor = JsonSerializer.SerializeToUtf8Bytes(
             new DescriptorRecord<T>(
-                generation,
                 ownerId,
                 leaseGeneration,
-                lifecycleGeneration,
                 descriptorRevision,
                 descriptor),
             ZLinkJsonSerializerOptions.Default);
@@ -645,17 +646,39 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         null)
                 ]),
                 encodedDescriptor,
-                generation,
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    // The framework no longer keeps its own generation counter inside the
+    // descriptor payload (21-location-runtime.md#2.4: "a provider-internal
+    // storage-row version counter... isn't added to this canonical JSON,
+    // because the opaque record's own... version member already fills that
+    // role") -- the Generation this repository hands back to a caller is
+    // derived from the provider's own per-key version returned by the write
+    // (or, on an idempotent-replay reconciliation, the post-read version of
+    // the row actually on the store), the same "version_of" pattern the cpp
+    // store closure landed for storeVersion. Every caller of Update*Async's
+    // result only ever treats Generation as a "did this write actually get
+    // applied" nonzero marker (ZLinkAutoConnectReconciler's _localGeneration
+    // gate), never as a real sequence number, so VersionOf below falls back
+    // to a stable 1 when the provider's version string isn't a plain
+    // decimal integer -- true for the live Redis provider, whose per-key Put
+    // version is a freshly issued GUID, not a counter.
+    private static ulong VersionOf(ZLinkStoreVersion version) =>
+        ulong.TryParse(
+            version.Value,
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out var parsed) && parsed != 0
+            ? parsed
+            : 1;
 
     private async ValueTask<ZLinkLocationWriteResult>
         WriteDescriptorWithReconciliationAsync(
             ZLinkStoreKey rowKey,
             ZLinkStoreWriteRequest request,
             ReadOnlyMemory<byte> encodedDescriptor,
-            ulong generation,
             CancellationToken cancellationToken)
     {
         ZLinkStoreWriteResult result;
@@ -682,7 +705,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         encodedDescriptor.Span))
                 {
                     return ZLinkLocationWriteResult.Stored(
-                        generation,
+                        VersionOf(found.Value.Version),
                         found.Value.StoreNow);
                 }
             }
@@ -696,7 +719,9 @@ internal sealed partial class ZLinkProviderLocationRepository(
         }
 
         return result is ZLinkStoreWriteResult.Applied applied
-            ? ZLinkLocationWriteResult.Stored(generation, applied.StoreNow)
+            ? ZLinkLocationWriteResult.Stored(
+                VersionOf(applied.PutVersions[rowKey]),
+                applied.StoreNow)
             : ZLinkLocationWriteResult.IgnoredStale;
     }
 
@@ -711,7 +736,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (current is not ZLinkStoreReadResult.Found found)
             return ZLinkLocationWriteStatus.IgnoredStale;
-        var record = Decode<DescriptorRecord<T>>(found.Value.Bytes);
+        var record = DecodeDescriptor<T>(found.Value.Bytes);
         if (ownerId(record.Descriptor) != owner.OwnerId
             || leaseGeneration(record.Descriptor) != owner.LeaseGeneration)
             return ZLinkLocationWriteStatus.IgnoredStale;
@@ -738,7 +763,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         return await ListCompleteSnapshotPageAsync(
                 prefix,
                 page,
-                static bytes => Decode<DescriptorRecord<T>>(bytes).Descriptor,
+                static bytes => DecodeDescriptor<T>(bytes).Descriptor,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -808,6 +833,25 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ?? throw new InvalidDataException(
             "The Location Store record is invalid.");
 
+    // Descriptor records (mesh-node/client-server/fanout-publisher) check
+    // recordVersion explicitly (21-location-runtime.md#2.4: "The framework,
+    // not the provider, checks this value; on an unrecognized value it
+    // fails explicitly instead of guessing how to read it"). Scoped to
+    // DescriptorRecord<T> rather than folded into the generic Decode<T>
+    // above, since Decode<T> is also used for the owner-lease record, whose
+    // own recordVersion check is a pre-existing gap outside this closure
+    // item's scope.
+    private static DescriptorRecord<T> DecodeDescriptor<T>(
+        ReadOnlyMemory<byte> bytes)
+    {
+        var record = Decode<DescriptorRecord<T>>(bytes);
+        if (record.RecordVersion != 1)
+            throw new InvalidDataException(
+                "The Location Store descriptor record has an unrecognized"
+                + " recordVersion.");
+        return record;
+    }
+
     // Canonical opaque-record envelope for the owner-lease record
     // (21-location-runtime.md#2.4): recordVersion is currently always 1,
     // and leaseGeneration is a decimal-string 64-bit value per the field
@@ -826,15 +870,29 @@ internal sealed partial class ZLinkProviderLocationRepository(
         public int RecordVersion { get; init; } = 1;
     }
 
-    private sealed record MeshRecord(
-        ulong Generation,
-        ZLinkMeshNodeDescriptor Descriptor);
-
+    // Canonical opaque-record envelope shared by the mesh-node/
+    // client-server/fanout-publisher descriptors (21-location-runtime.md
+    // #2.4's general table): {recordVersion, ownerId, leaseGeneration,
+    // descriptorRevision, descriptor}. No top-level lifecycleGeneration and
+    // no provider-internal generation counter -- both were removed by the
+    // C-4f store closure; lifecycleGeneration only lives inside `descriptor`
+    // now (callers read it back out via a per-T selector), and the
+    // generation this repository reports to a caller is derived from the
+    // provider's own opaque version instead (see VersionOf above).
     private sealed record DescriptorRecord<T>(
-        ulong Generation,
         string OwnerId,
+        [property: JsonConverter(
+            typeof(Messaging.ZLinkJsonSerializerOptions
+                .FrameworkSigned64JsonConverter))]
         long LeaseGeneration,
-        ulong LifecycleGeneration,
+        [property: JsonConverter(
+            typeof(Messaging.ZLinkJsonSerializerOptions
+                .FrameworkUnsigned64JsonConverter))]
         ulong DescriptorRevision,
-        T Descriptor);
+        T Descriptor)
+    {
+        [JsonPropertyName("recordVersion")]
+        [JsonPropertyOrder(-1)]
+        public int RecordVersion { get; init; } = 1;
+    }
 }

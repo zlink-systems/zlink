@@ -4314,7 +4314,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                 $"eligible_target_rejected reason=no_descriptor mesh={key.MeshName}");
             return null;
         }
-        var descriptor = Decode<MeshRecord>(descriptorFound.Value.Bytes).Descriptor;
+        var descriptor =
+            DecodeDescriptor<ZLinkMeshNodeDescriptor>(descriptorFound.Value.Bytes)
+                .Descriptor;
         var ownerRead = await ReadLiveOwnerAsync(owner, cancellationToken)
             .ConfigureAwait(false);
         //  Nine guards below share one bare null. Name the values they compare

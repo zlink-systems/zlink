@@ -164,7 +164,16 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         }
 
         Assert.Equal(ZLinkLocationWriteStatus.Stored, result.Status);
-        Assert.Equal(1UL, result.Generation);
+        // Generation is no longer a predicted advance-by-one counter kept
+        // inside the record body (21-location-runtime.md#2.4 / checklist
+        // C-4f): it's derived from the provider's own opaque version, so
+        // this reconciliation path (ambiguous write -> re-read -> matching
+        // bytes) only guarantees a nonzero "the write was actually applied"
+        // marker, not a specific number -- the in-memory provider's
+        // version is a store-wide counter that has already advanced past 1
+        // by the time this descriptor write happens (the owner claim above
+        // wrote two keys of its own).
+        Assert.True(result.Generation > 0);
     }
 
     [Fact]

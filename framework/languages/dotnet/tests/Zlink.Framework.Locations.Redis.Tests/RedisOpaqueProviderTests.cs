@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -755,6 +756,313 @@ public sealed class RedisOpaqueProviderTests(RedisTestFixture fixture)
         Assert.Equal(
             JsonValueKind.Null,
             json.GetProperty("pendingCreation").ValueKind);
+    }
+
+    /// <summary>
+    /// Checklist C-4f (dotnet store closure, descriptor sub-object field
+    /// tables): drives a real UpdateMeshNodeAsync through the production
+    /// ZLinkProviderLocationRepository against live Redis, reads the raw
+    /// stored bytes back through the opaque provider, and structurally
+    /// compares them against 21-location-runtime.md#2.4's MeshNode
+    /// descriptor field table / the store-record-v1.json
+    /// "meshNodeDescriptor-normal" golden vector's shape (field names,
+    /// string- vs number-encoded integers, string enums). Exact
+    /// leaseGeneration/descriptorRevision numbers aren't asserted against
+    /// the golden's "5"/"3" -- a real claimed lease won't reproduce those
+    /// arbitrary picks -- so this compares shape, not bytes.
+    /// </summary>
+    [SkippableFact]
+    public async Task MeshNode_descriptor_uses_the_canonical_field_table()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var repository = new ZLinkProviderLocationRepository(store);
+
+        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await repository.ClaimOwnerLeaseAsync(
+                "mesh-descriptor-golden-owner",
+                TimeSpan.FromMinutes(2))).Token;
+        var rid = RoutingId.From("mesh-descriptor-golden-node");
+        var descriptor = new ZLinkMeshNodeDescriptor(
+            "golden-mesh",
+            rid,
+            1,
+            3,
+            "tcp://127.0.0.1:7401",
+            new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["billing"] = 100
+            },
+            "golden-node-identity",
+            owner.OwnerId,
+            owner.LeaseGeneration,
+            DateTimeOffset.FromUnixTimeMilliseconds(1700000000000))
+        {
+            ApplicationVersion = 2,
+            ObjectCapabilities =
+            [
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.Actor,
+                    "chat",
+                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                    false,
+                    0),
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.UserSpot,
+                    "game",
+                    ZLinkObjectMaintenancePolicyKind.Snapshot,
+                    true,
+                    500)
+            ],
+            ObjectRole = ZLinkMeshNodeObjectRole.Server,
+            EntrySpotId = "entry-1",
+            PlacementWeight = 100,
+            Capacity = new ZLinkPlacementCapacity(
+                new ZLinkPopulationCapacity(3, 1, 0),
+                new ZLinkPopulationCapacity(2, 0, 100),
+                [
+                    new ZLinkSpotTypeCapacity(
+                        ZLinkPlacementObjectKind.UserSpot,
+                        "game",
+                        2,
+                        0,
+                        100)
+                ]),
+            ActivationConcurrency = new ZLinkActivationConcurrency(0, 128),
+            State = ZLinkFrameworkRuntimeState.Serving
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                descriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        var rowKey = ZLinkProviderLocationRepository.MeshKey(
+            descriptor.MeshName, rid);
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await store.ReadAsync(rowKey));
+        using var parsed = JsonDocument.Parse(read.Value.Bytes);
+        var json = parsed.RootElement;
+
+        Assert.Equal(1, json.GetProperty("recordVersion").GetInt32());
+        Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
+            json.GetProperty("leaseGeneration").GetString());
+        Assert.Equal("3", json.GetProperty("descriptorRevision").GetString());
+
+        var payload = json.GetProperty("descriptor");
+        Assert.Equal("golden-mesh", payload.GetProperty("meshName").GetString());
+        Assert.Equal(rid.ToHex(), payload.GetProperty("routingIdHex").GetString());
+        Assert.Equal("1", payload.GetProperty("lifecycleGeneration").GetString());
+        Assert.Equal("3", payload.GetProperty("descriptorRevision").GetString());
+        Assert.Equal(
+            "tcp://127.0.0.1:7401",
+            payload.GetProperty("endpoint").GetString());
+        Assert.Equal("entry-1", payload.GetProperty("entrySpotId").GetString());
+        Assert.Equal(
+            100,
+            payload.GetProperty("channelWeights").GetProperty("billing").GetInt32());
+        Assert.Equal("2", payload.GetProperty("applicationVersion").GetString());
+        var capabilities = payload.GetProperty("objectCapabilities");
+        Assert.Equal(2, capabilities.GetArrayLength());
+        Assert.Equal("actor", capabilities[0].GetProperty("objectKind").GetString());
+        Assert.Equal("chat", capabilities[0].GetProperty("stableType").GetString());
+        Assert.Equal("disabled", capabilities[0].GetProperty("policy").GetString());
+        Assert.False(capabilities[0].GetProperty("hasSnapshotAdapter").GetBoolean());
+        Assert.Equal(0, capabilities[0].GetProperty("limit").GetInt32());
+        Assert.Equal("userSpot", capabilities[1].GetProperty("objectKind").GetString());
+        Assert.Equal("snapshot", capabilities[1].GetProperty("policy").GetString());
+        Assert.True(capabilities[1].GetProperty("hasSnapshotAdapter").GetBoolean());
+        Assert.Equal(500, capabilities[1].GetProperty("limit").GetInt32());
+        Assert.Equal("server", payload.GetProperty("objectRole").GetString());
+        Assert.Equal(100, payload.GetProperty("placementWeight").GetInt32());
+        var capacity = payload.GetProperty("capacity");
+        Assert.Equal(3, capacity.GetProperty("actors").GetProperty("active").GetInt32());
+        Assert.Equal(1, capacity.GetProperty("actors").GetProperty("reserved").GetInt32());
+        Assert.Equal(0, capacity.GetProperty("actors").GetProperty("limit").GetInt32());
+        Assert.Equal(2, capacity.GetProperty("spots").GetProperty("active").GetInt32());
+        Assert.Equal(100, capacity.GetProperty("spots").GetProperty("limit").GetInt32());
+        var spotTypes = capacity.GetProperty("spotTypes");
+        Assert.Equal(1, spotTypes.GetArrayLength());
+        Assert.Equal("userSpot", spotTypes[0].GetProperty("objectKind").GetString());
+        Assert.Equal("game", spotTypes[0].GetProperty("stableType").GetString());
+        var activation = payload.GetProperty("activationConcurrency");
+        Assert.Equal(0, activation.GetProperty("active").GetInt32());
+        Assert.Equal(128, activation.GetProperty("limit").GetInt32());
+        Assert.Equal(
+            JsonValueKind.Null,
+            payload.GetProperty("maintenanceWave").ValueKind);
+        Assert.Equal("serving", payload.GetProperty("state").GetString());
+        Assert.Equal(
+            "golden-node-identity",
+            payload.GetProperty("securityIdentity").GetString());
+        Assert.Equal(owner.OwnerId, payload.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
+            payload.GetProperty("leaseGeneration").GetString());
+        Assert.Equal(
+            "1700000000000",
+            payload.GetProperty("updatedAtEpochMs").GetString());
+        // No provider-internal generation counter leaks into the payload
+        // (21-location-runtime.md#2.4).
+        Assert.False(json.TryGetProperty("generation", out _));
+        Assert.False(payload.TryGetProperty("generation", out _));
+    }
+
+    /// <summary>
+    /// Checklist C-4f: same shape proof as the MeshNode test above, for the
+    /// ClientServer server descriptor's field table (21-location-runtime.md
+    /// #2.4 / store-record-v1.json's "clientServerDescriptor-normal"
+    /// vector).
+    /// </summary>
+    [SkippableFact]
+    public async Task ClientServer_descriptor_uses_the_canonical_field_table()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var repository = new ZLinkProviderLocationRepository(store);
+
+        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await repository.ClaimOwnerLeaseAsync(
+                "client-server-descriptor-golden-owner",
+                TimeSpan.FromMinutes(2))).Token;
+        var rid = RoutingId.From("client-server-descriptor-golden-server");
+        var descriptor = new ZLinkClientServerServerDescriptor(
+            "golden-channel",
+            rid,
+            1,
+            4,
+            "tcp://127.0.0.1:7402",
+            100,
+            ZLinkFrameworkRuntimeState.Serving,
+            "golden-server-identity",
+            owner.OwnerId,
+            owner.LeaseGeneration,
+            DateTimeOffset.FromUnixTimeMilliseconds(1700000001000));
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateClientServerAsync(
+                descriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        var rowKey = ZLinkProviderLocationRepository.ClientServerKey(
+            descriptor.ChannelName, rid);
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await store.ReadAsync(rowKey));
+        using var parsed = JsonDocument.Parse(read.Value.Bytes);
+        var json = parsed.RootElement;
+
+        Assert.Equal(1, json.GetProperty("recordVersion").GetInt32());
+        Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
+            json.GetProperty("leaseGeneration").GetString());
+        Assert.Equal("4", json.GetProperty("descriptorRevision").GetString());
+
+        var payload = json.GetProperty("descriptor");
+        Assert.Equal(
+            "golden-channel",
+            payload.GetProperty("channelName").GetString());
+        Assert.Equal(
+            rid.ToHex(),
+            payload.GetProperty("serverRoutingIdHex").GetString());
+        Assert.Equal("1", payload.GetProperty("lifecycleGeneration").GetString());
+        Assert.Equal("4", payload.GetProperty("descriptorRevision").GetString());
+        Assert.Equal(
+            "tcp://127.0.0.1:7402",
+            payload.GetProperty("endpoint").GetString());
+        Assert.Equal(100, payload.GetProperty("weight").GetInt32());
+        Assert.Equal("serving", payload.GetProperty("state").GetString());
+        Assert.Equal(
+            "golden-server-identity",
+            payload.GetProperty("securityIdentity").GetString());
+        Assert.Equal(owner.OwnerId, payload.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
+            payload.GetProperty("leaseGeneration").GetString());
+        Assert.Equal(
+            "1700000001000",
+            payload.GetProperty("updatedAtEpochMs").GetString());
+        Assert.False(json.TryGetProperty("generation", out _));
+        Assert.False(payload.TryGetProperty("generation", out _));
+    }
+
+    /// <summary>
+    /// Checklist C-4f: same shape proof for the fanout publisher
+    /// descriptor's field table (21-location-runtime.md#2.4 /
+    /// store-record-v1.json's "fanoutPublisherDescriptor-normal" vector --
+    /// the ClientServer shape minus weight).
+    /// </summary>
+    [SkippableFact]
+    public async Task FanoutPublisher_descriptor_uses_the_canonical_field_table()
+    {
+        Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
+        await using var store = fixture.CreateStore();
+        var repository = new ZLinkProviderLocationRepository(store);
+
+        var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await repository.ClaimOwnerLeaseAsync(
+                "fanout-descriptor-golden-owner",
+                TimeSpan.FromMinutes(2))).Token;
+        var rid = RoutingId.From("fanout-descriptor-golden-publisher");
+        var descriptor = new ZLinkFanoutPublisherDescriptor(
+            "golden-channel",
+            rid,
+            1,
+            1,
+            "tcp://127.0.0.1:7403",
+            ZLinkFrameworkRuntimeState.Serving,
+            "golden-publisher-identity",
+            owner.OwnerId,
+            owner.LeaseGeneration,
+            DateTimeOffset.FromUnixTimeMilliseconds(1700000002000));
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateFanoutPublisherAsync(
+                descriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        var rowKey = ZLinkProviderLocationRepository.FanoutKey(
+            descriptor.ChannelName, rid);
+        var read = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await store.ReadAsync(rowKey));
+        using var parsed = JsonDocument.Parse(read.Value.Bytes);
+        var json = parsed.RootElement;
+
+        Assert.Equal(1, json.GetProperty("recordVersion").GetInt32());
+        Assert.Equal(owner.OwnerId, json.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
+            json.GetProperty("leaseGeneration").GetString());
+        Assert.Equal("1", json.GetProperty("descriptorRevision").GetString());
+
+        var payload = json.GetProperty("descriptor");
+        Assert.Equal(
+            "golden-channel",
+            payload.GetProperty("channelName").GetString());
+        Assert.Equal(
+            rid.ToHex(),
+            payload.GetProperty("publisherRoutingIdHex").GetString());
+        Assert.Equal("1", payload.GetProperty("lifecycleGeneration").GetString());
+        Assert.Equal("1", payload.GetProperty("descriptorRevision").GetString());
+        Assert.Equal(
+            "tcp://127.0.0.1:7403",
+            payload.GetProperty("endpoint").GetString());
+        Assert.False(payload.TryGetProperty("weight", out _));
+        Assert.Equal("serving", payload.GetProperty("state").GetString());
+        Assert.Equal(
+            "golden-publisher-identity",
+            payload.GetProperty("securityIdentity").GetString());
+        Assert.Equal(owner.OwnerId, payload.GetProperty("ownerId").GetString());
+        Assert.Equal(
+            owner.LeaseGeneration.ToString(CultureInfo.InvariantCulture),
+            payload.GetProperty("leaseGeneration").GetString());
+        Assert.Equal(
+            "1700000002000",
+            payload.GetProperty("updatedAtEpochMs").GetString());
+        Assert.False(json.TryGetProperty("generation", out _));
+        Assert.False(payload.TryGetProperty("generation", out _));
     }
 
     private static string Sha256Hex(string value) =>
