@@ -395,6 +395,17 @@
       2^63-1=무변경 소진, 최대 발급 2^63-2)+node owner-counter 정렬, 경계
       무변경 테스트 ⑨ [M] java 집계 범위 소진 → **해소 `bb6ac7b00c`**(경계 선검사+typed 전파, near-ceiling
       테스트)
+- [ ] **C-9d sol 4차 배치 리뷰(2026-08-19) — 3건(그 외 전부 CLEAN), 배정**:
+      ① [H] node aggregate relocation이 공유 authority-owner-counter를 우회
+      (개별 row +1, location-store-repository.ts:591-618 — 일반 경로 :1033은
+      정상; 혼합 런타임서 중복 발급 가능) → node 수정 ② [M] 비정규 counter
+      bytes(0·선행0·+부호) 수신 판정 4언어 상이(cpp만 엄격) → 3언어 strict
+      canonical decode 정렬 ③ [M] cpp error envelope가 missing/unknown
+      errorCode를 request_failed/InternalFailure로 관용 수용(spec 32:
+      ProtocolError 요구; java 숫자 0..12 수용도 포함) → cpp+수신 의미론 정렬.
+      **CLEAN 확정 사항**: dotnet cmd-44 순서 스펙 무위반(:1371→:1399, Join
+      terminal 선행), java ClientServer 신원 'default' 호환, cpp terminal
+      identity fence-empty 커버, 정상 error-code 13종 이름/bytes 4언어 일치
 - [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
       비가역성 위반(→판정 정정: 기한 도달 시 Location Store authority 조회로 확정
