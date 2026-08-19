@@ -374,12 +374,11 @@
       errorSink 관찰화(바인딩 유지·롤백 금지), 137/137 그린** ⑨ [L] feature-map ST-B2 행 "commit ack" 잔재 —
       코디네이터 즉시 수정
 - [ ] **C-9c sol 3차 배치 리뷰(2026-08-19) — 9건(배치1 dotnet direct-join은
-      clean), 전량 배정**: ① [H] cpp pending terminal 식별이 OperationId만으로
-      키잉(spec 51 §667: source-owner lifecycle 한정 유일+fence 포함 필요 —
-      교차 lifecycle 충돌·오귀속 가능, cpp 큐) ② [M] parking-node 폴백이 구
-      송신자에 대해 미소유 노드로 오배송+가변 relay 메타(비인증) — cpp 큐
-      ③ [H] cpp bind 재시도가 STREAM 실행 스레드 동기 점유(기아 위험, 비동기
-      스케줄링으로 이전 — cpp 큐) ④ [H] node acknowledged bind 실패 → **해소 `53fcdc55dc`**: 스펙 20 정밀 재독 —
+      clean), 전량 배정**: ①②③ cpp 3건 → **해소 `0e5f6d6b51`**: pending key에 source RID+fence 스코핑(동일
+      OperationId 교차 lifecycle 공존 pin), requester 폴백 제거(명시 drop
+      metric+trace, clean-break), bind 대기 co_await 전환(경계·소진 불변).
+      부수: app_host 간헐의 진범 규명 — /tmp 고정 이름 로그 오염(결정적 정리
+      추가). 게이트 43/43, ST-C2 3/3·SF-F2 그린 ④ [H] node acknowledged bind 실패 → **해소 `53fcdc55dc`**: 스펙 20 정밀 재독 —
       최초 bind는 owner terminal 성공 후에만 route 저장(§127-153)이라 실패 시
       공개 실패+임시 바인딩 해제, relocation 44 갱신만 보고-전용(§389-438).
       기존 판정의 과일반화 정정 ⑤ [H] java cmd-44 순서 → **해소 `bb6ac7b00c`**: Join terminal 후 44 발신+실패 탈결합
