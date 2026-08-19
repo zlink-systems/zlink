@@ -180,10 +180,9 @@
       wire-admitted actor의 route 바인딩, chunk limit의 relocation 소비자 연결,
       전체 host-fixture e2e — C-7 라이브 검증에서 함께 판정** (service-wire cross-node join 요청/응답,
       binary tail 탑재 — codec은 `7ed3992ccd`로 기구현, node 발신 경로 참조)
-- [ ] C-6 dotnet actorJoin 발신 연산 — **terra 구현 완료(actorJoin(28) originate +
-      tail completion, spot fence·peer 세대 일치 시 wire 선택, JSON 경로 무변경;
-      요청 frame round-trip 테스트 작성)**. sandbox가 vstest TCP bind를 막아 검증
-      미실행 — dotnet C-4 게이트 종료 후 코디네이터 로컬 검증→커밋 예정
+- [x] C-6 dotnet actorJoin 발신 — **완료(terra 구현 + sonnet 검증·수정)**: 디코더
+      오류 분류 버그 수정, cpp와 byte 레이아웃 완전 일치 검증, 게이트 닫힘 증명
+      (generation-0 계약 의존 — 전용 게이트 테스트는 D급 후속), 1756/1759 그린
 - [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 (JoinEntrySpot 경로 우선,
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
