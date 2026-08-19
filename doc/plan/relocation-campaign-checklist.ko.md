@@ -603,7 +603,14 @@
       prepare_target·prepare_relocation_remote가 task_t<relocation_reason_t>
       반환, aggregate·single-object 경로 모두 실패 분류 보존,
       relocationDataLost=checksum_mismatch M6B 테스트 고정.
-- [ ] E-5 E 단계 전체 sol 리뷰 + 전 게이트 재확인
+- [x] E-5 E 단계 전체 sol 리뷰 — **완료(2026-08-20), 발견 4건 전부 처분**:
+      [M] E-4가 원격 workerQueueFull을 소스 소유 permit_unavailable로 오분류
+      (spec 32: 외국 capacity=Unavailable) → **수정 `ccfdbc4184`**(restore_failed
+      귀착+m6b pin, unregister 루프 중복도 헬퍼로 통합=[L]④ 동시 해소);
+      [L] E-3 순수 이동 아님(디셔너리 최적화 동반, 동작 등가·진단 문구만 상이)
+      — 수용; [L] E-2 discard가 unregister 예외를 삼켜 실패 reply 보장 — 개선
+      으로 수용. m6a/b/c 그린(m6b 1회 SEGFAULT는 기지 환경 flake, 단독 3연속
+      그린). 전 게이트 재확인은 G 게이트에 위임.
 
 ## F. 별도 캠페인 (이 캠페인 범위 외 — 착수 시 별도 계획 문서)
 
