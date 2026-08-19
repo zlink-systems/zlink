@@ -491,7 +491,11 @@
       ⑤ [M] dotnet owner-counter strict → **해소 `ebd79c54d3`**(+3-participant 골든의 dotnet
       실패 2건은 낡은 기대값 판정·갱신 — 디코더는 다중 participant 정상,
       게이트 1780/1783 인가만)
-      ⑥ [H] node public bind() generic Error 래핑 — node 재구조화 후 정렬.
+      ⑥ [H] node public bind() 래핑 → **해소 `971ed36314`**(typed 재던짐).
+      **node stream 수렴 대완결 `971ed36314`** + java 골든 pin `68cfcb4cdc`:
+      bare control·frozen backlog·store inventory·rich timer·spot+actor 전부
+      relocation-envelope-v1, spotFence 필드 누락(pilot 적발) 동봉, 전 게이트
+      그린. wire 수렴 잔여 = cpp(W-3 생성 스왑)뿐.
       **pilot5 부산물: 동치 하네스가 실결함 적발** — node spotFence()가
       spot-route-fence의 expectedOwnerLeaseGeneration 미직렬화(스키마 위반,
       service-stateful-wire-codec.ts:2069) → node 큐 편입; cpp·dotnet 28 동치
