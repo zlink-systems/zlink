@@ -32,9 +32,11 @@
 
 ## B. 원 캠페인(M9) 잔여 검증 게이트
 
-- [x] cpp e2e ST-C4 — **완료 `284d78ca74`**: identity-conflict variant 3/3 그린
-      (청정 독점 재빌드). checksum variant는 wire seam 부재로 정직한 부분 판정
-      유지, feature-map에 기록
+- [ ] cpp e2e ST-C4 — 구현 `284d78ca74`(identity-conflict variant 3/3 그린).
+      **sol 2차 [H]로 체크 철회(2026-08-19)**: 현 variant는 독립된 두 public Join의
+      통상 reservation 경합이지 config-10이 계약한 "동일 relocation identity의
+      checksum/길이 불일치" assembly 충돌이 아님 — 계약 fault point 경유 재작성
+      필요(cpp 트랙 배정)
 - [ ] cpp e2e Track F 신설 — **구현 랜딩 `284d78ca74`**(relocation 노드 역할·
       공유 계약·4시나리오·run_e2e 배선). SF-F2/F3에서 relocation 자체는 단대단
       완결 검증(F3는 Redis 중단 중 포함), 클린 패스는 아래 29초 공백 결함에 차단.
@@ -229,6 +231,22 @@
 - [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 (JoinEntrySpot 경로 우선,
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
+- [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
+      ① [H] cpp 28 수신이 승인 전용 admission에서 relocation/commit 수행(spec 15
+      §478-527: 임시 큐+factory 준비만; later-attempt-wins도 미준수) — 게이트
+      닫힘이라 잠재, cpp actorJoin 재구조화 유닛 ② [H] dotnet 28 발신이 승인
+      응답을 완료된 Join으로 처리(seal/capture/CAS/merge 부재) — 동일 유닛(dotnet)
+      ③ [H] cpp actorJoin 실패를 전부 Unavailable로 붕괴(spec 32: ProtocolError/
+      DeadlineExceeded 구분 필요; 협상 limit 폐기) ④ [H] java가 relocationFailed
+      (53) 코드 무시하고 generic IllegalStateException(ZLinkCanonicalRelocation
+      StateMachine:685) — 4언어 수신 분류 parity 파괴, java 에이전트 투입
+      ⑤ [H] ST-C4 계약 variant 미검증(B 섹션에 반영) ⑥ [H] run_e2e.sh가 Track F
+      미실행인데 집계 성공 보고(:68-73) — cpp 트랙 ⑦ [M] dotnet authority/owner-
+      lease 리더 recordVersion 미검증(spec 21 §420-425 fail-closed), cpp는 부재
+      버전 허용 — 각 언어 마감 ⑧ [M] node acknowledged 경로가 즉시 거부를
+      DeadlineExceeded로 오분류+production이 예외 폐기(session-actor-coordinator
+      :168) — node 에이전트 투입 ⑨ [L] feature-map ST-B2 행 "commit ack" 잔재 —
+      코디네이터 즉시 수정
 - [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
       비가역성 위반(→판정 정정: 기한 도달 시 Location Store authority 조회로 확정

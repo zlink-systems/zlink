@@ -16,7 +16,7 @@ context는 HTTP·connector 연결과 반복되는 evidence 조회만 제공한�
 | ST-A2 | `implemented` | local admission 거절과 joined side effect 부재를 검사한다. |
 | ST-A3 | `implemented` | joined gate가 유지되는 동안 actor packet이 완료되지 않는지 검사한다. |
 | ST-B1 | `implemented` | stateful remote transfer와 target state를 검사한다. Target authority commit(Location Store CAS 한 번, `location_committed`로 관측)이 `joined`보다 먼저 완료되는지 확인하고, target의 `location_committed`와 source의 `source_cleanup`이 같은 transfer id와 message-flow correlation을 공유하는지 확인한다. (mesh `commit_request`/`commit_ack` packet 교환은 8bae89dc0f 이후 존재하지 않는다 -- relocation commit은 target 쪽 Location Store CAS 한 번으로 바뀌었다.) |
-| ST-B2 | `implemented` | commit ack 뒤 success reply를 확인하고 source cleanup evidence가 아직 없을 때 source를 중단한 뒤 target generation과 packet 처리가 유지되는지 검사한다. |
+| ST-B2 | `implemented` | target의 Location Store commit(`location_committed`) 뒤 success reply를 확인하고 source cleanup evidence가 아직 없을 때 source를 중단한 뒤 target generation과 packet 처리가 유지되는지 검사한다. |
 | ST-B3 | `implemented` | adapter 미등록 시 빈 state transfer와 source·target callback 순서를 검사하고, commit 경계 marker가 같은 transfer id와 message-flow correlation을 공유하는지 확인한다. |
 | ST-B4 | `implemented` | 명시적인 빈 state transfer 뒤 target state를 검사한다. |
 | ST-C1 | `implemented` | admission 뒤 commit 전 source를 중단하고, target의 구조화된 `pending_admission_expired` evidence와 target membership·dispatch 부재를 검사한다. |
