@@ -116,7 +116,12 @@ inline void run_sf_f2_scenario (const options_t &options)
         const auto &new_actor_id = new_actor.actor_id;
         const auto new_result = df::relocate (node_a, new_actor_id, "SF-F2", spot.spot_id);
         sf_client::ensure (new_result.accepted, "SF-F2 new call after a failure was not accepted");
-        df::wait_evidence (node_b, {"|" + new_actor_id + "|transfer_in|"});
+        // Wait for the join to complete (not just the payload arrival) before
+        // asserting the committed location, exactly like variant 1: the
+        // location commit precedes the joined callback, so `joined` evidence
+        // is the earliest point the target ref is stable to read.
+        df::wait_evidence (node_b, {"|" + new_actor_id + "|transfer_in|",
+                                    "|" + new_actor_id + "|joined|"});
         const auto ref_new = df::get_actor_ref (node_b, new_actor_id);
         sf_client::ensure (ref_new.node_rid == "df-b",
                            "SF-F2 new call did not complete at the target");

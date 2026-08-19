@@ -18,6 +18,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -3616,6 +3617,195 @@ int same_rid_registration_retains_retired_close_handler ()
 /* async-execution-policy §1.3: the session Actor relay waiter is bounded —
  * when the FIFO is full a new relay completes immediately with
  * DeadlineExceeded and is never submitted later. */
+int parked_request_without_route_fence_receives_reply_after_replay ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace host = zlink::framework::runtime::host;
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    // Regression pin (SF-F2 hang): an actor_request that arrives while the
+    // actor's transfer is still open parks in the handoff backlog and is
+    // replayed with a handoff terminal route. The pending entry that maps
+    // the terminal back to the original reply token must be recorded even
+    // when the requester attached no actor_route fence (e.g. a local
+    // requester on the current owner). Before the fix the entry was only
+    // recorded for fenced requests, so the replayed reply was silently
+    // dropped and the requester waited forever.
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 16, "parked-replay-worker");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("actor-a");
+    spot->spot_id = spot_id_t ("actor-a-user");
+    spot->spot_name = "user";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (
+      spot->spot_id, spot_context_access_t::create (spot));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) {
+        return std::make_shared<int> (7);
+    };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "parked-actor", 1);
+    const auto key = std::string ("player:parked-actor");
+    node->actor_instances.emplace (key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (key, spot->spot_id);
+    node->actor_generations.emplace (key, 1);
+    node->actor_types_by_id.emplace ("parked-actor", "player");
+
+    std::atomic_bool handler_ran{false};
+    spot->handlers.push_back (spot_handler_descriptor_t{
+      spot_handler_kind_t::actor_request, "ParkedProbe", "",
+      std::type_index (typeid (int)), std::type_index (typeid (void)),
+      std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [&handler_ran] (
+        void *, void *, service_provider_t &, serializer_registry_t &,
+        const zlink::message_t &, const spot_inbound_message_t &)
+        -> task_t<zlink::message_t> {
+          handler_ran.store (true, std::memory_order_release);
+          co_return zlink::message_t::from (std::string ("pong"));
+      });
+
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    node->root_services = services.build_provider ();
+    auto provider = services.build_provider ();
+
+    // The transfer is open when the request arrives: it must park.
+    if (!node->actor_transfer_coordinator.try_begin_local (key))
+        return 1;
+
+    std::mutex reply_mutex;
+    std::vector<zlink::message_t> reply_parts;
+    const auto reply_host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        .mesh = {
+          .descriptor = {
+            .mesh_name = "parked-replay",
+            .node_routing_id =
+              zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    host::receive_record_t record{
+      .kind = host::record_kind_t::actor_request,
+      .domain = host::ready_domain_t::application};
+    record.operation_id = host::call_id_t{41, 43};
+    record.source_node_rid = zlink::routing_id_t::from (std::string ("actor-a"));
+    record.reply_route_id = 57;
+    record.reply_token.host = reply_host;
+    record.reply_token.local_reply =
+      [&reply_mutex, &reply_parts] (const std::vector<zlink::message_t> &parts) {
+          const std::lock_guard lock (reply_mutex);
+          reply_parts = parts;
+          return true;
+      };
+    // Deliberately NO record.actor_route: the requester attached no fence.
+
+    const host::ready_record_t owner{
+      .owner_kind = host::owner_kind_t::actor,
+      .domain = host::ready_domain_t::application,
+      .spot_id = std::string (spot->spot_id),
+      .actor = actor};
+
+    messaging::envelope_codec_t codec;
+    auto encoded = codec.encode_raw_body_parts (
+      messaging::envelope_header_t{
+        .kind = messaging::message_kind_t::request,
+        .channel_name = "actor",
+        .message_name = "ParkedProbe",
+        .correlation_id = "parked-request-1"},
+      zlink::message_t::from (std::string ("ping")));
+    auto request_parts = std::move (encoded).take_items ();
+
+    spot_node_runtime_t spots (node);
+    (void) spots.dispatch_mesh_record (
+      owner, record, request_parts, provider, serializers);
+
+    // The request must park (not dispatch) and the pending handoff entry
+    // that owns the original reply token must be recorded despite the
+    // missing route fence.
+    const auto park_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    bool pending_recorded = false;
+    while (std::chrono::steady_clock::now () < park_deadline) {
+        {
+            std::lock_guard<std::recursive_mutex> lock (node->mutex);
+            pending_recorded = node->pending_handoff_requests.contains ({41, 43});
+        }
+        if (pending_recorded)
+            break;
+        std::this_thread::yield ();
+    }
+    if (!pending_recorded)
+        return 2;
+    if (handler_ran.load (std::memory_order_acquire))
+        return 3;
+
+    // Give the relay coroutine time to finish parking the packet, then
+    // close the move the production way: replay drains the backlog and the
+    // handoff terminal must find the pending entry and deliver the reply.
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    spots.fail_remote_actor_transfer (actor, false, std::nullopt);
+
+    const auto reply_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    for (;;) {
+        {
+            const std::lock_guard lock (reply_mutex);
+            if (!reply_parts.empty ())
+                break;
+        }
+        if (std::chrono::steady_clock::now () >= reply_deadline) {
+            std::lock_guard<std::recursive_mutex> lock (node->mutex);
+            std::cerr << "parked-replay debug: handler_ran="
+                      << handler_ran.load () << " pending="
+                      << node->pending_handoff_requests.size () << " phase="
+                      << (node->actor_transfer_coordinator.phase (key)
+                            ? static_cast<int> (
+                                *node->actor_transfer_coordinator.phase (key))
+                            : -1)
+                      << '\n';
+            return 4;
+        }
+        std::this_thread::yield ();
+    }
+    if (!handler_ran.load (std::memory_order_acquire))
+        return 5;
+    std::vector<zlink::message_t> delivered;
+    {
+        const std::lock_guard lock (reply_mutex);
+        delivered = reply_parts;
+    }
+    const auto reply_header = codec.decode_header (
+      messaging::message_parts_t (std::move (delivered)));
+    if (!reply_header)
+        return 6;
+    if (reply_header.value ().kind != messaging::message_kind_t::response)
+        return 7;
+    {
+        std::lock_guard<std::recursive_mutex> lock (node->mutex);
+        if (node->pending_handoff_requests.contains ({41, 43}))
+            return 8;
+    }
+    return 0;
+}
+
 int session_relay_waiter_capacity_is_bounded ()
 {
     using namespace zlink::framework;
@@ -3669,6 +3859,11 @@ int session_relay_waiter_capacity_is_bounded ()
 
 int main ()
 {
+    if (const auto parked_reply =
+          parked_request_without_route_fence_receives_reply_after_replay ();
+        parked_reply != 0) {
+        return 360 + parked_reply;
+    }
     if (const auto capacity = session_relay_waiter_capacity_is_bounded ();
         capacity != 0) {
         return 290 + capacity;

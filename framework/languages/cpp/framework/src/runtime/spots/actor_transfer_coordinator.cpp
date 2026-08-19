@@ -357,6 +357,23 @@ actor_transfer_coordinator_t::message_follow_target (
       route->target_fence};
 }
 
+bool actor_transfer_coordinator_t::message_follow_targets_node (
+  const std::string &actor_key, const zlink::routing_id_t &node) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _message_follow_routes.find (actor_key);
+    if (found == _message_follow_routes.end ())
+        return false;
+    const auto now = std::chrono::steady_clock::now ();
+    return std::ranges::any_of (found->second, [&] (const auto &route) {
+        return route.remove_at > now
+               && zlink::routing_id_t::from (
+                    std::string (route.target_route.node_rid.value ()))
+                    .to_bytes ()
+                    == node.to_bytes ();
+    });
+}
+
 bool actor_transfer_coordinator_t::has_message_follow_route (
   const std::string &actor_key) const
 {

@@ -222,6 +222,13 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
     bool has_message_follow_route (const std::string &actor_key) const;
+    // True when any active Message Follow route for actor_key points at the
+    // given node. A pending handoff request recorded without a route fence
+    // (the requester attached none) cannot name the exact followed edge, so
+    // its terminal is admitted against the node identity of the retained
+    // follow targets instead.
+    bool message_follow_targets_node (const std::string &actor_key,
+                                      const zlink::routing_id_t &node) const;
     // A cold hit (no incoming follow fence, e.g. a client probing the old
     // owner directly) has no fence to match against. It does carry the
     // ObjectGeneration it believes the Actor is still at, which relocation

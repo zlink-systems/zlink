@@ -10099,12 +10099,26 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     || found->second.reply_route_id != *reply_route) {
                     return true;
                 }
-                const auto target = _state->actor_transfer_coordinator.message_follow_target (
-                  actor_key (found->second.actor), found->second.source_fence);
-                if (!target
-                    || zlink::routing_id_t::from (
-                         std::string (target->route.node_rid.value ())).to_bytes ()
-                         != record.source_node_rid.to_bytes ()) {
+                // The terminal must come from the node the parked request was
+                // handed to. A fenced pending entry names the exact followed
+                // edge; an entry recorded without a fence (the requester
+                // attached no route) is admitted against the node identity of
+                // any active follow target for the same Actor instead.
+                bool terminal_source_admitted = false;
+                if (found->second.source_fence.actor_id.empty ()) {
+                    terminal_source_admitted =
+                      _state->actor_transfer_coordinator.message_follow_targets_node (
+                        actor_key (found->second.actor), record.source_node_rid);
+                } else {
+                    const auto target = _state->actor_transfer_coordinator.message_follow_target (
+                      actor_key (found->second.actor), found->second.source_fence);
+                    terminal_source_admitted =
+                      target
+                      && zlink::routing_id_t::from (
+                           std::string (target->route.node_rid.value ())).to_bytes ()
+                           == record.source_node_rid.to_bytes ();
+                }
+                if (!terminal_source_admitted) {
                     return true;
                 }
                 pending = std::move (found->second);
@@ -10555,10 +10569,17 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         const auto handoff_operation = std::pair{record.operation_id.high,
                                                  record.operation_id.low};
         bool deferred_handoff_request = false;
+        /* A request parked during an in-progress transfer is replayed with a
+         * handoff terminal route whenever it carries an operation id (see the
+         * relay metadata below), so the pending entry that restores the
+         * original reply token must be recorded under the same condition. A
+         * request without an attached route fence (e.g. a local requester on
+         * the current owner) parks and replays exactly like a fenced one;
+         * requiring the fence here silently orphaned its terminal, leaving
+         * the requester waiting forever. */
         if (record.kind == service::record_kind_t::actor_request
             && !semantic_send
             && (record.operation_id.high != 0 || record.operation_id.low != 0)
-            && record.actor_route
             && actor_transfer_in_progress (actor)
             && !header.value ().metadata.contains (
               std::string (detail::actor_handoff_source_node_key))) {
@@ -10575,7 +10596,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 const auto [_, inserted] = _state->pending_handoff_requests.emplace (
                   handoff_operation,
                   spot_node_builder_state_t::pending_handoff_request_t{
-                    actor, *record.actor_route, record.reply_route_id, record.reply_token,
+                    actor,
+                    record.actor_route.value_or (
+                      runtime::protocol::actor_route_fence_t{}),
+                    record.reply_route_id, record.reply_token,
                     header.value (),
                     now + std::chrono::seconds (30)});
                 deferred_handoff_request = inserted;
