@@ -153,7 +153,7 @@ public sealed class RedisProviderRepositoryAuthorityTests(
         var intent = Encoding.UTF8.GetBytes($"create:{actorId}");
         return new ZLinkObjectReservationRequest(
             ZLinkPlacementObjectKind.Actor,
-            new ZLinkAuthorityKey(actorId),
+            ZLinkAuthorityKeyCodec.EncodeActor(actorId),
             "player",
             $"inline:{actorId}",
             SHA256.HashData(intent),

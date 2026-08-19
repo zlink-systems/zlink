@@ -4858,8 +4858,31 @@ internal sealed partial class ZLinkProviderLocationRepository
     // bytes and both generation values directly, so a single Put/Delete on
     // this key is already byte-atomic and needs no split-read integrity
     // check.
-    private static ZLinkStoreKey AuthorityMetaKey(ZLinkAuthorityKey key) =>
-        Key(AuthorityMetaPrefix(key.Value));
+    //
+    // Checklist C-4e: the Redis key for the authority record is the same
+    // public, cross-language contract as Mesh/Owner/ClientServer/FanoutKey
+    // above (21-location-runtime.md#2.4) -- the provider hashes the key
+    // value with SHA-256, so the value must equal the exact NUL-delimited
+    // logical key preimage the spec pins: "authority\0{actor|spot}\0{Id}".
+    // ZLinkAuthorityKey.Value itself stays the "zla1:..." percent-encoded
+    // contract value used everywhere else in this codebase as the
+    // in-process identity handle (equality, dictionary keys, wire framing);
+    // this method and DecodeAuthorityKey below are the only place that
+    // handle is translated to/from the canonical preimage. Visibility is
+    // `internal` for the same reason as the four key builders above --
+    // StoreRecordGoldenTests drives this production preimage directly.
+    internal static ZLinkStoreKey AuthorityMetaKey(ZLinkAuthorityKey key) =>
+        Key(AuthorityCanonicalPreimage(key));
+
+    private static string AuthorityCanonicalPreimage(ZLinkAuthorityKey key)
+    {
+        if (ZLinkAuthorityKeyCodec.TryDecodeActor(key, out var actorId))
+            return $"authority\0actor\0{actorId}";
+        if (ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var spotId))
+            return $"authority\0spot\0{spotId}";
+        throw new InvalidDataException(
+            $"Authority key '{key.Value}' is not canonical authority-key-v1.");
+    }
 
     private static ZLinkStoreKey AuthorityOwnerGenerationCounterKey() =>
         Key($"{AuthorityPrefix}owner-generation-counter");
@@ -4870,16 +4893,52 @@ internal sealed partial class ZLinkProviderLocationRepository
     private static ZLinkStoreKey ObjectGenerationCounterKey() =>
         Key($"{AuthorityPrefix}object-generation-counter");
 
-    private static string AuthorityMetaPrefix(string prefix) =>
-        $"{AuthorityMetaPrefixValue}{prefix}";
+    private const string AuthorityCanonicalPreimagePrefix = "authority\0";
 
-    private static string AuthorityMetaPrefixValue =>
-        $"{AuthorityPrefix}meta:";
+    // ListAuthoritiesAsync's `prefix` parameter (IZLinkLocationRepository)
+    // is the pre-existing "zla1:a:"/"zla1:s:" kind marker every caller
+    // passes (ZLinkLocationObjectQuery, ZLinkRelocationStartupRecovery,
+    // ZLinkInstanceSpotActivationTarget) -- translated here to the
+    // canonical preimage's kind segment for the real opaque-record scan.
+    // An empty prefix (scan everything) passes through unchanged.
+    private static string AuthorityMetaPrefix(string prefix) => prefix switch
+    {
+        "" => AuthorityCanonicalPreimagePrefix,
+        "zla1:a:" => $"{AuthorityCanonicalPreimagePrefix}actor\0",
+        "zla1:s:" => $"{AuthorityCanonicalPreimagePrefix}spot\0",
+        _ => throw new ArgumentException(
+            $"unsupported authority scan prefix '{prefix}'", nameof(prefix))
+    };
 
     private static ZLinkAuthorityKey DecodeAuthorityKey(ZLinkStoreKey key)
     {
-        return new ZLinkAuthorityKey(
-            key.Value[AuthorityMetaPrefixValue.Length..]);
+        var preimage = key.Value;
+        if (!preimage.StartsWith(
+                AuthorityCanonicalPreimagePrefix,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Authority scan returned a non-authority logical key "
+                + $"'{preimage}'.");
+        }
+
+        var rest = preimage[AuthorityCanonicalPreimagePrefix.Length..];
+        var separator = rest.IndexOf('\0');
+        if (separator < 0)
+        {
+            throw new InvalidDataException(
+                "Authority logical key preimage is malformed.");
+        }
+
+        var kind = rest[..separator];
+        var id = rest[(separator + 1)..];
+        return kind switch
+        {
+            "actor" => ZLinkAuthorityKeyCodec.EncodeActor(id),
+            "spot" => ZLinkAuthorityKeyCodec.EncodeSpot(id),
+            _ => throw new InvalidDataException(
+                $"Unrecognized authority key kind '{kind}'.")
+        };
     }
 
     private static ZLinkStoreKey ReservationKey(string reservationId) =>

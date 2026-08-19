@@ -2129,7 +2129,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             {
                 var index = offset + batchIndex;
                 participants[index] = AggregateParticipant(
-                    new ZLinkAuthorityKey($"actor:ten-thousand:{index}"),
+                    ZLinkAuthorityKeyCodec.EncodeActor(
+                        $"actor:ten-thousand:{index}"),
                     applied.PutVersions[metaKeys[batchIndex]].Value,
                     index);
             }
@@ -2221,7 +2222,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     private static ZLinkStoreKey AuthorityMetaKey(string actorId) =>
-        new($"zlink:v11:authority:meta:{actorId}");
+        ZLinkProviderLocationRepository.AuthorityMetaKey(
+            ZLinkAuthorityKeyCodec.EncodeActor(actorId));
 
     private static ZLinkStoreKey CapacityKey(
         ZLinkMeshNodeDescriptor descriptor) =>
@@ -2302,7 +2304,9 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var intent = Encoding.UTF8.GetBytes($"create:{actorId}");
         return new ZLinkObjectReservationRequest(
             objectKind,
-            new ZLinkAuthorityKey(actorId),
+            objectKind == ZLinkPlacementObjectKind.Actor
+                ? ZLinkAuthorityKeyCodec.EncodeActor(actorId)
+                : ZLinkAuthorityKeyCodec.EncodeSpot(actorId),
             "player",
             $"inline:{actorId}",
             SHA256.HashData(intent),
@@ -2523,8 +2527,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         private bool ContainsAggregateFence(ZLinkStoreMutation.Put put)
         {
-            return put.Key.Value.Contains(
-                    ":authority:meta:",
+            return put.Key.Value.StartsWith(
+                    "authority\0",
                     StringComparison.Ordinal);
         }
     }
@@ -2717,7 +2721,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             var hasAuthorityPut = request.Mutations
                 .OfType<ZLinkStoreMutation.Put>()
                 .Any(static put => put.Key.Value.StartsWith(
-                    "zlink:v11:authority:",
+                    "authority\0",
                     StringComparison.Ordinal));
             var hasCapacityPut = request.Mutations
                 .OfType<ZLinkStoreMutation.Put>()

@@ -90,12 +90,16 @@ public sealed class StoreRecordGoldenTests
     }
 
     /// <summary>
-    /// Checklist C-4 (dotnet store convergence): unlike the test above,
+    /// Checklist C-4/C-4e (dotnet store convergence): unlike the test above,
     /// which is a pure-function fixture self-test, this drives the actual
     /// production key builders (ZLinkProviderLocationRepository.OwnerKey/
-    /// MeshKey/ClientServerKey/FanoutKey) and the production owner-lease
-    /// JSON envelope encoder, so a regression in the real Redis provider's
-    /// key derivation or envelope shape fails here.
+    /// MeshKey/ClientServerKey/FanoutKey/AuthorityMetaKey) and the
+    /// production owner-lease JSON envelope encoder, so a regression in the
+    /// real Redis provider's key derivation or envelope shape fails here.
+    /// AuthorityMetaKey is driven through ZLinkAuthorityKeyCodec.EncodeActor
+    /// /EncodeSpot -- the same "zla1:..." contract value every production
+    /// caller builds -- so this exercises the real actor/spot -&gt; canonical
+    /// preimage translation, not a reimplementation of it.
     /// </summary>
     [Fact]
     public void StoreRecordGolden_dotnet_production_key_builders_match_golden()
@@ -128,6 +132,14 @@ public sealed class StoreRecordGoldenTests
             ZLinkProviderLocationRepository.FanoutKey(
                 "chat-channel",
                 RoutingId.FromHex("01020304")).Value);
+        AssertPreimage(
+            byRecord["authority-actor"],
+            ZLinkProviderLocationRepository.AuthorityMetaKey(
+                ZLinkAuthorityKeyCodec.EncodeActor("user:42")).Value);
+        AssertPreimage(
+            byRecord["authority-spot"],
+            ZLinkProviderLocationRepository.AuthorityMetaKey(
+                ZLinkAuthorityKeyCodec.EncodeSpot("room:1")).Value);
 
         var ownerLeaseValueVector = root.GetProperty("valueVectors")
             .GetProperty("genericOpaqueRecord").EnumerateArray()
