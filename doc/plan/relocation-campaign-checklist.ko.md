@@ -309,8 +309,15 @@
       5건**: cpp→node spot-route 호스트 침묵, node→dotnet relocation
       invalidDescriptor 거부, java→dotnet DEADLINE_EXCEEDED, dotnet→java
       TargetUnavailable, java→node spot-route not_found(java-cross 첫 실행).
-      capability v13 수렴의 잔여 상호작용 의심(java v12-only 광고 가능성 등) —
-      4언어 통합 진단·수정 잡 투입, 산출물 scratchpad/c7-final 보존
+      capability v13 수렴의 잔여 상호작용 의심 → **연쇄 규명 진행(2026-08-19)**:
+      ⓐ java v12-only 하드코딩 해소 `3a24d186f3`(cpp 버그의 거울) ⓑ node의
+      dotnet 거절 = plaintext vs default 신원 기대값 → 정규화+거부 로그 필드화
+      `1e9ed58b30` ⓒ node·dotnet descriptor updatedAt 미스탬프(epoch0/기본값)
+      → 기록 전 스탬프 `0aae3ff3f9` ⓓ discovery 가시성 해소 확인(dotnet이 node
+      row 2/2 리드) ⓔ 하니스: relocation target의 weight=0 미승격 → probe 후
+      승격 로직 작업 ⓕ **최심층: actor authority payload 방언**(node=JSON 신원
+      envelope vs dotnet resolver=binary ZLAU 전용 → source NotFound) — golden
+      §2.4 canonical authority와의 정합 판정 포함 계속 진행 중(admission6)
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
