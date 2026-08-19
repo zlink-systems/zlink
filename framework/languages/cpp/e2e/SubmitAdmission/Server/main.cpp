@@ -1566,11 +1566,9 @@ void configure_mesh_role (zlink::framework::zlink_framework_options_t &framework
                                          sa::evidence_store_t> ();
 
     auto mesh = framework.add_route_mesh (sa::mesh_name);
-    auto &socket = mesh.configure_router_socket ();
-    socket.send_high_water_mark = zlink::byte_count_t::bytes (1);
-    socket.receive_high_water_mark = zlink::byte_count_t::bytes (1);
-    socket.mailbox_message_budget = 1;
-    socket.send_timeout = std::chrono::milliseconds (300);
+    framework.configure_core_hwm ().set_core_hwm_budget_bytes (1);
+    framework.configure_inbound_dispatch ().set_max_queued_application_jobs (1);
+    mesh.configure_router_socket ().send_timeout = std::chrono::milliseconds (300);
     auto &node = mesh.listen (options.mesh_endpoint)
                    .set_routing_id (zlink::routing_id_t::from (options.rid))
                    .set_object_role (zlink::framework::object_role_t::server);
@@ -1663,7 +1661,7 @@ void configure_owner_isolation_role (
       std::make_unique<saturation_probe_state_t> (2));
 
     auto mesh = framework.add_route_mesh (sa::mesh_name);
-    mesh.configure_router_socket ().mailbox_message_budget = 1;
+    framework.configure_inbound_dispatch ().set_max_queued_application_jobs (1);
     mesh.listen (options.mesh_endpoint)
       .set_routing_id (zlink::routing_id_t::from (options.rid))
       .set_object_role (zlink::framework::object_role_t::server);
@@ -1719,11 +1717,9 @@ void configure_object_client_role (
                                          sa::evidence_store_t> ();
 
     auto mesh = framework.add_route_mesh (sa::mesh_name);
-    auto &socket = mesh.configure_router_socket ();
-    socket.send_high_water_mark = zlink::byte_count_t::bytes (1);
-    socket.receive_high_water_mark = zlink::byte_count_t::bytes (1);
-    socket.mailbox_message_budget = 1;
-    socket.send_timeout = std::chrono::milliseconds (300);
+    framework.configure_core_hwm ().set_core_hwm_budget_bytes (1);
+    framework.configure_inbound_dispatch ().set_max_queued_application_jobs (1);
+    mesh.configure_router_socket ().send_timeout = std::chrono::milliseconds (300);
     mesh.listen (options.mesh_endpoint)
       .set_routing_id (zlink::routing_id_t::from (options.rid))
       .set_object_role (zlink::framework::object_role_t::client);

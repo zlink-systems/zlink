@@ -60,15 +60,19 @@ inline int run_service_host (int argc, char **argv)
           .add_request_handler<mesh_application_gate_dispatch_handler_t,
                                application_gate_req_t,
                                application_gate_res_t> ();
-        mesh.configure_router_socket ().send_high_water_mark =
-          // The request envelope has multiple frames. Keep the test's HWM
-          // deliberately small while leaving room for one complete typed
-          // RouteMesh request after a peer replacement.
-          zlink::byte_count_t::bytes (4 * 1024);
+        // The request envelope has multiple frames. Keep the test's shared
+        // Core HWM budget deliberately small while leaving room for one
+        // complete typed RouteMesh request after a peer replacement. RouteMesh
+        // sockets now inherit this auto-HWM context rather than carrying a
+        // per-socket HWM setting.
+        framework.configure_core_hwm ()
+          .set_core_hwm_budget_bytes (4 * 1024)
+          .set_core_hwm_memory_limit_bytes (2 * 1024 * 1024);
+        // Admission pressure is now owned by the application job queue rather
+        // than the RouteMesh socket mailbox.
+        framework.configure_inbound_dispatch ().set_max_queued_application_jobs (1);
         mesh.configure_router_socket ().send_timeout =
           std::chrono::milliseconds (250);
-        mesh.configure_router_socket ().mailbox_message_budget = 1;
-        mesh.configure_router_socket ().mailbox_byte_budget = 2 * 1024 * 1024;
         mesh.add_spot_factory<monitoring_spot_t> (
           spot_channel,
           [] (zlink::framework::spot_context_t context) {
