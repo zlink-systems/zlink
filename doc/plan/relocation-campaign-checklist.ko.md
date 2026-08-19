@@ -196,7 +196,7 @@
 
 ## C-11 스펙 이슈 전량 확정 (사용자 지시 2026-08-19 — 보류 금지, 즉시 판정·반영)
 
-- [ ] 8건 판정 완료 → 스펙 반영 진행 중: ① 불확정 FINALIZE 3분기 복구 절차(28
+- [x] 8건 판정·반영 완료 — 커밋 참조: ① 불확정 FINALIZE 3분기 복구 절차(28
       명문화), ② relay hop deadline=클라이언트 관리+로컬 창 재바운드(28 개정),
       ③ Entry Spot 비주소성+노드 레벨 알림(15/28), ④ 동일 revision RENEW=무해
       no-op(21), ⑤ authority commit은 자기 정체성만 펜스(21), ⑥ removeAllByOwner는
