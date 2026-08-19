@@ -596,6 +596,25 @@
       False/True)** — cert1 최초 실행에서도 실패한 **선재 회귀**(durable-join
       phase/frozen-recovery 기원, genfix 무관), 별도 수정 진행 중. 이후
       java+dotnet+genfix 전체 배치 커밋(게이트 sanctioned-3만).
+      **체크포인트 커밋 `ef19855326`**(genfix+durfix+batch): dotnet 유닛
+      sanctioned-3만·conformance 9/9 검증필. durfix: cert3의 shape 체크가
+      Completed 터미널 phase 거부(Activated까지만) → 완화, DeferredActorJoin
+      DurabilityTests 2건 해소(선재 회귀, genfix 무관).
+      **⚠️ dotnet→java 미완결 — 3번째 계층 확인(2026-08-20, 직접 트레이스)**:
+      genfix가 generation 처닝(→gen=1 고정)과 liveness(→java probe 1→11
+      진행)를 실제로 해결했으나, 그 위 **relocation 오케스트레이션 계층**이
+      남음. 증상: source가 매 relocate 시도마다 `drain targets peers=2
+      accepting=1`→`relocation_admission_fence_committed`→descriptor
+      revision bump(6→7→8)→재Hello를 반복하지만 `relocation_phase_per_actor
+      completed=True **committed=0**` — actor를 java target에 실제
+      전송(commit)하지 않고 **prepare(cmd 40)를 java에 dispatch 안 함**
+      (java는 command 1·4만 수신) → 4× DeadlineExceeded. 이는 되던 기능
+      회귀가 아니라 **4언어 relocation 첫 통합**(교차언어 스테이지 자체가
+      캠페인 신규)이라 generation→liveness→drain/fence 순으로 잠복 결함이
+      계층별 노출. green 방향(java/node→dotnet)은 dotnet이 target이라 이
+      source-side 오케스트레이션을 안 탐. 후속: source drain/fence/target-
+      accept가 committed=0으로 종료하는 지점(왜 java-as-target을 commit
+      대상으로 안 잡는지) 스펙(28/30/15) 근거 수정.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
