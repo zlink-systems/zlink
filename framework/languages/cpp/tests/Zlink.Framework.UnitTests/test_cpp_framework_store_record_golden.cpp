@@ -494,5 +494,180 @@ int main ()
         assert (produced_json == owner_lease_vector.at ("decoded"));
     }
 
+    // Checklist C-4d: extend the finding-3 pattern above to the mesh
+    // descriptor and authority real writers now that provider_location_
+    // repository.hpp's encode_mesh_record/encode(mesh_node_descriptor_t)/
+    // encode_authority/encode_allocation/encode_bundle have been aligned to
+    // §2.4's canonical field names (camelCase, generation-typed strings,
+    // objectKind/policy/objectRole/state spelled out, no rid/nodeGeneration/
+    // role/storeVersion/generation provider-internal aliases).
+    {
+        using namespace zlink::framework;
+        using namespace zlink::framework::runtime;
+
+        in_memory_location_store_t store;
+        provider_location_repository_t repository (store);
+
+        // Pre-seed the owner-lease counter (provider-private, same as the
+        // owner-lease block above) to reach the golden's leaseGeneration "5"
+        // deterministically.
+        const store_key_t owner_counter_key{"zlink:v11:owner-counter"};
+        const std::string five = "5";
+        std::vector<std::byte> five_bytes (five.size ());
+        for (std::size_t index = 0; index < five.size (); ++index)
+            five_bytes[index] = static_cast<std::byte> (five[index]);
+        assert (std::holds_alternative<store_write_applied_t> (
+          store
+            .write ({.conditions = {store_missing_condition_t{owner_counter_key}},
+                     .mutations = {store_put_t{owner_counter_key, five_bytes, std::nullopt}}})
+            .result ()
+            .value ()));
+
+        const auto claimed =
+          repository.claim_owner_lease ("owner-a", std::chrono::seconds (30)).result ().value ();
+        const auto *claim = std::get_if<owner_lease_claimed_t> (&claimed);
+        assert (claim != nullptr);
+        assert (claim->token.owner_id == "owner-a");
+        assert (claim->token.lease_generation == 5);
+
+        // The golden's meshNodeDescriptor/authority-actor/authority-spot
+        // vectors all reference the same mesh node (mesh "main", routing id
+        // hex "01020304"), so build it once. object_creation_target_t's
+        // node_rid_t is a raw-bytes opaque string (read_target_descriptor
+        // reconstructs it via zlink::routing_id_t::from(std::string(...)),
+        // NOT from_hex/to_string's printable/numeric special-casing), so the
+        // target below is built from the identical 4 raw bytes as the
+        // descriptor's routing id -- not routing_id_t::to_string(), which
+        // would round-trip a 4-byte id through a decimal string instead and
+        // silently point reservations at the wrong store key.
+        const std::array<std::uint8_t, 4> rid_bytes{0x01, 0x02, 0x03, 0x04};
+        const auto mesh_rid = zlink::routing_id_t::from (rid_bytes.data (), rid_bytes.size ());
+        assert (mesh_rid.to_hex () == "01020304");
+        const std::string rid_raw (reinterpret_cast<const char *> (rid_bytes.data ()),
+                                   rid_bytes.size ());
+
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "main";
+        descriptor.rid = mesh_rid;
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 3;
+        descriptor.endpoint = "tcp://node-a:5000";
+        descriptor.entry_spot_id = "entry-1";
+        descriptor.channel_weights = {{"billing", 100}};
+        descriptor.application_version = 2;
+        descriptor.object_capabilities = {
+          {placement_object_kind_t::actor, "chat", maintenance_policy_kind_t::disabled, false, 0},
+          {placement_object_kind_t::user_spot, "game", maintenance_policy_kind_t::snapshot, true,
+           500}};
+        descriptor.object_role = object_role_t::server;
+        descriptor.placement_weight = 100;
+        descriptor.capacity.actors = {3, 1, 0};
+        descriptor.capacity.spots = {2, 0, 100};
+        descriptor.capacity.spot_types = {
+          {placement_object_kind_t::user_spot, "game", {2, 0, 100}}};
+        descriptor.activation_concurrency = {0, 128};
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.security_identity = "node-a-identity";
+        descriptor.owner_id = claim->token.owner_id;
+        descriptor.lease_generation = claim->token.lease_generation;
+        descriptor.updated_at =
+          std::chrono::system_clock::time_point (std::chrono::milliseconds (1700000000000));
+
+        const auto stored_descriptor =
+          repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+            .result ()
+            .value ();
+        assert (stored_descriptor.status == location_write_status_t::stored);
+
+        // key_mesh(mesh_name, rid) == preimage2("mesh-node", mesh_name) +
+        // '\0' + rid.to_hex() -- exactly the golden's own "mesh-node"
+        // keyDerivation preimage.
+        const std::string mesh_key_value =
+          std::string ("mesh-node") + '\0' + "main" + '\0' + "01020304";
+        const auto mesh_stored = store.read ({mesh_key_value}).result ().value ();
+        const auto *mesh_found = std::get_if<store_found_t> (&mesh_stored);
+        assert (mesh_found != nullptr);
+
+        const auto &mesh_vector = root.at ("valueVectors").at ("genericOpaqueRecord").at (0);
+        assert (mesh_vector.at ("name").get<std::string> () == "meshNodeDescriptor-normal");
+        const auto mesh_produced = nlohmann::json::parse (
+          std::string (reinterpret_cast<const char *> (mesh_found->value.bytes.data ()),
+                       mesh_found->value.bytes.size ()));
+        assert (mesh_produced == mesh_vector.at ("decoded"));
+
+        // authority-actor-normal (index 5): reserve then commit an actor
+        // against the mesh node above, reaching state=active with
+        // pendingCreation reset to null -- exactly what reserve()+commit()
+        // legitimately produce. The private authority-generations counter
+        // (provider-private, same idea as the owner-lease counter) is
+        // pre-seeded so the post-increment objectGeneration/
+        // authorityOwnerGeneration land on the golden's "7"/"3".
+        const store_key_t generations_key{"zlink:v11:authority-generations"};
+        const auto generations_seed =
+          nlohmann::json{{"objectGeneration", 6}, {"authorityOwnerGeneration", 2}}.dump ();
+        std::vector<std::byte> generations_bytes (generations_seed.size ());
+        for (std::size_t index = 0; index < generations_seed.size (); ++index)
+            generations_bytes[index] = static_cast<std::byte> (generations_seed[index]);
+        assert (std::holds_alternative<store_write_applied_t> (
+          store
+            .write ({.conditions = {store_missing_condition_t{generations_key}},
+                     .mutations = {store_put_t{generations_key, generations_bytes, std::nullopt}}})
+            .result ()
+            .value ()));
+
+        object_creation_target_t target{"main", node_rid_t::from_string (rid_raw), 1,
+                                        claim->token};
+        object_reserve_request_t actor_request;
+        actor_request.key = {placement_object_kind_t::actor, "user:42"};
+        actor_request.intent.stable_type = "chat";
+        actor_request.target = target;
+        actor_request.creating_payload = {std::byte{0}};
+        actor_request.capacity_bundle.actor_slots = 1;
+        const auto reserved = repository.reserve (actor_request).result ().value ();
+        const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+        assert (reservation != nullptr);
+        assert (reservation->fence.object_generation == 7);
+        assert (reservation->fence.authority_owner_generation == 3);
+
+        const auto ready_payload = base64_decode ("3q2+78r+8A0=");
+        const auto committed =
+          repository.commit ({actor_request.key, reservation->fence, ready_payload})
+            .result ()
+            .value ();
+        const auto *created = std::get_if<object_committed_t> (&committed);
+        assert (created != nullptr);
+        assert (created->ready.payload == ready_payload);
+
+        const std::string actor_authority_key_value =
+          std::string ("authority") + '\0' + "actor" + '\0' + "user:42";
+        const auto actor_stored = store.read ({actor_authority_key_value}).result ().value ();
+        const auto *actor_found = std::get_if<store_found_t> (&actor_stored);
+        assert (actor_found != nullptr);
+
+        const auto &authority_vector = root.at ("valueVectors").at ("genericOpaqueRecord").at (5);
+        assert (authority_vector.at ("name").get<std::string> () == "authority-actor-normal");
+        const auto authority_produced = nlohmann::json::parse (
+          std::string (reinterpret_cast<const char *> (actor_found->value.bytes.data ()),
+                       actor_found->value.bytes.size ()));
+        assert (authority_produced == authority_vector.at ("decoded"));
+
+        // authority-spot-normal (index 6) is NOT driven through the real
+        // writer here: its reservationId "reservation-1" has no "-<owner
+        // generation>" suffix, but reserve_once always mints
+        // "reservation-<objectGeneration>-<authorityOwnerGeneration>", and
+        // its state:"active" coexists with a populated pendingCreation,
+        // which reserve()+commit() never produce together (commit() clears
+        // pendingCreation exactly when it sets state to active). Both are
+        // therefore unreachable through the legitimate reserve/commit state
+        // machine -- this vector looks hand-authored rather than sampled
+        // from a real writer, so per the checklist C-4d handoff notes this
+        // is reported, not forced: encode_allocation/encode_bundle/
+        // encode_pending's *shapes* are exercised and golden-matched above
+        // via the actor vector (which shares every field golden fixture's
+        // shape with the spot vector except objectKind/spotType), but the
+        // spot vector's exact byte content is not independently verified by
+        // a real-writer round trip.
+    }
+
     return 0;
 }

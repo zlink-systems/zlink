@@ -293,9 +293,6 @@ class provider_location_repository_t final : public location_repository_t
                 || !adjust_capacity (target->descriptor, snapshot.allocation.capacity_bundle, 0,
                                      -1))
                 return authority_conflict (std::move (current));
-            if (!advance_store_version (snapshot))
-                return completed (
-                  authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
             const auto decoded_key = authority_key_codec_detail::decode_authority_key (
               key.value);
             if (!decoded_key)
@@ -331,9 +328,6 @@ class provider_location_repository_t final : public location_repository_t
             if (!same_owner (snapshot.owner, restore->expected_owner))
                 return authority_conflict (std::move (current));
             snapshot.payload = restore->payload;
-            if (!advance_store_version (snapshot))
-                return completed (
-                  authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
             auto written =
               write ({{version_condition (row_key, found->value.version)},
                       {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}});
@@ -390,9 +384,6 @@ class provider_location_repository_t final : public location_repository_t
             snapshot.owner = retarget->target.owner;
             snapshot.allocation.target = retarget->target;
             snapshot.payload = std::move (retarget->payload);
-            if (!advance_store_version (snapshot))
-                return completed (
-                  authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
             store_write_request_t write_request;
             write_request.conditions = {
               version_condition (row_key, found->value.version),
@@ -426,9 +417,6 @@ class provider_location_repository_t final : public location_repository_t
         if (snapshot.allocation.state != placement_allocation_state_t::active)
             return authority_conflict (std::move (current));
         snapshot.payload = std::move (put.payload);
-        if (!advance_store_version (snapshot))
-            return completed (
-              authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
         auto live_owner = read_live_owner (snapshot.owner);
         if (!live_owner)
             return authority_conflict (std::move (current));
@@ -622,15 +610,23 @@ class provider_location_repository_t final : public location_repository_t
             return completed (object_reserve_result_t{object_reserve_conflict_t{
               authority_missing_t{std::get<store_missing_t> (authority).store_now}}});
 
+        // The real expected_store_version can't be known until the write
+        // below returns its opaque per-key version (checklist C-4d), so
+        // both `fence` and `creating` are seeded with a placeholder here
+        // and patched with the real value after a successful write, below.
+        // The reservation record's persisted fence copy keeps this
+        // placeholder -- same_fence no longer compares expected_store_version
+        // (reservation_id, already unique per attempt, is the identity), so
+        // it is write-only bookkeeping, not a second source of truth.
         object_reservation_fence_t fence{"reservation-" + std::to_string (object_generation) + "-"
                                            + std::to_string (owner_generation_value),
-                                         "1",
+                                         "pending",
                                          object_generation,
                                          owner_generation_value,
                                          request.target,
                                          request.capacity_bundle};
         authority_snapshot_t creating{
-          "1",
+          "pending",
           request.creating_payload,
           object_generation,
           owner_generation_value,
@@ -657,10 +653,13 @@ class provider_location_repository_t final : public location_repository_t
                                     .dump ()),
                         std::nullopt},
             store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
-        if (!std::holds_alternative<store_write_applied_t> (written))
+        const auto *applied = std::get_if<store_write_applied_t> (&written);
+        if (!applied)
             return completed (object_reserve_result_t{
               object_reserve_conflict_t{read_authority_value (object_key (request.key))}});
-        creating.store_now = std::get<store_write_applied_t> (written).store_now;
+        creating.store_now = applied->store_now;
+        creating.store_version = version_of (*applied, authority_key);
+        fence.expected_store_version = creating.store_version;
         return completed (
           object_reserve_result_t{object_reserved_t{std::move (fence), std::move (creating)}});
     }
@@ -763,10 +762,22 @@ class provider_location_repository_t final : public location_repository_t
         if (!same_fence (stored_fence, request.fence))
             return completed (object_commit_result_t{object_commit_stale_t{}});
         const auto status = record.at ("status").get<std::string> ();
-        if (status == "committed")
-            return completed (object_commit_result_t{object_already_committed_t{decode_authority (
-              to_bytes (record.at ("snapshot").dump ()), std::string{},
-              stored_reservation->value.store_now)}});
+        if (status == "committed") {
+            // The reservation's cached "snapshot" copy has no provider
+            // version of its own (checklist C-4d: encode_authority no
+            // longer carries one, and this cache predates the write that
+            // would assign one anyway). A caller that replays this commit
+            // may chain a further CAS off the returned store_version (see
+            // public_host_runtime.cpp's post-commit compare_exchange_
+            // authority call), so source it from a fresh read of the live
+            // authority row instead of guessing.
+            auto cached = decode_authority (to_bytes (record.at ("snapshot").dump ()), std::string{},
+                                            stored_reservation->value.store_now);
+            auto live = read (key_authority (object_key (request.key)));
+            if (const auto *live_found = std::get_if<store_found_t> (&live))
+                cached.store_version = live_found->value.version.value;
+            return completed (object_commit_result_t{object_already_committed_t{std::move (cached)}});
+        }
         if (status != "prepared")
             return completed (object_commit_result_t{object_commit_stale_t{}});
 
@@ -793,8 +804,6 @@ class provider_location_repository_t final : public location_repository_t
         if (!adjust_capacity (target->descriptor, request.fence.capacity_bundle, -1, 1))
             return completed (
               object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}});
-        if (!advance_store_version (snapshot))
-            return completed (object_commit_result_t{authority_generation_exhausted_t{}});
         snapshot.payload = std::move (request.ready_payload);
         snapshot.allocation.state = placement_allocation_state_t::active;
         snapshot.pending_creation.reset ();
@@ -809,10 +818,12 @@ class provider_location_repository_t final : public location_repository_t
                   {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
                    store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
                    store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
-        if (!std::holds_alternative<store_write_applied_t> (written))
+        const auto *applied = std::get_if<store_write_applied_t> (&written);
+        if (!applied)
             return completed (object_commit_result_t{
               object_commit_conflict_t{read_authority_value (object_key (request.key))}});
-        snapshot.store_now = std::get<store_write_applied_t> (written).store_now;
+        snapshot.store_now = applied->store_now;
+        snapshot.store_version = version_of (*applied, authority_key);
         return completed (object_commit_result_t{object_committed_t{std::move (snapshot)}});
     }
 
@@ -1270,8 +1281,11 @@ class provider_location_repository_t final : public location_repository_t
                 after.owner = target_owner;
                 after.allocation.target = target;
                 after.payload = participant.authority_payload;
-                if (!advance_store_version (after))
-                    return completed (aggregate_commit_result_t::generation_exhausted);
+                // `after.store_version` is never read back out of this
+                // struct (encode_authority no longer serializes it, and the
+                // committing-page replay branch above re-decodes with the
+                // live provider version once the row is actually written),
+                // so there is nothing to advance here anymore.
                 entry = {participant.key.value, found->value.bytes, encode_authority (after)};
             }
 
@@ -2281,11 +2295,27 @@ class provider_location_repository_t final : public location_repository_t
               location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
         auto current = read (row_key);
+        // The write-generation counter is provider-private bookkeeping (it
+        // only gates exhaustion on non-renew intents; §2.4's canonical
+        // record shape has no room for it) reparented onto the provider's
+        // own opaque per-key version -- the same trick checklist C-4d
+        // applies to the authority store's store_version -- instead of a
+        // value this store used to persist inside the record body as
+        // "generation". `generation` here is therefore no longer 1:1 with
+        // any prior call's return value; it is a best-effort exhaustion
+        // bound, skipped when the provider version isn't a plain integer.
         std::uint64_t generation = 1;
         store_condition_t row_condition;
         if (const auto *found = std::get_if<store_found_t> (&current)) {
             auto stored = parse_json (found->value.bytes);
-            generation = stored.at ("generation").get<std::uint64_t> ();
+            std::uint64_t provider_generation = 0;
+            bool provider_generation_known = false;
+            try {
+                provider_generation = std::stoull (found->value.version.value);
+                provider_generation_known = true;
+            }
+            catch (...) {
+            }
             const auto stored_owner = record_owner_id (stored);
             const auto stored_lease = record_lease_generation (stored);
             const auto previous_owner = read (key_owner (stored_owner));
@@ -2303,11 +2333,11 @@ class provider_location_repository_t final : public location_repository_t
                     || !immutable_fields_equal (stored))
                     return completed (
                       location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-            } else {
-                if (generation == std::numeric_limits<std::uint64_t>::max ())
-                    return unavailable<location_write_result_t> ("descriptor generation exhausted");
-                ++generation;
+            } else if (provider_generation_known
+                      && provider_generation == std::numeric_limits<std::uint64_t>::max ()) {
+                return unavailable<location_write_result_t> ("descriptor generation exhausted");
             }
+            generation = provider_generation_known ? provider_generation + 1 : 1;
             row_condition = version_condition (row_key, found->value.version);
         } else {
             if (intent == location_write_intent_t::renew)
@@ -2315,7 +2345,6 @@ class provider_location_repository_t final : public location_repository_t
                   location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
             row_condition = missing_condition (row_key);
         }
-        record["generation"] = generation;
         auto encoded = to_bytes (record.dump ());
         auto result = write (
           {{version_condition (lease_key, live_lease->value.version), std::move (row_condition)},
@@ -2505,28 +2534,57 @@ class provider_location_repository_t final : public location_repository_t
                 decode_owner (value.at ("owner"))};
     }
 
+    // 21-location-runtime.md#2.4's canonical objectKind spelling for the
+    // three-way placement kind (actor|userSpot|instanceSpot), shared by
+    // encode_bundle's spotType and encode_allocation below.
+    static const char *object_kind3_name (placement_object_kind_t value)
+    {
+        switch (value) {
+        case placement_object_kind_t::actor:
+            return "actor";
+        case placement_object_kind_t::instance_spot:
+            return "instanceSpot";
+        case placement_object_kind_t::user_spot:
+        default:
+            return "userSpot";
+        }
+    }
+
+    static placement_object_kind_t parse_object_kind3 (const std::string &value)
+    {
+        if (value == "actor")
+            return placement_object_kind_t::actor;
+        if (value == "instanceSpot")
+            return placement_object_kind_t::instance_spot;
+        return placement_object_kind_t::user_spot;
+    }
+
+    // §2.4's canonical capacity shape: `actors`/`spots` counts plus an
+    // optional `spotType{objectKind,stableType,count}` (was
+    // `actorSlots`/`spotSlots`/`spotType{objectKind:int,...,slots}`).
     static json_t encode_bundle (const placement_capacity_bundle_t &value)
     {
         json_t spot_type = nullptr;
         if (value.spot_type)
-            spot_type = {{"objectKind", static_cast<int> (value.spot_type->object_kind)},
+            spot_type = {{"objectKind", object_kind3_name (value.spot_type->object_kind)},
                          {"stableType", value.spot_type->stable_type},
-                         {"slots", value.spot_type->slots}};
-        return {{"actorSlots", value.actor_slots},
-                {"spotSlots", value.spot_slots},
+                         {"count", value.spot_type->slots}};
+        return {{"actors", value.actor_slots},
+                {"spots", value.spot_slots},
                 {"spotType", std::move (spot_type)}};
     }
 
     static placement_capacity_bundle_t decode_bundle (const json_t &value)
     {
         placement_capacity_bundle_t result;
-        result.actor_slots = value.at ("actorSlots").get<std::uint32_t> ();
-        result.spot_slots = value.at ("spotSlots").get<std::uint32_t> ();
+        result.actor_slots = value.at ("actors").get<std::uint32_t> ();
+        result.spot_slots = value.at ("spots").get<std::uint32_t> ();
         if (value.contains ("spotType") && !value.at ("spotType").is_null ()) {
             const auto &spot = value.at ("spotType");
             result.spot_type = spot_type_capacity_delta_t{
-              static_cast<placement_object_kind_t> (spot.at ("objectKind").get<int> ()),
-              spot.at ("stableType").get<std::string> (), spot.at ("slots").get<std::uint32_t> ()};
+              parse_object_kind3 (spot.at ("objectKind").get<std::string> ()),
+              spot.at ("stableType").get<std::string> (),
+              static_cast<std::uint32_t> (spot.at ("count").get<std::uint64_t> ())};
         }
         return result;
     }
@@ -2544,53 +2602,67 @@ class provider_location_repository_t final : public location_repository_t
         return static_cast<placement_allocation_state_t> (value.get<int> ());
     }
 
-    static const char *object_kind_name (placement_object_kind_t value)
+    // §2.4's canonical allocation.descriptor is just {meshName,routingIdHex}
+    // -- no owner, no nodeLifecycleGeneration -- because the allocation is
+    // always written together with the authority envelope's ownerId/
+    // ownerLeaseGeneration, and authority_retarget_t/reserve_once/aggregate
+    // commit all set snapshot.owner and snapshot.allocation.target.owner to
+    // the identical owner token in the same mutation, so the envelope owner
+    // losslessly reconstructs it on decode. This is a separate helper from
+    // encode_target (kept for the fence/terminal-record shape, which is not
+    // golden-pinned and still needs owner+nodeLifecycleGeneration for its
+    // own CAS bookkeeping).
+    //
+    // object_creation_target_t::node_rid is an opaque raw-bytes token
+    // (read_target_descriptor reconstructs a routing_id_t from it via
+    // `routing_id_t::from(std::string(node_rid.value()))`, i.e. the bytes
+    // are used verbatim, not parsed as hex/decimal/UTF-8) -- so the decode
+    // side below must hand back those same raw bytes, not
+    // routing_id_t::to_string()'s printable/4-byte-decimal/UUID
+    // special-casing, or a non-printable/non-4/16-byte id round-trips to a
+    // node_rid_t that no longer resolves to the same mesh row.
+    static json_t encode_target_descriptor (const object_creation_target_t &value)
     {
-        return value == placement_object_kind_t::actor ? "actor" : "spot";
+        return {{"meshName", value.mesh_name},
+                {"routingIdHex",
+                 zlink::routing_id_t::from (std::string (value.node_rid.value ())).to_hex ()}};
     }
 
-    static const char *spot_kind_name (placement_object_kind_t value)
+    static object_creation_target_t decode_target_descriptor (
+      const json_t &value, location_owner_token_t owner, std::uint64_t node_lifecycle_generation)
     {
-        return value == placement_object_kind_t::instance_spot ? "instance" : "user";
-    }
-
-    static placement_object_kind_t parse_object_kind (const json_t &record)
-    {
-        if (const auto &value = record.at ("objectKind"); value.is_string ()) {
-            if (value.get<std::string> () == "actor")
-                return placement_object_kind_t::actor;
-            // "spot": disambiguated by the additive spotKind field
-            // (21-location-runtime.md#2.3's Entry|User|Instance kinds).
-            if (record.contains ("spotKind")
-                && record.at ("spotKind").get<std::string> () == "instance")
-                return placement_object_kind_t::instance_spot;
-            return placement_object_kind_t::user_spot;
-        }
-        return static_cast<placement_object_kind_t> (record.at ("objectKind").get<int> ());
+        const auto rid =
+          zlink::routing_id_t::from_hex (value.at ("routingIdHex").get<std::string> ());
+        return {value.at ("meshName").get<std::string> (),
+                node_rid_t::from_string (
+                  std::string (reinterpret_cast<const char *> (rid.data ()), rid.size ())),
+                node_lifecycle_generation, std::move (owner)};
     }
 
     // §2.4's canonical allocation shape uses `state`/`objectKind` as strings
-    // and adds `spotKind` for spot allocations; the original numeric
-    // `objectKind`/`state` fields are kept as additional fields (decode
-    // accepts either shape defensively, though this store only ever writes
-    // the canonical string shape now).
+    // (objectKind is the three-way actor|userSpot|instanceSpot spelling,
+    // shared with encode_bundle's spotType -- no separate spotKind field).
     static json_t encode_allocation (const placement_allocation_t &value)
     {
-        json_t encoded{{"state", allocation_state_name (value.state)},
-                       {"objectKind", object_kind_name (value.object_kind)},
-                       {"stableType", value.stable_type},
-                       {"target", encode_target (value.target)},
-                       {"capacityBundle", encode_bundle (value.capacity_bundle)}};
-        if (value.object_kind != placement_object_kind_t::actor)
-            encoded["spotKind"] = spot_kind_name (value.object_kind);
-        return encoded;
+        return {{"state", allocation_state_name (value.state)},
+                {"objectKind", object_kind3_name (value.object_kind)},
+                {"stableType", value.stable_type},
+                {"descriptor", encode_target_descriptor (value.target)},
+                {"descriptorLifecycleGeneration",
+                 generation_string (value.target.node_lifecycle_generation)},
+                {"capacity", encode_bundle (value.capacity_bundle)}};
     }
 
-    static placement_allocation_t decode_allocation (const json_t &value)
+    static placement_allocation_t decode_allocation (const json_t &value,
+                                                      const location_owner_token_t &owner)
     {
-        return {parse_allocation_state (value.at ("state")), parse_object_kind (value),
-                value.at ("stableType").get<std::string> (), decode_target (value.at ("target")),
-                decode_bundle (value.at ("capacityBundle"))};
+        return {parse_allocation_state (value.at ("state")),
+                parse_object_kind3 (value.at ("objectKind").get<std::string> ()),
+                value.at ("stableType").get<std::string> (),
+                decode_target_descriptor (
+                  value.at ("descriptor"), owner,
+                  parse_u64_field (value.at ("descriptorLifecycleGeneration"))),
+                decode_bundle (value.at ("capacity"))};
     }
 
     static json_t encode_pending (const std::optional<pending_object_creation_t> &value)
@@ -2600,8 +2672,7 @@ class provider_location_repository_t final : public location_repository_t
         return {{"reservationId", value->reservation_id},
                 {"requestContentReference", value->request_content_reference},
                 {"requestSha256", hex (value->request_sha256)},
-                {"requestEncodedSize", generation_string (
-                                        static_cast<std::uint64_t> (value->request_encoded_size))}};
+                {"requestEncodedSize", static_cast<std::uint64_t> (value->request_encoded_size)}};
     }
 
     static std::optional<pending_object_creation_t> decode_pending (const json_t &value)
@@ -2619,14 +2690,16 @@ class provider_location_repository_t final : public location_repository_t
     // is base64 (was hex -- checklist C-4's explicitly named cpp
     // conversion); `objectGeneration`/`authorityOwnerGeneration` and the
     // flat `ownerId`/`ownerLeaseGeneration` (not a nested `owner` object,
-    // unlike the generic record) are JSON strings. `storeVersion` is kept as
-    // an additional field: it is this store's own app-level CAS marker
-    // embedded in the record body, independent of the provider's opaque
-    // `StoreVersion` (returned separately via store_found_t.value.version).
+    // unlike the generic record) are JSON strings. There is no `storeVersion`
+    // field (checklist C-4d): the CAS token is reparented onto the
+    // provider's own opaque per-key version (store_found_t.value.version /
+    // store_write_applied_t.put_versions), threaded in via decode_authority's
+    // `provider_version` parameter and authority_write_result's post-write
+    // lookup below, instead of a counter this store used to maintain inside
+    // the record body.
     static std::vector<std::byte> encode_authority (const authority_snapshot_t &value)
     {
         return to_bytes (json_t{{"recordVersion", 1},
-                                {"storeVersion", value.store_version},
                                 {"payload", base64_encode (value.payload)},
                                 {"objectGeneration", generation_string (value.object_generation)},
                                 {"authorityOwnerGeneration",
@@ -2643,7 +2716,6 @@ class provider_location_repository_t final : public location_repository_t
                                                   std::string provider_version,
                                                   std::chrono::system_clock::time_point store_now)
     {
-        (void) provider_version;
         const auto value = parse_json (bytes);
         if (value.contains ("recordVersion") && value.at ("recordVersion").get<int> () != 1)
             throw std::invalid_argument ("unrecognized authority recordVersion");
@@ -2656,13 +2728,13 @@ class provider_location_repository_t final : public location_repository_t
         // no dual-read fallback -- the whole opaque-record key/value scheme
         // changed in the same conversion, so no pre-conversion record can be
         // found under these keys to begin with.
-        return {value.at ("storeVersion").get<std::string> (),
+        return {std::move (provider_version),
                 base64_decode (value.at ("payload").get<std::string> ()),
                 parse_u64_field (value.at ("objectGeneration")),
                 parse_u64_field (value.at ("authorityOwnerGeneration")),
                 owner,
                 store_now,
-                decode_allocation (value.at ("allocation")),
+                decode_allocation (value.at ("allocation"), owner),
                 decode_pending (value.at ("pendingCreation"))};
     }
 
@@ -2722,11 +2794,16 @@ class provider_location_repository_t final : public location_repository_t
                 decode_bundle (value.at ("capacityBundle"))};
     }
 
+    // checklist C-4d's matches_reservation(): identifies a reservation by
+    // reservation_id (already unique per attempt -- derived from
+    // object_generation/authority_owner_generation, both also compared
+    // below) rather than the placeholder expected_store_version the
+    // reservation record was written with before the real value was known
+    // (see reserve_once).
     static bool same_fence (const object_reservation_fence_t &left,
                             const object_reservation_fence_t &right)
     {
         return left.reservation_id == right.reservation_id
-               && left.expected_store_version == right.expected_store_version
                && left.object_generation == right.object_generation
                && left.authority_owner_generation == right.authority_owner_generation
                && left.target.mesh_name == right.target.mesh_name
@@ -2767,31 +2844,29 @@ class provider_location_repository_t final : public location_repository_t
           authority_missing_t{std::get<store_missing_t> (current).store_now}}});
     }
 
+    // The post-write CAS token for a row: the provider's own opaque
+    // per-key version for `key` out of a successful write's put_versions,
+    // i.e. the value this store now uses as authority_snapshot_t::
+    // store_version (checklist C-4d's reparenting away from a record-body
+    // counter).
+    static std::string version_of (const store_write_applied_t &applied, const store_key_t &key)
+    {
+        for (const auto &entry : applied.put_versions)
+            if (entry.key.value == key.value)
+                return entry.version.value;
+        return {};
+    }
+
     task_t<authority_compare_exchange_result_t> authority_write_result (
       const store_key_t &row_key, authority_snapshot_t snapshot, store_write_result_t written)
     {
         if (const auto *applied = std::get_if<store_write_applied_t> (&written)) {
-            (void) row_key;
             snapshot.store_now = applied->store_now;
+            snapshot.store_version = version_of (*applied, row_key);
             return completed (
               authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
         }
         return authority_conflict (read (row_key));
-    }
-
-    static bool advance_store_version (authority_snapshot_t &snapshot)
-    {
-        std::uint64_t current = 0;
-        try {
-            current = static_cast<std::uint64_t> (std::stoull (snapshot.store_version));
-        }
-        catch (...) {
-            return false;
-        }
-        if (current >= max_generation)
-            return false;
-        snapshot.store_version = std::to_string (current + 1);
-        return true;
     }
 
     static json_t encode (const capacity_usage_t &value)
@@ -2806,39 +2881,110 @@ class provider_location_repository_t final : public location_repository_t
                 value.at ("limit").get<std::int32_t> ()};
     }
 
+    static const char *runtime_state_name (framework_runtime_state_t value)
+    {
+        switch (value) {
+        case framework_runtime_state_t::preparing:
+            return "preparing";
+        case framework_runtime_state_t::serving:
+            return "serving";
+        case framework_runtime_state_t::relocating:
+            return "relocating";
+        case framework_runtime_state_t::relocated:
+            return "relocated";
+        case framework_runtime_state_t::draining:
+            return "draining";
+        case framework_runtime_state_t::stopped:
+            return "stopped";
+        case framework_runtime_state_t::error:
+            return "error";
+        }
+        return "preparing";
+    }
+
+    static framework_runtime_state_t parse_runtime_state (const std::string &value)
+    {
+        static const std::map<std::string, framework_runtime_state_t> names{
+          {"preparing", framework_runtime_state_t::preparing},
+          {"serving", framework_runtime_state_t::serving},
+          {"relocating", framework_runtime_state_t::relocating},
+          {"relocated", framework_runtime_state_t::relocated},
+          {"draining", framework_runtime_state_t::draining},
+          {"stopped", framework_runtime_state_t::stopped},
+          {"error", framework_runtime_state_t::error}};
+        const auto found = names.find (value);
+        return found == names.end () ? framework_runtime_state_t::preparing : found->second;
+    }
+
+    static const char *maintenance_policy_name (maintenance_policy_kind_t value)
+    {
+        switch (value) {
+        case maintenance_policy_kind_t::disabled:
+            return "disabled";
+        case maintenance_policy_kind_t::recreate:
+            return "recreate";
+        case maintenance_policy_kind_t::snapshot:
+            return "snapshot";
+        }
+        return "disabled";
+    }
+
+    static maintenance_policy_kind_t parse_maintenance_policy (const std::string &value)
+    {
+        if (value == "recreate")
+            return maintenance_policy_kind_t::recreate;
+        if (value == "snapshot")
+            return maintenance_policy_kind_t::snapshot;
+        return maintenance_policy_kind_t::disabled;
+    }
+
+    static const char *object_role_name (object_role_t value)
+    {
+        static constexpr std::array<const char *, 3> names{"none", "client", "server"};
+        return names.at (static_cast<std::size_t> (value));
+    }
+
+    static object_role_t parse_object_role (const std::string &value)
+    {
+        if (value == "client")
+            return object_role_t::client;
+        if (value == "server")
+            return object_role_t::server;
+        return object_role_t::none;
+    }
+
+    // 21-location-runtime.md#2.4's canonical mesh node descriptor shape:
+    // camelCase field names, generation-typed fields as JSON strings,
+    // enums spelled out (objectKind/policy/objectRole/state), capacity's
+    // spotTypes entries flattened (no nested "usage"), and no `rid`/
+    // `nodeGeneration`/`role` provider-internal aliases (checklist C-4d).
     static json_t encode (const mesh_node_descriptor_t &value)
     {
         json_t capabilities = json_t::array ();
         for (const auto &item : value.object_capabilities)
-            capabilities.push_back ({{"objectKind", static_cast<int> (item.object_kind)},
+            capabilities.push_back ({{"objectKind", object_kind3_name (item.object_kind)},
                                      {"stableType", item.stable_type},
-                                     {"policy", static_cast<int> (item.policy)},
+                                     {"policy", maintenance_policy_name (item.policy)},
                                      {"hasSnapshotAdapter", item.has_snapshot_adapter},
-                                     {"spotLimit", item.spot_limit}});
+                                     {"limit", item.spot_limit}});
         json_t spot_types = json_t::array ();
         for (const auto &item : value.capacity.spot_types)
-            spot_types.push_back ({{"objectKind", static_cast<int> (item.object_kind)},
+            spot_types.push_back ({{"objectKind", object_kind3_name (item.object_kind)},
                                    {"stableType", item.stable_type},
-                                   {"usage", encode (item.usage)}});
-        // routingIdHex/nodeGeneration/role are the 21-location-runtime.md#2.4
-        // canonical aliases for rid/lifecycleGeneration/objectRole; the
-        // originals are kept so decode_mesh_descriptor and
-        // same_mesh_immutable stay unchanged.
-        static constexpr std::array<const char *, 3> role_names{"none", "client", "server"};
+                                   {"active", item.usage.active},
+                                   {"reserved", item.usage.reserved},
+                                   {"limit", item.usage.limit}});
         return {
           {"meshName", value.mesh_name},
-          {"rid", value.rid.to_hex ()},
           {"routingIdHex", value.rid.to_hex ()},
-          {"lifecycleGeneration", value.lifecycle_generation},
-          {"nodeGeneration", generation_string (value.lifecycle_generation)},
-          {"descriptorRevision", value.descriptor_revision},
+          {"lifecycleGeneration", generation_string (value.lifecycle_generation)},
+          {"descriptorRevision", generation_string (value.descriptor_revision)},
           {"endpoint", value.endpoint},
           {"entrySpotId", value.entry_spot_id ? json_t (*value.entry_spot_id) : json_t (nullptr)},
           {"channelWeights", value.channel_weights},
-          {"applicationVersion", value.application_version},
+          {"applicationVersion", generation_string (value.application_version)},
           {"objectCapabilities", std::move (capabilities)},
-          {"objectRole", static_cast<int> (value.object_role)},
-          {"role", role_names.at (static_cast<std::size_t> (value.object_role))},
+          {"objectRole", object_role_name (value.object_role)},
           {"placementWeight", value.placement_weight},
           {"capacity",
            {{"actors", encode (value.capacity.actors)},
@@ -2849,11 +2995,11 @@ class provider_location_repository_t final : public location_repository_t
             {"limit", value.activation_concurrency.limit}}},
           {"maintenanceWave",
            value.maintenance_wave ? json_t (*value.maintenance_wave) : json_t (nullptr)},
-          {"state", static_cast<int> (value.state)},
+          {"state", runtime_state_name (value.state)},
           {"securityIdentity", value.security_identity},
           {"ownerId", value.owner_id},
-          {"leaseGeneration", value.lease_generation},
-          {"updatedAt", unix_ms (value.updated_at)}};
+          {"leaseGeneration", generation_string (value.lease_generation)},
+          {"updatedAtEpochMs", generation_string (unix_ms (value.updated_at))}};
     }
 
     static bool same_mesh_immutable (const mesh_node_descriptor_t &left,
@@ -3083,41 +3229,45 @@ class provider_location_repository_t final : public location_repository_t
     {
         mesh_node_descriptor_t result;
         result.mesh_name = value.at ("meshName").get<std::string> ();
-        result.rid = zlink::routing_id_t::from_hex (value.at ("rid").get<std::string> ());
-        result.lifecycle_generation = value.at ("lifecycleGeneration").get<std::uint64_t> ();
-        result.descriptor_revision = value.at ("descriptorRevision").get<std::uint64_t> ();
+        result.rid = zlink::routing_id_t::from_hex (value.at ("routingIdHex").get<std::string> ());
+        result.lifecycle_generation = parse_u64_field (value.at ("lifecycleGeneration"));
+        result.descriptor_revision = parse_u64_field (value.at ("descriptorRevision"));
         result.endpoint = transport::normalize_endpoint (value.at ("endpoint").get<std::string> ());
         if (value.contains ("entrySpotId") && !value.at ("entrySpotId").is_null ())
             result.entry_spot_id = value.at ("entrySpotId").get<std::string> ();
         result.channel_weights = value.at ("channelWeights").get<std::map<std::string, int>> ();
-        result.application_version = value.at ("applicationVersion").get<std::int64_t> ();
+        result.application_version =
+          static_cast<std::int64_t> (parse_u64_field (value.at ("applicationVersion")));
         for (const auto &item : value.at ("objectCapabilities"))
             result.object_capabilities.push_back (
-              {static_cast<placement_object_kind_t> (item.at ("objectKind").get<int> ()),
+              {parse_object_kind3 (item.at ("objectKind").get<std::string> ()),
                item.at ("stableType").get<std::string> (),
-               static_cast<maintenance_policy_kind_t> (item.at ("policy").get<int> ()),
+               parse_maintenance_policy (item.at ("policy").get<std::string> ()),
                item.at ("hasSnapshotAdapter").get<bool> (),
-               item.at ("spotLimit").get<std::int32_t> ()});
-        result.object_role = static_cast<object_role_t> (value.at ("objectRole").get<int> ());
+               item.at ("limit").get<std::int32_t> ()});
+        result.object_role = parse_object_role (value.at ("objectRole").get<std::string> ());
         result.placement_weight = value.at ("placementWeight").get<int> ();
         const auto &capacity = value.at ("capacity");
         result.capacity.actors = decode_capacity_usage (capacity.at ("actors"));
         result.capacity.spots = decode_capacity_usage (capacity.at ("spots"));
         for (const auto &item : capacity.at ("spotTypes"))
             result.capacity.spot_types.push_back (
-              {static_cast<placement_object_kind_t> (item.at ("objectKind").get<int> ()),
+              {parse_object_kind3 (item.at ("objectKind").get<std::string> ()),
                item.at ("stableType").get<std::string> (),
-               decode_capacity_usage (item.at ("usage"))});
+               {item.at ("active").get<std::uint64_t> (), item.at ("reserved").get<std::uint64_t> (),
+                item.at ("limit").get<std::int32_t> ()}});
         const auto &activation = value.at ("activationConcurrency");
         result.activation_concurrency.active = activation.at ("active").get<std::uint32_t> ();
         result.activation_concurrency.limit = activation.at ("limit").get<std::int32_t> ();
         if (value.contains ("maintenanceWave") && !value.at ("maintenanceWave").is_null ())
             result.maintenance_wave = value.at ("maintenanceWave").get<std::string> ();
-        result.state = static_cast<framework_runtime_state_t> (value.at ("state").get<int> ());
+        result.state = parse_runtime_state (value.at ("state").get<std::string> ());
         result.security_identity = value.at ("securityIdentity").get<std::string> ();
         result.owner_id = value.at ("ownerId").get<std::string> ();
-        result.lease_generation = value.at ("leaseGeneration").get<std::int64_t> ();
-        result.updated_at = from_unix_ms (value.at ("updatedAt").get<std::int64_t> ());
+        result.lease_generation =
+          static_cast<std::int64_t> (parse_u64_field (value.at ("leaseGeneration")));
+        result.updated_at = from_unix_ms (
+          static_cast<std::int64_t> (parse_u64_field (value.at ("updatedAtEpochMs"))));
         return result;
     }
 
@@ -3192,15 +3342,17 @@ class provider_location_repository_t final : public location_repository_t
     static std::string generation_string (std::int64_t value) { return std::to_string (value); }
 
     // §2.4's canonical envelope for the generic opaque record (MeshNode,
-    // ClientServer, fanout publisher). `generation` is kept as an additional
-    // field beyond the spec's "at least" set: it is this store's own
-    // internal write-generation counter (distinct from the host-issued
-    // `descriptorRevision`), used to gate `renew` intent and exhaustion.
+    // ClientServer, fanout publisher). The internal write-generation counter
+    // (distinct from the host-issued `descriptorRevision`; used to gate
+    // `renew` intent and exhaustion) is no longer persisted here -- it is
+    // reparented onto the provider's own opaque per-key version by
+    // update_descriptor (checklist C-4d), so the `generation` parameter is
+    // unused; kept only so call sites don't need touching.
     static json_t encode_mesh_record (std::uint64_t generation,
                                       const mesh_node_descriptor_t &descriptor)
     {
+        (void) generation;
         return {{"recordVersion", 1},
-                {"generation", generation},
                 {"ownerId", descriptor.owner_id},
                 {"leaseGeneration", generation_string (descriptor.lease_generation)},
                 {"descriptorRevision", generation_string (descriptor.descriptor_revision)},
@@ -3214,8 +3366,8 @@ class provider_location_repository_t final : public location_repository_t
                                             std::uint64_t descriptor_revision,
                                             json_t descriptor)
     {
+        (void) generation;
         return {{"recordVersion", 1},
-                {"generation", generation},
                 {"ownerId", std::move (owner_id)},
                 {"leaseGeneration", generation_string (lease_generation)},
                 {"lifecycleGeneration", lifecycle_generation},

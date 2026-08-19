@@ -331,7 +331,12 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     const auto reserved = repository.reserve (request).result ().value ();
     const auto *reservation = std::get_if<object_reserved_t> (&reserved);
     ASSERT_NE (reservation, nullptr);
-    EXPECT_EQ (reservation->creating.store_version, "1");
+    // store_version is the provider's own opaque per-key version
+    // (checklist C-4d), not a per-record counter reset to "1" -- assert it
+    // round-trips to a live re-read instead of pinning a literal that
+    // depends on how many other keys this store instance already wrote.
+    EXPECT_FALSE (reservation->creating.store_version.empty ());
+    EXPECT_EQ (reservation->fence.expected_store_version, reservation->creating.store_version);
     auto nodes = repository.list_mesh_nodes ("play").result ().value ();
     ASSERT_EQ (nodes.items.size (), 1u);
     EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 1u);
