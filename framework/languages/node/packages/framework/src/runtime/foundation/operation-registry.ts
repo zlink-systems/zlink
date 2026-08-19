@@ -38,9 +38,10 @@ interface Entry<T> {
 
 const systemClock: OperationClock = {
   setTimeout(callback, delayMs) {
-    const timer = setTimeout(callback, delayMs);
-    timer.unref();
-    return timer;
+    // A request promise is live work.  Raw RouteMesh polling deliberately
+    // uses unref'ed timers, so this deadline is the handle that keeps a
+    // submit() caller alive until a reply, cancellation, or deadline settles.
+    return setTimeout(callback, delayMs);
   },
   clearTimeout(handle) {
     clearTimeout(handle as NodeJS.Timeout);

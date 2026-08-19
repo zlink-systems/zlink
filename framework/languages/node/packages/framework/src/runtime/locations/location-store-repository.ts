@@ -154,10 +154,10 @@ interface DescriptorRecord<T> {
 
 interface CanonicalDescriptorRecord<T> {
   readonly recordVersion: 1;
-  readonly generation: string;
+  /** Legacy Node-private row generation.  Canonical v1 records omit this. */
+  readonly generation?: string;
   readonly ownerId: string;
   readonly leaseGeneration: string;
-  readonly lifecycleGeneration: string;
   readonly descriptorRevision: string;
   readonly descriptor: T;
 }
@@ -1508,7 +1508,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (current.kind === 'found') {
       const record = decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(current.value.bytes);
       const stored = reviveMeshDescriptor(record.descriptor);
-      generation = BigInt(record.generation);
+      generation = descriptorStoreGeneration(record, current.value.version.value);
       if (sameMeshDescriptor(stored, descriptor)) {
         return { status: WriteStatus.Stored, generation, updatedAt: current.value.storeNow };
       }
@@ -1641,10 +1641,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     validateClientServerDescriptor(descriptor);
-    const normalized = reviveClientServerDescriptor({
-      ...descriptor,
-      serverRid: String(descriptor.serverRid)
-    });
+    const normalized = reviveClientServerDescriptor(descriptor);
     return this.updateDescriptor(
       clientServerKey(normalized.channelName, normalized.serverRid),
       normalized,
@@ -1688,10 +1685,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     validateFanoutPublisherDescriptor(descriptor);
-    const normalized = reviveFanoutDescriptor({
-      ...descriptor,
-      publisherRid: String(descriptor.publisherRid)
-    });
+    const normalized = reviveFanoutDescriptor(descriptor);
     return this.updateDescriptor(
       fanoutKey(normalized.channelName, normalized.publisherRid),
       normalized,
@@ -2157,7 +2151,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (current.kind === 'found') {
       const record = decodeCanonicalDescriptorRecord<T>(current.value.bytes);
       const stored = revive(record.descriptor);
-      generation = BigInt(record.generation);
+      generation = descriptorStoreGeneration(record, current.value.version.value);
       if (same(stored, descriptor)) {
         return { status: WriteStatus.Stored, generation, updatedAt: current.value.storeNow };
       }
@@ -3184,14 +3178,16 @@ function encodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
   generation: bigint,
   descriptor: T
 ): Uint8Array {
+  // `generation` is an old Node-local row counter.  The opaque record's
+  // cmsgpack version is the interoperable row version, so it is deliberately
+  // not serialized (21-location-runtime §2.4).
+  void generation;
   return Buffer.from(JSON.stringify({
     recordVersion: 1,
-    generation: generation.toString(),
     ownerId: descriptor.ownerId,
     leaseGeneration: descriptor.leaseGeneration.toString(),
-    lifecycleGeneration: descriptor.lifecycleGeneration.toString(),
     descriptorRevision: descriptor.descriptorRevision.toString(),
-    descriptor: canonicalize(descriptor)
+    descriptor: canonicalDescriptor(descriptor)
   } satisfies CanonicalDescriptorRecord<unknown>), 'utf8');
 }
 
@@ -3199,6 +3195,124 @@ function decodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(bytes: Uint8
   const record = JSON.parse(decodeText(bytes)) as CanonicalDescriptorRecord<unknown>;
   requireRecordVersion(record, 'descriptor');
   return reviveCanonical(record) as CanonicalDescriptorRecord<T>;
+}
+
+function descriptorStoreGeneration(
+  record: CanonicalDescriptorRecord<unknown>,
+  storeVersion: string
+): bigint {
+  return record.generation === undefined ? BigInt(storeVersion) : BigInt(record.generation);
+}
+
+function canonicalDescriptor(descriptor: OwnedDescriptor): Record<string, unknown> {
+  if ('rid' in descriptor) return canonicalMeshDescriptor(descriptor);
+  if ('serverRid' in descriptor) return {
+    channelName: descriptor.channelName,
+    serverRoutingIdHex: encodeRoutingIdStorageHex(descriptor.serverRid),
+    lifecycleGeneration: descriptor.lifecycleGeneration.toString(),
+    descriptorRevision: descriptor.descriptorRevision.toString(),
+    endpoint: descriptor.endpoint,
+    weight: descriptor.weight,
+    state: canonicalRuntimeState(descriptor.state),
+    securityIdentity: descriptor.securityIdentity,
+    ownerId: descriptor.ownerId,
+    leaseGeneration: descriptor.leaseGeneration.toString(),
+    updatedAtEpochMs: descriptor.updatedAt.getTime().toString()
+  };
+  const publisher = descriptor as ZLinkFanoutPublisherDescriptor;
+  return {
+    channelName: publisher.channelName,
+    publisherRoutingIdHex: encodeRoutingIdStorageHex(publisher.publisherRid),
+    lifecycleGeneration: publisher.lifecycleGeneration.toString(),
+    descriptorRevision: publisher.descriptorRevision.toString(),
+    endpoint: publisher.endpoint,
+    state: canonicalRuntimeState(publisher.state),
+    securityIdentity: publisher.securityIdentity,
+    ownerId: publisher.ownerId,
+    leaseGeneration: publisher.leaseGeneration.toString(),
+    updatedAtEpochMs: publisher.updatedAt.getTime().toString()
+  };
+}
+
+function canonicalMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): Record<string, unknown> {
+  return {
+    meshName: descriptor.meshName,
+    routingIdHex: encodeRoutingIdStorageHex(descriptor.rid),
+    lifecycleGeneration: descriptor.lifecycleGeneration.toString(),
+    descriptorRevision: descriptor.descriptorRevision.toString(),
+    endpoint: descriptor.endpoint,
+    entrySpotId: descriptor.entrySpotId ?? null,
+    channelWeights: descriptor.channelWeights,
+    applicationVersion: descriptor.applicationVersion.toString(),
+    objectCapabilities: descriptor.objectCapabilities.map(capability => ({
+      ...capability,
+      objectKind: canonicalObjectKind(capability.objectKind),
+      policy: capability.policy === 'disabled' ? 'disabled' : capability.policy
+    })),
+    objectRole: descriptor.objectRole,
+    placementWeight: descriptor.placementWeight,
+    capacity: {
+      actors: descriptor.populationCapacity.actors,
+      spots: descriptor.populationCapacity.spots,
+      spotTypes: descriptor.populationCapacity.spotTypes.map(capacity => ({
+        ...capacity,
+        objectKind: canonicalObjectKind(capacity.objectKind)
+      }))
+    },
+    activationConcurrency: descriptor.activationConcurrency,
+    maintenanceWave: descriptor.maintenanceWave ?? null,
+    state: canonicalRuntimeState(descriptor.state),
+    securityIdentity: descriptor.securityIdentity,
+    ownerId: descriptor.ownerId,
+    leaseGeneration: descriptor.leaseGeneration.toString(),
+    updatedAtEpochMs: descriptor.updatedAt.getTime().toString()
+  };
+}
+
+function reviveCanonicalCapacity(value: Record<string, unknown>): ZLinkMeshNodeDescriptor['populationCapacity'] {
+  return {
+    actors: value.actors as ZLinkMeshNodeDescriptor['populationCapacity']['actors'],
+    spots: value.spots as ZLinkMeshNodeDescriptor['populationCapacity']['spots'],
+    spotTypes: (value.spotTypes as readonly Record<string, unknown>[]).map(capacity => ({
+      ...capacity,
+      objectKind: runtimeSpotObjectKind(String(capacity.objectKind))
+    })) as unknown as ZLinkMeshNodeDescriptor['populationCapacity']['spotTypes']
+  };
+}
+
+function reviveCanonicalCapabilities(value: unknown): ZLinkMeshNodeDescriptor['objectCapabilities'] {
+  return (value as readonly Record<string, unknown>[]).map(capability => ({
+    ...capability,
+    objectKind: runtimeObjectKind(String(capability.objectKind))
+  })) as unknown as ZLinkMeshNodeDescriptor['objectCapabilities'];
+}
+
+function canonicalObjectKind(kind: 'actor' | 'user_spot' | 'instance_spot'): string {
+  return kind === 'user_spot' ? 'userSpot' : kind === 'instance_spot' ? 'instanceSpot' : 'actor';
+}
+
+function runtimeObjectKind(kind: string): 'actor' | 'user_spot' | 'instance_spot' {
+  if (kind === 'actor') return 'actor';
+  if (kind === 'userSpot') return 'user_spot';
+  if (kind === 'instanceSpot') return 'instance_spot';
+  throw new TypeError(`Location Store descriptor has invalid objectKind '${kind}'.`);
+}
+
+function runtimeSpotObjectKind(kind: string): 'user_spot' | 'instance_spot' {
+  const result = runtimeObjectKind(kind);
+  if (result === 'actor') throw new TypeError('Location Store spot capacity cannot have actor objectKind.');
+  return result;
+}
+
+function canonicalRuntimeState(state: ZLinkFrameworkRuntimeState): string {
+  return ['preparing', 'serving', 'relocating', 'relocated', 'draining', 'stopped', 'error'][state]
+    ?? (() => { throw new TypeError(`Location Store descriptor has invalid state '${state}'.`); })();
+}
+
+function runtimeState(state: string): ZLinkFrameworkRuntimeState {
+  const index = ['preparing', 'serving', 'relocating', 'relocated', 'draining', 'stopped', 'error'].indexOf(state);
+  if (index < 0) throw new TypeError(`Location Store descriptor has invalid state '${state}'.`);
+  return index as ZLinkFrameworkRuntimeState;
 }
 
 function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
@@ -3646,13 +3760,39 @@ function canTakeOverStoredLocation(
 }
 
 function persistMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
-  return { ...descriptor, rid: String(descriptor.rid), updatedAt: descriptor.updatedAt.toISOString() as never };
+  return descriptor;
 }
 
 function reviveMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
+  const value = descriptor as unknown as Record<string, unknown>;
+  if ('routingIdHex' in value) {
+    const capacity = value.capacity as Record<string, unknown>;
+    return {
+      meshName: String(value.meshName),
+      rid: decodeRoutingId(String(value.routingIdHex), value.routingIdHex),
+      lifecycleGeneration: BigInt(String(value.lifecycleGeneration)),
+      descriptorRevision: BigInt(String(value.descriptorRevision)),
+      endpoint: String(value.endpoint),
+      objectRole: value.objectRole as ZLinkObjectRole,
+      entrySpotId: value.entrySpotId === null ? undefined : value.entrySpotId as string | undefined,
+      placementWeight: Number(value.placementWeight),
+      populationCapacity: reviveCanonicalCapacity(capacity),
+      activationConcurrency: value.activationConcurrency as ZLinkMeshNodeDescriptor['activationConcurrency'],
+      channelWeights: value.channelWeights as Readonly<Record<string, number>>,
+      applicationVersion: BigInt(String(value.applicationVersion)),
+      spotTypes: [],
+      objectCapabilities: reviveCanonicalCapabilities(value.objectCapabilities),
+      maintenanceWave: value.maintenanceWave === null ? undefined : value.maintenanceWave as string | undefined,
+      state: runtimeState(String(value.state)),
+      securityIdentity: String(value.securityIdentity),
+      ownerId: String(value.ownerId),
+      leaseGeneration: BigInt(String(value.leaseGeneration)),
+      updatedAt: new Date(Number(value.updatedAtEpochMs))
+    };
+  }
   return {
     ...descriptor,
-    rid: String(descriptor.rid),
+    rid: descriptor.rid,
     updatedAt: descriptor.updatedAt instanceof Date
       ? descriptor.updatedAt
       : new Date(descriptor.updatedAt)
@@ -3662,9 +3802,25 @@ function reviveMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNod
 function reviveClientServerDescriptor(
   descriptor: ZLinkClientServerServerDescriptor
 ): ZLinkClientServerServerDescriptor {
+  const value = descriptor as unknown as Record<string, unknown>;
+  if ('serverRoutingIdHex' in value) {
+    return {
+      channelName: String(value.channelName),
+      serverRid: decodeRoutingId(String(value.serverRoutingIdHex), value.serverRoutingIdHex),
+      lifecycleGeneration: BigInt(String(value.lifecycleGeneration)),
+      descriptorRevision: BigInt(String(value.descriptorRevision)),
+      endpoint: String(value.endpoint),
+      weight: Number(value.weight),
+      state: runtimeState(String(value.state)),
+      securityIdentity: String(value.securityIdentity),
+      ownerId: String(value.ownerId),
+      leaseGeneration: BigInt(String(value.leaseGeneration)),
+      updatedAt: new Date(Number(value.updatedAtEpochMs))
+    };
+  }
   return {
     ...descriptor,
-    serverRid: String(descriptor.serverRid),
+    serverRid: descriptor.serverRid,
     updatedAt: reviveDate(descriptor.updatedAt)
   };
 }
@@ -3672,9 +3828,24 @@ function reviveClientServerDescriptor(
 function reviveFanoutDescriptor(
   descriptor: ZLinkFanoutPublisherDescriptor
 ): ZLinkFanoutPublisherDescriptor {
+  const value = descriptor as unknown as Record<string, unknown>;
+  if ('publisherRoutingIdHex' in value) {
+    return {
+      channelName: String(value.channelName),
+      publisherRid: decodeRoutingId(String(value.publisherRoutingIdHex), value.publisherRoutingIdHex),
+      lifecycleGeneration: BigInt(String(value.lifecycleGeneration)),
+      descriptorRevision: BigInt(String(value.descriptorRevision)),
+      endpoint: String(value.endpoint),
+      state: runtimeState(String(value.state)),
+      securityIdentity: String(value.securityIdentity),
+      ownerId: String(value.ownerId),
+      leaseGeneration: BigInt(String(value.leaseGeneration)),
+      updatedAt: new Date(Number(value.updatedAtEpochMs))
+    };
+  }
   return {
     ...descriptor,
-    publisherRid: String(descriptor.publisherRid),
+    publisherRid: descriptor.publisherRid,
     updatedAt: reviveDate(descriptor.updatedAt)
   };
 }

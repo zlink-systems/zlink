@@ -730,6 +730,66 @@ test('redis-backed repository writes the golden canonical authority allocation e
   }
 });
 
+test('redis-backed production repository writes the golden canonical descriptor bodies', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const golden = JSON.parse(fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', '..', 'runtime', 'protocol', 'golden', 'store-record-v1.json'
+  ), 'utf8'));
+  const prefix = testPrefix('golden-descriptor-conformance');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  try {
+    const owner = await repository.claimOwnerLease('owner-a', 60_000);
+    assert.equal(owner.kind, 'claimed');
+    if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
+    for (const [name, update] of [
+      ['meshNodeDescriptor-normal', 'updateMeshNode'],
+      ['clientServerDescriptor-normal', 'updateClientServer'],
+      ['fanoutPublisherDescriptor-normal', 'updateFanoutPublisher']
+    ]) {
+      const vector = golden.valueVectors.genericOpaqueRecord.find(item => item.name === name);
+      assert.ok(vector, `${name} fixture missing`);
+      const body = vector.decoded.descriptor;
+      const rid = { toHex: () => body.routingIdHex ?? body.serverRoutingIdHex ?? body.publisherRoutingIdHex,
+        toString: () => body.routingIdHex ?? body.serverRoutingIdHex ?? body.publisherRoutingIdHex };
+      const common = {
+        lifecycleGeneration: BigInt(body.lifecycleGeneration), descriptorRevision: BigInt(body.descriptorRevision),
+        endpoint: body.endpoint, state: framework.ZLinkFrameworkRuntimeState.Serving,
+        securityIdentity: body.securityIdentity, ownerId: owner.token.ownerId,
+        leaseGeneration: owner.token.leaseGeneration, updatedAt: new Date(Number(body.updatedAtEpochMs))
+      };
+      const descriptor = update === 'updateMeshNode' ? {
+        ...common, meshName: body.meshName, rid, objectRole: framework.ZLinkObjectRole.Server,
+        entrySpotId: body.entrySpotId, channelWeights: body.channelWeights,
+        applicationVersion: BigInt(body.applicationVersion), placementWeight: body.placementWeight,
+        populationCapacity: { ...body.capacity, spotTypes: body.capacity.spotTypes.map(value => ({ ...value,
+          objectKind: value.objectKind === 'userSpot' ? 'user_spot' : 'instance_spot' })) },
+        activationConcurrency: body.activationConcurrency,
+        spotTypes: [], objectCapabilities: body.objectCapabilities.map(value => ({ ...value,
+          objectKind: value.objectKind === 'userSpot' ? 'user_spot' : value.objectKind === 'instanceSpot' ? 'instance_spot' : 'actor' })),
+        maintenanceWave: body.maintenanceWave ?? undefined
+      } : update === 'updateClientServer' ? { ...common, channelName: body.channelName, serverRid: rid, weight: body.weight }
+        : { ...common, channelName: body.channelName, publisherRid: rid };
+      const result = await repository[update](descriptor, frameworkInternal.ZLinkLocationWriteIntent.NewClaim);
+      assert.equal(result.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
+      const read = await store.read(key(vector.originalKey.replace(/\\u0000/g, '\0')));
+      assert.equal(read.kind, 'found', name);
+      const stored = JSON.parse(Buffer.from(read.value.bytes).toString('utf8'));
+      assert.deepEqual(stored, {
+        ...vector.decoded,
+        leaseGeneration: String(owner.token.leaseGeneration),
+        ownerId: owner.token.ownerId,
+        descriptor: { ...vector.decoded.descriptor, leaseGeneration: String(owner.token.leaseGeneration), ownerId: owner.token.ownerId }
+      });
+    }
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
 test('redis-backed production repository rejects an authority envelope without recordVersion', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;

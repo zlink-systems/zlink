@@ -16,6 +16,18 @@ const { resolveFrameworkPacketName } = require('../../packages/framework/dist/ru
 const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
+const { RawServiceMeshRuntime } = require(
+  '../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime'
+);
+const { ZLinkNodeRawBindingPort } = require(
+  '../../packages/framework/dist/runtime/backend/node/node-raw-binding-port'
+);
+const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require(
+  '../../packages/framework/dist/runtime/host/application-job-queue'
+);
+const serviceWire = require(
+  '../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec'
+);
 
 function dispatchOptions() {
   return framework.createFrameworkOptions((options) => {
@@ -30,6 +42,66 @@ const reservedPorts = new Set();
 test.afterEach(async () => {
   // Native socket teardown completes its monitor callbacks asynchronously.
   await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test('two Node RouteMesh nodes round-trip a channel request and retain the pending submit', async () => {
+  const descriptor = (rid, endpoint, channels, role) => ({
+    meshName: 'channel-round-trip', nodeRoutingId: rid, lifecycleGeneration: 1n,
+    descriptorRevision: 1n, advertisedEndpoint: endpoint, channels, state: 'serving',
+    securityIdentity: 'test', applicationVersion: 1n, protocolCapabilities: ['framework-service-v12'],
+    objectRole: role, placementWeight: 100, activeCapacityLimit: 100,
+    pendingCapacityLimit: 10, activeCapacityUsed: 0, pendingCapacityUsed: 0
+  });
+  const queue = () => new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  const client = new RawServiceMeshRuntime({
+    descriptor: descriptor('channel-client', 'tcp://127.0.0.1:0', [], 'client'),
+    bindingPort: new ZLinkNodeRawBindingPort(), applicationJobQueue: queue()
+  });
+  const server = new RawServiceMeshRuntime({
+    descriptor: descriptor('channel-server', 'tcp://127.0.0.1:0', [{ name: 'api', weight: 100 }], 'server'),
+    bindingPort: new ZLinkNodeRawBindingPort(), applicationJobQueue: queue()
+  });
+  try {
+    client.start();
+    server.start();
+    server.setServiceIngress(record => {
+      if (record.command !== serviceWire.M6aServiceWireCommand.channelRequest) return undefined;
+      const request = serviceWire.decodeChannelRequestHeader(record.parts[0]);
+      server.replyService(record, [
+        serviceWire.encodeReplyHeader(request.correlation),
+        serviceWire.encodeApplicationPayload({
+          packetName: 'Pong', contentType: 'application/json', payload: Buffer.from('{"ok":true}')
+        })
+      ]);
+      return 'infrastructure';
+    });
+    client.connectPeer(server.topology.localDescriptor().advertisedEndpoint, server.topology.localDescriptor());
+    server.connectPeer(client.topology.localDescriptor().advertisedEndpoint, client.topology.localDescriptor());
+    for (let turn = 0; turn < 300
+      && (!client.isPeerRouteReady('channel-server') || !server.isPeerRouteReady('channel-client')); turn += 1) {
+      await client.drainMonitorEvents(); await server.drainMonitorEvents();
+      await client.announceExpectedPeers(); await server.announceExpectedPeers();
+      await client.tickLiveness(); await server.tickLiveness();
+      await client.pumpOne(); await server.pumpOne();
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(client.isPeerRouteReady('channel-server'), true);
+    const pending = client.requestToChannel('api', {
+      packetName: 'Ping', contentType: 'application/json', payload: Buffer.from('{"ping":true}')
+    }, 1_000);
+    for (let turn = 0; turn < 300; turn += 1) {
+      await client.tickLiveness(); await server.tickLiveness();
+      await client.pumpOne(); await server.pumpOne();
+      await new Promise(resolve => setImmediate(resolve));
+      if (await Promise.race([pending.promise.then(() => true), Promise.resolve(false)])) break;
+    }
+    const reply = await pending.promise;
+    assert.equal(reply.terminalResult, 0);
+    assert.equal(Buffer.from(reply.payload.payload).toString(), '{"ok":true}');
+  } finally {
+    client.close();
+    server.close();
+  }
 });
 
 function typedPacket(packetName, value) {
