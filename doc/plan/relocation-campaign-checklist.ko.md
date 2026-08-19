@@ -49,20 +49,25 @@
 - [x] Bingo 재검증 (2026-08-19): node·kotlin 각 3회 클린 실행 6/6 첫 시도 그린,
       relocation 실행 확인(대체·route-ready·target_resume), 지문 재현 없음 —
       당시 미커밋 편집 트리가 원인으로 종결 (로그 scratchpad/sample-gates/*-recheck-*)
-- [ ] dotnet 샘플 6종 실행 — **1차(2026-08-19): 4/6 그린**(DeliveryDispatch·
-      GameQuest·ShoppingMall·SupportChat), Bingo·TicTacToe는 push-relay 회귀로
-      134. 회귀 수정 후 재실행 필요
-- [ ] **dotnet push-relay 회귀(신규 2026-08-19, 결정적 4/4)**: `6fa7d6aab8`이
-      actor 노드≠세션 노드일 때 `$zlink.session.push-relay.v1` 프레임을 세션
-      노드가 아닌 actor 노드로 보내 무실패 유실(JoinGameNotify/
-      BingoGameStartedNotify timeout). git-archive 이분법 확정(last good
-      d3a951be5a), 환경 가설 기각. ActorHandoff capture_entry
-      (ZLinkActorHandoffState.cs:359, bound_route=True)가 해당 프레임 가로챔 —
-      수정 에이전트 투입
+- [x] dotnet 샘플 6종 실행 — 1차 4/6 그린(DeliveryDispatch·GameQuest·
+      ShoppingMall·SupportChat), Bingo·TicTacToe는 cutover 회귀 수정
+      `f859696dc7` 후 각 2회 exit 0 — **6/6 확보**(최종 HEAD 재확인은 G-2)
+- [x] **dotnet push 유실 회귀 — 수정 완료 `f859696dc7`**: 진짜 원인은 relay
+      가로채기(적색 청어)가 아니라 `6fa7d6aab8`의 직접 join cutover가 remote-join
+      import에 canonical-maintenance 전용 활성화 헬퍼를 호출 → 예외로 분리 태스크
+      조용히 사망 → 세션 라우트 커밋(44)·Join terminal 미발생 → 이후 push 전면
+      무실패 유실. cutover 완료가 remote-join replay를 직접 구동하도록 수정(store
+      복구 경로 반사), 회귀 테스트 A/B 고정+ProtocolErrors 불증가 단언.
+      **후속(D급 기록): ① cutover 사망이 debug 게이트 로그+카운터로만 관측 —
+      명시 실패(error sink) 강화 필요, SendIfBoundToAsync의 무바인딩 Submitted
+      동일 ② cpp/java 직접 전송 포트에 동일 실수 여부 점검 필요**
 - [x] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest(22/22),
       CurrentManagerFakeBackendTest(1/1), FORBIDDEN_SAMPLE_PATTERN rg 스윕(508파일
       0건) — 3/3 그린, live redis, run_samples.sh 동일 호출 재현 [2026-08-19]
-- [ ] RelocationBehaviorConformanceTests(dotnet) batch hang 근본 원인·처분
+- [ ] RelocationBehaviorConformanceTests(dotnet) hang 근본 원인·처분 — **특성
+      갱신(2026-08-19)**: batch 전용 아님, `ActorJoin_uses_ordered_one_way_cutover
+      _before_target_CAS`는 solo에서도 hang(수정 전 코드 A/B로 기존 결함 확증),
+      +3건 실패도 pre-existing. cutover 수정 후 클래스가 더 멀리 진행됨
 - [x] dotnet TicTacToe JoinGameNotify timeout 재현 조사 — **재분류(2026-08-19)**:
       부하 flake 아님, 위 `6fa7d6aab8` push-relay 회귀의 결정적 증상으로 흡수 종결
 - [ ] harness 기본 `all` 스테이지 깨끗한 단독 재실행 (동시 에이전트 경합으로 1차
