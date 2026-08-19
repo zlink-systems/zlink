@@ -207,9 +207,12 @@
       follow가 op identity/deadline/source/reply-route 4값 미보존(전문 에이전트),
       [M] cpp Lua point-read 0x01 미검증(cpp store 에이전트), [M] golden 테스트가
       실제 producer 미구동+dotnet brace-less 잔재(각 언어 마감에 편입)
-- [ ] C-10 node relocationFailed row-collapse 세분화: NotFound/Rejected/InvalidOp 등을
-      wire 후보(15/33/34)로 구분 인코딩 — 4언어 기준 매핑(97fc074058)과 정렬
-      [D에서 편입 2026-08-19; 전용 wire 어휘 확장(ShuttingDown 등)은 이때 재판정]
+- [x] C-10 node relocationFailed 세분화 — **완료**: java 기준표(97fc074058)와
+      전 행 정합(22행 conformance 테스트 고정), 82/82 그린. 초안의 (15/33/34)는
+      실제 기준 매핑으로 대체(34는 어느 언어도 인코딩 안 함; InvalidOp→21/33).
+      **wire 어휘 확장 재판정: 불요** — 4언어 closest-fit 합의로 상호운용 모호성
+      없음, 어떤 디코더도 해당 뉘앙스에 분기 없음, 스펙 15 실패표에 해당 행 부재
+      → 스펙 오류 아님, 확장은 무행동 churn [2026-08-19]
 
 ## C-11 스펙 이슈 전량 확정 (사용자 지시 2026-08-19 — 보류 금지, 즉시 판정·반영)
 
