@@ -633,75 +633,67 @@ test('relocation envelope preserves queued work and logical timers deterministic
   const encoded = encodeServiceRelocationEnvelope(envelope);
   const decoded = decodeServiceRelocationEnvelope(encoded);
   assert.deepEqual(
-    decoded.participants.map(({ key }) => key),
-    ['actor:a', 'spot:room']
+    decoded.participants.map(({ participantId }) => participantId),
+    [1n, 2n]
   );
   assert.deepEqual(
-    decoded.participants.map(participant => [
-      participant.objectKind,
-      participant.stableType,
-      participant.objectGeneration,
-      participant.authorityOwnerGeneration
-    ]),
-    [
-      ['actor', 'player', 8n, 5n],
-      ['user_spot', 'room', 3n, 2n]
-    ]
+    decoded.participants[0]?.rootSpotId,
+    'room'
   );
+  const actor = decoded.participants[0]!;
   const spot = decoded.participants[1]!;
   assert.deepEqual(
-    spot.queuedMessages.map(({ sequence }) => sequence),
-    [1n, 2n]
+    actor.queuedMessages.map(({ sequence }) => sequence),
+    [1n]
   );
   assert.deepEqual(
     spot.timers.map(({ timerId }) => timerId),
     ['heartbeat', 'idle']
   );
   assert.deepEqual(
-    encodeServiceRelocationEnvelope(decoded),
-    encoded
+    decoded.participants.map(participant => Buffer.from(participant.applicationState).toString('utf8')),
+    ['actor-state', 'spot-state']
   );
+
+  const standalone = envelope.participants.find(value => value.objectKind === 'actor')!;
+  const standaloneEncoded = encodeServiceRelocationEnvelope({
+    aggregateId: '22222222-2222-4222-8222-222222222222',
+    aggregateGeneration: 1n,
+    participants: [standalone],
+    memberships: []
+  });
+  assert.notEqual(standaloneEncoded[0], 0x7b, 'standalone Actor must not use the legacy JSON envelope');
+  const standaloneDecoded = decodeServiceRelocationEnvelope(standaloneEncoded);
+  assert.deepEqual(standaloneDecoded.participants[0]?.participantId, 1n);
+  assert.deepEqual(standaloneDecoded.participants[0]?.rootObjectKind, 'actor');
+  assert.deepEqual(standaloneDecoded.participants[0]?.rootSpotId, 'a');
+  assert.deepEqual(standaloneDecoded.participants[0]?.queuedMessages, standalone.queuedMessages);
 });
 
-test('relocation envelope rejects unknown identity and participant work fields', () => {
+test('relocation envelope rejects malformed root and trailing stream bytes', () => {
   const encoded = encodeServiceRelocationEnvelope(relocationEnvelope());
-  const parsed = JSON.parse(encoded.toString('utf8')) as {
-    version: number;
-    participants: Array<Record<string, unknown>>;
-  };
-
-  parsed.participants[0]!.objectGeneration = '0';
+  const malformedRoot = Buffer.from(encoded);
+  malformedRoot[16] = 4;
   assert.throws(
-    () => decodeServiceRelocationEnvelope(Buffer.from(JSON.stringify(parsed))),
-    /object generation must be a positive integer/
+    () => decodeServiceRelocationEnvelope(malformedRoot),
+    /root object kind is invalid/
   );
-
-  const unknownKind = JSON.parse(encoded.toString('utf8')) as {
-    participants: Array<Record<string, unknown>>;
-  };
-  unknownKind.participants[0]!.objectKind = 'channel';
   assert.throws(
-    () => decodeServiceRelocationEnvelope(Buffer.from(JSON.stringify(unknownKind))),
-    /object kind is invalid/
-  );
-
-  const unknownField = JSON.parse(encoded.toString('utf8')) as Record<string, unknown>;
-  unknownField.legacyQueue = [];
-  assert.throws(
-    () => decodeServiceRelocationEnvelope(Buffer.from(JSON.stringify(unknownField))),
-    /envelope fields/
+    () => decodeServiceRelocationEnvelope(Buffer.concat([encoded, Buffer.of(0)])),
+    /Trailing relocation envelope bytes/
   );
 });
 
 test('relocation envelope rejects duplicate participant queue and timer identities', () => {
   const envelope = relocationEnvelope();
-  const spot = envelope.participants[0]!;
+  const actor = envelope.participants.find(value => value.objectKind === 'actor')!;
+  const spot = envelope.participants.find(value => value.objectKind === 'user_spot')!;
   const queueEnvelope: ServiceRelocationEnvelope = {
     ...envelope,
-    participants: [{
-      ...spot,
-      queuedMessages: [spot.queuedMessages[0]!, spot.queuedMessages[0]!]
-    }]
+    participants: envelope.participants.map(value => value === actor ? {
+      ...actor,
+      queuedMessages: [actor.queuedMessages[0]!, actor.queuedMessages[0]!]
+    } : value)
   };
   assert.throws(
     () => encodeServiceRelocationEnvelope(queueEnvelope),
@@ -710,10 +702,10 @@ test('relocation envelope rejects duplicate participant queue and timer identiti
 
   const timerEnvelope: ServiceRelocationEnvelope = {
     ...envelope,
-    participants: [{
+    participants: envelope.participants.map(value => value === spot ? {
       ...spot,
       timers: [spot.timers[0]!, spot.timers[0]!]
-    }]
+    } : value)
   };
   assert.throws(
     () => encodeServiceRelocationEnvelope(timerEnvelope),
@@ -755,9 +747,9 @@ test('relocation inventory preserves 10,100 participants without a Spot member c
     encodeServiceRelocationEnvelope(envelope)
   );
   assert.equal(decoded.participants.length, 10_100);
-  assert.equal(decoded.memberships.length, 10_099);
-  assert.equal(decoded.participants[0]?.key, 'actor:profile:00000');
-  assert.equal(decoded.participants.at(-1)?.key, spot.key);
+  assert.equal(decoded.memberships.length, 0);
+  assert.equal(decoded.participants[0]?.participantId, 1n);
+  assert.equal(decoded.participants.at(-1)?.participantId, 10_100n);
 });
 
 test('mailbox seal captures queued work, holds new ingress, and restores or relays in order', () => {
@@ -855,7 +847,8 @@ test('managed timer pauses and restores its logical schedule without native hand
   const captured = await source.captureRelocation();
   assert.equal(captured.name, 'heartbeat');
   assert.equal(captured.periodMs, 60_000);
-  assert.equal(captured.pendingTicks, 0);
+  assert.equal(captured.handlerType, '');
+  assert.deepEqual(captured.pendingTicks, []);
 
   const target = new ZLinkManagedTimer('heartbeat', 60_000, options, async () => {});
   target.restoreRelocation(captured);
@@ -1226,13 +1219,11 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
         authorityOwnerGeneration: 2n,
         applicationState: Buffer.from('spot-state'),
         boundSessionState: Buffer.from('spot-journal'),
-        queuedMessages: [
-          { sequence: 2n, payload: Buffer.from('second') },
-          { sequence: 1n, payload: Buffer.from('first') }
-        ],
+        queuedMessages: [],
         timers: [
           {
             timerId: 'idle',
+            handlerType: 'IdleTimerHandler',
             startedAtUnixMs: 100,
             dueAtUnixMs: 1_000,
             intervalMs: 900,
@@ -1241,10 +1232,11 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
             overrunPolicy: 'skipLateTicks',
             maxCatchUpTicks: 1,
             stopOnUnhandledException: false,
-            pendingTicks: 0
+            pendingTicks: []
           },
           {
             timerId: 'heartbeat',
+            handlerType: 'HeartbeatTimerHandler',
             startedAtUnixMs: 100,
             dueAtUnixMs: 500,
             intervalMs: 100,
@@ -1253,7 +1245,12 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
             overrunPolicy: 'catchUpBounded',
             maxCatchUpTicks: 2,
             stopOnUnhandledException: true,
-            pendingTicks: 1
+            pendingTicks: [{
+              deliveryIndex: 4n,
+              scheduledIndex: 5n,
+              scheduledAtUnixMs: 600,
+              skippedTicks: 0n
+            }]
           }
         ]
       },
@@ -1265,7 +1262,11 @@ function relocationEnvelope(): ServiceRelocationEnvelope {
         authorityOwnerGeneration: 5n,
         applicationState: Buffer.from('actor-state'),
         boundSessionState: Buffer.from('actor-journal'),
-        queuedMessages: [],
+        queuedMessages: [{
+          sequence: 1n,
+          payload: frozenRecord(9, 1, 0, 1n, undefined,
+            Buffer.concat([frozenActorRoute(), frozenPayload()]), true)
+        }],
         timers: []
       }
     ]

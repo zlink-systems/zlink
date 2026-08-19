@@ -1057,13 +1057,21 @@ test('managed stream actor route commit rebinds the native gateway for a new own
 
 test('managed stream actor bind failure does not create stale local binding', async () => {
   const socket = new FakeStreamSocket();
-  socket.bindError = new Error('native bind failed');
+  const typedFailure = new framework.ZLinkFrameworkException(
+    framework.ZLinkFrameworkErrorKind.DeadlineExceeded,
+    'native bind deadline exceeded'
+  );
+  socket.bindError = typedFailure;
   const runtime = new framework.ZLinkStreamBindingRuntime();
   const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session'));
 
   await assert.rejects(
     () => context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-a', generation: 1n }),
-    /native bind failed/
+    error => {
+      assert.equal(error, typedFailure);
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      return true;
+    }
   );
 
   assert.equal(context.actors.find('actor-a'), undefined);

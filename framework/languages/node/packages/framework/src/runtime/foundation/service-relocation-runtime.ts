@@ -1,7 +1,19 @@
 import { createHash } from 'node:crypto';
 import type { ZLinkPlacementObjectKind } from '../../contracts/Locations';
+import type { ZLinkAuthorityKey } from '../../contracts/Locations';
+import {
+  decodeServiceWireFrozenRecordPrefix
+} from './service-stateful-wire-codec';
+import { decodeAuthorityKey } from '../locations/authority-key-codec';
 
 export interface ServiceRelocationParticipant {
+  /** Wire-local participant ordinal; identity is projected from Location Store. */
+  readonly participantId?: bigint;
+  /** Root projection carried by relocation-envelope-v1, never a participant identity vector. */
+  readonly rootSpotId?: string;
+  readonly rootSpotGeneration?: bigint;
+  readonly rootOwnerGeneration?: bigint;
+  readonly rootObjectKind?: ZLinkPlacementObjectKind;
   readonly key: string;
   readonly objectKind: ZLinkPlacementObjectKind;
   readonly stableType: string;
@@ -20,6 +32,7 @@ export interface ServiceRelocationQueuedMessage {
 
 export interface ServiceRelocationTimer {
   readonly timerId: string;
+  readonly handlerType: string;
   readonly startedAtUnixMs: number;
   readonly dueAtUnixMs: number;
   readonly intervalMs: number;
@@ -28,7 +41,14 @@ export interface ServiceRelocationTimer {
   readonly overrunPolicy: string;
   readonly maxCatchUpTicks: number;
   readonly stopOnUnhandledException: boolean;
-  readonly pendingTicks: number;
+  readonly pendingTicks: readonly ServiceRelocationPendingTimerTick[];
+}
+
+export interface ServiceRelocationPendingTimerTick {
+  readonly deliveryIndex: bigint;
+  readonly scheduledIndex: bigint;
+  readonly scheduledAtUnixMs: number;
+  readonly skippedTicks: bigint;
 }
 
 export interface ServiceRelocationMembership {
@@ -120,106 +140,263 @@ export function replaceServiceRelocationAuthorityApplicationPayload(
 }
 
 export function encodeServiceRelocationEnvelope(envelope: ServiceRelocationEnvelope): Buffer {
-  if (envelope.participants.length < 1) {
-    throw new TypeError('Relocation participant count is outside its bound.');
+  const aggregate = relocationId(canonicalUuid(envelope.aggregateId, 'aggregate id'));
+  const applicationVersion = positiveBigInt(envelope.aggregateGeneration, 'aggregate generation');
+  const participants = canonicalParticipants(envelope.participants);
+  const root = participants.find(value => value.objectKind !== 'actor') ?? participants[0]!;
+  if (envelope.participants.every(value => value.objectKind === 'actor')) {
+    if (participants.length !== 1) {
+      throw new TypeError('Standalone Actor relocation requires one participant.');
+    }
   }
-  const aggregateId = canonicalUuid(envelope.aggregateId, 'aggregate id');
-  const aggregateGeneration = positiveBigInt(
-    envelope.aggregateGeneration,
-    'aggregate generation'
-  );
-  const participants = [...envelope.participants]
-    .map(participant => encodeParticipant(participant))
-    .sort((left, right) => left.key.localeCompare(right.key));
-  if (new Set(participants.map(({ key }) => key)).size !== participants.length) {
-    throw new TypeError('Relocation participants must have unique keys.');
+  const writer = new RelocationWriter();
+  writer.u64(aggregate.high); writer.u64(aggregate.low);
+  const rootKind = root.objectKind === 'actor' ? 1 : root.objectKind === 'user_spot' ? 2 : 3;
+  writer.u8(rootKind);
+  writer.body16(body => {
+    if (rootKind === 3) body.text8(root.stableType);
+    body.text8(authorityGlobalId(root.key)); body.u64(root.objectGeneration);
+    if (rootKind !== 3) body.u64(root.authorityOwnerGeneration);
+  });
+  writer.u64(applicationVersion);
+  writer.u32(participants.length);
+  for (const [index, participant] of participants.entries()) {
+    writer.u64(BigInt(index + 1)); writer.bool(true);
+    writer.body64(body => { body.bytes64(participant.applicationState); });
   }
-  const memberships = encodeMemberships(envelope.memberships, envelope.participants);
-  return Buffer.from(JSON.stringify({
-    version: 3,
-    aggregateId,
-    aggregateGeneration: aggregateGeneration.toString(),
-    inventoryDigest: inventoryDigest(envelope.participants, envelope.memberships),
-    memberships,
-    participants
-  }), 'utf8');
+  const saved = participants.flatMap((participant, index) => participant.queuedMessages.map(message => ({
+    participantId: BigInt(index + 1), order: positiveBigInt(message.sequence, 'queue sequence'), payload: Buffer.from(message.payload)
+  }))).sort(compareParticipantOrder);
+  if (saved.some((value, index) => index > 0
+    && compareParticipantOrder(saved[index - 1]!, value) === 0)) {
+    throw new TypeError('Relocation queue sequences must be unique per participant.');
+  }
+  writer.u32(saved.length);
+  for (const value of saved) {
+    const prefix = decodeServiceWireFrozenRecordPrefix(value.payload);
+    if (prefix.length !== value.payload.byteLength || prefix.record.recordKind > 11) {
+      throw new TypeError('Saved work must be one canonical relocation frozen record.');
+    }
+    writer.u64(value.participantId); writer.u64(value.order); writer.raw(value.payload);
+  }
+  const timers = participants.flatMap((participant, index) => participant.timers.map(timer => ({
+    participantId: BigInt(index + 1), timer
+  }))).sort((a, b) => a.participantId === b.participantId
+    ? Buffer.compare(Buffer.from(a.timer.timerId), Buffer.from(b.timer.timerId))
+    : a.participantId < b.participantId ? -1 : 1);
+  if (timers.some((value, index) => index > 0
+    && timers[index - 1]!.participantId === value.participantId
+    && timers[index - 1]!.timer.timerId === value.timer.timerId)) {
+    throw new TypeError('Relocation timer ids must be unique per participant.');
+  }
+  writer.u32(timers.length);
+  for (const { participantId, timer } of timers) {
+    writer.u64(participantId); writer.text8(timer.timerId); writer.text8(timer.handlerType);
+    writer.u64(BigInt(positiveInteger(timer.intervalMs, 'timer interval')));
+    writer.u8(timerPolicy(timer.overrunPolicy));
+    writer.u64(BigInt(positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit')));
+    writer.bool(requireBoolean(timer.stopOnUnhandledException, 'timer stop-on-error flag'));
+    writer.u64(nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index'));
+    writer.u64(nonNegativeBigInt(timer.lastScheduledIndex, 'timer scheduled index'));
+    writer.u64(nonNegativeUnixMilliseconds(timer.dueAtUnixMs, 'timer due time'));
+  }
+  const nextOrder = new Map<bigint, bigint>();
+  for (const value of saved) {
+    const current = nextOrder.get(value.participantId) ?? 0n;
+    if (value.order > current) nextOrder.set(value.participantId, value.order);
+  }
+  const pending = timers.flatMap(({ participantId, timer }) => timer.pendingTicks.map(tick => {
+    const order = (nextOrder.get(participantId) ?? 0n) + 1n;
+    nextOrder.set(participantId, order);
+    return { participantId, order, timerName: timer.timerId, tick };
+  })).sort(compareParticipantOrder);
+  writer.u32(pending.length);
+  for (const value of pending) {
+    writer.u64(value.participantId); writer.u64(value.order); writer.text8(value.timerName);
+    writer.u64(nonNegativeBigInt(value.tick.deliveryIndex, 'pending timer delivery index'));
+    writer.u64(nonNegativeBigInt(value.tick.scheduledIndex, 'pending timer scheduled index'));
+    writer.u64(nonNegativeUnixMilliseconds(value.tick.scheduledAtUnixMs, 'pending timer scheduled time'));
+    writer.u64(nonNegativeBigInt(value.tick.skippedTicks, 'pending timer skipped ticks'));
+  }
+  return writer.finish();
 }
 
 export function decodeServiceRelocationEnvelope(payload: Uint8Array): ServiceRelocationEnvelope {
-  const parsed = JSON.parse(Buffer.from(payload).toString('utf8')) as {
-    readonly version?: unknown;
-    readonly aggregateId?: unknown;
-    readonly aggregateGeneration?: unknown;
-    readonly inventoryDigest?: unknown;
-    readonly memberships?: unknown;
-    readonly participants?: unknown;
-  };
-  requireExactKeys(parsed, [
-    'aggregateGeneration',
-    'aggregateId',
-    'inventoryDigest',
-    'memberships',
-    'participants',
-    'version'
-  ], 'envelope');
-  if (
-    parsed.version !== 3
-    || typeof parsed.inventoryDigest !== 'string'
-    || !Array.isArray(parsed.participants)
-    || !Array.isArray(parsed.memberships)
-    || parsed.participants.length < 1
-  ) {
-    throw new TypeError('Invalid relocation envelope.');
+  const reader = new RelocationReader(payload);
+  const aggregateId = uuid(reader.u64(), reader.u64());
+  if (aggregateId === undefined) throw new TypeError('Invalid relocation identity.');
+  const rootKind = reader.u8();
+  if (rootKind < 1 || rootKind > 3) throw new TypeError('relocation-envelope-v1 root object kind is invalid.');
+  const root = reader.body16();
+  if (rootKind === 3) root.text8();
+  const spotId = root.text8(); const spotGeneration = root.nonZeroU64();
+  const ownerGeneration = rootKind === 3 ? undefined : root.nonZeroU64(); root.end();
+  const aggregateGeneration = reader.nonZeroU64();
+  const count = reader.count();
+  const participants = Array.from({ length: count }, (_, index) => {
+    const participantId = reader.nonZeroU64(); if (participantId !== BigInt(index + 1)) throw new TypeError('Application state participant order is invalid.');
+    const hasState = reader.bool(); const body = reader.body64(); const applicationState = hasState ? body.bytes64() : Buffer.alloc(0); body.end();
+    return wireParticipant(participantId, applicationState);
+  });
+  const byId = new Map(participants.map(value => [value.participantId!, value]));
+  for (const _ of reader.vector()) {
+    const participant = byId.get(reader.nonZeroU64()); const sequence = reader.nonZeroU64();
+    if (participant === undefined) throw new TypeError('Saved work participant is unknown.');
+    const start = reader.position; const prefix = decodeServiceWireFrozenRecordPrefix(reader.remainingBytes());
+    if (prefix.record.recordKind > 11) throw new TypeError('Saved work record kind is invalid.');
+    reader.skip(prefix.length); participant.queuedMessages.push({ sequence, payload: reader.copy(start, reader.position) });
   }
-  const envelope: ServiceRelocationEnvelope = {
-    aggregateId: canonicalUuid(parsed.aggregateId, 'aggregate id'),
-    aggregateGeneration: positiveBigInt(
-      parsed.aggregateGeneration,
-      'aggregate generation'
-    ),
-    participants: parsed.participants.map((value: unknown) => {
-      const item = record(value, 'participant');
-      requireExactKeys(item, [
-        'applicationState',
-        'authorityOwnerGeneration',
-        'boundSessionState',
-        'key',
-        'objectGeneration',
-        'objectKind',
-        'queuedMessages',
-        'stableType',
-        'timers'
-      ], 'participant');
-      if (
-        !Array.isArray(item.queuedMessages)
-        || !Array.isArray(item.timers)
-      ) {
-        throw new TypeError('Invalid relocation participant work inventory.');
-      }
-      return {
-        key: requireText(item.key, 'participant key'),
-        objectKind: objectKind(item.objectKind),
-        stableType: requireText(item.stableType, 'participant stable type'),
-        objectGeneration: positiveBigInt(item.objectGeneration, 'object generation'),
-        authorityOwnerGeneration: positiveBigInt(
-          item.authorityOwnerGeneration,
-          'authority owner generation'
-        ),
-        applicationState: base64(item.applicationState, 'application state'),
-        boundSessionState: base64(item.boundSessionState, 'bound Session state'),
-        queuedMessages: item.queuedMessages.map(decodeQueuedMessage),
-        timers: item.timers.map(decodeTimer)
-      };
-    }),
-    memberships: parsed.memberships.map(decodeMembership)
-  };
-  validateMemberships(envelope.memberships, envelope.participants);
-  const canonical = encodeServiceRelocationEnvelope(envelope);
-  const canonicalParsed = JSON.parse(canonical.toString('utf8')) as { readonly inventoryDigest: string };
-  if (canonicalParsed.inventoryDigest !== parsed.inventoryDigest) {
-    throw new TypeError('Relocation inventory digest mismatch.');
+  const timerNames = new Map<bigint, Set<string>>();
+  for (const _ of reader.vector()) {
+    const participant = byId.get(reader.nonZeroU64()); if (participant === undefined) throw new TypeError('Timer participant is unknown.');
+    const timerId = reader.text8(); const names = timerNames.get(participant.participantId!) ?? new Set<string>(); if (names.has(timerId)) throw new TypeError('Timer name is duplicated.'); names.add(timerId); timerNames.set(participant.participantId!, names);
+    const handlerType = reader.text8();
+    const intervalMs = Number(reader.nonZeroU64());
+    const overrunPolicy = timerPolicyName(reader.u8());
+    const maxCatchUpTicks = Number(reader.nonZeroU64());
+    const stopOnUnhandledException = reader.bool();
+    const deliveryIndex = reader.u64();
+    const lastScheduledIndex = reader.u64();
+    const dueAtUnixMs = unixMilliseconds(reader.u64());
+    participant.timers.push({ timerId, handlerType, startedAtUnixMs: 0, dueAtUnixMs, intervalMs, overrunPolicy, maxCatchUpTicks, stopOnUnhandledException, deliveryIndex, lastScheduledIndex, pendingTicks: [] });
   }
-  return envelope;
+  for (const _ of reader.vector()) {
+    const participant = byId.get(reader.nonZeroU64()); const order = reader.nonZeroU64(); const timerName = reader.text8();
+    const timer = participant?.timers.find(value => value.timerId === timerName);
+    if (timer === undefined || order === 0n) throw new TypeError('Pending timer tick is invalid.');
+    (timer.pendingTicks as ServiceRelocationPendingTimerTick[]).push({ deliveryIndex: reader.nonZeroU64(), scheduledIndex: reader.nonZeroU64(), scheduledAtUnixMs: unixMilliseconds(reader.u64()), skippedTicks: reader.u64() });
+  }
+  reader.end();
+  // Root identity is an envelope projection, not an entry in the participant
+  // vector.  Keep it once as local decode metadata until Location Store maps
+  // ordinal states back to authoritative identities.
+  const rootParticipant = participants[0]!;
+  const rootObjectKind: ZLinkPlacementObjectKind = rootKind === 1 ? 'actor' : rootKind === 2 ? 'user_spot' : 'instance_spot';
+  return { aggregateId, aggregateGeneration, participants: participants.map(value => ({ ...value, ...(value === rootParticipant ? { rootSpotId: spotId, rootSpotGeneration: spotGeneration, rootOwnerGeneration: ownerGeneration, rootObjectKind } : {}) } as ServiceRelocationParticipant)), memberships: [] };
+}
+
+function canonicalParticipants(values: readonly ServiceRelocationParticipant[]): readonly ServiceRelocationParticipant[] {
+  if (values.length === 0) throw new TypeError('Relocation participant count is outside its bound.');
+  const participants = [...values].sort((a, b) => Buffer.compare(Buffer.from(a.key), Buffer.from(b.key)));
+  if (new Set(participants.map(value => value.key)).size !== participants.length) {
+    throw new TypeError('Relocation participants must have unique keys.');
+  }
+  return participants;
+}
+
+function authorityGlobalId(key: string): string {
+  try {
+    return decodeAuthorityKey({ value: key } as ZLinkAuthorityKey).globalId;
+  } catch {
+    const marker = key.indexOf(':');
+    return marker < 0 ? requireText(key, 'participant key') : requireText(key.slice(marker + 1), 'participant key');
+  }
+}
+
+function relocationId(value: string): { readonly high: bigint; readonly low: bigint } {
+  const hex = value.replaceAll('-', '');
+  return { high: BigInt(`0x${hex.slice(0, 16)}`), low: BigInt(`0x${hex.slice(16)}`) };
+}
+
+function uuid(high: bigint, low: bigint): string | undefined {
+  if (high === 0n && low === 0n) return undefined;
+  const hex = high.toString(16).padStart(16, '0') + low.toString(16).padStart(16, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function compareParticipantOrder<T extends { readonly participantId: bigint; readonly order: bigint }>(a: T, b: T): number {
+  return a.participantId === b.participantId
+    ? a.order < b.order ? -1 : a.order > b.order ? 1 : 0
+    : a.participantId < b.participantId ? -1 : 1;
+}
+
+function timerPolicy(value: string): 1 | 2 | 3 {
+  if (value === 'skipLateTicks') return 1;
+  if (value === 'catchUpBounded') return 2;
+  if (value === 'delayNextTick') return 3;
+  throw new TypeError('Timer overrun policy is invalid.');
+}
+
+function timerPolicyName(value: number): string {
+  if (value === 1) return 'skipLateTicks';
+  if (value === 2) return 'catchUpBounded';
+  if (value === 3) return 'delayNextTick';
+  throw new TypeError('Timer overrun policy is invalid.');
+}
+
+function nonNegativeUnixMilliseconds(value: number, label: string): bigint {
+  const parsed = safeInteger(value, label);
+  if (parsed < 0) throw new TypeError(`${label} must not be negative.`);
+  return BigInt(parsed);
+}
+
+function unixMilliseconds(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new TypeError('Unix milliseconds exceed Node safe integer range.');
+  return Number(value);
+}
+
+function wireParticipant(participantId: bigint, applicationState: Buffer): ServiceRelocationParticipant & {
+  queuedMessages: ServiceRelocationQueuedMessage[];
+  timers: ServiceRelocationTimer[];
+} {
+  return {
+    participantId,
+    key: `wire:${participantId}`,
+    objectKind: 'actor',
+    stableType: 'wire',
+    objectGeneration: 1n,
+    authorityOwnerGeneration: 1n,
+    applicationState,
+    boundSessionState: Buffer.alloc(0),
+    queuedMessages: [],
+    timers: []
+  };
+}
+
+class RelocationWriter {
+  private readonly values: number[] = [];
+  u8(value: number): void { if (!Number.isInteger(value) || value < 0 || value > 255) throw new TypeError('Invalid u8.'); this.values.push(value); }
+  bool(value: boolean): void { this.u8(value ? 1 : 0); }
+  u32(value: number): void { if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) throw new TypeError('Invalid u32.'); this.values.push(value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255); }
+  u64(value: bigint): void { if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new TypeError('Invalid u64.'); for (let i = 7; i >= 0; --i) this.u8(Number((value >> BigInt(i * 8)) & 255n)); }
+  raw(value: Uint8Array): void { this.values.push(...value); }
+  text8(value: string): void { const bytes = Buffer.from(requireText(value, 'text8'), 'utf8'); if (bytes.byteLength > 255) throw new TypeError('text8 exceeds 255 bytes.'); this.u8(bytes.byteLength); this.raw(bytes); }
+  bytes64(value: Uint8Array): void { this.u64(BigInt(value.byteLength)); this.raw(value); }
+  body16(write: (body: RelocationWriter) => void): void { const body = new RelocationWriter(); write(body); const bytes = body.finish(); if (bytes.byteLength > 0xffff) throw new TypeError('body16 exceeds 65535 bytes.'); this.u8(bytes.byteLength >>> 8); this.u8(bytes.byteLength & 255); this.raw(bytes); }
+  body64(write: (body: RelocationWriter) => void): void { const body = new RelocationWriter(); write(body); const bytes = body.finish(); this.u64(BigInt(bytes.byteLength)); this.raw(bytes); }
+  finish(): Buffer { return Buffer.from(this.values); }
+}
+
+class RelocationReader {
+  private offset = 0;
+  private readonly bytes: Buffer;
+  constructor(value: Uint8Array) { this.bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength); }
+  get position(): number { return this.offset; }
+  u8(): number { this.need(1); return this.bytes[this.offset++]!; }
+  bool(): boolean { const value = this.u8(); if (value > 1) throw new TypeError('Invalid boolean.'); return value === 1; }
+  u32(): number { this.need(4); const value = this.bytes.readUInt32BE(this.offset); this.offset += 4; return value; }
+  u64(): bigint { this.need(8); const value = this.bytes.readBigUInt64BE(this.offset); this.offset += 8; return value; }
+  nonZeroU64(): bigint { const value = this.u64(); if (value === 0n) throw new TypeError('Expected non-zero u64.'); return value; }
+  text8(): string { const length = this.u8(); if (length === 0) throw new TypeError('Expected non-empty text8.'); return this.text(length); }
+  bytes64(): Buffer { const length = this.u64(); if (length > BigInt(Number.MAX_SAFE_INTEGER)) throw new TypeError('bytes64 exceeds safe length.'); return this.take(Number(length)); }
+  body16(): RelocationReader { return new RelocationReader(this.take(this.u8() * 256 + this.u8())); }
+  body64(): RelocationReader { const length = this.u64(); if (length > BigInt(Number.MAX_SAFE_INTEGER)) throw new TypeError('body64 exceeds safe length.'); return new RelocationReader(this.take(Number(length))); }
+  count(): number { const value = this.u32(); if (value > 65_536 || value > this.bytes.byteLength - this.offset) throw new TypeError('Relocation vector count exceeds remaining bytes.'); return value; }
+  *vector(): Iterable<undefined> { for (let index = 0, count = this.count(); index < count; ++index) yield undefined; }
+  remainingBytes(): Buffer { return this.bytes.subarray(this.offset); }
+  skip(length: number): void { this.need(length); this.offset += length; }
+  copy(start: number, end: number): Buffer { return Buffer.from(this.bytes.subarray(start, end)); }
+  end(): void { if (this.offset !== this.bytes.byteLength) throw new TypeError('Trailing relocation envelope bytes.'); }
+  private take(length: number): Buffer { this.need(length); const value = this.bytes.subarray(this.offset, this.offset + length); this.offset += length; return value; }
+  private text(length: number): string { const bytes = this.take(length); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (value.includes('\0')) throw new TypeError('text8 contains NUL.'); return value; }
+  private need(length: number): void { if (length < 0 || this.offset + length > this.bytes.byteLength) throw new TypeError('Truncated relocation envelope.'); }
+}
+
+function objectKind(value: unknown): ZLinkPlacementObjectKind {
+  if (value !== 'actor' && value !== 'user_spot' && value !== 'instance_spot') {
+    throw new TypeError('Relocation object kind is invalid.');
+  }
+  return value;
 }
 
 export function inventoryDigest(
@@ -361,25 +538,6 @@ function encodeMemberships(
   })).sort((left, right) => left.actorKey.localeCompare(right.actorKey));
 }
 
-function decodeMembership(value: unknown): ServiceRelocationMembership {
-  const item = record(value, 'membership');
-  requireExactKeys(item, [
-    'actorKey',
-    'membershipEpoch',
-    'spotKey',
-    'spotObjectGeneration'
-  ], 'membership');
-  return {
-    actorKey: requireText(item.actorKey, 'membership actor key'),
-    spotKey: requireText(item.spotKey, 'membership spot key'),
-    spotObjectGeneration: positiveBigInt(
-      item.spotObjectGeneration,
-      'membership Spot generation'
-    ),
-    membershipEpoch: positiveBigInt(item.membershipEpoch, 'membership epoch')
-  };
-}
-
 function validateMemberships(
   memberships: readonly ServiceRelocationMembership[],
   participants: readonly ServiceRelocationParticipant[]
@@ -413,111 +571,6 @@ function validateMemberships(
   }
 }
 
-function encodeParticipant(participant: ServiceRelocationParticipant) {
-  const queuedMessages = [...participant.queuedMessages]
-    .map(message => ({
-      sequence: positiveBigInt(message.sequence, 'queue sequence').toString(),
-      payload: Buffer.from(message.payload).toString('base64')
-    }))
-    .sort((left, right) => {
-      const a = BigInt(left.sequence);
-      const b = BigInt(right.sequence);
-      return a < b ? -1 : a > b ? 1 : 0;
-    });
-  if (new Set(queuedMessages.map(({ sequence }) => sequence)).size !== queuedMessages.length) {
-    throw new TypeError('Relocation queue sequences must be unique per participant.');
-  }
-  const timers = [...participant.timers]
-    .map(timer => ({
-      timerId: requireText(timer.timerId, 'timer id'),
-      startedAtUnixMs: safeInteger(timer.startedAtUnixMs, 'timer start time'),
-      dueAtUnixMs: safeInteger(timer.dueAtUnixMs, 'timer due time'),
-      intervalMs: positiveInteger(timer.intervalMs, 'timer interval'),
-      deliveryIndex: nonNegativeBigInt(timer.deliveryIndex, 'timer delivery index').toString(),
-      lastScheduledIndex: nonNegativeBigInt(
-        timer.lastScheduledIndex,
-        'timer scheduled index'
-      ).toString(),
-      overrunPolicy: requireText(timer.overrunPolicy, 'timer overrun policy'),
-      maxCatchUpTicks: positiveInteger(timer.maxCatchUpTicks, 'timer catch-up limit'),
-      stopOnUnhandledException: requireBoolean(
-        timer.stopOnUnhandledException,
-        'timer stop-on-error flag'
-      ),
-      pendingTicks: nonNegativeInteger(timer.pendingTicks, 'pending timer ticks')
-    }))
-    .sort((left, right) => left.timerId.localeCompare(right.timerId));
-  if (new Set(timers.map(({ timerId }) => timerId)).size !== timers.length) {
-    throw new TypeError('Relocation timer ids must be unique per participant.');
-  }
-  return {
-    key: requireText(participant.key, 'participant key'),
-    objectKind: objectKind(participant.objectKind),
-    stableType: requireText(participant.stableType, 'participant stable type'),
-    objectGeneration: positiveBigInt(
-      participant.objectGeneration,
-      'object generation'
-    ).toString(),
-    authorityOwnerGeneration: positiveBigInt(
-      participant.authorityOwnerGeneration,
-      'authority owner generation'
-    ).toString(),
-    applicationState: Buffer.from(participant.applicationState).toString('base64'),
-    boundSessionState: Buffer.from(participant.boundSessionState).toString('base64'),
-    queuedMessages,
-    timers
-  };
-}
-
-function decodeQueuedMessage(value: unknown): ServiceRelocationQueuedMessage {
-  const item = record(value, 'queued message');
-  requireExactKeys(item, ['payload', 'sequence'], 'queued message');
-  return {
-    sequence: positiveBigInt(item.sequence, 'queue sequence'),
-    payload: base64(item.payload, 'queued payload')
-  };
-}
-
-function decodeTimer(value: unknown): ServiceRelocationTimer {
-  const item = record(value, 'timer');
-  requireExactKeys(item, [
-    'deliveryIndex',
-    'dueAtUnixMs',
-    'intervalMs',
-    'lastScheduledIndex',
-    'maxCatchUpTicks',
-    'overrunPolicy',
-    'pendingTicks',
-    'startedAtUnixMs',
-    'stopOnUnhandledException',
-    'timerId'
-  ], 'timer');
-  return {
-    timerId: requireText(item.timerId, 'timer id'),
-    startedAtUnixMs: safeInteger(item.startedAtUnixMs, 'timer start time'),
-    dueAtUnixMs: safeInteger(item.dueAtUnixMs, 'timer due time'),
-    intervalMs: positiveInteger(item.intervalMs, 'timer interval'),
-    deliveryIndex: nonNegativeBigInt(item.deliveryIndex, 'timer delivery index'),
-    lastScheduledIndex: nonNegativeBigInt(
-      item.lastScheduledIndex,
-      'timer scheduled index'
-    ),
-    overrunPolicy: requireText(item.overrunPolicy, 'timer overrun policy'),
-    maxCatchUpTicks: positiveInteger(item.maxCatchUpTicks, 'timer catch-up limit'),
-    stopOnUnhandledException: requireBoolean(
-      item.stopOnUnhandledException,
-      'timer stop-on-error flag'
-    ),
-    pendingTicks: nonNegativeInteger(item.pendingTicks, 'pending timer ticks')
-  };
-}
-
-function objectKind(value: unknown): ZLinkPlacementObjectKind {
-  if (value !== 'actor' && value !== 'user_spot' && value !== 'instance_spot') {
-    throw new TypeError('Relocation object kind is invalid.');
-  }
-  return value;
-}
 
 const CRC32C_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value;
@@ -630,12 +683,6 @@ function safeInteger(value: unknown, label: string): number {
 function positiveInteger(value: unknown, label: string): number {
   const parsed = safeInteger(value, label);
   if (parsed <= 0) throw new TypeError(`${label} must be positive.`);
-  return parsed;
-}
-
-function nonNegativeInteger(value: unknown, label: string): number {
-  const parsed = safeInteger(value, label);
-  if (parsed < 0) throw new TypeError(`${label} must not be negative.`);
   return parsed;
 }
 

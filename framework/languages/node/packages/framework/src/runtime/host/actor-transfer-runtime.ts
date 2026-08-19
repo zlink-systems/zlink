@@ -409,7 +409,15 @@ export class ZLinkActorTransferRuntime {
     }
     try {
       if (state.spotId !== undefined) {
+        relocationDebug('source_actor_move.await_spot_transfer', {
+          actorId: actor.context.actorId,
+          spotId: String(state.spotId)
+        });
         await this.options.spotManager()?.beginActorTransfer(state.spotId, actor.context.actorId);
+        relocationDebug('source_actor_move.spot_transfer_complete', {
+          actorId: actor.context.actorId,
+          spotId: String(state.spotId)
+        });
       }
     } catch (error) {
       if (deferredOperationId === undefined) {
@@ -684,6 +692,10 @@ export class ZLinkActorTransferRuntime {
     ): Promise<void>;
     rollback(): Promise<void>;
   }> {
+    relocationDebug('maintenance_session.begin', {
+      actorId: actor.context.actorId,
+      spotId: state.spotId === undefined ? undefined : String(state.spotId)
+    });
     if (manageMembership) {
       await this.beginSourceActorMove(actor, state);
     } else {
@@ -693,6 +705,9 @@ export class ZLinkActorTransferRuntime {
         requireSourceObjectGeneration(actor.context.actorId, state)
       );
     }
+    relocationDebug('maintenance_session.source_move_complete', {
+      actorId: actor.context.actorId
+    });
     let sealId: string | undefined;
     try {
       if (state.remoteBoundSessionTarget !== undefined) {
@@ -1693,6 +1708,11 @@ export class ZLinkActorTransferRuntime {
       return;
     }
   }
+}
+
+function relocationDebug(marker: string, detail: Record<string, unknown>): void {
+  if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
+  console.error('[zlink.runtime.relocation]', marker, detail);
 }
 
 function sameSourceActorAuthority(

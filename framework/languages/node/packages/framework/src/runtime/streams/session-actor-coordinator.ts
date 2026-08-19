@@ -1,7 +1,8 @@
 import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
-import type {
+import {
   ActorRef,
-  ZLinkActor
+  ZLinkActor,
+  ZLinkFrameworkException
 } from '../../contracts';
 import { throwIfAborted } from '../abort';
 import { routingIdsEqual } from '../routing-id';
@@ -444,6 +445,9 @@ export class ZLinkSessionActorCoordinator {
         context.actorBindingReplacedHandler
       );
     } catch (error) {
+      if (error instanceof ZLinkFrameworkException) {
+        throw error;
+      }
       throw new Error(
         `Actor '${actorRef.actorId}' native session bind failed: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error }

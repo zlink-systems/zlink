@@ -4845,7 +4845,8 @@ export class ServiceStatefulRuntime {
         spot,
         targetNodeRid,
         targetNodeGeneration: this.nodeGeneration,
-        authorityOwnerGeneration: local.authorityOwnerGeneration
+        authorityOwnerGeneration: local.authorityOwnerGeneration,
+        ownerLeaseGeneration: this.nodeGeneration
       };
     }
     const route = this.spotRoutes.get(spotKey(spot));
@@ -5215,7 +5216,8 @@ function freezeSpotRoute(route: ServiceSpotRouteFence): ServiceSpotRouteFence {
     spot: Object.freeze({ ...route.spot }),
     targetNodeRid: route.targetNodeRid,
     targetNodeGeneration: route.targetNodeGeneration,
-    authorityOwnerGeneration: route.authorityOwnerGeneration
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration
   });
 }
 

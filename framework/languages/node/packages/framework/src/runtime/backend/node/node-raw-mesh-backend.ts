@@ -589,6 +589,16 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
+  async sendInfrastructureControl(
+    targetRid: unknown,
+    record: Uint8Array
+  ): Promise<SubmitResultValue> {
+    return await this.requireRuntime().sendService(
+      String(targetRid),
+      [Buffer.from(record)]
+    ) ? SubmitResult.Ok : SubmitResult.NotConnected;
+  }
+
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],

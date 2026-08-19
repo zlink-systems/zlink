@@ -49,7 +49,10 @@ import {
   ServiceWireProtocolError
 } from './service-wire-m6a-codec';
 import { createServiceWireCodec } from './service-wire-codec';
-import { ServiceWireFrameworkErrorCode } from './service-wire-constants.generated';
+import {
+  ServiceWireCommand,
+  ServiceWireFrameworkErrorCode
+} from './service-wire-constants.generated';
 
 export type RawServicePumpResult =
   | 'noData'
@@ -841,6 +844,22 @@ export class RawServiceMeshRuntime {
       });
       if (stateful !== undefined) return stateful;
       if (
+        header.flags === 0
+        && received.parts.length === 1
+        && isBareInfrastructureControl(header.command)
+      ) {
+        const accepted = this.mailbox.tryEnqueue({
+          owner: `node:${this.descriptor.nodeRoutingId}`,
+          domain: 'infrastructure',
+          parts: received.parts,
+          sourceRoutingId: received.sourceRid,
+          sourceRoute: received.sourceRoute,
+          ...(received.reply === undefined ? {} : { reply: received.reply }),
+          ...(received.requestSeq === undefined ? {} : { requestSequence: received.requestSeq })
+        });
+        return accepted ? 'infrastructure' : 'dropped';
+      }
+      if (
         header.flags !== 0
         || received.parts.length !== 2
         || ![
@@ -1628,6 +1647,27 @@ export class RawServiceMeshRuntime {
     }
   }
 
+}
+
+/**
+ * Relocation and bound-Session controls are service-wire records themselves,
+ * not application NodeSend(16) envelopes. Keep this list closed: a bare
+ * record outside the frozen control vocabulary remains a protocol error.
+ */
+function isBareInfrastructureControl(command: number): boolean {
+  return [
+    ServiceWireCommand.relocationReady,
+    ServiceWireCommand.relocationData,
+    ServiceWireCommand.replyRelay,
+    ServiceWireCommand.relocationCutover,
+    ServiceWireCommand.relocationPrepare,
+    ServiceWireCommand.sessionRelocationSeal,
+    ServiceWireCommand.sessionRelocationSealed,
+    ServiceWireCommand.sessionRelocationRoute,
+    ServiceWireCommand.replyRelayAck,
+    ServiceWireCommand.relocationState,
+    ServiceWireCommand.relocationFailed
+  ].includes(command as never);
 }
 
 function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: number } {

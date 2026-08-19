@@ -32,6 +32,7 @@ type ZLinkTimerFailureReporter = (
 
 export interface ZLinkTimerRelocationState {
   readonly name: string;
+  readonly handlerType: string;
   readonly periodMs: number;
   readonly overrunPolicy: ZLinkTimerOverrunPolicy;
   readonly maxCatchUpTicks: number;
@@ -39,12 +40,21 @@ export interface ZLinkTimerRelocationState {
   readonly startedAtUnixMs: number;
   readonly deliveryIndex: bigint;
   readonly lastScheduledIndex: bigint;
-  readonly pendingTicks: number;
+  readonly nextDueAtUnixMs: number;
+  readonly pendingTicks: readonly ZLinkTimerRelocationPendingTick[];
+}
+
+export interface ZLinkTimerRelocationPendingTick {
+  readonly deliveryIndex: bigint;
+  readonly scheduledIndex: bigint;
+  readonly scheduledAtUnixMs: number;
+  readonly skippedTicks: bigint;
 }
 
 export class ZLinkSpotTimerRegistry {
   private readonly timers = new Map<string, {
     readonly generation: bigint;
+    readonly handlerType: string;
     readonly timer: ZLinkManagedTimer;
   }>();
   private readonly generations = new Map<string, bigint>();
@@ -115,7 +125,7 @@ export class ZLinkSpotTimerRegistry {
       reportFailure,
       () => !executionSerial.isExecuting
     );
-    this.timers.set(name, { generation, timer });
+    this.timers.set(name, { generation, handlerType: handlerType.name, timer });
     return new ZLinkRegisteredTimer(this, name, generation, timer);
   }
 
@@ -131,7 +141,7 @@ export class ZLinkSpotTimerRegistry {
     const states: ZLinkTimerRelocationState[] = [];
     for (const [name, entry] of [...this.timers.entries()].sort(([left], [right]) =>
       left.localeCompare(right))) {
-      const state = await entry.timer.captureRelocation();
+      const state = await entry.timer.captureRelocation(entry.handlerType);
       if (state.name !== name) throw new Error('Timer relocation identity changed during capture.');
       states.push(state);
     }
@@ -148,7 +158,7 @@ export class ZLinkSpotTimerRegistry {
       if (state === undefined) {
         throw new Error(`Timer '${name}' is missing from relocation state.`);
       }
-      entry.timer.restoreRelocation(state);
+      entry.timer.restoreRelocation(state, entry.handlerType);
     }
   }
 
@@ -238,7 +248,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     return this.cancel();
   }
 
-  async captureRelocation(): Promise<ZLinkTimerRelocationState> {
+  async captureRelocation(handlerType = ''): Promise<ZLinkTimerRelocationState> {
     if (this.disposed) throw new Error(`Timer '${this.name}' is disposed.`);
     this.pausedForRelocation = true;
     if (this.timeout !== undefined) {
@@ -248,6 +258,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     if (this.shouldWaitForRunningOnCancel()) await this.running;
     return {
       name: this.name,
+      handlerType,
       periodMs: this.periodMs,
       overrunPolicy: this.options.overrunPolicy,
       maxCatchUpTicks: this.options.maxCatchUpTicks,
@@ -255,14 +266,16 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       startedAtUnixMs: this.startedAtMs,
       deliveryIndex: this.deliveryIndex,
       lastScheduledIndex: this.lastScheduledIndex,
-      pendingTicks: 0
+      nextDueAtUnixMs: this.startedAtMs + Number(this.lastScheduledIndex + 1n) * this.periodMs,
+      pendingTicks: []
     };
   }
 
-  restoreRelocation(state: ZLinkTimerRelocationState): void {
+  restoreRelocation(state: ZLinkTimerRelocationState, handlerType = ''): void {
     if (this.disposed) throw new Error(`Timer '${this.name}' is disposed.`);
     if (
       state.name !== this.name
+      || state.handlerType !== handlerType
       || state.periodMs !== this.periodMs
       || state.overrunPolicy !== this.options.overrunPolicy
       || state.maxCatchUpTicks !== this.options.maxCatchUpTicks
@@ -270,7 +283,10 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       || !Number.isSafeInteger(state.startedAtUnixMs)
       || state.deliveryIndex < 0n
       || state.lastScheduledIndex < 0n
-      || state.pendingTicks !== 0
+      || !Number.isSafeInteger(state.nextDueAtUnixMs)
+      || state.nextDueAtUnixMs !== state.startedAtUnixMs
+        + Number(state.lastScheduledIndex + 1n) * state.periodMs
+      || state.pendingTicks.length !== 0
     ) {
       throw new Error(`Timer '${this.name}' relocation contract does not match its registration.`);
     }

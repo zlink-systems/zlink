@@ -425,6 +425,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       return { kind: 'drained' };
     } catch (error) {
       const classified = drainFailureReason(error);
+      if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION === '1') {
+        console.error('[zlink.runtime.relocation.drain_failed]', classified, error);
+      }
       const reason: ZLinkDrainForceReason = deadline.signal.aborted
         ? 'deadline_exceeded'
         : classified;

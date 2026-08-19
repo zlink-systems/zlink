@@ -223,6 +223,8 @@ export interface ServiceSpotRouteFence {
   readonly targetNodeRid: string;
   readonly targetNodeGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;
+  /** Schema spot-route-fence expectedOwnerLeaseGeneration. */
+  readonly ownerLeaseGeneration: bigint;
 }
 
 export interface ServiceDirectSpotRouteFence extends ServiceSpotRouteFence {
@@ -2071,14 +2073,14 @@ function spotFence(value: ServiceSpotRouteFence): Buffer {
     spotRef(value.spot),
     rid(value.targetNodeRid, 'targetNodeRid'),
     u64(value.targetNodeGeneration),
-    u64(value.authorityOwnerGeneration)
+    u64(value.authorityOwnerGeneration),
+    u64(value.ownerLeaseGeneration)
   );
 }
 
 function directSpotFence(value: ServiceDirectSpotRouteFence): Buffer {
   return concat(
     spotFence(value),
-    u64(value.ownerLeaseGeneration),
     text16(value.storeVersion, 'storeVersion')
   );
 }
@@ -2527,14 +2529,14 @@ class Reader {
       spot,
       targetNodeRid: this.rid('targetNodeRid'),
       targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
-      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration')
+      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
     };
   }
 
   directSpotFence(): ServiceDirectSpotRouteFence {
     return {
       ...this.spotFence(),
-      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration'),
       storeVersion: this.text16('storeVersion')
     };
   }
@@ -2600,6 +2602,32 @@ class Reader {
 
 export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFrozenRecord {
   const reader = new FrozenReader(bytes);
+  const record = decodeServiceWireFrozenRecordFrom(reader);
+  reader.end('frozen record');
+  return { ...record, canonicalBytes: Buffer.from(bytes) };
+}
+
+/**
+ * Consumes exactly one canonical frozen record at `offset`.  Relocation
+ * saved-work is a vector of back-to-back records, so its boundary is the
+ * record grammar itself rather than an enclosing length field.
+ */
+export function decodeServiceWireFrozenRecordPrefix(
+  bytes: Uint8Array,
+  offset = 0
+): { readonly record: ServiceWireFrozenRecord; readonly length: number } {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= bytes.byteLength) {
+    fail('Frozen record offset is outside the encoded bytes.');
+  }
+  const reader = new FrozenReader(bytes.subarray(offset));
+  const record = decodeServiceWireFrozenRecordFrom(reader);
+  return {
+    record: { ...record, canonicalBytes: Buffer.from(bytes.subarray(offset, offset + reader.position)) },
+    length: reader.position
+  };
+}
+
+function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFrozenRecord {
   const recordKind = reader.u8('recordKind');
   if (recordKind < 1 || recordKind > 14) fail('Invalid frozen record kind.');
   const sourceKind = reader.u8('sourceKind');
@@ -2654,7 +2682,6 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
     : undefined;
   replyReader.end('frozen reply route');
   const body = reader.frozenBody(recordKind);
-  reader.end('frozen record');
   validateFrozenOperationMatrix(recordKind, operationKind, operationId, replyRouteId,
     body.instanceOperationKind);
   return {
@@ -2674,7 +2701,7 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
     ...(body.applicationPayload === undefined
       ? {}
       : { applicationPayload: body.applicationPayload }),
-    canonicalBytes: Buffer.from(bytes)
+    canonicalBytes: Buffer.alloc(0)
   };
 }
 
@@ -2792,6 +2819,10 @@ class FrozenReader {
 
   private get remaining(): number {
     return this.bytes.byteLength - this.offset;
+  }
+
+  get position(): number {
+    return this.offset;
   }
 
   u8(name: string): number {

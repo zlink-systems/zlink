@@ -332,7 +332,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
         { routingId: 'source', lifecycleGeneration: 2n, state: 3 },
         { routingId: 'target', lifecycleGeneration: 6n, state: 3 }
       ],
-      sendToNode: (targetRid: string, bytes: Uint8Array) => {
+      sendInfrastructureControl: (targetRid: string, bytes: Uint8Array) => {
         sent.push({ target: targetRid, bytes: Buffer.from(bytes) });
         return SubmitResult.Ok;
       }
@@ -437,7 +437,7 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   const held = new Promise<void>(resolve => { release = resolve; });
   const runtime = new ZLinkHostServiceRelocationRuntime({
     meshNode: () => ({
-      sendToNode: (_targetRid: string, bytes: Uint8Array) => {
+      sendInfrastructureControl: (_targetRid: string, bytes: Uint8Array) => {
         sent.push(Buffer.from(bytes));
         return SubmitResult.Ok;
       }
@@ -575,7 +575,7 @@ test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its c
     [17, ZLinkFrameworkErrorKind.InternalFailure]
   ] as const) {
     const runtime = new ZLinkHostServiceRelocationRuntime({
-      meshNode: () => ({ sendToNode: () => SubmitResult.Ok })
+      meshNode: () => ({ sendInfrastructureControl: () => SubmitResult.Ok })
     } as never);
     const internals = runtime as unknown as {
       sendControl: (
@@ -939,7 +939,8 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
       async sendToNode() {
         events.push('sourceLeave:submit');
         return SubmitResult.NotConnected;
-      }
+      },
+      async sendInfrastructureControl() { return SubmitResult.Ok; }
     }),
     actorTransfer: {
       async publishRoutedActorOwnership() {
@@ -1497,7 +1498,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const sourceNode = {
     status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
     peers: () => [{ routingId: 'target', lifecycleGeneration: 6n, state: 3 }],
-    sendToNode(_targetRid: string, bytes: Uint8Array) {
+    sendInfrastructureControl(_targetRid: string, bytes: Uint8Array) {
       const control = decodeServiceRelocationControlRequest(bytes);
       if (control !== undefined) {
         controlKinds.push(control.kind);
@@ -1515,7 +1516,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const targetNode = {
     status: () => ({ routingId: 'target', lifecycleGeneration: 6n }),
     peers: () => [{ routingId: 'source', lifecycleGeneration: 2n, state: 3 }],
-    sendToNode(_sourceRid: string, bytes: Uint8Array) {
+    sendInfrastructureControl(_sourceRid: string, bytes: Uint8Array) {
       const control = decodeServiceRelocationControlRequest(bytes);
       if (control?.kind === 'ready') {
         events.push('ready:submit');
@@ -1528,6 +1529,14 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       }
       queueMicrotask(() => deliver(sourceRuntime, 'target', Buffer.from(bytes), sourceDeliveries));
       return SubmitResult.Ok;
+    },
+    sendToNode(_sourceRid: string, bytes: Uint8Array) {
+      events.push('sourceLeave:submit');
+      const result = options.sourceLeaveResult ?? SubmitResult.Ok;
+      if (result === SubmitResult.Ok) {
+        queueMicrotask(() => deliver(sourceRuntime, 'target', Buffer.from(bytes), sourceDeliveries));
+      }
+      return result;
     }
   };
   const targetSpotManager = {
