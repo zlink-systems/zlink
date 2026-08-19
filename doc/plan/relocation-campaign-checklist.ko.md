@@ -437,7 +437,9 @@
       marker CAS에 동봉, live-redis 연속 세대 pin) ② [M] 비정규 counter bytes 수신 판정 → **node 해소(전 counter strict
       canonical)**, **java 해소 `822be1d9ca`**(canonical 재검증+
       counter 테스트; dotnet·node 잔여) ③ [M] error envelope 수신 의미론 → **java 몫 해소 `822be1d9ca`**(숫자 수용 제거,
-      missing/unknown=ProtocolError); cpp 관용 수용 잔여.
+      missing/unknown=ProtocolError); **cpp 몫 해소 `6e36892d6f`**(envelope_codec
+      13종 canonical 코드만 수용, 누락·미지=protocol_error, null/invented 회귀
+      테스트, 관련 3테스트 그린) → ③ 전 언어 마감.
       **CLEAN 확정 사항**: dotnet cmd-44 순서 스펙 무위반(:1371→:1399, Join
       terminal 선행), java ClientServer 신원 'default' 호환, cpp terminal
       identity fence-empty 커버, 정상 error-code 13종 이름/bytes 4언어 일치
