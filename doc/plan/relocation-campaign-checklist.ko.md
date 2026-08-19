@@ -62,7 +62,12 @@
       복구 경로 반사), 회귀 테스트 A/B 고정+ProtocolErrors 불증가 단언.
       **후속(D급 기록): ① cutover 사망이 debug 게이트 로그+카운터로만 관측 —
       명시 실패(error sink) 강화 필요, SendIfBoundToAsync의 무바인딩 Submitted
-      동일 ② cpp/java 직접 전송 포트에 동일 실수 여부 점검 필요**
+      동일(→dotnet 마감 유닛에 편입) ② cpp/java 동일 실수 점검 **완료(2026-08-19):
+      양쪽 구조적 면역**(cpp는 actor 경로에 maintenance import 개념 자체 부재+
+      전 단계 인라인 complete(failure)로 loud, java는 admission 분기에서 kind
+      판별+direct 전용 헬퍼). 단 java 신규 위험 발견: command 44 라우트 전환이
+      fire-and-forget warn-and-swallow(ZLinkActorSpotAdmission:568/729/749) —
+      join accept 후 교차 노드 push 무음 유실로 퇴화 가능, 강화 에이전트 투입**
 - [x] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest(22/22),
       CurrentManagerFakeBackendTest(1/1), FORBIDDEN_SAMPLE_PATTERN rg 스윕(508파일
       0건) — 3/3 그린, live redis, run_samples.sh 동일 호출 재현 [2026-08-19]
