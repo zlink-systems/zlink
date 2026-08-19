@@ -53,6 +53,11 @@
       사전 실패 주장 포함 확인)
 - [ ] cpp bind-session 재시도 소진 분류(deadline_exceeded로 갱신됨, `46ef4b0f03`)의
       교차 언어 parity 확인 — java/node/dotnet의 동일 시나리오 분류 대조
+- [ ] **ST-C2 session bind 실패(신규 2026-08-19, 재현 2/2)**: 시나리오 초입
+      `bound_session_t` 생성(scenario_context.hpp ~434)에서 `bind_actor_session_req_t`
+      stream 요청이 성공 응답을 못 받음 — commit 어휘 수정(`9973345552`)과 무관한
+      별도 결함. bind-session 경로(위 항목 `46ef4b0f03` 분류 변경)와 동일 경로
+      가능성 — 함께 조사
 - [x] cpp standalone actor 직접 relocation 복원 갭 — **판정 완료(2026-08-19): cpp
       실결함.** 4언어·스펙 모두 "타깃의 기존 Entry Spot으로 이동"이 계약인데 cpp만
       restore에 target_spot=nullopt 하드코딩(stateful_object_runtime.cpp:1584),
