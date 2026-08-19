@@ -398,11 +398,9 @@
 - [ ] **C-9d sol 4차 배치 리뷰(2026-08-19) — 3건(그 외 전부 CLEAN), 배정**:
       ① [H] node aggregate relocation이 공유 authority-owner-counter를 우회
       (개별 row +1, location-store-repository.ts:591-618 — 일반 경로 :1033은
-      정상; 혼합 런타임서 중복 발급 가능) → node 수정 ② [M] 비정규 counter
-      bytes(0·선행0·+부호) 수신 판정 4언어 상이(cpp만 엄격) → 3언어 strict
-      canonical decode 정렬 ③ [M] cpp error envelope가 missing/unknown
-      errorCode를 request_failed/InternalFailure로 관용 수용(spec 32:
-      ProtocolError 요구; java 숫자 0..12 수용도 포함) → cpp+수신 의미론 정렬.
+      정상; 혼합 런타임서 중복 발급 가능) → node 수정 ② [M] 비정규 counter bytes 수신 판정 → **java 해소 `822be1d9ca`**(canonical 재검증+
+      counter 테스트; dotnet·node 잔여) ③ [M] error envelope 수신 의미론 → **java 몫 해소 `822be1d9ca`**(숫자 수용 제거,
+      missing/unknown=ProtocolError); cpp 관용 수용 잔여.
       **CLEAN 확정 사항**: dotnet cmd-44 순서 스펙 무위반(:1371→:1399, Join
       terminal 선행), java ClientServer 신원 'default' 호환, cpp terminal
       identity fence-empty 커버, 정상 error-code 13종 이름/bytes 4언어 일치
