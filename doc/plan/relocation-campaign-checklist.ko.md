@@ -485,8 +485,15 @@
       사용(컴파일 파손) ② cpp→node·java→node spot-route target 미등록 회귀
       (node ready인데 not_found — 971ed36314 이후 의심) ③ relocation 3쌍 —
       외국 actor authority의 canonical 외부 행 폴백이 dotnet에만 존재(java·node
-      resolver는 자기 코덱 전용 → probe 무응답/DeadlineExceeded). 수정 3잡 가동,
-      이후 재수용 런
+      resolver는 자기 코덱 전용 → probe 무응답/DeadlineExceeded). 수정 3잡 완료(java/node resolver `b7ed1c161b`/`a687a15440`, cpp 픽스처
+      `a4409332bc`). **run4(2026-08-20): 기본 게이트 19/19 단일 런 그린 +
+      java-cross 전 쌍 그린 — 메시징·spot-route·fanout 매트릭스 수용 완료.**
+      relocation 3쌍 결정적 잔여 2계열: ⑴ java가 auto-discovery로 dial된
+      dotnet의 mesh admission Hello 310건에 무응답(수동 토폴로지는 정상 —
+      java↔dotnet 양방향 차단; 자동 발견 인바운드 admission 경로) ⑵ node→dotnet:
+      admission은 되나 dotnet이 relocation prepare control을 30s 무ACK(~120회
+      재전송; dotnet relocation 세션 무활동) + node 인바운드 서비싱 수 초 지연
+      (probe 10/12 timeout 후 완료) — 2잡 투입
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
       ① [C] 스펙의 4언어 stream 주장 vs frozen 시점 java만 부합 — **처분: 스펙=
       판정된 목표 계약(dotnet은 이후 18598a85db로 수렴, node 진행 중, cpp=W-3)**,
