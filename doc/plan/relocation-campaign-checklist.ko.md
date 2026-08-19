@@ -376,16 +376,20 @@
       스케줄링으로 이전 — cpp 큐) ④ [H] node acknowledged bind 실패 → **해소 `53fcdc55dc`**: 스펙 20 정밀 재독 —
       최초 bind는 owner terminal 성공 후에만 route 저장(§127-153)이라 실패 시
       공개 실패+임시 바인딩 해제, relocation 44 갱신만 보고-전용(§389-438).
-      기존 판정의 과일반화 정정 ⑤ [H] java cmd-44 순서 역전(spec 15 §523-532: 완료·
-      dispatch 개방 후 44 발신, CAS 후 44 손실은 seal timeout 회복 — join 실패
-      결합 제거, 기존 판정 정정 필요, java 투입 예정) ⑥ [M] dotnet
+      기존 판정의 과일반화 정정 ⑤ [H] java cmd-44 순서 → **해소 `bb6ac7b00c`**: Join terminal 후 44 발신+실패 탈결합
+      (기존 판정 정정), 순서·탈결합 pin 테스트. **파생 2건**: (a) java Bingo
+      잔여 wedge — READY 발행 AggregateConflict 시 target.abort가 actor stage
+      제거 후 동일 request 재시도가 requireActorStage에서 무한 실패(별개
+      target-stage retry/abort lifecycle 결함, 후속 투입) (b) dotnet도 동일
+      스펙 독법상 44를 Join terminal 앞에 발신(FinishRelocationTarget 내부) —
+      sol 3차 배치1 clean 판정과 상충, dotnet 슬라이스에서 재검증 ⑥ [M] dotnet
       recordVersion 부재 필드 수용(DTO 기본값 1 — java/node는 존재 요구, 존재
       검증 추가, dotnet 큐) ⑦ [H] cpp 늦은 admit/probe 응답이 현재 연결에 적용
       (spec 51 §275-312: 구 pair 이벤트 격리 — 연결 세대 캡처·비교, envelope
       에이전트 편입) ⑧ [H] counter 경계 → **해소 `53fcdc55dc`**: 스펙 22 경계 문구 정정(저장 1..2^63-1,
       2^63-1=무변경 소진, 최대 발급 2^63-2)+node owner-counter 정렬, 경계
-      무변경 테스트 ⑨ [M] java 집계 범위 소진이 ArithmeticException
-      (typed GenerationExhausted로, java 투입 예정)
+      무변경 테스트 ⑨ [M] java 집계 범위 소진 → **해소 `bb6ac7b00c`**(경계 선검사+typed 전파, near-ceiling
+      테스트)
 - [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
       비가역성 위반(→판정 정정: 기한 도달 시 Location Store authority 조회로 확정
