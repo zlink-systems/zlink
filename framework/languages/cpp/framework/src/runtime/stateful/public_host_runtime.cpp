@@ -270,10 +270,13 @@ read_route_owner_fence (
   char object_kind,
   std::string_view object_id,
   std::uint64_t object_generation,
-  std::uint64_t authority_owner_generation = 0,
-  std::uint64_t owner_lease_generation = 0,
-  std::chrono::milliseconds owner_lease_fencing_margin =
-    std::chrono::seconds (5))
+  std::uint64_t authority_owner_generation,
+  std::uint64_t owner_lease_generation,
+  /* No default: the caller must pass its configured
+   * location_options_t::owner_lease_fencing_margin. A hardcoded margin
+   * larger than the deployment's owner_lease_ttl makes every store-backed
+   * fence read return nullopt (permanent stale_route). */
+  std::chrono::milliseconds owner_lease_fencing_margin)
 {
     if (object_id.empty () || object_generation == 0)
         return std::nullopt;
@@ -285,29 +288,58 @@ read_route_owner_fence (
         return route_owner_fence_read_t{
           {authority_owner_generation, owner_lease_generation}, std::nullopt};
     }
-    if (!store)
+    if (!store) {
+        trace_mesh_host ("route-owner-fence-read", "reason=no-store");
         return std::nullopt;
+    }
     try {
         auto read = store->read_authority (
           object_kind == '1' ? actor_authority_key (object_id)
                              : spot_authority_key (object_id))
           .result ();
-        if (!read)
+        if (!read) {
+            trace_mesh_host ("route-owner-fence-read",
+                             "reason=authority-read-failed");
             return std::nullopt;
+        }
         const auto *snapshot =
           std::get_if<authority_snapshot_t> (&read.value ());
         if (!snapshot || snapshot->object_generation != object_generation
             || snapshot->authority_owner_generation == 0
-            || snapshot->owner.lease_generation <= 0)
+            || snapshot->owner.lease_generation <= 0) {
+            trace_mesh_host (
+              "route-owner-fence-read",
+              std::string ("reason=snapshot-mismatch snapshot=")
+                + (snapshot
+                     ? "generation="
+                         + std::to_string (snapshot->object_generation)
+                         + " authority="
+                         + std::to_string (
+                           snapshot->authority_owner_generation)
+                         + " lease="
+                         + std::to_string (
+                           snapshot->owner.lease_generation)
+                     : "missing")
+                + " expected_generation="
+                + std::to_string (object_generation));
             return std::nullopt;
+        }
         location_options_t location_options;
         location_options.owner_lease_fencing_margin =
           owner_lease_fencing_margin;
         live_location_reader_t live (*store, std::move (location_options));
         const auto admission_lifetime =
           live.owner_admission_lifetime (snapshot->owner);
-        if (!admission_lifetime)
+        if (!admission_lifetime) {
+            trace_mesh_host (
+              "route-owner-fence-read",
+              "reason=admission-lifetime-null owner="
+                + snapshot->owner.owner_id + " lease="
+                + std::to_string (snapshot->owner.lease_generation)
+                + " margin_ms="
+                + std::to_string (owner_lease_fencing_margin.count ()));
             return std::nullopt;
+        }
         return route_owner_fence_read_t{
           {snapshot->authority_owner_generation,
            static_cast<std::uint64_t> (snapshot->owner.lease_generation)},
@@ -2709,7 +2741,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
       : object ? object->authority_owner_generation : target.object_generation ();
     const auto route_fence = read_route_owner_fence (
       _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
-      authority_generation, owner_lease_generation);
+      authority_generation, owner_lease_generation,
+      _options.owner_lease_fencing_margin);
     if (!route_fence || route_fence->fence.first != authority_generation)
         co_return zlink::submit_result_t::not_found;
     co_return co_await _transport->send_to_actor_result (
@@ -2768,7 +2801,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
     const auto owner = read_route_owner_fence (
       _user_spot_store, '1', actor.actor_id ().value (),
       actor.object_generation (), authority_owner_generation,
-      owner_lease_generation);
+      owner_lease_generation, _options.owner_lease_fencing_margin);
     if (!owner
         || owner->fence.first != object->authority_owner_generation) {
         trace_mesh_host (
@@ -2850,7 +2883,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
       : object ? object->authority_owner_generation : target.object_generation ();
     const auto route_fence = read_route_owner_fence (
       _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
-      authority_generation, owner_lease_generation);
+      authority_generation, owner_lease_generation,
+      _options.owner_lease_fencing_margin);
     if (!route_fence || route_fence->fence.first != authority_generation) {
         release_completion (operation);
         co_return zlink::submit_result_t::not_found;
@@ -3959,7 +3993,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto owner_fence =
                       read_route_owner_fence (
                         store, '1', bind.actor.actor_id,
-                        bind.actor.object_generation);
+                        bind.actor.object_generation, 0, 0,
+                        _options.owner_lease_fencing_margin);
                     const auto admission =
                       classify_bound_session_bind_admission (
                         bind.actor,
@@ -3968,6 +4003,35 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               owner_fence->fence}
                           : std::optional<route_fence_t>{},
                         authority_matches);
+                    trace_mesh_host (
+                      "bound-session-bind-admission",
+                      "actor=" + bind.actor.actor_id
+                        + " admission="
+                        + (admission
+                               == bound_session_bind_admission_t::ready
+                             ? "ready"
+                           : admission
+                               == bound_session_bind_admission_t::
+                                 stale_route
+                             ? "stale_route"
+                             : "actor_not_ready")
+                        + " requested_authority="
+                        + std::to_string (
+                          bind.actor.authority_owner_generation)
+                        + " requested_lease="
+                        + std::to_string (
+                          bind.actor.owner_lease_generation)
+                        + " store_authority="
+                        + (owner_fence
+                             ? std::to_string (owner_fence->fence.first)
+                             : "nullopt")
+                        + " store_lease="
+                        + (owner_fence
+                             ? std::to_string (owner_fence->fence.second)
+                             : "nullopt")
+                        + " authority_matches="
+                        + (authority_matches ? "true" : "false")
+                        + " local_actor=" + (actor ? "found" : "missing"));
                     bound_session_bind_operation_result_t operation_result{
                       stateful::stateful_error_t::conflict, std::nullopt};
                     if (admission

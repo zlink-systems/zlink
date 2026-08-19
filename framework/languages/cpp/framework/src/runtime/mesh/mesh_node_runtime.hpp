@@ -48,17 +48,18 @@ enum class application_actor_session_bind_attempt_t : std::uint8_t
     retry
 };
 
+/* Retries are bounded by the caller's binding deadline (not by attempt
+ * count), matching the dotnet/java bind-vs-authority-convergence retry
+ * loops: stale_route and actor_not_ready are transient outcomes that a
+ * later attempt can resolve once the authority converges. */
 constexpr bool can_retry_application_actor_session_bind (
-  application_actor_session_bind_outcome_t outcome,
-  application_actor_session_bind_attempt_t attempt) noexcept
+  application_actor_session_bind_outcome_t outcome) noexcept
 {
-    return attempt
-             == application_actor_session_bind_attempt_t::initial
-           && (outcome
-                 == application_actor_session_bind_outcome_t::stale_route
-               || outcome
-                    == application_actor_session_bind_outcome_t::
-                      actor_not_ready);
+    return outcome
+             == application_actor_session_bind_outcome_t::stale_route
+           || outcome
+                == application_actor_session_bind_outcome_t::
+                  actor_not_ready;
 }
 
 inline result_t<runtime::stateful::object_ref_t>

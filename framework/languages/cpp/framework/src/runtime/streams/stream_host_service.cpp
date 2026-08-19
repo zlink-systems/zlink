@@ -1999,6 +1999,25 @@ class stream_host_service_t::listener_t
             const auto resolved =
               _mesh_node->native_node ().resolve_actor (native_actor);
             if (!resolved) {
+                /* actor_not_ready on the local node: short-backoff retry
+                 * bounded by the binding deadline (bind can race the
+                 * actor's own admission). */
+                const auto remaining =
+                  std::chrono::duration_cast<std::chrono::milliseconds> (
+                    binding_deadline - std::chrono::steady_clock::now ());
+                if (detail::can_retry_application_actor_session_bind (
+                      detail::application_actor_session_bind_outcome_t::
+                        actor_not_ready)
+                    && remaining > std::chrono::milliseconds::zero ()) {
+                    std::this_thread::sleep_for (
+                      std::min (remaining, std::chrono::milliseconds (10)));
+                    co_await bind_actor_session (
+                      transport_connection, session_rid, actor, replacement,
+                      binding_generation,
+                      detail::application_actor_session_bind_attempt_t::retry,
+                      binding_deadline);
+                    co_return;
+                }
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "Framework STREAM Actor is not ready for session binding");
@@ -2237,6 +2256,39 @@ class stream_host_service_t::listener_t
             throw framework_exception_t (
               framework_error_kind_t::internal_failure,
               "Framework STREAM actor binding rollback failed");
+        }
+        if (retryable_outcome
+            && detail::can_retry_application_actor_session_bind (
+              *retryable_outcome)) {
+            const auto remaining =
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                binding_deadline - std::chrono::steady_clock::now ());
+            if (remaining <= std::chrono::milliseconds::zero ()) {
+                throw framework_exception_t (
+                  framework_error_kind_t::deadline_exceeded,
+                  "Remote Actor session binding deadline elapsed");
+            }
+            if (*retryable_outcome
+                == detail::application_actor_session_bind_outcome_t::
+                  stale_route) {
+                /* Invalidate the stale cached route, then wait (capped
+                 * ~1s) for the authority to publish a changed route
+                 * before re-entering the bind. */
+                (void) _mesh_node->refresh_application_actor_route (
+                  actor, *actor_route);
+                (void) _mesh_node->wait_for_application_actor_route_change (
+                  actor, *actor_route,
+                  std::min (remaining, std::chrono::milliseconds (1000)));
+            } else {
+                std::this_thread::sleep_for (
+                  std::min (remaining, std::chrono::milliseconds (10)));
+            }
+            co_await bind_actor_session (
+              transport_connection, session_rid, actor, replacement,
+              binding_generation,
+              detail::application_actor_session_bind_attempt_t::retry,
+              binding_deadline);
+            co_return;
         }
         throw recorded.error ()
                 ? *recorded.error ()

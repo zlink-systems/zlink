@@ -1365,18 +1365,15 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
+    /* Bind retries are bounded by the binding deadline, not attempt count
+     * (dotnet/java parity): both transient outcomes stay retryable on every
+     * attempt, while a completed bind never re-enters. */
     assert (detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::stale_route,
-      detail::application_actor_session_bind_attempt_t::initial));
+      detail::application_actor_session_bind_outcome_t::stale_route));
     assert (detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::actor_not_ready,
-      detail::application_actor_session_bind_attempt_t::initial));
+      detail::application_actor_session_bind_outcome_t::actor_not_ready));
     assert (!detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::stale_route,
-      detail::application_actor_session_bind_attempt_t::retry));
-    assert (!detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::actor_not_ready,
-      detail::application_actor_session_bind_attempt_t::retry));
+      detail::application_actor_session_bind_outcome_t::bound));
     source.stop ();
     target.stop ();
 }
