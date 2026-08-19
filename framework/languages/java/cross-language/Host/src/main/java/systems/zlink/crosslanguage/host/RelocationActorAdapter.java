@@ -1,6 +1,7 @@
 package systems.zlink.crosslanguage.host;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
@@ -13,7 +14,10 @@ public final class RelocationActorAdapter implements ZLinkActorRelocationAdapter
     public CompletionStage<byte[]> capture(
         RelocationActor actor, ZLinkRelocationCancellation cancellation) {
         byte[] state = actor.applicationState();
+        // The cross-language fixture uses the .NET BinaryWriter-compatible
+        // little-endian two-int header before the opaque state bytes.
         byte[] encoded = ByteBuffer.allocate(Integer.BYTES * 2 + state.length)
+            .order(ByteOrder.LITTLE_ENDIAN)
             .putInt(actor.stateVersion())
             .putInt(state.length)
             .put(state)
@@ -24,7 +28,7 @@ public final class RelocationActorAdapter implements ZLinkActorRelocationAdapter
     @Override
     public CompletionStage<Void> restore(
         RelocationActor actor, byte[] payload, ZLinkRelocationCancellation cancellation) {
-        ByteBuffer buffer = ByteBuffer.wrap(payload);
+        ByteBuffer buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
         int stateVersion = buffer.getInt();
         int length = buffer.getInt();
         if (length < 0 || length > buffer.remaining()) {

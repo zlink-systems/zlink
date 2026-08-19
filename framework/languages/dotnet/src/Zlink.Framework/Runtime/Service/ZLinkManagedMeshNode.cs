@@ -343,6 +343,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         lock (_gate)
         {
             ThrowIfDisposed();
+            // Service-wire §5 scopes a connection generation to the admitted
+            // physical connection lifetime. Auto-connect reconciliation can
+            // repeat its desired target while that connection remains live;
+            // reuse its intent instead of opening a second candidate whose
+            // admission could supersede the live generation.
+            var admitted = _peersByIntent.Values.FirstOrDefault(peer =>
+                peer.Direction == ZLinkServiceConnectionDirection.Outbound
+                && peer.Admitted
+                && peer.ExpectedRid == expectedRid
+                && string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
+                && string.Equals(
+                    peer.ExpectedSecurityIdentity,
+                    expectedSecurityIdentity,
+                    StringComparison.Ordinal));
+            if (admitted is not null)
+                return admitted.Intent;
             var intent = checked(++_nextIntent);
             var peer = new Peer(
                 intent,
@@ -4828,6 +4844,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private bool ProcessInfrastructureControl(
         RoutingId sourceRid,
+        ulong? requestSequence,
         IReadOnlyList<Message> parts,
         byte[] head)
     {
@@ -4876,7 +4893,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out var liveness,
                 out _))
         {
-            ProcessLiveness(sourceRid, liveness);
+            ProcessLiveness(sourceRid, requestSequence, liveness);
             return true;
         }
         if (ZLinkServiceWireCodec.TryDecodeRouteAdmission(
@@ -5073,7 +5090,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 + $"allowed={allowed} current_source={currentSource}");
             var processed = allowed
                 && currentSource
-                && ProcessInfrastructureControl(sourceRid, received.Parts, head);
+                && ProcessInfrastructureControl(
+                    sourceRid, received.RequestSeq, received.Parts, head);
             if (!processed)
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
@@ -5484,6 +5502,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // the source deadline own eventual expiry. In contrast, a
                 // restore/prepare failure below remains an explicit terminal.
                 target.ReadySubmissionFailed(prepare, sourceNodeRid);
+                _inboundRelocationAssemblies.TryRemove(
+                    new KeyValuePair<PendingRelocationPrepareKey,
+                        ZLinkRelocationChunkAssembler>(assemblyKey, assembler));
                 ZLinkFrameworkDebugLog.TaskFailure(
                     "canonical-relocation-ready-submit",
                     submitFailure);
@@ -5504,6 +5525,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // not a relocation failure: keep the exact stage and let a
             // retransmitted Prepare submit READY again.
             target.ReadySubmissionFailed(prepare, sourceNodeRid);
+            _inboundRelocationAssemblies.TryRemove(
+                new KeyValuePair<PendingRelocationPrepareKey,
+                    ZLinkRelocationChunkAssembler>(assemblyKey, assembler));
             ZLinkFrameworkDebugLog.TaskFailure(
                 "canonical-relocation-ready-submit",
                 readySubmissionFailure);
@@ -7461,8 +7485,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
             if (!_peersByIntent.ContainsKey(peer.Intent))
                 _peersByIntent.Add(peer.Intent, peer);
-            peer.ConnectionGeneration =
-                checked(++_nextPeerConnectionGeneration);
+            // The Peer receives its connection generation when the physical
+            // connection intent is created. Admission and descriptor updates
+            // establish or refresh that same intent; neither is evidence of a
+            // replacement physical connection, so they must preserve its
+            // liveness epoch.
             peer.RoutingId = sourceRid;
             if (peer.Direction == ZLinkServiceConnectionDirection.Inbound
                 || peer.PhysicalRoutingId.IsEmpty)
@@ -7500,6 +7527,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessLiveness(
         RoutingId sourceRid,
+        ulong? requestSequence,
         ZLinkServiceWireCodec.LivenessRecord record)
     {
         if (record.Command == ServiceWireConstants.Command.LivenessProbe)
@@ -7512,13 +7540,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
                 return;
             }
-            SendControl(
-                peer.PhysicalRoutingId,
-                peer.ConnectionGeneration,
+            var acknowledgement = ZLinkServiceWireCodec.EncodeLiveness(
                 ServiceWireConstants.Command.LivenessAck,
-                ZLinkServiceWireCodec.EncodeLiveness(
+                record.ProbeId);
+            if (requestSequence is { } sequence)
+                SendInfrastructureReply(sourceRid, sequence, acknowledgement);
+            else
+                SendControl(
+                    peer.PhysicalRoutingId,
+                    peer.ConnectionGeneration,
                     ServiceWireConstants.Command.LivenessAck,
-                    record.ProbeId));
+                    acknowledgement);
             return;
         }
 
@@ -7527,6 +7559,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _ = peer.Liveness?.Acknowledge(
                     record.ProbeId,
                     Stopwatch.GetTimestamp()) == true;
+    }
+
+    private void SendInfrastructureReply(
+        RoutingId target,
+        ulong requestSequence,
+        byte[] head)
+    {
+        Message? message = null;
+        try
+        {
+            message = Message.From(head);
+            lock (_socketGate)
+            {
+                var socket = _socket;
+                if (socket is null
+                    || _activeSocketGeneration != _lifecycleGeneration)
+                    return;
+                socket.Reply(target, requestSequence).Message(message).Submit();
+                message = null;
+            }
+        }
+        catch (ZlinkException)
+        {
+        }
+        finally
+        {
+            message?.Dispose();
+        }
     }
 
     private void ProcessInfrastructure(long now)
@@ -9381,13 +9441,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && peer.ConnectionGeneration == connectionGeneration
                 && peer.State != MeshPeerState.Closed);
             if (current is null)
+            {
+                ZLinkFrameworkDebugLog.InboundCommand(
+                    $"mesh={_meshName} control_send_skipped target={target} "
+                    + $"generation={connectionGeneration}");
                 return;
+            }
         }
 
         try
         {
             await SendRoutedAsync(target, [head], cancellationToken)
                 .ConfigureAwait(false);
+            ZLinkFrameworkDebugLog.InboundCommand(
+                $"mesh={_meshName} control_send_submitted target={target} "
+                + $"generation={connectionGeneration}");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -9401,6 +9469,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                   && submit.Result != ZlinkSubmitException.ErrorCode.NotFound
                   && submit.Result != ZlinkSubmitException.ErrorCode.Terminated)
         {
+            ZLinkFrameworkDebugLog.InboundCommand(
+                $"mesh={_meshName} control_send_nonterminal target={target} "
+                + $"generation={connectionGeneration} result={submit.Result}");
             //  Spec 13-mesh-node:331 (condition 3) — only route/lifecycle
             //  terminal evidence ("the previous pipe has ended") may demote
             //  the peer epoch. Backpressure (queue/HWM/submit timeout),

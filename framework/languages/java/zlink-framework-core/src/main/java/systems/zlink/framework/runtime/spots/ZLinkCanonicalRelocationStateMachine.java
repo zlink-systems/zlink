@@ -1058,20 +1058,17 @@ final class ZLinkCanonicalRelocationStateMachine
             == ZLinkPlacementObjectKind.ACTOR.value();
         List<ZLinkAggregateRelocationCoordinator.Participant> participants =
             new ArrayList<>(entries.size());
-        ZLinkActorAuthorityPayloadCodec actorCodec =
-            new ZLinkActorAuthorityPayloadCodec();
+        var actorCodec = new ZLinkActorAuthorityPayloadCodec();
         for (ZLinkAuthorityEntry entry : entries) {
             ZLinkAuthoritySnapshot snapshot = entry.snapshot();
             byte[] authorityPayload = snapshot.payload();
             byte[] membershipMutation = new byte[0];
             if (standalone) {
-                var actor = actorCodec.decode(snapshot.payload())
-                    .orElseThrow(() -> new IllegalStateException(
-                        "standalone Actor authority payload is invalid"));
+                String actorId = ZLinkAuthorityKeyCodec.decode(entry.key()).id();
                 authorityPayload = actorCodec.encode(
                     ZLinkActorAuthorityPayloadCodec.State.READY,
-                    actor.stableType(),
-                    actor.actorId(),
+                    snapshot.allocation().stableType(),
+                    actorId,
                     request.spotId(),
                     profile.actorSpotGeneration(),
                     profile.actorSpotKind(),
@@ -1197,7 +1194,8 @@ final class ZLinkCanonicalRelocationStateMachine
             || envelope.applicationVersion() != prepare.applicationVersion()
             || entries.size() != envelope.applicationStates().size()) {
             throw new IllegalStateException(
-                "target relocation inventory differs from root");
+                "target relocation inventory differs from root"
+                    + relocationInventoryDiagnostic(prepare, envelope, entries));
         }
         Map<Long, Boolean> restore = new HashMap<>();
         for (var state : envelope.applicationStates()) {
@@ -1206,7 +1204,6 @@ final class ZLinkCanonicalRelocationStateMachine
         List<ZLinkSpotRetireControl.ParticipantFence> participants =
             new ArrayList<>(entries.size());
         var spotCodec = new ZLinkServiceAuthorityPayloadCodec();
-        var actorCodec = new ZLinkActorAuthorityPayloadCodec();
         String stableType = null;
         String targetSpotId = entrySpotId;
         boolean restorePrimary = false;
@@ -1238,11 +1235,8 @@ final class ZLinkCanonicalRelocationStateMachine
                 objectType = decoded.stableType();
                 targetSpotId = objectId;
             } else {
-                var decoded = actorCodec.decode(snapshot.payload())
-                    .orElseThrow(() -> new IllegalStateException(
-                        "Actor authority payload is invalid"));
-                objectId = decoded.actorId();
-                objectType = decoded.stableType();
+                objectId = ZLinkAuthorityKeyCodec.decode(entry.key()).id();
+                objectType = snapshot.allocation().stableType();
             }
             participants.add(new ZLinkSpotRetireControl.ParticipantFence(
                 entry.key(),
@@ -1285,6 +1279,67 @@ final class ZLinkCanonicalRelocationStateMachine
             rootBytes,
             participants,
             List.of());
+    }
+
+    private static String relocationInventoryDiagnostic(
+        ZLinkCanonicalRelocationProtocol.Prepare prepare,
+        ZLinkServiceRelocationEnvelopeCodec.Envelope envelope,
+        List<ZLinkAuthorityEntry> entries) {
+        StringBuilder value = new StringBuilder(" [root={id=")
+            .append(envelope.relocationHigh()).append(':')
+            .append(envelope.relocationLow()).append(",kind=")
+            .append(envelope.object().kind()).append(",objectId=")
+            .append(envelope.object().objectId()).append(",objectGeneration=")
+            .append(envelope.object().objectGeneration())
+            .append(",authorityOwnerGeneration=")
+            .append(envelope.object().expectedAuthorityOwnerGeneration())
+            .append(",applicationVersion=")
+            .append(envelope.applicationVersion()).append(",states=")
+            .append(envelope.applicationStates().size()).append("},prepare={id=")
+            .append(prepare.id().getMostSignificantBits()).append(':')
+            .append(prepare.id().getLeastSignificantBits()).append(",kind=")
+            .append(prepare.object().kind()).append(",objectId=")
+            .append(prepare.object().objectId()).append(",stableType=")
+            .append(prepare.object().stableType()).append(",objectGeneration=")
+            .append(prepare.object().objectGeneration())
+            .append(",authorityOwnerGeneration=")
+            .append(prepare.object().expectedAuthorityOwnerGeneration())
+            .append(",applicationVersion=")
+            .append(prepare.applicationVersion()).append("},authorities=[");
+        var spotCodec = new ZLinkServiceAuthorityPayloadCodec();
+        for (int index = 0; index < entries.size(); index++) {
+            if (index != 0) {
+                value.append(';');
+            }
+            var entry = entries.get(index);
+            var snapshot = entry.snapshot();
+            int kind = snapshot.allocation().objectKind().value();
+            String objectId = "<invalid>";
+            String stableType = "<invalid>";
+            if (kind == 2) {
+                var decoded = spotCodec.decode(snapshot.payload());
+                if (decoded.isPresent()) {
+                    objectId = decoded.get().spotId();
+                    stableType = decoded.get().stableType();
+                }
+            } else if (kind == 1) {
+                objectId = ZLinkAuthorityKeyCodec.decode(entry.key()).id();
+                stableType = snapshot.allocation().stableType();
+            }
+            value.append("{index=").append(index + 1)
+                .append(",keyUtf8Hex=").append(java.util.HexFormat.of()
+                    .formatHex(entry.key().getBytes(StandardCharsets.UTF_8)))
+                .append(",key=").append(entry.key()).append(",kind=")
+                .append(kind).append(",objectId=").append(objectId)
+                .append(",stableType=").append(stableType)
+                .append(",objectGeneration=")
+                .append(snapshot.objectGeneration())
+                .append(",authorityOwnerGeneration=")
+                .append(snapshot.authorityOwnerGeneration())
+                .append(",storeVersion=").append(snapshot.storeVersion())
+                .append('}');
+        }
+        return value.append("]]" ).toString();
     }
 
     private static void validateResolvedPrimary(

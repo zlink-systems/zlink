@@ -488,18 +488,17 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             || found.Snapshot.AuthorityOwnerGeneration
                != checked(source.AuthorityOwnerGeneration + 1)
             || found.Snapshot.OwnerId != target.OwnerId
-            || found.Snapshot.OwnerLeaseGeneration != target.LeaseGeneration)
+            || found.Snapshot.OwnerLeaseGeneration != target.LeaseGeneration
+            || found.Snapshot.Allocation.Descriptor
+               != new ZLinkMeshNodeDescriptorKey(target.MeshName, target.Rid)
+            || found.Snapshot.Allocation.DescriptorLifecycleGeneration
+               != target.LifecycleGeneration)
             return false;
 
         if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                 found.Snapshot.Payload.Span,
                 out var canonical))
         {
-            //  Direct transfer (spec 52 §3.1.7) keeps the handoff payload in
-            //  source memory: it has no Relocation Store pointer, so the
-            //  durable row carries no reference/checksum extension. The
-            //  in-memory payload CRC therefore only matches the durable row
-            //  when a store pointer exists (root.Reference is non-empty).
             var pointerMatches = root.Reference.Length == 0
                 ? canonical.RelocationReference.Length == 0
                 : StringComparer.Ordinal.Equals(
@@ -536,19 +535,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                    && publication.TargetOwnerLeaseGeneration
                       == target.LeaseGeneration;
 
-        return ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(
-                   found.Snapshot.Payload.Span,
-                   out var steady)
-               && steady.State == ZLinkActorAuthorityState.Ready
-               && steady.NodeRid == target.Rid
-               && steady.NodeGeneration == target.LifecycleGeneration
-               && StringComparer.Ordinal.Equals(steady.OwnerId, target.OwnerId)
-               && steady.OwnerLeaseGeneration
-                  == checked((ulong)target.LeaseGeneration)
-               && found.Snapshot.Allocation.Descriptor
-                  == new ZLinkMeshNodeDescriptorKey(target.MeshName, target.Rid)
-               && found.Snapshot.Allocation.DescriptorLifecycleGeneration
-                  == target.LifecycleGeneration;
+        if (ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(
+                found.Snapshot.Payload.Span,
+                out var steady))
+            return steady.State == ZLinkActorAuthorityState.Ready
+                   && steady.NodeRid == target.Rid
+                   && steady.NodeGeneration == target.LifecycleGeneration
+                   && StringComparer.Ordinal.Equals(steady.OwnerId, target.OwnerId)
+                   && steady.OwnerLeaseGeneration
+                      == checked((ulong)target.LeaseGeneration);
+
+        // Spec 52 §4.3 makes the target-only authority CAS the commit
+        // boundary for a foreign target's opaque progress payload. The exact
+        // outer owner and allocation fences above are the common contract.
+        return true;
     }
 
     internal static async ValueTask<ZLinkAuthoritySnapshot>

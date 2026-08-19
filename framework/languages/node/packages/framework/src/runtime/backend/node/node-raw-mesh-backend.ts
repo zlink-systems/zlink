@@ -2078,6 +2078,35 @@ function decodeMultipartRecord(
   if (stateful !== undefined) {
     return decodeStatefulRecord(record, stateful);
   }
+  // RawServiceMeshRuntime admits the frozen relocation/session controls as a
+  // single bare service-wire frame.  They are node-owned infrastructure work,
+  // not an M6A application envelope, so do not try to read a nonexistent
+  // second multipart frame here.  The host's relocation dispatcher decodes
+  // the canonical frame directly from `parts[0]`.
+  if (record.parts.length === 1) {
+    return {
+      kind: ReceiveKind.NodeSend,
+      domain: readyDomain(record.domain),
+      sourceNodeRid: record.sourceRoutingId as RoutingId | undefined ?? null,
+      sourceSpotId: null,
+      sourceBindingGeneration: 0n,
+      sourceActor: null,
+      operationId: { high: 0n, low: 0n },
+      operationKind: 0,
+      channelName: null,
+      topic: null,
+      applicationMetadata: null,
+      packetName: undefined,
+      contentType: undefined,
+      kindData: null,
+      terminalResult: 0,
+      failureErrno: 0,
+      ...receiveIngressLifecycle(record),
+      parts: record.parts.map(part => Message.from(part)),
+      reply: () => SubmitResult.InvalidState,
+      replyActorJoin: () => SubmitResult.NotSupported
+    };
+  }
   const header = record.parts[0]!;
   const command = header[3]!;
   const payloadFrame = record.parts[1]!;
@@ -2234,7 +2263,7 @@ function readyOwner(
     return {
       ownerKind: ReadyOwnerKind.Spot,
       domain: readyDomain(domain),
-      ordinaryIngressPreAdmitted: true,
+      ordinaryIngressPreAdmitted: domain === 'application',
       spotId: owner.slice('spot:'.length),
       actor: null
     };
@@ -2249,7 +2278,7 @@ function readyOwner(
     return {
       ownerKind: ReadyOwnerKind.Actor,
       domain: readyDomain(domain),
-      ordinaryIngressPreAdmitted: true,
+      ordinaryIngressPreAdmitted: domain === 'application',
       spotId: current?.spot.spotId ?? null,
       actor: current?.ref ?? {
         nodeRid,
@@ -2261,7 +2290,7 @@ function readyOwner(
   return {
     ownerKind: ReadyOwnerKind.Node,
     domain: readyDomain(domain),
-    ordinaryIngressPreAdmitted: true,
+    ordinaryIngressPreAdmitted: domain === 'application',
     spotId: null,
     actor: null
   };

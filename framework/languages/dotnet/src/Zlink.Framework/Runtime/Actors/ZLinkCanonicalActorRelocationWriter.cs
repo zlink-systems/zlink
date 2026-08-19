@@ -24,6 +24,10 @@ internal static class ZLinkCanonicalActorRelocationWriter
             throw new ArgumentException(
                 "Canonical standalone Actor relocation requires one Actor participant.",
                 nameof(inventory));
+        if (!ZLinkActorAuthorityPayloadCodec.TryGetActorId(
+                participant.AuthorityKey, out var actorId))
+            throw new ZLinkRelocationDataLostException(
+                "Canonical standalone Actor relocation has an invalid authority key.");
 
         var accepted = participant.AcceptedJobs
             .OrderBy(static job => job.AcceptedSequence)
@@ -52,7 +56,10 @@ internal static class ZLinkCanonicalActorRelocationWriter
         stream.WriteByte((byte)ZLinkPlacementObjectKind.Actor);
         using (var identity = new MemoryStream())
         {
-            Text8(identity, participant.AuthorityKey.Value);
+            // Spec 28 section 4.2 carries the Actor object ID here. The
+            // authority key remains inventory-only; serializing it changes
+            // the root object identity across language boundaries.
+            Text8(identity, actorId);
             U64(identity, participant.ObjectGeneration);
             U64(identity, participant.AuthorityOwnerGeneration);
             U16(stream, checked((ushort)identity.Length));

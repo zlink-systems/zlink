@@ -179,6 +179,23 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     List<MeshPeerEntry> peers();
 
+    /**
+     * Whether the exact admitted transport for a relocation target is
+     * available.  Canonical relocation's Prepare is the target-readiness
+     * handshake; it must not wait for an independent liveness round-trip
+     * before that handshake can be sent.
+     */
+    default boolean isCanonicalRelocationTargetAdmitted(
+        RoutingId peerRid,
+        long lifecycleGeneration) {
+        return peers().stream().anyMatch(peer ->
+            peer.routingId().equals(peerRid)
+                && peer.lifecycleGeneration() == lifecycleGeneration
+                && peer.state()
+                    == systems.zlink.framework.runtime.internal.binding.spot
+                        .MeshPeerState.ADMITTED);
+    }
+
     default PeerChannels peerChannels(RoutingId peerRid, long lifecycleGeneration) {
         return new PeerChannels(List.of(), List.of());
     }

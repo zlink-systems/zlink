@@ -667,13 +667,8 @@ public final class ZLinkUserSpotRetireRuntime {
         ZLinkInternalMeshNode node,
         systems.zlink.contracts.core.RoutingId targetRid,
         long targetGeneration) {
-        boolean ready = node.peers().stream().anyMatch(peer ->
-            peer.routingId().equals(targetRid)
-                && peer.lifecycleGeneration()
-                    == targetGeneration
-                && peer.state()
-                    == systems.zlink.framework.runtime.internal.binding.spot
-                        .MeshPeerState.ADMITTED);
+        boolean ready = node.isCanonicalRelocationTargetAdmitted(
+            targetRid, targetGeneration);
         if (!ready) {
             throw new RelocationBlockedException(
                 ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,

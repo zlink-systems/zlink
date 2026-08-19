@@ -1816,6 +1816,18 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
+    // These frozen relocation controls overlap the legacy stateful command
+    // number range (30-34). They are bare infrastructure records and must
+    // fall through to RawServiceMeshRuntime's relocation ingress instead of
+    // being decoded as stateful actor/spot work.
+    if (
+      record.command === M6bServiceWireCommand.relocationReady
+      || record.command === M6bServiceWireCommand.relocationData
+      || record.command === M6bServiceWireCommand.replyRelay
+      || record.command === M6bServiceWireCommand.relocationCutover
+    ) {
+      return undefined;
+    }
     if (
       record.command < M6bServiceWireCommand.spotSend
       || (

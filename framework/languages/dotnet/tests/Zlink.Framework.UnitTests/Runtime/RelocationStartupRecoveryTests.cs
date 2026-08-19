@@ -375,7 +375,8 @@ public sealed class RelocationStartupRecoveryTests
     {
         var relocationId = Guid.NewGuid();
         var participant = new ZLinkRelocationParticipantEnvelope(
-            new ZLinkAuthorityKey($"zla1:a:recovery-{relocationId:N}"),
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey(
+                $"actor-{relocationId:N}"),
             ZLinkPlacementObjectKind.Actor,
             11,
             3,

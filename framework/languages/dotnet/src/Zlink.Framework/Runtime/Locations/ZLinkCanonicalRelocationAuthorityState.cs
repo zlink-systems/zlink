@@ -171,6 +171,15 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             var coordinatorNodeGeneration = relocation.U64();
             var phase = relocation.U8();
             var applicationVersion = relocation.I64();
+            // These fields are mandatory in the .NET-private canonical slot.
+            // In particular, Java's shared ZLAU envelope has a zero-valued
+            // reservation token at this byte position. Without these shape
+            // checks its payload can be misread as this layout and make a
+            // source reject an otherwise exact foreign target CAS.
+            if (coordinatorOwner.Length == 0
+                || coordinatorNodeRid.Length == 0
+                || phase is 0 or > (byte)ZLinkStandaloneActorCanonicalPhase.Completed)
+                return false;
             _ = relocation.U8();
             var aggregateGeneration = 0UL;
             var coordinatorExpectedStoreVersion = string.Empty;
@@ -239,6 +248,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             return true;
         }
         catch (Exception error) when (error is IOException
+                                      or InvalidDataException
                                       or OverflowException
                                       or DecoderFallbackException
                                       or ArgumentException)

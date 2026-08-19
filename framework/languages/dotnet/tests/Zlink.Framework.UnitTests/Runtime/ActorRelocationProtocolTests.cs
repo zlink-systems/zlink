@@ -345,7 +345,7 @@ public sealed class ActorRelocationProtocolTests
         var participantRecovery =
             ZLinkCanonicalParticipantRecoveryCodec.Encode(
                 new ZLinkCanonicalParticipantRecovery(
-                    new ZLinkAuthorityKey("actor:actor-1"),
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1"),
                     ZLinkPlacementObjectKind.Actor,
                     7,
                     3,
@@ -365,7 +365,7 @@ public sealed class ActorRelocationProtocolTests
             new byte[32],
             [
                 new ZLinkRelocationParticipantEnvelope(
-                    new ZLinkAuthorityKey("actor:actor-1"),
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1"),
                     ZLinkPlacementObjectKind.Actor,
                     7,
                     3,

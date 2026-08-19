@@ -625,19 +625,19 @@ internal static class ZLinkRelocationEnvelopeCodec
         if (objectKindValue is < 1 or > 3)
             throw new InvalidDataException("The relocation object kind is invalid.");
         var objectBody = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
-        string authorityKey;
+        string objectId;
         ulong objectGeneration;
         ulong ownerGeneration;
         if (objectKindValue is 1 or 2)
         {
-            authorityKey = objectBody.ReadText8();
+            objectId = objectBody.ReadText8();
             objectGeneration = objectBody.ReadUInt64();
             ownerGeneration = objectBody.ReadUInt64();
         }
         else
         {
             _ = objectBody.ReadText8(); // Instance stable type.
-            authorityKey = objectBody.ReadText8();
+            objectId = objectBody.ReadText8();
             objectGeneration = objectBody.ReadUInt64();
             ownerGeneration = 1;
         }
@@ -645,6 +645,15 @@ internal static class ZLinkRelocationEnvelopeCodec
         if (objectGeneration == 0 || ownerGeneration == 0)
             throw new InvalidDataException(
                 "Relocation participant generations must be non-zero.");
+        var authorityKey = (ZLinkPlacementObjectKind)objectKindValue switch
+        {
+            ZLinkPlacementObjectKind.Actor =>
+                ZLinkAuthorityKeyCodec.EncodeActor(objectId),
+            ZLinkPlacementObjectKind.UserSpot
+                or ZLinkPlacementObjectKind.InstanceSpot =>
+                ZLinkAuthorityKeyCodec.EncodeSpot(objectId),
+            _ => throw new InvalidDataException("The relocation object kind is invalid.")
+        };
 
         var applicationVersion = reader.ReadInt64();
         if (applicationVersion < 0)
@@ -697,9 +706,10 @@ internal static class ZLinkRelocationEnvelopeCodec
 
         var participants = states.Select((entry, index) =>
             new ZLinkRelocationParticipantEnvelope(
-                new ZLinkAuthorityKey(index == 0
+                index == 0
                     ? authorityKey
-                    : $"{authorityKey}#participant:{entry.Key}"),
+                    : new ZLinkAuthorityKey(
+                        $"{authorityKey.Value}#participant:{entry.Key}"),
                 (ZLinkPlacementObjectKind)objectKindValue,
                 objectGeneration,
                 ownerGeneration,

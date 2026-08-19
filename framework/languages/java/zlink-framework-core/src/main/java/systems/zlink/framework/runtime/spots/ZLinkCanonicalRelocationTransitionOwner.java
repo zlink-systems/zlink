@@ -66,6 +66,7 @@ final class ZLinkCanonicalRelocationTransitionOwner {
         int command = Byte.toUnsignedInt(record[3]);
         boolean known =
             command == ServiceWireConstants.COMMAND_RELOCATION_READY
+                || command == ServiceWireConstants.COMMAND_RELOCATION_FAILED
                 || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
                 || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
                 || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER

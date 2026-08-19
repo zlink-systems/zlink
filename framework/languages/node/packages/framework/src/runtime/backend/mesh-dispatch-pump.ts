@@ -48,8 +48,10 @@ class ZLinkMeshDispatchFailure extends Error {
 export class ZLinkMeshDispatchPump {
   private pendingDomains: number = ReadyDomain.None;
   private scheduled = false;
+  private infrastructureScheduled = false;
   private disposed = false;
   private drainPromise?: Promise<void>;
+  private infrastructureDrainPromise?: Promise<void>;
   private readonly activeDrains = new Set<Promise<void>>();
   private readonly capacityStop = new AbortController();
 
@@ -83,6 +85,12 @@ export class ZLinkMeshDispatchPump {
   }
 
   private schedule(): void {
+    if ((this.pendingDomains & ReadyDomain.Infrastructure) !== 0) {
+      this.scheduleInfrastructure();
+    }
+    if ((this.pendingDomains & ReadyDomain.Application) === 0) {
+      return;
+    }
     if (this.scheduled) {
       return;
     }
@@ -110,30 +118,64 @@ export class ZLinkMeshDispatchPump {
     });
   }
 
+  /**
+   * Infrastructure controls must not wait for an application permit. During
+   * source draining an application claim can legitimately remain parked at
+   * `acquirePermit`; sharing that turn would strand Ready/State/Cutover in
+   * the infrastructure mailbox and prevent the relocation coordinator from
+   * completing the drain that releases the application work.
+   */
+  private scheduleInfrastructure(): void {
+    if (this.infrastructureScheduled) {
+      return;
+    }
+    this.infrastructureScheduled = true;
+    const drain = yieldToEventLoop()
+      .then(() => this.drainInfrastructure())
+      .catch((error) => {
+        if (error instanceof ZLinkMeshDispatchFailure) {
+          this.options.reportError?.(error.dispatchCause, error.context);
+          return;
+        }
+        this.options.reportError?.(error);
+      });
+    this.activeDrains.add(drain);
+    this.infrastructureDrainPromise = drain;
+    void drain.finally(() => {
+      this.activeDrains.delete(drain);
+      if (this.infrastructureDrainPromise === drain) {
+        this.infrastructureDrainPromise = undefined;
+        this.infrastructureScheduled = false;
+        if (!this.disposed && (this.pendingDomains & ReadyDomain.Infrastructure) !== 0) {
+          this.scheduleInfrastructure();
+        }
+      }
+    });
+  }
+
   private async drain(): Promise<void> {
     while (!this.disposed) {
-      const domains = this.pendingDomains;
-      this.pendingDomains = ReadyDomain.None;
-      if (domains === ReadyDomain.None) {
+      if ((this.pendingDomains & ReadyDomain.Application) === 0) {
         return;
       }
-      await this.drainDomains(domains);
+      this.pendingDomains &= ~ReadyDomain.Application;
+      await this.drainDomain(ReadyDomain.Application);
     }
   }
 
-  private async drainDomains(domains: number): Promise<void> {
-    let lifecycleBudgetExhausted = false;
-    if ((domains & ReadyDomain.Infrastructure) !== 0) {
-      lifecycleBudgetExhausted = await this.drainDomain(
+  private async drainInfrastructure(): Promise<void> {
+    while (!this.disposed) {
+      if ((this.pendingDomains & ReadyDomain.Infrastructure) === 0) {
+        return;
+      }
+      this.pendingDomains &= ~ReadyDomain.Infrastructure;
+      const lifecycleBudgetExhausted = await this.drainDomain(
         ReadyDomain.Infrastructure,
         MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
       );
-    }
-    if ((domains & ReadyDomain.Application) !== 0) {
-      await this.drainDomain(ReadyDomain.Application);
-    }
-    if (lifecycleBudgetExhausted) {
-      this.pendingDomains |= ReadyDomain.Infrastructure;
+      if (lifecycleBudgetExhausted) {
+        this.pendingDomains |= ReadyDomain.Infrastructure;
+      }
     }
   }
 
@@ -174,6 +216,7 @@ export class ZLinkMeshDispatchPump {
               const owner = drained.records[index];
               const claimPermit = owner.terminalCompletion === true
                 || owner.ordinaryIngressPreAdmitted === true
+                || domain === ReadyDomain.Infrastructure
                 ? undefined
                 : await this.acquirePermit();
               if (claimPermit === undefined

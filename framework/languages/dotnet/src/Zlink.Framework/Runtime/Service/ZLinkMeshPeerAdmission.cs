@@ -27,7 +27,8 @@ internal sealed class ZLinkMeshPeerAdmission
         ArgumentNullException.ThrowIfNull(advertisedEndpoint);
 
         if (peersByRid.TryGetValue(sourceRid, out var exact)
-            && (command == ServiceWireConstants.Command.Update
+            && (exact.Admitted
+                || command == ServiceWireConstants.Command.Update
                 || command == ServiceWireConstants.Command.Hello
                     && exact.Direction == ZLinkServiceConnectionDirection.Inbound
                 || command == ServiceWireConstants.Command.Admit

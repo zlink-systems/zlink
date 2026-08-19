@@ -1150,6 +1150,23 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public boolean isCanonicalRelocationTargetAdmitted(
+        RoutingId peerRid,
+        long lifecycleGeneration) {
+        ZLinkServiceTopologyRegistry current = topology;
+        if (current == null) {
+            return false;
+        }
+        return current.peer(peerRid)
+            .filter(peer -> peer.descriptor().lifecycleGeneration()
+                == lifecycleGeneration)
+            .filter(peer -> peer.connectionId().equals(
+                admissionControlReadyConnections.get(peerRid)))
+            .filter(this::hasSelectedApplicationTransportPair)
+            .isPresent();
+    }
+
+    @Override
     public void markPeerConnectionNotRequired(
         RoutingId peerRid,
         String endpoint,
@@ -4066,6 +4083,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || command == ServiceWireConstants.COMMAND_REPLY
             || command == ServiceWireConstants.COMMAND_ACTOR_LEFT
             || command == ServiceWireConstants.COMMAND_RELOCATION_READY
+            || command == ServiceWireConstants.COMMAND_RELOCATION_FAILED
             || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
             || command == ServiceWireConstants.COMMAND_REPLY_RELAY
             || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER
@@ -6297,12 +6315,22 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     inbound.source(),
                     peer.connectionId(),
                     probeId).isPresent()) {
-                    sendLiveness(
-                        inbound.source(),
-                        inboundPair,
-                        encodeLiveness(
-                            ServiceWireConstants.COMMAND_LIVENESS_ACK,
-                            probeId));
+                    List<byte[]> acknowledgement = encodeLiveness(
+                        ServiceWireConstants.COMMAND_LIVENESS_ACK,
+                        probeId);
+                    // Java RouterSocket.send is request-shaped. A .NET probe
+                    // therefore must be completed on its original request
+                    // route, rather than by a fresh routed send.
+                    if (inbound.requestSequence() != null) {
+                        port.reply(
+                            requireStarted(),
+                            inbound.source(),
+                            inbound.requestSequence(),
+                            acknowledgement);
+                    } else {
+                        sendLiveness(
+                            inbound.source(), inboundPair, acknowledgement);
+                    }
                 }
             } else {
                 boolean acknowledged = liveness.acknowledge(
@@ -6663,6 +6691,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private static boolean isCanonicalRelocationControl(int command) {
         return command == ServiceWireConstants.COMMAND_RELOCATION_READY
+            || command == ServiceWireConstants.COMMAND_RELOCATION_FAILED
             || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
             || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
             || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER

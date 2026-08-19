@@ -69,6 +69,30 @@ public sealed class ZLinkMeshPeerAdmissionTests
         Assert.Same(admitted, duplicate);
     }
 
+    [Fact]
+    public void Repeat_admission_of_live_peer_reuses_its_connection_generation()
+    {
+        var sourceRid = RoutingId.From("remote-node");
+        var admitted = Peer(1, "tcp://remote", sourceRid);
+        admitted.RoutingId = sourceRid;
+        admitted.Admitted = true;
+        admitted.ConnectionGeneration = 42;
+        var matcher = new ZLinkMeshPeerAdmission();
+
+        var selected = matcher.FindForAdmission(
+            new Dictionary<RoutingId, ZLinkMeshPeer>
+            {
+                [sourceRid] = admitted
+            },
+            [admitted],
+            sourceRid,
+            ServiceWireConstants.Command.Hello,
+            admitted.Endpoint);
+
+        Assert.Same(admitted, selected);
+        Assert.Equal(42UL, selected!.ConnectionGeneration);
+    }
+
     private static ZLinkMeshPeer Peer(
         ulong intent,
         string endpoint,
