@@ -480,8 +480,13 @@
       (기계가독 선언이 부족한 항목은 스키마 기계가독부 보강 — 변경 전부 명시)
 - [ ] W-3 4언어 전면 스왑: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트 통과 후
       교체, 손 코덱 삭제. 언어별 unittest 전체 그린
-- [ ] W-4 수용: C-7 교차 언어 매트릭스(기본+relocation+java-cross) 전 쌍 그린을
-      생성 코덱 위에서 재확인 — 이후 발산은 스키마 편집으로만 가능해짐
+- [ ] W-4 수용: C-7 교차 언어 매트릭스 전 쌍 그린 — **1차 런(2026-08-20)
+      NOT ACCEPTED, 3계열 배정**: ① cpp E2E 픽스처가 제거된 socket config 멤버
+      사용(컴파일 파손) ② cpp→node·java→node spot-route target 미등록 회귀
+      (node ready인데 not_found — 971ed36314 이후 의심) ③ relocation 3쌍 —
+      외국 actor authority의 canonical 외부 행 폴백이 dotnet에만 존재(java·node
+      resolver는 자기 코덱 전용 → probe 무응답/DeadlineExceeded). 수정 3잡 가동,
+      이후 재수용 런
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
       ① [C] 스펙의 4언어 stream 주장 vs frozen 시점 java만 부합 — **처분: 스펙=
       판정된 목표 계약(dotnet은 이후 18598a85db로 수렴, node 진행 중, cpp=W-3)**,
