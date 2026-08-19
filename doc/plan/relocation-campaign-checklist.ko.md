@@ -40,14 +40,22 @@
 - [x] Bingo 재검증 (2026-08-19): node·kotlin 각 3회 클린 실행 6/6 첫 시도 그린,
       relocation 실행 확인(대체·route-ready·target_resume), 지문 재현 없음 —
       당시 미커밋 편집 트리가 원인으로 종결 (로그 scratchpad/sample-gates/*-recheck-*)
-- [ ] dotnet 샘플 6종 실행 (Bingo, DeliveryDispatch, GameQuest, ShoppingMall,
-      SupportChat, TicTacToe — 종료 코드 로그)
+- [ ] dotnet 샘플 6종 실행 — **1차(2026-08-19): 4/6 그린**(DeliveryDispatch·
+      GameQuest·ShoppingMall·SupportChat), Bingo·TicTacToe는 push-relay 회귀로
+      134. 회귀 수정 후 재실행 필요
+- [ ] **dotnet push-relay 회귀(신규 2026-08-19, 결정적 4/4)**: `6fa7d6aab8`이
+      actor 노드≠세션 노드일 때 `$zlink.session.push-relay.v1` 프레임을 세션
+      노드가 아닌 actor 노드로 보내 무실패 유실(JoinGameNotify/
+      BingoGameStartedNotify timeout). git-archive 이분법 확정(last good
+      d3a951be5a), 환경 가설 기각. ActorHandoff capture_entry
+      (ZLinkActorHandoffState.cs:359, bound_route=True)가 해당 프레임 가로챔 —
+      수정 에이전트 투입
 - [x] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest(22/22),
       CurrentManagerFakeBackendTest(1/1), FORBIDDEN_SAMPLE_PATTERN rg 스윕(508파일
       0건) — 3/3 그린, live redis, run_samples.sh 동일 호출 재현 [2026-08-19]
 - [ ] RelocationBehaviorConformanceTests(dotnet) batch hang 근본 원인·처분
-- [ ] dotnet TicTacToe JoinGameNotify timeout(exit 134) 조용한 머신에서 재현 조사
-      (샘플 게이트 1차는 PASS였음 — 재현 안 되면 종결 기록)
+- [x] dotnet TicTacToe JoinGameNotify timeout 재현 조사 — **재분류(2026-08-19)**:
+      부하 flake 아님, 위 `6fa7d6aab8` push-relay 회귀의 결정적 증상으로 흡수 종결
 - [ ] harness 기본 `all` 스테이지 깨끗한 단독 재실행 (동시 에이전트 경합으로 1차
       판정불가; message-follow "Raw MeshNode requires the host Application Job Queue"
       사전 실패 주장 포함 확인)
