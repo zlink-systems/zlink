@@ -552,8 +552,17 @@
       추가 정합 + 외국 payload는 fence 수용(spec 52 §4.3, 검토 승인).
       java core 그린, node→dotnet 그린. 실패 3건은 전부 타이밍 계열로 e24
       cpp 병렬 빌드 경합 시간대와 일치(flake 0.486s/상한 0.450s, conformance
-      re-prepare timeout 1건, java→dotnet DEADLINE_EXCEEDED) → **cert2
-      재실행 가동 중(직렬·정숙 머신)**. 통과 시 java+dotnet 누적 배치 커밋.
+      re-prepare timeout 1건, java→dotnet DEADLINE_EXCEEDED) → cert2
+      재실행(직렬·정숙 머신) 결과: ⓐ java→dotnet **PASS**(부하 아티팩트
+      확정) ⓑ conformance 실결함 root-cause 해소 — READY 송신 실패 시 완성
+      chunk assembler 잔존으로 정확 Prepare 재시도 차단 → assembler 제거
+      (ZLinkManagedMeshNode.cs), **9/9 복구** ⓒ dotnet 풀 게이트 = 인가 3건만
+      ⓓ flake는 정숙 단독 3연속 0.486s/상한 0.450s — 부하 무관, 기존 인가
+      유지 ⓔ **dotnet→java 정숙 재현 실패(신규 회귀)**: source 4×Blocked|
+      DeadlineExceeded, target probe-timeout|last=none(활성화 이전 단계) —
+      reloc4 그린 이후의 dotnet 변경(cert1 커밋확인 디코드 분기 / cert2
+      assembler 제거)이 후보 → **cert3 집중 회귀 사냥 가동 중**. 통과 시
+      java+dotnet 누적 배치 커밋.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
