@@ -414,9 +414,11 @@ JSON 값이다. 최소한 다음 field를 포함한다.
 
 `descriptor`의 정확한 field 목록은 이 문서 §2.3·§3의 계약과
 [glossary](01-glossary.ko.md#meshnode-descriptor)가 이미 고정한 .NET 표기를 기준으로
-정한다. 정수 field(generation·revision·weight·limit류)는 다른 record의 generation
-field와 마찬가지로 JSON number가 아닌 JSON string으로 쓴다. RoutingId는 소문자
-16진수 문자열로, timestamp는 Unix epoch millisecond를 담은 문자열로 쓴다. 세 record
+정한다. generation·revision류 정수 field는 다른 record의 generation field와
+마찬가지로 JSON number가 아닌 JSON string으로 쓴다. 반면 weight·limit·capacity
+count류의 크기 값은 JSON number로 쓴다 — golden fixture가 고정한 형태가 기준이다.
+RoutingId는 소문자 16진수 문자열로, timestamp는 Unix epoch millisecond를 담은
+문자열로 쓴다. 세 record
 모두 `descriptor` 안에 자신의 `ownerId`·`leaseGeneration`·`descriptorRevision`을
 다시 담는다 — 이 값은 record 최상위 field와 같은 publish 작업이 쓰는 같은 값이므로
 항상 같아야 한다(최상위와 `descriptor` 안 두 곳에 각각 쓰지만 CAS는 record 전체를

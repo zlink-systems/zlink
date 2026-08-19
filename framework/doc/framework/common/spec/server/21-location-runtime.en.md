@@ -428,10 +428,12 @@ bytes, without interpreting its meaning. It includes at least the following fiel
 | `descriptor` | The MeshNode/ClientServer/fanout publisher descriptor content (§3). Absent from the owner lease record and the authority record. |
 
 `descriptor`'s exact field list follows this document's §2.3/§3 contract and the .NET
-notation the [glossary](01-glossary.en.md#meshnode-descriptor) already pins. Integer
-fields (generation/revision/weight/limit kinds) are written as JSON strings rather than
-JSON numbers, same as the generation fields on other records. RoutingId is a lowercase hex
-string; timestamps are strings carrying a Unix epoch millisecond value. All three records
+notation the [glossary](01-glossary.en.md#meshnode-descriptor) already pins. Generation
+and revision kinds of integer fields are written as JSON strings rather than JSON
+numbers, same as the generation fields on other records; magnitude values such as
+weight, limit, and capacity counts are written as JSON numbers — the golden fixture's
+pinned shape is authoritative. RoutingId is a lowercase hex string; timestamps are
+strings carrying a Unix epoch millisecond value. All three records
 carry their own `ownerId`/`leaseGeneration`/`descriptorRevision` again inside `descriptor`
 — these are the same values the same publish operation writes at the record's top level, so
 they must always match (written in two places, but CAS treats the whole record as one
