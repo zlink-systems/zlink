@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -14,6 +15,7 @@
 
 namespace protocol = zlink::framework::runtime::protocol;
 namespace mesh = zlink::framework::runtime::mesh;
+namespace messaging = zlink::framework::runtime::messaging;
 
 static_assert (!std::is_same_v<zlink::framework::runtime::call_id_t,
                                protocol::wire_operation_id_t>);
@@ -519,6 +521,27 @@ int main ()
         }
         assert (decode_rejected);
     }
+
+    // Channel error envelopes use the shared JSON wire (spec 51).  An Error
+    // reply must name one of the canonical framework error codes; accepting a
+    // missing or invented code would turn malformed remote input into a
+    // fabricated application failure.
+    const messaging::envelope_codec_t envelope_codec;
+    const auto invalid_error_header = [&] (std::string_view error_code) {
+        return envelope_codec.decode_header (zlink::message_t::from (
+          std::string{"{\"formatMarker\":242,\"kind\":5,\"channelName\":\"test\",\"messageName\":\"reply\",\"contentType\":\"application/json\",\"correlationId\":\"request-1\",\"deadline\":null,\"topic\":null,"}
+          + std::string (error_code)
+          + ",\"errorMessage\":\"failed\",\"source\":null,\"metadata\":{}}"));
+    };
+    const auto missing_error_code = invalid_error_header (R"("errorCode":null)");
+    assert (!missing_error_code
+            && missing_error_code.error_kind ()
+                 == zlink::framework::framework_error_kind_t::protocol_error);
+    const auto unknown_error_code =
+      invalid_error_header (R"("errorCode":"invented_error")");
+    assert (!unknown_error_code
+            && unknown_error_code.error_kind ()
+                 == zlink::framework::framework_error_kind_t::protocol_error);
     const protocol::spot_route_fence_t spot_fence{
       {'s', 'p', 'o', 't'},
       3,

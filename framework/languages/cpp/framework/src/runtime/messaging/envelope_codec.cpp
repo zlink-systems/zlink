@@ -68,6 +68,17 @@ message_parts_t envelope_codec_t::encode_parts (const envelope_header_t &header,
 namespace
 {
 
+bool valid_error_code (const std::string &value) noexcept
+{
+    return value == "not_found" || value == "already_exists"
+           || value == "type_mismatch" || value == "not_configured"
+           || value == "rejected" || value == "unavailable"
+           || value == "capacity_exceeded" || value == "deadline_exceeded"
+           || value == "shutting_down" || value == "protocol_error"
+           || value == "invalid_operation" || value == "data_lost"
+           || value == "internal_failure";
+}
+
 result_t<void> validate_protocol_header (const envelope_header_t &header,
                                          int format_marker)
 {
@@ -90,6 +101,12 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "ZLink envelope flow origin is invalid");
         }
+    }
+    if (header.kind == message_kind_t::error
+        && (!header.error_code || !valid_error_code (*header.error_code))) {
+        return result_t<void>::failure (
+          framework_error_kind_t::protocol_error,
+          "ZLink error envelope requires a recognized errorCode");
     }
     return result_t<void>::success ();
 }

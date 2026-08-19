@@ -2948,7 +2948,7 @@ int main ()
           error_header.channel_name = "public.route";
           error_header.message_name = request_header.value ().message_name;
           error_header.correlation_id = request_header.value ().correlation_id;
-          error_header.error_code = "handler_not_found";
+          error_header.error_code = "not_found";
           error_header.error_message = "missing route handler";
           return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (

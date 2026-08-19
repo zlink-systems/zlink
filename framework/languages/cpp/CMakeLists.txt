@@ -937,6 +937,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   add_executable(test_cpp_framework_service_wire_codec
     tests/Zlink.Framework.UnitTests/test_cpp_framework_service_wire_codec.cpp
     framework/src/runtime/protocol/service_wire_codec.cpp
+    framework/src/runtime/messaging/envelope_codec.cpp
+    framework/src/runtime/codecs/serializer.cpp
+    framework/src/runtime/diagnostics/flow_context.cpp
     framework/src/runtime/mesh/service_topology_registry.cpp)
   target_compile_features(test_cpp_framework_service_wire_codec PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE
@@ -949,6 +952,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
+    nlohmann_json::nlohmann_json
     Threads::Threads)
   add_test(NAME test_cpp_framework_service_wire_codec
     COMMAND test_cpp_framework_service_wire_codec)

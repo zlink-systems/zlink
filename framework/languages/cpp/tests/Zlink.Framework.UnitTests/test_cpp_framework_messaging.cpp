@@ -302,7 +302,7 @@ int main ()
         error_header.kind = zlink::framework::runtime::messaging::message_kind_t::error;
         error_header.channel_name = "profile";
         error_header.message_name = "EnvelopePayload";
-        error_header.error_code = "route_not_connected";
+        error_header.error_code = "unavailable";
         error_header.error_message = "route is down";
         const auto error_reply = envelope_codec.encode_raw_body_parts (
           error_header, zlink::message_t::from (std::string{}));
@@ -320,11 +320,11 @@ int main ()
         wire_error_header.channel_name = "profile";
         wire_error_header.message_name = "MissingProfileReq";
         wire_error_header.correlation_id = "request-2";
-        wire_error_header.error_code = "handler_not_found";
+        wire_error_header.error_code = "not_found";
         wire_error_header.error_message = "missing handler";
         const auto wire_error_json = envelope_codec.encode_header (wire_error_header).to_string ();
         if (wire_error_json.find (R"("kind":5)") == std::string::npos
-            || wire_error_json.find (R"("errorCode":"handler_not_found")")
+            || wire_error_json.find (R"("errorCode":"not_found")")
                  == std::string::npos
             || wire_error_json.find (R"("errorMessage":"missing handler")")
                  == std::string::npos
@@ -336,7 +336,7 @@ int main ()
         if (!decoded_wire_error
             || decoded_wire_error.value ().kind
                  != zlink::framework::runtime::messaging::message_kind_t::error
-            || decoded_wire_error.value ().error_code != "handler_not_found"
+            || decoded_wire_error.value ().error_code != "not_found"
             || decoded_wire_error.value ().error_message != "missing handler") {
             return 54;
         }
