@@ -284,17 +284,16 @@
       ① **[C] ClientServer admission 프레이밍 분열**: cpp는 hello/admit을 plain
       frame으로, node/dotnet은 RequestSeq 프레임 요구(무seq hello 무시/폐기) —
       cpp↔node/dotnet channel 3스테이지 전멸. 규범 판정+정렬 필요(스펙 대조)
-      ② **[H] dotnet channel direct 경로가 admission-ready 대기 없이 즉시
-      NotFound**(dotnet↔dotnet도 실패, RequestToChannelDirectAsync:7945)
-      ③ **[H] node channel reply 상관 회귀**(node↔node: 서버 처리 완료, 클라이언트
-      promise 미해결·루프 드레인 exit 0) ④ **[H] cpp fanout publisher 강제
+      ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
+      가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
+      (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
+      ③ **[H] node channel reply 회귀 → 해소 `9281b375b1`**(pending 기한 타이머
+      unref가 원인 — settle까지 루프 유지, 2노드 round-trip 계약 테스트) ④ **[H] cpp fanout publisher 강제
       discovery 경로**(enable_publisher가 discovery=true 고정, channel_runtime
-      :982)+cpp→X fanout 미전달 잔존(X→cpp는 정상) ⑤ **[H] cpp↔dotnet spot-route
-      양방향 실패**(타 조합 전부 그린 — dotnet admission 의심, 42ddf3d2f4/
-      8bae89dc0f 후보) ⑥ **[C] node mesh-node descriptor 스키마 미수렴**(rid/
-      populationCapacity/updatedAt ISO vs 규범 routingIdHex/capacity/
-      updatedAtEpochMs/lifecycleGeneration — C-3b 74a0ed04da 위반; node→dotnet
-      decode 크래시) ⑦ **[H] java u64 signed parse**(Long.parseLong에 전범위
+      :982)+cpp→X fanout 미전달 잔존(X→cpp는 정상) ⑤ **[H] cpp↔dotnet spot-route 양방향 → 해소 `640c3ef484`**: 원인은 cpp 기본
+      mesh 보안 신원 'default' vs dotnet 기대 'plaintext' — 미인증 mesh 한정
+      동치 처리(인증 신원 정확 일치 유지), admission guard pin ⑥ **[C] node descriptor 스키마 미수렴 → 해소 `9281b375b1`**(mesh-node·
+      client-server·fanout 전부 §2.4 canonical, golden 실제 writer 구동) ⑦ **[H] java u64 signed parse**(Long.parseLong에 전범위
       u64 → java↔dotnet ~50% 실패; ZLinkProviderDescriptorRepository:648,
       ZLinkRedisRelocationStore:224, ZLinkRedisOpaqueLocationStore:855)
       ⑧ **[H] dotnet이 java 기록 lease/counter 값 파싱 실패** → **판정·해소
