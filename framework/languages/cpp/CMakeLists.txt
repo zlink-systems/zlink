@@ -116,7 +116,13 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/fanout/raw_fanout_owner.cpp
   framework/src/runtime/fanout/fanout_location_runtime.cpp
   framework/src/runtime/client_server/raw_client_server_owner.cpp
-  framework/src/runtime/client_server/client_server_location_runtime.cpp)
+  framework/src/runtime/client_server/client_server_location_runtime.cpp
+  framework/src/runtime/channels/channel_reply_writer.cpp
+  framework/src/runtime/messaging/client_call_codec.cpp
+  framework/src/runtime/messaging/envelope_codec.cpp
+  framework/src/runtime/messaging/request_failure_mapper.cpp
+  framework/src/runtime/codecs/serializer.cpp
+  framework/src/runtime/diagnostics/flow_context.cpp)
 
 set(ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES
   framework/src/runtime/stateful/public_host_runtime.cpp
@@ -186,7 +192,6 @@ add_library(zlink_framework STATIC
   framework/src/runtime/channels/channel_host_service.cpp
   framework/src/runtime/channels/channel_bundle_factory.cpp
   framework/src/runtime/channels/channel_pending_requests.cpp
-  framework/src/runtime/channels/channel_reply_writer.cpp
   framework/src/runtime/channels/channel_outbound_exchange.cpp
   framework/src/runtime/channels/channel_runtime_bundle.cpp
   framework/src/runtime/channels/channel_runtime_manager.cpp
@@ -203,7 +208,6 @@ add_library(zlink_framework STATIC
   framework/src/runtime/configuration/builders/configuration_builder.cpp
   framework/src/runtime/configuration/endpoint_connections.cpp
   framework/src/runtime/configuration/services.cpp
-  framework/src/runtime/codecs/serializer.cpp
   framework/src/runtime/diagnostics/logging.cpp
   framework/src/runtime/diagnostics/health.cpp
   framework/src/runtime/diagnostics/monitoring_runtime.cpp
@@ -213,13 +217,9 @@ add_library(zlink_framework STATIC
   framework/src/runtime/dispatch/projection.cpp
   framework/src/runtime/host/app.cpp
   framework/src/runtime/host/relocation_target_eligibility.cpp
-  framework/src/runtime/diagnostics/flow_context.cpp
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp
   framework/src/runtime/host/framework_runtime.cpp
-  framework/src/runtime/messaging/client_call_codec.cpp
-  framework/src/runtime/messaging/envelope_codec.cpp
-  framework/src/runtime/messaging/request_failure_mapper.cpp
   framework/src/runtime/mesh/mesh_metadata_codec.cpp
   framework/src/runtime/mesh/mesh_node_host_service.cpp
   framework/src/runtime/mesh/mesh_node_runtime.cpp

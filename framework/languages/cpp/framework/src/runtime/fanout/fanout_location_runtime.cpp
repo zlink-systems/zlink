@@ -828,7 +828,7 @@ task_t<void> fanout_location_runtime_t::publish (
       std::move (packet_name),
       std::move (content_type),
       message.to_bytes ()};
-    co_await publisher->publish (topic, encoded, timeout);
+    co_await publisher->publish (channel_name, topic, encoded, timeout);
 }
 
 void fanout_location_runtime_t::stop () noexcept

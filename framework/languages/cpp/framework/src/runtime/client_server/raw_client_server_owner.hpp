@@ -3,6 +3,9 @@
 
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
+
+#include <zlink/framework/contracts/errors/error.hpp>
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
@@ -33,11 +36,16 @@ class socket_monitor_t;
 namespace zlink::framework::runtime::client_server
 {
 
+/* ClientServer application records ride the cross-language JSON channel
+ * envelope ([JSON header, payload]); a completed request either carries the
+ * response body or the error envelope's code/message pair. */
 struct client_server_request_completion_t
 {
     foundation::operation_terminal_t terminal =
       foundation::operation_terminal_t::transport_failed;
-    protocol::reply_header_t reply_header{};
+    std::optional<std::string> error_code;
+    std::optional<std::string> error_message;
+    std::string content_type;
     std::vector<std::uint8_t> payload;
 };
 
@@ -91,8 +99,14 @@ class raw_client_server_server_t
       const protocol::application_payload_t &payload);
     bool reply (
       const mesh::service_mailbox_record_t &request,
-      std::uint32_t terminal_result,
-      protocol::framework_error_code failure_code);
+      const framework_exception_t &error);
+
+  private:
+    client_server_pump_result_t enqueue_application_record (
+      detail::backend::raw_received_t received,
+      std::shared_ptr<application_job_queue_t::permit_t> application_permit);
+
+  public:
 
   private:
     struct byte_vector_less_t
@@ -187,7 +201,9 @@ class raw_client_server_client_t
     std::atomic_size_t _pending_requests{0};
     mesh::service_liveness_registry_t _liveness;
     std::vector<std::uint8_t> _connection_id;
-    std::uint64_t _next_correlation = 1;
+    /* Bumped on every physical connection ready/terminate; fences parked
+     * control-reply completions from a previous physical pair. */
+    std::uint64_t _connection_generation = 0;
     std::size_t _last_pump_bytes = 0;
     bool _ready = false;
     bool _closed = false;

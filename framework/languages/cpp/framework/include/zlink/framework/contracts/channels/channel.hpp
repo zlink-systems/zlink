@@ -140,7 +140,10 @@ class channel_builder_t
 
     capability_builder_t enable_server ();
     capability_builder_t enable_client ();
-    capability_builder_t enable_publisher ();
+    /* discovery=false configures a manually-bound publisher that neither
+     * announces to nor requires a Location Store; it publishes on the
+     * native transport path. */
+    capability_builder_t enable_publisher (bool discovery = true);
     capability_builder_t enable_subscriber ();
     channel_builder_t &default_request_timeout (std::chrono::milliseconds timeout);
 

@@ -64,35 +64,6 @@ std::string stable_key (
     return descriptor.server_rid.to_hex ();
 }
 
-struct client_server_wire_failure_t
-{
-    std::uint32_t terminal_result;
-    protocol::framework_error_code failure_code;
-};
-
-client_server_wire_failure_t
-wire_failure (const framework_exception_t &error)
-{
-    switch (error.kind ()) {
-        case framework_error_kind_t::unavailable:
-            return {
-              105, protocol::framework_error_code::routeNotConnected};
-        case framework_error_kind_t::not_found:
-            return {
-              102,
-              protocol::framework_error_code::requestTargetNotFound};
-        case framework_error_kind_t::rejected:
-            return {
-              106, protocol::framework_error_code::requestRejected};
-        case framework_error_kind_t::protocol_error:
-            return {
-              104,
-              protocol::framework_error_code::requestProtocolError};
-        default:
-            return {105, protocol::framework_error_code::requestFailed};
-    }
-}
-
 void report_client_server_dispatch_error (
   const dispatch_options_t &options,
   const mesh::service_mailbox_record_t &record,
@@ -1208,16 +1179,32 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
             if (record.parts.size () != 2)
                 continue;
             std::optional<protocol::application_payload_t> pending_reply;
-            std::optional<client_server_wire_failure_t> pending_failure_reply;
+            std::optional<framework_exception_t> pending_failure_reply;
             try {
-                /* flow-correlation §4: at Off the wire flow pair is neither
-                 * validated nor materialized at this ingress. */
-                const auto payload =
-                  protocol::decode_application_payload (
-                    record.parts[1],
+                /* ClientServer application records ride the channel
+                 * envelope: [JSON header, payload]. flow-correlation §4: at
+                 * Off the wire flow pair is neither validated nor
+                 * materialized at this ingress. */
+                const auto envelope_header =
+                  runtime::messaging::envelope_codec_t{}.decode_header (
+                    zlink::message_t::from (record.parts[0]),
                     detail::message_flow_tracer_t (
                       _channel_runtime.dispatch_options_ref ())
                       .capture_enabled ());
+                if (!envelope_header) {
+                    throw framework_exception_t (
+                      framework_error_kind_t::protocol_error,
+                      envelope_header.error () != nullptr
+                        ? envelope_header.error ()->what ()
+                        : "ClientServer request envelope is malformed");
+                }
+                const auto &request_envelope = envelope_header.value ();
+                const protocol::application_payload_t payload{
+                  request_envelope.message_name,
+                  request_envelope.content_type,
+                  record.parts[1],
+                  request_envelope.flow_id,
+                  request_envelope.flow_origin};
                 const auto message =
                   zlink::message_t::from (payload.payload);
                 detail::inbound_message_context_t
@@ -1229,9 +1216,9 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                   payload.packet_name;
                 inbound.message.content_type =
                   payload.content_type;
-                if (record.correlation)
+                if (!request_envelope.correlation_id.empty ())
                     inbound.message.correlation_id =
-                      std::to_string (*record.correlation);
+                      request_envelope.correlation_id;
                 detail::message_flow_tracer_t flow (
                   _channel_runtime.dispatch_options_ref ());
                 auto flow_scope = runtime::flow_context_t::enter (
@@ -1276,7 +1263,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     _services,
                     zlink::framework::detail::service_scope_kind_t::
                       handler_invocation);
-                if (record.request_sequence && record.correlation) {
+                if (record.request_sequence) {
                     auto reply = _channel_runtime.dispatch_request (
                       record.owner, {}, payload.packet_name,
                       scope.provider (), *_serializers, *_handlers,
@@ -1302,8 +1289,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                           dispatch_message_kind_t::request,
                           dispatch_error_action_t::reply_error,
                           error);
-                        const auto failure = wire_failure (error);
-                        pending_failure_reply = failure;
+                        pending_failure_reply = error;
                     }
                 } else {
                     auto result = _channel_runtime.dispatch_send (
@@ -1353,11 +1339,9 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     ? dispatch_error_action_t::reply_error
                     : dispatch_error_action_t::drop,
                   error);
-                if (record.request_sequence
-                    && record.correlation) {
-                    const auto failure = wire_failure (error);
+                if (record.request_sequence) {
                     pending_reply.reset ();
-                    pending_failure_reply = failure;
+                    pending_failure_reply = error;
                 }
             }
             catch (const std::exception &error) {
@@ -1375,11 +1359,9 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     ? dispatch_error_action_t::reply_error
                     : dispatch_error_action_t::drop,
                   failure);
-                if (record.request_sequence
-                    && record.correlation) {
-                    const auto wire = wire_failure (failure);
+                if (record.request_sequence) {
                     pending_reply.reset ();
-                    pending_failure_reply = wire;
+                    pending_failure_reply = failure;
                 }
             }
             catch (...) {
@@ -1397,21 +1379,16 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     ? dispatch_error_action_t::reply_error
                     : dispatch_error_action_t::drop,
                   failure);
-                if (record.request_sequence
-                    && record.correlation) {
-                    const auto wire = wire_failure (failure);
+                if (record.request_sequence) {
                     pending_reply.reset ();
-                    pending_failure_reply = wire;
+                    pending_failure_reply = failure;
                 }
             }
             try {
                 if (pending_reply)
                     (void) owner->reply (record, *pending_reply);
                 else if (pending_failure_reply)
-                    (void) owner->reply (
-                      record,
-                      pending_failure_reply->terminal_result,
-                      pending_failure_reply->failure_code);
+                    (void) owner->reply (record, *pending_failure_reply);
             }
             catch (...) {
             }
@@ -1520,28 +1497,19 @@ client_server_location_runtime_t::request (
           client_server_operation_exception (
             completion.terminal, "ClientServer request"));
     }
-    if (completion.reply_header.terminal_result != 0) {
+    if (completion.error_code) {
         const auto error =
           runtime::messaging::request_failure_mapper_t{}
-            .reply_header_exception (
-              completion.reply_header.terminal_result,
-              completion.reply_header.failure_code,
+            .error_header_exception (
+              *completion.error_code,
+              completion.error_message.value_or (
+                "ClientServer request failed"),
               "ClientServer request");
         co_return detail::result_access_t::failure<zlink::message_t> (
           error);
     }
-    try {
-        /* Reply flow fields are never consumed by the requester. */
-        const auto decoded = protocol::decode_application_payload (
-          completion.payload, false);
-        co_return zlink::message_t::from (decoded.payload);
-    }
-    catch (const std::exception &error) {
-        //  Spec 32-framework-error-model:40,83-92 — an unprocessable reply
-        //  payload is a ProtocolError, not an InternalFailure.
-        co_return result_t<zlink::message_t>::failure (
-          framework_error_kind_t::protocol_error, error.what ());
-    }
+    /* The response envelope body is the reply payload as-is. */
+    co_return zlink::message_t::from (completion.payload);
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>>

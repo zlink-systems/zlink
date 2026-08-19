@@ -975,11 +975,11 @@ capability_builder_t channel_builder_t::enable_client ()
     return builder;
 }
 
-capability_builder_t channel_builder_t::enable_publisher ()
+capability_builder_t channel_builder_t::enable_publisher (bool discovery)
 {
     auto builder =
       enable_capability (detail::select_capability (*_state, channel_capability_t::publisher));
-    detail::select_capability (*_state, channel_capability_t::publisher).discovery = true;
+    detail::select_capability (*_state, channel_capability_t::publisher).discovery = discovery;
     return builder;
 }
 

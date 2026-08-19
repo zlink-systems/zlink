@@ -124,6 +124,11 @@ async function channelClient() {
 
   const app = await NestFactory.createApplicationContext(ClientModule, { logger: false });
   const client = app.get(nestjs.ZLINK_CHANNEL_CLIENT, { strict: false });
+  /* A pure client process has no server runtime holding the event loop; a
+   * pending ClientServer request must not let the loop drain (exit 0)
+   * before its reply arrives. Keep an explicit handle for the host's
+   * lifetime. */
+  setInterval(() => {}, 1000);
   const value = args.value ?? 'node-to-cpp';
   const reply = await client
     .requestToChannel(require_('channel-name'), new TestHostProfileRequest(value))

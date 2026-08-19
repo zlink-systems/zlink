@@ -989,7 +989,16 @@ class fanout_channel_builder_t
                                      subscriber_uses_discovery] (zlink_builder_t &zlink) {
                                         auto channel = zlink.channel (channel_name);
                                         if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
-                                            auto publisher = channel.enable_publisher ();
+                                            /* Publisher discovery (Location
+                                             * Store announcement) is opted
+                                             * into by configuring a routing
+                                             * identity; a plain
+                                             * endpoint-bound publisher runs
+                                             * on the native path with no
+                                             * store requirement. */
+                                            auto publisher = channel.enable_publisher (
+                                              routing_id.has_value ()
+                                              || automatic_routing_id_prefix.has_value ());
                                             if (routing_id) {
                                                 publisher.set_routing_id (*routing_id);
                                             } else if (automatic_routing_id_prefix) {

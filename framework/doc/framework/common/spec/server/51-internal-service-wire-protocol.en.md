@@ -166,9 +166,9 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 6 | `livenessAck` | Responds to the same probe ID |
 | 16 | `nodeSend` | Node one-way |
 | 17 | `nodeRequest` | Node request |
-| 18 | `channelSend` | Channel one-way |
-| 19 | `channelRequest` | Channel request |
-| 20 | `reply` | Request terminal result |
+| 18 | `channelSend` | Channel one-way (RouteMesh connections only) |
+| 19 | `channelRequest` | Channel request (RouteMesh connections only) |
+| 20 | `reply` | Request terminal result (RouteMesh connections only) |
 | 21 | `spotSend` | Spot one-way |
 | 22 | `spotRequest` | Spot request |
 | 23 | `logicalMulticast` | Logical multicast |
@@ -289,7 +289,8 @@ of the new connection.
 ### ClientServer direction
 
 - A ClientServer connection fixes a single application-attached channel name, the [ChannelName](01-glossary.en.md#channelname), and a client-to-server direction.
-- The client sends only send/request and liveness commands; the server sends only reply, liveness, update, and reject.
+- The only service-wire records on a ClientServer connection are the infrastructure commands: the client starts `hello` as a Core request and sends/answers the liveness pair; the server answers `admit`/`reject` only on that hello request's reply leg and pushes `update` and liveness.
+- Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections.
 - Reusing a [RouteMesh](01-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
 ## 5. Service liveness

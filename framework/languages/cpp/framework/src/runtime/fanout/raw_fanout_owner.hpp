@@ -91,7 +91,10 @@ class raw_fanout_publisher_t
     void close () noexcept;
     std::string endpoint () const;
     std::chrono::steady_clock::time_point next_activity () const;
-    task_t<void> publish (std::string topic,
+    /* Publishes one application record as the cross-language channel
+     * envelope: [JSON header (kind=publish, no correlation), payload]. */
+    task_t<void> publish (std::string channel_name,
+                          std::string topic,
                           protocol::application_payload_t payload,
                           std::chrono::milliseconds timeout =
                             std::chrono::milliseconds{-1});

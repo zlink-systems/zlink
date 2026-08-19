@@ -21,6 +21,7 @@
 #include <vector>
 
 namespace mesh = zlink::framework::runtime::mesh;
+namespace messaging = zlink::framework::runtime::messaging;
 namespace client_server = zlink::framework::runtime::client_server;
 namespace protocol = zlink::framework::runtime::protocol;
 namespace stateful = zlink::framework::runtime::stateful;
@@ -226,11 +227,21 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     constexpr std::uint64_t request_sequence = 51;
     constexpr std::uint64_t correlation = 61;
     const std::string mailbox_owner = descriptor.channel_name;
+    /* The reply path reads the request's channel-envelope header, so the
+     * synthetic record carries a real envelope header frame. */
+    messaging::envelope_header_t request_header;
+    request_header.kind = messaging::message_kind_t::request;
+    request_header.channel_name = descriptor.channel_name;
+    request_header.message_name = "ClientServerRequest";
+    request_header.correlation_id = "reply-claim-corr";
+    const auto request_header_bytes =
+      messaging::envelope_codec_t{}.encode_header (request_header)
+        .to_bytes ();
     assert (server.mailbox ().try_enqueue (
       mesh::service_mailbox_record_t{
         mailbox_owner,
         mesh::service_mailbox_domain_t::application,
-        {{0x01}},
+        {request_header_bytes, bytes ("request")},
         source_routing_id,
         request_sequence,
         correlation}));

@@ -2,6 +2,7 @@
 
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Eventing/poll_event.hpp>
@@ -96,6 +97,7 @@ raw_fanout_publisher_t::next_activity () const
 }
 
 task_t<void> raw_fanout_publisher_t::publish (
+  std::string channel_name,
   std::string topic,
   protocol::application_payload_t payload,
   std::chrono::milliseconds timeout)
@@ -104,8 +106,17 @@ task_t<void> raw_fanout_publisher_t::publish (
         throw std::invalid_argument (
           "fanout application topic is empty or reserved");
     }
-    auto encoded = protocol::encode_application_payload (payload);
-    auto message = zlink::message_t::from (std::move (encoded));
+    /* The record is the cross-language channel envelope. A Publish record
+     * carries no correlation id in the shared dialect. */
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::publish;
+    header.channel_name = std::move (channel_name);
+    header.message_name = payload.packet_name;
+    header.content_type = payload.content_type;
+    header.topic = topic;
+    auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from (std::move (payload.payload)));
+    auto items = std::move (parts).take_items ();
     std::optional<zlink::async_result_t<void>> submitted;
     {
         std::lock_guard lock (_mutex);
@@ -114,8 +125,12 @@ task_t<void> raw_fanout_publisher_t::publish (
               framework_error_kind_t::unavailable,
               "fanout publisher is stopped");
         }
-        auto operation =
-          std::move (_socket->publish (topic)).message (std::move (message));
+        /* Lvalue chaining appends multipart frames (the rvalue overload
+         * replaces the staged single part); items stays alive in this
+         * coroutine frame until the submit completes. */
+        auto operation = std::move (_socket->publish (topic))
+                           .message (items[0])
+                           .message (items[1]);
         submitted.emplace (
           timeout.count () > 0
             ? std::move (operation).timeout (timeout).async ()
@@ -351,18 +366,40 @@ raw_fanout_subscriber_t::try_receive (
             connection.deadline = now + fanout_receive_deadline;
             return {fanout_receive_status_t::beacon, std::nullopt};
         }
-        if (parts.size () != 1) {
+        if (parts.size () != 2) {
             reopen_locked (connection);
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
-        try {
-            const auto bytes = parts.front ().bytes ();
-            /* The classic-fanout consumer never reads the flow pair —
-             * structural skip keeps Off nodes from failing on it. */
-            auto payload = protocol::decode_application_payload (
-              std::span<const std::uint8_t> (
-                reinterpret_cast<const std::uint8_t *> (bytes.data ()), bytes.size ()),
+        {
+            /* Application publish records ride the cross-language channel
+             * envelope: [JSON header, payload]. The classic-fanout consumer
+             * never reads the flow pair — structural skip keeps Off nodes
+             * from failing on it. */
+            const auto header_bytes = parts.front ().bytes ();
+            const auto header = messaging::envelope_codec_t{}.decode_header (
+              zlink::message_t::from (std::vector<std::uint8_t> (
+                reinterpret_cast<const std::uint8_t *> (header_bytes.data ()),
+                reinterpret_cast<const std::uint8_t *> (header_bytes.data ())
+                  + header_bytes.size ())),
               false);
+            if (!header
+                || header.value ().kind
+                     != messaging::message_kind_t::publish) {
+                reopen_locked (connection);
+                return {fanout_receive_status_t::protocol_error,
+                        std::nullopt};
+            }
+            const auto &envelope = header.value ();
+            const auto body_bytes = parts[1].bytes ();
+            protocol::application_payload_t payload{
+              envelope.message_name,
+              envelope.content_type,
+              std::vector<std::uint8_t> (
+                reinterpret_cast<const std::uint8_t *> (body_bytes.data ()),
+                reinterpret_cast<const std::uint8_t *> (body_bytes.data ())
+                  + body_bytes.size ()),
+              envelope.flow_id,
+              envelope.flow_origin};
             connection.ready = true;
             connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;
@@ -372,10 +409,6 @@ raw_fanout_subscriber_t::try_receive (
               fanout_receive_status_t::application,
               fanout_received_t{intent.routing_id, std::move (topic),
                                 std::move (payload), std::move (retained)}};
-        }
-        catch (const protocol::service_wire_error_t &) {
-            reopen_locked (connection);
-            return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
     }
     return {fanout_receive_status_t::no_data, std::nullopt};

@@ -1530,6 +1530,9 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             runtime::messaging::client_call_codec_t codec;
             auto header = codec.create_envelope (runtime::messaging::message_kind_t::publish,
                                                  channel_name, call_packet_name, timeout, topic);
+            /* Shared channel-envelope dialect: a Publish record must not
+             * carry a correlation id (node/java reject one). */
+            header.correlation_id.clear ();
             header.metadata = metadata;
             auto parts = encode_channel_payload_parts (header, event_type, encode_payload,
                                                        *state->serializers);

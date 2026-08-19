@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -40,6 +42,27 @@ constexpr std::uint64_t client_server_wire_hwm_margin = 64u * 1024u;
 // or lets the liveness deadline decide (probe).
 constexpr std::chrono::milliseconds client_server_admission_timeout{5000};
 constexpr std::chrono::milliseconds client_server_probe_request_timeout{5000};
+
+// Spec 51 §2/§4: only infrastructure control records (hello/admit/reject/
+// update/liveness) use the binary service-wire framing on a ClientServer
+// connection. Application records ride the cross-language JSON channel
+// envelope, whose first frame is a JSON object — never the 'ZM' magic.
+bool is_service_control_frame (
+  const detail::backend::raw_bytes_t &frame) noexcept
+{
+    return frame.size () >= 5 && frame[0] == 0x5A && frame[1] == 0x4D;
+}
+
+detail::backend::raw_message_t envelope_wire_parts (
+  runtime::messaging::message_parts_t parts)
+{
+    detail::backend::raw_message_t wire;
+    auto items = std::move (parts).take_items ();
+    wire.reserve (items.size ());
+    for (auto &item : items)
+        wire.push_back (item.to_bytes ());
+    return wire;
+}
 
 // Owns the control record and port for the lifetime of one asynchronous
 // dealer control request so the caller does not need to keep them alive.
@@ -408,32 +431,13 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         co_return client_server_pump_result_t::protocol_error;
     }
     try {
+        if (!is_service_control_frame (received->parts.front ())) {
+            //  Application record: [JSON channel-envelope header, payload].
+            co_return enqueue_application_record (
+              std::move (*received), std::move (application_permit));
+        }
         const auto header =
           protocol::decode_header (received->parts.front ());
-        if (header.kind == protocol::command::channelRequest
-            || header.kind == protocol::command::channelSend) {
-            trace_client_server_lazy (
-              "server-received",
-              [&] {
-                  return "channel=" + _options.descriptor.channel_name
-                         + " kind="
-                         + std::to_string (static_cast<int> (header.kind))
-                         + " client="
-                         + routing_id_label (received->source_routing_id)
-                         + " endpoint="
-                         + _options.descriptor.advertised_endpoint
-                         + " request_seq="
-                         + (received->request_sequence
-                              ? std::to_string (*received->request_sequence)
-                              : std::string ("-"))
-                         + " part0_bytes="
-                         + std::to_string (received->parts.front ().size ())
-                         + " part1_bytes="
-                         + (received->parts.size () > 1
-                              ? std::to_string (received->parts[1].size ())
-                              : std::string ("-"));
-              });
-        }
         if (header.kind == protocol::command::hello) {
             //  Spec 51 §4 (ClientServer direction): the server sends only
             //  reply, liveness, update, and reject. Admission therefore
@@ -536,57 +540,83 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             }
             co_return client_server_pump_result_t::infrastructure;
         }
-        if ((header.kind != protocol::command::channelSend
-             && header.kind != protocol::command::channelRequest)
-            || received->parts.size () != 2) {
-            co_return client_server_pump_result_t::protocol_error;
-        }
-        std::optional<std::uint64_t> correlation;
-        std::string channel;
-        if (header.kind == protocol::command::channelSend) {
-            channel = protocol::decode_channel_send_header (
-              received->parts.front ());
-        } else {
-            if (!received->request_sequence) {
-                co_return client_server_pump_result_t::protocol_error;
-            }
-            auto request = protocol::decode_channel_request_header (
-              received->parts.front ());
-            correlation = request.correlation;
-            channel = std::move (request.channel_name);
-        }
-        if (channel != _options.descriptor.channel_name) {
-            co_return client_server_pump_result_t::protocol_error;
-        }
-        (void) protocol::decode_application_payload (received->parts[1], false);
-        if (application_permit)
-            application_permit->mark_queued ();
-        mesh::service_mailbox_record_t record{
-          std::move (channel),
-          mesh::service_mailbox_domain_t::application,
-          std::move (received->parts),
-          std::move (received->source_routing_id),
-          received->request_sequence,
-          correlation,
-          0,
-          std::nullopt,
-          std::nullopt,
-          std::move (received->retained),
-          [permit = std::move (application_permit)] () mutable {
-              if (!permit)
-                  return;
-              permit->release_for_handler_entry ();
-              permit.reset ();
-          }};
-        if (!_mailbox.try_enqueue (std::move (record))) {
-            _pending_received.emplace (std::move (record));
-            co_return client_server_pump_result_t::backpressured;
-        }
-        co_return client_server_pump_result_t::application;
+        //  Any other service-wire command is not valid on a ClientServer
+        //  connection (application records ride the channel envelope).
+        co_return client_server_pump_result_t::protocol_error;
     }
     catch (const protocol::service_wire_error_t &) {
         co_return client_server_pump_result_t::protocol_error;
     }
+}
+
+client_server_pump_result_t
+raw_client_server_server_t::enqueue_application_record (
+  detail::backend::raw_received_t received,
+  std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+{
+    if (received.parts.size () != 2) {
+        return client_server_pump_result_t::protocol_error;
+    }
+    {
+        std::lock_guard lock (_mutex);
+        if (_connections.find (received.source_routing_id)
+            == _connections.end ()) {
+            return client_server_pump_result_t::protocol_error;
+        }
+    }
+    const auto header = messaging::envelope_codec_t{}.decode_header (
+      zlink::message_t::from (received.parts.front ()), false);
+    if (!header) {
+        return client_server_pump_result_t::protocol_error;
+    }
+    const auto &envelope = header.value ();
+    if (envelope.channel_name != _options.descriptor.channel_name) {
+        return client_server_pump_result_t::protocol_error;
+    }
+    if (envelope.kind == messaging::message_kind_t::request) {
+        if (!received.request_sequence) {
+            return client_server_pump_result_t::protocol_error;
+        }
+    } else if (envelope.kind != messaging::message_kind_t::command) {
+        return client_server_pump_result_t::protocol_error;
+    }
+    trace_client_server_lazy (
+      "server-received",
+      [&] {
+          return "channel=" + envelope.channel_name
+                 + " kind="
+                 + std::to_string (static_cast<int> (envelope.kind))
+                 + " packet=" + envelope.message_name + " client="
+                 + routing_id_label (received.source_routing_id)
+                 + " request_seq="
+                 + (received.request_sequence
+                      ? std::to_string (*received.request_sequence)
+                      : std::string ("-"));
+      });
+    if (application_permit)
+        application_permit->mark_queued ();
+    mesh::service_mailbox_record_t record{
+      envelope.channel_name,
+      mesh::service_mailbox_domain_t::application,
+      std::move (received.parts),
+      std::move (received.source_routing_id),
+      received.request_sequence,
+      std::nullopt,
+      0,
+      std::nullopt,
+      std::nullopt,
+      std::move (received.retained),
+      [permit = std::move (application_permit)] () mutable {
+          if (!permit)
+              return;
+          permit->release_for_handler_entry ();
+          permit.reset ();
+      }};
+    if (!_mailbox.try_enqueue (std::move (record))) {
+        _pending_received.emplace (std::move (record));
+        return client_server_pump_result_t::backpressured;
+    }
+    return client_server_pump_result_t::application;
 }
 
 bool raw_client_server_server_t::has_pending_application () const noexcept
@@ -643,9 +673,15 @@ bool raw_client_server_server_t::reply (
   const protocol::application_payload_t &payload)
 {
     if (request.source_routing_id.empty () || !request.request_sequence
-        || !request.correlation) {
+        || request.parts.empty ()) {
         throw std::invalid_argument (
           "ClientServer reply requires request context");
+    }
+    const auto request_header = messaging::envelope_codec_t{}.decode_header (
+      zlink::message_t::from (request.parts.front ()), false);
+    if (!request_header) {
+        throw std::invalid_argument (
+          "ClientServer reply requires a decodable request envelope");
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -654,28 +690,48 @@ bool raw_client_server_server_t::reply (
     }
     if (!port)
         return false;
-    detail::backend::raw_message_t parts{
-      protocol::encode_reply_header (*request.correlation, 0, 0),
-      protocol::encode_application_payload (payload)};
-    return port->reply (
+    zlink::framework::detail::channel_reply_writer_t writer;
+    auto header = writer.create_reply_header (
+      messaging::message_kind_t::response,
+      request_header.value ().channel_name,
+      request_header.value ());
+    header.content_type = payload.content_type;
+    auto parts = envelope_wire_parts (
+      writer.reply_raw_envelope (
+        header, zlink::message_t::from (payload.payload)));
+    const auto delivered = port->reply (
       {request.source_routing_id, request.request_sequence, {},
        request.retained},
       parts);
+    trace_client_server_lazy (
+      "server-reply",
+      [&] {
+          return "channel=" + request_header.value ().channel_name
+                 + " packet=" + request_header.value ().message_name
+                 + " client=" + routing_id_label (request.source_routing_id)
+                 + " request_seq="
+                 + (request.request_sequence
+                      ? std::to_string (*request.request_sequence)
+                      : std::string ("-"))
+                 + " delivered=" + (delivered ? "true" : "false");
+      });
+    return delivered;
 }
 
 bool raw_client_server_server_t::reply (
   const mesh::service_mailbox_record_t &request,
-  std::uint32_t terminal_result,
-  protocol::framework_error_code failure_code)
+  const framework_exception_t &error)
 {
     if (request.source_routing_id.empty () || !request.request_sequence
-        || !request.correlation) {
+        || request.parts.empty ()) {
         throw std::invalid_argument (
           "ClientServer reply requires request context");
     }
-    if (terminal_result == 0) {
+    const auto request_header = messaging::envelope_codec_t{}.decode_header (
+      zlink::message_t::from (request.parts.front ()), false);
+    if (!request_header) {
         throw std::invalid_argument (
-          "ClientServer failure reply requires terminal fields");
+          "ClientServer reply requires a decodable request envelope");
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -684,11 +740,16 @@ bool raw_client_server_server_t::reply (
     }
     if (!port)
         return false;
-    detail::backend::raw_message_t parts{
-      protocol::encode_reply_header (
-        *request.correlation,
-        terminal_result,
-        static_cast<std::uint32_t> (failure_code))};
+    zlink::framework::detail::channel_reply_writer_t writer;
+    auto header = writer.create_error_header (
+      request_header.value ().channel_name, request_header.value (), error);
+    //  The error reply body is the JSON literal `null`, matching the other
+    //  language runtimes' error envelope emission.
+    auto parts = envelope_wire_parts (
+      writer.reply_raw_envelope (
+        header,
+        zlink::message_t::from (
+          std::vector<std::uint8_t>{'n', 'u', 'l', 'l'})));
     return port->reply (
       {request.source_routing_id, request.request_sequence, {},
        request.retained},
@@ -710,12 +771,21 @@ bool raw_client_server_server_t::byte_vector_less_t::operator() (
 // is dropped.
 struct raw_client_server_client_t::control_reply_state_t
 {
+    /* Spec 51 §4 physical-connection replacement: a late event from a
+     * previous pair must not alter the new connection's admission or
+     * liveness. Each parked completion therefore carries the connection
+     * identity its request was started on; apply discards a mismatch. */
+    struct parked_reply_t
+    {
+        std::vector<std::uint8_t> connection;
+        std::uint64_t connection_generation = 0;
+        detail::backend::raw_request_completion_t completion;
+    };
+
     std::mutex mutex;
     bool admission_in_flight = false;
-    std::optional<detail::backend::raw_request_completion_t> admission;
-    std::vector<std::pair<std::uint64_t,
-                          detail::backend::raw_request_completion_t>>
-      probes;
+    std::optional<parked_reply_t> admission;
+    std::vector<std::pair<std::uint64_t, parked_reply_t>> probes;
 };
 
 raw_client_server_client_t::raw_client_server_client_t (
@@ -888,6 +958,7 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                 std::lock_guard lock (_mutex);
                 _connection_id = liveness_connection_identity (
                   _options.expected_server);
+                ++_connection_generation;
                 _ready = false;
             }
             if (port) {
@@ -916,6 +987,7 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
                 if (current) {
                     _ready = false;
                     _connection_id.clear ();
+                    ++_connection_generation;
                 }
             }
             if (current) {
@@ -1105,9 +1177,18 @@ void raw_client_server_client_t::begin_admission_request (
         _control_replies->admission_in_flight = true;
     }
     protocol::client_server_client_admission_t admission;
+    std::vector<std::uint8_t> connection;
+    std::uint64_t connection_generation = 0;
     {
         std::lock_guard lock (_mutex);
         admission = _options.admission;
+        connection = _connection_id;
+        connection_generation = _connection_generation;
+    }
+    if (connection.empty ()) {
+        std::lock_guard lock (_control_replies->mutex);
+        _control_replies->admission_in_flight = false;
+        return;
     }
     trace_client_server_lazy (
       "client-admission-request",
@@ -1122,7 +1203,8 @@ void raw_client_server_client_t::begin_admission_request (
                                 client_server_admission_timeout));
     detail::observe_task_completion (
       *running,
-      [state = _control_replies, running] (
+      [state = _control_replies, running, connection,
+       connection_generation] (
         const result_t<detail::backend::raw_request_completion_t> &settled) {
           trace_client_server_lazy (
             "client-admission-complete",
@@ -1141,11 +1223,15 @@ void raw_client_server_client_t::begin_admission_request (
           std::lock_guard lock (state->mutex);
           state->admission_in_flight = false;
           if (settled) {
-              state->admission.emplace (settled.value ());
+              state->admission.emplace (
+                control_reply_state_t::parked_reply_t{
+                  connection, connection_generation, settled.value ()});
           } else {
               state->admission.emplace (
-                detail::backend::raw_request_completion_t{
-                  detail::backend::raw_request_result_t::failed, {}});
+                control_reply_state_t::parked_reply_t{
+                  connection, connection_generation,
+                  detail::backend::raw_request_completion_t{
+                    detail::backend::raw_request_result_t::failed, {}}});
           }
       });
 }
@@ -1154,6 +1240,15 @@ void raw_client_server_client_t::begin_probe_request (
   const std::shared_ptr<detail::backend::raw_dealer_port_t> &port,
   std::uint64_t probe_id)
 {
+    std::vector<std::uint8_t> connection;
+    std::uint64_t connection_generation = 0;
+    {
+        std::lock_guard lock (_mutex);
+        connection = _connection_id;
+        connection_generation = _connection_generation;
+    }
+    if (connection.empty ())
+        return;
     detail::backend::raw_message_t probe_message{
       protocol::encode_liveness (
         protocol::command::livenessProbe, probe_id)};
@@ -1164,41 +1259,79 @@ void raw_client_server_client_t::begin_probe_request (
                                 client_server_probe_request_timeout));
     detail::observe_task_completion (
       *running,
-      [state = _control_replies, running, probe_id] (
+      [state = _control_replies, running, probe_id, connection,
+       connection_generation] (
         const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled)
               return;
           std::lock_guard lock (state->mutex);
-          state->probes.emplace_back (probe_id, settled.value ());
+          state->probes.emplace_back (
+            probe_id,
+            control_reply_state_t::parked_reply_t{
+              connection, connection_generation, settled.value ()});
       });
 }
 
 bool raw_client_server_client_t::apply_pending_control_replies (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    std::optional<detail::backend::raw_request_completion_t> admission;
+    std::optional<control_reply_state_t::parked_reply_t> admission;
     std::vector<std::pair<std::uint64_t,
-                          detail::backend::raw_request_completion_t>>
+                          control_reply_state_t::parked_reply_t>>
       probes;
     {
         std::lock_guard lock (_control_replies->mutex);
         admission.swap (_control_replies->admission);
         probes.swap (_control_replies->probes);
     }
+    std::vector<std::uint8_t> current_connection;
+    std::uint64_t current_generation = 0;
+    {
+        std::lock_guard lock (_mutex);
+        current_connection = _connection_id;
+        current_generation = _connection_generation;
+    }
     bool progressed = false;
     if (admission) {
         progressed = true;
-        if (admission->result == detail::backend::raw_request_result_t::ok
-            && admission->parts.size () == 1) {
+        const bool stale =
+          admission->connection != current_connection
+          || admission->connection_generation != current_generation;
+        const auto &completion = admission->completion;
+        if (stale) {
+            //  Spec 51 §4: a late admission reply from a previous physical
+            //  pair cannot admit or reject the current connection.
+            trace_client_server_lazy (
+              "client-admission-stale-discard",
+              [&] {
+                  return "channel=" + _options.admission.channel_name
+                         + " result="
+                         + std::to_string (
+                             static_cast<int> (completion.result));
+              });
+            //  The current (new) connection still needs its own admission.
+            std::shared_ptr<detail::backend::raw_dealer_port_t> port;
+            bool request = false;
+            {
+                std::lock_guard lock (_mutex);
+                request = !_closed && !_ready && !_connection_id.empty ();
+                if (request)
+                    port = _port;
+            }
+            if (request && port)
+                begin_admission_request (port);
+        } else if (completion.result
+                     == detail::backend::raw_request_result_t::ok
+                   && completion.parts.size () == 1) {
             try {
                 const auto header =
-                  protocol::decode_header (admission->parts.front ());
+                  protocol::decode_header (completion.parts.front ());
                 if (header.kind == protocol::command::admit) {
                     (void) accept_server_admission (
-                      admission->parts.front (), header.kind, now);
+                      completion.parts.front (), header.kind, now);
                 } else if (header.kind == protocol::command::reject) {
                     (void) protocol::decode_reject (
-                      admission->parts.front ());
+                      completion.parts.front ());
                     std::lock_guard lock (_mutex);
                     _ready = false;
                 } else {
@@ -1226,27 +1359,36 @@ bool raw_client_server_client_t::apply_pending_control_replies (
     }
     for (const auto &probe : probes) {
         progressed = true;
-        if (probe.second.result != detail::backend::raw_request_result_t::ok
-            || probe.second.parts.size () != 1) {
+        if (probe.second.connection != current_connection
+            || probe.second.connection_generation != current_generation) {
+            //  Spec 51 §4/§5: a probe ACK from a previous physical pair
+            //  cannot extend the new connection's liveness deadline.
+            trace_client_server_lazy (
+              "client-probe-stale-discard",
+              [&] { return "probe=" + std::to_string (probe.first); });
+            continue;
+        }
+        const auto &completion = probe.second.completion;
+        if (completion.result != detail::backend::raw_request_result_t::ok
+            || completion.parts.size () != 1) {
             continue;
         }
         try {
             const auto liveness =
-              protocol::decode_liveness (probe.second.parts.front ());
+              protocol::decode_liveness (completion.parts.front ());
             if (liveness.kind != protocol::command::livenessAck
                 || liveness.probe_id != probe.first) {
                 continue;
             }
-            std::vector<std::uint8_t> connection;
             std::vector<std::uint8_t> server_routing_id;
             {
                 std::lock_guard lock (_mutex);
-                connection = _connection_id;
                 server_routing_id =
                   _options.expected_server.server_routing_id;
             }
             (void) _liveness.acknowledge (
-              server_routing_id, connection, liveness.probe_id, now);
+              server_routing_id, current_connection, liveness.probe_id,
+              now);
         }
         catch (const protocol::service_wire_error_t &) {
             trace_client_server ("client-probe-malformed-reply");
@@ -1276,9 +1418,16 @@ task_t<zlink::submit_result_t> raw_client_server_client_t::send (
     }
     if (!ready)
         co_return zlink::submit_result_t::not_connected;
-    const auto wire = detail::backend::raw_message_t{
-      protocol::encode_channel_send_header (channel),
-      protocol::encode_application_payload (payload)};
+    //  A ClientServer one-way rides the channel envelope as a Command
+    //  record; per the shared dialect a Command carries no correlation id.
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::command;
+    header.channel_name = channel;
+    header.message_name = payload.packet_name;
+    header.content_type = payload.content_type;
+    const auto wire = envelope_wire_parts (
+      messaging::envelope_codec_t{}.encode_raw_body_parts (
+        header, zlink::message_t::from (payload.payload)));
     trace_client_server_lazy (
       "client-send-wire",
       [&] {
@@ -1313,7 +1462,6 @@ raw_client_server_client_t::request (
     std::shared_ptr<detail::backend::raw_dealer_port_t> port;
     std::string channel;
     std::string endpoint;
-    std::uint64_t correlation = 0;
     bool ready = false;
     {
         std::lock_guard lock (_mutex);
@@ -1322,37 +1470,36 @@ raw_client_server_client_t::request (
             port = _port;
             channel = _options.admission.channel_name;
             endpoint = _options.expected_server.advertised_endpoint;
-            if (_next_correlation == 0) {
-                throw std::overflow_error (
-                  "ClientServer correlation is exhausted");
-            }
-            correlation = _next_correlation;
-            _next_correlation =
-              correlation == std::numeric_limits<std::uint64_t>::max ()
-                ? 0
-                : correlation + 1;
         }
     }
     if (!ready) {
         co_return client_server_request_completion_t{
-          foundation::operation_terminal_t::transport_failed, {}, {}};
+          foundation::operation_terminal_t::transport_failed};
     }
+    //  A ClientServer request rides the channel envelope as a Request
+    //  record with a required correlation id; the deadline mirrors the
+    //  caller timeout like the other language runtimes.
+    messaging::client_call_codec_t codec;
+    auto header = codec.create_envelope (
+      messaging::message_kind_t::request, channel, payload.packet_name,
+      timeout);
+    header.content_type = payload.content_type;
+    const auto correlation_id = header.correlation_id;
     trace_client_server_lazy (
       "client-request-submit",
       [&] {
           return "endpoint=" + endpoint + " channel=" + channel
                  + " client=" + routing_id_label (_options.client_routing_id)
-                 + " correlation=" + std::to_string (correlation);
+                 + " correlation=" + correlation_id;
       });
-    const auto wire = detail::backend::raw_message_t{
-      protocol::encode_channel_request_header (correlation, channel),
-      protocol::encode_application_payload (payload)};
+    const auto wire = envelope_wire_parts (
+      messaging::envelope_codec_t{}.encode_raw_body_parts (
+        header, zlink::message_t::from (payload.payload)));
     trace_client_server_lazy (
       "client-request-wire",
       [&] {
-          return "endpoint=" + endpoint + " correlation="
-                 + std::to_string (correlation) + " packet="
-                 + payload.packet_name + " payload_bytes="
+          return "endpoint=" + endpoint + " correlation=" + correlation_id
+                 + " packet=" + payload.packet_name + " payload_bytes="
                  + std::to_string (wire[1].size ()) + " wire_bytes="
                  + std::to_string (raw_message_bytes (wire));
       });
@@ -1361,63 +1508,58 @@ raw_client_server_client_t::request (
     trace_client_server_lazy (
       "client-request-complete",
       [&] {
-          return "endpoint=" + endpoint + " correlation="
-                 + std::to_string (correlation) + " result="
+          return "endpoint=" + endpoint + " correlation=" + correlation_id
+                 + " result="
                  + std::to_string (static_cast<int> (completion.result))
                  + " parts=" + std::to_string (completion.parts.size ());
       });
     if (completion.result != detail::backend::raw_request_result_t::ok) {
         co_return client_server_request_completion_t{
-          request_failure (completion.result), {}, {}};
+          request_failure (completion.result)};
     }
-    try {
-        auto &parts = completion.parts;
-        if (parts.empty () || parts.size () > 2) {
-            throw protocol::service_wire_error_t (
-              "ClientServer reply has an invalid part count");
-        }
-        const auto reply = protocol::decode_reply_header (parts.front ());
-        trace_client_server_lazy (
-          "client-request-header",
-          [&] {
-              return "correlation=" + std::to_string (correlation)
-                     + " terminal_result="
-                     + std::to_string (reply.terminal_result)
-                     + " failure_code="
-                     + std::to_string (reply.failure_code);
-          });
-        if (reply.correlation != correlation) {
-            throw protocol::service_wire_error_t (
-              "ClientServer reply correlation does not match");
-        }
-        if (reply.terminal_result != 0) {
-            if (parts.size () != 1) {
-                throw protocol::service_wire_error_t (
-                  "failed ClientServer reply cannot carry payload");
-            }
-            co_return client_server_request_completion_t{
-              foundation::operation_terminal_t::completed, reply, {}};
-        }
-        if (parts.size () != 2) {
-            throw protocol::service_wire_error_t (
-              "successful ClientServer reply requires payload");
-        }
-        (void) protocol::decode_application_payload (parts[1], false);
-        co_return client_server_request_completion_t{
-          foundation::operation_terminal_t::completed,
-          reply,
-          std::move (parts[1])};
+    //  Spec 32-framework-error-model:91-92 — a malformed ClientServer reply
+    //  is ProtocolError, not a transport failure; report it as a completed
+    //  terminal carrying the protocol_error code for the consumer's mapper.
+    const auto protocol_failure =
+      [] (std::string message) {
+          client_server_request_completion_t failure{
+            foundation::operation_terminal_t::completed};
+          failure.error_code = "protocol_error";
+          failure.error_message = std::move (message);
+          return failure;
+      };
+    auto &parts = completion.parts;
+    if (parts.size () != 2) {
+        co_return protocol_failure (
+          "ClientServer reply has an invalid part count");
     }
-    catch (const protocol::service_wire_error_t &) {
-        //  Spec 32-framework-error-model:91-92 — a malformed ClientServer
-        //  reply is ProtocolError, not a transport failure. Return a
-        //  completed terminal with a synthesized protocolError header; the
-        //  consumer's reply_header_exception mapper classifies it.
-        co_return client_server_request_completion_t{
-          foundation::operation_terminal_t::completed,
-          protocol::reply_header_t{correlation, 104, 16},
-          {}};
+    const auto reply_header = messaging::envelope_codec_t{}.decode_header (
+      zlink::message_t::from (parts.front ()), false);
+    if (!reply_header) {
+        co_return protocol_failure (
+          reply_header.error () != nullptr
+            ? reply_header.error ()->what ()
+            : "ClientServer reply envelope is malformed");
     }
+    const auto &reply = reply_header.value ();
+    if (reply.kind == messaging::message_kind_t::error) {
+        client_server_request_completion_t failure{
+          foundation::operation_terminal_t::completed};
+        failure.error_code = reply.error_code.value_or ("request_failed");
+        failure.error_message = reply.error_message.value_or (
+          "ClientServer request failed");
+        co_return failure;
+    }
+    if (reply.kind != messaging::message_kind_t::response
+        || reply.correlation_id != correlation_id) {
+        co_return protocol_failure (
+          "ClientServer reply kind or correlation does not match");
+    }
+    client_server_request_completion_t success{
+      foundation::operation_terminal_t::completed};
+    success.content_type = reply.content_type;
+    success.payload = std::move (parts[1]);
+    co_return success;
 }
 
 std::size_t raw_client_server_client_t::pending_request_count () const noexcept

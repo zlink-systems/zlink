@@ -152,9 +152,9 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..25
 | 6 | `livenessAck` | 같은 probe ID 응답 |
 | 16 | `nodeSend` | node one-way |
 | 17 | `nodeRequest` | node request |
-| 18 | `channelSend` | channel one-way |
-| 19 | `channelRequest` | channel request |
-| 20 | `reply` | request terminal result |
+| 18 | `channelSend` | channel one-way (RouteMesh connection 전용) |
+| 19 | `channelRequest` | channel request (RouteMesh connection 전용) |
+| 20 | `reply` | request terminal result (RouteMesh connection 전용) |
 | 21 | `spotSend` | Spot one-way |
 | 22 | `spotRequest` | Spot request |
 | 23 | `logicalMulticast` | logical multicast |
@@ -264,7 +264,8 @@ event는 pair identity로 fence되어 새 connection의 admission이나 ready �
 ### ClientServer 방향
 
 - ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](01-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
-- Client는 send·request와 liveness command만 보내고 server는 reply, liveness, update와 reject만 보낸다.
+- ClientServer connection에서 service wire record는 infrastructure command에만 쓴다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
+- ClientServer connection의 application record는 service wire command를 쓰지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[JSON header (formatMarker 0xF2; kind request/response/command/error), payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다.
 - node 여럿이 이름으로 서로를 찾는 [RouteMesh](01-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 
 ## 5. Service liveness

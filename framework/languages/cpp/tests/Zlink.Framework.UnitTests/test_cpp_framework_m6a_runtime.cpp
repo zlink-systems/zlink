@@ -6,6 +6,7 @@
 #include "runtime/locations/service_descriptor_registry.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
@@ -1212,6 +1213,7 @@ void verify_manual_and_automatic_classic_fanout ()
     for (std::size_t attempt = 0; attempt < 100 && !application_received;
          ++attempt) {
         await_task (publisher.publish (
+          "fanout-alpha",
           "topic-a",
           {"FanoutProbe", "application/json", bytes ("fanout")}));
         const auto [status, received] = manual.try_receive (receive_now);
@@ -1272,6 +1274,7 @@ void verify_manual_and_automatic_classic_fanout ()
     bool reserved_rejected = false;
     try {
         await_task (publisher.publish (
+          "fanout-alpha",
           fanout::raw_fanout_publisher_t::reserved_topic (),
           {"Reserved", "application/json", {}}));
     }
@@ -1281,6 +1284,100 @@ void verify_manual_and_automatic_classic_fanout ()
           == zlink::framework::framework_error_kind_t::internal_failure;
     }
     assert (reserved_rejected);
+}
+
+void verify_client_server_stale_admission_reply_is_discarded ()
+{
+    /* Spec 51 §4 physical-connection replacement: an admission reply that
+     * settles after its physical pair terminated must not admit the client
+     * — the parked completion is fenced by the connection generation it
+     * was requested on and discarded on mismatch. */
+    protocol::client_server_server_admission_t server_descriptor{
+      "client-server-stale",
+      bytes ("server-s"),
+      41,
+      1,
+      100,
+      mesh::service_node_state_t::serving,
+      "security-s",
+      16u * 1024u * 1024u,
+      "tcp://127.0.0.1:0"};
+    auto server =
+      std::make_unique<client_server::raw_client_server_server_t> (
+        client_server::raw_client_server_server_options_t{
+          {server_descriptor}});
+    server->start ();
+    auto expected_server = server->descriptor ();
+    auto manual_server = expected_server;
+    manual_server.server_routing_id.clear ();
+    manual_server.lifecycle_generation = 0;
+    manual_server.descriptor_revision = 0;
+    client_server::raw_client_server_client_t client (
+      {bytes ("client-s"),
+       {expected_server.channel_name, "security-s", 16u * 1024u * 1024u},
+       std::move (manual_server)});
+    client.start ();
+
+    /* Fire the hello request and let the server answer it, without ever
+     * pumping the client — the admit completion parks unapplied. */
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    bool served_hello = false;
+    while (!served_hello && std::chrono::steady_clock::now () < deadline) {
+        (void) server->drain_monitor_events (std::chrono::steady_clock::now ());
+        (void) client.drain_monitor_events (std::chrono::steady_clock::now ())
+          .result ()
+          .value ();
+        const auto pump =
+          server->pump_one (std::chrono::steady_clock::now ())
+            .result ()
+            .value ();
+        served_hello =
+          pump == client_server::client_server_pump_result_t::infrastructure;
+        if (!served_hello)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (served_hello);
+    /* Give the admit reply time to settle into the parked state. */
+    std::this_thread::sleep_for (300ms);
+
+    /* Terminate the physical pair before the parked reply is applied, and
+     * bring up a replacement server on the same endpoint. The client
+     * reconnects (same connection identity bytes, new physical pair), but
+     * the replacement server never answers the new hello — so the only
+     * admission the client could apply is the stale parked one. */
+    const auto endpoint = expected_server.advertised_endpoint;
+    server->close ();
+    server.reset ();
+    auto replacement_descriptor = server_descriptor;
+    replacement_descriptor.advertised_endpoint = endpoint;
+    auto replacement =
+      std::make_unique<client_server::raw_client_server_server_t> (
+        client_server::raw_client_server_server_options_t{
+          {replacement_descriptor}});
+    replacement->start ();
+    /* Drain the client so it observes the disconnect and the reconnect to
+     * the replacement (new physical pair; fires a fresh hello the
+     * replacement deliberately leaves unanswered). */
+    const auto drain_until = std::chrono::steady_clock::now () + 2s;
+    while (std::chrono::steady_clock::now () < drain_until) {
+        (void) client.drain_monitor_events (std::chrono::steady_clock::now ())
+          .result ()
+          .value ();
+        std::this_thread::sleep_for (10ms);
+    }
+
+    /* Applying the parked admit from the previous pair must discard it as
+     * stale — the client stays unadmitted until the replacement answers. */
+    const auto assert_deadline = std::chrono::steady_clock::now () + 800ms;
+    while (std::chrono::steady_clock::now () < assert_deadline) {
+        (void) client.pump_one (std::chrono::steady_clock::now ())
+          .result ()
+          .value ();
+        assert (!client.ready ());
+        std::this_thread::sleep_for (10ms);
+    }
+    assert (!client.ready ());
+    replacement->close ();
 }
 
 void verify_client_server_plain_hello_is_rejected ()
@@ -1438,9 +1535,19 @@ void verify_client_server_independent_raw_path ()
     auto send_claim = server.mailbox ().try_claim (
       mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (send_claim && send_claim->records.size () == 1);
-    assert (protocol::decode_channel_send_header (
-              send_claim->records.front ().parts.front ())
-            == expected_server.channel_name);
+    {
+        const auto send_header =
+          runtime::messaging::envelope_codec_t{}.decode_header (
+            zlink::message_t::from (
+              send_claim->records.front ().parts.front ()),
+            false);
+        assert (send_header);
+        assert (send_header.value ().channel_name
+                == expected_server.channel_name);
+        assert (send_header.value ().kind
+                == runtime::messaging::message_kind_t::command);
+        assert (send_header.value ().message_name == "ClientServerSend");
+    }
     assert (server.mailbox ().release (*send_claim));
 
     auto request_task = client.request (
@@ -1460,7 +1567,6 @@ void verify_client_server_independent_raw_path ()
       mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     assert (request_claim->records.front ().request_sequence);
-    assert (request_claim->records.front ().correlation);
     assert (server.reply (
       request_claim->records.front (),
       {"ClientServerReply", "application/json", bytes ("reply")}));
@@ -1477,12 +1583,9 @@ void verify_client_server_independent_raw_path ()
     const auto result = request_task.result ().value ();
     assert (result.terminal
             == foundation::operation_terminal_t::completed);
-    assert (result.reply_header.terminal_result == 0);
-    assert (result.reply_header.failure_code == 0);
-    const protocol::application_payload_t expected_reply{
-      "ClientServerReply", "application/json", bytes ("reply")};
-    assert (protocol::decode_application_payload (result.payload)
-            == expected_reply);
+    assert (!result.error_code);
+    assert (result.content_type == "application/json");
+    assert (result.payload == bytes ("reply"));
 
     auto rejected_task = client.request (
       {"RejectedRequest", "application/json", bytes ("request")},
@@ -1501,8 +1604,10 @@ void verify_client_server_independent_raw_path ()
       mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     assert (server.reply (
-      request_claim->records.front (), 106,
-      protocol::framework_error_code::requestRejected));
+      request_claim->records.front (),
+      zlink::framework::framework_exception_t (
+        zlink::framework::framework_error_kind_t::rejected,
+        "ClientServer request was rejected.")));
     assert (server.mailbox ().release (*request_claim));
     while (!rejected_task.await_ready ()
            && std::chrono::steady_clock::now () < deadline) {
@@ -1516,12 +1621,7 @@ void verify_client_server_independent_raw_path ()
     const auto rejected = rejected_task.result ().value ();
     assert (rejected.terminal
             == foundation::operation_terminal_t::completed);
-    assert (rejected.reply_header.terminal_result == 106);
-    assert (
-      rejected.reply_header.failure_code
-      == static_cast<std::uint32_t> (
-        protocol::framework_error_code::requestRejected));
-    assert (rejected.payload.empty ());
+    assert (rejected.error_code && *rejected.error_code == "rejected");
 
     // The advertised ClientServer limit must remain usable for a frame that
     // is larger than the core automatic HWM default.
@@ -1564,11 +1664,8 @@ void verify_client_server_independent_raw_path ()
     const auto large_result = large_task.result ().value ();
     assert (large_result.terminal
             == foundation::operation_terminal_t::completed);
-    assert (large_result.reply_header.terminal_result == 0);
-    const protocol::application_payload_t expected_large_reply{
-      "LargePayloadReply", "application/json", large_reply};
-    assert (protocol::decode_application_payload (large_result.payload)
-            == expected_large_reply);
+    assert (!large_result.error_code);
+    assert (large_result.payload == large_reply);
 }
 
 void verify_client_server_admits_before_monitor_drain ()
@@ -2678,6 +2775,7 @@ int main ()
     verify_liveness_reuses_probe_and_fences_reconnect ();
     verify_location_descriptor_cas_snapshot_and_watch ();
     verify_manual_and_automatic_classic_fanout ();
+    verify_client_server_stale_admission_reply_is_discarded ();
     verify_client_server_plain_hello_is_rejected ();
     verify_client_server_independent_raw_path ();
     verify_client_server_admits_before_monitor_drain ();
