@@ -78,7 +78,7 @@ public interface ZLinkActorJoinRelocationPort {
             rawReply = Objects.requireNonNull(rawReply, "rawReply").clone();
             if (relocationId.equals(new UUID(0L, 0L))
                 || targetSpotGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || targetSpotAuthorityOwnerGeneration <= 0
                 || targetOwnerLeaseGeneration <= 0
                 || advertisedReceiveChunkLimitBytes < 0) {

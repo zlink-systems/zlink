@@ -108,7 +108,7 @@ final class ZLinkActorAcceptedJournal {
         Record {
             if (sourceNodeRid == null
                 || sourceOwnerId == null || sourceOwnerId.isBlank()
-                || sourceNodeGeneration <= 0
+                || sourceNodeGeneration == 0
                 || sourceOwnerLeaseGeneration <= 0
                 || sourceSessionRid == null
                     != (sourceBindingGeneration == 0)

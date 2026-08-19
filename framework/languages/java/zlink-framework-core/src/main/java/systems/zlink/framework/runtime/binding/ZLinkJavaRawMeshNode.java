@@ -2587,7 +2587,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 new ZlinkRequestException(RequestResult.NOT_CONNECTED));
         }
         if (actor.generation() <= 0
-            || bindingGeneration <= 0
+            || bindingGeneration == 0
             || authorityOwnerGeneration <= 0) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException(

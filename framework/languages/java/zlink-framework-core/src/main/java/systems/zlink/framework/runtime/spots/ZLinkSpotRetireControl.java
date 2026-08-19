@@ -442,9 +442,9 @@ final class ZLinkSpotRetireControl {
                 participants, "participants"));
             sessionRoutes = List.copyOf(Objects.requireNonNull(
                 sessionRoutes, "sessionRoutes"));
-            if (sourceNodeGeneration <= 0
+            if (sourceNodeGeneration == 0
                 || sourceOwnerLeaseGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || targetOwnerLeaseGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "relocation stage contains an invalid generation");
@@ -571,13 +571,13 @@ final class ZLinkSpotRetireControl {
             positive(
                 sourceAuthorityOwnerGeneration,
                 "sourceAuthorityOwnerGeneration");
-            positive(
+            nonzero(
                 sessionOwnerNodeGeneration,
                 "sessionOwnerNodeGeneration");
             positive(
                 sessionOwnerLeaseGeneration,
                 "sessionOwnerLeaseGeneration");
-            positive(bindingGeneration, "bindingGeneration");
+            nonzero(bindingGeneration, "bindingGeneration");
         }
     }
 
@@ -735,13 +735,13 @@ final class ZLinkSpotRetireControl {
             if (kind == STAGE) {
                 Fence fence = readFence(input);
                 RoutingId sourceNode = readRid(input);
-                long sourceNodeGeneration = positive(
+                long sourceNodeGeneration = nonzero(
                     input.readLong(), "sourceNodeGeneration");
                 String sourceOwner = readText(input);
                 long sourceOwnerGeneration = positive(
                     input.readLong(), "sourceOwnerLeaseGeneration");
                 RoutingId targetNode = readRid(input);
-                long targetNodeGeneration = positive(
+                long targetNodeGeneration = nonzero(
                     input.readLong(), "targetNodeGeneration");
                 String targetOwner = readText(input);
                 long targetOwnerGeneration = positive(
@@ -797,7 +797,7 @@ final class ZLinkSpotRetireControl {
                             "sourceAuthorityOwnerGeneration"),
                         readText(input),
                         readRid(input),
-                        positive(
+                        nonzero(
                             input.readLong(),
                             "sessionOwnerNodeGeneration"),
                         readText(input),
@@ -805,7 +805,7 @@ final class ZLinkSpotRetireControl {
                             input.readLong(),
                             "sessionOwnerLeaseGeneration"),
                         readRid(input),
-                        positive(input.readLong(), "bindingGeneration")));
+                        nonzero(input.readLong(), "bindingGeneration")));
                 }
                 command = new StageCommand(new StageRequest(
                     fence,
@@ -842,9 +842,9 @@ final class ZLinkSpotRetireControl {
                 long sourceOwnerLeaseGeneration = positive(
                     input.readLong(), "sourceOwnerLeaseGeneration");
                 RoutingId sourceNodeRid = readRid(input);
-                long sourceNodeGeneration = positive(
+                long sourceNodeGeneration = nonzero(
                     input.readLong(), "sourceNodeGeneration");
-                long targetNodeGeneration = positive(
+                long targetNodeGeneration = nonzero(
                     input.readLong(), "targetNodeGeneration");
                 long targetAuthorityOwnerGeneration = positive(
                     input.readLong(), "targetAuthorityOwnerGeneration");
@@ -1050,6 +1050,13 @@ final class ZLinkSpotRetireControl {
         if (length > MAX_TEXT_BYTES) {
             throw new IllegalArgumentException(
                 name + " exceeds its UTF-8 bound");
+        }
+        return value;
+    }
+
+    private static long nonzero(long value, String name) {
+        if (value == 0) {
+            throw new IllegalArgumentException(name + " must be nonzero");
         }
         return value;
     }

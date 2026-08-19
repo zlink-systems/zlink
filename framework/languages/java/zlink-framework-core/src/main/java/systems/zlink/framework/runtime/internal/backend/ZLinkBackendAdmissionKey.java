@@ -73,7 +73,7 @@ public record ZLinkBackendAdmissionKey(
         RoutingId sessionRid,
         long bindingGeneration) {
         if ((relocationHigh == 0L && relocationLow == 0L)
-            || sessionRid == null || bindingGeneration <= 0L) {
+            || sessionRid == null || bindingGeneration == 0L) {
             throw new IllegalArgumentException(
                 "relocating bound-Session admission fence is invalid");
         }

@@ -429,7 +429,7 @@ public final class ZLinkServiceM6BWireCodec {
     public byte[] encodeInstanceSpotHeader(InstanceSpotMessage message) {
         Objects.requireNonNull(message, "message");
         if ((message.flags() & ~ServiceWireConstants.FLAG_METADATA) != 0
-            || message.sourceNodeGeneration() <= 0
+            || message.sourceNodeGeneration() == 0
             || (message.request()
                 != (message.operationHigh() != 0
                     || message.operationLow() != 0))
@@ -1230,7 +1230,7 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(nodeRid, "nodeRid");
             Objects.requireNonNull(expectedAuthorityStoreVersion,
                 "expectedAuthorityStoreVersion");
-            if (leaseGeneration <= 0 || nodeGeneration <= 0) {
+            if (leaseGeneration <= 0 || nodeGeneration == 0) {
                 throw protocol("coordinator generations must be nonzero");
             }
         }
@@ -1244,8 +1244,8 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(nodeRid, "nodeRid");
             Objects.requireNonNull(ownerId, "ownerId");
             Objects.requireNonNull(sessionRid, "sessionRid");
-            if (nodeGeneration <= 0 || ownerLeaseGeneration <= 0
-                || bindingGeneration <= 0) {
+            if (nodeGeneration == 0 || ownerLeaseGeneration <= 0
+                || bindingGeneration == 0) {
                 throw protocol("Session owner generations must be nonzero");
             }
         }
@@ -1318,7 +1318,7 @@ public final class ZLinkServiceM6BWireCodec {
                 if (previousAuthorityOwnerGeneration <= 0
                     || currentAuthorityOwnerGeneration
                         <= previousAuthorityOwnerGeneration
-                    || targetNodeGeneration <= 0) {
+                    || targetNodeGeneration == 0) {
                     throw protocol("commit route update is invalid");
                 }
             } else {
@@ -1344,7 +1344,7 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(spotId, "spotId");
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             if (spotGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
                 throw protocol("Spot route fence generations must be nonzero");
@@ -1379,7 +1379,7 @@ public final class ZLinkServiceM6BWireCodec {
         public ActorRouteFence {
             Objects.requireNonNull(actor, "actor");
             if (actor.generation() <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
                 throw protocol("Actor route fence generations must be nonzero");
@@ -1524,9 +1524,9 @@ public final class ZLinkServiceM6BWireCodec {
                 "sessionOwnerNodeRid");
             Objects.requireNonNull(sessionOwnerId, "sessionOwnerId");
             Objects.requireNonNull(sessionRid, "sessionRid");
-            if (sessionOwnerNodeGeneration <= 0
+            if (sessionOwnerNodeGeneration == 0
                 || sessionOwnerLeaseGeneration <= 0
-                || retiredBindingGeneration <= 0
+                || retiredBindingGeneration == 0
                 || sessionOwnerId.isBlank()) {
                 throw protocol(
                     "retired Session route fence generations must be nonzero");
@@ -1562,7 +1562,7 @@ public final class ZLinkServiceM6BWireCodec {
         public InstanceRouteFence {
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             Objects.requireNonNull(targetSpotId, "targetSpotId");
-            if (targetNodeGeneration <= 0
+            if (targetNodeGeneration == 0
                 || objectGeneration <= 0
                 || authorityOwnerGeneration <= 0
                 || leaseGeneration <= 0) {
@@ -2071,7 +2071,7 @@ public final class ZLinkServiceM6BWireCodec {
         }
 
         void nonzero(long value, String field) {
-            if (value <= 0) {
+            if (value == 0) {
                 throw protocol(field + " must be nonzero");
             }
             u64(value);
@@ -2161,7 +2161,7 @@ public final class ZLinkServiceM6BWireCodec {
         long nonzeroU64(String field) {
             require(Long.BYTES, field);
             long value = input.getLong();
-            if (value <= 0) {
+            if (value == 0) {
                 throw protocol(field + " must be nonzero");
             }
             return value;

@@ -351,6 +351,100 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
         }
     }
 
+    @Test
+    void fullRangeU64GenerationsAndDecimalCounterInteropLive()
+        throws Exception {
+        // Cross-language interop regression (java->dotnet relocation):
+        // 1) dotnet publishes lifecycleGeneration as a random full-range
+        //    u64 decimal string; java must read it back without a signed
+        //    NumberFormatException ("18282048283864059584").
+        // 2) the shared "zlink:v11:owner-counter" row must be a UTF-8
+        //    decimal string (dotnet/cpp/node parse it as one), never raw
+        //    big-endian bytes.
+        long lifecycleGeneration =
+            Long.parseUnsignedLong("18282048283864059584");
+        try (var handle = liveRepository("u64-interop-live")) {
+            ZLinkLocationRepository store = handle.repository();
+            var owner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                store.claimOwnerLease(
+                        "u64-owner-live", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+
+            var counterRow = assertInstanceOf(
+                systems.zlink.framework.locationprovider
+                    .ZLinkStoreReadFound.class,
+                handle.store().read(
+                        new systems.zlink.framework.locationprovider
+                            .ZLinkStoreKey("zlink:v11:owner-counter"),
+                        () -> false)
+                    .toCompletableFuture().get());
+            byte[] counterBytes = counterRow.value().bytes();
+            org.junit.jupiter.api.Assertions.assertArrayEquals(
+                Long.toString(owner.leaseGeneration() + 1).getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8),
+                counterBytes,
+                "owner counter must be a UTF-8 decimal string");
+            for (byte b : counterBytes) {
+                org.junit.jupiter.api.Assertions.assertTrue(
+                    b >= '0' && b <= '9',
+                    "owner counter must contain only ASCII digits");
+            }
+
+            var published = descriptor(
+                NODE_A, lifecycleGeneration, 1, owner, "player", 2, 1);
+            assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                        published, ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture().get().status());
+            var listed = store.listMeshNodes(
+                    "game", ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get()
+                .items().getFirst();
+            assertEquals(
+                lifecycleGeneration, listed.lifecycleGeneration());
+            assertEquals(
+                "18282048283864059584",
+                Long.toUnsignedString(listed.lifecycleGeneration()));
+        }
+
+        // Relocation Store round trip of a payload embedding the same
+        // full-range u64 decimal token (exercises the store's decimal
+        // parse helpers against live Redis).
+        String endpoint =
+            System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(
+            endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+        try (var blobs = new ZLinkRedisRelocationStore(
+            new ZLinkRedisRelocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(
+                    "zlink:u64-interop-live:" + UUID.randomUUID()))) {
+            var reference = new systems.zlink.framework.locationprovider
+                .ZLinkBlobReference("u64-blob-" + UUID.randomUUID());
+            byte[] payload = "18282048283864059584".getBytes(
+                java.nio.charset.StandardCharsets.UTF_8);
+            assertInstanceOf(
+                systems.zlink.framework.locationprovider
+                    .ZLinkBlobStored.class,
+                blobs.put(
+                        reference,
+                        payload,
+                        Duration.ofSeconds(30),
+                        () -> false)
+                    .toCompletableFuture().get());
+            var found = assertInstanceOf(
+                systems.zlink.framework.locationprovider
+                    .ZLinkBlobFound.class,
+                blobs.read(reference, () -> false)
+                    .toCompletableFuture().get());
+            org.junit.jupiter.api.Assertions.assertArrayEquals(
+                payload, found.bytes());
+        }
+    }
+
     private static LiveRepository liveRepository(String label) {
         String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
         assumeTrue(

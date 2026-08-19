@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.internal.locations;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
@@ -62,6 +63,84 @@ final class ZLinkProviderOwnerLeaseRepositoryTest {
         assertInstanceOf(
             ZLinkOwnerLeaseFound.class,
             repository.read("owner-a").toCompletableFuture().get());
+    }
+
+    @Test
+    void ownerCounterRowIsAUtf8DecimalString() throws Exception {
+        // Cross-language contract: dotnet, cpp, and node all read/write
+        // "zlink:v11:owner-counter" as a UTF-8 decimal string. The old
+        // 8-byte big-endian encoding broke dotnet's decimal parse
+        // (FormatException on raw bytes such as 0x0A / "\n").
+        var provider = new systems.zlink.framework.runtime.locations
+            .ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderOwnerLeaseRepository(provider);
+
+        assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            repository.claim("owner-a", Duration.ofMinutes(1))
+                .toCompletableFuture().get());
+
+        var counter = assertInstanceOf(
+            ZLinkStoreReadFound.class,
+            provider.read(
+                    new ZLinkStoreKey("zlink:v11:owner-counter"),
+                    () -> false)
+                .toCompletableFuture().get());
+        assertArrayEquals(
+            "2".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            counter.value().bytes());
+    }
+
+    @Test
+    void claimsAgainstPeerWrittenDecimalStringCounter() throws Exception {
+        // Mirrors the cpp golden conformance setup: another language
+        // pre-seeded the counter with the decimal string "5"; the next
+        // java claim must issue leaseGeneration 5 and store "6".
+        var provider = new systems.zlink.framework.runtime.locations
+            .ZLinkInMemoryProviderLocationStore();
+        var counterKey = new ZLinkStoreKey("zlink:v11:owner-counter");
+        assertInstanceOf(
+            ZLinkStoreWriteApplied.class,
+            provider.write(
+                    new ZLinkStoreWriteRequest(
+                        java.util.List.of(
+                            new ZLinkStoreMissingCondition(counterKey)),
+                        java.util.List.of(new ZLinkStorePut(
+                            counterKey,
+                            "5".getBytes(
+                                java.nio.charset.StandardCharsets.UTF_8),
+                            null))),
+                    () -> false)
+                .toCompletableFuture().get());
+
+        var repository = new ZLinkProviderOwnerLeaseRepository(provider);
+        var claimed = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            repository.claim("owner-a", Duration.ofMinutes(1))
+                .toCompletableFuture().get());
+        assertEquals(5, claimed.token().leaseGeneration());
+
+        var counter = assertInstanceOf(
+            ZLinkStoreReadFound.class,
+            provider.read(counterKey, () -> false)
+                .toCompletableFuture().get());
+        assertArrayEquals(
+            "6".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            counter.value().bytes());
+    }
+
+    @Test
+    void fullRangeU64LeaseGenerationRoundTripsThroughRecordCodec() {
+        long leaseGeneration =
+            Long.parseUnsignedLong("18282048283864059584");
+        var record = ZLinkOwnerLeaseRecordCodec.decode(
+            ZLinkOwnerLeaseRecordCodec.encode(
+                "owner-a", leaseGeneration));
+        assertEquals("owner-a", record.ownerId());
+        assertEquals(leaseGeneration, record.leaseGeneration());
+        assertEquals(
+            "18282048283864059584",
+            Long.toUnsignedString(record.leaseGeneration()));
     }
 
     private static final class AtomicProvider

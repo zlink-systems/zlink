@@ -253,7 +253,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
             }
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             if (objectGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
                 throw protocol("Message Follow route generations must be nonzero");
@@ -274,7 +274,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
             }
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             if (objectGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
                 throw protocol("Message Follow route generations must be nonzero");
@@ -334,7 +334,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
 
         long nonzeroU64(String field) {
             long value = bits64(field);
-            if (value <= 0) {
+            if (value == 0) {
                 throw protocol(field + " must be nonzero");
             }
             return value;

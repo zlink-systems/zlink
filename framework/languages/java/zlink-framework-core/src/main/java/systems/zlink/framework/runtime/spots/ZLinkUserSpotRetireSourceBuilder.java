@@ -175,7 +175,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName is required");
         }
-        if (localNodeGeneration <= 0) {
+        if (localNodeGeneration == 0) {
             throw new IllegalArgumentException(
                 "local node generation must be positive");
         }

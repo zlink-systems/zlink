@@ -57,7 +57,7 @@ public final class ZLinkMeshPeerAuthorityResolver
             long sourceNodeGeneration) {
         Objects.requireNonNull(meshName, "meshName");
         Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-        if (sourceNodeGeneration <= 0) {
+        if (sourceNodeGeneration == 0) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         Key key = new Key(

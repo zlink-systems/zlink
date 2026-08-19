@@ -136,7 +136,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                 generator.writeStringField("actorId", value.actorId());
                 generator.writeStringField(
                     "objectGeneration",
-                    Long.toString(value.objectGeneration()));
+                    Long.toUnsignedString(value.objectGeneration()));
                 generator.writeStringField("meshName", value.meshName());
                 generator.writeStringField(
                     "nodeRid",
@@ -190,7 +190,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                 try {
                     return new ActorRef(
                         actorId,
-                        Long.parseLong(objectGeneration),
+                        Long.parseUnsignedLong(objectGeneration),
                         meshName,
                         RoutingId.fromHex(nodeRid));
                 } catch (RuntimeException failure) {
@@ -227,7 +227,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                 generator.writeStringField("spotId", value.spotId());
                 generator.writeStringField(
                     "objectGeneration",
-                    Long.toString(value.objectGeneration()));
+                    Long.toUnsignedString(value.objectGeneration()));
                 generator.writeStringField("meshName", value.meshName());
                 generator.writeStringField("nodeRid", value.nodeRid().toHex());
                 generator.writeEndObject();
@@ -279,7 +279,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                 try {
                     return new SpotRef(
                         spotId,
-                        Long.parseLong(objectGeneration),
+                        Long.parseUnsignedLong(objectGeneration),
                         meshName,
                         RoutingId.fromHex(nodeRid));
                 } catch (RuntimeException failure) {

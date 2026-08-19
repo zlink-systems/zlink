@@ -536,7 +536,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         public PeerAuthorityFence {
             Objects.requireNonNull(
                 sourceNodeRid, "sourceNodeRid");
-            if (sourceNodeGeneration <= 0
+            if (sourceNodeGeneration == 0
                 || ownerLeaseGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "source node and owner lease generations must be positive");

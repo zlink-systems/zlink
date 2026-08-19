@@ -37,7 +37,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
         public CommittedActorTenure {
             Objects.requireNonNull(actor, "actor");
             if (actor.generation() <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
                 throw new IllegalArgumentException(

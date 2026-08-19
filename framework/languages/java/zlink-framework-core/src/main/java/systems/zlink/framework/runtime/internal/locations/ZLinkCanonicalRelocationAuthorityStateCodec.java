@@ -129,7 +129,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long relocationLow = body.u64();
         if (relocationHigh == 0 && relocationLow == 0) throw invalid();
         long aggregateGeneration = body.u64();
-        if (aggregateGeneration <= 0) throw invalid();
+        if (aggregateGeneration == 0) throw invalid();
         RoutingId sourceNodeRid = RoutingId.from(body.sized8());
         long sourceNodeGeneration = body.nonzeroU64();
         String sourceOwnerId = body.text8();
@@ -493,7 +493,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         int u32(){ long v=u32Unsigned(); if(v>Integer.MAX_VALUE) throw invalid(); return (int)v; }
         long u32Unsigned(){ require(4); long v=Integer.toUnsignedLong(ByteBuffer.wrap(bytes,offset,4).order(ByteOrder.BIG_ENDIAN).getInt()); offset+=4; return v; }
         long u64(){ require(8); long v=ByteBuffer.wrap(bytes,offset,8).order(ByteOrder.BIG_ENDIAN).getLong(); offset+=8; return v; }
-        long nonzeroU64(){ long v=u64(); if(v<=0) throw invalid(); return v; }
+        long nonzeroU64(){ long v=u64(); if(v==0) throw invalid(); return v; }
         long ordinalOrZero(){ long v=u64(); if(v<0) throw invalid(); return v; }
         String text8(){ return text(sized8()); }
         String text16(){ int n=u16(); if(n==0) throw invalid(); return text(take(n)); }

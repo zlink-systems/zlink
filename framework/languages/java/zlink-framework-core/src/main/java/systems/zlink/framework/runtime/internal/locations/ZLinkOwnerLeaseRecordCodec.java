@@ -39,7 +39,7 @@ final class ZLinkOwnerLeaseRecordCodec {
         ObjectNode root = JSON.createObjectNode();
         root.put("recordVersion", 1);
         root.put("ownerId", ownerId);
-        root.put("leaseGeneration", Long.toString(leaseGeneration));
+        root.put("leaseGeneration", Long.toUnsignedString(leaseGeneration));
         try {
             return JSON.writeValueAsBytes(root);
         } catch (JsonProcessingException error) {
@@ -61,9 +61,11 @@ final class ZLinkOwnerLeaseRecordCodec {
                     "Location Store owner lease record is missing"
                         + " ownerId");
             }
-            long leaseGeneration = Long.parseLong(
+            // Full-range unsigned parse: peers may issue 64-bit generation
+            // values with bit 63 set, which Long.parseLong rejects.
+            long leaseGeneration = Long.parseUnsignedLong(
                 root.path("leaseGeneration").asText());
-            if (leaseGeneration <= 0) {
+            if (leaseGeneration == 0) {
                 throw new IllegalStateException(
                     "Location Store owner lease generation is invalid");
             }

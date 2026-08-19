@@ -31,7 +31,7 @@ public record ZLinkClientServerServerDescriptor(
             securityIdentity,
             "securityIdentity");
         ownerId = requireText(ownerId, "ownerId");
-        if (lifecycleGeneration <= 0
+        if (lifecycleGeneration == 0
             || descriptorRevision <= 0
             || leaseGeneration <= 0) {
             throw new IllegalArgumentException(

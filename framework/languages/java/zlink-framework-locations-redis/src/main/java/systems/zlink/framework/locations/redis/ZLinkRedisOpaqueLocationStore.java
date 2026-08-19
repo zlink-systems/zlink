@@ -852,7 +852,13 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         if (value instanceof Number number) {
             return number.longValue();
         }
-        return Long.parseLong(text(value));
+        // Full-range u64 decimal strings (bit 63 set) are legal wire
+        // values; Long.parseLong rejects them. Signed values (e.g. "-1"
+        // no-retention sentinels) keep the signed parse.
+        String text = text(value);
+        return text.startsWith("-")
+            ? Long.parseLong(text)
+            : Long.parseUnsignedLong(text);
     }
 
     private static Instant instant(Object value) {

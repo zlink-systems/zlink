@@ -19,7 +19,7 @@ public record ZLinkPlacementAllocation(
             throw new IllegalArgumentException(
                 "stableType must not be blank");
         }
-        if (descriptorLifecycleGeneration <= 0) {
+        if (descriptorLifecycleGeneration == 0) {
             throw new IllegalArgumentException(
                 "descriptorLifecycleGeneration must be positive");
         }

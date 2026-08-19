@@ -1,7 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
-import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -219,17 +219,28 @@ final class ZLinkProviderOwnerLeaseRepository {
             });
     }
 
+    // Cross-language counter row: dotnet, cpp, and node all read/write
+    // "zlink:v11:owner-counter" as a UTF-8 decimal string (no sign, no
+    // whitespace). Java previously wrote 8 raw big-endian bytes, which the
+    // other runtimes could not parse (binary bytes such as 0x0A rendered
+    // as "\n" in their decimal parsers).
     private static byte[] encodeCounter(long value) {
-        return ByteBuffer.allocate(Long.BYTES).putLong(value).array();
+        return Long.toString(value).getBytes(StandardCharsets.UTF_8);
     }
 
     private static long decodeCounter(byte[] bytes) {
-        if (bytes.length != Long.BYTES) {
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        long value;
+        try {
+            value = Long.parseUnsignedLong(text);
+        } catch (NumberFormatException failure) {
             throw new IllegalStateException(
-                "Location Store owner counter is invalid");
+                "Location Store owner counter is invalid", failure);
         }
-        long value = ByteBuffer.wrap(bytes).getLong();
         if (value <= 0) {
+            // 0 is never issued; values past 2^63-1 are outside the
+            // spec's counter range (generation exhaustion caps at
+            // 2^63-1), so a signed-negative bit pattern is invalid too.
             throw new IllegalStateException(
                 "Location Store owner counter is invalid");
         }

@@ -221,7 +221,13 @@ public final class ZLinkRedisRelocationStore
         if (value instanceof Number number) {
             return number.longValue();
         }
-        return Long.parseLong(string(value));
+        // Full-range u64 decimal strings (bit 63 set) are legal wire
+        // values; Long.parseLong rejects them. Signed values (e.g. "-1"
+        // sentinels) keep the signed parse.
+        String text = string(value);
+        return text.startsWith("-")
+            ? Long.parseLong(text)
+            : Long.parseUnsignedLong(text);
     }
 
     private static String string(Object value) {

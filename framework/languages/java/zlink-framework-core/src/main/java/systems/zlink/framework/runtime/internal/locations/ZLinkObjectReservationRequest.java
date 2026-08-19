@@ -34,7 +34,7 @@ public record ZLinkObjectReservationRequest(
             creationIntentHash,
             "creationIntentHash").clone();
         Objects.requireNonNull(targetDescriptor, "targetDescriptor");
-        if (targetDescriptorLifecycleGeneration <= 0) {
+        if (targetDescriptorLifecycleGeneration == 0) {
             throw new IllegalArgumentException(
                 "targetDescriptorLifecycleGeneration must be positive");
         }

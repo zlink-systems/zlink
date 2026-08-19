@@ -252,8 +252,9 @@ final class ZLinkProviderDescriptorRepository {
                                 == leaseGeneration
                             && identity.lifecycleGeneration()
                                 == lifecycleGeneration
-                            && descriptorRevision
-                                > identity.descriptorRevision()
+                            && Long.compareUnsigned(
+                                    descriptorRevision,
+                                    identity.descriptorRevision()) > 0
                             && immutableFieldsEqual.test(
                                 stored,
                                 descriptor);
@@ -494,10 +495,10 @@ final class ZLinkProviderDescriptorRepository {
         root.put("ownerId", descriptor.ownerId());
         root.put(
             "leaseGeneration",
-            Long.toString(descriptor.leaseGeneration()));
+            Long.toUnsignedString(descriptor.leaseGeneration()));
         root.put(
             "descriptorRevision",
-            Long.toString(descriptor.descriptorRevision()));
+            Long.toUnsignedString(descriptor.descriptorRevision()));
         root.set("descriptor", encodeMeshNodePayload(descriptor));
         try {
             return CANONICAL_JSON.writeValueAsBytes(root);
@@ -514,10 +515,10 @@ final class ZLinkProviderDescriptorRepository {
         node.put("routingIdHex", descriptor.rid().toHex());
         node.put(
             "lifecycleGeneration",
-            Long.toString(descriptor.lifecycleGeneration()));
+            Long.toUnsignedString(descriptor.lifecycleGeneration()));
         node.put(
             "descriptorRevision",
-            Long.toString(descriptor.descriptorRevision()));
+            Long.toUnsignedString(descriptor.descriptorRevision()));
         node.put("endpoint", descriptor.endpoint());
         if (descriptor.entrySpotId().isPresent()) {
             node.put("entrySpotId", descriptor.entrySpotId().get());
@@ -532,7 +533,7 @@ final class ZLinkProviderDescriptorRepository {
         node.set("channelWeights", channelWeights);
         node.put(
             "applicationVersion",
-            Long.toString(descriptor.applicationVersion()));
+            Long.toUnsignedString(descriptor.applicationVersion()));
         ArrayNode capabilities = CANONICAL_JSON.createArrayNode();
         descriptor.objectCapabilities().forEach(capability -> {
             ObjectNode encoded = CANONICAL_JSON.createObjectNode();
@@ -565,7 +566,7 @@ final class ZLinkProviderDescriptorRepository {
         node.put("ownerId", descriptor.ownerId());
         node.put(
             "leaseGeneration",
-            Long.toString(descriptor.leaseGeneration()));
+            Long.toUnsignedString(descriptor.leaseGeneration()));
         node.put(
             "updatedAtEpochMs",
             Long.toString(descriptor.updatedAt().toEpochMilli()));
@@ -645,13 +646,13 @@ final class ZLinkProviderDescriptorRepository {
         return new ZLinkMeshNodeDescriptor(
             descriptor.path("meshName").asText(),
             RoutingId.fromHex(descriptor.path("routingIdHex").asText()),
-            Long.parseLong(
+            Long.parseUnsignedLong(
                 descriptor.path("lifecycleGeneration").asText()),
-            Long.parseLong(
+            Long.parseUnsignedLong(
                 descriptor.path("descriptorRevision").asText()),
             descriptor.path("endpoint").asText(),
             channelWeights,
-            Long.parseLong(
+            Long.parseUnsignedLong(
                 descriptor.path("applicationVersion").asText()),
             capabilities,
             objectRoleFromWire(descriptor.path("objectRole").asText()),
@@ -669,7 +670,7 @@ final class ZLinkProviderDescriptorRepository {
             stateFromWire(descriptor.path("state").asText()),
             descriptor.path("securityIdentity").asText(),
             descriptor.path("ownerId").asText(),
-            Long.parseLong(descriptor.path("leaseGeneration").asText()),
+            Long.parseUnsignedLong(descriptor.path("leaseGeneration").asText()),
             Instant.ofEpochMilli(
                 Long.parseLong(
                     descriptor.path("updatedAtEpochMs").asText())));
@@ -785,19 +786,19 @@ final class ZLinkProviderDescriptorRepository {
         root.put("ownerId", descriptor.ownerId());
         root.put(
             "leaseGeneration",
-            Long.toString(descriptor.leaseGeneration()));
+            Long.toUnsignedString(descriptor.leaseGeneration()));
         root.put(
             "descriptorRevision",
-            Long.toString(descriptor.descriptorRevision()));
+            Long.toUnsignedString(descriptor.descriptorRevision()));
         ObjectNode payload = CANONICAL_JSON.createObjectNode();
         payload.put("channelName", descriptor.channelName());
         payload.put("serverRoutingIdHex", descriptor.serverRid().toHex());
         payload.put(
             "lifecycleGeneration",
-            Long.toString(descriptor.lifecycleGeneration()));
+            Long.toUnsignedString(descriptor.lifecycleGeneration()));
         payload.put(
             "descriptorRevision",
-            Long.toString(descriptor.descriptorRevision()));
+            Long.toUnsignedString(descriptor.descriptorRevision()));
         payload.put("endpoint", descriptor.endpoint());
         payload.put("weight", descriptor.weight());
         payload.put("state", stateWire(descriptor.state()));
@@ -805,7 +806,7 @@ final class ZLinkProviderDescriptorRepository {
         payload.put("ownerId", descriptor.ownerId());
         payload.put(
             "leaseGeneration",
-            Long.toString(descriptor.leaseGeneration()));
+            Long.toUnsignedString(descriptor.leaseGeneration()));
         payload.put(
             "updatedAtEpochMs",
             Long.toString(descriptor.updatedAt().toEpochMilli()));
@@ -840,16 +841,16 @@ final class ZLinkProviderDescriptorRepository {
                 descriptor.path("channelName").asText(),
                 RoutingId.fromHex(
                     descriptor.path("serverRoutingIdHex").asText()),
-                Long.parseLong(
+                Long.parseUnsignedLong(
                     descriptor.path("lifecycleGeneration").asText()),
-                Long.parseLong(
+                Long.parseUnsignedLong(
                     descriptor.path("descriptorRevision").asText()),
                 descriptor.path("endpoint").asText(),
                 descriptor.path("weight").asInt(),
                 stateFromWire(descriptor.path("state").asText()),
                 descriptor.path("securityIdentity").asText(),
                 descriptor.path("ownerId").asText(),
-                Long.parseLong(
+                Long.parseUnsignedLong(
                     descriptor.path("leaseGeneration").asText()),
                 Instant.ofEpochMilli(
                     Long.parseLong(
@@ -867,27 +868,27 @@ final class ZLinkProviderDescriptorRepository {
         root.put("ownerId", descriptor.ownerId());
         root.put(
             "leaseGeneration",
-            Long.toString(descriptor.leaseGeneration()));
+            Long.toUnsignedString(descriptor.leaseGeneration()));
         root.put(
             "descriptorRevision",
-            Long.toString(descriptor.descriptorRevision()));
+            Long.toUnsignedString(descriptor.descriptorRevision()));
         ObjectNode payload = CANONICAL_JSON.createObjectNode();
         payload.put("channelName", descriptor.channelName());
         payload.put(
             "publisherRoutingIdHex", descriptor.publisherRid().toHex());
         payload.put(
             "lifecycleGeneration",
-            Long.toString(descriptor.lifecycleGeneration()));
+            Long.toUnsignedString(descriptor.lifecycleGeneration()));
         payload.put(
             "descriptorRevision",
-            Long.toString(descriptor.descriptorRevision()));
+            Long.toUnsignedString(descriptor.descriptorRevision()));
         payload.put("endpoint", descriptor.endpoint());
         payload.put("state", stateWire(descriptor.state()));
         payload.put("securityIdentity", descriptor.securityIdentity());
         payload.put("ownerId", descriptor.ownerId());
         payload.put(
             "leaseGeneration",
-            Long.toString(descriptor.leaseGeneration()));
+            Long.toUnsignedString(descriptor.leaseGeneration()));
         payload.put(
             "updatedAtEpochMs",
             Long.toString(descriptor.updatedAt().toEpochMilli()));
@@ -922,15 +923,15 @@ final class ZLinkProviderDescriptorRepository {
                 descriptor.path("channelName").asText(),
                 RoutingId.fromHex(
                     descriptor.path("publisherRoutingIdHex").asText()),
-                Long.parseLong(
+                Long.parseUnsignedLong(
                     descriptor.path("lifecycleGeneration").asText()),
-                Long.parseLong(
+                Long.parseUnsignedLong(
                     descriptor.path("descriptorRevision").asText()),
                 descriptor.path("endpoint").asText(),
                 stateFromWire(descriptor.path("state").asText()),
                 descriptor.path("securityIdentity").asText(),
                 descriptor.path("ownerId").asText(),
-                Long.parseLong(
+                Long.parseUnsignedLong(
                     descriptor.path("leaseGeneration").asText()),
                 Instant.ofEpochMilli(
                     Long.parseLong(

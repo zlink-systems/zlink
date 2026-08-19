@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.internal.locations;
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -1946,14 +1945,14 @@ final class ZLinkProviderAuthorityRepository {
             "payload",
             Base64.getEncoder().encodeToString(value.payload()));
         root.put(
-            "objectGeneration", Long.toString(value.objectGeneration()));
+            "objectGeneration", Long.toUnsignedString(value.objectGeneration()));
         root.put(
             "authorityOwnerGeneration",
-            Long.toString(value.authorityOwnerGeneration()));
+            Long.toUnsignedString(value.authorityOwnerGeneration()));
         root.put("ownerId", value.ownerId());
         root.put(
             "ownerLeaseGeneration",
-            Long.toString(value.ownerLeaseGeneration()));
+            Long.toUnsignedString(value.ownerLeaseGeneration()));
         root.set("allocation", encodeAllocation(value.allocation()));
         if (value.pendingCreation().isPresent()) {
             root.set(
@@ -1990,7 +1989,7 @@ final class ZLinkProviderAuthorityRepository {
         node.set("descriptor", descriptor);
         node.put(
             "descriptorLifecycleGeneration",
-            Long.toString(allocation.descriptorLifecycleGeneration()));
+            Long.toUnsignedString(allocation.descriptorLifecycleGeneration()));
         node.set(
             "capacity", encodeCapacityBundle(allocation.capacityBundle()));
         return node;
@@ -2042,7 +2041,7 @@ final class ZLinkProviderAuthorityRepository {
                 aggregate.aggregateId().getLeastSignificantBits());
             marker.put(
                 "aggregateGeneration",
-                Long.toString(aggregate.aggregateGeneration()));
+                Long.toUnsignedString(aggregate.aggregateGeneration()));
             marker.put("index", aggregate.index());
             marker.put(
                 "expectedStoreVersion", aggregate.expectedStoreVersion());
@@ -2050,7 +2049,7 @@ final class ZLinkProviderAuthorityRepository {
                 "ownerTransition", aggregate.ownerTransition().name());
             marker.put(
                 "targetAuthorityOwnerGeneration",
-                Long.toString(aggregate.targetAuthorityOwnerGeneration()));
+                Long.toUnsignedString(aggregate.targetAuthorityOwnerGeneration()));
             marker.put(
                 "authorityPayloadSha256",
                 HexFormat.of().formatHex(
@@ -2181,12 +2180,12 @@ final class ZLinkProviderAuthorityRepository {
             }
             byte[] payload = Base64.getDecoder().decode(
                 root.path("payload").asText());
-            long objectGeneration = Long.parseLong(
+            long objectGeneration = Long.parseUnsignedLong(
                 root.path("objectGeneration").asText());
-            long ownerGeneration = Long.parseLong(
+            long ownerGeneration = Long.parseUnsignedLong(
                 root.path("authorityOwnerGeneration").asText());
             String ownerId = root.path("ownerId").asText();
-            long ownerLeaseGeneration = Long.parseLong(
+            long ownerLeaseGeneration = Long.parseUnsignedLong(
                 root.path("ownerLeaseGeneration").asText());
             ZLinkPlacementAllocation allocation =
                 decodeAllocation(root.path("allocation"));
@@ -2237,7 +2236,7 @@ final class ZLinkProviderAuthorityRepository {
                 descriptor.path("meshName").asText(),
                 RoutingId.fromHex(
                     descriptor.path("routingIdHex").asText())),
-            Long.parseLong(
+            Long.parseUnsignedLong(
                 node.path("descriptorLifecycleGeneration").asText()),
             decodeCapacityBundle(node.path("capacity")));
     }
@@ -2275,12 +2274,12 @@ final class ZLinkProviderAuthorityRepository {
             new UUID(
                 node.path("aggregateIdMostSigBits").asLong(),
                 node.path("aggregateIdLeastSigBits").asLong()),
-            Long.parseLong(node.path("aggregateGeneration").asText()),
+            Long.parseUnsignedLong(node.path("aggregateGeneration").asText()),
             node.path("index").asInt(),
             node.path("expectedStoreVersion").asText(),
             ZLinkAuthorityGenerationTransition.valueOf(
                 node.path("ownerTransition").asText()),
-            Long.parseLong(
+            Long.parseUnsignedLong(
                 node.path("targetAuthorityOwnerGeneration").asText()),
             HexFormat.of().parseHex(
                 node.path("authorityPayloadSha256").asText()),
@@ -2465,17 +2464,22 @@ final class ZLinkProviderAuthorityRepository {
         return ZLinkOwnerLeaseRecordCodec.decode(bytes).leaseGeneration();
     }
 
+    // Counter rows are stored as UTF-8 decimal strings, matching the
+    // cross-language owner-counter convention (dotnet/cpp/node parse
+    // counters with a decimal-string reader; raw big-endian bytes are
+    // unreadable to them).
     private static byte[] encodeLong(long value) {
-        return ByteBuffer.allocate(Long.BYTES)
-            .putLong(value).array();
+        return Long.toString(value).getBytes(StandardCharsets.UTF_8);
     }
 
     private static long decodeLong(byte[] bytes) {
-        if (bytes.length != Long.BYTES) {
+        try {
+            return Long.parseUnsignedLong(
+                new String(bytes, StandardCharsets.UTF_8));
+        } catch (NumberFormatException failure) {
             throw new IllegalStateException(
-                "Location Store counter is invalid");
+                "Location Store counter is invalid", failure);
         }
-        return ByteBuffer.wrap(bytes).getLong();
     }
 
     private static systems.zlink.framework.locationprovider

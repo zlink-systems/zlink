@@ -14,7 +14,7 @@ public record ZLinkCreationOperationIdentity(
     long operationIdLow) {
     public ZLinkCreationOperationIdentity {
         Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-        if (sourceLifecycleGeneration <= 0) {
+        if (sourceLifecycleGeneration == 0) {
             throw new IllegalArgumentException(
                 "sourceLifecycleGeneration must be positive");
         }

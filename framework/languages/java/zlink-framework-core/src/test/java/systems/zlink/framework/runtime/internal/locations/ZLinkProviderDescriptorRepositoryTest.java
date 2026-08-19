@@ -117,6 +117,73 @@ class ZLinkProviderDescriptorRepositoryTest {
         }
     }
 
+    @Test
+    void fullRangeU64LifecycleGenerationRoundTripsThroughStore()
+        throws Exception {
+        // dotnet issues lifecycleGeneration as a random full-range
+        // unsigned 64-bit token (spec 13 section 7.1); values with bit 63
+        // set must survive the decimal-string JSON encoding and the
+        // signed-long parse on read (live failure:
+        // "For input string: \"18282048283864059584\"").
+        long lifecycleGeneration =
+            Long.parseUnsignedLong("18282048283864059584");
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var owner = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            owners.claim("owner-a", Duration.ofMinutes(1))
+                .toCompletableFuture().get()).token();
+
+        var published = new ZLinkMeshNodeDescriptor(
+            "game",
+            RoutingId.from("node-a"),
+            lifecycleGeneration,
+            1,
+            "tcp://127.0.0.1:7000",
+            Map.of(),
+            1,
+            List.of(),
+            ZLinkMeshNodeObjectRole.SERVER,
+            Optional.of(
+                "node-a-entry-00000000-0000-4000-8000-000000000001"),
+            100,
+            new ZLinkPlacementCapacity(
+                new ZLinkCapacityUsage(0, 0, 100),
+                new ZLinkCapacityUsage(0, 0, 100),
+                List.of()),
+            new ZLinkActivationConcurrency(0, 64),
+            Optional.empty(),
+            ZLinkFrameworkRuntimeState.SERVING,
+            "security-a",
+            owner.ownerId(),
+            owner.leaseGeneration(),
+            Instant.parse("2026-07-29T00:00:00Z"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    published,
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        var listed = descriptors.listMeshNodes(
+                "game",
+                ZLinkPageRequest.firstPage())
+            .toCompletableFuture().get()
+            .items().getFirst();
+        assertEquals(lifecycleGeneration, listed.lifecycleGeneration());
+        assertEquals(
+            "18282048283864059584",
+            Long.toUnsignedString(listed.lifecycleGeneration()));
+
+        var read = descriptors.readMeshNode(
+                new ZLinkMeshNodeDescriptorKey("game", published.rid()),
+                () -> false)
+            .toCompletableFuture().get()
+            .orElseThrow();
+        assertEquals(lifecycleGeneration, read.lifecycleGeneration());
+    }
+
     private static ZLinkMeshNodeDescriptor descriptor(
         ZLinkLocationOwnerToken owner,
         long revision) {
