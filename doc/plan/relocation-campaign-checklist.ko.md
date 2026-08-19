@@ -333,8 +333,10 @@
       (제거 진행·conformance 재검증 중), node=사설 JSON v3(projection 레이어
       구현 중), cpp=custom recoverable wrapper+magic(별도 슬라이스 필요),
       스펙 28 §4.2는 형식 미명시(공백 — W-5에서 명문화 진행 중).
-      **현재 진행(2026-08-19 야간)**: ⓛ dotnet conformance hang(fallback-commit
-      테스트) 전용 근본 규명 — 덤프 분석 잡 가동 ⓜ node projection 2라운드 —
+      **현재 진행(2026-08-19 야간)**: ⓛ dotnet conformance hang → **해소·wire
+      수렴 커밋 `18598a85db`**: all-zero pending 센티널을 fence로 오독→거부→
+      rollback replay 파킹의 위장 hang. ZLDR 완전 제거, 스키마 stream이 wire,
+      conformance 무행+게이트 인가 실패만 ⓜ node projection 2라운드 —
       판정: 스키마 무변경, target이 store에서 정렬 authority inventory 재구성
       (participantId=정렬 index+1, java 기준)하는 resolver 구현 중 ⓝ cpp
       envelope 슬라이스는 W-3(생성 코덱 스왑)에 흡수 — 별도 수작업 안 함.
