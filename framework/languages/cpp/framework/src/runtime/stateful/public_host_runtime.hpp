@@ -482,6 +482,28 @@ using actor_create_operation_completion_t = std::function<void (
   protocol::actor_create_reply_t,
   std::optional<protocol::application_payload_t>)>;
 
+// actorJoin(28): mirrors actor_create_operation_*_t's shape. The target
+// callback runs the real admission (spot lookup, actor factory/type
+// resolution, join) and reports the outcome through the completion
+// callback, which the host turns into the wire reply via
+// _transport->reply_actor_join.
+struct actor_join_operation_result_t
+{
+    protocol::actor_join_result_t join_result =
+      protocol::actor_join_result_t::rejected;
+    std::optional<protocol::actor_join_reply_spot_ref_t> spot;
+    std::uint64_t membership_epoch = 0;
+    std::uint32_t receive_chunk_limit_bytes = 0;
+};
+
+using actor_join_operation_target_completion_t = std::function<void (
+  actor_join_operation_result_t)>;
+
+using actor_join_operation_target_t = std::function<
+  void (const protocol::actor_join_request_t &,
+        const std::optional<protocol::application_payload_t> &,
+        actor_join_operation_target_completion_t)>;
+
 using user_spot_close_completion_t = std::function<void (
   foundation::operation_terminal_t,
   protocol::user_spot_close_reply_t)>;
@@ -753,6 +775,8 @@ class public_host_runtime_t :
       peer_readiness_resolver_t resolver);
     void configure_actor_create_operations (
       actor_create_operation_target_t target);
+    void configure_actor_join_operations (
+      actor_join_operation_target_t target);
     void configure_instance_spot_operations (
       std::shared_ptr<zlink::framework::location_repository_t> store,
       std::shared_ptr<stateful::relocation_store_port_t> relocations,
@@ -1028,6 +1052,7 @@ class public_host_runtime_t :
     std::mutex _route_cache_mutex;
     std::map<std::string, cached_spot_route_fence_t> _spot_route_fences;
     actor_create_operation_target_t _actor_create_target;
+    actor_join_operation_target_t _actor_join_target;
     instance_spot_activation_materializer_t
       _instance_spot_materializer;
     std::shared_ptr<stateful::relocation_store_port_t>

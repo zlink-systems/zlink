@@ -528,6 +528,99 @@ void mesh_node_runtime_t::start ()
     }
     if (_actor_create_target)
         node->configure_actor_create_operations (_actor_create_target);
+    // actorJoin(28) receiver admission: self-contained (unlike actorCreate,
+    // it needs no external Location Store / materializer), so it is always
+    // wired here rather than gated on external configuration. It requires
+    // no admission logic of its own beyond what spot_node_runtime_t already
+    // does inside join_actor_to_spot_erased / join_actor_to_entry_spot_erased
+    // (identity-keyed parking via try_begin_local — spec 15's newest-attempt-
+    // wins comes free from there). actor_context is default-constructed:
+    // this path does not run bind_actor_route the way the JSON
+    // spot_actor_join_route_request_t path does, so an admitted actor here
+    // is not yet routable by a subsequent actorSend/actorRequest, and a
+    // factory that requires create_context_instance fails cleanly
+    // (not_configured -> rejected) rather than being admitted half-wired.
+    // Both are acceptable only because nothing yet selects this wire path in
+    // production (the originate fence-gate is a separate, later increment).
+    node->configure_actor_join_operations (
+      [state = _state] (const runtime::protocol::actor_join_request_t &request,
+                        const std::optional<runtime::protocol::application_payload_t> &payload,
+                        host::actor_join_operation_target_completion_t completion) {
+          host::actor_join_operation_result_t rejected;
+          try {
+              spot_node_runtime_t spot (state->spot_state);
+              // The wire body carries no stable type (unlike actorCreate's
+              // stableType) and no transfer/source-spot bookkeeping (unlike
+              // the JSON admission route packet) -- spec 15's admission
+              // semantics key on actor identity, and this node must already
+              // know that identity (via a prior actorCreate or join) to
+              // admit it here.
+              const auto actor_type =
+                spot.resolve_actor_type (request.actor.actor_id);
+              if (!actor_type) {
+                  completion (rejected);
+                  return;
+              }
+              const auto actor_ref =
+                ::zlink::framework::detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (
+                    zlink::routing_id_t::from (
+                      request.actor.target_node_routing_id)
+                      .to_string ()),
+                  *actor_type, request.actor.actor_id,
+                  request.actor.object_generation);
+              const auto payload_message =
+                payload ? zlink::message_t::from (payload->payload)
+                        : zlink::message_t{};
+              spot_id_t joined_spot_id;
+              result_t<detail::actor_join_reply_t> joined =
+                result_t<detail::actor_join_reply_t>::failure (
+                  framework_error_kind_t::not_found, "");
+              if (request.entry) {
+                  const auto entry_spot_id = spot.resolve_entry_spot_id ();
+                  if (!entry_spot_id) {
+                      completion (rejected);
+                      return;
+                  }
+                  joined_spot_id = *entry_spot_id;
+                  joined = spot.join_actor_to_entry_spot_erased (
+                    actor_ref,
+                    node_rid_t::from_string (state->routing_id->to_string ()),
+                    payload_message, std::nullopt,
+                    spot_node_runtime_t::default_actor_context ());
+              } else {
+                  joined_spot_id = spot_id_t (request.target_spot.spot_id);
+                  joined = spot.join_actor_to_spot_erased (
+                    actor_ref, joined_spot_id, payload_message, std::nullopt,
+                    spot_node_runtime_t::default_actor_context (), 0,
+                    request.correlation);
+              }
+              if (!joined || joined.value ().result_code != 0) {
+                  completion (rejected);
+                  return;
+              }
+              const auto membership_epoch =
+                spot.resolve_actor_membership_epoch (request.actor.actor_id);
+              const auto spot_generation = spot.resolve_spot_generation (
+                *state->routing_id, joined_spot_id);
+              if (!membership_epoch || !spot_generation
+                  || *spot_generation == 0) {
+                  completion (rejected);
+                  return;
+              }
+              host::actor_join_operation_result_t result;
+              result.join_result = runtime::protocol::actor_join_result_t::accepted;
+              result.spot = runtime::protocol::actor_join_reply_spot_ref_t{
+                joined_spot_id, *spot_generation};
+              result.membership_epoch = *membership_epoch;
+              result.receive_chunk_limit_bytes = static_cast<std::uint32_t> (
+                detail::spot_actor_join_advertised_receive_chunk_limit_bytes);
+              completion (result);
+          }
+          catch (...) {
+              completion (rejected);
+          }
+      });
     if (_instance_spot_materializer) {
         node->configure_instance_spot_operations (_user_spot_store, _instance_spot_relocations,
                                                   _instance_spot_owner,
@@ -2123,6 +2216,17 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
                                 std::move (bound_session_node_rid),
                                 std::move (bound_session_rid)});
     state->source_spot = completion_source_spot;
+    // actorJoin(28) fence-gate: wire only when this node has explicitly
+    // observed the target Spot's authority fence AND the target peer is
+    // admitted at exactly that observed lifecycle generation. Defaults (and
+    // today, always resolves) to the existing JSON admission path below --
+    // see observe_spot_authority's doc comment for why.
+    if (const auto observed = observed_spot_authority (
+          target.node_rid, target.spot_id, target.object_generation);
+        observed && has_admitted_peer (target.node_rid, observed->target_node_generation)) {
+        co_return co_await admit_remote_application_actor_join_via_wire (
+          std::move (state), *observed);
+    }
     co_return co_await join_remote_application_actor_to_spot (std::move (state));
 }
 
@@ -2254,6 +2358,132 @@ task_t<bool> mesh_node_runtime_t::abort_remote_actor_join_seal (
           s->session_seal.checkpoints, none,
           runtime::protocol::session_relocation_route_action_t::abort);
     } catch (...) { co_return false; }
+}
+
+namespace
+{
+std::string observed_spot_authority_key (const zlink::routing_id_t &target_node_rid,
+                                         const std::string &target_spot_id,
+                                         std::uint64_t object_generation)
+{
+    return target_node_rid.to_hex () + "|" + target_spot_id + "|"
+           + std::to_string (object_generation);
+}
+} // namespace
+
+void mesh_node_runtime_t::observe_spot_authority (
+  const zlink::routing_id_t &target_node_rid, const std::string &target_spot_id,
+  std::uint64_t object_generation, std::uint64_t target_node_generation,
+  std::uint64_t authority_owner_generation, std::uint64_t owner_lease_generation)
+{
+    if (target_spot_id.empty () || object_generation == 0 || target_node_generation == 0
+        || authority_owner_generation == 0 || owner_lease_generation == 0)
+        return;
+    std::lock_guard lock (_observed_spot_authority_mutex);
+    _observed_spot_authorities[observed_spot_authority_key (
+      target_node_rid, target_spot_id, object_generation)] = observed_spot_authority_t{
+      target_node_generation, authority_owner_generation, owner_lease_generation};
+}
+
+std::optional<mesh_node_runtime_t::observed_spot_authority_t>
+mesh_node_runtime_t::observed_spot_authority (const zlink::routing_id_t &target_node_rid,
+                                              const std::string &target_spot_id,
+                                              std::uint64_t object_generation) const
+{
+    std::lock_guard lock (_observed_spot_authority_mutex);
+    const auto found = _observed_spot_authorities.find (
+      observed_spot_authority_key (target_node_rid, target_spot_id, object_generation));
+    if (found == _observed_spot_authorities.end ())
+        return std::nullopt;
+    return found->second;
+}
+
+// actorJoin(28) originate fence-gate: only taken when (a) this node has
+// explicitly observed the target Spot's authority fence via
+// observe_spot_authority -- nothing calls that yet, so this is closed by
+// construction on every current production path -- and (b) the target peer
+// is admitted at exactly that observed lifecycle generation. request.
+// correlation is minted from the same monotonic counter the JSON path's
+// completion_operation_id_low already uses, forced odd/nonzero the same
+// way completion_operation_id_high is (encode_actor_join_request throws on
+// correlation == 0).
+task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_join_via_wire (
+  std::shared_ptr<remote_actor_join_state_t> s, observed_spot_authority_t observed)
+{
+    const auto source = _node->resolve_actor (s->actor);
+    if (!source || source->authority_owner_generation == 0) {
+        co_return fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (
+            framework_error_kind_t::not_found,
+            "source Framework Actor authority is unavailable"),
+          "source Framework Actor authority is unavailable");
+    }
+    // The wire actor-route-fence's ownerLeaseGeneration fences the *local
+    // node's* current lease (cpp analog of dotnet's _localOwnerLeaseGeneration
+    // read at ActorJoinRequest send time), not a per-actor lease -- the JSON
+    // admission path (spot_actor_admission_route_request_t) has no per-actor
+    // lease field at this phase either.
+    const auto local_owner =
+      _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
+    if (!local_owner || local_owner->lease_generation <= 0) {
+        co_return fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (
+            framework_error_kind_t::unavailable,
+            "local owner lease is unavailable for wire Actor join"),
+          "local owner lease is unavailable for wire Actor join");
+    }
+    const auto local = _node->status ();
+    // deliver_remote_actor_join / spot's completion delivery requires a
+    // non-zero completion operation id, exactly like the JSON path's
+    // admit_remote_application_actor_join sets before it can send its
+    // request.
+    s->completion_operation_id_low =
+      _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
+    s->completion_operation_id_high =
+      static_cast<std::uint64_t> (std::hash<std::string>{} (_state->mesh_name)) | 1ULL;
+    const auto correlation = (s->completion_operation_id_low << 1) | 1ULL;
+    const runtime::protocol::actor_join_request_t wire_request{
+      correlation,
+      runtime::protocol::actor_route_fence_t{
+        std::string (s->actor.actor_id ().value ()), s->actor.object_generation (),
+        local.routing_id ().to_bytes (), local.lifecycle_generation (),
+        source->authority_owner_generation,
+        static_cast<std::uint64_t> (local_owner->lease_generation)},
+      false,
+      runtime::protocol::spot_route_fence_t{
+        s->target.spot_id, s->target.object_generation, s->target.node_rid.to_bytes (),
+        observed.target_node_generation, observed.authority_owner_generation,
+        observed.owner_lease_generation}};
+    std::optional<runtime::protocol::application_payload_t> payload;
+    if (!s->request.is_empty ())
+        payload = runtime::protocol::application_payload_t{"", "", s->request.to_bytes ()};
+    auto tail = co_await _node->transport ().request_actor_join (
+      s->target.node_rid.to_bytes (), wire_request, payload, s->timeout);
+    if (!tail) {
+        co_return fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (
+            framework_error_kind_t::unavailable,
+            "wire Actor join timed out or was identity-fenced"),
+          "wire Actor join timed out or was identity-fenced");
+    }
+    // NOTE: tail->receive_chunk_limit_bytes (accepted case) is decoded here
+    // but not yet threaded into maintenance_runtime's advertised-chunk-limit
+    // consumer (runtime/stateful/maintenance_runtime.cpp) -- that consumer
+    // belongs to the relocation direct-transfer subsystem, outside this
+    // increment's scope. Reported as a follow-up, not dropped silently.
+    const auto mapped =
+      tail->join_result == runtime::protocol::actor_join_result_t::accepted
+        ? result_t<actor_join_reply_t>::success (
+            actor_join_reply_t{0, s->actor, zlink::message_t{}})
+        : result_t<actor_join_reply_t>::success (
+            actor_join_reply_t{1, s->actor, zlink::message_t{}});
+    const auto delivered = deliver_remote_actor_join (*s, mapped);
+    co_return delivered ? mapped
+                        : detail::propagate_failure<actor_join_reply_t> (
+                            delivered, "remote Actor Join completion callback failed");
 }
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_join (

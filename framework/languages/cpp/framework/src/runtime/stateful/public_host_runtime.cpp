@@ -1423,6 +1423,19 @@ void public_host_runtime_t::configure_actor_create_operations (
     _actor_create_target = std::move (target);
 }
 
+void public_host_runtime_t::configure_actor_join_operations (
+  actor_join_operation_target_t target)
+{
+    if (!target)
+        throw std::invalid_argument (
+          "Actor join operation target is required");
+    std::lock_guard lock (_mutex);
+    if (_started || _actor_join_target)
+        throw std::logic_error (
+          "Actor join operations must be configured once before host start");
+    _actor_join_target = std::move (target);
+}
+
 void public_host_runtime_t::configure_instance_spot_operations (
   std::shared_ptr<zlink::framework::location_repository_t> store,
   std::shared_ptr<stateful::relocation_store_port_t> relocations,
@@ -3828,6 +3841,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
     actor_create_operation_target_t actor_create_target;
+    actor_join_operation_target_t actor_join_target;
     instance_spot_activation_materializer_t instance_materializer;
     std::shared_ptr<stateful::relocation_store_port_t>
       instance_relocations;
@@ -3844,6 +3858,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         store = _user_spot_store;
         materializer = _user_spot_materializer;
         actor_create_target = _actor_create_target;
+        actor_join_target = _actor_join_target;
         instance_materializer = _instance_spot_materializer;
         instance_relocations = _instance_spot_relocations;
         instance_owner = _instance_spot_owner;
@@ -4611,6 +4626,53 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   actorCreateFailed)};
                             reply (std::move (result));
                         }
+                    }
+                    continue;
+                }
+
+                if (wire.kind == protocol::command::actorJoin) {
+                    if (mailbox_record.parts.empty ()
+                        || mailbox_record.parts.size () > 2)
+                        throw protocol::service_wire_error_t (
+                          "Actor join has an invalid part count");
+                    const auto request =
+                      protocol::decode_actor_join_request (
+                        mailbox_record.parts.front ());
+                    std::optional<protocol::application_payload_t> payload;
+                    if (mailbox_record.parts.size () == 2)
+                        payload = protocol::decode_application_payload (
+                          mailbox_record.parts.back (), capture_flow ());
+                    if (!actor_join_target) {
+                        (void) _transport->reply_actor_join (
+                          mailbox_record,
+                          protocol::actor_join_result_t::rejected,
+                          std::nullopt, 0, 0);
+                        continue;
+                    }
+                    auto completed = std::make_shared<std::atomic_bool> (
+                      false);
+                    auto reply = [weak = weak_from_this (),
+                                  mailbox_record, completed] (
+                                     actor_join_operation_result_t result) mutable {
+                        if (completed->exchange (true, std::memory_order_acq_rel))
+                            return;
+                        const auto host = weak.lock ();
+                        if (!host)
+                            return;
+                        try {
+                            (void) host->_transport->reply_actor_join (
+                              mailbox_record, result.join_result,
+                              result.spot, result.membership_epoch,
+                              result.receive_chunk_limit_bytes);
+                        }
+                        catch (...) {
+                        }
+                    };
+                    try {
+                        actor_join_target (request, payload, reply);
+                    }
+                    catch (...) {
+                        reply (actor_join_operation_result_t{});
                     }
                     continue;
                 }

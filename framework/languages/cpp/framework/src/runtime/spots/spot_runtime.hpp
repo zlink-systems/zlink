@@ -1111,6 +1111,26 @@ class spot_node_runtime_t
     std::vector<handoff_packet_t> take_actor_handoff_backlog (const actor_ref_t &actor_ref);
     bool actor_transfer_in_progress (const actor_ref_t &actor_ref) const;
     bool actor_transfer_in_progress (std::string_view actor_id) const;
+    // Node-local knowledge required to admit a wire actorJoin(28): the
+    // stable type string (never carried on that wire body — reconstructing
+    // an actor_ref_t requires it) and the actor's current membership epoch
+    // (seeded only at actor creation; a wire actorJoin(28) for an actor this
+    // node has never created/known is reported std::nullopt rather than
+    // guessed, so the caller can reject cleanly).
+    std::optional<std::string> resolve_actor_type (
+      std::string_view actor_id) const;
+    std::optional<std::uint64_t> resolve_actor_membership_epoch (
+      std::string_view actor_id) const;
+    // Same resolution join_actor_to_entry_spot_erased performs internally,
+    // exposed so a caller building an actorJoin(28) accepted reply can name
+    // the entry Spot it actually joined (entry=true requests carry an
+    // advisory targetSpot the entry path does not use to select the Spot).
+    std::optional<spot_id_t> resolve_entry_spot_id () const;
+    // actor_context_t's default constructor is private (friended to
+    // spot_node_runtime_t among a few others) -- this exposes it to callers
+    // outside spots/** that need a default/unbound context, e.g. the
+    // actorJoin(28) receiver path, which does not run bind_actor_route.
+    static actor_context_t default_actor_context ();
     void set_message_follow_duration (std::chrono::milliseconds duration);
     void bind_relocation_store (
       std::shared_ptr<runtime::stateful::relocation_store_port_t> store);

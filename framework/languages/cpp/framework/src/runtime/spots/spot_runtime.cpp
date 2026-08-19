@@ -5344,6 +5344,44 @@ bool spot_node_runtime_t::actor_transfer_in_progress (std::string_view actor_id)
                                                                + std::string (actor_id));
 }
 
+std::optional<std::string> spot_node_runtime_t::resolve_actor_type (
+  std::string_view actor_id) const
+{
+    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    const auto found = _state->actor_types_by_id.find (std::string (actor_id));
+    if (found == _state->actor_types_by_id.end ())
+        return std::nullopt;
+    return found->second;
+}
+
+std::optional<std::uint64_t> spot_node_runtime_t::resolve_actor_membership_epoch (
+  std::string_view actor_id) const
+{
+    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    const auto found =
+      _state->core_actor_membership_epochs.find (std::string (actor_id));
+    if (found == _state->core_actor_membership_epochs.end ())
+        return std::nullopt;
+    return found->second;
+}
+
+actor_context_t spot_node_runtime_t::default_actor_context ()
+{
+    return actor_context_t{};
+}
+
+std::optional<spot_id_t> spot_node_runtime_t::resolve_entry_spot_id () const
+{
+    std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+    if (!_state->snapshot.entry_spot_name)
+        return std::nullopt;
+    const auto entry_id =
+      _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
+    if (entry_id == _state->spot_ids_by_name.end ())
+        return std::nullopt;
+    return entry_id->second;
+}
+
 void spot_node_runtime_t::set_message_follow_duration (std::chrono::milliseconds duration)
 {
     _state->message_follow_duration = duration;

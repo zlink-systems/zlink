@@ -5299,6 +5299,68 @@ void test_advertised_receive_chunk_limit_wiring (test_context_t &test)
       "an advertised cap smaller than the local budget must split the same payload into more chunks");
 }
 
+// C-5 increment 2b: the actorJoin(28) originate fence-gate
+// (mesh_node_runtime_t::observe_spot_authority /
+// admit_remote_application_actor_join_via_wire's caller in
+// join_application_actor_to_spot) must stay closed on every current
+// production path. The gate's *only* input is observed_spot_authority's
+// lookup into the cache observe_spot_authority populates -- there is no
+// other way for join_application_actor_to_spot to decide the wire path is
+// eligible. Two things establish "closed on every current production
+// path": (1) grep -rn observe_spot_authority framework/languages/cpp/
+// framework/src/ returns only its own declaration/definition -- no
+// production call site exists anywhere in this codebase, so nothing can
+// populate the cache today; (2) proven here directly -- a freshly started
+// node's cache has no entry for a Spot address nothing has observed, so the
+// exact lookup join_application_actor_to_spot performs returns nullopt,
+// and after an explicit observe_spot_authority call with a fully valid,
+// nonzero fence, that same lookup returns exactly what was recorded. This
+// is a stronger and more direct proof than exercising the full remote-join
+// call chain (which fails deep inside completion delivery for a synthetic,
+// never-locally-created Actor regardless of which path is taken, and so
+// cannot discriminate between them) -- it inspects the one piece of state
+// the gate actually branches on.
+void test_actor_join_wire_gate_stays_closed_by_default (
+  test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+
+    const auto core_context = std::make_shared<zlink::context_t> ();
+    auto state = std::make_shared<detail::mesh_node_builder_state_t> (
+      "actor-join-gate-mesh");
+    state->core_context = core_context;
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->routing_id = zlink::routing_id_t::from ("gate-node");
+    detail::mesh_node_runtime_t node (state);
+    node.start ();
+
+    const auto target_rid = zlink::routing_id_t::from ("gate-target");
+    test.require (
+      !node.observed_spot_authority (target_rid, "gate-spot", 5).has_value (),
+      "a Spot authority nothing has observed must read back std::nullopt -- "
+      "this is the state of every current production path, so the wire "
+      "fence-gate can never open there");
+
+    node.observe_spot_authority (target_rid, "gate-spot", 5, 9, 7, 8);
+    const auto observed = node.observed_spot_authority (target_rid, "gate-spot", 5);
+    test.require (
+      observed && observed->target_node_generation == 9
+        && observed->authority_owner_generation == 7
+        && observed->owner_lease_generation == 8,
+      "an explicit observe_spot_authority call must be readable back "
+      "exactly -- proving the gate mechanism itself is real, not dead code, "
+      "for whichever future caller opts a peer in");
+
+    // A stale/mismatched key (wrong object generation) must not match --
+    // the cache key is the full (node, Spot, generation) identity.
+    test.require (
+      !node.observed_spot_authority (target_rid, "gate-spot", 6).has_value (),
+      "a different object generation must not read back an unrelated "
+      "observation");
+
+    node.stop ();
+}
+
 int main ()
 {
     test_context_t test;
@@ -5330,5 +5392,6 @@ int main ()
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_reservation_includes_active_work (test);
     test_advertised_receive_chunk_limit_wiring (test);
+    test_actor_join_wire_gate_stays_closed_by_default (test);
     return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -433,6 +433,33 @@ class mesh_node_runtime_t
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid,
                             std::uint64_t lifecycle_generation) const;
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid) const;
+    struct observed_spot_authority_t
+    {
+        std::uint64_t target_node_generation = 0;
+        std::uint64_t authority_owner_generation = 0;
+        std::uint64_t owner_lease_generation = 0;
+    };
+    // actorJoin(28) originate fence-gate (cpp analog of dotnet's
+    // _observedSpotAuthorities / ObserveSpotAuthority): defaults closed --
+    // nothing in this codebase calls this yet, so join_application_actor_to_
+    // spot's remote branch always takes the existing JSON admission path
+    // until some caller explicitly observes a peer's Spot authority fence
+    // (e.g. after a trust-establishing exchange with that peer). Observing
+    // an authority is not sufficient on its own to select the wire path --
+    // the target peer must also be admitted at exactly the observed
+    // lifecycle generation (checked at the call site, not here).
+    void observe_spot_authority (
+      const zlink::routing_id_t &target_node_rid,
+      const std::string &target_spot_id,
+      std::uint64_t object_generation,
+      std::uint64_t target_node_generation,
+      std::uint64_t authority_owner_generation,
+      std::uint64_t owner_lease_generation);
+    // Read-only lookup exposed for verification: the gate's only input.
+    std::optional<observed_spot_authority_t> observed_spot_authority (
+      const zlink::routing_id_t &target_node_rid,
+      const std::string &target_spot_id,
+      std::uint64_t object_generation) const;
     std::string mesh_name () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     std::string listen_endpoint () const;
@@ -510,6 +537,11 @@ class mesh_node_runtime_t
       const runtime::spot_address_t &target,
       runtime::messaging::message_parts_t encoded,
       std::chrono::milliseconds timeout);
+    task_t<actor_join_reply_t> admit_remote_application_actor_join_via_wire (
+      std::shared_ptr<remote_actor_join_state_t> state,
+      observed_spot_authority_t observed);
+
+  private:
 
     //  Coroutine: parameters are taken by value so the frame owns them for
     //  the whole suspended seal exchange (callers pass temporaries).
@@ -572,6 +604,8 @@ class mesh_node_runtime_t
     std::chrono::milliseconds _session_relocation_seal_timeout =
       location_options_t{}.session_relocation_seal_timeout;
     host::actor_create_operation_target_t _actor_create_target;
+    mutable std::mutex _observed_spot_authority_mutex;
+    std::map<std::string, observed_spot_authority_t> _observed_spot_authorities;
     host::instance_spot_activation_materializer_t _instance_spot_materializer;
     std::shared_ptr<runtime::stateful::relocation_store_port_t> _instance_spot_relocations;
     std::shared_ptr<runtime::stateful::authority_relocation_port_t> _relocation_authority;
