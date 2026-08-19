@@ -24,12 +24,18 @@ final class ZLinkServiceRelocationEnvelopeCodecTest {
         assertEquals(0, envelope.relocationHigh());
         assertEquals(9, envelope.relocationLow());
         assertEquals(1, envelope.applicationVersion());
-        assertEquals(2, envelope.applicationStates().size());
+        assertEquals(3, envelope.applicationStates().size());
+        assertEquals(1, envelope.applicationStates().get(0).participantId());
+        assertEquals(2, envelope.applicationStates().get(1).participantId());
+        assertEquals(3, envelope.applicationStates().get(2).participantId());
         assertEquals(1, envelope.savedWork().size());
-        assertEquals(1, envelope.savedWork().getFirst().participantId());
+        assertEquals(2, envelope.savedWork().getFirst().participantId());
         assertEquals(1, envelope.savedWork().getFirst().sequence());
         assertEquals(1, envelope.timerRegistrations().size());
+        assertEquals(3, envelope.timerRegistrations().getFirst().participantId());
         assertEquals(1, envelope.pendingTimerTicks().size());
+        assertEquals(3, envelope.pendingTimerTicks().getFirst().participantId());
+        assertEquals(2, envelope.pendingTimerTicks().getFirst().sequence());
         assertArrayEquals(encoded, envelope.canonicalBytes());
     }
 
