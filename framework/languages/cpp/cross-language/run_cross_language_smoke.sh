@@ -83,6 +83,7 @@ sock.close()
 sys.exit(0 if reply.startswith(b"+PONG") else 1)
 PY
     then
+      redis-cli -p "${port}" FLUSHALL >/dev/null
       return 0
     fi
     sleep 0.1

@@ -316,6 +316,12 @@ public final class Program {
         writeReadyFile(args);
         String actorId = args.option("actor-id", "cross-lang-relocation-actor");
         String nodeRid = args.require("node-rid");
+        // Keep the target out of the source's initial create turn, then make
+        // it eligible before the source's first five-second relocation
+        // attempt. Waiting for a routed probe to do this deadlocks when the
+        // foreign source correctly excludes a zero-weight target.
+        sleepQuietly(3000);
+        runtimeOptions.mesh(args.require("mesh-name")).setPlacementWeight(100);
         long deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos();
         CrossLangProbeRes lastReply = null;
         while (System.nanoTime() < deadlineNanos) {
@@ -326,13 +332,6 @@ public final class Program {
                     .submit(CrossLangProbeRes.class)
                     .toCompletableFuture()
                     .get(7, TimeUnit.SECONDS);
-                // Keep this target excluded while the source creates the
-                // actor, then make it a relocation candidate after the
-                // source authority answers. This preserves deterministic
-                // initial ownership without leaving no eligible target.
-                if (!nodeRid.equals(lastReply.nodeRid())) {
-                    runtimeOptions.mesh(args.require("mesh-name")).setPlacementWeight(100);
-                }
                 if (nodeRid.equals(lastReply.nodeRid())) {
                     break;
                 }
