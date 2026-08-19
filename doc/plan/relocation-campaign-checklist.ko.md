@@ -396,9 +396,9 @@
       무변경 테스트 ⑨ [M] java 집계 범위 소진 → **해소 `bb6ac7b00c`**(경계 선검사+typed 전파, near-ceiling
       테스트)
 - [ ] **C-9d sol 4차 배치 리뷰(2026-08-19) — 3건(그 외 전부 CLEAN), 배정**:
-      ① [H] node aggregate relocation이 공유 authority-owner-counter를 우회
-      (개별 row +1, location-store-repository.ts:591-618 — 일반 경로 :1033은
-      정상; 혼합 런타임서 중복 발급 가능) → node 수정 ② [M] 비정규 counter bytes 수신 판정 → **java 해소 `822be1d9ca`**(canonical 재검증+
+      ① [H] node aggregate counter 우회 → **해소 `85330be874`**(공유 counter 블록 예약을
+      marker CAS에 동봉, live-redis 연속 세대 pin) ② [M] 비정규 counter bytes 수신 판정 → **node 해소(전 counter strict
+      canonical)**, **java 해소 `822be1d9ca`**(canonical 재검증+
       counter 테스트; dotnet·node 잔여) ③ [M] error envelope 수신 의미론 → **java 몫 해소 `822be1d9ca`**(숫자 수용 제거,
       missing/unknown=ProtocolError); cpp 관용 수용 잔여.
       **CLEAN 확정 사항**: dotnet cmd-44 순서 스펙 무위반(:1371→:1399, Join
