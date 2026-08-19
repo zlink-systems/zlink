@@ -482,6 +482,18 @@
       교체, 손 코덱 삭제. 언어별 unittest 전체 그린
 - [ ] W-4 수용: C-7 교차 언어 매트릭스(기본+relocation+java-cross) 전 쌍 그린을
       생성 코덱 위에서 재확인 — 이후 발산은 스키마 편집으로만 가능해짐
+- [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
+      ① [C] 스펙의 4언어 stream 주장 vs frozen 시점 java만 부합 — **처분: 스펙=
+      판정된 목표 계약(dotnet은 이후 18598a85db로 수렴, node 진행 중, cpp=W-3)**,
+      W-4 완주가 해소 조건 ② [H] "코덱이 생성된다" 현재시제 vs W-2 미완의 자기
+      모순 — 의무형+과도기 명시로 문구 정정 ③ [H] participantId 도출 규칙이
+      스키마 기계가독부·골든에 부재(문서·java만 보유) — 스키마에 도출 규칙 명문+
+      골든 다중 participant 벡터 ④ [H] 상한 충돌: 21/schema=2^63-1 vs 22=발급
+      최대 2^63-2(4구현 일치) — 21·schema를 판정(저장≤2^63-1, 발급≤2^63-2)으로
+      정정 ⑤ [M] dotnet owner-counter가 선행0 수용(타 counter는 strict) — dotnet
+      정렬 ⑥ [H] node public bind()가 typed DeadlineExceeded를 generic Error로
+      래핑(session-actor-coordinator:431) — node 정렬(재구조화 후) ⑦ [H] schema
+      ClientServer allow-list가 18/19/20 허용 — 문서·구현과 모순, schema 정정
 - [x] W-5 스펙 상세 정리 — **완료 `c34ed263f5`**: ① 51 개정 — 스키마=wire 규범 원천·코덱 생성 의무
       (손 코덱 금지) 명문화 ② 28 §4.2 — relocation-envelope-v1 상세(필드 순서·
       big-endian·participantId=store inventory 정렬 index+1·frozen record·CRC-32C
