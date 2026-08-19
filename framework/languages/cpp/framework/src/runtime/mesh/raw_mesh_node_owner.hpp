@@ -134,6 +134,28 @@ struct relocation_prepare_response_t
     std::optional<protocol::relocation_failed_t> failed;
 };
 
+/* actorJoin(28) originate outcome. Spec 32 §5 requires the semantic owner
+ * to complete with a distinct ErrorKind per failure class, so the transport
+ * call must not collapse timeout, transport loss, and malformed replies
+ * into one "no result" bucket: `failure` is meaningful when `reply` is
+ * empty and classifies the outcome (deadline expiry vs. routing/transport
+ * unavailability vs. a malformed or identity-mismatched wire reply). On
+ * success the decoded application reply frame travels alongside the tail
+ * instead of being validated-then-discarded at decode. */
+enum class actor_join_wire_failure_t
+{
+    unavailable,
+    deadline_exceeded,
+    protocol_error
+};
+
+struct actor_join_wire_outcome_t
+{
+    std::optional<protocol::actor_join_reply_tail_t> reply;
+    std::optional<protocol::application_payload_t> application_reply;
+    actor_join_wire_failure_t failure = actor_join_wire_failure_t::unavailable;
+};
+
 class raw_mesh_node_owner_t
 {
   public:
@@ -355,10 +377,12 @@ class raw_mesh_node_owner_t
     // request_relocation_prepare's shape (this call owns the correlation
     // fence itself rather than registering with the operation registry,
     // since — unlike actorCreate/userSpotClose — there is no reservation to
-    // retry against). Returns std::nullopt on timeout, transport failure, or
-    // an identity-mismatched reply (stale/misrouted); the caller must have
-    // set request.correlation to a value it can recognize on return.
-    task_t<std::optional<protocol::actor_join_reply_tail_t>>
+    // retry against). A missing outcome.reply carries the failure class
+    // (deadline_exceeded on timeout, unavailable on routing/transport loss,
+    // protocol_error on a malformed or identity-mismatched reply); the
+    // caller must have set request.correlation to a value it can recognize
+    // on return.
+    task_t<actor_join_wire_outcome_t>
     request_actor_join (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::actor_join_request_t &request,

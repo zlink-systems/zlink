@@ -2454,6 +2454,150 @@ bool verify_remote_actor_prepare_is_idempotent ()
            && admission_calls == 1;
 }
 
+class wire_join_spot_resolver_t final
+    : public zlink::framework::runtime::spot_address_resolver_t
+{
+  public:
+    zlink::framework::task_t<std::optional<zlink::framework::runtime::spot_address_t>>
+    resolve_spot_address (std::string, std::string spot_id) override
+    {
+        co_return spot_id == address.spot_id ? std::make_optional (address) : std::nullopt;
+    }
+
+    void invalidate_spot_address (std::string_view) override {}
+
+    void invalidate_all_routes_after_store_recovery () override {}
+
+    zlink::framework::runtime::spot_address_t address;
+};
+
+// actorJoin(28) receiver admission is APPROVAL-ONLY (spec 15 §478-527):
+// admission registers the relocation temporary queue (identity-keyed
+// pending admission) with the prepared factory and replies approval — it
+// must NOT construct/install the Actor, claim the target location, or
+// advance membership; those belong to the later transfer/commit stages.
+// A newer wire attempt for the same actor identity evicts a parked older
+// attempt (later-attempt-wins, spec 15 §542-546), while a duplicate resend
+// of the SAME attempt parks against the existing preparation without
+// re-running the application admission callback.
+bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("wire-join-node");
+    auto target = std::make_shared<spot_context_state_t> ();
+    target->node = node;
+    target->node_rid = node_rid_t::from_string ("wire-join-node");
+    target->spot_id = spot_id_t ("target-spot");
+    target->spot_name = "target";
+    target->spot_instance = std::make_shared<int> (1);
+    target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime->serializers = &serializers;
+    target->serial_executor =
+      std::make_shared<runtime::offload_executor_t> (2, 64, "wire-join-admission");
+    target->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *target->serial_executor, 64, runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    node->spot_contexts_by_id.emplace (target->spot_id, spot_context_access_t::create (target));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    node->actor_factories.emplace ("player", std::move (factory));
+    int admission_calls = 0;
+    spot_actor_admission_callbacks_t callbacks;
+    callbacks.join = [&] (void *, std::string_view, const zlink::message_t &,
+                          serializer_registry_t &) {
+        ++admission_calls;
+        return spot_actor_join_result_t::accept (message_t::from (std::string ("approved")));
+    };
+    target->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
+    node->actor_types_by_id["actor-1"] = "player";
+
+    spot_node_runtime_t owner (node);
+    const auto local_rid = zlink::routing_id_t::from (std::string ("wire-join-node"));
+    const auto source_rid = zlink::routing_id_t::from (std::string ("wire-join-source"));
+    wire_join_spot_resolver_t resolver;
+    resolver.address.node_rid = local_rid;
+    resolver.address.spot_id = "target-spot";
+    resolver.address.spot_generation = 9;
+    owner.bind_spot_location_resolver (resolver);
+
+    const auto make_request = [&] (std::uint64_t correlation) {
+        return runtime::protocol::actor_join_request_t{
+          correlation,
+          runtime::protocol::actor_route_fence_t{"actor-1", 7, source_rid.to_bytes (), 3, 19,
+                                                 5},
+          false,
+          runtime::protocol::spot_route_fence_t{"target-spot", 9, local_rid.to_bytes (), 1, 21,
+                                                22}};
+    };
+    const auto transfer_id_for = [&] (std::uint64_t correlation) {
+        std::string transfer_id = "wire-actor-join:";
+        static constexpr char hex_digits[] = "0123456789abcdef";
+        for (const auto byte : source_rid.to_bytes ()) {
+            transfer_id += hex_digits[(byte >> 4) & 0x0f];
+            transfer_id += hex_digits[byte & 0x0f];
+        }
+        transfer_id += ":3:";
+        transfer_id += std::to_string (correlation);
+        return transfer_id;
+    };
+
+    const auto first = admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt);
+    const bool first_approved =
+      first.join_result == runtime::protocol::actor_join_result_t::accepted && first.spot
+      && first.spot->spot_id == "target-spot" && first.spot->object_generation == 9
+      // Approval-only: the accepted reply carries the PROPOSED membership
+      // epoch (no membership has moved, so current-none + 1 == 1) and the
+      // conservative advertised receive chunk limit.
+      && first.membership_epoch == 1 && first.receive_chunk_limit_bytes == 32768;
+    // No lifecycle side effects during admission: no Actor instance was
+    // constructed or installed, no membership was recorded, and no target
+    // location/commit state exists — only the temporary-queue registration
+    // (target_pending pending admission) on the coordinator.
+    const bool approval_only =
+      node->actor_instances.empty () && node->actor_spot_ids.empty ()
+      && node->core_actor_membership_epochs.empty ()
+      && node->actor_transfer_coordinator.admission (transfer_id_for (4211)).has_value ()
+      && node->actor_transfer_coordinator.phase ("player:actor-1")
+           == actor_move_phase_t::target_pending;
+
+    // A duplicate resend of the same attempt parks against the existing
+    // preparation without re-running the application admission callback.
+    const auto repeated =
+      admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt);
+    const bool duplicate_parked =
+      repeated.join_result == runtime::protocol::actor_join_result_t::accepted
+      && admission_calls == 1;
+
+    // Later-attempt-wins: a NEWER attempt (fresh correlation → distinct
+    // derived transfer identity) evicts the parked older attempt.
+    const auto newer = admit_wire_actor_join (node, local_rid, make_request (4213), std::nullopt);
+    const bool later_attempt_wins =
+      newer.join_result == runtime::protocol::actor_join_result_t::accepted
+      && !node->actor_transfer_coordinator.admission (transfer_id_for (4211)).has_value ()
+      && node->actor_transfer_coordinator.admission (transfer_id_for (4213)).has_value ()
+      && node->actor_transfer_coordinator.is_current ("player:actor-1", transfer_id_for (4213))
+      && node->actor_instances.empty () && node->actor_spot_ids.empty ();
+
+    // An identity this node has never created/known is rejected cleanly.
+    auto unknown_request = make_request (4215);
+    unknown_request.actor.actor_id = "actor-unknown";
+    const auto unknown =
+      admit_wire_actor_join (node, local_rid, unknown_request, std::nullopt);
+    const bool unknown_rejected =
+      unknown.join_result == runtime::protocol::actor_join_result_t::rejected && !unknown.spot;
+
+    target->serial_queue->close ();
+    target->serial_queue->drain ();
+    target->serial_executor->drain ();
+    return first_approved && approval_only && duplicate_parked && later_attempt_wins
+           && unknown_rejected;
+}
+
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
 {
     using namespace zlink::framework;
@@ -4822,6 +4966,10 @@ int main ()
     }
     if (!verify_remote_actor_prepare_is_idempotent ()) {
         return 58;
+    }
+    if (!verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()) {
+        std::cerr << "wire actor Join approval-only admission regression failed\n";
+        return 117;
     }
     if (!verify_target_commit_stages_source_prefix_before_live_dispatch ()) {
         return 94;

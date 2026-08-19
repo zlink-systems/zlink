@@ -406,6 +406,96 @@ void mesh_node_runtime_t::bind_descriptor_publisher (
     _descriptor_publisher = std::move (publisher);
 }
 
+host::actor_join_operation_result_t
+admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_state,
+                       const zlink::routing_id_t &local_node_rid,
+                       const runtime::protocol::actor_join_request_t &request,
+                       const std::optional<runtime::protocol::application_payload_t> &payload)
+{
+    host::actor_join_operation_result_t rejected;
+    try {
+        spot_node_runtime_t spot (spot_state);
+        // The wire body carries no stable type (unlike actorCreate's
+        // stableType) — spec 15's admission semantics key on actor
+        // identity, and this node must already know that identity (via a
+        // prior actorCreate or join) to admit it here.
+        const auto actor_type = spot.resolve_actor_type (request.actor.actor_id);
+        if (!actor_type)
+            return rejected;
+        // The actor fence's node coordinates name the CURRENT owner — the
+        // source node originating this proposal.
+        const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (
+            zlink::routing_id_t::from (request.actor.target_node_routing_id).to_string ()),
+          *actor_type, request.actor.actor_id, request.actor.object_generation);
+        const auto payload_message =
+          payload ? zlink::message_t::from (payload->payload) : zlink::message_t{};
+        spot_id_t target_spot_id;
+        if (request.entry) {
+            const auto entry_spot_id = spot.resolve_entry_spot_id ();
+            if (!entry_spot_id)
+                return rejected;
+            target_spot_id = *entry_spot_id;
+        } else {
+            target_spot_id = spot_id_t (request.target_spot.spot_id);
+        }
+        const auto spot_generation =
+          spot.resolve_spot_generation (local_node_rid, target_spot_id);
+        if (!spot_generation || *spot_generation == 0)
+            return rejected;
+        if (!request.entry) {
+            // Approval-only admission (spec 15 §478-527): run the
+            // application admission callback and register the relocation
+            // temporary queue (identity-keyed pending admission) with the
+            // prepared factory — nothing else. Spec 51 §9: a transfer id
+            // never travels on this wire body; the runtime derives one
+            // locally from the exact attempt identity (source node
+            // RID/generation + correlation), so a duplicate resend of the
+            // same attempt parks against the existing preparation while a
+            // NEWER attempt (fresh correlation) gets a distinct id and
+            // evicts the parked older attempt (later-attempt-wins,
+            // try_add_admission).
+            std::string transfer_id = "wire-actor-join:";
+            static constexpr char hex_digits[] = "0123456789abcdef";
+            for (const auto byte : request.actor.target_node_routing_id) {
+                transfer_id += hex_digits[(byte >> 4) & 0x0f];
+                transfer_id += hex_digits[byte & 0x0f];
+            }
+            transfer_id += ':';
+            transfer_id += std::to_string (request.actor.target_node_generation);
+            transfer_id += ':';
+            transfer_id += std::to_string (request.correlation);
+            const auto admitted = spot.admit_remote_actor_to_spot (
+              std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id,
+              payload_message, request.actor.target_node_generation,
+              request.correlation, request.actor.authority_owner_generation);
+            if (!admitted || !admitted.value ().accepted)
+                return rejected;
+        }
+        // JoinEntrySpot has no approval round trip in the store path and
+        // registers no preparation at admission (spec 15 §4.2) — the entry
+        // branch above therefore approves without side effects; its
+        // temporary queue is registered on the later Restore request.
+        host::actor_join_operation_result_t result;
+        result.join_result = runtime::protocol::actor_join_result_t::accepted;
+        result.spot =
+          runtime::protocol::actor_join_reply_spot_ref_t{target_spot_id, *spot_generation};
+        // Approval-only: membership has not moved yet, so the accepted
+        // reply carries the PROPOSED membership epoch (current + 1 — the
+        // analog of java's admission-reply coreMembershipEpoch + 1). The
+        // target CAS later in the transfer sequence is what actually
+        // advances membership.
+        result.membership_epoch =
+          spot.resolve_actor_membership_epoch (request.actor.actor_id).value_or (0) + 1;
+        result.receive_chunk_limit_bytes = static_cast<std::uint32_t> (
+          detail::spot_actor_join_advertised_receive_chunk_limit_bytes);
+        return result;
+    }
+    catch (...) {
+        return rejected;
+    }
+}
+
 void mesh_node_runtime_t::start ()
 {
     if (_node) {
@@ -530,96 +620,25 @@ void mesh_node_runtime_t::start ()
         node->configure_actor_create_operations (_actor_create_target);
     // actorJoin(28) receiver admission: self-contained (unlike actorCreate,
     // it needs no external Location Store / materializer), so it is always
-    // wired here rather than gated on external configuration. It requires
-    // no admission logic of its own beyond what spot_node_runtime_t already
-    // does inside join_actor_to_spot_erased / join_actor_to_entry_spot_erased
-    // (identity-keyed parking via try_begin_local — spec 15's newest-attempt-
-    // wins comes free from there). actor_context is default-constructed:
-    // this path does not run bind_actor_route the way the JSON
-    // spot_actor_join_route_request_t path does, so an admitted actor here
-    // is not yet routable by a subsequent actorSend/actorRequest, and a
-    // factory that requires create_context_instance fails cleanly
-    // (not_configured -> rejected) rather than being admitted half-wired.
-    // Both are acceptable only because nothing yet selects this wire path in
-    // production (the originate fence-gate is a separate, later increment).
+    // wired here rather than gated on external configuration. The admission
+    // is APPROVAL-ONLY (spec 15 §478-527): admit_wire_actor_join registers
+    // the relocation temporary queue and prepared factory and replies
+    // approval; actor construction/installation, target location claim,
+    // membership CAS, and application dispatch belong to the later
+    // transfer/commit stages (prepare/finalize on the actor transfer
+    // coordinator). Known deferred items: route binding of wire-admitted
+    // actors (an admitted actor is not yet routable by a subsequent
+    // actorSend/actorRequest until the transfer commit installs the route)
+    // and threading the negotiated chunk limit into the direct-transfer
+    // capture. Both are acceptable only because nothing yet selects this
+    // wire path in production (the originate fence-gate is a separate,
+    // later increment).
     node->configure_actor_join_operations (
       [state = _state] (const runtime::protocol::actor_join_request_t &request,
                         const std::optional<runtime::protocol::application_payload_t> &payload,
                         host::actor_join_operation_target_completion_t completion) {
-          host::actor_join_operation_result_t rejected;
-          try {
-              spot_node_runtime_t spot (state->spot_state);
-              // The wire body carries no stable type (unlike actorCreate's
-              // stableType) and no transfer/source-spot bookkeeping (unlike
-              // the JSON admission route packet) -- spec 15's admission
-              // semantics key on actor identity, and this node must already
-              // know that identity (via a prior actorCreate or join) to
-              // admit it here.
-              const auto actor_type =
-                spot.resolve_actor_type (request.actor.actor_id);
-              if (!actor_type) {
-                  completion (rejected);
-                  return;
-              }
-              const auto actor_ref =
-                ::zlink::framework::detail::actor_ref_access_t::make (
-                  node_rid_t::from_string (
-                    zlink::routing_id_t::from (
-                      request.actor.target_node_routing_id)
-                      .to_string ()),
-                  *actor_type, request.actor.actor_id,
-                  request.actor.object_generation);
-              const auto payload_message =
-                payload ? zlink::message_t::from (payload->payload)
-                        : zlink::message_t{};
-              spot_id_t joined_spot_id;
-              result_t<detail::actor_join_reply_t> joined =
-                result_t<detail::actor_join_reply_t>::failure (
-                  framework_error_kind_t::not_found, "");
-              if (request.entry) {
-                  const auto entry_spot_id = spot.resolve_entry_spot_id ();
-                  if (!entry_spot_id) {
-                      completion (rejected);
-                      return;
-                  }
-                  joined_spot_id = *entry_spot_id;
-                  joined = spot.join_actor_to_entry_spot_erased (
-                    actor_ref,
-                    node_rid_t::from_string (state->routing_id->to_string ()),
-                    payload_message, std::nullopt,
-                    spot_node_runtime_t::default_actor_context ());
-              } else {
-                  joined_spot_id = spot_id_t (request.target_spot.spot_id);
-                  joined = spot.join_actor_to_spot_erased (
-                    actor_ref, joined_spot_id, payload_message, std::nullopt,
-                    spot_node_runtime_t::default_actor_context (), 0,
-                    request.correlation);
-              }
-              if (!joined || joined.value ().result_code != 0) {
-                  completion (rejected);
-                  return;
-              }
-              const auto membership_epoch =
-                spot.resolve_actor_membership_epoch (request.actor.actor_id);
-              const auto spot_generation = spot.resolve_spot_generation (
-                *state->routing_id, joined_spot_id);
-              if (!membership_epoch || !spot_generation
-                  || *spot_generation == 0) {
-                  completion (rejected);
-                  return;
-              }
-              host::actor_join_operation_result_t result;
-              result.join_result = runtime::protocol::actor_join_result_t::accepted;
-              result.spot = runtime::protocol::actor_join_reply_spot_ref_t{
-                joined_spot_id, *spot_generation};
-              result.membership_epoch = *membership_epoch;
-              result.receive_chunk_limit_bytes = static_cast<std::uint32_t> (
-                detail::spot_actor_join_advertised_receive_chunk_limit_bytes);
-              completion (result);
-          }
-          catch (...) {
-              completion (rejected);
-          }
+          completion (admit_wire_actor_join (state->spot_state, *state->routing_id,
+                                             request, payload));
       });
     if (_instance_spot_materializer) {
         node->configure_instance_spot_operations (_user_spot_store, _instance_spot_relocations,
@@ -2398,6 +2417,33 @@ mesh_node_runtime_t::observed_spot_authority (const zlink::routing_id_t &target_
     return found->second;
 }
 
+namespace
+{
+std::string negotiated_receive_chunk_limit_key (const actor_ref_t &actor)
+{
+    return std::string (actor.actor_id ().value ()) + ":"
+           + std::to_string (actor.object_generation ());
+}
+} // namespace
+
+void mesh_node_runtime_t::record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
+                                                                 std::uint32_t limit_bytes)
+{
+    std::lock_guard lock (_negotiated_receive_chunk_limit_mutex);
+    _negotiated_receive_chunk_limits[negotiated_receive_chunk_limit_key (actor)] = limit_bytes;
+}
+
+std::optional<std::uint32_t>
+mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (const actor_ref_t &actor) const
+{
+    std::lock_guard lock (_negotiated_receive_chunk_limit_mutex);
+    const auto found =
+      _negotiated_receive_chunk_limits.find (negotiated_receive_chunk_limit_key (actor));
+    if (found == _negotiated_receive_chunk_limits.end ())
+        return std::nullopt;
+    return found->second;
+}
+
 // actorJoin(28) originate fence-gate: only taken when (a) this node has
 // explicitly observed the target Spot's authority fence via
 // observe_spot_authority -- nothing calls that yet, so this is closed by
@@ -2459,27 +2505,63 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     std::optional<runtime::protocol::application_payload_t> payload;
     if (!s->request.is_empty ())
         payload = runtime::protocol::application_payload_t{"", "", s->request.to_bytes ()};
-    auto tail = co_await _node->transport ().request_actor_join (
+    auto outcome = co_await _node->transport ().request_actor_join (
       s->target.node_rid.to_bytes (), wire_request, payload, s->timeout);
-    if (!tail) {
-        co_return fail_remote_actor_join (
-          *s,
-          result_t<actor_join_reply_t>::failure (
-            framework_error_kind_t::unavailable,
-            "wire Actor join timed out or was identity-fenced"),
-          "wire Actor join timed out or was identity-fenced");
+    if (!outcome.reply) {
+        //  Spec 32 §5: classify instead of collapsing every failure to
+        //  Unavailable — a malformed/identity-mismatched reply is
+        //  ProtocolError, deadline expiry is DeadlineExceeded, and only a
+        //  routing/transport loss is Unavailable.
+        switch (outcome.failure) {
+            case runtime::mesh::actor_join_wire_failure_t::protocol_error:
+                co_return fail_remote_actor_join (
+                  *s,
+                  result_t<actor_join_reply_t>::failure (
+                    framework_error_kind_t::protocol_error,
+                    "wire Actor join reply was malformed or identity-fenced"),
+                  "wire Actor join reply was malformed or identity-fenced");
+            case runtime::mesh::actor_join_wire_failure_t::deadline_exceeded:
+                co_return fail_remote_actor_join (
+                  *s,
+                  result_t<actor_join_reply_t>::failure (
+                    framework_error_kind_t::deadline_exceeded,
+                    "wire Actor join deadline elapsed before a reply"),
+                  "wire Actor join deadline elapsed before a reply");
+            case runtime::mesh::actor_join_wire_failure_t::unavailable:
+            default:
+                co_return fail_remote_actor_join (
+                  *s,
+                  result_t<actor_join_reply_t>::failure (
+                    framework_error_kind_t::unavailable,
+                    "wire Actor join route or transport was unavailable"),
+                  "wire Actor join route or transport was unavailable");
+        }
     }
-    // NOTE: tail->receive_chunk_limit_bytes (accepted case) is decoded here
-    // but not yet threaded into maintenance_runtime's advertised-chunk-limit
-    // consumer (runtime/stateful/maintenance_runtime.cpp) -- that consumer
-    // belongs to the relocation direct-transfer subsystem, outside this
-    // increment's scope. Reported as a follow-up, not dropped silently.
+    const auto &tail = *outcome.reply;
+    if (tail.join_result == runtime::protocol::actor_join_result_t::accepted
+        && tail.receive_chunk_limit_bytes != 0) {
+        //  The negotiated receive limit is recorded per actor identity so
+        //  the relocation direct-transfer capture (maintenance_runtime's
+        //  advertised_receive_chunk_limit_bytes consumer,
+        //  runtime/stateful/maintenance_runtime.cpp) can read it when it
+        //  begins the transfer this admission approved. Threading the value
+        //  into that consumer's call site stays deferred; recording it here
+        //  keeps the negotiated value from being dropped at decode.
+        record_negotiated_receive_chunk_limit (s->actor,
+                                               tail.receive_chunk_limit_bytes);
+    }
+    //  The decoded application reply frame (if any) is the target's
+    //  admission reply payload — surface it instead of discarding it.
+    auto application_reply =
+      outcome.application_reply
+        ? zlink::message_t::from (outcome.application_reply->payload)
+        : zlink::message_t{};
     const auto mapped =
-      tail->join_result == runtime::protocol::actor_join_result_t::accepted
+      tail.join_result == runtime::protocol::actor_join_result_t::accepted
         ? result_t<actor_join_reply_t>::success (
-            actor_join_reply_t{0, s->actor, zlink::message_t{}})
+            actor_join_reply_t{0, s->actor, application_reply})
         : result_t<actor_join_reply_t>::success (
-            actor_join_reply_t{1, s->actor, zlink::message_t{}});
+            actor_join_reply_t{1, s->actor, application_reply});
     const auto delivered = deliver_remote_actor_join (*s, mapped);
     co_return delivered ? mapped
                         : detail::propagate_failure<actor_join_reply_t> (

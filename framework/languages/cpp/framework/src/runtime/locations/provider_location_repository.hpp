@@ -88,7 +88,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto *found = std::get_if<store_found_t> (&result);
         if (!found || !found->value.expires_at)
             return completed (owner_lease_read_result_t{owner_lease_missing_t{}});
-        const auto record = parse_json (found->value.bytes);
+        const auto record = parse_canonical_record (found->value.bytes, "owner lease");
         return completed (owner_lease_read_result_t{
           owner_lease_found_t{{record.at ("ownerId").get<std::string> (),
                                parse_i64_field (record.at ("leaseGeneration"))},
@@ -135,8 +135,9 @@ class provider_location_repository_t final : public location_repository_t
         const auto key = key_mesh (descriptor.mesh_name, descriptor.rid);
         auto current = read (key);
         if (const auto *found = std::get_if<store_found_t> (&current)) {
-            const auto stored =
-              decode_mesh_descriptor (parse_json (found->value.bytes).at ("descriptor"));
+            const auto stored = decode_mesh_descriptor (
+              parse_canonical_record (found->value.bytes, "MeshNode descriptor")
+                .at ("descriptor"));
             descriptor.capacity.actors.active = stored.capacity.actors.active;
             descriptor.capacity.actors.reserved = stored.capacity.actors.reserved;
             descriptor.capacity.spots.active = stored.capacity.spots.active;
@@ -2066,6 +2067,34 @@ class provider_location_repository_t final : public location_repository_t
         return json_t::parse (to_string (value));
     }
 
+    // 21-location-runtime.md §2.4: the framework checks `recordVersion` on
+    // every canonical opaque record and fails explicitly on an unrecognized
+    // value instead of guessing how to read the record. A MISSING
+    // recordVersion is just as unrecognized as a wrong one (fail-closed --
+    // java is strict; dotnet went strict in f2dfa809e8). Every writer of
+    // the five canonical rows (MeshNode, owner lease, ClientServer, fanout
+    // publisher, authority) provably always emits the field, so this can
+    // never fire on a record this repository wrote. Provider-private rows
+    // (reservation, aggregate, terminal, counters, ...) are outside the
+    // canonical contract and are not funneled through here.
+    static void require_record_version (const json_t &record, const char *record_name)
+    {
+        if (!record.contains ("recordVersion")
+            || !record.at ("recordVersion").is_number_integer ()
+            || record.at ("recordVersion").get<std::int64_t> () != 1) {
+            throw std::invalid_argument (std::string ("unrecognized ") + record_name
+                                         + " recordVersion");
+        }
+    }
+
+    static json_t parse_canonical_record (const std::vector<std::byte> &value,
+                                          const char *record_name)
+    {
+        auto record = parse_json (value);
+        require_record_version (record, record_name);
+        return record;
+    }
+
     static std::int64_t parse_i64 (const std::vector<std::byte> &value)
     {
         return std::stoll (to_string (value));
@@ -2073,7 +2102,8 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::int64_t owner_generation (const std::vector<std::byte> &value)
     {
-        return parse_i64_field (parse_json (value).at ("leaseGeneration"));
+        return parse_i64_field (
+          parse_canonical_record (value, "owner lease").at ("leaseGeneration"));
     }
 
     static std::string segment (std::string_view value)
@@ -2307,7 +2337,7 @@ class provider_location_repository_t final : public location_repository_t
         std::uint64_t generation = 1;
         store_condition_t row_condition;
         if (const auto *found = std::get_if<store_found_t> (&current)) {
-            auto stored = parse_json (found->value.bytes);
+            auto stored = parse_canonical_record (found->value.bytes, "descriptor");
             std::uint64_t provider_generation = 0;
             bool provider_generation_known = false;
             try {
@@ -2362,7 +2392,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto *found = std::get_if<store_found_t> (&current);
         if (!found)
             return completed (location_write_status_t::ignored_stale);
-        const auto record = parse_json (found->value.bytes);
+        const auto record = parse_canonical_record (found->value.bytes, "descriptor");
         if (record_owner_id (record) != owner.owner_id
             || record_lease_generation (record) != owner.lease_generation)
             return completed (location_write_status_t::ignored_stale);
@@ -2390,7 +2420,8 @@ class provider_location_repository_t final : public location_repository_t
         location_page_t<T> output;
         output.items.reserve (found->items.size ());
         for (const auto &item : found->items)
-            output.items.push_back (decode (parse_json (item.value.bytes)));
+            output.items.push_back (
+              decode (parse_canonical_record (item.value.bytes, "descriptor")));
         if (found->next_cursor)
             output.continuation_token = found->next_cursor->value;
         return completed (std::move (output));
@@ -2407,7 +2438,8 @@ class provider_location_repository_t final : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "Location Store scan cursor expired");
             for (const auto &item : page->items) {
-                const auto record = parse_json (item.value.bytes);
+                const auto record =
+                  parse_canonical_record (item.value.bytes, "descriptor");
                 if (record_owner_id (record) != owner.owner_id
                     || record_lease_generation (record) != owner.lease_generation)
                     continue;
@@ -2716,9 +2748,9 @@ class provider_location_repository_t final : public location_repository_t
                                                   std::string provider_version,
                                                   std::chrono::system_clock::time_point store_now)
     {
-        const auto value = parse_json (bytes);
-        if (value.contains ("recordVersion") && value.at ("recordVersion").get<int> () != 1)
-            throw std::invalid_argument ("unrecognized authority recordVersion");
+        // Fail-closed on absent AND present-unknown recordVersion (spec 21
+        // §2.4); tolerating absence would guess at the record layout.
+        const auto value = parse_canonical_record (bytes, "authority");
         const auto owner = value.contains ("owner")
                              ? decode_owner (value.at ("owner"))
                              : location_owner_token_t{value.at ("ownerId").get<std::string> (),
@@ -3046,7 +3078,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto *found = std::get_if<store_found_t> (&row);
         if (!found)
             return std::nullopt;
-        const auto record = parse_json (found->value.bytes);
+        const auto record =
+          parse_canonical_record (found->value.bytes, "MeshNode descriptor");
         auto descriptor = decode_mesh_descriptor (record.at ("descriptor"));
         if ((require_identity
              && (descriptor.lifecycle_generation != target.node_lifecycle_generation

@@ -1898,45 +1898,78 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
       }, deadline);
 }
 
-task_t<std::optional<protocol::actor_join_reply_tail_t>>
+task_t<actor_join_wire_outcome_t>
 raw_mesh_node_owner_t::request_actor_join (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::actor_join_request_t &request,
   const std::optional<protocol::application_payload_t> &payload,
   std::chrono::milliseconds timeout)
 {
+    actor_join_wire_outcome_t outcome;
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         port = _port;
     }
-    if (!port || timeout <= std::chrono::milliseconds::zero ()
-        || request.correlation == 0)
-        co_return std::nullopt;
+    if (!port) {
+        outcome.failure = actor_join_wire_failure_t::unavailable;
+        co_return outcome;
+    }
+    if (timeout <= std::chrono::milliseconds::zero ()) {
+        //  The caller's deadline is already spent before the wire is
+        //  touched — spec 32 classifies this as DeadlineExceeded, not a
+        //  routing failure.
+        outcome.failure = actor_join_wire_failure_t::deadline_exceeded;
+        co_return outcome;
+    }
+    if (request.correlation == 0) {
+        //  encode_actor_join_request would reject this anyway: a request
+        //  this call cannot fence is a wire-contract violation.
+        outcome.failure = actor_join_wire_failure_t::protocol_error;
+        co_return outcome;
+    }
     detail::backend::raw_message_t parts{
       protocol::encode_actor_join_request (request)};
     if (payload)
         parts.push_back (protocol::encode_application_payload (*payload));
     auto pending = port->request (target_routing_id, parts, timeout);
     const auto completed = co_await pending;
-    if (completed.result != detail::backend::raw_request_result_t::ok
-        || completed.parts.empty () || completed.parts.size () > 2)
-        co_return std::nullopt;
+    if (completed.result != detail::backend::raw_request_result_t::ok) {
+        outcome.failure =
+          completed.result == detail::backend::raw_request_result_t::timed_out
+            ? actor_join_wire_failure_t::deadline_exceeded
+            : actor_join_wire_failure_t::unavailable;
+        co_return outcome;
+    }
+    if (completed.parts.empty () || completed.parts.size () > 2) {
+        //  A conformant peer never produces this part count for a
+        //  reply(20)+actorJoin tail — malformed wire, not unavailability.
+        outcome.failure = actor_join_wire_failure_t::protocol_error;
+        co_return outcome;
+    }
     try {
         auto reply =
           protocol::decode_actor_join_reply (completed.parts.front ());
         // Exact-identity fencing: a reply whose correlation does not match
         // the request this call sent is a stale or misrouted reply and must
         // not resolve this call either way.
-        if (reply.header.correlation != request.correlation)
-            co_return std::nullopt;
-        if (completed.parts.size () == 2)
-            (void) protocol::decode_application_payload (
+        if (reply.header.correlation != request.correlation) {
+            outcome.failure = actor_join_wire_failure_t::protocol_error;
+            co_return outcome;
+        }
+        if (completed.parts.size () == 2) {
+            //  Surface the decoded application reply to the caller instead
+            //  of validating and discarding it.
+            outcome.application_reply = protocol::decode_application_payload (
               completed.parts[1], false);
-        co_return reply;
+        }
+        outcome.reply = std::move (reply);
+        co_return outcome;
     }
     catch (const protocol::service_wire_error_t &) {
-        co_return std::nullopt;
+        outcome.failure = actor_join_wire_failure_t::protocol_error;
+        outcome.application_reply.reset ();
+        co_return outcome;
     }
 }
 

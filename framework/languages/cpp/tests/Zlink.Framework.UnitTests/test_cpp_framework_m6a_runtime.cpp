@@ -2293,10 +2293,10 @@ void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
     const auto request = actor_join_request (
       source_descriptor, target_descriptor, 4242, "actor-1", "spot-1");
 
-    std::optional<protocol::actor_join_reply_tail_t> response;
+    mesh::actor_join_wire_outcome_t outcome;
     std::atomic_bool source_settled{false};
     std::thread join_thread ([&] {
-        response = await_task (source.request_actor_join (
+        outcome = await_task (source.request_actor_join (
           target_descriptor.node_routing_id, request, std::nullopt, 5s));
         source_settled.store (true, std::memory_order_release);
     });
@@ -2324,6 +2324,7 @@ void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
     join_thread.join ();
 
     assert (source_settled.load (std::memory_order_acquire));
+    const auto &response = outcome.reply;
     assert (response);
     assert (response->join_result == protocol::actor_join_result_t::accepted);
     assert (response->spot && response->spot->spot_id == "spot-1");
@@ -2352,10 +2353,10 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
     const auto request = actor_join_request (
       source_descriptor, target_descriptor, 4343, "actor-2", "spot-2");
 
-    std::optional<protocol::actor_join_reply_tail_t> response;
+    mesh::actor_join_wire_outcome_t outcome;
     std::atomic_bool source_settled{false};
     std::thread join_thread ([&] {
-        response = await_task (source.request_actor_join (
+        outcome = await_task (source.request_actor_join (
           target_descriptor.node_routing_id, request, std::nullopt, 5s));
         source_settled.store (true, std::memory_order_release);
     });
@@ -2377,6 +2378,7 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
     join_thread.join ();
 
     assert (source_settled.load (std::memory_order_acquire));
+    const auto &response = outcome.reply;
     assert (response);
     assert (response->join_result == protocol::actor_join_result_t::rejected);
     assert (!response->spot);
@@ -2409,10 +2411,10 @@ void verify_actor_join_wrong_source_generation_is_fenced ()
     request.actor.target_node_generation =
       source_descriptor.lifecycle_generation + 1;
 
-    std::optional<protocol::actor_join_reply_tail_t> response;
+    mesh::actor_join_wire_outcome_t outcome;
     std::atomic_bool source_settled{false};
     std::thread join_thread ([&] {
-        response = await_task (source.request_actor_join (
+        outcome = await_task (source.request_actor_join (
           target_descriptor.node_routing_id, request, std::nullopt, 300ms));
         source_settled.store (true, std::memory_order_release);
     });
@@ -2441,8 +2443,66 @@ void verify_actor_join_wrong_source_generation_is_fenced ()
 
     assert (source_settled.load (std::memory_order_acquire));
     // Fenced on the receiver: the originate side never gets a reply and
-    // times out to std::nullopt, not a false "accepted"/"rejected".
-    assert (!response);
+    // times out — and the typed outcome must classify that timeout as
+    // deadline_exceeded (spec 32 §5), not a false "accepted"/"rejected"
+    // and not an unclassified transport failure.
+    assert (!outcome.reply);
+    assert (outcome.failure == mesh::actor_join_wire_failure_t::deadline_exceeded);
+
+    source.close ();
+    target.close ();
+}
+
+// Malformed-reply classification (spec 32 §5): a decodable reply whose
+// correlation does not match the request this call sent is a stale or
+// misrouted reply — the typed outcome must classify it as protocol_error,
+// never as accepted/rejected and never as a plain timeout.
+void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-mismatch-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-mismatch-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    const auto request = actor_join_request (
+      source_descriptor, target_descriptor, 4545, "actor-4", "spot-4");
+
+    mesh::actor_join_wire_outcome_t outcome;
+    std::atomic_bool source_settled{false};
+    std::thread join_thread ([&] {
+        outcome = await_task (source.request_actor_join (
+          target_descriptor.node_routing_id, request, std::nullopt, 5s));
+        source_settled.store (true, std::memory_order_release);
+    });
+
+    const auto claim = claim_actor_join (target);
+    assert (claim && claim->records.size () == 1);
+    // Reply through the raw route (so the frame reaches the pending
+    // request), but stamp a correlation that does not identify it.
+    auto misrouted = claim->records.front ();
+    misrouted.correlation = request.correlation + 2;
+    assert (target.reply_actor_join (
+      misrouted, protocol::actor_join_result_t::accepted,
+      protocol::actor_join_reply_spot_ref_t{"spot-4", 9}, 3, 8192));
+    assert (target.mailbox ().release (*claim));
+
+    const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source_settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < settle_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    join_thread.join ();
+
+    assert (source_settled.load (std::memory_order_acquire));
+    assert (!outcome.reply);
+    assert (outcome.failure == mesh::actor_join_wire_failure_t::protocol_error);
 
     source.close ();
     target.close ();
@@ -2562,5 +2622,6 @@ int main ()
     verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ();
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();
+    verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
     return 0;
 }

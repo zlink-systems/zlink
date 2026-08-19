@@ -715,4 +715,103 @@ TEST (CppFrameworkOpaqueRelocationStore, RepositoryReconcilesLostCommitReply)
     EXPECT_EQ (found->bytes, payload);
 }
 
+// Rewrites every stored canonical JSON row so its `recordVersion` field is
+// ABSENT (not merely unknown), returning how many rows were stripped.
+// Provider-private rows (counters, reservations, ...) either are not JSON
+// objects or carry no recordVersion and pass through untouched.
+std::size_t strip_record_version_fields (in_memory_location_store_t &store)
+{
+    std::size_t stripped = 0;
+    std::optional<store_scan_cursor_t> cursor;
+    do {
+        auto result = store.scan ({"", cursor, 256}).result ().value ();
+        auto *page = std::get_if<store_scan_page_t> (&result);
+        if (page == nullptr)
+            break;
+        for (const auto &item : page->items) {
+            const std::string text (
+              reinterpret_cast<const char *> (item.value.bytes.data ()),
+              item.value.bytes.size ());
+            auto record = nlohmann::json::parse (text, nullptr, false);
+            if (!record.is_object () || !record.contains ("recordVersion"))
+                continue;
+            record.erase ("recordVersion");
+            (void) store
+              .write ({.conditions = {},
+                       .mutations = {store_put_t{item.key, bytes (record.dump ()),
+                                                 std::chrono::hours (1)}}})
+              .result ()
+              .value ();
+            ++stripped;
+        }
+        cursor = page->next_cursor;
+    } while (cursor);
+    return stripped;
+}
+
+// Spec 21 §2.4 fail-closed: a canonical row whose recordVersion is MISSING
+// is just as unrecognized as one with a wrong value — the reader must fail
+// explicitly instead of guessing how to read it (java is strict; dotnet
+// went strict in f2dfa809e8; this pins the cpp readers: owner lease,
+// descriptor envelope, and authority).
+TEST (CppFrameworkOpaqueLocationStore, MissingRecordVersionFailsClosed)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    const auto claim = repository.claim_owner_lease ("owner-a", 30s).result ().value ();
+    const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
+    ASSERT_NE (claimed, nullptr);
+
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "play";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"node-7"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = claimed->token.owner_id;
+    descriptor.lease_generation = claimed->token.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back (
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+    descriptor.capacity.actors.limit = 10;
+    descriptor.capacity.spots.limit = 10;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+
+    object_creation_target_t target{"play", node_rid_t::from_string ("node-7"), 1,
+                                    claimed->token};
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "actor-1"};
+    request.intent.stable_type = "player";
+    request.target = target;
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+    const auto reserved = repository.reserve (request).result ().value ();
+    const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+    ASSERT_NE (reservation, nullptr);
+    const auto ready =
+      repository.commit ({request.key, reservation->fence, bytes ("ready")}).result ().value ();
+    ASSERT_NE (std::get_if<object_committed_t> (&ready), nullptr);
+
+    // Sanity: intact rows read fine before the corruption.
+    const auto actor_key = actor_authority_key ("actor-1");
+    ASSERT_TRUE (std::holds_alternative<owner_lease_found_t> (
+      repository.read_owner_lease ("owner-a").result ().value ()));
+    ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (
+      repository.read_authority (actor_key).result ().value ()));
+    ASSERT_EQ (repository.list_mesh_nodes ("play").result ().value ().items.size (), 1u);
+
+    // Owner lease + MeshNode descriptor + authority at minimum.
+    ASSERT_GE (strip_record_version_fields (provider), 3u);
+
+    provider_location_repository_t reopened (provider);
+    EXPECT_THROW ((void) reopened.read_owner_lease ("owner-a"), std::invalid_argument);
+    EXPECT_THROW ((void) reopened.read_authority (actor_key), std::invalid_argument);
+    EXPECT_THROW ((void) reopened.list_mesh_nodes ("play"), std::invalid_argument);
+}
+
 } // namespace

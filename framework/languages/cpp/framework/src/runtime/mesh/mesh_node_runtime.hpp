@@ -461,6 +461,15 @@ class mesh_node_runtime_t
       const zlink::routing_id_t &target_node_rid,
       const std::string &target_spot_id,
       std::uint64_t object_generation) const;
+    // Negotiated receive chunk limit from an accepted actorJoin(28)
+    // admission reply (spec 51 §9), keyed by actor identity. The relocation
+    // direct-transfer capture (maintenance_runtime's
+    // advertised_receive_chunk_limit_bytes consumer) reads it when it
+    // begins the transfer that admission approved; threading it into that
+    // consumer's call site is still deferred, but the negotiated value is
+    // no longer dropped at decode.
+    std::optional<std::uint32_t> negotiated_receive_chunk_limit_bytes (
+      const actor_ref_t &actor) const;
     std::string mesh_name () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     std::string listen_endpoint () const;
@@ -607,6 +616,10 @@ class mesh_node_runtime_t
     host::actor_create_operation_target_t _actor_create_target;
     mutable std::mutex _observed_spot_authority_mutex;
     std::map<std::string, observed_spot_authority_t> _observed_spot_authorities;
+    void record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
+                                                std::uint32_t limit_bytes);
+    mutable std::mutex _negotiated_receive_chunk_limit_mutex;
+    std::map<std::string, std::uint32_t> _negotiated_receive_chunk_limits;
     host::instance_spot_activation_materializer_t _instance_spot_materializer;
     std::shared_ptr<runtime::stateful::relocation_store_port_t> _instance_spot_relocations;
     std::shared_ptr<runtime::stateful::authority_relocation_port_t> _relocation_authority;
@@ -674,5 +687,25 @@ class mesh_node_runtime_t
                        zlink::framework::runtime::call_id_hash_t>
       _actor_join_continuations;
 };
+
+// actorJoin(28) receiver admission, extracted so unit tests can pin its
+// approval-only shape (spec 15 §4.2, spec 51 §9). Admission of a User Spot
+// join runs the application admission callback and registers the
+// relocation temporary queue (the identity-keyed pending admission on the
+// actor transfer coordinator) with the prepared factory, then replies
+// approval. No Actor instance is constructed or installed, no target
+// location is claimed, and no membership/commit runs during admission —
+// capture/restore/target CAS/membership/application dispatch belong to the
+// transfer/commit stages the direct-transfer flow already runs
+// (admit_remote_actor_to_spot → prepare_remote_actor_to_spot → finalize).
+// A newer attempt for the same actor identity replaces a parked older
+// attempt (later-attempt-wins, spec 15 §4.2). JoinEntrySpot has no
+// approval preparation: entry admission approves without registering a
+// temporary queue; its preparation rides the later Restore request.
+host::actor_join_operation_result_t admit_wire_actor_join (
+  const std::shared_ptr<spot_node_builder_state_t> &spot_state,
+  const zlink::routing_id_t &local_node_rid,
+  const runtime::protocol::actor_join_request_t &request,
+  const std::optional<runtime::protocol::application_payload_t> &payload);
 
 } // namespace zlink::framework::detail
