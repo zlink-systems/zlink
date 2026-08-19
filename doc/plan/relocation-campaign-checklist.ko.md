@@ -194,6 +194,17 @@
       wire 후보(15/33/34)로 구분 인코딩 — 4언어 기준 매핑(97fc074058)과 정렬
       [D에서 편입 2026-08-19; 전용 wire 어휘 확장(ShuttingDown 등)은 이때 재판정]
 
+## C-11 스펙 이슈 전량 확정 (사용자 지시 2026-08-19 — 보류 금지, 즉시 판정·반영)
+
+- [ ] 8건 판정 완료 → 스펙 반영 진행 중: ① 불확정 FINALIZE 3분기 복구 절차(28
+      명문화), ② relay hop deadline=클라이언트 관리+로컬 창 재바운드(28 개정),
+      ③ Entry Spot 비주소성+노드 레벨 알림(15/28), ④ 동일 revision RENEW=무해
+      no-op(21), ⑤ authority commit은 자기 정체성만 펜스(21), ⑥ removeAllByOwner는
+      authority만(21), ⑦ actorJoin(28) body=완전 계약(51), ⑧ golden authority-spot
+      벡터 state→reserved 정정. (기존 목록 잔여: 28↔21/23 모순=개정 해소, TTL·
+      pre-Prepare=base/delta 제거로 소멸, wire 어휘=현행 유지 확정, actorJoin
+      originate=구현 중)
+
 ## E. 확정 후속 단계 (사용자 승격 2026-08-19 — 완료 조건 포함, C 완료 후 착수)
 
 - [ ] E-1 dotnet 성능 패스(`062c0bbd1e`에 문서화된 6건): message-follow 중복 lock
