@@ -185,10 +185,17 @@ export interface ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
   ): Promise<SubmitResult>;
-  /** Sends one already-encoded service-wire infrastructure record directly to a peer. */
+  /**
+   * Sends service-wire infrastructure frames directly to a peer. Relocation
+   * Prepare may add NODE-INTERNAL sideband frames after its canonical frame.
+   */
   sendInfrastructureControl?(
     targetRid: unknown,
-    record: Uint8Array
+    record: Uint8Array | readonly Uint8Array[]
+  ): Promise<SubmitResult>;
+  sendInfrastructureControlFrames?(
+    targetRid: unknown,
+    frames: readonly Uint8Array[]
   ): Promise<SubmitResult>;
   requestToNode(
     targetRid: unknown,

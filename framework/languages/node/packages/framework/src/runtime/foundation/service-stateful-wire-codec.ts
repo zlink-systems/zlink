@@ -127,6 +127,11 @@ export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocati
   /** CRC-32C (Castagnoli) over the fully assembled payload bytes. */
   readonly payloadChecksumCrc32c: number;
   readonly applicationVersion: bigint;
+  /** NODE-INTERNAL; serialized as extra frames after canonical command 40. */
+  readonly nodeInternalBoundSessions?: readonly {
+    readonly participantKey: string;
+    readonly payload: Uint8Array;
+  }[];
 }
 
 export interface ServiceMaintenanceRelocationReady extends ServiceWireRelocationBase {

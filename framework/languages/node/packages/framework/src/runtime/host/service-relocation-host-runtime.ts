@@ -647,8 +647,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     record: ReceiveRecord,
     signal?: AbortSignal
   ): Promise<boolean> {
-    if (record.parts.length !== 1) return false;
+    if (record.parts.length === 0) return false;
     const payload = record.parts[0]!.data();
+    const sideband = record.parts.length === 1
+      ? undefined
+      : decodePrepareSideband(record.parts.slice(1).map(part => part.data()));
+    if (record.parts.length > 1 && sideband === undefined) return false;
     if (record.kind === ReceiveKind.NodeSend) {
       const sourceLeave = decodeRemoteActorSourceLeaveTerminal(payload);
       if (sourceLeave !== undefined) {
@@ -705,8 +709,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       return true;
     }
-    const request = decodeServiceRelocationControlRequest(payload);
+    let request = decodeServiceRelocationControlRequest(payload);
     if (request === undefined) return false;
+    if (sideband !== undefined) {
+      if (request.kind !== 'prepare') return false;
+      request = { ...request, nodeInternalBoundSessions: sideband };
+    }
     if (request.kind === 'ready' || request.kind === 'failed') {
       this.acceptControlResponse(request, record.sourceNodeRid);
       return true;
@@ -1835,13 +1843,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           timers: []
         };
       },
-      captureApplicationState: async signal => packStandaloneActorState(
-        await this.captureApplication(
-          registration.relocation,
-          state.actor!,
-          signal
-        ),
-        standalone ? encodeActorSession(ownSession?.prepared.target) : undefined
+      // The canonical participant body (discriminator 1) is raw application
+      // state. The sealed bound-session target remains in sealed work and is
+      // transported only by Prepare's NODE-INTERNAL sideband frames.
+      captureApplicationState: signal => this.captureApplication(
+        registration.relocation,
+        state.actor!,
+        signal
       ),
       commitSeal: async () => {
         if (!standalone || ownSession === undefined || target === undefined || meshName === undefined) return;
@@ -1984,7 +1992,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         target.rid,
         prepare,
         signal,
-        controlDeadlineAtMs
+        controlDeadlineAtMs,
+        encodePrepareSideband(captured.envelope)
       );
       try {
         relocationDebug('coordinator.state_transfer_begin', { aggregateId: captured.envelope.aggregateId });
@@ -2397,10 +2406,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new ServiceRelocationDataLostError(String((error as Error)?.message ?? error));
     }
     const envelope = decodeServiceRelocationEnvelope(payload);
-    const inventoryEnvelope = await this.resolveTargetParticipantInventory(
+    const inventoryEnvelope = attachPrepareBoundSessions(
+      await this.resolveTargetParticipantInventory(
       request,
       envelope,
       signal
+      ),
+      request.nodeInternalBoundSessions
     );
     validatePrepareEnvelope(request, inventoryEnvelope);
     const reservation = await this.reserveTargetForPrepare(
@@ -3129,7 +3141,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     request: ZLinkServiceRelocationControlRequest,
     signal?: AbortSignal,
-    deadlineAtMs = Date.now() + 30_000
+    deadlineAtMs = Date.now() + 30_000,
+    sideband: readonly Uint8Array[] = []
   ): Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> {
     const key = controlAckKey(request);
     if (this.pendingControls.has(key)) {
@@ -3157,7 +3170,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         try {
           const submitted = await this.sendInfrastructureControl(meshName,
             targetNodeRid,
-            encodeServiceRelocationControlRequest(request)
+            sideband.length === 0
+              ? encodeServiceRelocationControlRequest(request)
+              : [encodeServiceRelocationControlRequest(request), ...sideband]
           );
           relocationDebug('control.submit', {
             key,
@@ -3825,12 +3840,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private async sendInfrastructureControl(
     meshName: string,
     targetNodeRid: RoutingId,
-    record: Uint8Array
+    record: Uint8Array | readonly Uint8Array[]
   ): Promise<SubmitResult> {
     const node = this.requireMeshNode(meshName);
     const send = node.sendInfrastructureControl;
     if (send === undefined) {
       throw new Error('RouteMesh backend cannot submit bare infrastructure controls.');
+    }
+    if (Array.isArray(record)) {
+      const sendFrames = node.sendInfrastructureControlFrames;
+      if (sendFrames !== undefined) {
+        return await sendFrames.call(node, targetNodeRid, record);
+      }
+      // Legacy in-memory backends have no multipart ingress. They exercise
+      // the canonical frame only; production Node backends implement the
+      // explicit multipart capability above.
+      return await send.call(node, targetNodeRid, record[0]!);
     }
     return await send.call(node, targetNodeRid, record);
   }
@@ -3934,13 +3959,6 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     payload: Uint8Array,
     signal?: AbortSignal
   ): Promise<void> {
-    const standalone = hidden.actor === undefined
-      ? undefined
-      : unpackStandaloneActorState(payload);
-    if (standalone?.boundSessionState.byteLength) {
-      await this.restoreBoundSession(hidden, standalone.boundSessionState);
-    }
-    payload = standalone?.applicationState ?? payload;
     const registration = this.registration(hidden.participant.objectKind, hidden.participant.stableType);
     if (registration.relocation.kind === 'recreate') {
       if (payload.byteLength !== 0) throw new Error('Recreate relocation contains snapshot state.');
@@ -5125,6 +5143,71 @@ function toServiceTimer(value: import('../spots/spot-timer').ZLinkTimerRelocatio
   };
 }
 
+/**
+ * NODE-INTERNAL Prepare sideband. Frame zero remains the exact canonical
+ * command-40 schema record; each following ZLNI frame carries one sealed
+ * actor-session journal keyed by its canonical participant authority key.
+ * Sessionless relocation remains a single-frame, wire-identical Prepare.
+ */
+function encodePrepareSideband(envelope: ServiceRelocationEnvelope): readonly Buffer[] {
+  return envelope.participants
+    .filter(participant => participant.boundSessionState.byteLength !== 0)
+    .map(participant => {
+      const key = Buffer.from(participant.key, 'utf8');
+      const payload = Buffer.from(participant.boundSessionState);
+      if (key.byteLength === 0 || key.byteLength > 0xffff || payload.byteLength > 0xffff_ffff) {
+        throw new TypeError('Bound-session relocation sideband is out of bounds.');
+      }
+      const header = Buffer.allocUnsafe(11);
+      header.write('ZLNI', 0, 'ascii');
+      header[4] = 1;
+      header.writeUInt16BE(key.byteLength, 5);
+      header.writeUInt32BE(payload.byteLength, 7);
+      return Buffer.concat([header, key, payload]);
+    });
+}
+
+function decodePrepareSideband(frames: readonly Uint8Array[]): readonly {
+  readonly participantKey: string;
+  readonly payload: Buffer;
+}[] | undefined {
+  const result: Array<{ readonly participantKey: string; readonly payload: Buffer }> = [];
+  const keys = new Set<string>();
+  for (const frame of frames) {
+    const bytes = Buffer.from(frame);
+    if (bytes.byteLength < 11 || bytes.subarray(0, 4).toString('ascii') !== 'ZLNI' || bytes[4] !== 1) {
+      return undefined;
+    }
+    const keyLength = bytes.readUInt16BE(5);
+    const payloadLength = bytes.readUInt32BE(7);
+    if (11 + keyLength + payloadLength !== bytes.byteLength || keyLength === 0) return undefined;
+    const participantKey = bytes.subarray(11, 11 + keyLength).toString('utf8');
+    if (keys.has(participantKey)) return undefined;
+    keys.add(participantKey);
+    result.push({ participantKey, payload: Buffer.from(bytes.subarray(11 + keyLength)) });
+  }
+  return result;
+}
+
+function attachPrepareBoundSessions(
+  envelope: ServiceRelocationEnvelope,
+  sideband: ServiceMaintenanceRelocationPrepare['nodeInternalBoundSessions']
+): ServiceRelocationEnvelope {
+  if (sideband === undefined || sideband.length === 0) return envelope;
+  const byKey = new Map(sideband.map(value => [value.participantKey, Buffer.from(value.payload)]));
+  const participants = envelope.participants.map(participant => {
+    const payload = byKey.get(participant.key);
+    if (payload === undefined) return participant;
+    if (participant.objectKind !== 'actor') {
+      throw new TypeError('Bound-session relocation sideband names a non-Actor participant.');
+    }
+    byKey.delete(participant.key);
+    return { ...participant, boundSessionState: payload };
+  });
+  if (byKey.size !== 0) throw new TypeError('Bound-session relocation sideband names an unknown participant.');
+  return { ...envelope, participants };
+}
+
 function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): Buffer {
   if (target === undefined) return Buffer.alloc(0);
   return Buffer.from(JSON.stringify({
@@ -5162,39 +5245,6 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
             target.serviceWireRelocation.session.bindingGeneration.toString()
         }
   }), 'utf8');
-}
-
-/** The canonical actor-root has one opaque application-state section. */
-function packStandaloneActorState(applicationState: Uint8Array, boundSessionState?: Uint8Array): Buffer {
-  if (boundSessionState === undefined || boundSessionState.byteLength === 0) {
-    return Buffer.from(applicationState);
-  }
-  const state = Buffer.from(applicationState);
-  const session = Buffer.from(boundSessionState);
-  const header = Buffer.allocUnsafe(13);
-  header.write('ZLAS', 0, 'ascii');
-  header[4] = 1;
-  header.writeUInt32BE(state.byteLength, 5);
-  header.writeUInt32BE(session.byteLength, 9);
-  return Buffer.concat([header, state, session]);
-}
-
-function unpackStandaloneActorState(payload: Uint8Array): {
-  readonly applicationState: Buffer;
-  readonly boundSessionState: Buffer;
-} | undefined {
-  const bytes = Buffer.from(payload);
-  if (bytes.byteLength < 13 || bytes.subarray(0, 4).toString('ascii') !== 'ZLAS') return undefined;
-  if (bytes[4] !== 1) throw new TypeError('Standalone Actor relocation state wrapper version is invalid.');
-  const stateLength = bytes.readUInt32BE(5);
-  const sessionLength = bytes.readUInt32BE(9);
-  if (13 + stateLength + sessionLength !== bytes.byteLength) {
-    throw new TypeError('Standalone Actor relocation state wrapper is truncated.');
-  }
-  return {
-    applicationState: Buffer.from(bytes.subarray(13, 13 + stateLength)),
-    boundSessionState: Buffer.from(bytes.subarray(13 + stateLength))
-  };
 }
 
 function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget {

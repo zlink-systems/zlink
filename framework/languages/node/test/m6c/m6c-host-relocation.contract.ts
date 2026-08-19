@@ -1495,6 +1495,25 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }).finally(() => part.close());
     deliveries.push(delivery);
   };
+  const deliverFrames = (
+    runtime: ZLinkHostServiceRelocationRuntime,
+    sourceNodeRid: string,
+    frames: readonly Uint8Array[],
+    deliveries: Promise<void>[]
+  ) => {
+    const parts = frames.map(frame => Message.from(frame));
+    const delivery = runtime.tryHandleControl('mesh-a', {
+      kind: ReceiveKind.NodeSend,
+      sourceNodeRid,
+      parts
+    } as never).then(() => undefined).catch(error => {
+      deliveryErrors.push(error);
+      if (runtime === targetRuntime && options.readyResults === undefined) {
+        sourceSignal.abort(error);
+      }
+    }).finally(() => parts.forEach(part => part.close()));
+    deliveries.push(delivery);
+  };
   const sourceNode = {
     status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
     peers: () => [{ routingId: 'target', lifecycleGeneration: 6n, state: 3 }],
@@ -1510,6 +1529,18 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         }
       }
       queueMicrotask(() => deliver(targetRuntime, 'source', Buffer.from(bytes), targetDeliveries));
+      return SubmitResult.Ok;
+    },
+    sendInfrastructureControlFrames(_targetRid: string, frames: readonly Uint8Array[]) {
+      const bytes = frames[0]!;
+      const control = decodeServiceRelocationControlRequest(bytes);
+      if (control !== undefined) {
+        controlKinds.push(control.kind);
+        if (control.kind === 'prepare') {
+          prepareFingerprints.push(Buffer.from(bytes).toString('base64'));
+        }
+      }
+      queueMicrotask(() => deliverFrames(targetRuntime, 'source', frames, targetDeliveries));
       return SubmitResult.Ok;
     }
   };

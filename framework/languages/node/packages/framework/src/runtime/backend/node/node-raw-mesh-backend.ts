@@ -594,11 +594,21 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   async sendInfrastructureControl(
     targetRid: unknown,
-    record: Uint8Array
+    record: Uint8Array | readonly Uint8Array[]
   ): Promise<SubmitResultValue> {
     return await this.requireRuntime().sendService(
       String(targetRid),
-      [Buffer.from(record)]
+      (Array.isArray(record) ? record : [record]).map(value => Buffer.from(value))
+    ) ? SubmitResult.Ok : SubmitResult.NotConnected;
+  }
+
+  async sendInfrastructureControlFrames(
+    targetRid: unknown,
+    frames: readonly Uint8Array[]
+  ): Promise<SubmitResultValue> {
+    return await this.requireRuntime().sendService(
+      String(targetRid),
+      frames.map(frame => Buffer.from(frame))
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
