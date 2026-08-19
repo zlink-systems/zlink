@@ -503,7 +503,8 @@ minus `weight`.
 
 The authority record (§2.2, §2.3) is one opaque-record row addressed by one logical key in all
 four languages. **`objectGeneration` is issued from a Store-wide monotonic sequence**, which
-also guarantees per-identity monotonicity.
+also guarantees per-identity monotonicity; [Location Store Redis §7](22-location-store-redis.en.md#7-registration-lifetime-and-the-official-redis-provider)
+defines that sequence's counter keys and issuance contract.
 
 The authority record's canonical JSON includes at least the following fields. Except for
 `payload`, integer fields are written as JSON strings rather than JSON numbers, the same as

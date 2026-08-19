@@ -68,9 +68,6 @@ class ZLinkRedisLocationRowJsonTest {
             "app:{zlink-location-v3}:schema",
             keys.schemaKey());
         assertEquals(
-            "app:{zlink-location-v3}:counter",
-            keys.counterKey());
-        assertEquals(
             "app:{zlink-location-v3}:authority:key-index",
             keys.authorityIndexKey());
         assertEquals(

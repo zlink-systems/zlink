@@ -185,6 +185,36 @@ implementation matching each language's naming convention. Public options are
 limited to the connection, key namespace, and operation timeout needed to
 build the instance.
 
+### Framework Generation Counters
+
+These logical keys are one cross-language contract; they are not provider versions or
+Redis implementation counters.
+
+| Logical key | Issued value |
+|---|---|
+| `zlink:v11:owner-counter` | `OwnerLeaseGeneration` (unchanged) |
+| `zlink:v11:object-counter` | `ObjectGeneration` |
+| `zlink:v11:authority-owner-counter` | `AuthorityOwnerGeneration` |
+
+Each value is bare UTF-8 canonical decimal: no sign, leading zero, JSON envelope, or
+`recordVersion`. A missing row means the next value is `1`; issuing `v` CAS-puts `v + 1`.
+A block of `n` issues `v..v+n-1` and puts `v+n`. The only valid stored or issued values are
+`1..2^63-1`; `0` is never stored or issued. At exhaustion the operation returns its typed
+`GenerationExhausted` result and changes neither record nor counter.
+
+The counter mutation **must** be in the same conditional write batch as the record it gates
+(one `EVAL`). The provider mapping
+`{prefix}:{zlink-location-v3}:opaque:{sha256hex(logicalKey)}` gives every logical counter the
+same `{zlink-location-v3}` hash slot automatically. Counter logical keys remain outside the
+`authority\0` and descriptor scan-preimage prefixes.
+
+**Operations clean break:** flush once per Store the physical opaque keys computed as SHA-256
+of these retired logical literals: `zlink:v11:counter:object`,
+`zlink:v11:counter:authority-owner`, `zlink:v11:authority:object-generation-counter`,
+`zlink:v11:authority:owner-generation-counter`, and `zlink:v11:authority-generations`.
+Recompute each physical key from its literal with the mapping above; do not guess it from a
+record or scan prefix.
+
 A MeshNode descriptor, owner lease, ClientServer server descriptor, fanout
 publisher descriptor, and authority record must use the same opaque record
 representation regardless of language — otherwise a record one language

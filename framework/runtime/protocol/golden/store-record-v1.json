@@ -57,6 +57,27 @@
       "redisKey": "app1:{zlink-location-v3}:opaque:85883711be9358294d4b878df17330df09f34e5706b926a4b56b6ba5db23c51a"
     }
   ],
+  "counterVectors": {
+    "encoding": "bare UTF-8 canonical decimal; no sign, leading zero, JSON envelope, or recordVersion",
+    "semantics": "next-to-issue: absent means 1; issue v then CAS-put v+1",
+    "vectors": [
+      {
+        "logicalKey": "zlink:v11:owner-counter",
+        "issuedValue": "5",
+        "storedNextValue": "6"
+      },
+      {
+        "logicalKey": "zlink:v11:object-counter",
+        "issuedValue": "7",
+        "storedNextValue": "8"
+      },
+      {
+        "logicalKey": "zlink:v11:authority-owner-counter",
+        "issuedValue": "3",
+        "storedNextValue": "4"
+      }
+    ]
+  },
   "valueVectors": {
     "genericOpaqueRecord": [
       {

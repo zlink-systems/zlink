@@ -77,6 +77,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
             ZLinkObjectReserved.class,
             repository.reserve(first, () -> false)
                 .toCompletableFuture().get()).reservation();
+        assertCounterValue(provider, "zlink:v11:object-counter", "2");
+        assertCounterValue(
+            provider, "zlink:v11:authority-owner-counter", "2");
         assertInstanceOf(
             ZLinkPlacementCapacityExhausted.class,
             repository.reserve(second, () -> false)
@@ -107,6 +110,55 @@ final class ZLinkProviderAuthorityRepositoryTest {
             ZLinkObjectReserved.class,
             repository.reserve(second, () -> false)
                 .toCompletableFuture().get());
+    }
+
+    @Test
+    void exhaustedObjectCounterReturnsTypedResultWithoutChangingIt()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var owner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "owner-exhausted", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        ZLinkStoreKey counterKey = new ZLinkStoreKey(
+            "zlink:v11:object-counter");
+        provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(),
+                    List.of(new ZLinkStorePut(
+                        counterKey,
+                        Long.toString(Long.MAX_VALUE).getBytes(
+                            java.nio.charset.StandardCharsets.UTF_8),
+                        null))),
+                () -> false)
+            .toCompletableFuture().get();
+
+        var result = new ZLinkProviderAuthorityRepository(
+                provider, descriptors)
+            .reserve(
+                capacityRequest(
+                    ZLinkAuthorityKeyCodec.spot("spot-exhausted"),
+                    descriptor,
+                    owner),
+                () -> false)
+            .toCompletableFuture().get();
+
+        assertInstanceOf(ZLinkObjectGenerationExhausted.class, result);
+        var counter = assertInstanceOf(
+            ZLinkStoreReadFound.class,
+            provider.read(counterKey, () -> false).toCompletableFuture().get());
+        assertEquals(
+            Long.toString(Long.MAX_VALUE),
+            new String(
+                counter.value().bytes(),
+                java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Test
@@ -457,6 +509,21 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 ZLinkPlacementObjectKind.USER_SPOT,
                 "room",
                 1));
+    }
+
+    private static void assertCounterValue(
+        ZLinkLocationStore provider,
+        String key,
+        String expected) throws Exception {
+        var found = assertInstanceOf(
+            ZLinkStoreReadFound.class,
+            provider.read(new ZLinkStoreKey(key), () -> false)
+                .toCompletableFuture().get());
+        assertEquals(
+            expected,
+            new String(
+                found.value().bytes(),
+                java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private static ZLinkMeshNodeDescriptor capacityDescriptor(

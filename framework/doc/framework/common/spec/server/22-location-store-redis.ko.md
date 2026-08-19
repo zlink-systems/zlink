@@ -152,6 +152,34 @@ dispose한다. 여러 Store가 물리 connection을 공유할 때 중복 dispose
 공식 Redis extension package는 언어별 naming convention에 맞는 `RedisLocationStore` 구현을 제공한다.
 공개 options는 instance 생성에 필요한 connection, key namespace와 operation timeout으로 제한한다.
 
+### Framework generation counter
+
+다음 logical key는 provider version이나 Redis implementation counter가 아닌, 언어 공통의 하나의 계약이다.
+
+| Logical key | 발급 값 |
+|---|---|
+| `zlink:v11:owner-counter` | `OwnerLeaseGeneration`(변경 없음) |
+| `zlink:v11:object-counter` | `ObjectGeneration` |
+| `zlink:v11:authority-owner-counter` | `AuthorityOwnerGeneration` |
+
+각 value는 sign, leading zero, JSON envelope, `recordVersion`이 없는 bare UTF-8 canonical decimal이다.
+행이 없으면 다음 값은 `1`이고, `v`를 발급하면 CAS로 `v + 1`을 Put한다. `n`개 묶음은
+`v..v+n-1`을 발급하고 `v+n`을 Put한다. 저장하거나 발급할 수 있는 값은 `1..2^63-1`뿐이며
+`0`은 저장하거나 발급하지 않는다. 소진 시 operation은 typed `GenerationExhausted` 결과를
+반환하고 record와 counter를 모두 바꾸지 않는다.
+
+Counter mutation은 그 값이 gate하는 record와 **같은 conditional write batch**(하나의 `EVAL`)에
+반드시 들어가야 한다. Provider mapping
+`{prefix}:{zlink-location-v3}:opaque:{sha256hex(logicalKey)}`은 모든 logical counter를 자동으로
+같은 `{zlink-location-v3}` hash slot에 둔다. Counter logical key는 `authority\0` 및 descriptor
+scan-preimage prefix 밖에 둔다.
+
+**운영 clean break:** Store마다 한 번, 다음 retired logical literal의 SHA-256으로 계산한 physical
+opaque key를 flush한다: `zlink:v11:counter:object`, `zlink:v11:counter:authority-owner`,
+`zlink:v11:authority:object-generation-counter`, `zlink:v11:authority:owner-generation-counter`,
+`zlink:v11:authority-generations`. 위 mapping으로 literal마다 physical key를 다시 계산하며 record나
+scan prefix에서 추측하지 않는다.
+
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
 descriptor와 authority record는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 —
 그래야 한 언어가 쓴 record를 다른 언어가 읽을 수 있다. 이 다섯 record는 다음 저장

@@ -486,7 +486,8 @@ field에서 `weight`만 뺀 형태다.
 
 Authority record(§2.2, §2.3)는 네 언어 모두 하나의 logical key가 가리키는 하나의
 opaque-record 행으로 저장한다. **`objectGeneration`은 Store 전역 단조 sequence에서
-발급하며**, 이 방식은 identity별 단조성도 보장한다.
+발급하며**, 이 방식은 identity별 단조성도 보장한다. 이 sequence의 counter key와 발급
+계약은 [Location Store Redis §7](22-location-store-redis.ko.md#7-등록-수명과-공식-redis-provider)이 정한다.
 
 Authority record의 canonical JSON은 최소한 다음 field를 포함한다. `payload`를
 제외한 정수 field는 다른 record의 generation field와 마찬가지로 JSON number가 아닌

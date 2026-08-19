@@ -40,7 +40,10 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 final class ZLinkProviderAuthorityRepository {
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
-    private static final String COUNTER_PREFIX = "zlink:v11:counter:";
+    private static final ZLinkStoreKey OBJECT_COUNTER =
+        new ZLinkStoreKey("zlink:v11:object-counter");
+    private static final ZLinkStoreKey AUTHORITY_OWNER_COUNTER =
+        new ZLinkStoreKey("zlink:v11:authority-owner-counter");
     private static final String AGGREGATE_PREFIX = "zlink:v11:aggregate:";
     private static final byte AGGREGATE_STAGING = 0;
     private static final byte AGGREGATE_PREPARED = 1;
@@ -437,6 +440,10 @@ final class ZLinkProviderAuthorityRepository {
                                     conditions,
                                     opaqueCancellation)
                                 .thenCompose(counters -> {
+                            if (counters.exhausted()) {
+                                return completed(
+                                    new ZLinkObjectGenerationExhausted());
+                            }
                             String reservationVersion =
                                 UUID.randomUUID().toString();
                             AuthorityRecord record = new AuthorityRecord(
@@ -1405,7 +1412,7 @@ final class ZLinkProviderAuthorityRepository {
                 == ZLinkAuthorityGenerationTransition.NEW_OWNER)
             .count());
         return nextCounterRange(
-                "authority-owner",
+                AUTHORITY_OWNER_COUNTER,
                 ownerChanges,
                 counterConditions,
                 cancellation)
@@ -1723,28 +1730,34 @@ final class ZLinkProviderAuthorityRepository {
         List<ZLinkStoreCondition> conditions,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation
             cancellation) {
-        return nextCounter("object", conditions, cancellation)
-            .thenCompose(object -> nextCounter(
-                    "authority-owner", conditions, cancellation)
-                .thenApply(owner -> new Counters(
-                    object.value(),
-                    owner.value(),
-                    concat(object.mutations(), owner.mutations()))));
+        return nextCounter(OBJECT_COUNTER, conditions, cancellation)
+            .thenCompose(object -> {
+                if (object.exhausted()) {
+                    return completed(Counters.exhaustedResult());
+                }
+                return nextCounter(
+                        AUTHORITY_OWNER_COUNTER, conditions, cancellation)
+                    .thenApply(owner -> owner.exhausted()
+                        ? Counters.exhaustedResult()
+                        : new Counters(
+                            object.value(),
+                            owner.value(),
+                            concat(object.mutations(), owner.mutations()),
+                            false));
+            });
     }
 
     private CompletionStage<Counter> nextCounter(
-        String name,
+        ZLinkStoreKey key,
         List<ZLinkStoreCondition> conditions,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation
             cancellation) {
-        ZLinkStoreKey key = new ZLinkStoreKey(COUNTER_PREFIX + name);
         return provider.read(key, cancellation).thenApply(read -> {
             long value = read instanceof ZLinkStoreReadFound found
                 ? decodeLong(found.value().bytes())
                 : 1L;
             if (value == Long.MAX_VALUE) {
-                throw new IllegalStateException(
-                    "Location Store generation is exhausted");
+                return Counter.exhaustedResult();
             }
             conditions.add(read instanceof ZLinkStoreReadFound found
                 ? new ZLinkStoreVersionCondition(
@@ -1753,20 +1766,20 @@ final class ZLinkProviderAuthorityRepository {
             return new Counter(
                 value,
                 List.of(new ZLinkStorePut(
-                    key, encodeLong(value + 1), null)));
+                    key, encodeLong(value + 1), null)),
+                false);
         });
     }
 
     private CompletionStage<Counter> nextCounterRange(
-        String name,
+        ZLinkStoreKey key,
         int count,
         List<ZLinkStoreCondition> conditions,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation
             cancellation) {
         if (count == 0) {
-            return completed(new Counter(0, List.of()));
+            return completed(new Counter(0, List.of(), false));
         }
-        ZLinkStoreKey key = new ZLinkStoreKey(COUNTER_PREFIX + name);
         return provider.read(key, cancellation).thenApply(read -> {
             long value = read instanceof ZLinkStoreReadFound found
                 ? decodeLong(found.value().bytes())
@@ -1779,7 +1792,8 @@ final class ZLinkProviderAuthorityRepository {
             return new Counter(
                 value,
                 List.of(new ZLinkStorePut(
-                    key, encodeLong(next), null)));
+                    key, encodeLong(next), null)),
+                false);
         });
     }
 
@@ -2474,8 +2488,13 @@ final class ZLinkProviderAuthorityRepository {
 
     private static long decodeLong(byte[] bytes) {
         try {
-            return Long.parseUnsignedLong(
-                new String(bytes, StandardCharsets.UTF_8));
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            long value = Long.parseUnsignedLong(
+                text);
+            if (value <= 0 || !Long.toString(value).equals(text)) {
+                throw new NumberFormatException("outside generation range");
+            }
+            return value;
         } catch (NumberFormatException failure) {
             throw new IllegalStateException(
                 "Location Store counter is invalid", failure);
@@ -2764,11 +2783,23 @@ final class ZLinkProviderAuthorityRepository {
         }
     }
 
-    private record Counter(long value, List<ZLinkStoreMutation> mutations) {}
+    private record Counter(
+        long value,
+        List<ZLinkStoreMutation> mutations,
+        boolean exhausted) {
+        private static Counter exhaustedResult() {
+            return new Counter(0, List.of(), true);
+        }
+    }
     private record Counters(
         long objectGeneration,
         long ownerGeneration,
-        List<ZLinkStoreMutation> mutations) {}
+        List<ZLinkStoreMutation> mutations,
+        boolean exhausted) {
+        private static Counters exhaustedResult() {
+            return new Counters(0, 0, List.of(), true);
+        }
+    }
     private record DecodedItem(String key, ZLinkStoreValue value) {}
     private record LoadedParticipant(
         ZLinkStoreKey key,

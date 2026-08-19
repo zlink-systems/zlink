@@ -84,10 +84,6 @@ final class ZLinkRedisLocationKeys {
         return domainBase() + ":owner-lease:legacy-state";
     }
 
-    String leaseGenerationKey() {
-        return counterKey();
-    }
-
     String stampKey(String tag, String meshName) {
         if ("mesh-node".equals(tag)) {
             return meshName == null
@@ -174,18 +170,6 @@ final class ZLinkRedisLocationKeys {
 
     String authorityIndexKey() {
         return domainBase() + ":authority:key-index";
-    }
-
-    String authorityRevisionKey() {
-        return counterKey();
-    }
-
-    String authorityObjectGenerationKey() {
-        return counterKey();
-    }
-
-    String authorityOwnerGenerationKey() {
-        return counterKey();
     }
 
     String creationKey(String reservationId) {
@@ -336,10 +320,6 @@ final class ZLinkRedisLocationKeys {
 
     String schemaKey() {
         return domainBase() + ":schema";
-    }
-
-    String counterKey() {
-        return domainBase() + ":counter";
     }
 
     String authorityHistoryKey(String authorityKey) {
