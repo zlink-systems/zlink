@@ -198,9 +198,10 @@ Redis implementation counters.
 
 Each value is bare UTF-8 canonical decimal: no sign, leading zero, JSON envelope, or
 `recordVersion`. A missing row means the next value is `1`; issuing `v` CAS-puts `v + 1`.
-A block of `n` issues `v..v+n-1` and puts `v+n`. The only valid stored or issued values are
-`1..2^63-1`; `0` is never stored or issued. At exhaustion the operation returns its typed
-`GenerationExhausted` result and changes neither record nor counter.
+A block of `n` issues `v..v+n-1` and puts `v+n`. The valid stored counter range is
+`1..2^63-1`; `0` is never stored or issued. A row storing `2^63-1` is exhausted and returns
+the typed `GenerationExhausted` result without changing either record or counter. Therefore,
+the maximum issued value is `2^63-2`.
 
 The counter mutation **must** be in the same conditional write batch as the record it gates
 (one `EVAL`). The provider mapping

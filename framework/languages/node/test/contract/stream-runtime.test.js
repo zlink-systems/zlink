@@ -874,13 +874,11 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
   );
 });
 
-test('managed stream actor bind reports a failed acknowledged confirmation to the error sink', async () => {
-  //  Spec 20 (session binding): a failed bind notice never rolls back the
-  //  already-current binding but must produce bounded diagnostics — the typed
-  //  failure is observed through the runtime error sink, not silently
-  //  discarded.
+test('initial managed stream actor bind removes its provisional route and surfaces an acknowledged confirmation failure', async () => {
+  // Spec 20: the first bind has no current route to preserve. It only becomes
+  // current after the Actor owner accepts it, so the relay's typed failure is
+  // the public bind failure and the provisional native/local binding is gone.
   const socket = new FakeStreamSocket();
-  const reported = [];
   const confirmationFailure = new framework.ZLinkFrameworkException(
     framework.ZLinkFrameworkErrorKind.InvalidOperation,
     'remote session binding was rejected'
@@ -889,28 +887,23 @@ test('managed stream actor bind reports a failed acknowledged confirmation to th
     confirmRemoteActorSessionBinding: async (_actor, _sessionRid, _signal, options) => {
       assert.equal(options.waitForAcknowledgement, true);
       throw confirmationFailure;
-    },
-    errorSink: () => ({
-      reportRuntimeTaskException(taskName, error) {
-        reported.push({ taskName, error });
-      }
-    })
+    }
   });
   const context = runtime.createSessionContext(
     new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session')
   );
 
-  const actor = await context.actors.bind({
-    nodeRid: 'node-remote',
-    actorId: 'actor-confirm-nack-observed',
-    generation: 1n
-  });
-
-  //  The binding itself stays current.
-  assert.equal(context.actors.find('actor-confirm-nack-observed'), actor);
-  assert.equal(reported.length, 1);
-  assert.equal(reported[0].taskName, 'remote session binding confirmation');
-  assert.equal(reported[0].error, confirmationFailure);
+  await assert.rejects(
+    () => context.actors.bind({
+      nodeRid: 'node-remote',
+      actorId: 'actor-confirm-nack-observed',
+      generation: 1n
+    }),
+    error => error === confirmationFailure
+  );
+  assert.equal(context.actors.find('actor-confirm-nack-observed'), undefined);
+  assert.equal(runtime.find('actor-confirm-nack-observed'), undefined);
+  assert.deepEqual(socket.unboundActors, ['actor-confirm-nack-observed']);
 });
 
 test('fire-and-forget remote actor session bind retry exhaustion reports a typed DeadlineExceeded', async () => {
@@ -1077,7 +1070,7 @@ test('managed stream actor bind failure does not create stale local binding', as
   assert.equal(runtime.find('actor-a'), undefined);
 });
 
-test('managed stream remote bind confirmation failure does not roll back the accepted binding', async () => {
+test('initial managed stream remote bind deadline failure does not leave a provisional binding', async () => {
   const operations = [];
   let nativeActor;
   const socket = {
@@ -1101,17 +1094,19 @@ test('managed stream remote bind confirmation failure does not roll back the acc
   });
   const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid'));
 
-  const actor = await context.actors.bind({
-    nodeRid: 'remote-node',
-    actorId: 'actor-relay-fail',
-    generation: 1n
-  });
-  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    () => context.actors.bind({
+      nodeRid: 'remote-node',
+      actorId: 'actor-relay-fail',
+      generation: 1n
+    }),
+    /remote bound session bind confirmation failed/
+  );
 
-  assert.equal(nativeActor.actorId, actor.actorId);
-  assert.equal(context.actors.find('actor-relay-fail'), actor);
-  assert.equal(runtime.find('actor-relay-fail'), actor);
-  assert.deepEqual(operations, ['bind:actor-relay-fail']);
+  assert.equal(nativeActor, undefined);
+  assert.equal(context.actors.find('actor-relay-fail'), undefined);
+  assert.equal(runtime.find('actor-relay-fail'), undefined);
+  assert.deepEqual(operations, ['bind:actor-relay-fail', 'unbind:actor-relay-fail']);
 });
 
 test('runtime host bound session uses local stream route before native SessionRelay', async () => {
@@ -7815,6 +7810,7 @@ function serviceRelayMessage(json) {
 class FakeStreamSocket {
   constructor() {
     this.boundActors = [];
+    this.unboundActors = [];
     this.boundActorSends = [];
     this.sends = [];
     this.disconnects = [];
@@ -7849,7 +7845,9 @@ class FakeStreamSocket {
     this.boundActors.push({ sessionRid, actor, timeoutMs });
   }
 
-  async unbindActor() {}
+  async unbindActor(_sessionRid, actorId) {
+    this.unboundActors.push(actorId);
+  }
 
   sendBoundActor(sessionRid, actorId, parts, flags) {
     this.boundActorSends.push({ sessionRid, actorId, parts, flags });

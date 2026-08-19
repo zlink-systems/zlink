@@ -164,9 +164,10 @@ dispose한다. 여러 Store가 물리 connection을 공유할 때 중복 dispose
 
 각 value는 sign, leading zero, JSON envelope, `recordVersion`이 없는 bare UTF-8 canonical decimal이다.
 행이 없으면 다음 값은 `1`이고, `v`를 발급하면 CAS로 `v + 1`을 Put한다. `n`개 묶음은
-`v..v+n-1`을 발급하고 `v+n`을 Put한다. 저장하거나 발급할 수 있는 값은 `1..2^63-1`뿐이며
-`0`은 저장하거나 발급하지 않는다. 소진 시 operation은 typed `GenerationExhausted` 결과를
-반환하고 record와 counter를 모두 바꾸지 않는다.
+`v..v+n-1`을 발급하고 `v+n`을 Put한다. 저장 가능한 counter 범위는 `1..2^63-1`이며,
+`0`은 저장하거나 발급하지 않는다. `2^63-1`을 저장한 행은 소진 상태이며 typed
+`GenerationExhausted` 결과를 반환하고 record와 counter를 모두 바꾸지 않는다. 따라서 최대로
+발급할 수 있는 값은 `2^63-2`이다.
 
 Counter mutation은 그 값이 gate하는 record와 **같은 conditional write batch**(하나의 `EVAL`)에
 반드시 들어가야 한다. Provider mapping

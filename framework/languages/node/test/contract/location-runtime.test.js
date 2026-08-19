@@ -1687,6 +1687,34 @@ test('production repository leaves authority record and next-to-issue counters u
     (await provider.read({ value: 'authority\0actor\0generation-ceiling' })).kind,
     'missing'
   );
+
+  const ownerCounter = await provider.read({ value: 'zlink:v11:owner-counter' });
+  assert.equal(ownerCounter.kind, 'found');
+  const ownerCounterSeeded = await provider.write({
+    conditions: [{
+      kind: 'version',
+      key: { value: 'zlink:v11:owner-counter' },
+      expected: ownerCounter.value.version
+    }],
+    mutations: [{
+      kind: 'put',
+      key: { value: 'zlink:v11:owner-counter' },
+      bytes: ceiling
+    }]
+  });
+  assert.equal(ownerCounterSeeded.kind, 'applied');
+
+  assert.deepEqual(
+    await repository.claimOwnerLease('owner-generation-ceiling-exhausted', 30_000),
+    { kind: 'generationExhausted' }
+  );
+  const exhaustedOwnerCounter = await provider.read({ value: 'zlink:v11:owner-counter' });
+  assert.equal(exhaustedOwnerCounter.kind, 'found');
+  assert.deepEqual(Buffer.from(exhaustedOwnerCounter.value.bytes), ceiling);
+  assert.equal(
+    (await provider.read({ value: 'owner\0owner-generation-ceiling-exhausted' })).kind,
+    'missing'
+  );
 });
 
 test('production repository rejects legacy public records without recordVersion', async () => {

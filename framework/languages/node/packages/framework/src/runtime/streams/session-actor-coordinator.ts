@@ -169,18 +169,39 @@ export class ZLinkSessionActorCoordinator {
         { waitForAcknowledgement }
       );
       const reportFailure = (error: unknown) => {
-        // Spec 20 §binding: a failed bind notice never restores or removes
-        // the already-current binding — it produces bounded diagnostics
-        // instead. The fire-and-forget branch is retried independently by
-        // the relay; either way the typed failure is reported through the
-        // runtime error sink, not silently discarded.
+        // A fire-and-forget route update retains the already-current binding;
+        // its failure is bounded diagnostics rather than a rollback. The
+        // relay retries independently and reports the typed failure through
+        // the runtime error sink instead of silently discarding it.
         this.options.errorSink?.()?.reportRuntimeTaskException(
           'remote session binding confirmation',
           error
         );
       };
       if (waitForAcknowledgement) {
-        await confirmation.catch(reportFailure);
+        try {
+          await confirmation;
+        } catch (error) {
+          // The first bind has no previously accepted route. Its public
+          // terminal must fail when the Actor owner rejects or times out the
+          // admission, so remove only this provisional local route and retain
+          // the relay's typed failure for the caller.
+          try {
+            if (context.stream instanceof ZLinkManagedStream) {
+              await context.stream.unbindActor(
+                actorRef.actorId,
+                this.options.actorBindTimeoutMs ?? 2000
+              );
+            }
+          } catch (cleanupError) {
+            // Native cleanup cannot replace the owner rejection observed by
+            // the public bind. It is separately observable for diagnosis.
+            reportFailure(cleanupError);
+          } finally {
+            this.routes.unbind(actorRef.actorId, context, bindingToken);
+          }
+          throw error;
+        }
       } else {
         void confirmation.catch(reportFailure);
       }

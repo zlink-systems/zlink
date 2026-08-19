@@ -1395,7 +1395,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const generation = counter.kind === 'missing'
         ? 1n
         : BigInt(decodeText(counter.value.bytes));
-      if (generation > MAX_GENERATION) return { kind: 'generationExhausted' };
+      // Counters retain the next value to issue. Issuing MAX_GENERATION would
+      // require persisting MAX_GENERATION + 1, outside the stored range.
+      if (generation >= MAX_GENERATION) return { kind: 'generationExhausted' };
       const token = { ownerId, leaseGeneration: generation };
       const conditions: ZLinkStoreCondition[] = [
         { kind: 'missing', key: ownerKey(ownerId) },
