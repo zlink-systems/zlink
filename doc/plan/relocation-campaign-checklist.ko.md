@@ -519,7 +519,11 @@
       relocation 3쌍 수용 런: node→dotnet GREEN / java 양방향은 java 결함 2건
       정밀 특정 — ⓐ java source가 Prepare 발신 전 admission 대기 정지
       ⓑ java target의 inventory-vs-root 불일치 거부 + command 53 수신 미지원.
-      하니스 수정 커밋 `fa9d892614`, java 수정 잡 가동 중.
+      하니스 수정 커밋 `fa9d892614`. java 수정 연쇄: ⓐ 해소(liveness ACK
+      request-route 완료 — java reply화+dotnet 대칭)+53 배선+핸드셰이크 분리+
+      fixture endianness → **java→dotnet relocation 단대단 통과(2번째 쌍!)**.
+      잔여 1: dotnet→java의 java target inventory 비교(개수 일치, 필드 비교
+      불일치) — 필드 단위 진단·수정 최종 라운드 가동 중.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
