@@ -64,7 +64,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     @Test
-    void readySubmissionFailureRollsBackAndExactPrepareRetryRestages()
+    void readySubmissionFailureRetainsStageAndExactPrepareRetriesReady()
         throws Exception {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
@@ -281,11 +281,12 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         Thread.sleep(1_100L);
         assertEquals(0, commits.get(),
             "a failed READY submission must not arm the 1000 ms fallback");
-        assertEquals(1, targetEndpoint.aborted.get(),
-            "the hidden Restore is erased when READY cannot be submitted");
+        assertEquals(0, targetEndpoint.aborted.get(),
+            "a retryable READY conflict retains the hidden Restore stage");
         assertEquals(0, aggregateAborts.get(),
             "the exact immutable Prepare fence remains retryable rather than terminal ABORTED");
-        assertEquals(1, attemptCount(target.get(), "retryPrepared"));
+        assertEquals(1, attemptCount(target.get(), "targets"));
+        assertEquals(0, attemptCount(target.get(), "retryPrepared"));
         assertEquals(1, retainedExpiry.size(),
             "READY failure must bind retry retention to Restore expiry");
 
@@ -321,8 +322,11 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             retryFailure = failure.getCause();
         }
         assertNull(retryFailure,
-            "the exact same Prepare retry must restage after READY send failure");
-        assertEquals(2, targetEndpoint.staged.get());
+            "the exact same Prepare retry must resubmit READY on its retained stage");
+        assertEquals(1, targetEndpoint.staged.get(),
+            "a READY retry must not recreate or lose the Actor target stage");
+        assertEquals(0, targetEndpoint.aborted.get(),
+            "a retryable READY conflict must not abort the retained target stage");
         assertEquals(0, attemptCount(target.get(), "retryPrepared"));
         assertThrows(CompletionException.class, () -> source.get().publish(
                 targetRid, request.fence(), Duration.ofSeconds(1))

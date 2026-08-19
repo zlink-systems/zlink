@@ -495,6 +495,19 @@ final class ZLinkCanonicalRelocationStateMachine
                 .exceptionallyCompose(failure ->
                     rollbackReadySubmission(fence, attempt, unwrap(failure)));
             attempt.readyPublication(publication);
+            publication.whenComplete((ignored, failure) -> {
+                if (failure != null && !attempt.fallbackArmed()) {
+                    synchronized (attempt) {
+                        //  READY is a one-way submission.  Its transport or
+                        //  source-side conflict failure leaves the prepared
+                        //  target intact so an exact PREPARE can submit READY
+                        //  again with the same fence and RelocationId.
+                        if (attempt.readyPublication() == publication) {
+                            attempt.readyPublication(null);
+                        }
+                    }
+                }
+            });
             return publication;
         }
     }
@@ -506,32 +519,32 @@ final class ZLinkCanonicalRelocationStateMachine
         if (attempt.fallbackArmed()) {
             return failed(readyFailure);
         }
-        targets.remove(fence, attempt);
         ZLinkAggregateRelocationCoordinator.Prepared prepared =
             completedValue(attempt.prepared());
         if (prepared != null) {
-            RetryPrepared retained = new RetryPrepared(
-                ZLinkCanonicalRelocationProtocol.encodePrepare(
-                    attempt.prepare()),
-                prepared);
-            if (retryPrepared.putIfAbsent(fence, retained) == null) {
-                retentionScheduler.schedule(
-                    prepared.restoreDeadline(),
-                    () -> retryPrepared.remove(fence, retained));
-            }
+            retentionScheduler.schedule(
+                prepared.restoreDeadline(),
+                () -> expireReadySubmission(fence, attempt));
+        }
+        //  Do not abort here.  This is a retryable READY submission failure,
+        //  not an explicit pre-relay-ready abort: target.abort removes the
+        //  Actor target stage that the exact retry must publish.
+        return failed(readyFailure);
+    }
+
+    private void expireReadySubmission(Fence fence, TargetAttempt attempt) {
+        if (!targets.remove(fence, attempt) || attempt.fallbackArmed()) {
+            return;
         }
         ZLinkSpotRetireControl.StageRequest request =
             completedValue(attempt.request());
-        CompletionStage<Void> rollback = request == null
-            ? CompletableFuture.completedFuture(null)
-            : target.abort(request);
-        return rollback
-            .handle((ignored, targetFailure) -> {
-                if (targetFailure != null) {
-                    readyFailure.addSuppressed(unwrap(targetFailure));
-                }
-                throw new CompletionException(readyFailure);
+        if (request != null) {
+            target.abort(request).exceptionally(failure -> {
+                LOGGER.warning("Canonical relocation READY retry expiry "
+                    + "could not discard target stage: " + unwrap(failure));
+                return null;
             });
+        }
     }
 
     private static <T> T completedValue(CompletableFuture<T> future) {
