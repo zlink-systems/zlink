@@ -185,6 +185,12 @@
       DeadlineExceeded 누락 → **해소(4언어 en/ko, 문서 커밋)** ⑨ [H] config-10 Track E1A~C/G/H/I 미구현·⑪ [H] config-6
       26중 14만 지원 — **F(e2e_inventory backlog, 사용자 확정 별도 세션) 범위로
       분류** ⑩ [H] ST-C4 checksum variant — 기존 B 항목에서 추적 중
+- [x] 조기 신호 샘플 스윕(2026-08-19, cpp 제외 — 트리 점유): dotnet·node·java·
+      kotlin × 6샘플 = 23/24 그린(집계 게이트 재확인 포함). dotnet TicTacToe
+      1회 flake(재시도 클린, leave-marker 대기 — 기존 서명과 다름, G-2 관찰).
+      **유일 실결함: java Bingo 2/2 실패** — session 라우트 갱신 timeout·READY
+      발행 wedge(requireActorStage null) — sol 3차 ⑤와 원인 수렴, java 수정에
+      편입
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
 
 ## C. 상호 운용 확장 (M10, 사용자 확정 2026-08-19 — 근간·양보 불가)
