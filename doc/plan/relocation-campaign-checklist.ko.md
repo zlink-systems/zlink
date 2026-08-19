@@ -41,7 +41,7 @@
       공유 계약·4시나리오·run_e2e 배선). SF-F2/F3에서 relocation 자체는 단대단
       완결 검증(F3는 Redis 중단 중 포함), 클린 패스는 아래 29초 공백 결함에 차단.
       결함 해소 후 4종 재실행으로 마감
-- [x] **cpp relocation 후 정지 — 수정 완료 `65f56b12b0 대신 아래`**: 29초 자체는
+- [x] **cpp relocation 후 정지 — 수정 완료 `9c4f5ec83e`**: 29초 자체는
       스펙 명령의 30s Message Follow 창(비결함). 진짜 결함은 fence 없는 로컬
       요청자의 파킹 요청이 pending 미기록→재생 terminal pending-miss로 응답 무음
       폐기→요청자 영구 대기(gdb·계측 실증). 수정: 파킹 조건과 동일 조건으로
