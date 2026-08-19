@@ -2232,6 +2232,222 @@ void verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fenc
     target.close ();
 }
 
+// actorJoin(28) wire-level request/reply, mirroring the relocationPrepare
+// harness pattern above: originate via request_actor_join, the target claims
+// the infrastructure mailbox record (standing in for the real admission
+// handler, which is a separate, not-yet-landed increment — see
+// runtime/mesh/raw_mesh_node_owner.{hpp,cpp} and the C-5 report), and replies
+// via reply_actor_join.
+protocol::actor_join_request_t actor_join_request (
+  const mesh::service_node_descriptor_t &source_descriptor,
+  const mesh::service_node_descriptor_t &target_descriptor,
+  std::uint64_t correlation,
+  std::string actor_id,
+  std::string spot_id,
+  bool entry = false)
+{
+    return protocol::actor_join_request_t{
+      correlation,
+      protocol::actor_route_fence_t{
+        std::move (actor_id), 4, source_descriptor.node_routing_id,
+        source_descriptor.lifecycle_generation, 11, 12},
+      entry,
+      protocol::spot_route_fence_t{
+        std::move (spot_id), 9, target_descriptor.node_routing_id,
+        target_descriptor.lifecycle_generation, 21, 22}};
+}
+
+std::optional<mesh::service_mailbox_claim_t> claim_actor_join (
+  mesh::raw_mesh_node_owner_t &target)
+{
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+        claim = target.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        if (!claim) {
+            (void) await_task (target.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+        }
+    }
+    return claim;
+}
+
+// Accepted case: the tail's spot ref, membershipEpoch, and
+// receiveChunkLimitBytes must all thread through unchanged from the
+// receiver's reply_actor_join call to the originate side's decoded tail —
+// this is the exact information the ORIGINATE side's completion bookkeeping
+// (dd23fb0b36's receiveChunkLimitBytes consumption) depends on.
+void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-accept-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-accept-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    const auto request = actor_join_request (
+      source_descriptor, target_descriptor, 4242, "actor-1", "spot-1");
+
+    std::optional<protocol::actor_join_reply_tail_t> response;
+    std::atomic_bool source_settled{false};
+    std::thread join_thread ([&] {
+        response = await_task (source.request_actor_join (
+          target_descriptor.node_routing_id, request, std::nullopt, 5s));
+        source_settled.store (true, std::memory_order_release);
+    });
+
+    const auto claim = claim_actor_join (target);
+    assert (claim && claim->records.size () == 1);
+    const auto &record = claim->records.front ();
+    const auto decoded =
+      protocol::decode_actor_join_request (record.parts.front ());
+    assert (decoded == request);
+    assert (record.correlation && *record.correlation == request.correlation);
+
+    assert (target.reply_actor_join (
+      record, protocol::actor_join_result_t::accepted,
+      protocol::actor_join_reply_spot_ref_t{"spot-1", 9}, 3, 8192));
+    assert (target.mailbox ().release (*claim));
+
+    const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source_settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < settle_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    join_thread.join ();
+
+    assert (source_settled.load (std::memory_order_acquire));
+    assert (response);
+    assert (response->join_result == protocol::actor_join_result_t::accepted);
+    assert (response->spot && response->spot->spot_id == "spot-1");
+    assert (response->spot->object_generation == 9);
+    assert (response->membership_epoch == 3);
+    assert (response->receive_chunk_limit_bytes == 8192);
+
+    source.close ();
+    target.close ();
+}
+
+// Rejected case: a typed rejection (no spot) must resolve as rejected, not
+// as a timeout/no-result and not as accepted.
+void verify_actor_join_rejected_reply_completes_typed_failure ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-reject-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-reject-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    const auto request = actor_join_request (
+      source_descriptor, target_descriptor, 4343, "actor-2", "spot-2");
+
+    std::optional<protocol::actor_join_reply_tail_t> response;
+    std::atomic_bool source_settled{false};
+    std::thread join_thread ([&] {
+        response = await_task (source.request_actor_join (
+          target_descriptor.node_routing_id, request, std::nullopt, 5s));
+        source_settled.store (true, std::memory_order_release);
+    });
+
+    const auto claim = claim_actor_join (target);
+    assert (claim && claim->records.size () == 1);
+    const auto &record = claim->records.front ();
+    assert (target.reply_actor_join (
+      record, protocol::actor_join_result_t::rejected, std::nullopt, 0, 0));
+    assert (target.mailbox ().release (*claim));
+
+    const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source_settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < settle_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    join_thread.join ();
+
+    assert (source_settled.load (std::memory_order_acquire));
+    assert (response);
+    assert (response->join_result == protocol::actor_join_result_t::rejected);
+    assert (!response->spot);
+
+    source.close ();
+    target.close ();
+}
+
+// Identity-fence case: the receiver must reject an inbound actorJoin(28)
+// whose "actor" fence claims a source node lifecycle generation different
+// from the one this transport connection was actually admitted under — a
+// wrong-generation sender is a protocol error, exactly like the existing
+// actorCreate/userSpotCreate/userSpotClose/relocationPrepare fence checks.
+void verify_actor_join_wrong_source_generation_is_fenced ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-fence-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-fence-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    auto request = actor_join_request (
+      source_descriptor, target_descriptor, 4444, "actor-3", "spot-3");
+    // Claim a source node generation the connection was not actually
+    // admitted under.
+    request.actor.target_node_generation =
+      source_descriptor.lifecycle_generation + 1;
+
+    std::optional<protocol::actor_join_reply_tail_t> response;
+    std::atomic_bool source_settled{false};
+    std::thread join_thread ([&] {
+        response = await_task (source.request_actor_join (
+          target_descriptor.node_routing_id, request, std::nullopt, 300ms));
+        source_settled.store (true, std::memory_order_release);
+    });
+
+    mesh::raw_mesh_pump_result_t pumped = mesh::raw_mesh_pump_result_t::no_data;
+    const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (pumped != mesh::raw_mesh_pump_result_t::protocol_error
+           && std::chrono::steady_clock::now () < receive_deadline) {
+        pumped = await_task (target.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+    }
+    assert (pumped == mesh::raw_mesh_pump_result_t::protocol_error);
+    // A fenced inbound frame must not have reached the infrastructure
+    // mailbox at all.
+    assert (!target.mailbox ().try_claim (
+      mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+
+    const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source_settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < settle_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    join_thread.join ();
+
+    assert (source_settled.load (std::memory_order_acquire));
+    // Fenced on the receiver: the originate side never gets a reply and
+    // times out to std::nullopt, not a false "accepted"/"rejected".
+    assert (!response);
+
+    source.close ();
+    target.close ();
+}
+
 // The same exact-identity fencing that already protects relocation_ready_t
 // must also protect relocation_failed_t: a reply whose identity does not
 // match the sent prepare (a stale or wrong-attempt reply) must resolve
@@ -2343,5 +2559,8 @@ int main ()
     verify_raw_owner_node_send_and_liveness ();
     verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fencing ();
     verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced ();
+    verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ();
+    verify_actor_join_rejected_reply_completes_typed_failure ();
+    verify_actor_join_wrong_source_generation_is_fenced ();
     return 0;
 }

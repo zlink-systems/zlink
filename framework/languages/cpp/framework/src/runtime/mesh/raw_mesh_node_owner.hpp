@@ -351,6 +351,25 @@ class raw_mesh_node_owner_t
     bool reply_relocation_failed (
       const service_mailbox_record_t &request,
       const protocol::relocation_failed_t &failure);
+    // actorJoin(28): direct request/reply over the ROUTER port, mirroring
+    // request_relocation_prepare's shape (this call owns the correlation
+    // fence itself rather than registering with the operation registry,
+    // since — unlike actorCreate/userSpotClose — there is no reservation to
+    // retry against). Returns std::nullopt on timeout, transport failure, or
+    // an identity-mismatched reply (stale/misrouted); the caller must have
+    // set request.correlation to a value it can recognize on return.
+    task_t<std::optional<protocol::actor_join_reply_tail_t>>
+    request_actor_join (
+      const std::vector<std::uint8_t> &target_routing_id,
+      const protocol::actor_join_request_t &request,
+      const std::optional<protocol::application_payload_t> &payload,
+      std::chrono::milliseconds timeout);
+    bool reply_actor_join (
+      const service_mailbox_record_t &request,
+      const protocol::actor_join_result_t &join_result,
+      const std::optional<protocol::actor_join_reply_spot_ref_t> &spot,
+      std::uint64_t membership_epoch,
+      std::uint32_t receive_chunk_limit_bytes);
     task_t<raw_mesh_pump_result_t>
     pump_one (service_liveness_registry_t::clock_t::time_point now,
               bool accept_application_receive = true);

@@ -1898,6 +1898,48 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
       }, deadline);
 }
 
+task_t<std::optional<protocol::actor_join_reply_tail_t>>
+raw_mesh_node_owner_t::request_actor_join (
+  const std::vector<std::uint8_t> &target_routing_id,
+  const protocol::actor_join_request_t &request,
+  const std::optional<protocol::application_payload_t> &payload,
+  std::chrono::milliseconds timeout)
+{
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        port = _port;
+    }
+    if (!port || timeout <= std::chrono::milliseconds::zero ()
+        || request.correlation == 0)
+        co_return std::nullopt;
+    detail::backend::raw_message_t parts{
+      protocol::encode_actor_join_request (request)};
+    if (payload)
+        parts.push_back (protocol::encode_application_payload (*payload));
+    auto pending = port->request (target_routing_id, parts, timeout);
+    const auto completed = co_await pending;
+    if (completed.result != detail::backend::raw_request_result_t::ok
+        || completed.parts.empty () || completed.parts.size () > 2)
+        co_return std::nullopt;
+    try {
+        auto reply =
+          protocol::decode_actor_join_reply (completed.parts.front ());
+        // Exact-identity fencing: a reply whose correlation does not match
+        // the request this call sent is a stale or misrouted reply and must
+        // not resolve this call either way.
+        if (reply.header.correlation != request.correlation)
+            co_return std::nullopt;
+        if (completed.parts.size () == 2)
+            (void) protocol::decode_application_payload (
+              completed.parts[1], false);
+        co_return reply;
+    }
+    catch (const protocol::service_wire_error_t &) {
+        co_return std::nullopt;
+    }
+}
+
 task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
   const std::vector<std::uint8_t> &target_routing_id,
   protocol::instance_spot_activation_header_t request,
@@ -2257,6 +2299,34 @@ bool raw_mesh_node_owner_t::reply_actor_create (
     }
     if (!port)
         return false;
+    return port->reply (
+      detail::backend::raw_received_t{
+        request.source_routing_id, request.request_sequence, {},
+        request.retained},
+      std::move (parts));
+}
+
+bool raw_mesh_node_owner_t::reply_actor_join (
+  const service_mailbox_record_t &request,
+  const protocol::actor_join_result_t &join_result,
+  const std::optional<protocol::actor_join_reply_spot_ref_t> &spot,
+  std::uint64_t membership_epoch,
+  std::uint32_t receive_chunk_limit_bytes)
+{
+    if (!request.correlation || request.source_routing_id.empty ()
+        || !request.request_sequence)
+        return false;
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        port = _port;
+    }
+    if (!port)
+        return false;
+    detail::backend::raw_message_t parts{
+      protocol::encode_actor_join_reply (
+        *request.correlation, 0, 0, join_result, spot, membership_epoch,
+        receive_chunk_limit_bytes)};
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.request_sequence, {},
@@ -2969,6 +3039,45 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 std::move (received->source_routing_id),
                 received->request_sequence,
                 correlation},
+              raw_mesh_pump_result_t::infrastructure);
+        }
+        if (header.kind == protocol::command::actorJoin) {
+            if (header.flags != 0 || received->parts.empty ()
+                || received->parts.size () > 2
+                || !received->request_sequence) {
+                co_return raw_mesh_pump_result_t::protocol_error;
+            }
+            const auto request = protocol::decode_actor_join_request (
+              received->parts.front ());
+            if (received->parts.size () == 2)
+                (void) protocol::decode_application_payload (
+                  received->parts.back (), false);
+            const auto local = _topology.local_descriptor ();
+            // request.actor's node fence identifies the sending (source)
+            // node's own identity — the same "actor route fence targets the
+            // node currently reachable at this identity" convention used by
+            // actorSend/actorRequest/actorDestroy — while request.target_spot
+            // must resolve to this node, since that is who is being asked to
+            // admit the actor.
+            if (request.actor.target_node_routing_id
+                  != received->source_routing_id
+                || request.actor.target_node_routing_id
+                     != admitted->descriptor.node_routing_id
+                || request.actor.target_node_generation
+                     != admitted->descriptor.lifecycle_generation
+                || request.target_spot.target_node_routing_id
+                     != local.node_routing_id
+                || request.target_spot.target_node_generation
+                     != local.lifecycle_generation) {
+                co_return raw_mesh_pump_result_t::protocol_error;
+            }
+            co_return enqueue_received_or_retain (
+              service_mailbox_record_t{
+                owner_key (local.node_routing_id),
+                service_mailbox_domain_t::infrastructure,
+                std::move (received->parts),
+                std::move (received->source_routing_id),
+                received->request_sequence, request.correlation},
               raw_mesh_pump_result_t::infrastructure);
         }
         if (header.kind == protocol::command::relocationPrepare
