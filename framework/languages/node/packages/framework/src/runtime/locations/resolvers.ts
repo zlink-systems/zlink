@@ -32,6 +32,7 @@ import { encodeAuthorityKey } from './authority-key-codec';
 import {
   ZLinkSpotKind
 } from '../../contracts/Spots';
+import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
 import type {
   SpotHandle,
   ZLinkActorSpotHandleResolver,
@@ -84,6 +85,45 @@ interface CachedReadyRoute<TRow> {
   readonly row: TRow;
   readonly expiresAtMs: number;
   readonly storeVersion?: string;
+}
+
+/**
+ * Authority payloads are writer-private.  The active outer row is the
+ * cross-language route contract when a foreign writer's payload cannot be
+ * decoded by this runtime.
+ */
+function projectCanonicalActorRoute(
+  snapshot: ZLinkAuthoritySnapshot,
+  actorId: string
+): ZLinkResolvedActorRoute | undefined {
+  const { allocation } = snapshot;
+  const nodeRid = allocation.descriptor.rid;
+  if (
+    allocation.objectKind !== 'actor'
+    || allocation.state !== 'active'
+    || snapshot.objectGeneration <= 0n
+    || snapshot.ownerLeaseGeneration <= 0n
+    || actorId.length === 0
+    || allocation.stableType.length === 0
+    || allocation.descriptor.meshName.length === 0
+    || String(nodeRid).length === 0
+    || allocation.descriptorLifecycleGeneration <= 0n
+  ) return undefined;
+  return {
+    meshName: allocation.descriptor.meshName,
+    actorRef: {
+      actorId,
+      objectGeneration: snapshot.objectGeneration,
+      meshName: allocation.descriptor.meshName,
+      nodeRid
+    },
+    actorType: allocation.stableType,
+    ownerNodeGeneration: allocation.descriptorLifecycleGeneration,
+    ownerId: snapshot.ownerId,
+    ownerLeaseGeneration: snapshot.ownerLeaseGeneration,
+    authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+    authorityStoreVersion: snapshot.storeVersion.value
+  };
 }
 
 export interface ZLinkResolvedActorRoute {
@@ -331,9 +371,9 @@ export class ZLinkStoreLocationResolvers implements
         ownerLeaseGeneration: direct.ownerLeaseGeneration
       } as ActorRef;
     }
-    // An authority row is the canonical Actor location. If it exists but its
-    // owner lease is expired or its payload is invalid, the legacy location
-    // projection must not resurrect a stale route while recovery is pending.
+    // An authority row is the canonical Actor location. If it exists but is
+    // not active or its owner lease is expired, the legacy location projection
+    // must not resurrect a stale route while recovery is pending.
     const authority = await this.options.stores.authorityStore.readAuthority(
       encodeAuthorityKey('actor', actorId),
       signal
@@ -358,11 +398,6 @@ export class ZLinkStoreLocationResolvers implements
     const decoded = decodeActorAuthorityIdentity(
       serviceRelocationAuthorityApplicationPayload(current.payload)
     );
-    if (
-      decoded === undefined
-      || decoded.actor.actorId !== actorId
-      || decoded.actor.objectGeneration !== current.objectGeneration
-    ) return undefined;
     const currentOwner = {
       ownerId: current.ownerId,
       leaseGeneration: current.ownerLeaseGeneration
@@ -372,6 +407,17 @@ export class ZLinkStoreLocationResolvers implements
       signal
     );
     if (remainingLeaseMs <= 0) return undefined;
+    if (
+      decoded === undefined
+      || decoded.actor.actorId !== actorId
+      || decoded.actor.objectGeneration !== current.objectGeneration
+    ) {
+      return this.cacheDirectActorRoute(
+        actorId,
+        projectCanonicalActorRoute(current, actorId),
+        remainingLeaseMs
+      );
+    }
     let enclosingSpotRoute: ZLinkSpotRouteTarget | undefined;
     if (decoded.spotId !== undefined) {
       try {
@@ -410,12 +456,21 @@ export class ZLinkStoreLocationResolvers implements
       spotGeneration: decoded.spotGeneration,
       enclosingSpotRoute
     };
+    return this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
+  }
+
+  private cacheDirectActorRoute(
+    actorId: string,
+    route: ZLinkResolvedActorRoute | undefined,
+    remainingLeaseMs: number
+  ): ZLinkResolvedActorRoute | undefined {
+    if (route === undefined) return undefined;
     const maxAgeMs = this.options.routeCacheMaxAgeMs ?? 15000;
     if (maxAgeMs > 0) {
       this.directActorRoutes.set(actorId, {
         row: route,
         expiresAtMs: this.monotonicNowMs() + Math.min(maxAgeMs, remainingLeaseMs),
-        storeVersion: current.storeVersion.value
+        storeVersion: route.authorityStoreVersion
       });
     }
     return route;

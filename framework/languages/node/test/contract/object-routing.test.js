@@ -353,6 +353,55 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
   assert.equal(reads, 2);
 });
 
+test('authority Actor route projects a foreign payload from the canonical outer row', async () => {
+  const authority = {
+    async readAuthority() {
+      return {
+        kind: 'snapshot',
+        storeVersion: { value: 'foreign-v1' },
+        payload: Buffer.from('foreign-payload-codec-is-opaque'),
+        objectGeneration: 7n,
+        authorityOwnerGeneration: 17n,
+        ownerId: 'foreign-owner',
+        ownerLeaseGeneration: 13n,
+        allocation: {
+          state: 'active',
+          objectKind: 'actor',
+          stableType: 'ForeignPlayer',
+          descriptor: { meshName: 'foreign-play', rid: 'foreign-node' },
+          descriptorLifecycleGeneration: 11n,
+          capacity: { actors: 1, spots: 0 }
+        },
+        storeNow: new Date()
+      };
+    }
+  };
+  const unused = () => { throw new Error('legacy object row must not be read'); };
+  const resolver = new internal.ZLinkStoreLocationResolvers({
+    stores: {
+      authorityStore: authority,
+      locationStore: { listMeshNodes: unused },
+      peerStore: { listPeers: unused },
+      spotStore: { resolveSpot: unused },
+      actorStore: { resolveActor: unused },
+      routeStore: { resolveRoute: unused }
+    },
+    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    routeCacheMaxAgeMs: 15_000,
+    monotonicNowMs: () => 0
+  });
+
+  const route = await resolver.resolveDirectActorRoute('foreign-actor');
+  assert.equal(route.actorType, 'ForeignPlayer');
+  assert.equal(route.actorRef.actorId, 'foreign-actor');
+  assert.equal(route.actorRef.objectGeneration, 7n);
+  assert.equal(route.actorRef.meshName, 'foreign-play');
+  assert.equal(route.actorRef.nodeRid, 'foreign-node');
+  assert.equal(route.ownerNodeGeneration, 11n);
+  assert.equal(route.authorityOwnerGeneration, 17n);
+  assert.equal(route.ownerLeaseGeneration, 13n);
+});
+
 test('Message Follow invalidation deletes only the exact cached Actor route fence', async () => {
   let nodeRid = 'node-a';
   let nodeGeneration = 11n;

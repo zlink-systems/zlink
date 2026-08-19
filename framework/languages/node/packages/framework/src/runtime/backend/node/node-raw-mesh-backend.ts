@@ -1395,7 +1395,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.schedulePoll();
       }
     }, MESH_BACKEND_POLL_INTERVAL_MS);
-    this.pollTimer.unref();
   }
 
   private async poll(): Promise<void> {
