@@ -247,7 +247,9 @@
       lease 리더 recordVersion 미검증(spec 21 §420-425 fail-closed), cpp는 부재
       버전 허용 — 각 언어 마감 ⑧ [M] node acknowledged 경로가 즉시 거부를
       DeadlineExceeded로 오분류+production이 예외 폐기(session-actor-coordinator
-      :168) — node 에이전트 투입 ⑨ [L] feature-map ST-B2 행 "commit ack" 잔재 —
+      :168) → **해소: nack은 응답 errorKind 디코드(RequestFailed 폴백),
+      DeadlineExceeded는 transport 기한 경로 전용; swallow는 스펙 20 근거로
+      errorSink 관찰화(바인딩 유지·롤백 금지), 137/137 그린** ⑨ [L] feature-map ST-B2 행 "commit ack" 잔재 —
       코디네이터 즉시 수정
 - [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
