@@ -328,7 +328,12 @@
       직접 전송 wire payload는 스키마의 relocation-envelope-v1 logical stream
       ('provider envelope 없이' 명시, java 부합) — dotnet의 ZLDR+digest wire
       누출을 logical stream으로 정정(내부 보관형은 자유), node JSON→logical
-      stream, 스펙 28 §4.2 문구 스키마 정합(admission10 진행 중)
+      stream, 스펙 28 §4.2 문구 스키마 정합 ⓚ **전모(2026-08-19)**: 직접 전송
+      payload는 4언어 미수렴 — java=스키마 stream(기준), dotnet=ZLDR wire 누출
+      (제거 진행·conformance 재검증 중), node=사설 JSON v3(projection 레이어
+      구현 중), cpp=custom recoverable wrapper+magic(별도 슬라이스 필요),
+      스펙 28 §4.2는 형식 미명시(공백 — stream 명문화 필요). admission11:
+      dotnet 마감+node projection 진행 중
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
