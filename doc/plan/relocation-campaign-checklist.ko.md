@@ -587,12 +587,18 @@
       dictionary, codec 삼중 복사→단일 span 복사, spot-participant 쿼리 캐시).
       4·6번 위치는 에이전트 식별(원 커밋 미기록) — 판단 근거 문서화. 전 게이트
       1770/1773+conformance 9/9, 무동작 변경
-- [ ] E-2 cpp complete_relocation_assembly 구조 분해 — terra 시도는 정직 실패
-      (sandbox cmake configure 불가·등가성 테스트 기준 미충족, 미완성 변경 revert
-      완료). **로컬 sonnet으로 재투입 예정**(direct-call harness 우선 구현)
+- [x] E-2 cpp complete_relocation_assembly 구조 분해 — **완료 `cb46643e6a`**
+      (full-access terra 재투입 성공): restore/cleanup/activation 책임별 plain
+      동기 helper 4개(reply_relocation_assembly_failure·discard_…_staging·
+      restore_…·activate_…), 신규 coroutine frame 없음(aff9511de6 수명 패턴
+      준수), 관련 6 suite 전후 동일 그린. (이전 terra 실패 원인은 구 plugin
+      sandbox의 cmake 제약 — 해소됨)
 - [x] E-3 dotnet participant-restore 추출 — **완료 `42ddf3d2f4`**(순수 이동, staging은
       오케스트레이션 가독, rollback 부기 불변)
-- [ ] E-4 cpp aggregate 오케스트레이션 reason 전파 (task_t<bool> → 분류 전달)
+- [x] E-4 cpp aggregate 오케스트레이션 reason 전파 — **완료 `cb46643e6a`**:
+      prepare_target·prepare_relocation_remote가 task_t<relocation_reason_t>
+      반환, aggregate·single-object 경로 모두 실패 분류 보존,
+      relocationDataLost=checksum_mismatch M6B 테스트 고정.
 - [ ] E-5 E 단계 전체 sol 리뷰 + 전 게이트 재확인
 
 ## F. 별도 캠페인 (이 캠페인 범위 외 — 착수 시 별도 계획 문서)
