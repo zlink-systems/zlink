@@ -561,8 +561,14 @@ export class ZLinkActorPacketRelay {
       signal
     );
     if (reply.ok === false || (reply.response?.acknowledged !== true && reply.acknowledged !== true)) {
-      throw new Error(
-        `Actor '${actor.actorId}' did not acknowledge its remote session binding: ${JSON.stringify(reply)}`
+      //  Spec 32-framework-error-model: DeadlineExceeded(7). The acknowledged
+      //  bind confirmation is a deadline-bounded wait; exhausting it without an
+      //  acknowledgement surfaces the typed framework classification (the
+      //  reply's failure is preserved as the cause), matching the C++ runtime.
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        `Actor '${actor.actorId}' did not acknowledge its remote session binding: ${JSON.stringify(reply)}`,
+        reply.error
       );
     }
   }
@@ -581,7 +587,19 @@ export class ZLinkActorPacketRelay {
       () => undefined,
       error => {
         if (Date.now() >= deadline) {
-          this.options.errorSink().reportRuntimeTaskException('remote session binding send', error);
+          //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
+          //  exhaustion on the fire-and-forget bind send keeps its
+          //  fire-and-forget semantics (reported, not thrown) but is
+          //  classified as the typed framework deadline error with the last
+          //  underlying send failure preserved as the cause.
+          this.options.errorSink().reportRuntimeTaskException(
+            'remote session binding send',
+            createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+              'Remote actor session binding send retries exceeded their deadline.',
+              error
+            )
+          );
           return;
         }
         setTimeout(() => {

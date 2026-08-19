@@ -697,6 +697,100 @@ test('remote actor session binding uses a non-correlated command over the actor 
   assert.equal(routed[0].request.boundSessionSpotId, 'session-node');
 });
 
+test('acknowledged remote actor session bind exhaustion surfaces a typed DeadlineExceeded', async () => {
+  //  Spec 32-framework-error-model: DeadlineExceeded(7).
+  const actorRef = {
+    nodeRid: 'actor-node',
+    actorId: 'actor-bind-deadline',
+    objectGeneration: 3n,
+    meshName: 'actor.route'
+  };
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      routeChannels: [{ routerChannelId: 'actor.route' }]
+    })
+  });
+  host.setActorManager({
+    getState() {
+      return {
+        remoteActorPacketTarget: {
+          routerChannelId: 'actor.route',
+          targetNodeRid: actorRef.nodeRid,
+          spotId: actorRef.nodeRid,
+          spotKind: framework.ZLinkSpotKind.Entry
+        }
+      };
+    }
+  });
+  const lastFailure = 'bind confirmation was not admitted before its deadline';
+  host.routeTransport.request = async () => ({ ok: false, error: lastFailure });
+
+  await assert.rejects(
+    host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+      actorRef,
+      'session-node',
+      'session-rid'
+    ),
+    (error) => {
+      assert.ok(error instanceof framework.ZLinkFrameworkException);
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      assert.equal(
+        framework.internalFrameworkErrorKind(error),
+        framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+      );
+      assert.equal(error.cause, lastFailure);
+      assert.match(error.message, /did not acknowledge its remote session binding/);
+      return true;
+    }
+  );
+});
+
+test('fire-and-forget remote actor session bind retry exhaustion reports a typed DeadlineExceeded', async () => {
+  //  Spec 32-framework-error-model: DeadlineExceeded(7) — classification only;
+  //  the fire-and-forget send still reports through the error sink instead of
+  //  throwing.
+  const reported = [];
+  const sendFailure = new Error('route send failed');
+  const relay = new ZLinkActorPacketRelay({
+    routeTransport: {
+      sendToSpot: async () => { throw sendFailure; }
+    },
+    streamBindingRuntime: () => ({ find() {} }),
+    meshRouters: {},
+    actorManager: () => undefined,
+    spotManager: () => undefined,
+    spotNodeRuntime: () => undefined,
+    errorSink: () => ({
+      reportRuntimeTaskException(taskName, error) {
+        reported.push({ taskName, error });
+      }
+    })
+  });
+
+  //  Enter the retry loop with the deadline already elapsed so exhaustion is
+  //  observed without altering the production retry timing or bounds.
+  relay.retryRemoteSessionBindingSend(
+    { routerChannelId: 'actor.route', targetNodeRid: 'actor-node', spotId: 'actor-node' },
+    { actorId: 'actor-bind-deadline' },
+    Date.now() - 1,
+    1
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0].taskName, 'remote session binding send');
+  const error = reported[0].error;
+  assert.ok(error instanceof framework.ZLinkFrameworkException);
+  assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+  assert.equal(
+    framework.internalFrameworkErrorKind(error),
+    framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+  );
+  assert.equal(error.cause, sendFailure);
+  assert.match(error.message, /retries exceeded their deadline/);
+});
+
 test('remote actor session binding keeps its declared return route before peer discovery catches up', async () => {
   let remoteTarget;
   const actorRef = { nodeRid: 'actor-node', actorId: 'actor-bind-route', generation: 4n };
