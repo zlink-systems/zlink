@@ -463,6 +463,19 @@ Both operations return their results in the command 20 reply envelope.
 
 ## 9. Maintenance Capture And Relocation Envelope
 
+### Actor Join Request Envelope
+
+`actorJoin`(28)'s request body — correlation, the actor route fence, the `entry` flag,
+and the target spot route fence — is the complete cross-language contract for this
+operation. No other field travels on the wire for it. In particular, per-transfer
+bookkeeping identifiers a runtime uses internally to track an in-flight move (for
+example, a transfer id) are language-internal only and never appear in this body; a
+runtime that needs such an id generates and keeps it locally, not on the wire.
+Receiver-side admission semantics — parking behind an existing preparation and the
+later-attempt-wins rule described in
+[15. Spot And Actor Model §4.2](15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
+key on the actor identity carried in this body, not on any language-internal id.
+
 ### Session Seal And Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound

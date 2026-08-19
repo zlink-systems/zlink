@@ -62,6 +62,11 @@ node에 이미 존재하는 Entry Spot으로 이동한다. `PerActor` User Spot�
 바꿀 수 있으며, member Actor는 각각 같은 공통 흐름으로 이동한다. `SpotWide` User Spot은
 Spot과 member Actor owner를 한 번의 조건부 변경으로 함께 바꾼다.
 
+Entry Spot은 mesh spot routing으로 주소를 지정할 수 없다 — 이는 relocatable object identity가
+아니라 node lifecycle에 속한다는 사실에서 비롯된다. 그래서 node의 Entry Spot을 대상으로 하는
+framework notification(예: committed relocation 뒤의 `OnLeave`, target 쪽 materialization)은
+spot 주소로 routing되지 않고 node 단위로 전달되며, 수신 node가 local Entry Spot에 dispatch한다.
+
 Relocation은 object를 삭제하고 다시 만드는 작업이 아니므로 `ObjectGeneration`을 유지한다.
 Owner가 바뀐 순서는 `AuthorityOwnerGeneration`으로 구분한다. 여러 control message가 같은
 이동에 속하는지는 runtime이 만든 0이 아닌 relocation identity로 구분한다. 이 identity는
@@ -514,11 +519,17 @@ Session을 종료하고 Session state를 정리한다. 자세한 binding API와 
 | `SessionRelocationSealTimeout` 안에 route update가 없음 | Target owner, Session connection 종료 | Session owner는 physical connection을 종료하고 binding, held message와 seal을 정리한다. 늦은 update는 Warning만 기록하고 무시한다. |
 | Caller cancellation | Shared relocation은 현재 phase 규칙을 계속 따름 | 해당 waiter만 끝낸다. Relay 수신 준비 reply가 accepted 상태가 되기 전 명시적으로 실패한 경우에만 안전한 취소를 시작하며, 그 뒤에는 source를 복원하지 않는다. |
 | Source shutdown과 경쟁 | 먼저 seal한 operation | Relocation이 owner 전환 뒤라면 Message Follow 정리만 수행한다. Shutdown이 먼저면 새 relocation을 시작하지 않는다. |
+| Cutover submit 결과를 알 수 없음(예: relay 수신 준비 reply가 accepted 상태가 된 뒤 submit 자체가 실패해 target 수신 여부를 판단할 수 없는 경우) | Message Follow duration으로 제한한 reconciliation 대상 | Source는 추측하지 않고 해당 move를 reconciliation 대상으로 표시한다. Reconciliation deadline에 Location Store authority를 한 번 읽어, target이 commit했으면 target route를 채택하고 대기 중인 backlog를 target으로 forward-drain한다. Store가 여전히 source를 owner로 보이면 local dispatch를 복원하고 backlog를 replay한다. 읽기 결과가 indeterminate이거나 읽을 수 없으면 대기 중인 요청을 명시적으로 `Unavailable`로 실패시키고 해당 unit은 unavailable 상태를 유지하며, 무기한 대기하는 대신 다음 sweep에서 reconciliation을 재시도한다. |
 
 Relay 수신 준비 reply가 accepted 상태가 되기 전에는 명시적 실패로 source를 복원할 수 있다.
 Reply가 accepted 상태가 된 뒤에는 cutover submit의 성공·실패와 관계없이 source dispatch를 다시
 열지 않는다. 이후 target CAS가 실패하면 target은 준비한 unit을 제거하고 Session은 자체 timeout으로
 정리한다.
+
+위 cutover 결과 불명 시 reconciliation도 이 원칙을 어기지 않는다. Relay 수신 준비의 비가역성은
+source dispatch가 오직 Location Store가 source를 여전히 owner로 보여주는 증거가 있을 때만 다시
+열린다는 뜻이며, reconciliation deadline 자체만으로는 다시 열리지 않는다. Deadline은 그 증거를
+기다릴 수 있는 시간, 즉 source가 요청을 무기한 대기시키지 않고 멈추기까지의 시간만 제한한다.
 
 재전송까지 실패한 cutover 대기 fallback은 TCP retransmission을 대신하는 유실 복구 protocol이
 아니다. Cutover 없이 진행하면 target은 boundary 전 relay가 모두 도착했는지 확인할 수 없다. 이
@@ -536,10 +547,15 @@ Owner 변경 뒤에도 sender가 잠시 이전 주소를 사용할 수 있다. �
 owner에게 전달하는 경로를
 [Message Follow](01-glossary.ko.md#message-follow)라고 한다.
 
-Message Follow는 original operation identity, `ObjectGeneration`, payload, deadline과 reply route를
-유지한다. Store를 다시 읽거나 application handler를 source에서 실행하지 않는다. 정해진
+Message Follow는 original operation identity, `ObjectGeneration`, payload, source routing id와
+reply route를 유지한다. Store를 다시 읽거나 application handler를 source에서 실행하지 않는다. 정해진
 `MessageFollowDuration`이 끝나면 이전 route를 제거하고, 그 뒤 이전 주소로 도착한 request는
 `Unavailable`로 끝낸다.
+
+Follow되는 operation의 end-to-end deadline은 각 relay hop이 절대값으로 전파하는 값이 아니라
+client가 관리한다. Relay hop은 original request의 남은 deadline 대신 local relay window로 자신의
+대기 시간을 다시 설정하며, 유지한 operation identity, source routing id와 reply route를 전달해
+client 자신의 timeout이 end-to-end로 계속 진행할 가치가 있는지를 판단하게 한다.
 
 Late cutover나 Session route update가 늦었다는 이유로 Message Follow 기간을 무기한 연장하지
 않는다. 반대로 Session route가 먼저 적용됐다는 이유로 이미 이전 주소로 전송된 server message를

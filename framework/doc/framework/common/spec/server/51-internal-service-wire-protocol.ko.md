@@ -426,6 +426,17 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ## 9. Maintenance capture와 relocation envelope
 
+### Actor join 요청 envelope
+
+`actorJoin`(28)의 요청 body — correlation, actor route fence, `entry` flag와 target spot
+route fence — 는 이 operation의 완전한 cross-language 계약이다. 이 body 외에 wire로 전달되는
+필드는 없다. 특히 runtime이 진행 중인 이동을 내부에서 추적하기 위해 사용하는 transfer 단위
+bookkeeping identifier(예: transfer id)는 language-internal일 뿐 이 body에 나타나지 않는다.
+이런 id가 필요한 runtime은 local에서 생성하고 유지하며 wire에 싣지 않는다.
+[15. Spot과 Actor 모델 §4.2](15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)에
+설명한 기존 준비 뒤에서 대기하는 동작과 later-attempt-wins 규칙을 포함한 수신 측 admission
+semantics는 language-internal id가 아니라 이 body에 실린 actor identity를 key로 삼는다.
+
 ### Session seal과 source relay
 
 - Relocation coordinator는 source application dispatch를 멈추기 전에 command 42로 bound Session

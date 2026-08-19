@@ -66,6 +66,12 @@ change Spot authority first; each member Actor then moves through the same commo
 A `SpotWide` User Spot changes the Spot and member Actor owners in one conditional
 operation.
 
+An Entry Spot isn't addressable through mesh spot routing — that follows from belonging
+to node lifecycle rather than to a relocatable object identity. A framework notification
+targeting a node's Entry Spot (for example, `OnLeave` after a committed relocation, or
+target-side materialization) is therefore delivered node-level and dispatched to the
+local Entry Spot by the receiving node, not routed to it as a spot address.
+
 Relocation isn't object deletion and recreation, so `ObjectGeneration` is preserved.
 `AuthorityOwnerGeneration` distinguishes owner changes. A non-zero relocation identity
 made by the runtime distinguishes control messages belonging to the same move. This
@@ -561,11 +567,18 @@ are defined by [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 | No route update arrives within `SessionRelocationSealTimeout` | Target owner, Session connection closed | Session owner closes the physical connection and cleans bindings, held messages, and seal. A late update is ignored with a Warning. |
 | Caller cancellation | Shared relocation continues under its current phase rule | Ends only that waiter. A safe abort starts only on an explicit failure before relay-ready is accepted; source isn't restored afterward. |
 | Source shutdown races relocation | The operation that sealed first | After owner change, relocation performs only Message Follow cleanup. If shutdown sealed first, no new relocation starts. |
+| Cutover submission outcome is unknown (for example, the submission itself fails after relay-ready is accepted, so whether the target received it can't be determined) | Held for reconciliation, bounded by the Message Follow duration | Source marks the move for reconciliation instead of guessing. At the reconciliation deadline it reads Location Store authority once: if the store shows the target committed, source adopts the target route and forward-drains the parked backlog to it; if the store still shows source as owner, source restores local dispatch and replays the backlog; if the read is indeterminate or unreadable, source explicitly fails the parked requests with `Unavailable`, stays unavailable for that unit, and retries reconciliation on the next sweep rather than parking indefinitely. |
 
 Before relay-ready is accepted, an explicit failure can restore source. After
 relay-ready is accepted, source dispatch doesn't reopen regardless of cutover-submit
 success or failure. A later target-CAS failure removes prepared target state, while the
 Session cleans under its own timeout.
+
+The indeterminate-cutover reconciliation above never violates this: relay-ready
+irreversibility means source dispatch reopens only on Location Store evidence that
+source still owns the unit, never on the reconciliation deadline by itself. The deadline
+only bounds how long the move can wait for that evidence before the source stops parking
+requests silently.
 
 The cutover wait fallback reached after failed retransmission isn't a loss-recovery
 protocol replacing TCP retransmission. Without cutover, target can't confirm every
@@ -586,9 +599,16 @@ that forwards such a message to the current owner is called
 [Message Follow](01-glossary.en.md#message-follow).
 
 Message Follow preserves original operation identity, `ObjectGeneration`, payload,
-deadline, and reply route. It doesn't re-read the Store or run an application handler on
-the source. Once `MessageFollowDuration` ends, the old route is removed, and a request
-arriving there ends with `Unavailable`.
+source routing id, and reply route. It doesn't re-read the Store or run an application
+handler on the source. Once `MessageFollowDuration` ends, the old route is removed, and
+a request arriving there ends with `Unavailable`.
+
+The end-to-end deadline for a followed operation is managed by the client, not
+propagated as an absolute value through each relay hop. A relay hop re-bounds its own
+wait using the local relay window instead of the original request's remaining deadline;
+it forwards the preserved operation identity, source routing id, and reply route, and
+lets the client's own timeout govern whether the operation is still worth completing
+end to end.
 
 A late cutover or Session route update doesn't extend Message Follow
 indefinitely. Conversely, applying the Session route first doesn't immediately discard

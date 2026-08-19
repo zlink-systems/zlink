@@ -536,6 +536,11 @@ Framework는 목록을 읽기 전과 후에 변경 번호를 확인한다. 두 �
 페이지를 사용한다. Provider는 전체 목록을 Lua memory에 한꺼번에 만들거나 Redis
 `SCAN` cursor를 Framework에 노출하지 않는다.
 
+Publisher가 이미 저장된 것과 같은 Revision으로 보낸 `RENEW`는 무해한 no-op이며 Store는
+이를 ignored/stale로 보고하고 descriptor를 다시 저장하지 않는다. Publisher는 게시 내용을
+바꾸려면 반드시 Revision을 증가시켜야 한다 — Revision이 바뀌지 않은 `RENEW`는 여러 번
+반복되더라도 error가 되지 않고 저장된 descriptor를 덮어쓰지도 않는다.
+
 Host는 startup 중 descriptor 전체를 먼저 만든다. 크기 제한을 넘으면 일부를
 자르거나 나누어 게시하지 않고 startup 전체를 실패시킨다. Application state의
 format과 version은 descriptor에 넣지 않는다.
@@ -1118,6 +1123,13 @@ queue와 조립 상태를 사용하지 않는다. 결합 값이 같은 Restore �
 다른 길이나 checksum이 도착하면 기존 조립 상태를 재사용하지도 덮어쓰지도 않고
 명시적 conflict 실패로 끝낸다.
 
+Authority commit(위 "Owner 변경" 행의 CAS)은 authority row 자신의 identity —
+reservation id와 이 CAS가 어느 이동에 속하는지 식별하는 generation(`AuthorityOwnerGeneration`,
+target attempt) — 만 fence한다. Target node의 liveness나 target의 lifecycle generation
+검증은 여기서 하지 않으며, 그 검증은 Restore 이전에 실행된 admission/join 경로(§6)의
+책임이지 Store commit 자체의 책임이 아니다. 일치하는 identity fence 아래 성공한 Store
+commit은 그 순간 가리키는 target node가 실제로 살아 있는지와 무관하게 authoritative하다.
+
 | 실패 시점 | 처리 |
 |---|---|
 | `Preparing` 또는 capture 중 source 종료 | 현재 source owner를 확인한 뒤 이동을 취소한다. |
@@ -1282,6 +1294,12 @@ Framework는 같은 시점의 목록 읽기로 descriptor와 owner lease 삭제 
 Actor·Spot의 현재 위치 record는 명시적인 `Delete`로만 제거한다. `Delete`는
 `StoreVersion`, 현재 owner와 사용 중인 수용 공간을 확인한다. Host descriptor가
 사라졌다는 이유만으로 object의 위치 record를 삭제하지 않는다.
+
+Owner cleanup sweep(`removeAllByOwner`)은 authority row만 회수한다 — shutdown하는
+host의 owner id와 lease generation이 일치하는 row만 대상이다. Descriptor는 절대
+회수하지 않는다. Descriptor는 오직 자신의 lease 만료와 `TAKEOVER`로만 회수되며,
+owner sweep으로는 회수되지 않는다. 두 정리 경로는 서로 독립적이며 서로 다른
+lifetime으로 동작한다.
 
 Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, Store callback,
 재연결 작업과 observer는 Framework가 소유한 runtime resource보다 오래 남지 않아야

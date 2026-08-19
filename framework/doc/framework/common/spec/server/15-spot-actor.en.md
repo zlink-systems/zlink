@@ -666,7 +666,11 @@ is committed directly. Afterward, the target Entry Spot's `OnJoinedActor` and so
 User Spot's `OnLeaveActor` are called. These callbacks are only used for an
 application-requested logical membership change.
 
-The Entry Spot itself isn't a relocation participant. When Host `Relocate` moves a
+The Entry Spot itself isn't a relocation participant, and it isn't addressable through
+mesh spot routing — see [Complete Actor And Spot Relocation
+Flow](28-relocation-flow.en.md#3-what-moves-as-one-unit). A framework notification
+targeting a node's Entry Spot is delivered node-level and dispatched to the local Entry
+Spot by the receiving node. When Host `Relocate` moves a
 source Entry Spot's Actor to the target node's Entry Spot, the framework restores
 state via the Actor adapter. Owner, membership, queue, timer, and session route also
 move to the target. This infrastructure relocation doesn't call the target's

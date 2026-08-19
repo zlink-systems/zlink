@@ -598,7 +598,11 @@ User Spot에서 Entry Spot으로 복귀할 때는 `OnActorJoin`을 호출하지 
 `OnLeaveActor`를 호출한다. 이 callback들은 application이 요청한 logical membership 변경에만
 사용한다.
 
-Entry Spot 자체는 relocation participant가 아니다. Host `Relocate`로 source Entry Spot의
+Entry Spot 자체는 relocation participant가 아니며 mesh spot routing으로 주소를 지정할 수도
+없다. [Actor와 Spot relocation 전체
+흐름](28-relocation-flow.ko.md#3-무엇을-한-번에-옮기는가)을 참고한다. Node의 Entry Spot을
+대상으로 하는 framework notification은 node 단위로 전달되며 수신 node가 local Entry Spot에
+dispatch한다. Host `Relocate`로 source Entry Spot의
 Actor를 target node의 Entry Spot으로 옮길 때 Framework는 Actor adapter로 state를 복원한다.
 Owner, membership, queue, timer와 session route도 target으로 이전한다. 이 infrastructure
 relocation에서는 target의 `OnJoinedActor`와 source의 `OnLeaveActor`를 호출하지 않는다.

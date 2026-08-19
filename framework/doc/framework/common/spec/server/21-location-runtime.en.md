@@ -557,6 +557,12 @@ The framework checks the change number before and after reading the list. It onl
 the whole page when the two numbers match. The provider doesn't build the whole list in
 Lua memory at once, or expose a Redis `SCAN` cursor to the framework.
 
+A publisher's `RENEW` that carries the same Revision already stored is a harmless no-op:
+the Store reports it as ignored/stale and doesn't re-store the descriptor. A publisher
+must increment Revision to change published content — a replayed `RENEW` at an unchanged
+Revision never errors and never overwrites the stored descriptor, even if replayed more
+than once.
+
 The host builds the whole descriptor during startup first. If it exceeds the size limit,
 it doesn't publish a truncated or split version — the whole startup fails instead. The
 format and version of application state aren't put in the descriptor.
@@ -1175,6 +1181,14 @@ and checksum equal the first values. If a different length or checksum arrives f
 same binding values, the existing assembly state is neither reused nor overwritten — it
 ends as an explicit conflict failure.
 
+The authority commit (the CAS in the "Owner change" row above) only fences the authority
+row's own identity — the reservation id and the generations (`AuthorityOwnerGeneration`,
+target attempt) that identify which move this CAS belongs to. It doesn't validate
+target-node liveness or the target's lifecycle generation; that validation belongs to the
+admission/join path (§6) that ran before Restore, not to the Store commit itself. A Store
+commit that succeeds under matching identity fences is authoritative regardless of
+whether the target node it points to is still live at that instant.
+
 | Failure point | Handling |
 |---|---|
 | Source terminates during `Preparing` or capture | Confirms the current source owner, then cancels the move. |
@@ -1358,6 +1372,12 @@ version first read is unchanged.
 An Actor/Spot's current location record is only removed by an explicit `Delete`.
 `Delete` verifies `StoreVersion`, current owner, and space in use. An object's location
 record isn't deleted merely because the host descriptor disappeared.
+
+The owner-cleanup sweep (`removeAllByOwner`) reclaims authority rows only — the rows
+matching the shutting-down host's owner id and lease generation. It never reclaims
+descriptors. A descriptor is reclaimed only through its own lease expiry and
+`TAKEOVER`, never by the owner sweep; the two cleanup paths are independent and run on
+different lifetimes.
 
 If the deadline passes, a `ForceStopped` result completes exactly once. Timers, Store
 callbacks, reconnection work, and observers must not outlive the runtime resources the
