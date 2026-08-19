@@ -11,7 +11,9 @@
   "sandbox 제약"(vstest TCP bind·cmake 불가)은 plugin 기본 sandbox가 원인 —
   **`codex exec -m gpt-5.6-terra -s danger-full-access --skip-git-repo-check`로
   기동하면 테스트 실행까지 제약 없음(2026-08-19 실증)**. 감독(코디네이터)은
-  판정·커밋·조율 전담. **가능한 한 최대 병렬**, 공유 worktree 파일 소유권 분리.
+  판정·커밋·조율 전담. **가능한 한 최대 병렬 — 코디네이터가 지시 없이도 유휴
+  자원(언어 트리·리뷰·검증)을 스스로 찾아 채운다(사용자 지시 2026-08-19)**,
+  공유 worktree 파일 소유권 분리.
 - 그린 마일스톤마다 즉시 커밋·push. 커밋 스테이징은 **파일 명시 나열**(공유 worktree
   오염 방지 — 광역 `git add` 금지). **에이전트의 `git reset`/`git checkout` 등 트리
   전역 복원 명령 금지**(2026-08-19 사고: terra의 reset이 타 에이전트 미커밋 수정을
