@@ -488,7 +488,9 @@
       W-4 완주가 해소 조건 ②③④⑦ → **해소 `355d83bdfb`(스키마·문서·골든·self-test 235)**: 의무형+과도기 문구,
       participantId 기계가독 선언+3-participant 골든+파생 self-test, 상한
       저장≤2^63-1/발급≤2^63-2 정렬, ClientServer allow-list에서 18/19/20 제거
-      ⑤ [M] dotnet owner-counter strict — 구현 완료(집중 4/4), 게이트 완주 중
+      ⑤ [M] dotnet owner-counter strict → **해소 `ebd79c54d3`**(+3-participant 골든의 dotnet
+      실패 2건은 낡은 기대값 판정·갱신 — 디코더는 다중 participant 정상,
+      게이트 1780/1783 인가만)
       ⑥ [H] node public bind() generic Error 래핑 — node 재구조화 후 정렬.
       **pilot5 부산물: 동치 하네스가 실결함 적발** — node spotFence()가
       spot-route-fence의 expectedOwnerLeaseGeneration 미직렬화(스키마 위반,
