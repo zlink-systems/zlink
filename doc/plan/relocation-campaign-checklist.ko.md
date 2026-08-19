@@ -325,9 +325,9 @@
       4언어 모두 충족). authority\0 스캔 프리픽스 밖 유지. 스펙 22 §7 규범
       명문+21 §2.4 포인터+골든 갱신(cpp 골든 시드 {json}→행2개). 폐기 리터럴
       5종 1회 flush 필요(물리 키=sha256(논리키) — ops 노트 필수). 슬라이스:
-      **spec+golden+java 완료 `51f0c1d4ea`**, **node 완료 `4dc7a7eae7`**(golden
-      실기록 byte 검증+typed 소진), cpp(최대·last→next 플립)·dotnet(인코딩+플립)
-      잔여 — 트리 점유 해제 순서대로 투입
+      **spec+golden+java 완료 `51f0c1d4ea`**, **node 완료 `4dc7a7eae7`**,
+      **dotnet 완료 `edcaf60637`(게이트 1776/1779 인가만·conformance 9/9)** — cpp(최대·
+      last→next 플립)만 잔여, envelope 수렴 종료 후 투입
 - [ ] **node discovery-sharing 회귀(신규 2026-08-19, 청정 HEAD 재현 확인)**:
       location-runtime "shares ClientServer and fanout discovery through only
       opaque Store primitives"가 stored 기대에 ignoredStale 수신(:1923) —
