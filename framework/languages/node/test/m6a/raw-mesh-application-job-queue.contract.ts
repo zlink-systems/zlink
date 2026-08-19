@@ -19,6 +19,7 @@ import {
 import {
   ServiceMailbox
 } from '../../packages/framework/src/runtime/foundation/service-mailbox';
+import { SERVICE_WIRE_REQUIRED_CAPABILITY } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import type {
   ServiceNodeDescriptor
 } from '../../packages/framework/src/runtime/foundation/service-topology-registry';
@@ -41,7 +42,7 @@ function descriptor(): ServiceNodeDescriptor {
     state: 'preparing',
     securityIdentity: 'default',
     applicationVersion: 1n,
-    protocolCapabilities: ['framework-service-v12'],
+    protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
     objectRole: 'server',
     placementWeight: 100,
     activeCapacityLimit: 1,

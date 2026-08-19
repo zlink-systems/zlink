@@ -19,6 +19,9 @@ const {
 const { RawServiceMeshRuntime } = require(
   '../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime'
 );
+const { SERVICE_WIRE_REQUIRED_CAPABILITY } = require(
+  '../../packages/framework/dist/runtime/foundation/service-wire-constants.generated'
+);
 const { ZLinkNodeRawBindingPort } = require(
   '../../packages/framework/dist/runtime/backend/node/node-raw-binding-port'
 );
@@ -121,7 +124,7 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
   const descriptor = (rid, endpoint, channels, role) => ({
     meshName: 'channel-round-trip', nodeRoutingId: rid, lifecycleGeneration: 1n,
     descriptorRevision: 1n, advertisedEndpoint: endpoint, channels, state: 'serving',
-    securityIdentity: 'test', applicationVersion: 1n, protocolCapabilities: ['framework-service-v12'],
+    securityIdentity: 'test', applicationVersion: 1n, protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
     objectRole: role, placementWeight: 100, activeCapacityLimit: 100,
     pendingCapacityLimit: 10, activeCapacityUsed: 0, pendingCapacityUsed: 0
   });

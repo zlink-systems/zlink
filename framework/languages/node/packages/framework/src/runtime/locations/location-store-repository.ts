@@ -135,6 +135,9 @@ interface AggregateRecord {
   readonly targetDescriptorLifecycleGeneration: bigint;
   readonly capacity: ZLinkCapacityVector;
   readonly targetOwner: ZLinkLocationOwnerToken;
+  /** Store-wide authority-owner generations reserved for this aggregate. */
+  readonly ownerGenerationStart?: bigint;
+  readonly ownerGenerationEnd?: bigint;
 }
 
 interface OwnerRecord {
@@ -538,6 +541,21 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
 
       let sourceCapacity: ZLinkCapacityVector = { actors: 0, spots: 0 };
+      let ownerGenerationStart = aggregate.ownerGenerationStart;
+      let ownerGenerationEnd = aggregate.ownerGenerationEnd;
+      let ownerGenerationCounterRead: ZLinkStoreReadResult | undefined;
+      if (ownerGenerationStart === undefined || ownerGenerationEnd === undefined) {
+        ownerGenerationCounterRead = await this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal);
+        ownerGenerationStart = counterNextValue(ownerGenerationCounterRead);
+        ownerGenerationEnd = ownerGenerationStart + BigInt(request.participants.length) - 1n;
+        if (ownerGenerationEnd >= MAX_GENERATION) {
+          await this.abortAggregateStaging(fence, signal);
+          return { kind: 'generationExhausted' };
+        }
+      } else if (ownerGenerationEnd !== ownerGenerationStart + BigInt(request.participants.length) - 1n) {
+        await this.abortAggregateStaging(fence, signal);
+        return { kind: 'conflict' };
+      }
       const installed: Array<{
         readonly key: ZLinkStoreKey;
         readonly expectedStoreVersion: string;
@@ -553,6 +571,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         }
         const record = decodeAuthorityRecord(current.value.bytes);
         if (sameAggregateMarker(record.aggregate, fence, index, participant)) {
+          if (ownerGenerationCounterRead !== undefined) {
+            const reservedAggregate = await this.provider.read(rowKey, signal);
+            if (reservedAggregate.kind === 'missing') return { kind: 'conflict' };
+            const reservedRecord = decodeJson<AggregateRecord>(reservedAggregate.value.bytes);
+            if (reservedRecord.ownerGenerationStart === undefined
+              || reservedRecord.ownerGenerationEnd === undefined) {
+              return { kind: 'conflict' };
+            }
+            ownerGenerationStart = reservedRecord.ownerGenerationStart;
+            ownerGenerationEnd = reservedRecord.ownerGenerationEnd;
+            ownerGenerationCounterRead = undefined;
+            aggregateRead = reservedAggregate;
+          }
           installed.push({
             key: authorityRowKey,
             expectedStoreVersion: participant.expectedStoreVersion.value
@@ -588,13 +619,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             record.snapshot.allocation.capacity
           );
         }
-        if (record.snapshot.authorityOwnerGeneration >= MAX_GENERATION) {
-          await this.clearAggregateMarkers(fence, installed, signal);
-          await this.abortAggregateStaging(fence, signal);
-          return { kind: 'generationExhausted' };
-        }
         const targetAuthorityOwnerGeneration = participant.ownerTransition === 'newOwner'
-          ? record.snapshot.authorityOwnerGeneration + 1n
+          ? ownerGenerationStart + BigInt(index)
           : record.snapshot.authorityOwnerGeneration;
         const marker: AggregateParticipantFenceRecord = {
             aggregateId: fence.aggregateId.value,
@@ -606,22 +632,64 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             authorityPayloadSha256: entry.authorityPayloadSha256,
             membershipMutationSha256: entry.membershipMutationSha256
           };
+        const reservingOwnerGenerationBlock = ownerGenerationCounterRead !== undefined;
         const stored = await this.provider.write({
-          conditions: [{ kind: 'version', key: authorityRowKey, expected: current.value.version }],
-          mutations: [{
-            kind: 'put', key: authorityRowKey, bytes: encodeAuthorityRecord({
-              ...record,
-              aggregate: marker,
-              visibleStoreVersion:
-                record.visibleStoreVersion ?? current.value.version.value
-            } satisfies AuthorityRecord)
-          }]
+          conditions: [
+            { kind: 'version', key: authorityRowKey, expected: current.value.version },
+            ...(reservingOwnerGenerationBlock
+              ? [conditionFor(AUTHORITY_OWNER_COUNTER_KEY, ownerGenerationCounterRead!)]
+              : []),
+            ...(reservingOwnerGenerationBlock
+              ? [{ kind: 'version' as const, key: rowKey, expected: aggregateRead.value.version }]
+              : [])
+          ],
+          mutations: [
+            {
+              kind: 'put', key: authorityRowKey, bytes: encodeAuthorityRecord({
+                ...record,
+                aggregate: marker,
+                visibleStoreVersion:
+                  record.visibleStoreVersion ?? current.value.version.value
+              } satisfies AuthorityRecord)
+            },
+            ...(reservingOwnerGenerationBlock
+              ? [
+                  {
+                    kind: 'put' as const,
+                    key: AUTHORITY_OWNER_COUNTER_KEY,
+                    bytes: encodeText((ownerGenerationEnd! + 1n).toString())
+                  },
+                  {
+                    kind: 'put' as const,
+                    key: rowKey,
+                    bytes: encodeJson({
+                      ...aggregate,
+                      ownerGenerationStart,
+                      ownerGenerationEnd
+                    } satisfies AggregateRecord)
+                  }
+                ]
+              : [])
+          ]
         }, signal);
         if (stored.kind === 'conflict') {
           const raced = await this.provider.read(authorityRowKey, signal);
           if (raced.kind === 'found' && sameAggregateMarker(
             decodeAuthorityRecord(raced.value.bytes).aggregate, fence, index, participant
           )) {
+            if (reservingOwnerGenerationBlock) {
+              const reservedAggregate = await this.provider.read(rowKey, signal);
+              if (reservedAggregate.kind === 'missing') return { kind: 'conflict' };
+              const reservedRecord = decodeJson<AggregateRecord>(reservedAggregate.value.bytes);
+              if (reservedRecord.ownerGenerationStart === undefined
+                || reservedRecord.ownerGenerationEnd === undefined) {
+                return { kind: 'conflict' };
+              }
+              ownerGenerationStart = reservedRecord.ownerGenerationStart;
+              ownerGenerationEnd = reservedRecord.ownerGenerationEnd;
+              ownerGenerationCounterRead = undefined;
+              aggregateRead = reservedAggregate;
+            }
             installed.push({ key: authorityRowKey, expectedStoreVersion: participant.expectedStoreVersion.value });
             continue;
           }
@@ -639,6 +707,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           await this.clearAggregateMarkers(fence, installed, signal);
           await this.abortAggregateStaging(fence, signal);
           return { kind: 'conflict' };
+        }
+        if (reservingOwnerGenerationBlock) {
+          ownerGenerationCounterRead = undefined;
         }
         installed.push({
           key: authorityRowKey,
@@ -988,12 +1059,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (!capacityAvailable(descriptor, request.capacity, capacity)) {
         return { kind: 'placementCapacityExhausted' };
       }
-      const generation = objectGenerationRead.kind === 'missing'
-        ? 1n
-        : BigInt(decodeText(objectGenerationRead.value.bytes));
-      const authorityOwnerGeneration = authorityOwnerGenerationRead.kind === 'missing'
-        ? 1n
-        : BigInt(decodeText(authorityOwnerGenerationRead.value.bytes));
+      const generation = counterNextValue(objectGenerationRead);
+      const authorityOwnerGeneration = counterNextValue(authorityOwnerGenerationRead);
       // Counters retain the next value to issue.  Issuing MAX_GENERATION
       // would require persisting MAX_GENERATION + 1, which is outside the
       // contract's valid stored range, so it fails before this batch mutates.
@@ -1392,9 +1459,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         this.provider.read(OWNER_COUNTER_KEY, signal)
       ]);
       if (owner.kind === 'found') return { kind: 'conflict' };
-      const generation = counter.kind === 'missing'
-        ? 1n
-        : BigInt(decodeText(counter.value.bytes));
+      const generation = counterNextValue(counter);
       // Counters retain the next value to issue. Issuing MAX_GENERATION would
       // require persisting MAX_GENERATION + 1, outside the stored range.
       if (generation >= MAX_GENERATION) return { kind: 'generationExhausted' };
@@ -3108,6 +3173,20 @@ function encodeText(value: string): Uint8Array {
 
 function decodeText(value: Uint8Array): string {
   return Buffer.from(value).toString('utf8');
+}
+
+/** Counter rows are bare, canonical decimal next-to-issue values. */
+function counterNextValue(counter: ZLinkStoreReadResult): bigint {
+  if (counter.kind === 'missing') return 1n;
+  const text = decodeText(counter.value.bytes);
+  if (!/^[1-9][0-9]*$/.test(text)) {
+    throw new TypeError('Location Store counter is not canonical decimal.');
+  }
+  const value = BigInt(text);
+  if (value > MAX_GENERATION) {
+    throw new RangeError('Location Store counter is outside its valid range.');
+  }
+  return value;
 }
 
 function encodeJson<T>(value: T): Uint8Array {

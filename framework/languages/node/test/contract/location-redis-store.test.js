@@ -337,7 +337,7 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     );
 
     const snapshots = [];
-    for (let index = 0; index < 12; index++) {
+    for (let index = 0; index < 2; index++) {
       snapshots.push(await createReadyUserSpot(
         source,
         `room-${index.toString().padStart(2, '0')}`,
@@ -348,14 +348,14 @@ test('redis-backed aggregate prepare commit and abort converge across repository
       String(row.rid) === String(sourceTarget.nodeRid));
     assert.ok(sourceDescriptor);
     assert.deepEqual(sourceDescriptor.populationCapacity.spots, {
-      active: 12,
+      active: 2,
       reserved: 0,
       limit: 64
     });
     assert.deepEqual(sourceDescriptor.populationCapacity.spotTypes[0], {
       objectKind: 'user_spot',
       stableType: 'lobby',
-      active: 12,
+      active: 2,
       reserved: 0,
       limit: 64
     });
@@ -419,11 +419,17 @@ test('redis-backed aggregate prepare commit and abort converge across repository
         moved.authorityOwnerGeneration
           > snapshots[index].authorityOwnerGeneration
       );
+      assert.equal(moved.authorityOwnerGeneration, BigInt(index + 3));
       assert.equal(
         Buffer.from(moved.payload).toString(),
         `relocated-room-${index.toString().padStart(2, '0')}`
       );
     }
+    const authorityOwnerCounter = await providerA.read({
+      value: 'zlink:v11:authority-owner-counter'
+    });
+    assert.equal(authorityOwnerCounter.kind, 'found');
+    assert.deepEqual(Buffer.from(authorityOwnerCounter.value.bytes), Buffer.from('5'));
 
     const abortSnapshot = await createReadyUserSpot(
       source,

@@ -1717,6 +1717,53 @@ test('production repository leaves authority record and next-to-issue counters u
   );
 });
 
+test('production repository rejects non-canonical decimal bytes for every counter row', async () => {
+  for (const malformed of ['0', '01', '+1', ' 1', '1 ']) {
+    for (const counterKey of [
+      'zlink:v11:object-counter',
+      'zlink:v11:authority-owner-counter'
+    ]) {
+      const provider = new internal.ZLinkInMemoryProviderLocationStore();
+      const repository = new internal.ZLinkLocationStoreRepository(provider);
+      const owner = await repository.claimOwnerLease(`counter-${counterKey}-${malformed}`, 30_000);
+      assert.equal(owner.kind, 'claimed');
+      if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
+      const nodeRid = `counter-node-${counterKey}-${malformed}`;
+      assert.equal((await repository.updateMeshNode({
+        ...placementDescriptor(nodeRid, 'Player', 1, 0, 0),
+        ownerId: owner.token.ownerId,
+        leaseGeneration: owner.token.leaseGeneration
+      }, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+      internal.ZLinkLocationWriteStatus.Stored);
+      assert.equal((await provider.write({
+        conditions: [{ kind: 'missing', key: { value: counterKey } }],
+        mutations: [{ kind: 'put', key: { value: counterKey }, bytes: Buffer.from(malformed) }]
+      })).kind, 'applied');
+      await assert.rejects(repository.reserve({
+        key: { kind: 'actor', globalId: `counter-${counterKey}-${malformed}` },
+        intent: {
+          stableType: 'Player', requestContentReference: 'counter',
+          requestSha256: Buffer.alloc(32, 1), requestEncodedSize: 1n
+        },
+        target: {
+          meshName: 'play', nodeRid: rid(nodeRid), nodeLifecycleGeneration: 1n, owner: owner.token
+        },
+        capacity: { actors: 1, spots: 0 }, creatingPayload: Buffer.from('counter')
+      }), /counter is not canonical decimal/);
+    }
+
+    const provider = new internal.ZLinkInMemoryProviderLocationStore();
+    assert.equal((await provider.write({
+      conditions: [{ kind: 'missing', key: { value: 'zlink:v11:owner-counter' } }],
+      mutations: [{ kind: 'put', key: { value: 'zlink:v11:owner-counter' }, bytes: Buffer.from(malformed) }]
+    })).kind, 'applied');
+    await assert.rejects(
+      new internal.ZLinkLocationStoreRepository(provider).claimOwnerLease(`owner-${malformed}`, 30_000),
+      /counter is not canonical decimal/
+    );
+  }
+});
+
 test('production repository rejects legacy public records without recordVersion', async () => {
   const provider = new internal.ZLinkInMemoryProviderLocationStore();
   const authorityKey = authorityKeys.encodeAuthorityKey('actor', 'legacy-record');

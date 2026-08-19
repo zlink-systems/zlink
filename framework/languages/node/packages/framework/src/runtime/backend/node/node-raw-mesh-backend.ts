@@ -44,7 +44,8 @@ import {
 } from '../../foundation/service-wire-m6a-codec';
 import {
   SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
-  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+  SERVICE_WIRE_REQUIRED_CAPABILITY
 } from '../../foundation/service-wire-constants.generated';
 import {
   ServiceStatefulRuntime,
@@ -1362,9 +1363,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       applicationVersion: 0n,
       ...(this.maintenanceWave === undefined ? {} : { maintenanceWave: this.maintenanceWave }),
       protocolCapabilities: [
-        'framework-service-v12',
+        SERVICE_WIRE_REQUIRED_CAPABILITY,
         ...this.objectCapabilities
-      ],
+      ].sort(),
       objectRole: this.objectRole,
       placementWeight: this.placementWeight,
       activeCapacityLimit: this.activeCapacityLimit,

@@ -8,6 +8,9 @@ const {
 const {
   SmoothWeightedSelection
 } = require('../../packages/framework/dist/runtime/foundation/service-weighted-selection');
+const { SERVICE_WIRE_REQUIRED_CAPABILITY } = require(
+  '../../packages/framework/dist/runtime/foundation/service-wire-constants.generated'
+);
 
 function serviceNode(nodeRoutingId, weight) {
   return {
@@ -20,7 +23,7 @@ function serviceNode(nodeRoutingId, weight) {
     state: 'serving',
     securityIdentity: 'test',
     applicationVersion: 0n,
-    protocolCapabilities: ['framework-service-v12'],
+    protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
     objectRole: 'none',
     placementWeight: weight,
     activeCapacityLimit: 10,

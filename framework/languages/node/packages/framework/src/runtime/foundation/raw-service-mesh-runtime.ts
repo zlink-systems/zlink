@@ -740,6 +740,9 @@ export class RawServiceMeshRuntime {
           expected
         );
         if (result !== 'admitted') {
+          console.warn(
+            `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}.`
+          );
           await this.send(received.sourceRid, [encodeReject(admissionReason(result))]);
           if (result === 'notRequired') {
             this.retireNotRequiredExpectedPeer(

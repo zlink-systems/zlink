@@ -1,5 +1,6 @@
 import { descriptorConnectionNotRequired } from './route-mesh-connection-policy';
 import { SmoothWeightedSelection } from './service-weighted-selection';
+import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
 
 export type ServiceNodeState =
   | 'preparing'
@@ -61,7 +62,7 @@ export type ServiceObjectPlacementStatus =
   | 'capacity'
   | 'unavailable';
 
-const REQUIRED_CAPABILITY = 'framework-service-v12';
+const REQUIRED_CAPABILITY = SERVICE_WIRE_REQUIRED_CAPABILITY;
 const MAX_CAPACITY = 0x7fff_ffff;
 const MAX_PUBLIC_WEIGHT = 10_000;
 
