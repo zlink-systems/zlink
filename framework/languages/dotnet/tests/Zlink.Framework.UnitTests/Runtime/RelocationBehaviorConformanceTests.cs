@@ -380,7 +380,7 @@ public sealed class RelocationBehaviorConformanceTests
                 TimeSpan.FromSeconds(3));
             await trace.WaitAsync("publicJoinCompleted");
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
-            await trace.WaitAsync("sourceMembershipLeaveSubmitted");
+            await trace.WaitAsync("sourceMembershipLeaveStarted");
             trace.ReleaseSourceLeave.TrySetResult();
             _ = await saved.WaitAsync(TimeSpan.FromSeconds(10));
             _ = await prefix.WaitAsync(TimeSpan.FromSeconds(10));
@@ -545,7 +545,7 @@ public sealed class RelocationBehaviorConformanceTests
                 TimeSpan.FromSeconds(3));
             await trace.WaitAsync("publicJoinCompleted");
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
-            await trace.WaitAsync("sourceMembershipLeaveSubmitted");
+            await trace.WaitAsync("sourceMembershipLeaveStarted");
 
             var authorityMutations = trace.TargetAuthorityMutationCount;
             var lifecycleAttempts = trace.TargetLifecycleAttemptCount;
@@ -761,18 +761,24 @@ public sealed class RelocationBehaviorConformanceTests
             transport.ReleasePrepareCall.TrySetResult();
             await transport.TargetReadyFailureInjected.Task.WaitAsync(
                 TimeSpan.FromSeconds(3));
-            await transport.TargetRollbackDestroyStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            transport.ReleaseTargetRollbackDestroy.TrySetResult();
-            await transport.TargetRollbackDestroyCompleted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            //  Spec 15 §4.2 / spec 52 §3.2: a failed READY submission is
+            //  retryable submission state, not a relocation failure — the
+            //  target keeps the exact prepared stage (removed only by an
+            //  explicit abort or preparation-validity expiry), so no rollback
+            //  destroy may start here.
+            Assert.False(transport.TargetRollbackDestroyStarted.Task.IsCompleted);
+            transport.ReleaseTargetReadySend.TrySetResult();
             using var retryDeadline = new CancellationTokenSource(
                 TimeSpan.FromSeconds(3));
             _ = await RetryTargetPrepareAfterCleanupAsync(
                 transport,
                 retryDeadline.Token);
+            //  Explicit abort of the retained stage drives the target
+            //  rollback destroy, which the probe holds (this constructor
+            //  keeps ReleaseTargetRollbackDestroy unset) so force stop finds
+            //  it in flight.
             await transport.AbortRetriedTargetPrepareAsync();
-            await transport.RetriedTargetRollbackDestroyStarted.Task.WaitAsync(
+            await transport.TargetRollbackDestroyStarted.Task.WaitAsync(
                 TimeSpan.FromSeconds(3));
 
             var forceStop = target.Services
@@ -786,7 +792,7 @@ public sealed class RelocationBehaviorConformanceTests
                 result.Outcome);
             Assert.False(target.Runtime.IsStarted);
             Assert.False(
-                transport.RetriedTargetRollbackDestroyCompleted.Task.IsCompleted);
+                transport.TargetRollbackDestroyCompleted.Task.IsCompleted);
         }
         finally
         {
@@ -936,6 +942,13 @@ public sealed class RelocationBehaviorConformanceTests
             fixture.RootElement.GetProperty("fixture").GetString());
 
         var trace = new RelocationBehaviorTrace();
+        //  A pass-through probe: every gate is released up front, so the
+        //  runtime is unmodified — it only records the one-way OnLeaveActor
+        //  submission the fixture's "sourceMembershipLeaveSubmitted" event
+        //  stands for.
+        var transport = new CanonicalRelocationTransportProbe(trace);
+        transport.ReleasePrepareCall.TrySetResult();
+        transport.ReleaseCutoverSend.TrySetResult();
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
             trace);
@@ -949,7 +962,8 @@ public sealed class RelocationBehaviorConformanceTests
             trace,
             locationStore,
             relocationStore,
-            registerTargetSpot: false);
+            registerTargetSpot: false,
+            canonicalTransportProbe: transport);
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
             await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
@@ -966,7 +980,8 @@ public sealed class RelocationBehaviorConformanceTests
             trace,
             locationStore,
             relocationStore,
-            registerTargetSpot: true);
+            registerTargetSpot: true,
+            canonicalTransportProbe: transport);
         await WaitUntilAsync(
             () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
                       .Node.Status().ActivePeerCount == 1
@@ -1646,7 +1661,7 @@ internal sealed class BehaviorEntrySpot(
     public async ValueTask OnLeaveActorAsync(BehaviorActor actor, CancellationToken cancellationToken)
     {
         Assert.Equal("source", node.Name);
-        trace.Record("sourceMembershipLeaveSubmitted");
+        trace.Record("sourceMembershipLeaveStarted");
         await trace.ReleaseSourceLeave.Task.WaitAsync(cancellationToken);
     }
 }
@@ -1817,9 +1832,12 @@ internal sealed class CanonicalRelocationTransportProbe
         .PrepareAsync(
             _prepare ?? throw new InvalidOperationException(
                 "No canonical prepare was captured."),
-            ZLinkRelocationEnvelopeCodec.Decode(
+            //  Direct transfer frames the envelope with the ZLDR header and
+            //  inventory digest (spec 28 §4.2); decode through the transfer
+            //  payload codec, not the bare envelope codec.
+            ZLinkRelocationTransferPayload.DecodeEnvelope(
                 (_preparePayload ?? throw new InvalidOperationException(
-                    "No canonical prepare payload was captured.")).Encoded.Span),
+                    "No canonical prepare payload was captured.")).Encoded),
             _prepareSourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
             cancellationToken);
@@ -1835,9 +1853,9 @@ internal sealed class CanonicalRelocationTransportProbe
                 TargetAttemptGeneration = checked(
                     _prepare.TargetAttemptGeneration + 1)
             },
-            ZLinkRelocationEnvelopeCodec.Decode(
+            ZLinkRelocationTransferPayload.DecodeEnvelope(
                 (_preparePayload ?? throw new InvalidOperationException(
-                    "No canonical prepare payload was captured.")).Encoded.Span),
+                    "No canonical prepare payload was captured.")).Encoded),
             _prepareSourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
             cancellationToken);
@@ -1946,6 +1964,12 @@ internal sealed class CanonicalRelocationTransportProbe
     internal void RecordSourceLeaveSubmission()
     {
         _trace.Record("sourceLeaveOneWaySubmitted");
+        //  Fixture vocabulary (relocation-behavior-v1.json): the
+        //  "sourceMembershipLeaveSubmitted" behavior event is the one-way
+        //  OnLeaveActor SUBMISSION (spec 15 §4.2 step 7 orders the submission before
+        //  the Join completion callback; the cross-node execution of the
+        //  source callback is unordered against target-local completion).
+        _trace.Record("sourceMembershipLeaveSubmitted");
         SourceLeaveSubmitted.TrySetResult();
     }
 

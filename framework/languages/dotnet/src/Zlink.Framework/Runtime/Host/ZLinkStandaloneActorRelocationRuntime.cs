@@ -495,6 +495,18 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 found.Snapshot.Payload.Span,
                 out var canonical))
         {
+            //  Direct transfer (spec 52 §3.1.7) keeps the handoff payload in
+            //  source memory: it has no Relocation Store pointer, so the
+            //  durable row carries no reference/checksum extension. The
+            //  in-memory payload CRC therefore only matches the durable row
+            //  when a store pointer exists (root.Reference is non-empty).
+            var pointerMatches = root.Reference.Length == 0
+                ? canonical.RelocationReference.Length == 0
+                : StringComparer.Ordinal.Equals(
+                      canonical.RelocationReference,
+                      root.Reference)
+                  && canonical.RelocationChecksumCrc32c
+                     == root.ChecksumCrc32c;
             return canonical.Phase >= (byte)(requireActivated
                        ? ZLinkStandaloneActorCanonicalPhase.Activated
                        : ZLinkStandaloneActorCanonicalPhase.Committed)
@@ -502,11 +514,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                    && canonical.RelocationLow == ToWireId(relocationId).Low
                    && canonical.TargetAttemptGeneration
                       == targetAttemptGeneration
-                   && StringComparer.Ordinal.Equals(
-                       canonical.RelocationReference,
-                       root.Reference)
-                   && canonical.RelocationChecksumCrc32c
-                      == root.ChecksumCrc32c
+                   && pointerMatches
                    && StringComparer.Ordinal.Equals(
                        canonical.TargetOwnerId,
                        target.OwnerId)
@@ -1965,7 +1973,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     // remote-join import (Handoff.Import), never a canonical maintenance
     // import, so the canonical activation helper does not apply here — the
     // Runtime helper drives the imported replay itself, then finishes the
-    // target route and delivers the public Join completion.
+    // target route and delivers the public Join completion. The durable
+    // canonical phase then advances to Activated so the source's
+    // committed-target wait (which requires activation before it completes
+    // the source side, spec 15 §4.2 step 7) observes the target opening — without it
+    // the source spins on a Committed row until its join deadline and
+    // falsely rolls back an already-committed handoff.
     private async ValueTask CompleteDirectRemoteJoinTargetAsync(
         TargetStage stage,
         ZLinkRemoteActorJoinRequest request,
@@ -1978,8 +1991,93 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 request,
                 recovery,
                 stage.TargetAuthority.MeshName,
+                token => AdvanceDirectRemoteJoinTargetPhaseAsync(stage, token),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    //  The recovery progress coordinator resolves the immutable root through
+    //  its Relocation Store pointer, which a direct transfer never writes
+    //  (spec 52 §3.1.7), so the direct remote join advances the canonical
+    //  phase on the authority row itself — Committed → Activating →
+    //  Activated, one durable boundary per CAS, fenced by the exact
+    //  relocation identity and target attempt — and then normalizes the row
+    //  to its steady target-owned authority payload, mirroring the
+    //  store-based recovery release.
+    private async ValueTask AdvanceDirectRemoteJoinTargetPhaseAsync(
+        TargetStage stage,
+        CancellationToken cancellationToken)
+    {
+        var store = registration.Locations.ResolveStore()
+                    ?? throw new ZLinkConfigurationException(
+                        "Location Store is not registered.");
+        var relocationId = ToWireId(stage.Envelope.AggregateId);
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            var read = await store.ReadAuthorityAsync(
+                    stage.Participant.AuthorityKey,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (read is not ZLinkAuthorityReadResult.Found found)
+                throw DataLost(
+                    "Standalone Actor direct target activation lost its committed authority.");
+            if (!ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                    found.Snapshot.Payload.Span,
+                    out var canonical))
+                //  Already normalized to the steady target authority.
+                return;
+            if (canonical.RelocationHigh != relocationId.High
+                || canonical.RelocationLow != relocationId.Low
+                || canonical.TargetAttemptGeneration
+                   != stage.Prepare.TargetAttemptGeneration
+                || !StringComparer.Ordinal.Equals(
+                    canonical.TargetOwnerId,
+                    stage.TargetAuthority.OwnerId)
+                || canonical.TargetOwnerLeaseGeneration
+                   != stage.TargetAuthority.OwnerLeaseGeneration)
+                throw DataLost(
+                    "Standalone Actor direct target activation lost its exact attempt fence.");
+            ReadOnlyMemory<byte> payload;
+            if (canonical.Phase
+                >= (byte)ZLinkStandaloneActorCanonicalPhase.Activated)
+                payload = canonical.SteadyAuthorityPayload;
+            else if (canonical.Phase is
+                     (byte)ZLinkStandaloneActorCanonicalPhase.Committed or
+                     (byte)ZLinkStandaloneActorCanonicalPhase.Activating)
+            {
+                var next = canonical.Phase
+                           == (byte)ZLinkStandaloneActorCanonicalPhase.Committed
+                    ? ZLinkStandaloneActorCanonicalPhase.Activating
+                    : ZLinkStandaloneActorCanonicalPhase.Activated;
+                payload = ZLinkCanonicalRelocationAuthorityStateCodec
+                    .ReplaceRelocationState(
+                        found.Snapshot.Payload.Span,
+                        canonical.State with { Phase = (byte)next },
+                        stage.Envelope);
+            }
+            else
+                throw DataLost(
+                    $"Standalone Actor direct target activation phase is '{canonical.Phase}'.");
+            var exchanged = await store.CompareExchangeAuthorityAsync(
+                    stage.Participant.AuthorityKey,
+                    found.Snapshot.StoreVersion,
+                    new ZLinkAuthorityMutation.Put(
+                        payload,
+                        ZLinkAuthorityGenerationTransition.Preserve,
+                        null,
+                        null),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored
+                or ZLinkAuthorityCompareExchangeResult.Conflict)
+                continue;
+            throw new InvalidOperationException(
+                "Authority Store rejected direct standalone Actor phase progress.");
+        }
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            "Standalone Actor direct target activation conflicted after the bounded retry limit.",
+            retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
     }
 
     private async ValueTask ActivatePublishedTargetCoreAsync(
@@ -2706,12 +2804,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     case TargetReadySubmissionPhase.None:
                         _readySubmissionPhase = TargetReadySubmissionPhase.Pending;
                         return;
+                    //  An identical-retry Prepare that arrives while a READY
+                    //  submission is already in flight (or has landed)
+                    //  attaches to that submission instead of failing: READY
+                    //  is a one-way submission with no completion reply
+                    //  (spec 52 §4.1), duplicate READY records are idempotent
+                    //  at the source, and NACKing here would fault the shared
+                    //  pending-prepare waiter the original caller still owns.
+                    case TargetReadySubmissionPhase.Pending:
                     case TargetReadySubmissionPhase.Submitted:
                         return;
                     default:
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.Unavailable,
-                            "Standalone Actor READY submission is already pending.",
+                            "Standalone Actor target cleanup is still in progress.",
                             retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
                 }
             }

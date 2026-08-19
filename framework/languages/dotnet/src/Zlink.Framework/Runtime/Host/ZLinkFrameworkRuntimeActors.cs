@@ -941,20 +941,38 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (read is not ZLinkAuthorityReadResult.Found found
             || found.Snapshot.AuthorityOwnerGeneration
                != message.TargetAuthorityOwnerGeneration
-            || (!ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
-                    out var canonical)
-                || canonical.RelocationHigh == 0
+            || !Guid.TryParseExact(message.HandoffId, "N", out var handoffId))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"Actor '{message.ActorId}' source leave target fence is stale.");
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                found.Snapshot.Payload.Span,
+                out var canonical))
+        {
+            if (canonical.RelocationHigh == 0
                 || canonical.RelocationLow == 0
                 || canonical.State.TargetNodeRid
                    != authenticatedTargetNodeRid.ToHex()
-                || !Guid.TryParseExact(message.HandoffId, "N", out var handoffId)
                 || canonical.RelocationHigh
                    != BinaryPrimitives.ReadUInt64BigEndian(
                        handoffId.ToByteArray(bigEndian: true).AsSpan(0, 8))
                 || canonical.RelocationLow
                    != BinaryPrimitives.ReadUInt64BigEndian(
-                       handoffId.ToByteArray(bigEndian: true).AsSpan(8, 8))))
+                       handoffId.ToByteArray(bigEndian: true).AsSpan(8, 8)))
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    $"Actor '{message.ActorId}' source leave target fence is stale.");
+        }
+        //  The target normalizes its committed row to the steady target
+        //  authority before delivering the public Join terminal, so the
+        //  one-way leave can legitimately arrive after the canonical slot is
+        //  gone. The exact committed owner generation (checked above) plus
+        //  the steady owner decoding to the authenticated target node still
+        //  fence the message to this handoff.
+        else if (!ZLinkActorAuthorityPayloadCodec.TryDecode(
+                     found.Snapshot.Payload.Span,
+                     out var steadyTargetAuthority)
+                 || steadyTargetAuthority.NodeRid != authenticatedTargetNodeRid)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Actor '{message.ActorId}' source leave target fence is stale.");
@@ -981,6 +999,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRemoteActorJoinRequest request,
         ZLinkActorRelocationRecoveryRecord recovery,
         string targetMeshName,
+        Func<CancellationToken, ValueTask> normalizeDurableAuthority,
         CancellationToken cancellationToken)
     {
         var completion = CreateCanonicalRoutedActorCompletion(
@@ -992,38 +1011,34 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         try
         {
-            // The target must be fully ready before the transferred Actor sees
-            // its public Join terminal. In particular, the callback can issue
-            // traffic immediately; delivering it before replay completion and
-            // the target-side admission/session handoff leaves that traffic
-            // behind the relocation seal.
-            //
             // A direct remote join always holds a remote-join import
             // (Handoff.Import), never a canonical maintenance import, so this
             // completion path owns the replay drive itself: the durable and
             // relayed frames already sit in the import queue
             // (Import/AppendPreparedImport) and there is no trailing
             // completion batch in the direct protocol.
+            //
+            // Ordering (spec 15 §4.2 step 7 / spec 52 §4.3): the Actor's public Join
+            // completion callback is part of the target lifecycle and runs
+            // BEFORE application dispatch becomes runnable — the replay below
+            // is what admits saved/relayed/temporary work into handlers, so
+            // the completion terminal must precede it, mirroring the
+            // store-based recovery path. Callback traffic issued before the
+            // session route commit is held by the session seal and released
+            // when the route update lands (spec 15 §4.2 step 8).
             var target = ResolveActorHandoffTarget(spotId)
                          ?? throw new ZLinkFrameworkException(
                              ZLinkFrameworkErrorKind.NotFound,
                              $"Actor '{request.ActorId}' handoff target '{spotId}' "
                              + "is not active during direct completion.");
             actorState.Handoff.PrepareImportedReplay([]);
-            await ReplayFinalTransferredActorHandoffAsync(
-                    target,
-                    actorState,
-                    request.HandoffId,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            await actorState.Handoff.WaitForTargetReplayCompletionAsync(
-                    cancellationToken)
-                .ConfigureAwait(false);
-            await FinishRelocationTargetAsync(
-                    actorState,
-                    targetMeshName,
-                    request.HandoffId,
-                    cancellationToken)
+            //  Mirrors the store-based recovery path's ReleasePublishedAsync
+            //  position: the durable row reaches its terminal (Activated,
+            //  then steady) before the public Join terminal, so a late or
+            //  duplicate cutover after completion performs zero authority
+            //  writes (spec 52 §4.2 — late cutover is ignored) and the
+            //  source's committed-target wait observes the activation.
+            await normalizeDurableAuthority(cancellationToken)
                 .ConfigureAwait(false);
             if (recovery.OperationIdHigh != 0
                 || recovery.OperationIdLow != 0)
@@ -1056,6 +1071,21 @@ internal sealed partial class ZLinkFrameworkRuntime
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+            await ReplayFinalTransferredActorHandoffAsync(
+                    target,
+                    actorState,
+                    request.HandoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await actorState.Handoff.WaitForTargetReplayCompletionAsync(
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await FinishRelocationTargetAsync(
+                    actorState,
+                    targetMeshName,
+                    request.HandoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
             actorState.Handoff.Complete(request.HandoffId);
             _actorHandoffAdmissions.RecordCompletion(completion, spotId);
             _actorHandoffAdmissions.Complete(request.HandoffId);
