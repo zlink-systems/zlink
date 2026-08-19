@@ -678,6 +678,29 @@ test('redis-backed repository writes the golden canonical authority allocation e
       )).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
+    const objectCounter = golden.counterVectors.vectors.find(
+      item => item.logicalKey === 'zlink:v11:object-counter'
+    );
+    const authorityOwnerCounter = golden.counterVectors.vectors.find(
+      item => item.logicalKey === 'zlink:v11:authority-owner-counter'
+    );
+    assert.ok(objectCounter);
+    assert.ok(authorityOwnerCounter);
+    const seededCounters = await store.write({
+      conditions: [
+        { kind: 'missing', key: key(objectCounter.logicalKey) },
+        { kind: 'missing', key: key(authorityOwnerCounter.logicalKey) }
+      ],
+      mutations: [
+        { kind: 'put', key: key(objectCounter.logicalKey), bytes: Buffer.from(objectCounter.issuedValue) },
+        {
+          kind: 'put',
+          key: key(authorityOwnerCounter.logicalKey),
+          bytes: Buffer.from(authorityOwnerCounter.issuedValue)
+        }
+      ]
+    });
+    assert.equal(seededCounters.kind, 'applied');
     const authorityKey = encodeAuthorityKey('actor', 'user:42');
     const reserved = await repository.reserve({
       key: { kind: 'actor', globalId: 'user:42' },
@@ -693,6 +716,20 @@ test('redis-backed repository writes the golden canonical authority allocation e
     });
     assert.equal(reserved.kind, 'reserved');
     if (reserved.kind !== 'reserved') throw new Error('authority reserve failed');
+    assert.equal(reserved.creating.objectGeneration, BigInt(objectCounter.issuedValue));
+    assert.equal(
+      reserved.creating.authorityOwnerGeneration,
+      BigInt(authorityOwnerCounter.issuedValue)
+    );
+    for (const counter of [objectCounter, authorityOwnerCounter]) {
+      const read = await store.read(key(counter.logicalKey));
+      assert.equal(read.kind, 'found');
+      assert.deepEqual(
+        Buffer.from(read.value.bytes),
+        Buffer.from(counter.storedNextValue),
+        `${counter.logicalKey} must retain the golden bare-decimal next value`
+      );
+    }
     const committed = await repository.commit({
       key: { kind: 'actor', globalId: 'user:42' },
       reservationId: reserved.reservationId,

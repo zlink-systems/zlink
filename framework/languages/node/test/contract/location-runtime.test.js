@@ -1601,6 +1601,12 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal(envelope.payload, '3q2+7w==');
   assert.equal(envelope.objectGeneration, '1');
   assert.equal(envelope.authorityOwnerGeneration, '1');
+  const objectCounter = await provider.read({ value: 'zlink:v11:object-counter' });
+  const authorityOwnerCounter = await provider.read({ value: 'zlink:v11:authority-owner-counter' });
+  assert.equal(objectCounter.kind, 'found');
+  assert.equal(authorityOwnerCounter.kind, 'found');
+  assert.deepEqual(Buffer.from(objectCounter.value.bytes), Buffer.from('2'));
+  assert.deepEqual(Buffer.from(authorityOwnerCounter.value.bytes), Buffer.from('2'));
   assert.deepEqual(envelope.allocation, {
     state: 'reserved', objectKind: 'actor', stableType: 'Player',
     descriptor: { meshName: 'play', routingIdHex: Buffer.from('node-a').toString('hex') },
@@ -1620,6 +1626,67 @@ test('production repository persists owner lease and MeshNode records through on
     internal.ZLinkLocationWriteStatus.Stored
   );
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
+});
+
+test('production repository leaves authority record and next-to-issue counters unchanged at generation exhaustion', async () => {
+  const provider = new internal.ZLinkInMemoryProviderLocationStore();
+  const repository = new internal.ZLinkLocationStoreRepository(provider);
+  const owner = await repository.claimOwnerLease('owner-generation-ceiling', 30_000);
+  assert.equal(owner.kind, 'claimed');
+  if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
+  const target = {
+    meshName: 'play',
+    nodeRid: rid('node-generation-ceiling'),
+    nodeLifecycleGeneration: 1n,
+    owner: owner.token
+  };
+  assert.equal(
+    (await repository.updateMeshNode(
+      {
+        ...placementDescriptor('node-generation-ceiling', 'Player', 1, 0, 0),
+        ownerId: owner.token.ownerId,
+        leaseGeneration: owner.token.leaseGeneration
+      },
+      internal.ZLinkLocationWriteIntent.NewClaim
+    )).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  const ceiling = Buffer.from('9223372036854775807');
+  const seeded = await provider.write({
+    conditions: [
+      { kind: 'missing', key: { value: 'zlink:v11:object-counter' } },
+      { kind: 'missing', key: { value: 'zlink:v11:authority-owner-counter' } }
+    ],
+    mutations: [
+      { kind: 'put', key: { value: 'zlink:v11:object-counter' }, bytes: ceiling },
+      { kind: 'put', key: { value: 'zlink:v11:authority-owner-counter' }, bytes: Buffer.from('1') }
+    ]
+  });
+  assert.equal(seeded.kind, 'applied');
+
+  const exhausted = await repository.reserve({
+    key: { kind: 'actor', globalId: 'generation-ceiling' },
+    intent: {
+      stableType: 'Player',
+      requestContentReference: 'request:generation-ceiling',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 16n
+    },
+    target,
+    capacity: { actors: 1, spots: 0 },
+    creatingPayload: Buffer.from('creating')
+  });
+  assert.deepEqual(exhausted, { kind: 'generationExhausted' });
+  const objectCounter = await provider.read({ value: 'zlink:v11:object-counter' });
+  const authorityOwnerCounter = await provider.read({ value: 'zlink:v11:authority-owner-counter' });
+  assert.equal(objectCounter.kind, 'found');
+  assert.equal(authorityOwnerCounter.kind, 'found');
+  assert.deepEqual(Buffer.from(objectCounter.value.bytes), ceiling);
+  assert.deepEqual(Buffer.from(authorityOwnerCounter.value.bytes), Buffer.from('1'));
+  assert.equal(
+    (await provider.read({ value: 'authority\0actor\0generation-ceiling' })).kind,
+    'missing'
+  );
 });
 
 test('production repository rejects legacy public records without recordVersion', async () => {

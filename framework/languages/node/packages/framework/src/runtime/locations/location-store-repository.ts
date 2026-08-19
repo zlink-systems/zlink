@@ -84,7 +84,8 @@ const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
 // These counters are store-wide fences.  They deliberately are not derived
 // from an authority identity: deleting and recreating an authority must never
 // reuse an incarnation or owner-transition generation.
-const AUTHORITY_GENERATIONS_KEY = storeKey(`${PREFIX}authority-generations`);
+const OBJECT_COUNTER_KEY = storeKey(`${PREFIX}object-counter`);
+const AUTHORITY_OWNER_COUNTER_KEY = storeKey(`${PREFIX}authority-owner-counter`);
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_CREATION_TERMINAL_BYTES = 1024 * 1024;
@@ -101,11 +102,6 @@ interface AuthorityRecord {
   readonly terminal?: 'committed' | 'rejected' | 'failed' | 'aborted';
   readonly aggregate?: AggregateParticipantFenceRecord;
   readonly visibleStoreVersion?: string;
-}
-
-interface AuthorityGenerationRecord {
-  readonly objectGeneration: string;
-  readonly authorityOwnerGeneration: string;
 }
 
 interface CapacityRecord {
@@ -945,14 +941,21 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         request.target.meshName,
         String(request.target.nodeRid)
       );
-      const generationRowKey = AUTHORITY_GENERATIONS_KEY;
-      const [current, descriptorRead, leaseRead, capacityRead, generationRead] =
+      const [
+        current,
+        descriptorRead,
+        leaseRead,
+        capacityRead,
+        objectGenerationRead,
+        authorityOwnerGenerationRead
+      ] =
         await Promise.all([
           this.provider.read(rowKey, signal),
           this.provider.read(descriptorKey, signal),
           this.provider.read(leaseKey, signal),
           this.provider.read(capacityRowKey, signal),
-          this.provider.read(generationRowKey, signal)
+          this.provider.read(OBJECT_COUNTER_KEY, signal),
+          this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal)
         ]);
       if (current.kind === 'found') {
         const record = decodeAuthorityRecord(current.value.bytes);
@@ -985,18 +988,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (!capacityAvailable(descriptor, request.capacity, capacity)) {
         return { kind: 'placementCapacityExhausted' };
       }
-      const generations = generationRead.kind === 'missing'
-        ? { objectGeneration: 0n, authorityOwnerGeneration: 0n }
-        : (() => {
-            const stored = decodeJson<AuthorityGenerationRecord>(generationRead.value.bytes);
-            return {
-              objectGeneration: BigInt(stored.objectGeneration),
-              authorityOwnerGeneration: BigInt(stored.authorityOwnerGeneration)
-            };
-          })();
-      const generation = generations.objectGeneration + 1n;
-      const authorityOwnerGeneration = generations.authorityOwnerGeneration + 1n;
-      if (generation > MAX_GENERATION || authorityOwnerGeneration > MAX_GENERATION) {
+      const generation = objectGenerationRead.kind === 'missing'
+        ? 1n
+        : BigInt(decodeText(objectGenerationRead.value.bytes));
+      const authorityOwnerGeneration = authorityOwnerGenerationRead.kind === 'missing'
+        ? 1n
+        : BigInt(decodeText(authorityOwnerGenerationRead.value.bytes));
+      // Counters retain the next value to issue.  Issuing MAX_GENERATION
+      // would require persisting MAX_GENERATION + 1, which is outside the
+      // contract's valid stored range, so it fails before this batch mutates.
+      if (generation >= MAX_GENERATION || authorityOwnerGeneration >= MAX_GENERATION) {
         return { kind: 'generationExhausted' };
       }
       const reservationId = randomUUID();
@@ -1034,7 +1035,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           versionCondition(descriptorKey, descriptorRead),
           versionCondition(leaseKey, leaseRead),
           conditionFor(capacityRowKey, capacityRead),
-          conditionFor(generationRowKey, generationRead)
+          conditionFor(OBJECT_COUNTER_KEY, objectGenerationRead),
+          conditionFor(AUTHORITY_OWNER_COUNTER_KEY, authorityOwnerGenerationRead)
         ],
         mutations: [
           { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(record) },
@@ -1048,11 +1050,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           },
           {
             kind: 'put',
-            key: generationRowKey,
-            bytes: encodeJson<AuthorityGenerationRecord>({
-              objectGeneration: generation.toString(),
-              authorityOwnerGeneration: authorityOwnerGeneration.toString()
-            })
+            key: OBJECT_COUNTER_KEY,
+            bytes: encodeText((generation + 1n).toString())
+          },
+          {
+            kind: 'put',
+            key: AUTHORITY_OWNER_COUNTER_KEY,
+            bytes: encodeText((authorityOwnerGeneration + 1n).toString())
           }
         ]
       }, signal);
