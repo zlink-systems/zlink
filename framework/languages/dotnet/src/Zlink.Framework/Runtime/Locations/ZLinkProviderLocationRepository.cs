@@ -43,10 +43,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             {
                 ZLinkStoreReadResult.Missing => 1L,
                 ZLinkStoreReadResult.Found found =>
-                    long.Parse(
-                        Encoding.UTF8.GetString(found.Value.Bytes.Span),
-                        NumberStyles.None,
-                        CultureInfo.InvariantCulture),
+                    DecodeOwnerGenerationCounter(found.Value.Bytes),
                 _ => throw new InvalidOperationException()
             };
             if (generation == MaximumGeneration)
@@ -134,6 +131,27 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 applied.StoreNow + leaseTtl,
                 applied.StoreNow);
         }
+    }
+
+    private static long DecodeOwnerGenerationCounter(ReadOnlyMemory<byte> bytes)
+    {
+        var text = Encoding.UTF8.GetString(bytes.Span);
+        if (!long.TryParse(
+                text,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var value)
+            || value is <= 0 or > MaximumGeneration
+            || !string.Equals(
+                text,
+                value.ToString(CultureInfo.InvariantCulture),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The Location Store owner generation counter is not canonical decimal.");
+        }
+
+        return value;
     }
 
     public async ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(

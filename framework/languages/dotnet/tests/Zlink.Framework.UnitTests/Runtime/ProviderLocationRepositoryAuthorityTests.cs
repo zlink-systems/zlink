@@ -10,6 +10,8 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    private static readonly ZLinkStoreKey OwnerCounterKey =
+        new("zlink:v11:owner-counter");
     private static readonly ZLinkStoreKey ObjectCounterKey =
         new("zlink:v11:object-counter");
     private static readonly ZLinkStoreKey AuthorityOwnerCounterKey =
@@ -34,6 +36,28 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         Assert.Equal(claimed.Token, read.Token);
         Assert.Equal(claimed.LeaseExpiresAt, read.LeaseExpiresAt);
+    }
+
+    [Theory]
+    [InlineData("01")]
+    [InlineData("0")]
+    [InlineData("+1")]
+    [InlineData(" 1")]
+    public async Task OwnerClaimRejectsNonCanonicalGenerationCounter(
+        string encodedGeneration)
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        await SeedCounterAsync(provider, OwnerCounterKey, encodedGeneration);
+
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await repository.ClaimOwnerLeaseAsync(
+                "noncanonical-owner",
+                TimeSpan.FromMinutes(2)));
+
+        Assert.Equal(
+            "The Location Store owner generation counter is not canonical decimal.",
+            failure.Message);
     }
 
     [Fact]

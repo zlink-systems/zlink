@@ -185,7 +185,7 @@ public sealed class RelocationRuntimeTests
             ZLinkCrc32C.Compute(manifest),
             CancellationToken.None);
 
-        Assert.Equal(418, read.LogicalLength);
+        Assert.Equal(435, read.LogicalLength);
         Assert.Equal(1, read.ChunkCount);
         Assert.Equal(
             Enumerable.Range(0, 32).Select(static value => (byte)value),
@@ -215,11 +215,22 @@ public sealed class RelocationRuntimeTests
         var envelope = ZLinkRelocationEnvelopeCodec.Decode(logical);
 
         Assert.Equal(logical, ZLinkRelocationEnvelopeCodec.Encode(envelope));
-        var spot = envelope.Participants[0];
-        var savedWork = Assert.Single(spot.AcceptedJobs);
+        Assert.Collection(
+            envelope.Participants,
+            participant => Assert.Equal<ulong>(1, participant.CanonicalParticipantId),
+            participant => Assert.Equal<ulong>(2, participant.CanonicalParticipantId),
+            participant => Assert.Equal<ulong>(3, participant.CanonicalParticipantId));
+
+        var savedWorkParticipant = Assert.Single(
+            envelope.Participants,
+            static participant => participant.CanonicalParticipantId == 2);
+        var savedWork = Assert.Single(savedWorkParticipant.AcceptedJobs);
         Assert.Equal<ulong>(1, savedWork.AcceptedSequence);
         Assert.NotEmpty(savedWork.Payload.ToArray());
-        var timer = Assert.Single(spot.LogicalTimers);
+        var timerParticipant = Assert.Single(
+            envelope.Participants,
+            static participant => participant.CanonicalParticipantId == 3);
+        var timer = Assert.Single(timerParticipant.LogicalTimers);
         Assert.Equal("heartbeat", timer.TimerId);
         Assert.Equal(1_000, timer.PeriodMilliseconds);
         Assert.Equal(1_760_000_000_000, timer.DueUnixTimeMilliseconds);
@@ -237,11 +248,14 @@ public sealed class RelocationRuntimeTests
         Assert.Equal<ulong>(5, pendingTick.DeliveryIndex);
         Assert.Equal<ulong>(6, pendingTick.ScheduledIndex);
         Assert.Equal<ulong>(1, pendingTick.SkippedTicks);
-        Assert.True(spot.CompletionPayload.IsEmpty);
-        Assert.Equal<ulong>(1, spot.CanonicalParticipantId);
-        Assert.Empty(envelope.Participants[1].AcceptedJobs);
-        Assert.Empty(envelope.Participants[1].LogicalTimers);
-        Assert.True(envelope.Participants[1].CompletionPayload.IsEmpty);
+        Assert.True(savedWorkParticipant.CompletionPayload.IsEmpty);
+        Assert.True(timerParticipant.CompletionPayload.IsEmpty);
+        var stateOnlyParticipant = Assert.Single(
+            envelope.Participants,
+            static participant => participant.CanonicalParticipantId == 1);
+        Assert.Empty(stateOnlyParticipant.AcceptedJobs);
+        Assert.Empty(stateOnlyParticipant.LogicalTimers);
+        Assert.True(stateOnlyParticipant.CompletionPayload.IsEmpty);
     }
 
     [Theory]
