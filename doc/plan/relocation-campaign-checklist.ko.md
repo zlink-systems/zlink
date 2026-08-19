@@ -239,7 +239,9 @@
       ③ [H] cpp actorJoin 실패를 전부 Unavailable로 붕괴(spec 32: ProtocolError/
       DeadlineExceeded 구분 필요; 협상 limit 폐기) ④ [H] java가 relocationFailed
       (53) 코드 무시하고 generic IllegalStateException(ZLinkCanonicalRelocation
-      StateMachine:685) — 4언어 수신 분류 parity 파괴, java 에이전트 투입
+      StateMachine:685) — 4언어 수신 분류 parity 파괴 → **해소: emit 표의 역표를
+      상태기계에 공치(共置)해 typed kind 수신(원격요청 표 재사용은 parity 파괴라
+      기각), 게이트 그린**
       ⑤ [H] ST-C4 계약 variant 미검증(B 섹션에 반영) ⑥ [H] run_e2e.sh가 Track F
       미실행인데 집계 성공 보고(:68-73) — cpp 트랙 ⑦ [M] dotnet authority/owner-
       lease 리더 recordVersion 미검증(spec 21 §420-425 fail-closed), cpp는 부재
