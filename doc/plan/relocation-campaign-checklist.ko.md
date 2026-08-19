@@ -281,9 +281,17 @@
       (2026-08-19, HEAD bec7a9e48a) 결과: 기본 게이트 8/19 적색 + relocation 3쌍
       전부 store 계층 실패. 하니스 드리프트 수정 `dec1c2dd9a`(message-follow
       구주장은 드리프트로 판명·그린). 결함 8군 전량 배정:**
-      ① **[C] ClientServer admission 프레이밍 분열**: cpp는 hello/admit을 plain
-      frame으로, node/dotnet은 RequestSeq 프레임 요구(무seq hello 무시/폐기) —
-      cpp↔node/dotnet channel 3스테이지 전멸. 규범 판정+정렬 필요(스펙 대조)
+      ① **[C] ClientServer admission 프레이밍 분열 → 판정·해소 `f969155899`**:
+      스펙 51 §4 방향 계약(서버 발신=reply/liveness/update/reject만)이 결정 —
+      admit은 hello 요청의 reply로만 가능, java도 seq 진영(3:1)이라 cpp 단독
+      이탈 확정. cpp를 seq-프레임으로 정렬(레코드 byte 불변), plain hello는
+      protocol error, node와 양방향 admission 상호운용 실증.
+      **후속 [C] 발견·판정: ClientServer app 레코드 방언 분열** — cpp raw 경로는
+      binary 18/19/20, node/java/dotnet은 만장일치 JSON channel-envelope(0xF2).
+      mesh 연결의 binary 명령은 교차 언어 실증(spot-route 그린)되나 ClientServer
+      연결은 envelope가 실계약 — **판정: cpp가 envelope로 수렴+스펙 51 문구
+      한정 개정**(fanout 2-frame publish 동일, enable_publisher discovery 강제
+      루트 수정 포함) — 프레이밍 에이전트 속행
       ② **[H] dotnet channel direct 무대기 → 해소 `640c3ef484`**: 첫 admission
       가능 후보만 기한 대기(만료=DeadlineExceeded), 종결 상태 즉시 분류 유지
       (RouteMesh 3테스트 불변), 게이트 1772/1775 인가 실패만·conformance 9/9
