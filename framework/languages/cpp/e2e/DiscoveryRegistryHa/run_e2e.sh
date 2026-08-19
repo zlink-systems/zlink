@@ -51,6 +51,10 @@ normalize_scenario() {
     sf-d2|SF-D2|d2) echo SF-D2 ;;
     sf-d3|SF-D3|d3) echo SF-D3 ;;
     sf-e1|SF-E1|e1) echo SF-E1 ;;
+    sf-f2|SF-F2|f2) echo SF-F2 ;;
+    sf-f3|SF-F3|f3) echo SF-F3 ;;
+    sf-f7|SF-F7|f7) echo SF-F7 ;;
+    sf-f11|SF-F11|f11) echo SF-F11 ;;
     *) echo "Unsupported C++ StoreFailure scenario: $1" >&2; exit 2 ;;
   esac
 }
@@ -69,10 +73,19 @@ if [[ "$SCENARIO" == "all" ]]; then
   exit 0
 fi
 
-read -r API_A API_B API_B_REPLACEMENT API_C HTTP_A HTTP_B \
-  HTTP_B_REPLACEMENT HTTP_C HTTP_CONSUMER \
+read -r API_A API_B API_B_REPLACEMENT API_C RELOC_ROUTER_A RELOC_ROUTER_B \
+  HTTP_A HTTP_B HTTP_B_REPLACEMENT HTTP_C HTTP_CONSUMER RELOC_HTTP_A RELOC_HTTP_B \
   <<<"$(zlink_cpp_e2e_allocate_endpoints \
-    tcp tcp tcp tcp http http http http http)"
+    tcp tcp tcp tcp tcp tcp http http http http http http http)"
+
+# Track F (SF-F2/F3/F7/F11) uses a separate relocation-capable node pair,
+# distinct from the Track A-E provider/consumer roles above. This scenario
+# check gates the extra Redis container, node processes, and cmake target
+# so Track A-E scenarios keep their exact prior resource footprint.
+case "$SCENARIO" in
+  SF-F2|SF-F3|SF-F7|SF-F11) RELOCATION_TRACK=1 ;;
+  *) RELOCATION_TRACK=0 ;;
+esac
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
@@ -85,16 +98,29 @@ cmake -S "$CPP_DIR" -B "$BUILD_DIR" >/dev/null
 cmake --build "$BUILD_DIR" --target \
   zlink_cpp_e2e_store_failure_provider \
   zlink_cpp_e2e_store_failure_consumer \
-  zlink_cpp_e2e_store_failure_client >/dev/null
+  zlink_cpp_e2e_store_failure_client \
+  zlink_cpp_e2e_store_failure_relocation_node >/dev/null
 
 PROVIDER_SERVER="$BUILD_DIR/zlink_cpp_e2e_store_failure_provider"
 CONSUMER_SERVER="$BUILD_DIR/zlink_cpp_e2e_store_failure_consumer"
 CLIENT="$BUILD_DIR/zlink_cpp_e2e_store_failure_client"
+RELOCATION_NODE_SERVER="$BUILD_DIR/zlink_cpp_e2e_store_failure_relocation_node"
 REDIS_CONTAINER=""
 REDIS_OWNED=0
 REDIS_KEY_PREFIX="zlink:cpp:store-failure:${RUN_ID}"
 STORE_ENDPOINT=""
 REDIS_PROXY_ADMIN_URL=""
+RELOC_REDIS_CONTAINER=""
+RELOC_REDIS_OWNED=0
+RELOC_REDIS_ENDPOINT=""
+RELOC_REDIS_KEY_PREFIX="zlink:cpp:store-failure-relocation:${RUN_ID}"
+RELOC_A_PID=""
+RELOC_B_PID=""
+# Small enough that SF-F7's KB-scale fixtures genuinely cross the chunk and
+# in-flight-budget boundaries; must match the constants sf_f7_scenario.hpp
+# expects.
+RELOCATION_CHUNK_LIMIT_BYTES=4096
+RELOCATION_IN_FLIGHT_BUDGET_BYTES=8192
 PIDS=()
 API_A_PID=""
 API_B_PID=""
@@ -202,6 +228,12 @@ cleanup() {
   if [[ -n "$CONSUMER_PID" ]]; then
     post_shutdown "$HTTP_CONSUMER/shutdown"
   fi
+  if [[ -n "$RELOC_A_PID" ]]; then
+    post_shutdown "$RELOC_HTTP_A/shutdown"
+  fi
+  if [[ -n "$RELOC_B_PID" ]]; then
+    post_shutdown "$RELOC_HTTP_B/shutdown"
+  fi
   for pid in "${PIDS[@]:-}"; do
     if [[ -z "$pid" ]]; then
       continue
@@ -212,6 +244,11 @@ cleanup() {
   done
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_OWNED" == "1" ]]; then
     zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
+  fi
+  if [[ -n "$RELOC_REDIS_CONTAINER" && "$RELOC_REDIS_OWNED" == "1" ]]; then
+    # SF-F3 stops this container as part of the scenario and restarts it
+    # before finishing; remove-by-id tolerates either state.
+    zlink_redis_remove_by_id "$RELOC_REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
@@ -300,6 +337,20 @@ if [[ "$SCENARIO" == "SF-E1" ]]; then
   echo "redis latency proxy endpoint=$STORE_ENDPOINT admin=$REDIS_PROXY_ADMIN_URL"
 fi
 
+if [[ "$RELOCATION_TRACK" == "1" ]]; then
+  # SF-F3 needs a Relocation Store that is independently stoppable while the
+  # Location Store above stays healthy -- the production framework already
+  # exposes these as separate store interfaces (add_location_store vs.
+  # add_relocation_store), so this is just a second container, not a fault
+  # injection seam.
+  zlink_redis_start_scoped_assign RELOC_REDIS_CONTAINER reloc_redis_port \
+    "zlink-redis-cpp-e2e-discoveryregistryha-relocation" "redis:7-alpine"
+  RELOC_REDIS_ENDPOINT="127.0.0.1:${reloc_redis_port}"
+  RELOC_REDIS_OWNED=1
+  echo "relocation-store redis endpoint=$RELOC_REDIS_ENDPOINT (container $RELOC_REDIS_CONTAINER)"
+  wait_tcp "${RELOC_REDIS_ENDPOINT%:*}" "${RELOC_REDIS_ENDPOINT##*:}" relocation-store-redis
+fi
+
 write_role_config() {
   local path="$1"
   local rid="$2"
@@ -334,7 +385,8 @@ write_client_config() {
   python3 - "$path" "$SCENARIO" "$HTTP_CONSUMER" "$HTTP_A" "$HTTP_B" "$HTTP_C" \
     "$SF_A2_PROVIDER_START_FILE" "$REDIS_PROXY_ADMIN_URL" "$REDIS_CONTAINER" "$API_A" \
     "$API_B" "$HTTP_B_REPLACEMENT" "$API_B_REPLACEMENT" "$HEARTBEAT_MS" \
-    "$LEASE_TTL_MS" "$POLLING_MS" "$GRACE_MS" <<'PY'
+    "$LEASE_TTL_MS" "$POLLING_MS" "$GRACE_MS" \
+    "$RELOC_HTTP_A" "$RELOC_HTTP_B" "$RELOC_REDIS_CONTAINER" "$RELOC_REDIS_ENDPOINT" <<'PY'
 import json
 import os
 import stat
@@ -343,7 +395,9 @@ import sys
 (path, scenario, consumer_url, provider_a_url, provider_b_url, provider_c_url,
  provider_c_start_file, redis_proxy_admin_url, redis_container, provider_a_endpoint,
  provider_b_endpoint, replacement_provider_url, replacement_provider_endpoint,
- heartbeat_ms, lease_ttl_ms, polling_ms, grace_ms) = sys.argv[1:]
+ heartbeat_ms, lease_ttl_ms, polling_ms, grace_ms,
+ relocation_node_a_url, relocation_node_b_url, relocation_redis_container,
+ relocation_redis_endpoint) = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as file:
     json.dump({"e2e": {"scenario": scenario, "consumerUrl": consumer_url,
         "providerAUrl": provider_a_url, "providerBUrl": provider_b_url,
@@ -352,10 +406,57 @@ with open(path, "w", encoding="utf-8") as file:
         "providerAEndpoint": provider_a_endpoint, "providerBEndpoint": provider_b_endpoint,
         "replacementProviderUrl": replacement_provider_url,
         "replacementProviderEndpoint": replacement_provider_endpoint,
+        "relocationNodeAUrl": relocation_node_a_url,
+        "relocationNodeBUrl": relocation_node_b_url,
+        "relocationRedisContainer": relocation_redis_container,
+        "relocationRedisEndpoint": relocation_redis_endpoint,
         "location": {"heartbeatMs": int(heartbeat_ms), "leaseTtlMs": int(lease_ttl_ms),
         "pollingMs": int(polling_ms), "graceMs": int(grace_ms)}}}, file, indent=2)
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 PY
+}
+
+write_relocation_role_config() {
+  local path="$1"
+  local rid="$2"
+  local http="$3"
+  local router="$4"
+  python3 - "$path" "$rid" "$http" "$router" "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" \
+    "$RELOC_REDIS_ENDPOINT" "$RELOC_REDIS_KEY_PREFIX" "$LOG_DIR" "$rid" \
+    "$RELOCATION_CHUNK_LIMIT_BYTES" "$RELOCATION_IN_FLIGHT_BUDGET_BYTES" <<'PY'
+import json
+import os
+import stat
+import sys
+
+(path, rid, http_url, router_endpoint, redis_endpoint, redis_key_prefix,
+ relocation_redis_endpoint, relocation_redis_key_prefix, log_dir, evidence_name,
+ chunk_limit_bytes, in_flight_budget_bytes) = sys.argv[1:]
+role = {"rid": rid, "httpUrl": http_url, "routerEndpoint": router_endpoint,
+        "redis": {"endpoint": redis_endpoint, "keyPrefix": redis_key_prefix},
+        "relocationRedis": {"endpoint": relocation_redis_endpoint,
+                            "keyPrefix": relocation_redis_key_prefix},
+        "logDir": log_dir, "evidenceFile": f"{log_dir}/{evidence_name}.evidence.log",
+        "relocationChunkLimitBytes": chunk_limit_bytes,
+        "relocationInFlightBudgetBytes": in_flight_budget_bytes}
+with open(path, "w", encoding="utf-8") as file:
+    json.dump({"e2e": role}, file, indent=2)
+os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+PY
+}
+
+start_relocation_node() {
+  local rid="$1"
+  local http="$2"
+  local router="$3"
+  local config_path="$CONFIG_DIR/$rid.json"
+  write_relocation_role_config "$config_path" "$rid" "$http" "$router"
+  "$RELOCATION_NODE_SERVER" --config="$config_path" \
+    >"$LOG_DIR/$rid.stdout.log" 2>"$LOG_DIR/$rid.stderr.log" &
+  LAST_PID="$!"
+  PIDS+=("$LAST_PID")
+  wait_port "$rid-router" "$router"
+  wait_port "$rid-http" "$http"
 }
 
 start_provider() {
@@ -431,6 +532,12 @@ if [[ "$SCENARIO" == "SF-B2" ]]; then
 fi
 if [[ "$SCENARIO" == "SF-A2" ]]; then
   start_sf_a2_provider
+fi
+if [[ "$RELOCATION_TRACK" == "1" ]]; then
+  start_relocation_node df-a "$RELOC_HTTP_A" "$RELOC_ROUTER_A"
+  RELOC_A_PID="$LAST_PID"
+  start_relocation_node df-b "$RELOC_HTTP_B" "$RELOC_ROUTER_B"
+  RELOC_B_PID="$LAST_PID"
 fi
 
 sleep "$ROUTE_SETTLE_SECONDS"

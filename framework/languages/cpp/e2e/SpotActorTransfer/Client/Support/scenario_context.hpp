@@ -525,6 +525,7 @@ class scenario_runner_t
     void run_st_c1_scenario ();
     void run_st_c2_scenario ();
     void run_st_c3_scenario ();
+    void run_st_c4_scenario ();
     void run_st_d1_scenario ();
     void run_st_d2_scenario ();
     void run_st_e1_scenario ();

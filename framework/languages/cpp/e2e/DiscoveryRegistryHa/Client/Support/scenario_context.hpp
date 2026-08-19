@@ -37,6 +37,13 @@ struct options_t
     std::chrono::milliseconds lease_ttl;
     std::chrono::milliseconds polling;
     std::chrono::milliseconds grace;
+    /* Track F (SF-F2/F3/F7/F11): a separate relocation-capable node pair,
+     * independent of the provider/consumer roles above. Empty for
+     * Track A-E scenarios. */
+    std::string relocation_node_a_url;
+    std::string relocation_node_b_url;
+    std::string relocation_redis_container;
+    std::string relocation_redis_endpoint;
 };
 
 options_t read_options (int argc, char **argv)
@@ -75,7 +82,15 @@ options_t read_options (int argc, char **argv)
             .heartbeat = std::chrono::milliseconds (location.at ("heartbeatMs").get<int> ()),
             .lease_ttl = std::chrono::milliseconds (location.at ("leaseTtlMs").get<int> ()),
             .polling = std::chrono::milliseconds (location.at ("pollingMs").get<int> ()),
-            .grace = std::chrono::milliseconds (location.at ("graceMs").get<int> ())};
+            .grace = std::chrono::milliseconds (location.at ("graceMs").get<int> ()),
+            .relocation_node_a_url =
+              root.value ("relocationNodeAUrl", std::string ()),
+            .relocation_node_b_url =
+              root.value ("relocationNodeBUrl", std::string ()),
+            .relocation_redis_container =
+              root.value ("relocationRedisContainer", std::string ()),
+            .relocation_redis_endpoint =
+              root.value ("relocationRedisEndpoint", std::string ())};
 }
 
 std::chrono::milliseconds stale_peer_timeout (const options_t &options)

@@ -1757,6 +1757,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
   target_include_directories(zlink_cpp_e2e_store_failure_client PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
 
+  # Track F (SF-F2/F3/F7/F11): a separate relocation-capable participant for
+  # DiscoveryRegistryHa. Tracks A-E (provider/consumer above) never place a
+  # stateful Actor/Spot, so this role exists purely for Track F and does not
+  # change anything Tracks A-E build or run.
+  add_executable(zlink_cpp_e2e_store_failure_relocation_node
+    e2e/DiscoveryRegistryHa/Server/Relocation/main.cpp)
+  target_link_libraries(zlink_cpp_e2e_store_failure_relocation_node PRIVATE
+    zlink::framework
+    zlink::framework_locations_redis
+    OpenSSL::Crypto)
+  target_include_directories(zlink_cpp_e2e_store_failure_relocation_node PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
   add_executable(zlink_cpp_e2e_registry_messaging_provider
     e2e/RegistryMessaging/Server/Provider/main.cpp)
   target_link_libraries(zlink_cpp_e2e_registry_messaging_provider PRIVATE
@@ -2199,6 +2212,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
     zlink_cpp_e2e_spot_actor_transfer_host
     zlink_cpp_e2e_spot_actor_transfer_actor_node
     zlink_cpp_e2e_spot_actor_transfer_session
+    zlink_cpp_e2e_store_failure_relocation_node
     zlink_cpp_e2e_to_actor_messaging_actor
     zlink_cpp_e2e_to_actor_messaging_caller
     zlink_cpp_e2e_to_actor_messaging_session

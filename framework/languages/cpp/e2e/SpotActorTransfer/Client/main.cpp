@@ -11,6 +11,7 @@
 #include "Scenarios/st_c1_scenario.hpp"
 #include "Scenarios/st_c2_scenario.hpp"
 #include "Scenarios/st_c3_scenario.hpp"
+#include "Scenarios/st_c4_scenario.hpp"
 #include "Scenarios/st_d1_scenario.hpp"
 #include "Scenarios/st_d2_scenario.hpp"
 #include "Scenarios/st_e1_scenario.hpp"
@@ -79,6 +80,8 @@ int main (int argc, char **argv)
                 runner.run_st_c2_scenario ();
             } else if (name == "ST-C3") {
                 runner.run_st_c3_scenario ();
+            } else if (name == "ST-C4") {
+                runner.run_st_c4_scenario ();
             } else if (name == "ST-D1") {
                 runner.run_st_d1_scenario ();
             } else if (name == "ST-D2") {

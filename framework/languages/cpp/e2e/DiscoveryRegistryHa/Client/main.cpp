@@ -10,6 +10,10 @@
 #include "Scenarios/sf_d2_scenario.hpp"
 #include "Scenarios/sf_d3_scenario.hpp"
 #include "Scenarios/sf_e1_scenario.hpp"
+#include "Scenarios/sf_f2_scenario.hpp"
+#include "Scenarios/sf_f3_scenario.hpp"
+#include "Scenarios/sf_f7_scenario.hpp"
+#include "Scenarios/sf_f11_scenario.hpp"
 
 int main (int argc, char **argv)
 {
@@ -34,6 +38,14 @@ int main (int argc, char **argv)
         run_sf_d3_scenario (options);
     } else if (options.scenario == "SF-E1") {
         run_sf_e1_scenario (options);
+    } else if (options.scenario == "SF-F2") {
+        run_sf_f2_scenario (options);
+    } else if (options.scenario == "SF-F3") {
+        run_sf_f3_scenario (options);
+    } else if (options.scenario == "SF-F7") {
+        run_sf_f7_scenario (options);
+    } else if (options.scenario == "SF-F11") {
+        run_sf_f11_scenario (options);
     } else {
         throw std::runtime_error ("Unsupported StoreFailure scenario: " + options.scenario);
     }
