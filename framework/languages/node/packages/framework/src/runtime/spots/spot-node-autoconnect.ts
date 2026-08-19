@@ -223,7 +223,9 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       this.node.expectPeer?.({
         nodeRoutingId: String(target.nodeRid),
         endpoint: target.endpoint,
-        securityIdentity: target.metadata?.securityIdentity,
+        securityIdentity: toAdmissionSecurityIdentity(
+          target.metadata?.securityIdentity
+        ),
         lifecycleGeneration: target.lifecycleGeneration
       });
     }
@@ -240,7 +242,9 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
         expectedRid: target.nodeRid === undefined
           ? undefined
           : toBackendRoutingId(target.nodeRid),
-        expectedSecurityIdentity: target.metadata?.securityIdentity,
+        expectedSecurityIdentity: toAdmissionSecurityIdentity(
+          target.metadata?.securityIdentity
+        ),
         expectedLifecycleGeneration: target.lifecycleGeneration
       });
       this.connectionIntents.set(key, connectionIntentId);
@@ -277,4 +281,12 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
 
 function connectionKey(target: ZLinkAutoConnectTarget): string {
   return `${target.nodeRid ?? ''}\0${target.lifecycleGeneration}\0${target.endpoint}`;
+}
+
+// Location descriptors identify an unauthenticated transport as "plaintext";
+// RouteMesh admission carries its canonical wire identity, "default". The
+// expectation must use the wire value while authenticated identities remain
+// exact descriptor fences.
+function toAdmissionSecurityIdentity(identity: string | undefined): string | undefined {
+  return identity === 'plaintext' ? 'default' : identity;
 }

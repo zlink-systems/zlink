@@ -21,8 +21,10 @@ import { ServiceMailbox, type ServiceMailboxLimits, type ServiceMailboxRecord } 
 import {
   ServiceTopologyRegistry,
   sameServiceNodeDescriptor,
+  validateDescriptor,
   type AdmittedServicePeer,
   type PeerAdmissionResult,
+  type ServicePeerAdmissionExpectation,
   type ServiceNodeDescriptor
 } from './service-topology-registry';
 import {
@@ -740,8 +742,16 @@ export class RawServiceMeshRuntime {
           expected
         );
         if (result !== 'admitted') {
+          const detail = result === 'invalidDescriptor'
+            ? describeInvalidAdmissionDescriptor(
+              descriptor,
+              expected,
+              this.topology.peer(descriptor.nodeRoutingId)?.descriptor
+            )
+            : undefined;
           console.warn(
-            `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}.`
+            `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}`
+            + (detail === undefined ? '.' : ` (${detail}).`)
           );
           await this.send(received.sourceRid, [encodeReject(admissionReason(result))]);
           if (result === 'notRequired') {
@@ -1683,6 +1693,60 @@ function isConnectionReadyEdge(event: ZLinkRawMonitorRecord): boolean {
   return event.flags === undefined
     ? event.value > 0
     : (event.flags & MONITOR_CONNECTION_READY_EDGE) !== 0;
+}
+
+function describeInvalidAdmissionDescriptor(
+  descriptor: ServiceNodeDescriptor,
+  expected: ServicePeerAdmissionExpectation | undefined,
+  current: ServiceNodeDescriptor | undefined
+): string {
+  try {
+    validateDescriptor(descriptor);
+  } catch (error) {
+    return `descriptor validation: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (expected?.endpoint !== undefined
+    && descriptor.advertisedEndpoint !== expected.endpoint) {
+    return `advertisedEndpoint expected='${expected.endpoint}' actual='${descriptor.advertisedEndpoint}'`;
+  }
+  if (expected?.securityIdentity !== undefined
+    && descriptor.securityIdentity !== expected.securityIdentity) {
+    return `securityIdentity expected='${expected.securityIdentity}' actual='${descriptor.securityIdentity}'`;
+  }
+  if (expected?.lifecycleGeneration !== undefined
+    && descriptor.lifecycleGeneration !== expected.lifecycleGeneration) {
+    return `lifecycleGeneration expected=${expected.lifecycleGeneration} actual=${descriptor.lifecycleGeneration}`;
+  }
+  if (current !== undefined
+    && current.lifecycleGeneration === descriptor.lifecycleGeneration
+    && descriptor.descriptorRevision > current.descriptorRevision) {
+    const immutableField = immutableDescriptorMismatch(current, descriptor);
+    if (immutableField !== undefined) return immutableField;
+  }
+  return 'self routing id or immutable descriptor field';
+}
+
+function immutableDescriptorMismatch(
+  current: ServiceNodeDescriptor,
+  descriptor: ServiceNodeDescriptor
+): string | undefined {
+  const fields: ReadonlyArray<keyof ServiceNodeDescriptor> = [
+    'advertisedEndpoint', 'securityIdentity', 'applicationVersion', 'objectRole',
+    'activeCapacityLimit', 'pendingCapacityLimit'
+  ];
+  for (const field of fields) {
+    if (current[field] !== descriptor[field]) {
+      return `${field} changed within lifecycle expected=${String(current[field])} actual=${String(descriptor[field])}`;
+    }
+  }
+  if (JSON.stringify(current.protocolCapabilities) !== JSON.stringify(descriptor.protocolCapabilities)) {
+    return `protocolCapabilities changed within lifecycle expected=${JSON.stringify(current.protocolCapabilities)} actual=${JSON.stringify(descriptor.protocolCapabilities)}`;
+  }
+  if (JSON.stringify(current.channels.map(channel => channel.name))
+    !== JSON.stringify(descriptor.channels.map(channel => channel.name))) {
+    return 'channels changed within lifecycle';
+  }
+  return undefined;
 }
 
 function admissionReason(result: PeerAdmissionResult): number {
