@@ -105,7 +105,10 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-const MESH_BACKEND_POLL_INTERVAL_MS = 1;
+// A timer is only a no-data backoff.  Once the binding has reported readable
+// work, continue from the next event-loop turn so a full socket does not wait
+// for an arbitrary timer cadence between batches.
+const MESH_BACKEND_IDLE_POLL_INTERVAL_MS = 1;
 const MESH_RECEIVE_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
 const MESH_RECEIVE_BATCH_TIME_LIMIT_MS = 2;
 /**
@@ -1385,27 +1388,32 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     };
   }
 
-  private schedulePoll(): void {
+  private schedulePoll(delayMs = MESH_BACKEND_IDLE_POLL_INTERVAL_MS): void {
     if (this.closed || this.pollTimer !== undefined) return;
     this.pollTimer = setTimeout(async () => {
       this.pollTimer = undefined;
       try {
-        await this.poll();
+        const received = await this.poll();
+        // A zero-delay timer yields to I/O and other ready work first without
+        // inserting the idle polling interval between readable batches.
+        delayMs = received ? 0 : MESH_BACKEND_IDLE_POLL_INTERVAL_MS;
       } finally {
-        this.schedulePoll();
+        if (!this.closed && this.pollTimer === undefined) this.schedulePoll(delayMs);
       }
-    }, MESH_BACKEND_POLL_INTERVAL_MS);
+    }, delayMs);
   }
 
-  private async poll(): Promise<void> {
+  private async poll(): Promise<boolean> {
     const runtime = this.runtime;
-    if (runtime === undefined) return;
+    if (runtime === undefined) return false;
+    let received = false;
     await runtime.drainMonitorEvents();
     this.receiveBatchBudget.reset(performance.now());
     for (;;) {
       this.observedPumpSourceRoutingId = undefined;
       const result = await runtime.pumpOne(performance.now(), this.observePump);
       if (result === 'noData') break;
+      received = true;
       if (result === 'application') this.readyHandler?.(ReadyDomain.Application);
       const observation = this.takePumpObservation();
       // Core ROUTER advances its fair-queue cursor after each complete
@@ -1422,6 +1430,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     await runtime.announceExpectedPeers();
     await runtime.tickLiveness();
     this.notifyReady();
+    return received;
   }
 
   private notifyReady(): void {
