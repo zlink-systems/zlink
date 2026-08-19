@@ -263,12 +263,14 @@
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
 - [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
-      ① [H] cpp 28 수신이 승인 전용 admission에서 relocation/commit 수행(spec 15
-      §478-527: 임시 큐+factory 준비만; later-attempt-wins도 미준수) — 게이트
-      닫힘이라 잠재, cpp actorJoin 재구조화 유닛 ② [H] dotnet 28 발신이 승인
-      응답을 완료된 Join으로 처리(seal/capture/CAS/merge 부재) — 동일 유닛(dotnet)
-      ③ [H] cpp actorJoin 실패를 전부 Unavailable로 붕괴(spec 32: ProtocolError/
-      DeadlineExceeded 구분 필요; 협상 limit 폐기) ④ [H] java가 relocationFailed
+      ① [H] cpp 28 수신 승인 전용 위반 → **해소 `938f68a658`**: admit_wire_actor_
+      join이 승인 전용 스테이지만 수행(설치/CAS/membership/commit은 기존
+      coordinator 단계에), later-attempt-wins 구현(로컬 유도 transfer id),
+      게이트 계속 닫힘 ② [H] dotnet 28 발신이 승인 응답을 완료된 Join으로 처리
+      — 직접 join durable phase 전진(`86ed4a02f6`)으로 완료 시퀀스가 스펙 정렬,
+      C-7 라이브 검증에서 최종 판정 ③ [H] cpp actorJoin 실패 분류 붕괴 →
+      **해소 `938f68a658`**: typed outcome(protocol_error/deadline_exceeded/
+      unavailable)+application reply·chunk limit 표면화(소비자 연결은 이월 유지) ④ [H] java가 relocationFailed
       (53) 코드 무시하고 generic IllegalStateException(ZLinkCanonicalRelocation
       StateMachine:685) — 4언어 수신 분류 parity 파괴 → **해소: emit 표의 역표를
       상태기계에 공치(共置)해 typed kind 수신(원격요청 표 재사용은 parity 파괴라
@@ -277,7 +279,8 @@
       미실행인데 집계 성공 보고(:68-73) — cpp 트랙 ⑦ [M] dotnet authority/owner-
       lease 리더 recordVersion 미검증(spec 21 §420-425 fail-closed), cpp는 부재
       버전 허용 — 각 언어 마감 → **dotnet 해소 `f2dfa809e8`**(owner-lease 8개소+
-      authority 깔때기 fail-closed, 테스트 2종; cpp 잔여는 cpp 마감에 편입) ⑧ [M] node acknowledged 경로가 즉시 거부를
+      authority 깔때기 fail-closed, 테스트 2종) + **cpp 해소 `938f68a658`**(부재
+      recordVersion 거부, parse_canonical_record 단일 헬퍼, 전 canonical 리더) ⑧ [M] node acknowledged 경로가 즉시 거부를
       DeadlineExceeded로 오분류+production이 예외 폐기(session-actor-coordinator
       :168) → **해소: nack은 응답 errorKind 디코드(RequestFailed 폴백),
       DeadlineExceeded는 transport 기한 경로 전용; swallow는 스펙 20 근거로
