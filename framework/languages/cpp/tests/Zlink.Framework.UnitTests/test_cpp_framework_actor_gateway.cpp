@@ -3617,7 +3617,7 @@ int same_rid_registration_retains_retired_close_handler ()
 /* async-execution-policy §1.3: the session Actor relay waiter is bounded —
  * when the FIFO is full a new relay completes immediately with
  * DeadlineExceeded and is never submitted later. */
-int parked_request_without_route_fence_receives_reply_after_replay ()
+int parked_request_reply_case (const std::string &requester_rid)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -3625,14 +3625,15 @@ int parked_request_without_route_fence_receives_reply_after_replay ()
     namespace host = zlink::framework::runtime::host;
     namespace messaging = zlink::framework::runtime::messaging;
 
-    // Regression pin (SF-F2 hang): an actor_request that arrives while the
-    // actor's transfer is still open parks in the handoff backlog and is
-    // replayed with a handoff terminal route. The pending entry that maps
-    // the terminal back to the original reply token must be recorded even
-    // when the requester attached no actor_route fence (e.g. a local
-    // requester on the current owner). Before the fix the entry was only
-    // recorded for fenced requests, so the replayed reply was silently
-    // dropped and the requester waited forever.
+    // Regression pin (SF-F2 hang / SF-F7 cross-node timeout): an
+    // actor_request that arrives while the actor's transfer is still open
+    // parks in the handoff backlog and is replayed with a handoff terminal
+    // route. The pending entry that maps the terminal back to the original
+    // reply token must be recorded even when the requester attached no
+    // actor_route fence, and the terminal must return to THIS parking node
+    // even when the requester lives on another node — before the fix the
+    // terminal route named the requester, so a cross-node requester's
+    // terminal never found the pending entry and the reply was lost.
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (
@@ -3706,7 +3707,7 @@ int parked_request_without_route_fence_receives_reply_after_replay ()
       .kind = host::record_kind_t::actor_request,
       .domain = host::ready_domain_t::application};
     record.operation_id = host::call_id_t{41, 43};
-    record.source_node_rid = zlink::routing_id_t::from (std::string ("actor-a"));
+    record.source_node_rid = zlink::routing_id_t::from (requester_rid);
     record.reply_route_id = 57;
     record.reply_token.host = reply_host;
     record.reply_token.local_reply =
@@ -3806,6 +3807,167 @@ int parked_request_without_route_fence_receives_reply_after_replay ()
     return 0;
 }
 
+int parked_request_without_route_fence_receives_reply_after_replay ()
+{
+    // Requester local to the parking node (the SF-F2 shape).
+    return parked_request_reply_case ("actor-a");
+}
+
+int parked_cross_node_request_terminal_returns_to_parking_node ()
+{
+    // Requester on a different node (the SF-F7/SF-F11 shape): the handoff
+    // terminal must be routed by the parking-node key, not the requester's
+    // source-node key, or the pending reply token is never answered.
+    return parked_request_reply_case ("actor-b");
+}
+
+int relayed_request_without_deferred_terminal_receives_follow_reply ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace host = zlink::framework::runtime::host;
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    // Regression pin (SF-F7/SF-F11 timeout): a cross-node actor_request that
+    // reaches the committed Message Follow source right after the relocation
+    // commit is relayed to the new owner and the relayed reply comes back
+    // inline. The reply must reach the original reply token even when the
+    // record was dispatched without a deferred terminal (the direct
+    // transfer-window dispatch path passes none). Before the fix
+    // dispatch_mesh_record returned before observing the relay task, so the
+    // relayed reply was discarded and the requester's wire operation timed
+    // out.
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 16, "follow-relay-worker");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    node->root_services = services.build_provider ();
+    auto provider = services.build_provider ();
+
+    const auto local_host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        .mesh = {
+          .descriptor = {
+            .mesh_name = "follow-relay",
+            .node_routing_id =
+              zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    node->native_node = local_host;
+
+    const auto actor = test_actor_ref ("actor-a", "player", "moved-actor", 1);
+    const auto key = std::string ("player:moved-actor");
+    node->actor_types_by_id.emplace ("moved-actor", "player");
+
+    // The requester's stale route names this node as the committed source.
+    const runtime::protocol::actor_route_fence_t source_fence{
+      "moved-actor", 1,
+      zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
+      local_host->status ().lifecycle_generation (), 3, 5};
+    const runtime::protocol::actor_route_fence_t target_fence{
+      "moved-actor", 1,
+      zlink::routing_id_t::from (std::string ("actor-b")).to_bytes (),
+      1, 4, 6};
+    node->actor_transfer_coordinator.activate_message_follow (
+      key, source_fence,
+      test_actor_ref ("actor-b", "player", "moved-actor", 1),
+      spot_route_t{node_rid_t::from_string ("actor-b"),
+                   spot_id_t ("actor-b-user"), "user"},
+      target_fence,
+      std::chrono::steady_clock::now () + std::chrono::seconds (30));
+
+    spot_node_runtime_t spots (node);
+    std::atomic_bool relay_ran{false};
+    spots.on_actor_message_follow (
+      [&relay_ran] (
+        const actor_ref_t &, const runtime::messaging::envelope_header_t &,
+        const zlink::message_t &, std::chrono::milliseconds,
+        const zlink::routing_id_t &,
+        const runtime::protocol::actor_route_fence_t &, std::uint8_t,
+        const runtime::protocol::wire_operation_id_t &,
+        std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+          relay_ran.store (true, std::memory_order_release);
+          co_return result_t<std::optional<zlink::message_t>>::success (
+            std::make_optional (
+              zlink::message_t::from (std::string ("relayed-pong"))));
+      });
+
+    std::mutex reply_mutex;
+    std::vector<zlink::message_t> reply_parts;
+    host::receive_record_t record{
+      .kind = host::record_kind_t::actor_request,
+      .domain = host::ready_domain_t::application};
+    record.operation_id = host::call_id_t{11, 13};
+    record.source_node_rid = zlink::routing_id_t::from (std::string ("actor-b"));
+    record.actor_route = source_fence;
+    record.reply_route_id = 17;
+    record.reply_token.host = local_host;
+    record.reply_token.local_reply =
+      [&reply_mutex, &reply_parts] (const std::vector<zlink::message_t> &parts) {
+          const std::lock_guard lock (reply_mutex);
+          reply_parts = parts;
+          return true;
+      };
+
+    const host::ready_record_t owner{
+      .owner_kind = host::owner_kind_t::actor,
+      .domain = host::ready_domain_t::application,
+      .spot_id = std::string ("actor-a-user"),
+      .actor = actor};
+
+    messaging::envelope_codec_t codec;
+    auto encoded = codec.encode_raw_body_parts (
+      messaging::envelope_header_t{
+        .kind = messaging::message_kind_t::request,
+        .channel_name = "actor",
+        .message_name = "FollowProbe",
+        .correlation_id = "follow-request-1"},
+      zlink::message_t::from (std::string ("ping")));
+    auto request_parts = std::move (encoded).take_items ();
+
+    // Deliberately the deferred-terminal-less overload: this is the direct
+    // dispatch shape used while the transfer window is still open.
+    (void) spots.dispatch_mesh_record (
+      owner, record, request_parts, provider, serializers);
+
+    const auto reply_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    for (;;) {
+        {
+            const std::lock_guard lock (reply_mutex);
+            if (!reply_parts.empty ())
+                break;
+        }
+        if (std::chrono::steady_clock::now () >= reply_deadline)
+            return 1;
+        std::this_thread::yield ();
+    }
+    if (!relay_ran.load (std::memory_order_acquire))
+        return 2;
+    std::vector<zlink::message_t> delivered;
+    {
+        const std::lock_guard lock (reply_mutex);
+        delivered = reply_parts;
+    }
+    messaging::message_parts_t reply_envelope (std::move (delivered));
+    const auto reply_header = codec.decode_header (reply_envelope);
+    if (!reply_header)
+        return 3;
+    if (reply_header.value ().kind != messaging::message_kind_t::response)
+        return 4;
+    const auto reply_body = codec.decode_body (reply_envelope);
+    if (!reply_body || reply_body.value ().to_string () != "relayed-pong")
+        return 5;
+    return 0;
+}
+
 int session_relay_waiter_capacity_is_bounded ()
 {
     using namespace zlink::framework;
@@ -3863,6 +4025,16 @@ int main ()
           parked_request_without_route_fence_receives_reply_after_replay ();
         parked_reply != 0) {
         return 360 + parked_reply;
+    }
+    if (const auto follow_reply =
+          relayed_request_without_deferred_terminal_receives_follow_reply ();
+        follow_reply != 0) {
+        return 370 + follow_reply;
+    }
+    if (const auto cross_node_terminal =
+          parked_cross_node_request_terminal_returns_to_parking_node ();
+        cross_node_terminal != 0) {
+        return 380 + cross_node_terminal;
     }
     if (const auto capacity = session_relay_waiter_capacity_is_bounded ();
         capacity != 0) {

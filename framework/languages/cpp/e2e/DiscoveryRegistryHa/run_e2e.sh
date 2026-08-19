@@ -67,18 +67,11 @@ SCENARIO="$(normalize_scenario "$SCENARIO")"
 
 if [[ "$SCENARIO" == "all" ]]; then
   ALL_SCENARIOS=(SF-A1 SF-A2 SF-B1 SF-B2 SF-C1 SF-C2 SF-D1 SF-D2 SF-D3 SF-E1 \
-    SF-F2 SF-F3)
-  # Known-failing Track F scenarios, excluded from the default aggregate so
-  # it stays usable as a gate: SF-F7/SF-F11 relocation completes but the
-  # post-relocation cross-node probe reply is dropped (message-follow relay
-  # reply path) and the client times out. Run them individually:
-  #   ./run_e2e.sh SF-F7 / ./run_e2e.sh SF-F11
-  SKIPPED_SCENARIOS=(SF-F7 SF-F11)
+    SF-F2 SF-F3 SF-F7 SF-F11)
   for scenario in "${ALL_SCENARIOS[@]}"; do
     bash "$0" "$scenario"
   done
   echo "store-failure c++ e2e ran=${ALL_SCENARIOS[*]} result=passed"
-  echo "store-failure c++ e2e skipped=${SKIPPED_SCENARIOS[*]} (known-failing; see comment in run_e2e.sh)"
   exit 0
 fi
 

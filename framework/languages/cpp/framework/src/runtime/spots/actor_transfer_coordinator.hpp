@@ -112,6 +112,13 @@ struct handoff_packet_t
  * public context projection filters the __zlink namespace. */
 inline constexpr std::string_view actor_handoff_source_node_key =
   "__zlink.actorHandoffSourceNode";
+/* The node that parked the request and holds its pending handoff entry (the
+ * original reply token). The handoff terminal must return HERE — the source
+ * node key above names the original requester, which only coincides with the
+ * parking node when the requester was local to the current owner. A terminal
+ * sent to a remote requester finds no pending entry and the reply is lost. */
+inline constexpr std::string_view actor_handoff_parking_node_key =
+  "__zlink.actorHandoffParkingNode";
 inline constexpr std::string_view actor_handoff_route_actor_id_key =
   "__zlink.actorHandoffRouteActorId";
 inline constexpr std::string_view actor_handoff_route_object_generation_key =

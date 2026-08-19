@@ -476,13 +476,21 @@ struct handoff_terminal_route_t
 std::optional<handoff_terminal_route_t> handoff_terminal_route (
   const std::map<std::string, std::string> &metadata)
 {
+    /* The terminal answers the pending handoff entry, which lives on the
+     * parking node. The source-node key names the original requester and is
+     * only a valid terminal destination when the requester was local to the
+     * parking node (it then equals the parking node); older senders that
+     * stamped no parking key fall back to it. */
+    const auto parking =
+      handoff_routing_id (metadata, detail::actor_handoff_parking_node_key);
     const auto source = handoff_routing_id (metadata, detail::actor_handoff_source_node_key);
     const auto high = handoff_u64 (metadata, detail::actor_handoff_operation_high_key);
     const auto low = handoff_u64 (metadata, detail::actor_handoff_operation_low_key);
     const auto reply_route = handoff_u64 (metadata, detail::actor_handoff_reply_route_key);
-    if (!source || !high || !low || (!*high && !*low) || !reply_route)
+    if ((!parking && !source) || !high || !low || (!*high && !*low) || !reply_route)
         return std::nullopt;
-    return handoff_terminal_route_t{*source, {*high, *low}, *reply_route};
+    return handoff_terminal_route_t{parking ? *parking : *source,
+                                    {*high, *low}, *reply_route};
 }
 
 task_t<bool> send_handoff_terminal (
@@ -10569,18 +10577,24 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         const auto handoff_operation = std::pair{record.operation_id.high,
                                                  record.operation_id.low};
         bool deferred_handoff_request = false;
-        /* A request parked during an in-progress transfer is replayed with a
-         * handoff terminal route whenever it carries an operation id (see the
-         * relay metadata below), so the pending entry that restores the
-         * original reply token must be recorded under the same condition. A
-         * request without an attached route fence (e.g. a local requester on
-         * the current owner) parks and replays exactly like a fenced one;
-         * requiring the fence here silently orphaned its terminal, leaving
-         * the requester waiting forever. */
+        /* A request that carries an operation id travels with a handoff
+         * terminal route naming THIS node as the parking node (see the relay
+         * metadata below), so its reply may return as a handoff terminal
+         * whenever any downstream hop parks it — during the local transfer,
+         * or on the follow target while its join is still completing. The
+         * pending entry that restores the original reply token must exist
+         * under exactly that stamping condition: gating it on the local
+         * transfer state orphaned the terminal of a request that this node
+         * relayed immediately but the target parked (the reply was replaced
+         * by an empty one). An entry whose reply arrives inline instead is
+         * erased by the relay observer below; an untouched entry expires at
+         * its 30s deadline. A request without an attached route fence (e.g.
+         * a local requester on the current owner) parks and replays exactly
+         * like a fenced one; requiring the fence here silently orphaned its
+         * terminal, leaving the requester waiting forever. */
         if (record.kind == service::record_kind_t::actor_request
             && !semantic_send
             && (record.operation_id.high != 0 || record.operation_id.low != 0)
-            && actor_transfer_in_progress (actor)
             && !header.value ().metadata.contains (
               std::string (detail::actor_handoff_source_node_key))) {
             const auto now = std::chrono::steady_clock::now ();
@@ -10662,6 +10676,33 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                     follow_header.metadata.insert_or_assign (
                       "__zlink.actorRelayKind", "send");
                 }
+                /* The follow target can still park this request while its own
+                 * join is completing; the parked replay answers through the
+                 * handoff terminal route, so the terminal keys must travel on
+                 * this immediate relay exactly like on the relay_actor_packet
+                 * branch below — the pending entry recorded above waits for
+                 * them on this node. */
+                if (record.kind == service::record_kind_t::actor_request
+                    && (record.operation_id.high != 0
+                        || record.operation_id.low != 0)) {
+                    follow_header.metadata.insert_or_assign (
+                      std::string (detail::actor_handoff_source_node_key),
+                      record.source_node_rid.to_hex ());
+                    follow_header.metadata.insert_or_assign (
+                      std::string (detail::actor_handoff_parking_node_key),
+                      zlink::routing_id_t::from (
+                        detail::effective_spot_node_rid (_state->snapshot))
+                        .to_hex ());
+                    follow_header.metadata.insert_or_assign (
+                      std::string (detail::actor_handoff_operation_high_key),
+                      std::to_string (record.operation_id.high));
+                    follow_header.metadata.insert_or_assign (
+                      std::string (detail::actor_handoff_operation_low_key),
+                      std::to_string (record.operation_id.low));
+                    follow_header.metadata.insert_or_assign (
+                      std::string (detail::actor_handoff_reply_route_key),
+                      std::to_string (record.reply_route_id));
+                }
                 return _state->actor_message_follow_relay (
                   actor, follow_header, body.value (), std::chrono::seconds (30),
                   record.source_node_rid,
@@ -10686,6 +10727,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 && (record.operation_id.high != 0 || record.operation_id.low != 0)) {
                 relay_metadata.values[std::string (detail::actor_handoff_source_node_key)] =
                   record.source_node_rid.to_hex ();
+                relay_metadata.values[std::string (detail::actor_handoff_parking_node_key)] =
+                  zlink::routing_id_t::from (
+                    detail::effective_spot_node_rid (_state->snapshot))
+                    .to_hex ();
                 relay_metadata.values[std::string (detail::actor_handoff_operation_high_key)] =
                   std::to_string (record.operation_id.high);
                 relay_metadata.values[std::string (detail::actor_handoff_operation_low_key)] =
@@ -10731,7 +10776,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                        std::move (before_application_handler),
                                        std::move (after_application_admission));
         }();
-        if (!*terminal_owner)
+        if (!*terminal_owner
+            && record.kind != service::record_kind_t::actor_request)
             return false;
         detail::observe_task_completion (
           relayed,
@@ -10739,7 +10785,20 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
            request_header, reply_token = record.reply_token,
            terminal_claimed, terminal_owner]
           (const result_t<std::optional<zlink::message_t>> &result) mutable {
-              if (deferred_handoff_request && (!result || !result.value ())) {
+              /* An empty relay result with a recorded pending entry means the
+               * request was parked for a handoff replay: the reply token stays
+               * in pending_handoff_requests and the handoff terminal from the
+               * follow target restores the reply. Replying (or erasing the
+               * entry) here would orphan that terminal. Any other outcome —
+               * an immediate relayed reply or a relay failure — is terminal
+               * right now, so the entry is settled and the requester answered
+               * directly; without this, a cross-node request relayed through
+               * the committed Message Follow source between the relocation
+               * commit and the source cleanup lost its reply forever (the
+               * requester's wire operation simply timed out). */
+              const bool parked =
+                deferred_handoff_request && result && !result.value ();
+              if (!parked && deferred_handoff_request) {
                   try {
                       std::lock_guard<std::recursive_mutex> lock (state->mutex);
                       state->pending_handoff_requests.erase (handoff_operation);
@@ -10750,23 +10809,26 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               if (terminal_claimed->exchange (
                     true, std::memory_order_acq_rel))
                   return;
-              try {
-                  detail::channel_reply_writer_t writer;
-                  const auto reply = result
-                    ? writer.reply_raw_envelope (
-                        writer.create_reply_header (runtime::messaging::message_kind_t::response,
-                                                    request_header.channel_name, request_header),
-                        result.value () ? *result.value () : zlink::message_t{})
-                    : writer.reply_raw_envelope (
-                        writer.create_error_header (
-                          request_header.channel_name, request_header,
-                          framework_exception_t (result.error_kind (), result.error ()
-                            ? result.error ()->what () : "Actor handler failed")),
-                        zlink::message_t{});
-                  (void) service::reply (reply_token, reply.items ());
-              } catch (...) {
+              if (!parked) {
+                  try {
+                      detail::channel_reply_writer_t writer;
+                      const auto reply = result
+                        ? writer.reply_raw_envelope (
+                            writer.create_reply_header (runtime::messaging::message_kind_t::response,
+                                                        request_header.channel_name, request_header),
+                            result.value () ? *result.value () : zlink::message_t{})
+                        : writer.reply_raw_envelope (
+                            writer.create_error_header (
+                              request_header.channel_name, request_header,
+                              framework_exception_t (result.error_kind (), result.error ()
+                                ? result.error ()->what () : "Actor handler failed")),
+                            zlink::message_t{});
+                      (void) service::reply (reply_token, reply.items ());
+                  } catch (...) {
+                  }
               }
-              (*terminal_owner) ();
+              if (*terminal_owner)
+                  (*terminal_owner) ();
           });
         if (terminal_deferred)
             *terminal_deferred = true;
