@@ -474,6 +474,11 @@
       교체, 손 코덱 삭제. 언어별 unittest 전체 그린
 - [ ] W-4 수용: C-7 교차 언어 매트릭스(기본+relocation+java-cross) 전 쌍 그린을
       생성 코덱 위에서 재확인 — 이후 발산은 스키마 편집으로만 가능해짐
+- [ ] W-5 스펙 상세 정리: ① 51 개정 — 스키마=wire 규범 원천·코덱 생성 의무
+      (손 코덱 금지) 명문화 ② 28 §4.2 — relocation-envelope-v1 상세(필드 순서·
+      big-endian·participantId=store inventory 정렬 index+1·frozen record·CRC-32C
+      위치) 공백 해소 ③ 계층 형식 지도(store JSON/채널 0xF2/mesh 바이너리/앱
+      불투명) 표 ④ 스키마 기계가독부 규약(생성기 입력 계약) 문서화 — en/ko
 
 ## E. 확정 후속 단계 (사용자 승격 2026-08-19 — 완료 조건 포함, C 완료 후 착수)
 
