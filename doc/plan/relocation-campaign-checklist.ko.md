@@ -37,10 +37,13 @@
       통상 reservation 경합이지 config-10이 계약한 "동일 relocation identity의
       checksum/길이 불일치" assembly 충돌이 아님 — 계약 fault point 경유 재작성
       필요(cpp 트랙 배정)
-- [ ] cpp e2e Track F 신설 — **구현 랜딩 `284d78ca74`**(relocation 노드 역할·
-      공유 계약·4시나리오·run_e2e 배선). SF-F2/F3에서 relocation 자체는 단대단
-      완결 검증(F3는 Redis 중단 중 포함), 클린 패스는 아래 29초 공백 결함에 차단.
-      결함 해소 후 4종 재실행으로 마감
+- [ ] cpp e2e Track F — 구현 `284d78ca74`, 재실행(2026-08-19, e38c63fcf3 트리):
+      **SF-F2 2회·SF-F3 그린, 기본 all 게이트 편입**(run_e2e 정직화 — sol ⑥ 해소,
+      스킵 명시 출력). **SF-F7 3/3·SF-F11 잔여 실패 = 신규 결함**: relocation·
+      증거 전부 그린 후 교차 노드 message-follow relay의 probe 응답이 caller
+      노드로 미귀환(request_to_spot/await_completion, mesh_node_runtime:2841) —
+      fence/bind 계열 무관 실증. 부수 관찰: SF-F2 웜업 중 간헐 ~19s RelocateReq
+      지연 2회(재현 안 됨). relay 응답 유실 해소 후 F7/F11 마감
 - [x] **cpp relocation 후 정지 — 수정 완료 `9c4f5ec83e`**: 29초 자체는
       스펙 명령의 30s Message Follow 창(비결함). 진짜 결함은 fence 없는 로컬
       요청자의 파킹 요청이 pending 미기록→재생 terminal pending-miss로 응답 무음
@@ -91,7 +94,10 @@
       **node 완료 `6a5b42b098`**(+nack 오분류 정정 `2a65d3aeea`),
       **java 완료 `c835984c89`**, **dotnet 완료(4언어 정렬 종결)**: retry 소진 시
       DeadlineExceeded+InnerException, 비재시도 실패는 무변환 통과, 테스트 고정
-- [ ] **ST-C2 session bind 실패 — 근본 원인 확정(2026-08-19)**: `8bae89dc0f`가
+- [x] **ST-C2 session bind 실패 — 수정 완료 `e38c63fcf3`**: 재시도 복원(기한
+      바운드, dotnet parity) + H2 실증·수정 — read_route_owner_fence의 하드코딩
+      5s margin이 설정 3s TTL 초과로 admission lifetime ≤0 → 영구 stale. 전
+      콜사이트가 설정 margin 전달, ST-C2 3/3 통과, 게이트 43/43. 원 기록: `8bae89dc0f`가
       stream_host_service의 stale-route bind 재시도(무효화→route 변경 대기→재진입,
       5s 기한)를 삭제하며 기계를 죽은 코드로 방치(retryable_outcome 미사용,
       bind_attempt=retry 무호출) → ST-C2 유일의 교차 노드 bind가 생성 직후
