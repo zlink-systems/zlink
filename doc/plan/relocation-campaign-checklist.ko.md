@@ -315,13 +315,16 @@
 
 ## E. 확정 후속 단계 (사용자 승격 2026-08-19 — 완료 조건 포함, C 완료 후 착수)
 
-- [ ] E-1 dotnet 성능 패스(`062c0bbd1e`에 문서화된 6건): message-follow 중복 lock
-      수동 해체, ToHex 정렬 comparer, HeldRecords O(N²), 중복 participant 스캔,
-      codec 삼중 복사, LINQ 재해석 캐시
+- [x] E-1 dotnet 성능 패스 — **완료 `42ddf3d2f4`**: 6건 전부(중복 lock 10개소 해체, byte-wise
+      RoutingId comparer 16개소, HeldRecords O(N²)→상각 O(1), participant 단일
+      dictionary, codec 삼중 복사→단일 span 복사, spot-participant 쿼리 캐시).
+      4·6번 위치는 에이전트 식별(원 커밋 미기록) — 판단 근거 문서화. 전 게이트
+      1770/1773+conformance 9/9, 무동작 변경
 - [ ] E-2 cpp complete_relocation_assembly 구조 분해 — terra 시도는 정직 실패
       (sandbox cmake configure 불가·등가성 테스트 기준 미충족, 미완성 변경 revert
       완료). **로컬 sonnet으로 재투입 예정**(direct-call harness 우선 구현)
-- [ ] E-3 dotnet StageInboundSpotAggregateAsync participant-restore 추출
+- [x] E-3 dotnet participant-restore 추출 — **완료 `42ddf3d2f4`**(순수 이동, staging은
+      오케스트레이션 가독, rollback 부기 불변)
 - [ ] E-4 cpp aggregate 오케스트레이션 reason 전파 (task_t<bool> → 분류 전달)
 - [ ] E-5 E 단계 전체 sol 리뷰 + 전 게이트 재확인
 
