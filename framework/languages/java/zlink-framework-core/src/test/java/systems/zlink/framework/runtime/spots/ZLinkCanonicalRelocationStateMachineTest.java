@@ -278,6 +278,48 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
+    void wireFailureKindDecodesWorkerTimedOutToDeadlineExceeded() {
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                .DEADLINE_EXCEEDED,
+            ZLinkCanonicalRelocationStateMachine.wireFailureKind(
+                ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT));
+    }
+
+    @Test
+    void wireFailureKindDecodesWorkerQueueFullToCapacityExceeded() {
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                .CAPACITY_EXCEEDED,
+            ZLinkCanonicalRelocationStateMachine.wireFailureKind(
+                ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL));
+    }
+
+    @Test
+    void wireFailureKindDecodesRelocationDataLostToDataLost() {
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
+            ZLinkCanonicalRelocationStateMachine.wireFailureKind(
+                ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST));
+    }
+
+    @Test
+    void wireFailureKindDecodesRequestRejectedToRejected() {
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+            ZLinkCanonicalRelocationStateMachine.wireFailureKind(
+                ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED));
+    }
+
+    @Test
+    void wireFailureKindFallsBackToInternalFailureForAnUnknownCode() {
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                .INTERNAL_FAILURE,
+            ZLinkCanonicalRelocationStateMachine.wireFailureKind(999L));
+    }
+
+    @Test
     void unregisteredAdapterTakesTheUnchangedFullPayloadPath() {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1});

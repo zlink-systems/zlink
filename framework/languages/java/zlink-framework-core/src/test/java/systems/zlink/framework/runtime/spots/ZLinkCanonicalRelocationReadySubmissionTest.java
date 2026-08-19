@@ -239,7 +239,14 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             ExecutionException.class,
             () -> failedStage.get(500, TimeUnit.MILLISECONDS),
             "a pre-prepare target stage failure must terminate at the source");
-        assertInstanceOf(IllegalStateException.class, stageFailure.getCause());
+        var typedRejection = assertInstanceOf(
+            systems.zlink.framework.errors.ZLinkFrameworkException.class,
+            stageFailure.getCause(),
+            "a wire failure code decodes to the typed framework error");
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
+            typedRejection.kind(),
+            "relocationDataLost(35) decodes to the DataLost kind");
 
         AtomicReference<ZLinkCanonicalRelocationStateMachine> source =
             new AtomicReference<>();

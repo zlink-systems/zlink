@@ -20,6 +20,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -658,6 +659,50 @@ final class ZLinkCanonicalRelocationStateMachine
         };
     }
 
+    /**
+     * Inverse of {@link #wireFailureCode(Throwable, int)}: maps a received
+     * {@code relocationFailed(53)} wire failure code back to the framework
+     * error kind the emitting target classified, so a source-side rejection
+     * carries the same typed classification in every language (node and cpp
+     * decode identically). Where the emit table collapses several kinds into
+     * one code the decode picks the kind the emit table documents as the
+     * code's primary meaning; both object-kind variants of a split code
+     * (Actor/Spot stale and type-mismatch) decode to the same kind. Any
+     * unknown or unmapped code falls back to {@code INTERNAL_FAILURE} —
+     * the same fail-safe generic classification as before (spec 15
+     * §"Failed.Kind").
+     */
+    static ZLinkFrameworkErrorKind wireFailureKind(long failureCode) {
+        return switch ((int) failureCode) {
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST ->
+                ZLinkFrameworkErrorKind.DATA_LOST;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED ->
+                ZLinkFrameworkErrorKind.REJECTED;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR ->
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL ->
+                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT ->
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE,
+                 (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE ->
+                ZLinkFrameworkErrorKind.INVALID_OPERATION;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED ->
+                ZLinkFrameworkErrorKind.UNAVAILABLE;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND ->
+                ZLinkFrameworkErrorKind.NOT_FOUND;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS ->
+                ZLinkFrameworkErrorKind.ALREADY_EXISTS;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH,
+                 (int) ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH ->
+                ZLinkFrameworkErrorKind.TYPE_MISMATCH;
+            case (int) ServiceWireConstants.FRAMEWORK_ERROR_HANDLER_NOT_FOUND ->
+                ZLinkFrameworkErrorKind.NOT_CONFIGURED;
+            default ->
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+        };
+    }
+
     private CompletionStage<Void> onReady(
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.Ready ready) {
@@ -698,7 +743,11 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "canonical relocation failure fence differs"));
         }
-        attempt.ready().completeExceptionally(new IllegalStateException(
+        //  Decode the wire failure code back to the typed framework error
+        //  kind the target classified, mirroring node/cpp, so the caller
+        //  sees the same public classification in every language.
+        attempt.ready().completeExceptionally(new ZLinkFrameworkException(
+            wireFailureKind(failure.failureCode()),
             "target rejected canonical relocation: " + failure.failureCode()));
         return CompletableFuture.completedFuture(null);
     }
