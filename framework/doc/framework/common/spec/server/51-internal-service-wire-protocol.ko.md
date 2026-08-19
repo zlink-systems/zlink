@@ -22,7 +22,7 @@ title: "51. Service wire protocol"
 
 | 절 | 다루는 내용 |
 |---|---|
-| [1. Schema와 생성 경계](#1-schema와-생성-경계) | schema 단일 생성 입력, validator, Location Store authority key 형식 |
+| [1. Schema와 생성 경계](#1-schema와-생성-경계) | 규범 generated-codec 정본, 계층별 형식 소유, schema 관례, validator, Location Store authority key 형식 |
 | [2. Record framing과 decode](#2-record-framing과-decode) | multipart frame 구성, decode 검증, payload 크기 상한 |
 | [3. Command space](#3-command-space) | 40개 command 목록과 역할, Message Follow와 session 교체 notification |
 | [4. Admission과 connection fence](#4-admission과-connection-fence) | hello/admit/reject 절차, DescriptorRevision ordering, ClientServer 방향 |
@@ -37,12 +37,42 @@ title: "51. Service wire protocol"
 
 ## 1. Schema와 생성 경계
 
-### 생성 경계
+### 규범 생성 정본
 
-`framework/runtime/protocol/service-wire-v1.schema.json`은 Framework service wire의 단일 생성 입력이다. 이
-schema가 command ID, frame layout, enum 값, field bound, durable format과 semantic constraint를 고정한다.
-C++·.NET·JVM·Node.js runtime은 schema에서 상수와 codec table을 생성하며 같은 값을 source에 다시 정의하지
-않는다.
+`framework/runtime/protocol/service-wire-v1.schema.json`은 Framework service wire의 유일한 규범 wire
+정본이다. 이 schema가 command ID, frame·logical stream layout, enum 값, field bound, durable format과
+semantic constraint를 고정한다. C++·.NET·JVM·Node.js codec과 상수는 이 schema에서 생성하며, 손으로 작성한
+encode/decode 구현은 허용하지 않는다.
+
+따라서 wire 차이는 review를 거친 schema 변경으로만 생길 수 있다. Runtime은 source에서 layout을 갈라
+정의하거나, local compatibility encoding을 추가하거나, schema field를 다르게 해석해서는 안 된다. Schema
+self-test, generated-asset check, decoder-fixture check와 schema의 golden fixture가 언어 간 conformance
+수단이다. 생성된 모든 codec은 선언한 같은 bytes와 failure를 만들고 받아들여야 한다.
+
+### 계층별 규범 형식
+
+| 계층 | 규범 형식 | 소유자와 해석 |
+|---|---|---|
+| Location Store record | canonical JSON envelope | [Location runtime §2.4](21-location-runtime.ko.md)가 byte-exact JSON record를 정의하며 provider는 opaque bytes로 취급한다. |
+| ClientServer application record | JSON `0xF2` channel envelope | ClientServer application-record 계약이 이 envelope와 JSON 의미를 소유한다. |
+| Internal mesh command와 relocation 직접 전송 stream | `service-wire-v1.schema.json` binary format | 생성된 codec이 command frame을 소유하며 `relocation-envelope-v1`은 그 big-endian logical stream이다. |
+| Application payload bytes | opaque, application 소유 bytes | Framework는 선언한 envelope 경계만 검증하며 bytes에 업무 의미를 부여하지 않는다. |
+
+### Machine-readable schema 관례
+
+생성기 입력은 언어별 추론 모델이 아니라 현재 schema다. `types` array가 이름 있는 layout을 선언한다.
+Primitive와 enum은 `encoding`과 `values`를 쓰고, 순서가 고정된 field는 `kind: "struct"`의 선언 순서
+`fields`를 쓰며, count가 있는 sequence는 `kind: "vector"`의 `countType`과 `item`을 쓴다. Length-delimited,
+conditional, tagged layout은 각각 `lengthType`, `layout`, `cases`, `fields`, `encodingOrder`를 선언한다.
+`$ref`는 선언한 type을, `$bound`는 선언한 limit을 가리킨다. `constraints`, `trailingBytes`, `when`,
+`otherwise`는 encoder와 decoder 모두가 지켜야 하는 검증을 선언한다. Command body는 `commands`의 선언 순서
+`body` array에, durable envelope은 `durableFormats`에, relocation 직접 stream은
+`relocationLogicalStreamFormat`에 있다.
+
+현재 schema에는 모든 기존 layout을 같은 방식으로 generator가 내릴 규칙이나 언어별 output mapping이
+완전하게 선언되어 있지는 않다. W-2는 모든 layout kind의 완전한 lowering 범위, conditional·semantic
+constraint 처리, generated asset과 fixture mapping을 포함한 이 generator-input 빈틈을 채워야 한다. Private
+syntax나 손으로 작성한 codec 예외를 도입하지 말고 schema를 확장해야 한다.
 
 ### Validator
 

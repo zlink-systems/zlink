@@ -96,14 +96,31 @@ capture해 하나의 relocation payload로 확정한다. 이 payload는 저장�
 Source는 payload 전체를 memory에 유지한 채 target에 직접 전송하며, cutover submit이 terminal
 result에 도달하고 재전송 창(§4.4)이 끝날 때까지 이 memory 사본이 유일한 handoff 원본이다.
 
-Source는 target에 Restore 요청을 보내면서 payload의 전체 encoded 길이, chunk 수와 전체
-checksum을 함께 싣는다. Payload를 정해진 크기 이하의 조각으로 나눈 것을 chunk라고 하며,
-checksum은 조립이 끝난 payload의 encoded byte 전체를 단일 CRC-32C 규약으로 계산한 값이다 —
-규약 상수와 header의 byte 표현은 여러 언어 runtime이 공유하는 언어 중립 wire 정의가 한 번만
-고정한다. Restore 요청 뒤 source는 각 chunk를 relay가 사용하는 같은 ordered mesh
-connection으로 `[send]`한다. 각 chunk에는 `RelocationId`, `targetAttemptGeneration`, chunk
-순번과 encoded 길이를 붙인다. Chunk 사이에는 같은 connection을 쓰는 다른 object의 message가
-섞여 전송될 수 있다.
+직접 전송 payload는 schema의 `relocation-envelope-v1`이다. Provider 전체 envelope 없이 canonical
+big-endian field stream으로 encoding한다. Schema 선언 순서는 `relocation`, `object`,
+`applicationVersion`, `applicationStates`, `savedWork`, `timerRegistrations`,
+`pendingTimerTicks`다. Target은 Location Store의 authority key를 UTF-8 authority-key byte 순서로
+정렬해 canonical participant inventory를 재구성한다. Participant identity는 stream에 의도적으로
+넣지 않는다. `participantId`는 이 정렬된 inventory의 zero-based index에 1을 더한 값이고, 모든
+participant vector는 schema가 선언한 key로 정렬되고 unique해야 한다.
+
+`savedWork`는 `(participantId, order, record)`의 frozen ordered vector다. Frozen record에는
+record kind, source identity, optional metadata, `operationId`, operation kind, conditional reply
+route와 record-kind body가 들어간다. 따라서 queue에 있던 request는 correlation/operation identity,
+reply route와 record-kind별 deadline field를 보존한다. `timerRegistrations`에는 participant별
+timer name, handler type, period, overrun policy, catch-up limit, unhandled-exception policy, 완료한
+delivery·schedule index, 다음 Unix-millisecond schedule cursor가 들어간다. `pendingTimerTicks`에는
+participant/order sequence, timer name, delivery·scheduled index, scheduled timestamp, skipped-tick
+count가 들어간다. Native timer handle과 callback continuation은 이 frozen saved-work record에 넣지
+않는다.
+
+Command 40 `relocationPrepare`가 이 stream의 manifest다. `payloadTotalLength`,
+`payloadChunkCount`, `payloadChecksumCrc32c`가 complete encoded logical stream을 설명한다.
+`payloadChecksumCrc32c`는 그 stream 전체의 CRC-32C integrity check다. Provider envelope checksum이
+아니며 stream 주위에 provider envelope을 추가하지 않는다. Command 40 뒤 source는 stream을 command 52
+chunk로 relay와 같은 ordered mesh connection에 `[send]`한다. Frozen record 내부를 포함해 어느 byte
+boundary에서도 chunk를 나눌 수 있고, chunk 사이에는 같은 connection의 다른 object message가 섞여
+전송될 수 있다.
 
 전송 chunk 하나의 유효 크기는 다음 세 값 중 가장 작은 값이다 — server 설정
 `RelocationPayloadChunkLimit`(chunk 하나의 encoded 크기, 기본 256 KiB), target이 seal 전에

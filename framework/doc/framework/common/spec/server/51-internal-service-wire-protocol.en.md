@@ -23,7 +23,7 @@ title: "51. Service wire protocol"
 
 | Section | Covers |
 |---|---|
-| [1. Schema and generation boundary](#1-schema-and-generation-boundary) | The schema as single source of generation, the validator, the Location Store authority key format |
+| [1. Schema and generation boundary](#1-schema-and-generation-boundary) | Normative generated-codec authority, format ownership by layer, schema conventions, validator, and Location Store authority keys |
 | [2. Record framing and decode](#2-record-framing-and-decode) | Multipart frame layout, decode validation, payload size limits |
 | [3. Command space](#3-command-space) | The list of 40 commands and their roles, Message Follow and session-replacement notifications |
 | [4. Admission and connection fence](#4-admission-and-connection-fence) | The hello/admit/reject procedure, DescriptorRevision ordering, ClientServer direction |
@@ -38,13 +38,50 @@ title: "51. Service wire protocol"
 
 ## 1. Schema and generation boundary
 
-### Generation boundary
+### Normative generation authority
 
-`framework/runtime/protocol/service-wire-v1.schema.json` is the single source
-of generation for the Framework service wire. This schema fixes command IDs,
-frame layout, enum values, field bounds, the durable format, and semantic
-constraints. The C++/.NET/JVM/Node.js runtimes generate their constants and
-codec tables from the schema, and never redefine the same values in source.
+`framework/runtime/protocol/service-wire-v1.schema.json` is the sole normative
+wire authority for the Framework service wire. It fixes command IDs, frame and
+logical-stream layout, enum values, field bounds, durable formats, and semantic
+constraints. C++/.NET/JVM/Node.js codecs and their constants are generated from
+that schema; handwritten encode/decode implementations are prohibited.
+
+Consequently, a wire divergence is possible only through a reviewed schema
+change. A runtime must not fork a layout, add a local compatibility encoding, or
+reinterpret a schema field in source. The schema self-test, generated-asset
+check, decoder-fixture check, and the schema's golden fixtures are the
+cross-language conformance mechanism: every generated codec must accept and
+produce the same declared bytes and failures.
+
+### Normative format by layer
+
+| Layer | Normative format | Owner and interpretation |
+|---|---|---|
+| Location Store records | Canonical JSON envelope | [Location runtime §2.4](21-location-runtime.en.md#24-how-different-languages-read-and-write-the-same-redis-record) defines the byte-exact JSON record; the provider treats it as opaque bytes. |
+| ClientServer application records | JSON `0xF2` channel envelope | The ClientServer application-record contract owns this envelope and its JSON semantics. |
+| Internal mesh commands and relocation direct-transfer stream | `service-wire-v1.schema.json` binary formats | Generated codecs own command frames; `relocation-envelope-v1` is its big-endian logical stream. |
+| Application payload bytes | Opaque, application-owned bytes | Framework validates only the declared envelope boundary and does not assign business meaning to the bytes. |
+
+### Machine-readable schema conventions
+
+The generator input is the existing schema, not an inferred language model. Its
+`types` array declares named layouts: primitives and enums use `encoding` and
+`values`; ordered fixed fields use `kind: "struct"` with declaration-order
+`fields`; counted sequences use `kind: "vector"` with `countType` and `item`;
+and length-delimited, conditional, and tagged layouts declare their own
+`lengthType`, `layout`, `cases`, `fields`, or `encodingOrder`. `$ref` names a
+declared type, `$bound` names a declared limit, and `constraints`,
+`trailingBytes`, `when`, and `otherwise` state validation required of both
+encoders and decoders. Command bodies are declaration-order `body` arrays under
+`commands`; durable envelopes are under `durableFormats`; the relocation direct
+stream is declared by `relocationLogicalStreamFormat`.
+
+The schema does not yet give every existing layout a uniform generator-ready
+lowering rule or per-language output mapping. W-2 must fill those missing
+generator-input details, including complete lowering coverage for every layout
+kind, conditional/semantic constraint handling, and the generated asset and
+fixture mapping. It must extend the schema rather than introduce private syntax
+or handwritten codec exceptions.
 
 ### Validator
 

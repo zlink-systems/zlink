@@ -105,16 +105,34 @@ whole payload in memory, and until the cutover submit reaches a terminal result 
 retransmission window (§4.4) ends, this in-memory copy is the only handoff source of
 truth.
 
-The source sends the target a Restore request carrying the payload's total encoded
-length, chunk count, and total checksum. A piece of the payload no larger than a
-configured size is called a chunk, and the checksum is computed over the entire encoded
-bytes of the assembled payload with a single CRC-32C convention — the convention
-constants and the byte representation of the header are fixed once by a
-language-neutral wire definition shared by every language runtime. After the Restore
-request, the source sends each chunk as `[send]` on the same ordered mesh connection
-that relay uses. Each chunk carries the `RelocationId`, `targetAttemptGeneration`,
-chunk ordinal, and encoded length. Messages of other objects using the same connection
-may be interleaved between chunks.
+The direct-transfer payload is the schema's `relocation-envelope-v1`: a canonical
+big-endian field stream with no monolithic provider envelope. In schema declaration
+order, it contains `relocation`, `object`, `applicationVersion`,
+`applicationStates`, `savedWork`, `timerRegistrations`, and `pendingTimerTicks`.
+The target reconstructs the canonical ordered participant inventory from Location Store
+authority keys, sorted by UTF-8 authority-key bytes. Participant identity is deliberately
+absent from the stream: `participantId` is that inventory's zero-based sorted index plus
+one, and every participant vector is sorted and unique by the schema's declared keys.
+
+`savedWork` is a frozen, ordered `(participantId, order, record)` vector. Each frozen
+record carries its record kind, source identity, optional metadata, `operationId`,
+operation kind, conditional reply route, and its record-kind body; consequently queued
+requests retain their correlation/operation identity, reply route, and every
+record-kind deadline field. `timerRegistrations` carries each participant's timer name, handler
+type, period, overrun policy, catch-up limit, unhandled-exception policy, completed
+delivery and schedule indices, and next scheduled Unix-millisecond cursor.
+`pendingTimerTicks` carries the participant/order sequence, timer name, delivery and
+scheduled indices, scheduled timestamp, and skipped-tick count. Native timer handles and
+callback continuations are not part of this frozen saved-work record.
+
+Command 40, `relocationPrepare`, is the manifest for this stream: its
+`payloadTotalLength`, `payloadChunkCount`, and `payloadChecksumCrc32c` describe the
+complete encoded logical stream. `payloadChecksumCrc32c` is the CRC-32C integrity check
+over that stream; it is not a provider envelope checksum and no provider envelope is
+inserted around the stream. After command 40, the source sends the stream in command 52
+chunks as `[send]` on the same ordered mesh connection that relay uses. Chunks may split
+at any byte boundary, including within a frozen record, and messages of other objects on
+the connection may be interleaved between chunks.
 
 The effective size of one transmitted chunk is the smallest of three values — the
 server setting `RelocationPayloadChunkLimit` (encoded size of one chunk, default
