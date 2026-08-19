@@ -839,11 +839,15 @@ class public_host_runtime_t :
     // timeout, transport failure, or malformed/mismatched reply, so a
     // caller that wants to distinguish "target explicitly rejected this"
     // from "no usable reply arrived" can.
+    /* session_routes: prebuilt bound-session command-44 commit records the
+     * target stages beside the Restore request (the schema payload carries
+     * no session-route section) and sends after CAS and queue opening. */
     task_t<bool> prepare_relocation_remote (
       const zlink::routing_id_t &target_node,
       protocol::relocation_prepare_t prepare,
       std::chrono::milliseconds timeout,
-      framework_error_kind_t *failure_kind = nullptr);
+      framework_error_kind_t *failure_kind = nullptr,
+      std::vector<protocol::session_relocation_route_t> session_routes = {});
     task_t<bool> cutover_relocation_remote (
       const zlink::routing_id_t &target_node,
       protocol::relocation_cutover_t cutover);

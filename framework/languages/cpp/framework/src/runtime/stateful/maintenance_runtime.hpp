@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include "runtime/protocol/relocation_envelope_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
@@ -110,10 +111,34 @@ struct authority_publish_result_t
     std::optional<authority_relocation_reference_t> current;
 };
 
+/* One participant of a relocation unit as the target derives it from
+ * Location Store authority rows (28 §4.2): identity, stable type, and — for
+ * an Actor — its Spot membership as projected into the authority payload. */
+struct relocation_participant_identity_t
+{
+    object_ref_t owner;
+    std::string stable_type;
+    /* Actor rows only: (spotId, spotGeneration) membership projection. */
+    std::optional<std::pair<std::string, std::uint64_t>> spot_membership;
+
+    friend bool operator== (const relocation_participant_identity_t &,
+                            const relocation_participant_identity_t &)
+      = default;
+};
+
 class authority_relocation_port_t
 {
   public:
     virtual ~authority_relocation_port_t () = default;
+    /* Enumerates every live authority row (the repository scans the
+     * "authority\0…" preimage prefix). The target reconstructs the
+     * canonical ordered participant inventory of an inbound relocation
+     * from this listing. std::nullopt means enumeration is unavailable. */
+    virtual std::optional<std::vector<relocation_participant_identity_t>>
+    list_participant_identities ()
+    {
+        return std::nullopt;
+    }
     virtual authority_publish_result_t publish (
       const object_ref_t &source,
       const object_ref_t &target,
@@ -227,10 +252,16 @@ struct eligible_relocation_unit_t
          * before the first suspension so the relocationState chunks the
          * caller sends next arrive after it. The returned task completes
          * once the target's relay-ready reply arrives (after the target
-         * assembled, verified, and restored the payload). */
+         * assembled, verified, and restored the payload). The captured
+         * bound-session commit routes ride beside the request: the schema
+         * relocation-envelope-v1 payload deliberately has no session-route
+         * section, and command 44 commit must still originate from the
+         * target runtime (20 §5), so the target stages them here. */
         std::function<task_t<bool> (
           const std::vector<frozen_object_state_t> &,
-          const relocation_payload_manifest_t &)> prepare_target;
+          const relocation_payload_manifest_t &,
+          const std::vector<protocol::session_relocation_route_t> &)>
+          prepare_target;
         /* Sends one relocationState chunk on the same ordered mesh
          * connection as the Restore request and the relay lane. */
         std::function<task_t<bool> (
@@ -462,20 +493,28 @@ class maintenance_runtime_t
     static std::uint64_t apply_advertised_receive_chunk_limit (
       std::uint64_t local_limit_bytes,
       std::uint64_t advertised_receive_chunk_limit_bytes) noexcept;
-    static std::vector<std::uint8_t> encode (
-      const frozen_object_state_t &frozen,
-      const inventory_digest_t &inventory_digest);
-    static std::optional<std::pair<frozen_object_state_t, inventory_digest_t>>
-    decode (const std::vector<std::uint8_t> &payload) noexcept;
-    static std::vector<std::uint8_t> encode_aggregate (
+    /* The direct-transfer wire payload is exactly the schema's
+     * relocation-envelope-v1 logical stream (28 §4.2). The codec owns the
+     * bytes; these statics own the mapping between the runtime's frozen
+     * object model and the stream. */
+    static std::vector<std::uint8_t> encode_envelope (
       const std::vector<frozen_object_state_t> &participants,
-      const inventory_digest_t &inventory_digest);
-    static std::optional<
-      std::pair<std::vector<frozen_object_state_t>, inventory_digest_t>>
-    decode_aggregate (const std::vector<std::uint8_t> &payload) noexcept;
-    static std::optional<std::vector<protocol::session_relocation_route_t>>
-    decode_session_routes (
+      const protocol::relocation_id_t &relocation);
+    static std::optional<protocol::relocation_envelope_t> decode_envelope (
       const std::vector<std::uint8_t> &payload) noexcept;
+    /* Target-side model mapping: the caller supplies the store-derived
+     * participant inventory (authority rows), which this method sorts by
+     * UTF-8 authority-key bytes to assign participantId = index + 1. */
+    static std::optional<std::vector<frozen_object_state_t>>
+    materialize_envelope (
+      const protocol::relocation_envelope_t &envelope,
+      std::vector<relocation_participant_identity_t> inventory) noexcept;
+    /* The derived inventory digest (no wrapper digest exists any more):
+     * SHA-256 over the (kind, key)-sorted participants' key bytes and
+     * interleaved generation bytes — the same value every source computes
+     * before publishing an authority row. */
+    static inventory_digest_t compute_inventory_digest (
+      const std::vector<object_ref_t> &participants);
 
   private:
     struct relocation_terminal_state_t;

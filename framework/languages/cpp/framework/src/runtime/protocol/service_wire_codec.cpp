@@ -2533,8 +2533,10 @@ void append_frozen_actor_route (std::vector<std::uint8_t> &output,
 }
 }
 
-frozen_record_t decode_frozen_record (
-  std::span<const std::uint8_t> bytes, bool capture_flow)
+frozen_record_t decode_frozen_record_prefix (
+  std::span<const std::uint8_t> bytes,
+  std::size_t &consumed,
+  bool capture_flow)
 {
     std::size_t offset = 0;
     if (offset >= bytes.size ())
@@ -2611,11 +2613,23 @@ frozen_record_t decode_frozen_record (
           reply, reply_offset, "reply route ID");
     require_end (reply, reply_offset, "frozen reply route");
     const auto body = read_frozen_body (bytes, offset, result.kind, capture_flow);
-    require_end (bytes, offset, "frozen record");
     validate_operation_matrix (result, body);
     result.target = body.target;
     result.application = body.application;
-    result.canonical_bytes.assign (bytes.begin (), bytes.end ());
+    result.canonical_bytes.assign (bytes.begin (), bytes.begin ()
+                                                     + static_cast<
+                                                       std::ptrdiff_t> (
+                                                       offset));
+    consumed = offset;
+    return result;
+}
+
+frozen_record_t decode_frozen_record (
+  std::span<const std::uint8_t> bytes, bool capture_flow)
+{
+    std::size_t consumed = 0;
+    auto result = decode_frozen_record_prefix (bytes, consumed, capture_flow);
+    require_end (bytes, consumed, "frozen record");
     return result;
 }
 

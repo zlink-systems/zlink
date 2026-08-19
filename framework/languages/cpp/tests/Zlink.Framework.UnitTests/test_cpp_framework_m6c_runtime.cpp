@@ -1545,6 +1545,15 @@ class memory_authority_store_t final : public authority_relocation_port_t
         return read_locked (kind, key);
     }
 
+    std::optional<std::vector<relocation_participant_identity_t>>
+    list_participant_identities () override
+    {
+        std::lock_guard lock (mutex);
+        if (participant_identities.empty ())
+            return std::nullopt;
+        return participant_identities;
+    }
+
     std::optional<authority_relocation_reference_t>
     read_locked (object_kind_t kind, const std::string &key)
     {
@@ -1556,6 +1565,9 @@ class memory_authority_store_t final : public authority_relocation_port_t
 
     std::mutex mutex;
     std::map<std::string, authority_relocation_reference_t> rows;
+    /* Store-derived participant inventory (28 §4.2): what a production
+     * Location Store serves from its authority rows. */
+    std::vector<relocation_participant_identity_t> participant_identities;
     std::vector<std::string> log;
     bool force_conflict = false;
     bool throw_after_publish = false;
@@ -1948,109 +1960,134 @@ void test_close_barrier_waits_and_abort_restores_ingress (
 
 void test_envelope_round_trip (test_context_t &test)
 {
+    namespace protocol = zlink::framework::runtime::protocol;
+    // One canonical saved-work record, exactly as the seal canonicalizes an
+    // accepted Spot request (Stage A retains the typed admission capture).
+    protocol::frozen_application_record_t admitted;
+    admitted.kind = protocol::frozen_record_kind_t::spot_request;
+    admitted.source_kind = protocol::frozen_source_kind_t::node;
+    admitted.source = {"request-source", 6, {'n'}, 1};
+    admitted.operation = {0, 42};
+    admitted.operation_kind = 3;
+    admitted.reply_route_id = 99;
+    admitted.body = protocol::frozen_spot_application_body_t{
+      {"spot-a", 3, {'m'}, 2, 9, 0}, 1,
+      protocol::application_payload_t{
+        "ChatRequest", "application/json",
+        {'{', '"', 'i', 'd', '"', ':', '1', '}'}}};
+    const auto canonical =
+      protocol::encode_frozen_application_record (admitted);
+
     frozen_object_state_t frozen{
       .owner =
-        {.kind = object_kind_t::actor,
-         .key = "actor-a",
-         .object_generation = 7,
+        {.kind = object_kind_t::user_spot,
+         .key = "spot-a",
+         .object_generation = 3,
          .authority_owner_generation = 9,
          .mesh_name = "mesh",
          .node_id = "node-a"},
-      .stable_type = "actor",
+      .stable_type = "spot",
       .application_state = {7, 8, 9},
-      .pending_application = {{1, {1, 2}}, {2, {3}}},
+      .pending_application =
+        {turn_record_t{
+          4, canonical.canonical_bytes,
+          protocol::application_payload_hwm_bytes (*canonical.application),
+          std::nullopt, canonical}},
       .timers = {{11, 100, 50, 3}}};
-    const auto digest = digest_with (0x5a);
-    const auto encoded = maintenance_runtime_t::encode (frozen, digest);
-    const auto decoded = maintenance_runtime_t::decode (encoded);
-    test.require (decoded.has_value (), "relocation envelope must decode");
-    test.require (decoded && decoded->first == frozen,
-                  "queue and timer state must round-trip");
-    test.require (decoded && decoded->second == digest,
-                  "inventory digest must round-trip");
-    test.require (maintenance_runtime_t::crc32c (encoded) != 0,
-                  "CRC32C must be computed for the immutable root");
 
-    // ZLR1 did not contain an application-state length or payload. The reader
-    // keeps accepting those roots while every new root is written as ZLR2.
-    auto legacy_v1 = encoded;
-    legacy_v1[3] = static_cast<std::uint8_t> ('1');
-    constexpr std::size_t application_state_length_offset = 59;
-    constexpr std::size_t application_state_payload_offset = 63;
-    legacy_v1.erase (
-      legacy_v1.begin ()
-        + static_cast<std::ptrdiff_t> (application_state_length_offset),
-      legacy_v1.begin ()
-        + static_cast<std::ptrdiff_t> (
-          application_state_payload_offset
-          + frozen.application_state.size ()));
-    const auto decoded_v1 = maintenance_runtime_t::decode (legacy_v1);
-    auto expected_v1 = frozen;
-    expected_v1.application_state.clear ();
+    const protocol::relocation_id_t relocation{0, 9};
+    const auto encoded =
+      maintenance_runtime_t::encode_envelope ({frozen}, relocation);
+    test.require (!encoded.empty (),
+                  "the schema relocation envelope must encode");
+    const auto envelope = maintenance_runtime_t::decode_envelope (encoded);
+    test.require (envelope.has_value (),
+                  "the schema relocation envelope must decode");
     test.require (
-      decoded_v1 && decoded_v1->first == expected_v1,
-      "ZLR1 roots must remain readable with empty application state");
+      envelope && envelope->relocation == relocation
+        && envelope->object.kind
+             == protocol::relocation_object_kind_t::user_spot
+        && envelope->object.object_id == "spot-a"
+        && envelope->object.object_generation == 3
+        && envelope->object.expected_authority_owner_generation == 9
+        && envelope->application_states.size () == 1
+        && envelope->saved_work.size () == 1
+        && envelope->saved_work.front ().order == 4
+        && envelope->timer_registrations.size () == 1,
+      "the stream must carry the declared schema sections");
+    // Re-encoding the decoded model must be byte-exact.
+    test.require (
+      envelope
+        && protocol::encode_relocation_envelope (*envelope) == encoded,
+      "the schema relocation envelope must re-encode byte-exactly");
 
-    auto excessive_count = encoded;
-    constexpr std::size_t pending_count_offset = 66;
-    excessive_count[pending_count_offset] = 0;
-    excessive_count[pending_count_offset + 1] = 0;
-    excessive_count[pending_count_offset + 2] = 0x10;
-    excessive_count[pending_count_offset + 3] = 0x01;
-    test.require (
-      !maintenance_runtime_t::decode (excessive_count),
-      "decoder must reject pending counts above the explicit maximum");
-
-    auto duplicate_sequence = encoded;
-    constexpr std::size_t first_sequence_offset = 70;
-    constexpr std::size_t second_sequence_offset = 84;
-    std::copy_n (
-      duplicate_sequence.begin ()
-        + static_cast<std::ptrdiff_t> (first_sequence_offset),
-      8,
-      duplicate_sequence.begin ()
-        + static_cast<std::ptrdiff_t> (second_sequence_offset));
-    test.require (
-      !maintenance_runtime_t::decode (duplicate_sequence),
-      "decoder must reject duplicate or unordered queue sequences");
+    const auto materialized = maintenance_runtime_t::materialize_envelope (
+      *envelope,
+      {relocation_participant_identity_t{frozen.owner, frozen.stable_type,
+                                         std::nullopt}});
+    test.require (materialized.has_value ()
+                    && materialized->size () == 1
+                    && materialized->front () == frozen,
+      "queue and timer state must round-trip through the schema stream");
 
     auto unordered = frozen;
-    unordered.pending_application[1].sequence = 1;
+    unordered.pending_application.push_back (
+      unordered.pending_application.front ());
     test.require (
-      maintenance_runtime_t::encode (unordered, digest).empty (),
+      maintenance_runtime_t::encode_envelope ({unordered}, relocation)
+        .empty (),
       "encoder must reject duplicate or unordered queue sequences");
 
-    constexpr std::size_t application_state_limit =
-      64u * 1024u * 1024u;
-    auto bounded = frozen;
-    bounded.application_state.assign (application_state_limit, 0x5a);
-    auto bounded_encoded = maintenance_runtime_t::encode (bounded, digest);
-    const auto bounded_decoded =
-      maintenance_runtime_t::decode (bounded_encoded);
+    // A two-participant aggregate: the canonical inventory order is the
+    // UTF-8 authority-key byte order, so the Actor precedes the Spot.
+    frozen_object_state_t actor{
+      .owner =
+        {.kind = object_kind_t::actor,
+         .key = "actor-b",
+         .object_generation = 5,
+         .authority_owner_generation = 2,
+         .mesh_name = "mesh",
+         .node_id = "node-a"},
+      .stable_type = "actor",
+      .application_state = {1},
+      .pending_application = {},
+      .timers = {}};
+    const auto aggregate_encoded = maintenance_runtime_t::encode_envelope (
+      {frozen, actor}, relocation);
+    test.require (!aggregate_encoded.empty (),
+                  "the aggregate schema envelope must encode");
+    const auto aggregate_envelope =
+      maintenance_runtime_t::decode_envelope (aggregate_encoded);
     test.require (
-      bounded_decoded
-        && bounded_decoded->first.application_state.size ()
-             == application_state_limit,
-      "the exact 64 MiB application-state limit must round-trip");
+      aggregate_envelope
+        && aggregate_envelope->application_states.size () == 2
+        && aggregate_envelope->object.object_id == "spot-a"
+        && aggregate_envelope->saved_work.size () == 1
+        && aggregate_envelope->saved_work.front ().participant_id == 2,
+      "participant ids must follow the sorted authority-key inventory");
+    const auto aggregate_materialized =
+      maintenance_runtime_t::materialize_envelope (
+        *aggregate_envelope,
+        {relocation_participant_identity_t{frozen.owner, frozen.stable_type,
+                                           std::nullopt},
+         relocation_participant_identity_t{
+           actor.owner, actor.stable_type,
+           std::pair{std::string ("spot-a"), std::uint64_t{3}}}});
+    test.require (
+      aggregate_materialized && aggregate_materialized->size () == 2
+        && aggregate_materialized->front () == actor
+        && aggregate_materialized->back () == frozen,
+      "aggregate participants must round-trip in inventory order");
 
-    auto oversized_root = std::move (bounded_encoded);
-    oversized_root.insert (
-      oversized_root.begin ()
-        + static_cast<std::ptrdiff_t> (
-          application_state_payload_offset + application_state_limit),
-      0x5a);
-    oversized_root[application_state_length_offset] = 0x04;
-    oversized_root[application_state_length_offset + 1] = 0x00;
-    oversized_root[application_state_length_offset + 2] = 0x00;
-    oversized_root[application_state_length_offset + 3] = 0x01;
-    test.require (
-      !maintenance_runtime_t::decode (oversized_root),
-      "decoder must reject application state above 64 MiB");
-
-    bounded.application_state.push_back (0x5a);
-    test.require (
-      maintenance_runtime_t::encode (bounded, digest).empty (),
-      "encoder must reject application state above 64 MiB");
+    // Tampering with the stream must be rejected by the decoder.
+    auto truncated = encoded;
+    truncated.pop_back ();
+    test.require (!maintenance_runtime_t::decode_envelope (truncated),
+                  "decoder must reject a truncated stream");
+    test.require (!maintenance_runtime_t::decode_envelope ({}),
+                  "decoder must reject an empty stream");
+    test.require (maintenance_runtime_t::crc32c (encoded) != 0,
+                  "CRC32C must be computed for the retained payload");
 }
 
 void test_spot_restore_stages_before_publication (
@@ -3005,6 +3042,14 @@ void test_application_relocation_remote_production_path (
             std::this_thread::sleep_for (1ms);
         }
       };
+    {
+        /* The schema stream carries no participant stable type: the target
+         * derives it from the Location Store authority row. */
+        std::lock_guard lock (authority->mutex);
+        authority->participant_identities = {
+          relocation_participant_identity_t{
+            *bound_source_object, "production.actor", std::nullopt}};
+    }
     relocation_result_t result;
     std::thread relocation_thread ([&] {
         result = await_task (source.relocate_application_actor (
@@ -3687,6 +3732,19 @@ void test_application_user_spot_aggregate_remote_production_path (
     aggregate_materialized_spot_adapter_t::capture_count.store (0);
     aggregate_materialized_actor_factory_t::record_target.store (
       true, std::memory_order_release);
+    {
+        /* The direct-transfer stream carries no participant identity: the
+         * target reconstructs the inventory from Location Store authority
+         * rows.  Serve those rows from the shared in-memory authority. */
+        std::lock_guard lock (authority->mutex);
+        authority->participant_identities = {
+          relocation_participant_identity_t{
+            *spot, "production.aggregate.spot", std::nullopt},
+          relocation_participant_identity_t{
+            joined_actor, "production.aggregate.actor",
+            std::pair{std::string ("production-aggregate-spot"),
+                      spot->object_generation}}};
+    }
 
     const auto make_authority =
       [&] (const object_ref_t &object,

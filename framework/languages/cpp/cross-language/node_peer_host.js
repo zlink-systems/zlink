@@ -452,6 +452,10 @@ async function entrySpotRelocate() {
            * creation, so the pre-relocation owner assertion is meaningful
            * rather than an accident of the placement algorithm. */
           .setPlacementWeight(role === 'source' ? 100 : 0);
+        // Automatic RouteMesh discovery still needs a common route channel
+        // before this node can receive the target's pre-relocation probe.
+        // The Java and .NET hosts already advertise this membership.
+        mesh.channel(meshName).server();
         /* No manual peerConnections().connect() at all: .NET's relocate()
          * explicitly rejects manual topology with
          * ZLinkFrameworkRelocationReason.ManualTopologyUnsupported --

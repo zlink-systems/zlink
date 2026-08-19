@@ -141,6 +141,12 @@ struct turn_record_t
     // The canonical relocation bytes are created only when a relocation
     // snapshot is actually serialized.
     std::optional<protocol::frozen_application_record_t> application_record;
+    // A relocation snapshot retains the complete, canonical record as well
+    // as the typed admission input.  The latter is sufficient while the
+    // source queue is live; the former is the durable saved-work fact and
+    // keeps source/correlation/reply-route/deadline fields intact on a
+    // C++ -> C++ restore.
+    std::optional<protocol::frozen_record_t> frozen_record;
 
     friend bool operator== (const turn_record_t &, const turn_record_t &) = default;
 };
@@ -151,6 +157,28 @@ struct logical_timer_t
     std::uint64_t due_after_milliseconds = 0;
     std::uint64_t period_milliseconds = 0;
     std::uint64_t next_tick_sequence = 1;
+    // These fields are deliberately part of the frozen model, rather than a
+    // timer implementation detail.  A target needs the handler identity and
+    // a structured pending tick to resume a sealed timer deterministically.
+    std::string name;
+    std::string handler_type;
+    std::uint8_t overrun_policy = 0;
+    std::uint64_t max_catch_up_ticks = 0;
+    bool stop_on_unhandled_exception = false;
+    std::uint64_t last_completed_delivery_index = 0;
+    std::uint64_t last_completed_scheduled_index = 0;
+    std::uint64_t next_scheduled_at_unix_milliseconds = 0;
+    struct pending_tick_t
+    {
+        std::uint64_t delivery_index = 0;
+        std::uint64_t scheduled_index = 0;
+        std::uint64_t scheduled_at_unix_milliseconds = 0;
+        std::uint64_t skipped_ticks = 0;
+
+        friend bool operator== (const pending_tick_t &,
+                                const pending_tick_t &) = default;
+    };
+    std::vector<pending_tick_t> pending_ticks;
 
     friend bool operator== (const logical_timer_t &,
                             const logical_timer_t &) = default;

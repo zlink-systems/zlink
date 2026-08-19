@@ -3,6 +3,7 @@
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
@@ -200,6 +201,74 @@ class public_authority_store_adapter_t final :
                         decode_current (conflict->current)};
         }
         return {authority_publish_status_t::failed, std::nullopt};
+    }
+
+    std::optional<std::vector<relocation_participant_identity_t>>
+    list_participant_identities () override
+    {
+        try {
+            std::vector<relocation_participant_identity_t> output;
+            std::optional<authority_scan_cursor_t> cursor;
+            for (;;) {
+                const auto result =
+                  _store->list_authorities ("", cursor, 1000)
+                    .result ()
+                    .value ();
+                const auto *page =
+                  std::get_if<authority_page_t> (&result);
+                if (!page)
+                    return std::nullopt;
+                for (const auto &entry : page->items) {
+                    const auto decoded_key =
+                      runtime::authority_key_codec_detail::
+                        decode_authority_key (entry.key.value);
+                    if (!decoded_key)
+                        continue;
+                    const auto &snapshot = entry.snapshot;
+                    relocation_participant_identity_t identity;
+                    identity.owner.key = decoded_key->object_id;
+                    identity.owner.object_generation =
+                      snapshot.object_generation;
+                    identity.owner.authority_owner_generation =
+                      snapshot.authority_owner_generation;
+                    identity.owner.mesh_name =
+                      snapshot.allocation.target.mesh_name;
+                    identity.owner.node_id =
+                      snapshot.allocation.target.node_rid.value ();
+                    identity.stable_type =
+                      snapshot.allocation.stable_type;
+                    if (decoded_key->kind == 'a') {
+                        identity.owner.kind = object_kind_t::actor;
+                        const auto projection =
+                          runtime::decode_actor_authority_payload (
+                            snapshot.payload);
+                        if (projection) {
+                            identity.spot_membership = std::pair{
+                              std::string (projection->spot_id),
+                              projection->spot_generation};
+                            if (identity.stable_type.empty ())
+                                identity.stable_type = ::zlink::framework::
+                                  detail::actor_ref_access_t::actor_type (
+                                    projection->actor);
+                        }
+                    }
+                    else {
+                        identity.owner.kind =
+                          snapshot.allocation.object_kind
+                              == placement_object_kind_t::instance_spot
+                            ? object_kind_t::instance_spot
+                            : object_kind_t::user_spot;
+                    }
+                    output.push_back (std::move (identity));
+                }
+                if (!page->next_cursor)
+                    return output;
+                cursor = page->next_cursor;
+            }
+        }
+        catch (...) {
+            return std::nullopt;
+        }
     }
 
     std::optional<authority_relocation_reference_t>

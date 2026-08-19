@@ -1265,8 +1265,19 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                 frozen.timers.push_back (timer);
             frozen.pending_application.reserve (
               object->queue.application.size ());
-            for (const auto &pending : object->queue.application)
-                frozen.pending_application.push_back (pending);
+            for (const auto &pending : object->queue.application) {
+                auto saved = pending;
+                if (saved.application_record) {
+                    // Canonicalize while the typed admission capture is
+                    // still available.  This freezes every request fence and
+                    // reply route, not just its payload bytes.
+                    saved.frozen_record =
+                      protocol::encode_frozen_application_record (
+                        *saved.application_record);
+                    saved.payload = saved.frozen_record->canonical_bytes;
+                }
+                frozen.pending_application.push_back (std::move (saved));
+            }
             frozen_participants.push_back (std::move (frozen));
         }
         _relocation_seals.emplace (

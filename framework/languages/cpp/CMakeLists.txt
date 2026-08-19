@@ -108,6 +108,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
   framework/src/runtime/protocol/service_wire_codec.cpp
+  framework/src/runtime/protocol/relocation_envelope_codec.cpp
   framework/src/runtime/mesh/raw_mesh_node_owner.cpp
   framework/src/runtime/mesh/service_liveness_registry.cpp
   framework/src/runtime/mesh/service_mailbox.cpp
@@ -981,6 +982,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   add_test(NAME test_cpp_framework_authority_key_codec
     COMMAND test_cpp_framework_authority_key_codec)
   set_tests_properties(test_cpp_framework_authority_key_codec PROPERTIES
+    LABELS "framework-unit;framework-foundation;protocol"
+    TIMEOUT 30)
+
+  add_executable(test_cpp_framework_relocation_envelope_golden
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_envelope_golden.cpp)
+  target_compile_features(test_cpp_framework_relocation_envelope_golden PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_relocation_envelope_golden PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_relocation_envelope_golden PRIVATE
+    ZLINK_RELOCATION_ENVELOPE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/relocation-envelope-v1.json")
+  target_link_libraries(test_cpp_framework_relocation_envelope_golden PRIVATE
+    nlohmann_json::nlohmann_json
+    zlink::framework
+    Threads::Threads)
+  add_test(NAME test_cpp_framework_relocation_envelope_golden
+    COMMAND test_cpp_framework_relocation_envelope_golden)
+  set_tests_properties(test_cpp_framework_relocation_envelope_golden PROPERTIES
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 

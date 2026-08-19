@@ -1327,7 +1327,8 @@ task_t<relocation_prepare_response_t>
 raw_mesh_node_owner_t::request_relocation_prepare (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::relocation_prepare_t &prepare,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  std::vector<protocol::session_relocation_route_t> session_routes)
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -1339,6 +1340,9 @@ raw_mesh_node_owner_t::request_relocation_prepare (
     detail::backend::raw_message_t parts;
     parts.emplace_back (
       protocol::encode_relocation_control (prepare));
+    for (const auto &route : session_routes)
+        parts.emplace_back (
+          protocol::encode_session_relocation_route (route));
     auto pending = port->request (target_routing_id, parts, timeout);
     const auto completed = co_await pending;
     if (completed.result != detail::backend::raw_request_result_t::ok
@@ -3117,7 +3121,10 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             || header.kind == protocol::command::relocationData
             || header.kind == protocol::command::relocationCutover
             || header.kind == protocol::command::relocationState) {
-            if (received->parts.size () != 1
+            if (received->parts.empty ()
+                || (received->parts.size () != 1
+                    && header.kind
+                         != protocol::command::relocationPrepare)
                 || (received->request_sequence
                     && header.kind
                          != protocol::command::relocationPrepare)) {

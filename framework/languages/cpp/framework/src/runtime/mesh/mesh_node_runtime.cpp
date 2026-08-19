@@ -1124,7 +1124,9 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)),
          relocation, coordinator] (
           const std::vector<runtime::stateful::frozen_object_state_t> &,
-          const runtime::stateful::relocation_payload_manifest_t &manifest)
+          const runtime::stateful::relocation_payload_manifest_t &manifest,
+          const std::vector<runtime::protocol::session_relocation_route_t>
+            &session_routes)
           -> task_t<bool> {
             runtime::protocol::relocation_object_kind_t kind;
             switch (source.kind) {
@@ -1158,7 +1160,7 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
                 manifest.checksum_crc32c,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
-              std::chrono::seconds (5));
+              std::chrono::seconds (5), nullptr, session_routes);
         },
       .send_state_chunk =
         [this, target] (const runtime::protocol::relocation_state_t &chunk)
@@ -1369,7 +1371,9 @@ mesh_node_runtime_t::relocate_application_unit (
         [this, target, status, sources, stable_types, principal_index,
          relocation, coordinator] (
           const std::vector<frozen_object_state_t> &,
-          const runtime::stateful::relocation_payload_manifest_t &manifest)
+          const runtime::stateful::relocation_payload_manifest_t &manifest,
+          const std::vector<runtime::protocol::session_relocation_route_t>
+            &session_routes)
           -> task_t<bool> {
             runtime::protocol::relocation_object_kind_t kind;
             switch (sources[principal_index].kind) {
@@ -1404,7 +1408,7 @@ mesh_node_runtime_t::relocate_application_unit (
                 manifest.checksum_crc32c,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
-              std::chrono::seconds (5));
+              std::chrono::seconds (5), nullptr, session_routes);
         },
       .send_state_chunk =
         [this, target] (const runtime::protocol::relocation_state_t &chunk)

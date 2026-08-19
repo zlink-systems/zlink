@@ -908,6 +908,13 @@ frozen_record_t summarize_frozen_application_record (
  * flow pairs are skipped structurally instead of validated/materialized. */
 frozen_record_t decode_frozen_record (
   std::span<const std::uint8_t> bytes, bool capture_flow = true);
+/* Frozen records are self-delimiting (28 §4.2): decodes exactly one record
+ * from the front of `bytes`, reports the consumed byte count, and permits
+ * trailing bytes. canonical_bytes retains exactly the consumed range. */
+frozen_record_t decode_frozen_record_prefix (
+  std::span<const std::uint8_t> bytes,
+  std::size_t &consumed,
+  bool capture_flow = true);
 std::vector<std::uint8_t> encode_user_spot_create_header (
   const user_spot_create_header_t &record);
 user_spot_create_header_t decode_user_spot_create_header (

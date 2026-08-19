@@ -3,11 +3,16 @@
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/locations/sha256.hpp"
 #include "runtime/timers/async_delay.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
+#include <map>
+#include <set>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace zlink::framework::runtime::stateful
@@ -15,12 +20,6 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
-constexpr std::array<std::uint8_t, 4> envelope_magic_v1{'Z', 'L', 'R', '1'};
-constexpr std::array<std::uint8_t, 4> envelope_magic_v2{'Z', 'L', 'R', '2'};
-constexpr std::array<std::uint8_t, 4> aggregate_envelope_magic{
-  'Z', 'L', 'R', 'A'};
-constexpr std::array<std::uint8_t, 4> recoverable_envelope_magic{
-  'Z', 'L', 'R', 'W'};
 constexpr std::array<std::uint8_t, 4> session_journal_magic{
   'Z', 'L', 'S', 'J'};
 constexpr std::chrono::hours relocation_retention{24};
@@ -135,223 +134,13 @@ class reader_t
     {
         return _input.size () - _offset;
     }
+    std::size_t checkpoint () const noexcept { return _offset; }
+    void rewind (std::size_t checkpoint) noexcept { _offset = checkpoint; }
 
   private:
     const std::vector<std::uint8_t> &_input;
     std::size_t _offset = 0;
 };
-
-struct persisted_relocation_wire_t
-{
-    eligible_relocation_unit_t::canonical_wire_context_t context;
-    std::vector<protocol::relocation_data_t> records;
-};
-
-struct recoverable_payload_t
-{
-    std::vector<std::uint8_t> state;
-    std::optional<persisted_relocation_wire_t> wire;
-};
-
-std::vector<std::uint8_t> encode_recoverable_payload (
-  std::vector<std::uint8_t> state,
-  const eligible_relocation_unit_t::canonical_wire_context_t &context,
-  const std::vector<protocol::relocation_data_t> &records)
-{
-    if (state.empty ()
-        || (context.relocation.high == 0
-            && context.relocation.low == 0)
-        || context.target_attempt_generation == 0
-        || context.coordinator.owner_id.empty ()
-        || context.coordinator.lease_generation == 0
-        || context.coordinator.node_routing_id.empty ()
-        || context.coordinator.node_generation == 0
-        || context.coordinator.expected_authority_store_version.empty ()
-        || context.target_node_routing_id.empty ()
-        || context.target_node_generation == 0
-        || records.size () > max_pending_records
-        || context.session_routes.size () > max_pending_records) {
-        return {};
-    }
-
-    std::vector<std::uint8_t> output (
-      recoverable_envelope_magic.begin (),
-      recoverable_envelope_magic.end ());
-    if (!append_bytes (output, state))
-        return {};
-    append_u64 (output, context.relocation.high);
-    append_u64 (output, context.relocation.low);
-    append_u64 (output, context.target_attempt_generation);
-    if (!append_text (output, context.coordinator.owner_id))
-        return {};
-    append_u64 (output, context.coordinator.lease_generation);
-    if (!append_bytes (output, context.coordinator.node_routing_id))
-        return {};
-    append_u64 (output, context.coordinator.node_generation);
-    if (!append_text (
-          output,
-          context.coordinator.expected_authority_store_version)
-        || !append_bytes (output, context.target_node_routing_id))
-        return {};
-    append_u64 (output, context.target_node_generation);
-    append_u32 (
-      output, static_cast<std::uint32_t> (records.size ()));
-    for (const auto &record : records) {
-        std::vector<std::uint8_t> encoded;
-        try {
-            encoded = protocol::encode_relocation_control (record);
-        }
-        catch (...) {
-            return {};
-        }
-        if (!append_bytes (output, encoded))
-            return {};
-    }
-    append_u32 (
-      output,
-      static_cast<std::uint32_t> (context.session_routes.size ()));
-    for (const auto &route : context.session_routes) {
-        if (route.relocation != context.relocation
-            || route.coordinator != context.coordinator
-            || route.sender_role != protocol::relocation_role_t::target
-            || route.route.action
-                 != protocol::session_relocation_route_action_t::commit
-            || route.route.target_node_routing_id
-                 != context.target_node_routing_id
-            || route.route.target_node_generation
-                 != context.target_node_generation) {
-            return {};
-        }
-        std::vector<std::uint8_t> encoded;
-        try {
-            encoded = protocol::encode_session_relocation_route (route);
-        }
-        catch (...) {
-            return {};
-        }
-        if (!append_bytes (output, encoded))
-            return {};
-    }
-    return output.size () <= max_envelope_bytes
-             ? std::move (output)
-             : std::vector<std::uint8_t>{};
-}
-
-std::optional<recoverable_payload_t> decode_recoverable_payload (
-  const std::vector<std::uint8_t> &payload) noexcept
-try
-{
-    if (payload.size () < recoverable_envelope_magic.size ()
-        || !std::equal (
-          recoverable_envelope_magic.begin (),
-          recoverable_envelope_magic.end (), payload.begin ())) {
-        return recoverable_payload_t{payload, std::nullopt};
-    }
-    if (payload.size () > max_envelope_bytes)
-        return std::nullopt;
-    std::vector<std::uint8_t> body (
-      payload.begin ()
-        + static_cast<std::ptrdiff_t> (
-          recoverable_envelope_magic.size ()),
-      payload.end ());
-    reader_t reader (body);
-    auto state = reader.bytes ();
-    const auto relocation_high = reader.u64 ();
-    const auto relocation_low = reader.u64 ();
-    const auto attempt = reader.u64 ();
-    const auto coordinator_owner = reader.text ();
-    const auto coordinator_lease = reader.u64 ();
-    auto coordinator_node = reader.bytes (255);
-    const auto coordinator_generation = reader.u64 ();
-    const auto authority_version = reader.text ();
-    auto target_node = reader.bytes (255);
-    const auto target_generation = reader.u64 ();
-    if (!state || !relocation_high || !relocation_low
-        || (*relocation_high == 0 && *relocation_low == 0)
-        || !attempt || *attempt == 0 || !coordinator_owner
-        || coordinator_owner->empty () || !coordinator_lease
-        || *coordinator_lease == 0 || !coordinator_node
-        || coordinator_node->empty () || !coordinator_generation
-        || *coordinator_generation == 0 || !authority_version
-        || authority_version->empty () || !target_node
-        || target_node->empty () || !target_generation
-        || *target_generation == 0 || reader.remaining () < 4u) {
-        return std::nullopt;
-    }
-
-    persisted_relocation_wire_t persisted;
-    persisted.context.relocation = {*relocation_high, *relocation_low};
-    persisted.context.target_attempt_generation = *attempt;
-    persisted.context.coordinator = {
-      std::move (*coordinator_owner),
-      *coordinator_lease,
-      std::move (*coordinator_node),
-      *coordinator_generation,
-      std::move (*authority_version)};
-    persisted.context.target_node_routing_id = std::move (*target_node);
-    persisted.context.target_node_generation = *target_generation;
-    const auto record_count = reader.u32 ();
-    if (!record_count || *record_count > max_pending_records
-        || reader.remaining ()
-             < static_cast<std::size_t> (*record_count) * 4u) {
-        return std::nullopt;
-    }
-    persisted.records.reserve (*record_count);
-    for (std::uint32_t index = 0; index != *record_count; ++index) {
-        const auto encoded = reader.bytes ();
-        if (!encoded)
-            return std::nullopt;
-        const auto control =
-          protocol::decode_relocation_control (*encoded);
-        const auto *record =
-          std::get_if<protocol::relocation_data_t> (&control);
-        if (!record
-            || record->relocation != persisted.context.relocation
-            || record->target_attempt_generation
-                 != persisted.context.target_attempt_generation
-            || record->coordinator != persisted.context.coordinator) {
-            return std::nullopt;
-        }
-        persisted.records.push_back (*record);
-    }
-    if (!reader.done ()) {
-        const auto route_count = reader.u32 ();
-        if (!route_count || *route_count > max_pending_records
-            || reader.remaining ()
-                 < static_cast<std::size_t> (*route_count) * 4u) {
-            return std::nullopt;
-        }
-        persisted.context.session_routes.reserve (*route_count);
-        for (std::uint32_t index = 0; index != *route_count; ++index) {
-            const auto encoded = reader.bytes ();
-            if (!encoded)
-                return std::nullopt;
-            const auto route =
-              protocol::decode_session_relocation_route (*encoded);
-            if (route.relocation != persisted.context.relocation
-                || route.coordinator != persisted.context.coordinator
-                || route.sender_role
-                     != protocol::relocation_role_t::target
-                || route.route.action
-                     != protocol::session_relocation_route_action_t::commit
-                || route.route.target_node_routing_id
-                     != persisted.context.target_node_routing_id
-                || route.route.target_node_generation
-                     != persisted.context.target_node_generation) {
-                return std::nullopt;
-            }
-            persisted.context.session_routes.push_back (route);
-        }
-        if (!reader.done ())
-            return std::nullopt;
-    }
-    return recoverable_payload_t{
-      std::move (*state), std::move (persisted)};
-}
-catch (...)
-{
-    return std::nullopt;
-}
 
 std::vector<std::uint8_t> encode_session_journal (
   const durable_session_journal_record_t &record)
@@ -659,8 +448,8 @@ task_t<bool> maintenance_runtime_t::prepare_target (
 {
     bool target_prepared = false;
     try {
-        target_prepared =
-          co_await context.prepare_target (participants, manifest);
+        target_prepared = co_await context.prepare_target (
+          participants, manifest, context.session_routes);
     }
     catch (...) {
         target_prepared = false;
@@ -1089,10 +878,8 @@ bool maintenance_runtime_t::relocate_encode (
      * the wire and retained through the retransmission window. Nothing is
      * written to the Relocation Store on this path. */
     try {
-        state->payload = encode (state->seal_attempt.seal.participants.front (),
-                                 state->inventory_digest);
-        state->payload = encode_recoverable_payload (
-          std::move (state->payload), state->context, {});
+        state->payload = encode_envelope (
+          state->seal_attempt.seal.participants, state->context.relocation);
         if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
             (void) _objects.abort_relocation (state->seal_attempt.seal.token);
             state->result.emplace (finish (
@@ -1399,9 +1186,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->sealed_at = std::chrono::steady_clock::now ();
     state->pending_unit_token = begin_pending_relocation_unit ();
     try {
-        state->payload = encode_aggregate (seal.participants, inventory_digest);
-        state->payload = encode_recoverable_payload (
-          std::move (state->payload), persisted_context, {});
+        state->payload = encode_envelope (
+          seal.participants, persisted_context.relocation);
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
     }
@@ -1531,344 +1317,405 @@ std::uint32_t maintenance_runtime_t::crc32c (
     return ~crc;
 }
 
-std::vector<std::uint8_t> maintenance_runtime_t::encode (
-  const frozen_object_state_t &frozen,
-  const inventory_digest_t &inventory_digest)
+namespace
 {
-    if (frozen.owner.key.empty ()
-        || frozen.owner.mesh_name.empty ()
-        || frozen.owner.node_id.empty ()
-        || frozen.stable_type.empty ()
-        || frozen.application_state.size () > max_application_state_bytes
-        || frozen.pending_application.size () > max_pending_records
-        || frozen.timers.size () > max_logical_timers) {
-        return {};
-    }
-    std::vector<std::uint8_t> output (
-      envelope_magic_v2.begin (), envelope_magic_v2.end ());
-    output.push_back (static_cast<std::uint8_t> (frozen.owner.kind));
-    if (!append_text (output, frozen.owner.key)
-        || !append_text (output, frozen.stable_type)
-        || !append_text (output, frozen.owner.mesh_name)
-        || !append_text (output, frozen.owner.node_id)) {
-        return {};
-    }
-    append_u64 (output, frozen.owner.object_generation);
-    append_u64 (output, frozen.owner.authority_owner_generation);
-    if (!append_bytes (output, frozen.application_state))
-        return {};
-    append_u32 (
-      output,
-      static_cast<std::uint32_t> (frozen.pending_application.size ()));
-    std::uint64_t previous_sequence = 0;
-    for (const auto &record : frozen.pending_application) {
-        if (record.sequence == 0
-            || record.sequence <= previous_sequence)
-            return {};
-        previous_sequence = record.sequence;
-        append_u64 (output, record.sequence);
-        std::vector<std::uint8_t> canonical;
-        if (record.application_record) {
-            canonical = protocol::encode_frozen_application_record (
-                          *record.application_record)
-                          .canonical_bytes;
-        }
-        else {
-            canonical = record.payload;
-        }
-        if (!append_bytes (output, canonical))
-            return {};
-    }
-    append_u32 (
-      output, static_cast<std::uint32_t> (frozen.timers.size ()));
-    std::uint64_t previous_timer = 0;
-    for (const auto &timer : frozen.timers) {
-        if (timer.timer_id == 0 || timer.timer_id <= previous_timer
-            || timer.due_after_milliseconds == 0
-            || timer.next_tick_sequence == 0) {
-            return {};
-        }
-        previous_timer = timer.timer_id;
-        append_u64 (output, timer.timer_id);
-        append_u64 (output, timer.due_after_milliseconds);
-        append_u64 (output, timer.period_milliseconds);
-        append_u64 (output, timer.next_tick_sequence);
-    }
-    output.insert (
-      output.end (), inventory_digest.begin (), inventory_digest.end ());
-    return output.size () <= max_envelope_bytes
-             ? std::move (output)
-             : std::vector<std::uint8_t>{};
+
+std::string_view participant_sort_word (object_kind_t kind) noexcept
+{
+    return kind == object_kind_t::actor ? "actor" : "spot";
 }
 
-std::optional<std::pair<frozen_object_state_t, inventory_digest_t>>
-maintenance_runtime_t::decode (
+/* Canonical participant inventory order (28 §4.2): UTF-8 authority-key
+ * bytes. The cross-language authority-key preimage is
+ * "authority\0{actor|spot}\0{Id}", so the order is the kind word first and
+ * the raw object-id bytes second. */
+bool participant_order_less (const object_ref_t &left,
+                             const object_ref_t &right) noexcept
+{
+    const auto left_word = participant_sort_word (left.kind);
+    const auto right_word = participant_sort_word (right.kind);
+    if (left_word != right_word)
+        return left_word < right_word;
+    return left.key < right.key;
+}
+
+bool all_digits (std::string_view value) noexcept
+{
+    if (value.empty () || value.size () > 20)
+        return false;
+    for (const auto character : value) {
+        if (character < '0' || character > '9')
+            return false;
+    }
+    return true;
+}
+
+/* Synthetic identity for a logical timer that was registered without the
+ * enriched schema fields. Its schema name is the decimal timer id and the
+ * handler type is this sentinel, which lets a C++ target reconstruct the
+ * original bare registration exactly. */
+constexpr std::string_view bare_timer_handler_type = "LogicalTimer";
+
+} // namespace
+
+std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
+  const std::vector<frozen_object_state_t> &participants,
+  const protocol::relocation_id_t &relocation)
+{
+    if (participants.empty ()
+        || (relocation.high == 0 && relocation.low == 0))
+        return {};
+    std::vector<const frozen_object_state_t *> ordered;
+    ordered.reserve (participants.size ());
+    for (const auto &participant : participants)
+        ordered.push_back (&participant);
+    std::sort (ordered.begin (), ordered.end (),
+               [] (const frozen_object_state_t *left,
+                   const frozen_object_state_t *right) {
+                   return participant_order_less (left->owner, right->owner);
+               });
+    for (std::size_t index = 0; index != ordered.size (); ++index) {
+        const auto &frozen = *ordered[index];
+        if (frozen.owner.key.empty () || frozen.stable_type.empty ()
+            || frozen.owner.object_generation == 0
+            || frozen.owner.authority_owner_generation == 0
+            || frozen.application_state.size () > max_application_state_bytes
+            || frozen.pending_application.size () > max_pending_records
+            || frozen.timers.size () > max_logical_timers)
+            return {};
+        if (index != 0
+            && !participant_order_less (ordered[index - 1]->owner,
+                                        frozen.owner))
+            return {};
+    }
+    const auto principal = std::find_if (
+      participants.begin (), participants.end (),
+      [] (const frozen_object_state_t &candidate) {
+          return candidate.owner.kind == object_kind_t::user_spot;
+      });
+    const auto &root =
+      principal != participants.end () ? *principal : participants.front ();
+
+    protocol::relocation_envelope_t envelope;
+    envelope.relocation = relocation;
+    envelope.object = {to_wire_object_kind (root.owner.kind),
+                       root.stable_type, root.owner.key,
+                       root.owner.object_generation,
+                       root.owner.authority_owner_generation};
+    envelope.application_version = 1;
+
+    try {
+        for (std::size_t index = 0; index != ordered.size (); ++index) {
+            const auto &frozen = *ordered[index];
+            const auto participant_id =
+              static_cast<std::uint64_t> (index) + 1;
+            envelope.application_states.push_back (
+              {participant_id, 1, frozen.application_state, {}});
+
+            std::uint64_t boundary = 0;
+            for (const auto &record : frozen.pending_application) {
+                if (record.sequence == 0 || record.sequence <= boundary)
+                    return {};
+                boundary = record.sequence;
+                protocol::frozen_record_t canonical;
+                try {
+                    if (record.frozen_record)
+                        canonical = *record.frozen_record;
+                    else if (record.application_record)
+                        canonical = protocol::encode_frozen_application_record (
+                          *record.application_record);
+                    else
+                        canonical =
+                          protocol::decode_frozen_record (record.payload);
+                }
+                catch (const protocol::service_wire_error_t &) {
+                    /* Only canonical service-wire-v1 frozen records exist as
+                     * schema saved work. A non-canonical retained payload is
+                     * not encodable; its accepted boundary still counts. */
+                    continue;
+                }
+                envelope.saved_work.push_back (
+                  {participant_id, record.sequence, std::move (canonical)});
+            }
+
+            std::vector<std::pair<std::string, const logical_timer_t *>>
+              timers;
+            timers.reserve (frozen.timers.size ());
+            for (const auto &timer : frozen.timers) {
+                auto name = timer.name.empty ()
+                              ? std::to_string (timer.timer_id)
+                              : timer.name;
+                timers.emplace_back (std::move (name), &timer);
+            }
+            std::sort (timers.begin (), timers.end (),
+                       [] (const auto &left, const auto &right) {
+                           return left.first < right.first;
+                       });
+            for (std::size_t position = 1; position < timers.size ();
+                 ++position) {
+                if (timers[position - 1].first == timers[position].first)
+                    return {};
+            }
+            for (const auto &[name, timer] : timers) {
+                const auto bare = timer->name.empty ();
+                protocol::relocation_envelope_timer_t registration;
+                registration.participant_id = participant_id;
+                registration.name = name;
+                registration.handler_type =
+                  timer->handler_type.empty ()
+                    ? std::string (bare_timer_handler_type)
+                    : timer->handler_type;
+                registration.period_milliseconds =
+                  timer->period_milliseconds != 0
+                    ? timer->period_milliseconds
+                    : (timer->due_after_milliseconds != 0
+                         ? timer->due_after_milliseconds
+                         : 1);
+                registration.overrun_policy =
+                  timer->overrun_policy >= 1 && timer->overrun_policy <= 3
+                    ? timer->overrun_policy
+                    : 1;
+                registration.max_catch_up_ticks =
+                  timer->max_catch_up_ticks != 0 ? timer->max_catch_up_ticks
+                                                 : 1;
+                registration.stop_on_unhandled_exception =
+                  timer->stop_on_unhandled_exception;
+                if (bare) {
+                    const auto completed =
+                      timer->next_tick_sequence != 0
+                        ? timer->next_tick_sequence - 1
+                        : 0;
+                    registration.last_completed_delivery_index = completed;
+                    registration.last_completed_scheduled_index = completed;
+                    registration.next_scheduled_at_unix_milliseconds =
+                      timer->due_after_milliseconds;
+                }
+                else {
+                    registration.last_completed_delivery_index =
+                      timer->last_completed_delivery_index;
+                    registration.last_completed_scheduled_index =
+                      timer->last_completed_scheduled_index;
+                    registration.next_scheduled_at_unix_milliseconds =
+                      timer->next_scheduled_at_unix_milliseconds != 0
+                        ? timer->next_scheduled_at_unix_milliseconds
+                        : timer->due_after_milliseconds;
+                }
+                envelope.timer_registrations.push_back (
+                  std::move (registration));
+                for (const auto &tick : timer->pending_ticks) {
+                    ++boundary;
+                    envelope.pending_timer_ticks.push_back (
+                      {participant_id, boundary, name,
+                       tick.delivery_index, tick.scheduled_index,
+                       tick.scheduled_at_unix_milliseconds,
+                       tick.skipped_ticks});
+                }
+            }
+        }
+        auto encoded = protocol::encode_relocation_envelope (envelope);
+        if (encoded.size () > max_envelope_bytes)
+            return {};
+        return encoded;
+    }
+    catch (...) {
+        return {};
+    }
+}
+
+std::optional<protocol::relocation_envelope_t>
+maintenance_runtime_t::decode_envelope (
   const std::vector<std::uint8_t> &payload) noexcept
 try
 {
-    if (payload.size () >= recoverable_envelope_magic.size ()
-        && std::equal (
-          recoverable_envelope_magic.begin (),
-          recoverable_envelope_magic.end (), payload.begin ())) {
-        const auto recoverable =
-          decode_recoverable_payload (payload);
-        return recoverable
-                 ? decode (recoverable->state)
-                 : std::nullopt;
-    }
-    const auto legacy_v1 =
-      payload.size () >= envelope_magic_v1.size ()
-      && std::equal (
-        envelope_magic_v1.begin (), envelope_magic_v1.end (),
-        payload.begin ());
-    const auto current_v2 =
-      payload.size () >= envelope_magic_v2.size ()
-      && std::equal (
-        envelope_magic_v2.begin (), envelope_magic_v2.end (),
-        payload.begin ());
-    if (payload.size () > max_envelope_bytes
-        || payload.size () < envelope_magic_v2.size ()
-                           + 1 + inventory_digest_t{}.size ()
-        || (!legacy_v1 && !current_v2)) {
+    if (payload.empty () || payload.size () > max_envelope_bytes)
         return std::nullopt;
-    }
-    std::vector<std::uint8_t> encoded (
-      payload.begin ()
-        + static_cast<std::ptrdiff_t> (envelope_magic_v2.size ()),
-      payload.end ());
-    reader_t reader (encoded);
-    const auto kind = reader.u8 ();
-    const auto key = reader.text ();
-    const auto stable_type = reader.text ();
-    const auto mesh_name = reader.text ();
-    const auto node_id = reader.text ();
-    const auto object_generation = reader.u64 ();
-    const auto owner_generation = reader.u64 ();
-    std::optional<std::vector<std::uint8_t>> application_state =
-      legacy_v1
-        ? std::optional<std::vector<std::uint8_t>>{
-            std::vector<std::uint8_t>{}}
-        : reader.bytes ();
-    const auto pending_count = reader.u32 ();
-    if (!kind || *kind > static_cast<std::uint8_t> (object_kind_t::instance_spot)
-        || !key || key->empty () || !stable_type || stable_type->empty ()
-        || !mesh_name || mesh_name->empty () || !node_id || node_id->empty ()
-        || !object_generation || *object_generation == 0
-        || !owner_generation || *owner_generation == 0
-        || !application_state
-        || application_state->size () > max_application_state_bytes
-        || !pending_count
-        || *pending_count > max_pending_records
-        || reader.remaining ()
-             < static_cast<std::size_t> (*pending_count) * 12u
-                 + 4u + inventory_digest_t{}.size ()) {
-        return std::nullopt;
-    }
-
-    frozen_object_state_t frozen{
-      .owner =
-        object_ref_t{
-          .kind = static_cast<object_kind_t> (*kind),
-          .key = *key,
-          .object_generation = *object_generation,
-          .authority_owner_generation = *owner_generation,
-          .mesh_name = *mesh_name,
-          .node_id = *node_id},
-      .stable_type = *stable_type,
-      .application_state = std::move (*application_state),
-      .pending_application = {},
-      .timers = {}};
-    frozen.pending_application.reserve (*pending_count);
-    std::uint64_t previous_sequence = 0;
-    for (std::uint32_t index = 0; index != *pending_count; ++index) {
-        const auto sequence = reader.u64 ();
-        auto bytes = reader.bytes ();
-        if (!sequence || *sequence == 0
-            || *sequence <= previous_sequence || !bytes)
-            return std::nullopt;
-        previous_sequence = *sequence;
-        std::optional<std::size_t> application_payload_bytes;
-        try {
-            const auto application =
-              protocol::decode_frozen_record (*bytes).application;
-            if (application)
-                application_payload_bytes =
-                  protocol::application_payload_hwm_bytes (*application);
-        }
-        catch (const protocol::service_wire_error_t &) {
-            // Legacy relocation records did not require a canonical
-            // application envelope. They retain the previous full-record
-            // accounting fallback until rewritten by the current runtime.
-        }
-        frozen.pending_application.push_back (
-          turn_record_t{*sequence, std::move (*bytes),
-                        application_payload_bytes});
-    }
-    const auto timer_count = reader.u32 ();
-    if (!timer_count || *timer_count > max_logical_timers
-        || reader.remaining ()
-             < static_cast<std::size_t> (*timer_count) * 32u
-                 + inventory_digest_t{}.size ())
-        return std::nullopt;
-    frozen.timers.reserve (*timer_count);
-    std::uint64_t previous_timer = 0;
-    for (std::uint32_t index = 0; index != *timer_count; ++index) {
-        const auto timer_id = reader.u64 ();
-        const auto due = reader.u64 ();
-        const auto period = reader.u64 ();
-        const auto next = reader.u64 ();
-        if (!timer_id || *timer_id == 0
-            || *timer_id <= previous_timer || !due || *due == 0
-            || !period || !next || *next == 0) {
-            return std::nullopt;
-        }
-        previous_timer = *timer_id;
-        frozen.timers.push_back (
-          logical_timer_t{*timer_id, *due, *period, *next});
-    }
-    inventory_digest_t digest{};
-    for (auto &byte : digest) {
-        const auto value = reader.u8 ();
-        if (!value)
-            return std::nullopt;
-        byte = *value;
-    }
-    if (!reader.done ())
-        return std::nullopt;
-    return std::make_pair (std::move (frozen), digest);
+    return protocol::decode_relocation_envelope (payload);
 }
 catch (...)
 {
     return std::nullopt;
 }
 
-std::vector<std::uint8_t> maintenance_runtime_t::encode_aggregate (
-  const std::vector<frozen_object_state_t> &participants,
-  const inventory_digest_t &inventory_digest)
-{
-    if (participants.size () < 2
-        || participants.size () > std::numeric_limits<std::uint32_t>::max ())
-        return {};
-    std::vector<std::uint8_t> output (
-      aggregate_envelope_magic.begin (),
-      aggregate_envelope_magic.end ());
-    append_u32 (
-      output, static_cast<std::uint32_t> (participants.size ()));
-    for (const auto &participant : participants) {
-        const auto encoded = encode (participant, inventory_digest);
-        if (encoded.empty () || !append_bytes (output, encoded))
-            return {};
-    }
-    output.insert (
-      output.end (), inventory_digest.begin (), inventory_digest.end ());
-    return output;
-}
-
-std::optional<
-  std::pair<std::vector<frozen_object_state_t>, inventory_digest_t>>
-maintenance_runtime_t::decode_aggregate (
-  const std::vector<std::uint8_t> &payload) noexcept
+std::optional<std::vector<frozen_object_state_t>>
+maintenance_runtime_t::materialize_envelope (
+  const protocol::relocation_envelope_t &envelope,
+  std::vector<relocation_participant_identity_t> inventory) noexcept
 try
 {
-    if (payload.size () >= recoverable_envelope_magic.size ()
-        && std::equal (
-          recoverable_envelope_magic.begin (),
-          recoverable_envelope_magic.end (), payload.begin ())) {
-        const auto recoverable =
-          decode_recoverable_payload (payload);
-        return recoverable
-                 ? decode_aggregate (recoverable->state)
-                 : std::nullopt;
-    }
-    if (payload.size () > max_envelope_bytes
-        || payload.size () < aggregate_envelope_magic.size () + 4
-                           + inventory_digest_t{}.size ()
-        || !std::equal (
-          aggregate_envelope_magic.begin (),
-          aggregate_envelope_magic.end (), payload.begin ())) {
+    if (inventory.empty ()
+        || inventory.size () != envelope.application_states.size ())
         return std::nullopt;
-    }
-    std::vector<std::uint8_t> encoded (
-      payload.begin ()
-        + static_cast<std::ptrdiff_t> (aggregate_envelope_magic.size ()),
-      payload.end ());
-    reader_t reader (encoded);
-    const auto participant_count = reader.u32 ();
-    if (!participant_count || *participant_count < 2
-        || reader.remaining ()
-             < static_cast<std::size_t> (*participant_count) * 4u
-                 + inventory_digest_t{}.size ()) {
-        return std::nullopt;
+    std::sort (inventory.begin (), inventory.end (),
+               [] (const relocation_participant_identity_t &left,
+                   const relocation_participant_identity_t &right) {
+                   return participant_order_less (left.owner, right.owner);
+               });
+    for (std::size_t index = 0; index != inventory.size (); ++index) {
+        const auto &identity = inventory[index];
+        if (identity.owner.key.empty () || identity.stable_type.empty ()
+            || identity.owner.object_generation == 0
+            || identity.owner.authority_owner_generation == 0)
+            return std::nullopt;
+        if (index != 0
+            && !participant_order_less (inventory[index - 1].owner,
+                                        identity.owner))
+            return std::nullopt;
+        /* participantId is deliberately absent from the stream: it is this
+         * sorted inventory's zero-based index plus one. */
+        if (envelope.application_states[index].participant_id
+            != static_cast<std::uint64_t> (index) + 1)
+            return std::nullopt;
     }
 
     std::vector<frozen_object_state_t> participants;
-    participants.reserve (*participant_count);
-    std::optional<inventory_digest_t> participant_digest;
-    for (std::uint32_t index = 0; index != *participant_count; ++index) {
-        const auto participant_payload = reader.bytes ();
-        if (!participant_payload)
-            return std::nullopt;
-        auto participant = decode (*participant_payload);
-        if (!participant)
-            return std::nullopt;
-        if (participant_digest
-            && *participant_digest != participant->second) {
-            return std::nullopt;
-        }
-        participant_digest = participant->second;
-        participants.push_back (std::move (participant->first));
-    }
-    inventory_digest_t root_digest{};
-    for (auto &byte : root_digest) {
-        const auto value = reader.u8 ();
-        if (!value)
-            return std::nullopt;
-        byte = *value;
-    }
-    if (!reader.done () || !participant_digest
-        || *participant_digest != root_digest) {
-        return std::nullopt;
+    participants.reserve (inventory.size ());
+    for (std::size_t index = 0; index != inventory.size (); ++index) {
+        const auto &identity = inventory[index];
+        const auto &state = envelope.application_states[index];
+        participants.push_back (frozen_object_state_t{
+          .owner = identity.owner,
+          .stable_type = identity.stable_type,
+          .application_state = state.state,
+          .pending_application = {},
+          .timers = {}});
     }
 
-    std::sort (
-      participants.begin (), participants.end (),
-      [] (const frozen_object_state_t &left,
-          const frozen_object_state_t &right) {
-          if (left.owner.kind != right.owner.kind)
-              return left.owner.kind < right.owner.kind;
-          return left.owner.key < right.owner.key;
-      });
-    for (std::size_t index = 1; index != participants.size (); ++index) {
-        if (participants[index - 1].owner.kind
-              == participants[index].owner.kind
-            && participants[index - 1].owner.key
-                 == participants[index].owner.key) {
+    for (const auto &entry : envelope.saved_work) {
+        if (entry.participant_id == 0
+            || entry.participant_id > participants.size ())
             return std::nullopt;
-        }
+        auto &participant =
+          participants[static_cast<std::size_t> (entry.participant_id) - 1];
+        std::optional<std::size_t> application_payload_bytes;
+        if (entry.record.application)
+            application_payload_bytes =
+              protocol::application_payload_hwm_bytes (
+                *entry.record.application);
+        participant.pending_application.push_back (
+          turn_record_t{entry.order, entry.record.canonical_bytes,
+                        application_payload_bytes, std::nullopt,
+                        entry.record});
     }
-    return std::make_pair (
-      std::move (participants), root_digest);
+
+    /* Rebuild the runtime timer model. A schema registration whose handler
+     * type is the bare sentinel and whose name is the decimal timer id was
+     * written from a bare C++ registration and reconstructs it exactly;
+     * anything else keeps the enriched fields and derives the local timer
+     * id from the name when it is numeric, or sequentially otherwise. */
+    std::map<std::uint64_t, std::set<std::uint64_t>> used_ids;
+    for (const auto &registration : envelope.timer_registrations) {
+        if (registration.participant_id == 0
+            || registration.participant_id > participants.size ())
+            return std::nullopt;
+        auto &participant = participants[static_cast<std::size_t> (
+                              registration.participant_id) - 1];
+        auto &ids = used_ids[registration.participant_id];
+        std::uint64_t timer_id = 0;
+        if (all_digits (registration.name)) {
+            std::uint64_t parsed = 0;
+            const auto *first = registration.name.data ();
+            const auto *last = first + registration.name.size ();
+            if (std::from_chars (first, last, parsed).ec == std::errc{}
+                && parsed != 0 && !ids.contains (parsed))
+                timer_id = parsed;
+        }
+        if (timer_id == 0) {
+            timer_id = ids.empty () ? 1 : *ids.rbegin () + 1;
+            while (ids.contains (timer_id))
+                ++timer_id;
+        }
+        ids.insert (timer_id);
+        const auto bare =
+          registration.handler_type == bare_timer_handler_type
+          && all_digits (registration.name);
+        logical_timer_t timer;
+        timer.timer_id = timer_id;
+        timer.period_milliseconds = registration.period_milliseconds;
+        timer.due_after_milliseconds =
+          registration.next_scheduled_at_unix_milliseconds != 0
+            ? registration.next_scheduled_at_unix_milliseconds
+            : registration.period_milliseconds;
+        timer.next_tick_sequence =
+          registration.last_completed_delivery_index + 1;
+        if (!bare) {
+            timer.name = registration.name;
+            timer.handler_type = registration.handler_type;
+            timer.overrun_policy = registration.overrun_policy;
+            timer.max_catch_up_ticks = registration.max_catch_up_ticks;
+            timer.stop_on_unhandled_exception =
+              registration.stop_on_unhandled_exception;
+            timer.last_completed_delivery_index =
+              registration.last_completed_delivery_index;
+            timer.last_completed_scheduled_index =
+              registration.last_completed_scheduled_index;
+            timer.next_scheduled_at_unix_milliseconds =
+              registration.next_scheduled_at_unix_milliseconds;
+        }
+        participant.timers.push_back (std::move (timer));
+    }
+    for (const auto &tick : envelope.pending_timer_ticks) {
+        if (tick.participant_id == 0
+            || tick.participant_id > participants.size ())
+            return std::nullopt;
+        auto &participant = participants[static_cast<std::size_t> (
+                              tick.participant_id) - 1];
+        const auto registration = std::find_if (
+          envelope.timer_registrations.begin (),
+          envelope.timer_registrations.end (),
+          [&tick] (const protocol::relocation_envelope_timer_t &candidate) {
+              return candidate.participant_id == tick.participant_id
+                     && candidate.name == tick.timer_name;
+          });
+        if (registration == envelope.timer_registrations.end ())
+            return std::nullopt;
+        const auto position = static_cast<std::size_t> (std::distance (
+          std::find_if (envelope.timer_registrations.begin (),
+                        envelope.timer_registrations.end (),
+                        [&tick] (const auto &candidate) {
+                            return candidate.participant_id
+                                   == tick.participant_id;
+                        }),
+          registration));
+        if (position >= participant.timers.size ())
+            return std::nullopt;
+        participant.timers[position].pending_ticks.push_back (
+          {tick.delivery_index, tick.scheduled_index,
+           tick.scheduled_at_unix_milliseconds, tick.skipped_ticks});
+    }
+    return participants;
 }
 catch (...)
 {
     return std::nullopt;
 }
 
-std::optional<std::vector<protocol::session_relocation_route_t>>
-maintenance_runtime_t::decode_session_routes (
-  const std::vector<std::uint8_t> &payload) noexcept
-try
+inventory_digest_t maintenance_runtime_t::compute_inventory_digest (
+  const std::vector<object_ref_t> &participants)
 {
-    const auto recoverable = decode_recoverable_payload (payload);
-    if (!recoverable)
-        return std::nullopt;
-    if (!recoverable->wire)
-        return std::vector<protocol::session_relocation_route_t>{};
-    return recoverable->wire->context.session_routes;
-}
-catch (...)
-{
-    return std::nullopt;
+    auto sorted = participants;
+    std::sort (sorted.begin (), sorted.end (),
+               [] (const object_ref_t &left, const object_ref_t &right) {
+                   if (left.kind != right.kind)
+                       return left.kind < right.kind;
+                   return left.key < right.key;
+               });
+    std::vector<std::byte> seed;
+    for (const auto &source : sorted) {
+        for (const auto value : source.key)
+            seed.push_back (static_cast<std::byte> (
+              static_cast<unsigned char> (value)));
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            seed.push_back (
+              static_cast<std::byte> (source.object_generation >> shift));
+            seed.push_back (static_cast<std::byte> (
+              source.authority_owner_generation >> shift));
+        }
+    }
+    const auto digest = runtime::sha256 (seed);
+    inventory_digest_t output{};
+    for (std::size_t index = 0; index != output.size (); ++index)
+        output[index] = std::to_integer<std::uint8_t> (digest[index]);
+    return output;
 }
 
 maintenance_runtime_t::permit_t::permit_t (maintenance_runtime_t *owner) :
