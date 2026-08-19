@@ -495,7 +495,11 @@
       **node stream 수렴 대완결 `971ed36314`** + java 골든 pin `68cfcb4cdc`:
       bare control·frozen backlog·store inventory·rich timer·spot+actor 전부
       relocation-envelope-v1, spotFence 필드 누락(pilot 적발) 동봉, 전 게이트
-      그린. wire 수렴 잔여 = cpp(W-3 생성 스왑)뿐.
+      그린. **cpp stream 전환 완결 `2361f1f739`**: ZLR* 전 기계 삭제(clean-break),
+      전용 코덱+store inventory 열거 port+digest 유도, 골든 byte-exact(셔플
+      inventory 파생 증명 포함), 게이트 44/44, SF-F2·ST-C2 그린 —
+      **4언어 relocation wire 수렴 성립**. (W-3 생성 코덱 byte-계층 스왑은
+      W-1 동치 완료 후 기계적 교체로 잔존)
       **pilot5 부산물: 동치 하네스가 실결함 적발** — node spotFence()가
       spot-route-fence의 expectedOwnerLeaseGeneration 미직렬화(스키마 위반,
       service-stateful-wire-codec.ts:2069) → node 큐 편입; cpp·dotnet 28 동치
