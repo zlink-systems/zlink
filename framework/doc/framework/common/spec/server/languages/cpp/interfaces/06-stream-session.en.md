@@ -194,8 +194,10 @@ Actor is restored and starts processing messages, the target runtime
 sends `sessionActorLocationUpdateReqMsg` to change that Actor route and
 the bound session's current `actor_ref_t` location snapshot together.
 The snapshot reflects the same ActorId/ObjectGeneration and the target
-MeshName/NodeRid. Even without a response, target Actor processing
-doesn't stop, and the same request is resent at a fixed interval. In
+MeshName/NodeRid. `sessionActorLocationUpdateReqMsg` (command 44) is a
+one-way command per [Channel messaging](03-channel-messaging.en.md) §18:
+it is sent exactly once and is not retransmitted (no retry even without a
+response). Even without a response, target Actor processing doesn't stop. In
 the same Session, the route and physical STREAM connection of a
 different Actor not included in the relocation target is kept. The
 application doesn't call `bind()` again to learn about relocation.

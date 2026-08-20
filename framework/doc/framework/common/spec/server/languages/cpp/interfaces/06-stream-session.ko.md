@@ -185,7 +185,9 @@ Store를 조회하지 않는다. Physical disconnect는 Framework가 current bin
 복원되어 message 처리를 시작한 뒤 target runtime이 `sessionActorLocationUpdateReqMsg`를
 send하여 해당 Actor route와 bound-session의 current `actor_ref_t` location snapshot을 함께
 바꾼다. Snapshot은 같은 ActorId·ObjectGeneration과 target MeshName·NodeRid를 반영한다.
-응답이 없어도 Target Actor 처리를 멈추지 않으며 정해진 간격으로 같은 요청을 다시 보낸다.
+`sessionActorLocationUpdateReqMsg`(command 44)는 [Channel messaging](03-channel-messaging.ko.md) §18의
+one-way command로 한 번만 send하며 재전송하지 않는다(무응답이어도 재시도 없음). 응답이 없어도 Target
+Actor 처리를 멈추지 않는다.
 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의 route와 physical STREAM connection은 유지한다.
 Application은 relocation을 알기 위해 `bind()`를 다시 호출하지 않는다.
 
