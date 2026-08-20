@@ -685,6 +685,23 @@
       (동일 `_gate` 필요)가 차단. **focused 세션 과제**: `_gate` cross-await
       보유 제거 또는 liveness 처리 레인 분리. terra 2회+본 세션 광범위
       진단이 도달한 최종 근본 — 이제 수정 지점이 단일 확정됨.
+      **⭐⭐ 근본 원인 정정(2026-08-20, sonnet 에이전트 계측 반증)**: 위
+      "dotnet ReceiveLoop 기아" 가설은 **직접 계측으로 반증됨** — ReceiveLoop
+      건강(628 프레임 즉시 처리·모든 probe 즉시 응답·gap 0), dotnet ack 적용
+      경로 spec 29 §3 정합. **진짜 결함은 java 측 liveness ack 처리**:
+      dotnet이 java에 probe를 보내는데 java가 **LivenessAck를 안 보냄**
+      (dotnet ack-apply 0회) → 15s 만료 → de-admit → 재Hello → java 재Admit
+      (15s 케이던스 11회) 반복, command 40 안정 창 부재. 또 java가 자기
+      probe를 250ms마다 폭주(spec 5000ms) — `state.ready`가 영영 false.
+      원인: **`ZLinkJavaRawMeshNode.java` ~6283-6350 liveness.acknowledge
+      경로**: (a) `topology.peer(inbound.source()).orElseThrow()`(~6283)가
+      `catch(RuntimeException ignored){}`(~6350)에 삼켜져 조회 실패를 무시,
+      또는 (b) TransportPair/connectionId 소유권 체크(~6292-6310)가 정당한
+      ack를 "foreign pair"로 거부. → **relocation flake = java liveness ack
+      미성립, dotnet 무관**. `.flow`는 0줄(spec 26 message-flow는 application
+      dispatch 표면만, RouteMesh control-plane liveness는 spec 29/49 소관 —
+      커버리지 갭). **수정: java 범위, ZLINK_JAVA_STREAM_TRACE로 (a)/(b)
+      판별 후 spec 29/49 정합 수정** → sonnet 위임. 하니스 flow 배선 커밋됨.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
