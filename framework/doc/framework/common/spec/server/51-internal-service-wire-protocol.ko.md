@@ -473,6 +473,35 @@ bookkeeping identifier(예: transfer id)는 language-internal일 뿐 이 body에
 설명한 기존 준비 뒤에서 대기하는 동작과 later-attempt-wins 규칙을 포함한 수신 측 admission
 semantics는 language-internal id가 아니라 이 body에 실린 actor identity를 key로 삼는다.
 
+#### 수신자 stable-type 해석
+
+`actorJoin`(28) body는 Actor stable type을 의도적으로 싣지 않으므로, 수신자는 factory type을
+wire field나 사전 local record가 아니라 canonical Location Store에서 해석한다. Actor의 Authority
+row가 per-Actor 단일 진실 원천이며(canonical key `authority\0actor\0{ActorId}`,
+[21. Location Runtime §2.4](21-location-runtime.ko.md) 참조) 이미 `allocation.stableType`을
+가진다. admission 시 수신자는 body의 `ActorId`에 해당하는 그 row를 **반드시 읽고**, row가 actor
+route fence와 정확히 일치할 때만 join을 수용한다.
+
+- `allocation.state == active`이고 `allocation.objectKind == actor`;
+- row의 `objectGeneration`이 fence의 `ObjectGeneration`과 일치;
+- row의 owner node RID·descriptor lifecycle generation이 fence의 target node RID·node generation과 일치;
+- row의 `authorityOwnerGeneration`이 fence의 `expectedAuthorityOwnerGeneration`과 일치;
+- row의 `ownerLeaseGeneration`이 fence의 `expectedOwnerLeaseGeneration`과 일치.
+
+그 뒤 row의 `allocation.stableType`으로 local factory registry에서 factory를 해석한다. 이는
+relocation 경로가 `relocationState`(52)(마찬가지로 wire object에서 type 생략)에서 이미 수행하는
+Authority 유도 stable-type 검증과 동일하며, 28 admission 경로는 sender가 준 type을 신뢰하는 대신
+이 검증을 첫 target 준비 단계로 확장한다. 모든 실패는 command 20 reply의 typed terminal이고 조용한
+drop이 아니다: 없거나 읽을 수 없는 row는 `Unavailable`(Store unavailable) 또는 `NotFound`(미생성/
+이미 retire); 불일치하는 fence field는 stale/mismatch protocol terminal; 미지의 `stableType`(local
+factory 부재)은 typed rejection. 여기서 비교하는 generation은 bounded generation이며 정확 equality로만
+대조하고 숫자 크기 순서로 판정하지 않는다(§12).
+
+source가 fence의 `expectedOwnerLeaseGeneration`에 넣는 lease 값은 bound-Session token이 아니라
+Actor의 현재 Location owner lease다. unbound Actor도 자기 owner lease를 실으며, bound Session은
+seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28) 수용에 bound Session을
+요구해서는 안 된다.
+
 ### Session seal과 source relay
 
 - Relocation coordinator는 source application dispatch를 멈추기 전에 command 42로 bound Session

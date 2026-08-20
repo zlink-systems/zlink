@@ -520,6 +520,39 @@ later-attempt-wins rule described in
 [15. Spot And Actor Model §4.2](15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
 key on the actor identity carried in this body, not on any language-internal id.
 
+#### Receiver Stable-Type Resolution
+
+Because the `actorJoin`(28) body deliberately carries no Actor stable type, the receiver
+resolves the factory type from the canonical Location Store, not from any wire field or a
+prior local record. The Actor's Authority row is the single per-Actor source of truth (its
+canonical key is `authority\0actor\0{ActorId}`; see
+[21. Location Runtime §2.4](21-location-runtime.en.md)) and already carries
+`allocation.stableType`. On admission the receiver MUST read that row for the `ActorId` in
+the body and accept the join only when the row exactly matches the actor route fence:
+
+- `allocation.state == active` and `allocation.objectKind == actor`;
+- the row's `objectGeneration` equals the fence's `ObjectGeneration`;
+- the row's owner node RID and descriptor lifecycle generation equal the fence's target
+  node RID and node generation;
+- the row's `authorityOwnerGeneration` equals the fence's `expectedAuthorityOwnerGeneration`;
+- the row's `ownerLeaseGeneration` equals the fence's `expectedOwnerLeaseGeneration`.
+
+The factory is then resolved from the row's `allocation.stableType` against the local
+factory registry. This is the same Authority-derived stable-type verification the
+relocation path already performs on `relocationState`(52) (which likewise omits the type
+from its wire object); the 28 admission path extends it to the first target preparation
+step rather than trusting a sender-supplied type. Every failure is a typed terminal on the
+command 20 reply, never a silent drop: a missing or unreadable row is `Unavailable`
+(Store unavailable) or `NotFound` (never created / already retired); any fence field that
+does not match is a stale/mismatch protocol terminal; an unknown `stableType` (no local
+factory) is a typed rejection. A generation compared here is a bounded generation and is
+matched by exact equality, never by numeric ordering (§12).
+
+The lease value the source places in the fence's `expectedOwnerLeaseGeneration` is the
+Actor's current Location owner lease, not a bound-Session token; an unbound Actor still
+carries its owner lease, and a bound Session adds only the seal/route-update legs, so a
+receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
+
 ### Session Seal And Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound

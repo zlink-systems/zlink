@@ -480,7 +480,11 @@ order after the handler ends normally.
    `OnActorJoin`. While processing this approval request, and before returning
    `Accepted`, the target also finishes registering the
    [relocation temporary queue](01-glossary.en.md#relocation-temporary-queue) for the
-   ActorId and `ObjectGeneration` and preparing factory execution. The later Restore
+   ActorId and `ObjectGeneration` and preparing factory execution. The factory's stable
+   type is resolved from the Actor's Location Store Authority row (`allocation.stableType`,
+   keyed by `ActorId`), matched against the join request's actor route fence, not from a
+   type supplied on the wire; the cross-language wire form carries no Actor stable type
+   (see [51 §9](51-internal-service-wire-protocol.en.md)). The later Restore
    request doesn't repeat this preparation, so the number of round trips stays the
    same and only the post-seal processing time shrinks. The approval reply also
    carries the target's effective receive limit for the
