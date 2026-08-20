@@ -6374,6 +6374,113 @@ void verify_remote_user_spot_create_close_terminal_once ()
     target->close ();
 }
 
+// Spec 28 §3/§12: the exact identity is RelocationId + targetAttemptGeneration
+// + coordinator fence (+ object). A chunk carrying a different exact
+// identity than the in-progress assembly is discarded without being linked
+// to that assembly -- it must not corrupt, complete, or fail the assembly
+// that owns the identity actually in progress.
+void verify_relocation_assembly_rejects_mismatched_identity_chunk ()
+{
+    const protocol::relocation_id_t relocation{0x51, 0x52};
+    const protocol::relocation_coordinator_fence_t coordinator{
+      "coordinator", 7, bytes ("coordinator-node"), 9, "store-v1"};
+    const protocol::relocation_object_t object{
+      protocol::relocation_object_kind_t::actor,
+      {}, "assembly-actor", 2, 4};
+    const std::vector<std::uint8_t> payload = bytes ("assembly-payload");
+    const auto manifest =
+      stateful::plan_relocation_payload (payload, payload.size ());
+    assert (manifest.chunk_count == 1);
+
+    stateful::relocation_state_assembly_t assembly (
+      relocation, 31, coordinator, object, manifest);
+
+    // A different RelocationId is a mismatched exact identity.
+    auto wrong_relocation = stateful::make_relocation_state_chunk (
+      protocol::relocation_id_t{0x61, 0x62}, 31, coordinator, object,
+      payload, 0, payload.size ());
+    assert (assembly.accept (wrong_relocation)
+            == stateful::relocation_assembly_result_t::ignored);
+
+    // A different targetAttemptGeneration is a mismatched exact identity.
+    auto wrong_generation = stateful::make_relocation_state_chunk (
+      relocation, 32, coordinator, object, payload, 0, payload.size ());
+    assert (assembly.accept (wrong_generation)
+            == stateful::relocation_assembly_result_t::ignored);
+
+    // A different coordinator fence is a mismatched exact identity.
+    protocol::relocation_coordinator_fence_t wrong_coordinator = coordinator;
+    wrong_coordinator.lease_generation = coordinator.lease_generation + 1;
+    auto wrong_fence = stateful::make_relocation_state_chunk (
+      relocation, 31, wrong_coordinator, object, payload, 0,
+      payload.size ());
+    assert (assembly.accept (wrong_fence)
+            == stateful::relocation_assembly_result_t::ignored);
+
+    // None of the mismatched-identity arrivals touched the assembly bound
+    // to the exact identity actually in progress: the matching chunk still
+    // completes it cleanly afterward.
+    assert (!assembly.complete ());
+    assert (!assembly.failed ());
+    auto matching = stateful::make_relocation_state_chunk (
+      relocation, 31, coordinator, object, payload, 0, payload.size ());
+    assert (assembly.accept (matching)
+            == stateful::relocation_assembly_result_t::completed);
+    assert (assembly.complete ());
+    assert (!assembly.failed ());
+    assert (assembly.take_payload () == payload);
+}
+
+// Spec 28 §12: "On a checksum mismatch, the target doesn't proceed to CAS,
+// doesn't restore from a partially assembled payload, and responds with an
+// explicit failure reply." The manifest's declared checksum_crc32c came
+// from the source's own payload (relocation_transfer.hpp's
+// plan_relocation_payload); a chunk whose exact identity matches but whose
+// bytes don't hash to that checksum must fail the assembly explicitly, and
+// the partially assembled payload must not survive for restore.
+void verify_relocation_assembly_rejects_checksum_mismatch ()
+{
+    const protocol::relocation_id_t relocation{0x53, 0x54};
+    const protocol::relocation_coordinator_fence_t coordinator{
+      "coordinator", 7, bytes ("coordinator-node"), 9, "store-v1"};
+    const protocol::relocation_object_t object{
+      protocol::relocation_object_kind_t::actor,
+      {}, "checksum-actor", 2, 4};
+    const std::vector<std::uint8_t> honest_payload = bytes ("honest-payload");
+    // The manifest declares the checksum of the honest payload, exactly as
+    // the source's plan_relocation_payload would when the sender computes
+    // it from its own captured bytes.
+    const auto manifest =
+      stateful::plan_relocation_payload (honest_payload, honest_payload.size ());
+    assert (manifest.chunk_count == 1);
+
+    stateful::relocation_state_assembly_t assembly (
+      relocation, 41, coordinator, object, manifest);
+
+    // A single chunk carrying the exact identity in the manifest, but with
+    // bytes that don't hash to the manifest's checksum -- the contracted
+    // fault-injection point spec 28 §12 describes: the wire bytes a target
+    // actually receives diverge from what its own manifest declares.
+    const std::vector<std::uint8_t> corrupted_payload = bytes ("dishonest-payloadX");
+    auto corrupted_chunk = stateful::make_relocation_state_chunk (
+      relocation, 41, coordinator, object, corrupted_payload, 0,
+      honest_payload.size ());
+    assert (corrupted_chunk.chunk_data != honest_payload);
+    // Pin that this exercises the CRC compare (accept()'s last check), not
+    // an earlier length guard: the chunk must land exactly at the
+    // manifest's declared total_length so every length/ordinal guard
+    // passes and only the checksum can fail it.
+    assert (corrupted_chunk.chunk_data.size () == manifest.total_length);
+    assert (assembly.accept (corrupted_chunk)
+            == stateful::relocation_assembly_result_t::conflict);
+
+    // No CAS, no restore from the partial payload: the assembly is failed
+    // and holds nothing an accidental subsequent read could restore from.
+    assert (assembly.failed ());
+    assert (!assembly.complete ());
+    assert (assembly.take_payload ().empty ());
+}
+
 void verify_relocation_id_generation_retries_collisions ()
 {
     const std::vector<protocol::relocation_id_t> candidates{
@@ -6522,6 +6629,8 @@ int main ()
     verify_durable_reply_relay_single_winner ();
     verify_public_host_dispatches_durable_reply_relay ();
     verify_remote_user_spot_create_close_terminal_once ();
+    verify_relocation_assembly_rejects_mismatched_identity_chunk ();
+    verify_relocation_assembly_rejects_checksum_mismatch ();
     verify_relocation_id_generation_retries_collisions ();
     verify_relocation_failure_code_classification_is_distinct ();
     return 0;

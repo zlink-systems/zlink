@@ -14,25 +14,42 @@ namespace
  *   - exact-identity-conflict: a different length/checksum arrives for the
  *     same exact relocation identity.
  *
- * checksum-mismatch is NOT implemented here -- no seam. It requires
- * corrupting bytes or the checksum field of a wire-level
- * protocol::relocation_state_t chunk in flight, or lying about a chunk's
- * checksum while the receiver still recomputes it. Nothing in this e2e
- * harness constructs or edits a raw relocation_state_t chunk -- the client
- * only calls the public Join HTTP API, never the mesh-node-to-mesh-node
- * wire protocol. On the receiving side, relocation_assembly_t::accept()
- * (framework/languages/cpp/framework/src/runtime/stateful/
- * relocation_transfer.hpp, around lines 187-198) always recomputes
- * protocol::relocation_checksum_crc32c() from the bytes it actually
- * received and compares it to the manifest's checksum_crc32c that came
- * from the same sender -- an honest sender's checksum always matches its
- * own bytes, so this path can only be exercised by a fault-injection seam
- * that intercepts/mutates the wire frame between source and target. No
- * such seam is exposed to the e2e harness or the public API today. Adding
- * one would mean editing production wire/mesh code
- * (raw_mesh_node_owner.cpp / service_wire_codec.cpp), which is out of this
- * task's scope. This gap is recorded honestly in feature-map.ko.md rather
- * than faked.
+ * checksum-mismatch is NOT implemented as a role-server E2E variant here --
+ * the target-side contract clause it exercises (spec 28 §12: "On a checksum
+ * mismatch, the target doesn't proceed to CAS, doesn't restore from a
+ * partially assembled payload, and responds with an explicit failure
+ * reply") is covered directly at the unit level instead --
+ * verify_relocation_assembly_rejects_checksum_mismatch in
+ * tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp feeds
+ * relocation_state_assembly_t::accept() (relocation_transfer.hpp) a chunk
+ * whose bytes don't hash to its own manifest's checksum_crc32c and asserts
+ * the conflict result with nothing left to restore from.
+ *
+ * The E2E variant needs a chunk to actually arrive corrupted on the wire
+ * between two live role-server processes, which needs a fault-injection
+ * seam this harness doesn't have yet. The seam location is known now,
+ * though, which the old version of this comment didn't have: in
+ * mesh_node_runtime.cpp's relocate_application_actor, the
+ * .send_state_chunk lambda (around line 1165) holds the fully-built
+ * protocol::relocation_state_t in the source process, in memory, before
+ * encoding -- flipping one byte of chunk.chunk_data there is a clean,
+ * wire-framing-free corruption with the exact identity intact (so the
+ * target's assembly links it as a conflict, not an ignored mismatched-
+ * identity chunk). What's missing is a way to arm that one-shot, scoped to
+ * a single Join, from the e2e client process: it would need a new
+ * debug-only method on public_host_runtime_t together with a way to reach
+ * it from Client/main.cpp, which -- because the client and the ActorNode
+ * are separate processes -- means either a new field on the framework
+ * host's public API surface (fw::app_t, framework/include) or a proxy
+ * sitting on the actor-a<->actor-b mesh connection. Both were considered
+ * and set aside for now: a new public API method that exists only to arm
+ * test corruption crosses a contract boundary shared with every other
+ * language binding for a single scenario's benefit, and a proxy is unsafe
+ * here because ST-C4 runs inside the batched "all" run
+ * (run_e2e.sh:246) sharing one live actor-a<->actor-b mesh connection with
+ * a dozen other scenarios -- unlike ST-F3A's session-route proxy, which
+ * gets its own isolated run. Recorded honestly in feature-map.ko.md rather
+ * than faked; see that file for the same note.
  *
  * exact-identity-conflict IS implemented below: two Join calls for the
  * very same Actor to the very same target Spot are started concurrently
