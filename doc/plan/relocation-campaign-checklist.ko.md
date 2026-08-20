@@ -849,3 +849,5 @@
       마지막에 반드시 1회 전체 재실행)
 - [ ] G-3 java/kotlin 샘플 집계 게이트·doc 게이트·harness all 스테이지 최종 확인
 - [ ] G-4 G-1~G-3 결과를 최종 보고에 매트릭스로 첨부
+
+- [x] **Java u64-signed-sentinel 종합 소탕 완료** (2026-08-20, 커밋 `4957255224`, Claude 검증): 23사이트/13파일 + 구조적 presence-flag(authorityFenceEstablished). 스펙 discriminator 확정 — full-range opaque(lifecycle/node/OperationId→`==0`) vs bounded 1..MaxValue counter(Object/AuthorityOwner/OwnerLease→`<=0` 정당). 세 relocation flake 유발 재발 버그류 Java 전량 종결.
