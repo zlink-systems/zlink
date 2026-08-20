@@ -315,7 +315,8 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
               zlink::message_t::from (request.payload), services, *_serializers,
               std::move (metadata), follow_target ? &*follow_target : nullptr,
               std::function<void ()>{}, std::function<void ()>{},
-              received.source_node_rid, inbound_operation, inbound_reply_route_id);
+              received.source_node_rid, inbound_operation, inbound_reply_route_id,
+              header.deadline);
             detail::observe_task_completion (
               relayed,
               [runtime, actor_gateway = std::move (actor_gateway), actor_ref,

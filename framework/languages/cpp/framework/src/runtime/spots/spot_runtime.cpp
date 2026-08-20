@@ -8045,7 +8045,8 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                          zlink::routing_id_t inbound_source_node_rid,
                                          runtime::protocol::wire_operation_id_t
                                            inbound_operation,
-                                         std::uint64_t inbound_reply_route_id)
+                                         std::uint64_t inbound_reply_route_id,
+                                         std::optional<std::string> inbound_deadline)
 {
     // This member coroutine can be entered through a short-lived runtime
     // wrapper. Keep the node state in the frame for the terminal path below:
@@ -8320,11 +8321,12 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
             header.message_name = std::string (packet_name);
             header.content_type = metadata.content_type;
             header.metadata = metadata.values;
-            // The relay's own per-hop budget stays a fixed convention (see
-            // the equivalent dispatch_mesh_record relay a few thousand lines
-            // down, which hard-codes the same 30s independent of the
-            // inbound deadline); what must not be lost is the caller's own
-            // identity so the stale-cache notice below finds its way home.
+            // Spec 28 §10 keeps the client-managed absolute deadline on the
+            // forwarded envelope while this hop uses its own local relay
+            // window below.  In particular, a cold probe has no incoming
+            // follow fence, so preserve the deadline supplied by the route
+            // dispatcher instead of manufacturing a new client deadline.
+            header.deadline = std::move (inbound_deadline);
             co_return co_await _state->actor_message_follow_relay (actor_ref, header, message,
                                                        std::chrono::seconds (30),
                                                        inbound_source_node_rid,

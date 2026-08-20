@@ -1263,7 +1263,8 @@ class spot_node_runtime_t
                           zlink::routing_id_t::from (std::uint32_t{0}),
                         runtime::protocol::wire_operation_id_t
                           inbound_operation = {},
-                        std::uint64_t inbound_reply_route_id = 0);
+                        std::uint64_t inbound_reply_route_id = 0,
+                        std::optional<std::string> inbound_deadline = std::nullopt);
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>

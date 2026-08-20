@@ -2166,13 +2166,14 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     const auto inbound_source_node_rid = zlink::routing_id_t::from ("probing-client");
     const auto inbound_operation = runtime::protocol::wire_operation_id_t{111, 222};
     constexpr std::uint64_t inbound_reply_route_id = 333;
+    const std::string inbound_deadline = "2030-01-02T03:04:05Z";
 
     std::atomic_int relay_calls{0};
     spot_node_runtime_t spots (node);
     spots.on_actor_message_follow (
       [&] (const actor_ref_t &relayed_actor,
            const runtime::messaging::envelope_header_t &header,
-           const zlink::message_t &, std::chrono::milliseconds,
+           const zlink::message_t &, std::chrono::milliseconds relay_timeout,
            const zlink::routing_id_t &source_node,
            const runtime::protocol::actor_route_fence_t &route,
            std::uint8_t hop_count,
@@ -2182,6 +2183,8 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
           if (relayed_actor.actor_id ().value () != "actor-remote-ok"
               || route != source_fence || hop_count != 0
               || header.message_name != "after-transfer"
+              || header.deadline != inbound_deadline
+              || relay_timeout != std::chrono::seconds (30)
               || source_node.to_bytes () != inbound_source_node_rid.to_bytes ()
               || operation.high != inbound_operation.high
               || operation.low != inbound_operation.low
@@ -2204,7 +2207,7 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
       "after-transfer", zlink::message_t::from (std::string ("probe")), provider,
       serializers, std::move (metadata), nullptr, std::function<void ()>{},
       std::function<void ()>{}, inbound_source_node_rid, inbound_operation,
-      inbound_reply_route_id);
+      inbound_reply_route_id, inbound_deadline);
 
     const auto outcome = finite_task_result (std::move (relayed));
     if (!outcome || !*outcome)

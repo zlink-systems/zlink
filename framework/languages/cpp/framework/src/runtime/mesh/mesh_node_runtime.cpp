@@ -3027,6 +3027,9 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             auto request_header =
               codec.create_envelope (runtime::messaging::message_kind_t::request, "spot",
                                      spot_actor_packet_route_request_t::packet_name, timeout);
+            // Message Follow owns a local relay window, but the next hop must
+            // receive the original client-managed absolute deadline unchanged.
+            request_header.deadline = header.deadline;
             auto request = make_spot_actor_packet_route_request (
               follow_target.actor, follow_target.route.spot_id, header.message_name, payload,
               metadata, follow_target.target_fence);
