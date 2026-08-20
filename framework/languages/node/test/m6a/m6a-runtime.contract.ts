@@ -640,6 +640,153 @@ test('raw monitor preserves each physical candidate direction through admission 
   assert.equal(internal.connectionIds.get('peer'), inbound.connectionId);
 });
 
+test('raw monitor admits a discovered same-RID replacement only after its exact lifecycle fence', async () => {
+  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
+  const old = {
+    ...descriptor('peer', 'tcp://old-peer:41001'),
+    lifecycleGeneration: 99n,
+    state: 'serving' as const
+  };
+  const replacement = {
+    ...old,
+    advertisedEndpoint: 'tcp://replacement-peer:42001',
+    securityIdentity: 'replacement-security',
+    lifecycleGeneration: 3n,
+    descriptorRevision: 1n
+  };
+  const oldConnection = 'old-physical-pair';
+  const disconnectedPairs: Array<readonly [bigint, bigint]> = [];
+  const disconnectedRids: string[] = [];
+  const helloTargets: string[] = [];
+  const internal = runtime as unknown as {
+    expectedPeers: Map<string, {
+      meshName: string;
+      nodeRoutingId: string;
+      endpoint: string;
+      securityIdentity: string;
+      lifecycleGeneration: bigint;
+    }>;
+    connectionCandidates: Map<string, Map<string, {
+      connectionId: string;
+      direction: string;
+      discriminator: string;
+      localAddress: string;
+      remoteAddress: string;
+      transportPairId?: bigint;
+      transportPairGeneration?: bigint;
+    }>>;
+    connectionIds: Map<string, string>;
+    monitorEvents: Array<{
+      event: number;
+      value: number;
+      routingId: string;
+      localAddress: string;
+      remoteAddress: string;
+      transportPairId: bigint;
+      transportPairGeneration: bigint;
+      flags: number;
+    }>;
+    router: {
+      send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
+      disconnectRid(routingId: string): void;
+      disconnectTransportPair(pairId: bigint, generation: bigint): void;
+    };
+    admitPeer(
+      descriptor: ServiceNodeDescriptor,
+      connection: {
+        connectionId: string;
+        direction: string;
+        discriminator: string;
+        localAddress: string;
+        remoteAddress: string;
+        transportPairId?: bigint;
+        transportPairGeneration?: bigint;
+      },
+      nowMs: number,
+      expected: {
+        endpoint: string;
+        securityIdentity: string;
+        lifecycleGeneration: bigint;
+      }
+    ): string;
+  };
+  internal.router = {
+    async send(targetRid): Promise<void> {
+      helloTargets.push(targetRid);
+    },
+    disconnectRid(routingId): void {
+      disconnectedRids.push(routingId);
+    },
+    disconnectTransportPair(pairId, generation): void {
+      disconnectedPairs.push([pairId, generation]);
+    }
+  };
+  internal.connectionCandidates.set(old.nodeRoutingId, new Map([[oldConnection, {
+    connectionId: oldConnection,
+    direction: 'outbound',
+    discriminator: 'initiator:local',
+    localAddress: 'tcp://local:40001',
+    remoteAddress: old.advertisedEndpoint,
+    transportPairId: 101n,
+    transportPairGeneration: 7n
+  }]]));
+  internal.connectionIds.set(old.nodeRoutingId, oldConnection);
+  assert.equal(runtime.topology.admit(old, oldConnection, undefined, 'initiator:local'), 'admitted');
+  runtime.liveness.admit(old.nodeRoutingId, oldConnection, 1);
+  assert.equal(runtime.liveness.requestProbe(old.nodeRoutingId, oldConnection, 1), true);
+  const oldProbe = runtime.liveness.tick(1).probes[0]!;
+  assert.equal(runtime.liveness.acknowledge(old.nodeRoutingId, oldConnection, oldProbe.probeId, 1), true);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+
+  internal.expectedPeers.set(old.nodeRoutingId, {
+    meshName: replacement.meshName,
+    nodeRoutingId: replacement.nodeRoutingId,
+    endpoint: replacement.advertisedEndpoint,
+    securityIdentity: replacement.securityIdentity,
+    lifecycleGeneration: replacement.lifecycleGeneration
+  });
+  runtime.disconnectPeer(old.advertisedEndpoint, old.nodeRoutingId, old.lifecycleGeneration);
+  assert.deepEqual(disconnectedRids, []);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+  internal.monitorEvents.push({
+    event: 0x1000,
+    value: 1,
+    routingId: old.nodeRoutingId,
+    localAddress: 'tcp://local:40002',
+    remoteAddress: replacement.advertisedEndpoint,
+    transportPairId: 202n,
+    transportPairGeneration: 8n,
+    flags: 1
+  });
+
+  assert.equal(await runtime.drainMonitorEvents(), 1);
+  assert.deepEqual(helloTargets, [old.nodeRoutingId]);
+  assert.deepEqual(disconnectedPairs, []);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+
+  const replacementCandidate = [...internal.connectionCandidates.get(old.nodeRoutingId)!.values()]
+    .find(candidate => candidate.connectionId !== oldConnection)!;
+  const expected = internal.expectedPeers.get(old.nodeRoutingId)!;
+  assert.equal(internal.admitPeer(replacement, replacementCandidate, 2, expected), 'admitted');
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration, replacement.lifecycleGeneration);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementCandidate.connectionId);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, replacementCandidate.connectionId), false);
+  assert.deepEqual(disconnectedPairs, [[101n, 7n]]);
+
+  const lateOldCandidate = {
+    ...replacementCandidate,
+    connectionId: 'late-old-physical-pair',
+    transportPairId: 303n,
+    transportPairGeneration: 9n
+  };
+  assert.equal(internal.admitPeer(old, lateOldCandidate, 3, expected), 'invalidDescriptor');
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration, replacement.lifecycleGeneration);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementCandidate.connectionId);
+  assert.deepEqual(disconnectedPairs, [[101n, 7n], [303n, 9n]]);
+});
+
 test('raw monitor ignores a late disconnect from the superseded physical connection', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
