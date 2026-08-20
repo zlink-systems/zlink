@@ -112,6 +112,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
@@ -3529,6 +3530,106 @@ public final class ZLinkSpotRuntime
                 "Entry Spot activation is not available for actor transfer"));
         }
         return activation.handleInternalActorTransfer(sourceRoutingId, envelope);
+    }
+
+    /**
+     * Receives the canonical actorJoin(28) body after the raw service
+     * boundary has selected it over the private transfer dialect.  The
+     * Store-backed actor fence/type check remains owned by
+     * {@link ZLinkActorSpotAdmission}; this adapter only restores the
+     * canonical payload and selects the already-active target surface.
+     */
+    public CompletionStage<ZLinkSpotActorJoinResult> admitCanonicalActorJoin(
+        ServiceWirePilotCodec.ActorJoin28 join,
+        RoutingId sourcePeerRid) {
+        Objects.requireNonNull(join, "join");
+        ServiceWirePilotCodec.Fence target = join.targetSpot();
+        RoutingId targetNode = RoutingId.from(
+            new String(target.targetNodeRid(), StandardCharsets.UTF_8));
+        if (!targetNode.equals(primaryNode.routingId())) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actor Join target fence is not local"));
+        }
+        ZLinkActorSpotRoutePackets.TransferRequest request =
+            canonicalActorJoinRequest(join, sourcePeerRid);
+        if (join.entry()) {
+            EntrySpotActivation entry = entrySpotActivationFor(target.id());
+            if (entry == null
+                || entry.backendSpot.lifecycleGeneration() != target.generation()) {
+                return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                    "canonical actor Join Entry Spot is unavailable: " + target.id()));
+            }
+            return entry.admitCanonicalActorJoin(request, sourcePeerRid);
+        }
+        SpotActivation spot = spotLifecycle.spotActivationFor(target.id());
+        if (spot == null || spot.backendSpot.lifecycleGeneration() != target.generation()) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                "canonical actor Join Spot is unavailable: " + target.id()));
+        }
+        Message payload = Message.from(join.payload() == null
+            ? new byte[0]
+            : join.payload().payload());
+        try {
+            return spot.admitCanonicalActorJoin(request, sourcePeerRid, payload)
+                .whenComplete((ignored, error) -> payload.close());
+        } catch (RuntimeException error) {
+            payload.close();
+            throw error;
+        }
+    }
+
+    /**
+     * Converts an admitted canonical Join into the reply payload ownership
+     * expected by the raw service boundary.  The transfer bookkeeping stays
+     * local; only the optional application reply is carried after the
+     * canonical command-20 actorJoin tail.
+     */
+    public CompletionStage<ZLinkInternalMeshNode.CanonicalActorJoinResponse>
+        admitCanonicalActorJoinForServiceWire(
+            ServiceWirePilotCodec.ActorJoin28 join,
+            RoutingId sourcePeerRid) {
+        return admitCanonicalActorJoin(join, sourcePeerRid).thenApply(result -> {
+            List<Message> reply = result.reply() == null
+                ? List.of()
+                : List.of(ZLinkMessagePayloads.message(
+                    result.reply(), serializerForSpot()));
+            return new ZLinkInternalMeshNode.CanonicalActorJoinResponse(
+                result.accepted(), result.accepted() ? 1L : 0L, reply);
+        });
+    }
+
+    static ZLinkActorSpotRoutePackets.TransferRequest
+        canonicalActorJoinRequest(
+            ServiceWirePilotCodec.ActorJoin28 join,
+            RoutingId sourcePeerRid) {
+        ServiceWirePilotCodec.Fence actor = join.actor();
+        RoutingId actorNode = RoutingId.from(
+            new String(actor.targetNodeRid(), StandardCharsets.UTF_8));
+        return new ZLinkActorSpotRoutePackets.TransferRequest(
+            ZLinkActorSpotRoutePackets.ADMISSION_PHASE,
+            "canonical:" + Long.toUnsignedString(join.correlation()),
+            1_000L,
+            actor.id(),
+            "",
+            actorNode,
+            actor.generation(),
+            sourcePeerRid == null ? actorNode : sourcePeerRid,
+            "canonical",
+            "canonical",
+            sourcePeerRid,
+            null,
+            null,
+            0,
+            false,
+            0L, 0L, 0L, 0L, 0L, 0L,
+            null,
+            new byte[0],
+            actor.targetNodeGeneration(),
+            actor.expectedAuthorityOwnerGeneration(),
+            actor.expectedOwnerLeaseGeneration());
     }
 
     Object localActorSpotSurface(ZLinkActor actor) {

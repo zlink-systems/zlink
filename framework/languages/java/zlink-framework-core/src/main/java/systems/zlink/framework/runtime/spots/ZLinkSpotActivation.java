@@ -691,6 +691,29 @@ final class SpotActivation
             });
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    CompletionStage<ZLinkSpotActorJoinResult> admitCanonicalActorJoin(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        RoutingId sourcePeerRid,
+        Message payload) {
+        return host.actorAdmissions().prepareCanonicalRoutedActor(
+            request,
+            null,
+            sourcePeerRid,
+            backendSpot.spotId(),
+            host.spotFor(backendSpot.spotId()),
+            actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
+                spot, actor, backendSpot.spotId(), true),
+            actorId -> host.runWithOutbound(context.dispatchOutbound(), () ->
+                ZLinkHandlerStages.fromStageSupplier(() ->
+                    (CompletionStage<ZLinkSpotActorJoinResult>)
+                    ((ZLinkSpot) spot).onActorJoin(
+                        actorId,
+                        ZLinkMessage.fromEncoded(
+                            ZLinkMessagePayloads.encoded(payload),
+                            host.serializerForSpot())))));
+    }
+
     private CompletionStage<List<Message>> replayHandoff(
         ZLinkBackendActorRef actorRef,
         List<ZLinkActorSpotRoutePackets.WireHandoffPacket> backlog) {

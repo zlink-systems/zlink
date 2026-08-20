@@ -99,6 +99,8 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWi
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
+import systems.zlink.framework.runtime.internal.service.ZLinkCanonicalActorJoinReplyCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -227,6 +229,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         userSpotOperationHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler
         actorCreateOperationHandler;
+    private volatile ZLinkInternalMeshNode.CanonicalActorJoinHandler
+        canonicalActorJoinHandler;
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver
         peerAuthorityResolver;
     private volatile ZLinkInternalMeshNode.PeerAuthorityFence
@@ -2687,6 +2691,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setCanonicalActorJoinHandler(
+        ZLinkInternalMeshNode.CanonicalActorJoinHandler handler) {
+        canonicalActorJoinHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
     public void setApplicationStreamCodecResolver(
         Function<String, Optional<ZLinkStreamCodec>> resolver) {
         applicationStreamCodecResolver =
@@ -4281,6 +4291,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             handedOff = dispatchActor(inbound, flags);
             return;
         }
+        if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
+            dispatchCanonicalActorJoin(inbound);
+            return;
+        }
         if (command == ServiceWireConstants.COMMAND_INSTANCE_SPOT) {
             dispatchInstanceSpot(inbound, flags);
             return;
@@ -5622,6 +5636,133 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 header.replyRouteId(),
                 terminalResult,
                 failureCode)));
+    }
+
+    private void dispatchCanonicalActorJoin(
+        ZLinkJavaRawServicePort.Inbound inbound) {
+        List<byte[]> frames = inbound.frames();
+        if (inbound.requestSequence() == null || frames.isEmpty()
+            || frames.size() > 2) {
+            return;
+        }
+        // Command 28 also carries the pre-canonical Java relocation record.
+        // Its transfer id is language-internal (spec 51 §9), so preserve the
+        // legacy path before asking the generated canonical decoder to
+        // recognise a record.
+        if (hasLegacyActorJoinTransfer(frames)) {
+            return;
+        }
+        final ServiceWirePilotCodec.ActorJoin28 join;
+        try {
+            join = ServiceWirePilotCodec.decodeActorJoin28(frames);
+        } catch (Exception notCanonical) {
+            // Recognition failure retains the default private command-28 path.
+            return;
+        }
+        RoutingId targetNode = RoutingId.from(new String(
+            join.targetSpot().targetNodeRid(), StandardCharsets.UTF_8));
+        if (localDescriptor == null || !targetNode.equals(routingId)
+            || join.targetSpot().targetNodeGeneration()
+                != localDescriptor.lifecycleGeneration()) {
+            replyCanonicalActorJoinFailure(inbound, join.correlation(), 102, 14);
+            return;
+        }
+        ZLinkInternalMeshNode.CanonicalActorJoinHandler handler =
+            canonicalActorJoinHandler;
+        if (handler == null) {
+            replyCanonicalActorJoinFailure(inbound, join.correlation(), 105, 17);
+            return;
+        }
+        try {
+            handler.admit(inbound.source(), join).whenComplete((response, failure) -> {
+                if (failure != null || response == null) {
+                    int[] terminal = canonicalActorJoinFailurePair(unwrap(failure));
+                    replyCanonicalActorJoinFailure(
+                        inbound, join.correlation(), terminal[0], terminal[1]);
+                    return;
+                }
+                List<Message> applicationReply = response.applicationReply();
+                try {
+                    ZLinkCanonicalActorJoinReplyCodec.Tail tail =
+                        response.accepted()
+                            ? new ZLinkCanonicalActorJoinReplyCodec.Tail(
+                                ZLinkCanonicalActorJoinReplyCodec.JOIN_RESULT_ACCEPTED,
+                                new ZLinkCanonicalActorJoinReplyCodec.SpotRef(
+                                    join.targetSpot().id(),
+                                    join.targetSpot().generation()),
+                                response.membershipEpoch(),
+                                32_768L)
+                            : new ZLinkCanonicalActorJoinReplyCodec.Tail(
+                                ZLinkCanonicalActorJoinReplyCodec.JOIN_RESULT_REJECTED,
+                                null, null, null);
+                    List<byte[]> reply = new ArrayList<>();
+                    reply.add(new ZLinkCanonicalActorJoinReplyCodec().encode(
+                        new ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply(
+                            join.correlation(), 0, 0, tail.joinResult(),
+                            tail.spot(), tail.membershipEpoch(),
+                            tail.receiveChunkLimitBytes())));
+                    if (!applicationReply.isEmpty()) {
+                        reply.add(wire.encodeApplicationPayload(
+                            applicationPayload(applicationReply)));
+                    }
+                    port.reply(requireStarted(), inbound.source(),
+                        inbound.requestSequence(), reply);
+                } catch (RuntimeException invalidReply) {
+                    replyCanonicalActorJoinFailure(
+                        inbound, join.correlation(), 105, 2);
+                } finally {
+                    applicationReply.forEach(Message::close);
+                }
+            });
+        } catch (RuntimeException failure) {
+            int[] terminal = canonicalActorJoinFailurePair(failure);
+            replyCanonicalActorJoinFailure(
+                inbound, join.correlation(), terminal[0], terminal[1]);
+        }
+    }
+
+    private static boolean hasLegacyActorJoinTransfer(List<byte[]> frames) {
+        for (byte[] frame : frames) {
+            String text = new String(frame, StandardCharsets.ISO_8859_1);
+            if (text.contains("transferId") || text.contains("transfer-id")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The Store admission owner reports framework kinds, which must retain
+     * their command-20 terminal rather than being collapsed into a generic
+     * transport failure.  These pairs are the schema's exact typed-terminal
+     * mappings used by the other service-wire receivers.
+     */
+    static int[] canonicalActorJoinFailurePair(Throwable failure) {
+        if (failure instanceof ZLinkFrameworkException framework) {
+            return switch (framework.kind()) {
+                case NOT_FOUND -> new int[] {102, 14};
+                case PROTOCOL_ERROR -> new int[] {104, 16};
+                case TYPE_MISMATCH -> new int[] {107, 4};
+                case REJECTED -> new int[] {106, 15};
+                default -> new int[] {105, 17};
+            };
+        }
+        return relayedFailurePair(failure);
+    }
+
+    private void replyCanonicalActorJoinFailure(
+        ZLinkJavaRawServicePort.Inbound inbound,
+        long correlation,
+        int terminalResult,
+        int failureCode) {
+        if (inbound.requestSequence() == null
+            || !ServiceWireConstants.validTerminalFailure(
+                terminalResult, failureCode)) {
+            return;
+        }
+        port.reply(requireStarted(), inbound.source(), inbound.requestSequence(),
+            List.of(wire.encodeReplyHeader(
+                correlation, terminalResult, failureCode)));
     }
 
     private boolean dispatchActor(

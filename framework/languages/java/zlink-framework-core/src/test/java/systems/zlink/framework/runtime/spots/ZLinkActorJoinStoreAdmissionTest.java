@@ -1,11 +1,15 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -28,6 +32,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocati
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 
 final class ZLinkActorJoinStoreAdmissionTest {
@@ -101,6 +106,75 @@ final class ZLinkActorJoinStoreAdmissionTest {
 
         assertEquals(false, result.accepted());
         assertEquals(0, callbacks.get());
+    }
+
+    @Test
+    void canonicalMultipartWithAndWithoutPayloadUsesGeneratedDecodeAndStoreAdmission()
+        throws Exception {
+        ServiceWirePilotCodec.Fence actor = new ServiceWirePilotCodec.Fence(
+            ACTOR_ID, 7L, NODE.toString().getBytes(StandardCharsets.UTF_8),
+            -9L, 2L, 3L);
+        ServiceWirePilotCodec.Fence target = new ServiceWirePilotCodec.Fence(
+            "spot", 11L, NODE.toString().getBytes(StandardCharsets.UTF_8),
+            -9L, 2L, 3L);
+        for (List<byte[]> frames : List.of(
+                ServiceWirePilotCodec.encodeActorJoin28(
+                    new ServiceWirePilotCodec.ActorJoin28(41L, actor, false, target,
+                        new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
+                            "JoinRequest", "application/json",
+                            "payload".getBytes(StandardCharsets.UTF_8)))),
+                ServiceWirePilotCodec.encodeActorJoin28(
+                    new ServiceWirePilotCodec.ActorJoin28(42L, actor, true, target, null)))) {
+            ServiceWirePilotCodec.ActorJoin28 decoded =
+                ServiceWirePilotCodec.decodeActorJoin28(frames);
+            if (decoded.payload() == null) {
+                assertNull(decoded.payload());
+            } else {
+                assertEquals("JoinRequest", decoded.payload().packetName());
+                assertEquals("application/json", decoded.payload().contentType());
+                assertArrayEquals("payload".getBytes(StandardCharsets.UTF_8),
+                    decoded.payload().payload());
+            }
+            AtomicInteger callbacks = new AtomicInteger();
+            var result = admission(Map.of("canonical-type", Factory.class))
+                .prepareCanonicalRoutedActor(
+                    ZLinkSpotRuntime.canonicalActorJoinRequest(decoded, NODE),
+                    null, NODE, "spot", new Object(),
+                    ignored -> CompletableFuture.completedFuture(null),
+                    ignored -> {
+                        callbacks.incrementAndGet();
+                        return CompletableFuture.completedFuture(
+                            ZLinkSpotActorJoinResult.accept());
+                    })
+                .toCompletableFuture().join();
+            assertEquals(true, result.accepted());
+            assertEquals(1, callbacks.get());
+        }
+    }
+
+    @Test
+    void malformedCanonicalBodyIsRejectedAndCanonicalFenceFailureStaysTyped() {
+        assertThrows(Exception.class, () -> ServiceWirePilotCodec.decodeActorJoin28(
+            List.of(new byte[] {0x5a, 0x4d, 1, 28, 0})));
+        ServiceWirePilotCodec.Fence forgedActor = new ServiceWirePilotCodec.Fence(
+            ACTOR_ID, 7L, NODE.toString().getBytes(StandardCharsets.UTF_8),
+            -9L, 2L, 4L);
+        ServiceWirePilotCodec.Fence target = new ServiceWirePilotCodec.Fence(
+            "spot", 11L, NODE.toString().getBytes(StandardCharsets.UTF_8),
+            -9L, 2L, 3L);
+        CompletionException error = assertThrows(CompletionException.class,
+            () -> admission(Map.of("canonical-type", Factory.class))
+                .prepareCanonicalRoutedActor(
+                    ZLinkSpotRuntime.canonicalActorJoinRequest(
+                        new ServiceWirePilotCodec.ActorJoin28(
+                            43L, forgedActor, false, target, null), NODE),
+                    null, NODE, "spot", new Object(),
+                    ignored -> CompletableFuture.completedFuture(null),
+                    ignored -> CompletableFuture.completedFuture(
+                        ZLinkSpotActorJoinResult.accept()))
+                .toCompletableFuture().join());
+        assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+            ((ZLinkFrameworkException) error.getCause()).kind());
     }
 
     private static ZLinkActorSpotAdmission admission(

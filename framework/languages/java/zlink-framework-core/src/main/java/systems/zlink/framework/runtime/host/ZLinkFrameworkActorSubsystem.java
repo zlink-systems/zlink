@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
@@ -259,6 +260,12 @@ final class ZLinkFrameworkActorSubsystem {
             actors.setRemoteAddressResolver(remoteAddressResolver);
         }
         spots.attachActorRuntime(actors);
+        // Canonical service-wire actorJoin(28) is decoded by the raw mesh
+        // boundary, while admission remains in the Spot runtime so it shares
+        // the S3 Location Store fence/type resolution with routed joins.
+        meshNodes.values().forEach(node -> node.setCanonicalActorJoinHandler(
+            (sourceNodeRid, join) -> spots.admitCanonicalActorJoinForServiceWire(
+                join, sourceNodeRid)));
         channels.registerRouteInternalRequestHandler(
             ZLinkActorEntrySpotRoutePackets.JOIN_ENTRY_SPOT_PACKET_NAME,
             actors::handleEntrySpotRouteJoin);

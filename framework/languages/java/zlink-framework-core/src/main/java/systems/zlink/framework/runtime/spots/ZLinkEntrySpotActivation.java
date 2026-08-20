@@ -415,6 +415,21 @@ final class EntrySpotActivation
         return result;
     }
 
+    CompletionStage<ZLinkSpotActorJoinResult> admitCanonicalActorJoin(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        RoutingId sourcePeerRid) {
+        return host.actorAdmissions().prepareCanonicalRoutedActor(
+            request,
+            null,
+            sourcePeerRid,
+            backendSpot.spotId(),
+            entrySpot,
+            actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
+                entrySpot, actor, backendSpot.spotId(), true),
+            actorId -> CompletableFuture.completedFuture(
+                ZLinkSpotActorJoinResult.accept()));
+    }
+
     private void drainSubscriptions() {
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
         while (batch.canReceiveNext()) {

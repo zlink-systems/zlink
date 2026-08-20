@@ -404,6 +404,44 @@ final class ZLinkActorSpotAdmission {
             });
     }
 
+    /**
+     * Admits a canonical service-wire actorJoin(28) proposal.  The canonical
+     * body deliberately omits the legacy transfer id and actor type (spec 51
+     * §9), so this path must stop after the shared Store fence/type decision
+     * and must not create a private pending-transfer record.
+     */
+    CompletionStage<ZLinkSpotActorJoinResult> prepareCanonicalRoutedActor(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        String routeChannelName,
+        RoutingId sourcePeerRid,
+        String targetSpotId,
+        Object targetSpot,
+        Function<ZLinkActor, CompletionStage<Void>> joinedCallback,
+        Function<String, CompletionStage<ZLinkSpotActorJoinResult>> callback) {
+        if (!request.admission()) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "canonical actor Join request has the wrong phase"));
+        }
+        if (draining.getAsBoolean()) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
+        }
+        return requireActors().readActorJoinAuthority(request.actorId())
+            .thenCompose(authority -> {
+                validateAuthorityFence(request, authority);
+                ZLinkActorSpotRoutePackets.TransferRequest storeResolved =
+                    request.withActorType(authority.stableType());
+                try {
+                    requireActors().resolveActorFactoryType(
+                        storeResolved.actorType());
+                } catch (ZLinkConfigurationException noFactory) {
+                    return CompletableFuture.completedFuture(
+                        ZLinkSpotActorJoinResult.reject());
+                }
+                return invokeAdmissionCallback(callback, request.actorId())
+                    .thenApply(ZLinkActorSpotAdmission::effectiveResponse);
+            });
+    }
+
     private CompletionStage<ZLinkSpotActorJoinResult>
         prepareRoutedActorFromAuthority(
         ZLinkActorSpotRoutePackets.TransferRequest request,

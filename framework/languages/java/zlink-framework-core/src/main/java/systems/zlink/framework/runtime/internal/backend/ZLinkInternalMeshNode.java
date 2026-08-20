@@ -245,6 +245,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not yet own Framework Actor creation.
     }
 
+    /** Installs the canonical service-wire actorJoin(28) admission owner. */
+    default void setCanonicalActorJoinHandler(
+        CanonicalActorJoinHandler handler) {
+        // Alternate backends may not accept canonical actorJoin service records.
+    }
+
     /**
      * Installs the durable source-owner resolver used before a remote Spot or
      * Actor operation enters an application queue.
@@ -538,6 +544,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     @FunctionalInterface
+    interface CanonicalActorJoinHandler {
+        CompletionStage<CanonicalActorJoinResponse> admit(
+            RoutingId sourceNodeRid,
+            systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                .ActorJoin28 join);
+    }
+
+    @FunctionalInterface
     interface PeerAuthorityResolver {
         CompletionStage<Optional<PeerAuthorityFence>> resolve(
             String meshName,
@@ -719,6 +733,20 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         @Override
         public byte[] terminalEnvelope() {
             return terminalEnvelope.clone();
+        }
+    }
+
+    record CanonicalActorJoinResponse(
+        boolean accepted,
+        long membershipEpoch,
+        List<Message> applicationReply) {
+        public CanonicalActorJoinResponse {
+            if (accepted && membershipEpoch <= 0) {
+                throw new IllegalArgumentException(
+                    "accepted canonical Actor Join requires membership epoch");
+            }
+            applicationReply = List.copyOf(Objects.requireNonNull(
+                applicationReply, "applicationReply"));
         }
     }
 
