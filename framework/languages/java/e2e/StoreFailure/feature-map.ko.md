@@ -80,7 +80,7 @@
 - `SF-F2`, `SF-F3`, `SF-F4`, `SF-F5`, `SF-F7`, `SF-F8`, `SF-F10`, `SF-F11`은 relocation store,
   state adapter와 capture/restore gate를 제공하는 stateful fixture가 필요하다. 현재 fixture는 relocation
   store를 등록하지 않고 `LeaseProbeSpot`의 relocation을 명시적으로 비활성화한다.
-- `SF-G1`, `SF-G2`, `SF-G3`은 Actor·User Spot factory와 aggregate membership, factory gate 및 여러
+- `SF-G1`, `SF-G2`는 Actor·User Spot factory와 aggregate membership, factory gate 및 여러
   capacity variant를 제공하는 fixture가 필요하다. 현재 fixture는 Instance Spot factory 하나만 등록한다.
 
 ## 검증 방법
@@ -97,7 +97,7 @@
 - `SF-C4`
 - `SF-F1`, `SF-F2`, `SF-F3`, `SF-F4`, `SF-F5`, `SF-F6`
 - `SF-F7`, `SF-F8`, `SF-F10`, `SF-F11`
-- `SF-G1`, `SF-G2`, `SF-G3`
+- `SF-G1`, `SF-G2`
 
 ## SF-C5 구현 및 검증 상태
 
