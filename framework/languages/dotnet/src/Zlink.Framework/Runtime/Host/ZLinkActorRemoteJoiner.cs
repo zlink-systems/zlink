@@ -694,7 +694,12 @@ internal sealed class ZLinkActorRemoteJoiner(
 	             targetReservation,
                  hasBoundSession
                      ? sessionRelocationContext
-                     : default);
+                     : default,
+                 actorNodeGeneration:
+                     currentAuthority.Snapshot.Allocation
+                         .DescriptorLifecycleGeneration,
+                 expectedOwnerLeaseGeneration: checked(
+                     (ulong)currentAuthority.Snapshot.OwnerLeaseGeneration));
         var recovery = new ZLinkActorRelocationRecoveryRecord(
             requestTemplate,
             targetSpotId,

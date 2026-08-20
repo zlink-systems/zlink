@@ -543,7 +543,9 @@ public sealed class ActorRelocationProtocolTests
             ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
             Reference(),
             ZLinkMessage.From("join-request"),
-            codecs);
+            codecs,
+            actorNodeGeneration: 11,
+            expectedOwnerLeaseGeneration: 5);
 
         var decoded = ZLinkRemoteActorJoinPackets.DecodeJoinRequest(parts);
 
@@ -553,7 +555,117 @@ public sealed class ActorRelocationProtocolTests
         Assert.Equal("root-1", decoded.RelocationReference);
         Assert.Equal((uint)17, decoded.RelocationChecksumCrc32c);
         Assert.Equal(32, decoded.RelocationInventoryDigest.Length);
+        Assert.Equal((ulong)11, decoded.ActorNodeGeneration);
+        Assert.Equal((ulong)5, decoded.ExpectedOwnerLeaseGeneration);
         Assert.Equal("join-request", ZLinkRemoteActorJoinPackets.DecodeJoinRequestPayload(decoded, codecs).Decode<string>());
+    }
+
+    [Fact]
+    public async Task Routed_join_resolves_matching_authority_stable_type()
+    {
+        var stableType = await ZLinkFrameworkRuntime
+            .ResolveRoutedActorJoinStableTypeAsync(
+                JoinRequest(),
+                new JoinAuthorityStore(Authority()),
+                type => type == "store-player");
+
+        Assert.Equal("store-player", stableType);
+    }
+
+    [Theory]
+    [InlineData("no-store", ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData("missing", ZLinkFrameworkErrorKind.NotFound)]
+    [InlineData("unreadable", ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData("fence", ZLinkFrameworkErrorKind.ProtocolError)]
+    [InlineData("forged-type", ZLinkFrameworkErrorKind.TypeMismatch)]
+    [InlineData("no-factory", ZLinkFrameworkErrorKind.Rejected)]
+    public async Task Routed_join_authority_resolution_reports_typed_terminal(
+        string scenario,
+        ZLinkFrameworkErrorKind expected)
+    {
+        var request = scenario == "forged-type"
+            ? JoinRequest(actorType: "forged-player")
+            : JoinRequest();
+        IZLinkLocationRepository? store = scenario switch
+        {
+            "no-store" => null,
+            "missing" => new JoinAuthorityStore(),
+            "unreadable" => new JoinAuthorityStore(throwOnRead: true),
+            "fence" => new JoinAuthorityStore(
+                Authority() with
+                {
+                    Allocation = Authority().Allocation with
+                    {
+                        DescriptorLifecycleGeneration = 12
+                    }
+                }),
+            _ => new JoinAuthorityStore(Authority())
+        };
+
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+            () => ZLinkFrameworkRuntime.ResolveRoutedActorJoinStableTypeAsync(
+                request,
+                store,
+                _ => scenario != "no-factory").AsTask());
+
+        Assert.Equal(expected, failure.Kind);
+    }
+
+    private static ZLinkRemoteActorJoinRequest JoinRequest(
+        string actorType = "store-player") => new(
+        "actor-1",
+        actorType,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        null,
+        null,
+        ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
+        "root-1",
+        17,
+        Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+        1,
+        new byte[32],
+        ZLinkEnvelopeCodec.DefaultContentType,
+        [1],
+        [],
+        "source-spot",
+        RoutingId.From("source-node").ToBytes().ToArray(),
+        7,
+        3,
+        ActorNodeGeneration: 11,
+        ExpectedOwnerLeaseGeneration: 5);
+
+    private static ZLinkAuthoritySnapshot Authority() => new(
+        "v1",
+        ReadOnlyMemory<byte>.Empty,
+        7,
+        3,
+        "source-owner",
+        5,
+        new ZLinkPlacementAllocation(
+            ZLinkPlacementAllocationState.Active,
+            ZLinkPlacementObjectKind.Actor,
+            "store-player",
+            new ZLinkMeshNodeDescriptorKey(
+                "mesh",
+                RoutingId.From("source-node")),
+            11,
+            new ZLinkCapacityVector(1, 0, null)),
+        null,
+        DateTimeOffset.UtcNow);
+
+    private sealed class JoinAuthorityStore(
+        ZLinkAuthoritySnapshot? snapshot = null,
+        bool throwOnRead = false)
+        : Zlink.Framework.UnitTests.ZLinkLocationStoreTestDouble
+    {
+        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default) => throwOnRead
+            ? ValueTask.FromException<ZLinkAuthorityReadResult>(
+                new InvalidOperationException("store unavailable"))
+            : ValueTask.FromResult<ZLinkAuthorityReadResult>(snapshot is { } found
+                ? new ZLinkAuthorityReadResult.Found(found)
+                : new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow));
     }
 
     private static ZLinkRelocationManifestReference Reference() =>

@@ -92,7 +92,9 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkCodecRegistryBuilder codecs,
         ZLinkActorBoundSession? boundSessionIdentity = null,
         ZLinkActorRelocationReservation? reservation = null,
-        ZLinkSessionRelocationContext sessionRelocationContext = default)
+        ZLinkSessionRelocationContext sessionRelocationContext = default,
+        ulong actorNodeGeneration = 0,
+        ulong expectedOwnerLeaseGeneration = 0)
     {
         var payload = CreateJoinRequest(
             actorId,
@@ -110,7 +112,9 @@ internal static class ZLinkRemoteActorJoinPackets
             codecs,
             boundSessionIdentity,
             reservation,
-            sessionRelocationContext);
+            sessionRelocationContext,
+            actorNodeGeneration,
+            expectedOwnerLeaseGeneration);
         return EncodeJoinRequest(header, payload);
     }
 
@@ -130,7 +134,9 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkCodecRegistryBuilder codecs,
         ZLinkActorBoundSession? boundSessionIdentity = null,
         ZLinkActorRelocationReservation? reservation = null,
-        ZLinkSessionRelocationContext sessionRelocationContext = default)
+        ZLinkSessionRelocationContext sessionRelocationContext = default,
+        ulong actorNodeGeneration = 0,
+        ulong expectedOwnerLeaseGeneration = 0)
     {
         var encodedRequest = request.Encode(codecs);
         return new ZLinkRemoteActorJoinRequest(
@@ -177,7 +183,9 @@ internal static class ZLinkRemoteActorJoinPackets
                 ? null
                 : sessionRelocationContext.Coordinator.NodeRid.ToBytes().ToArray(),
             sessionRelocationContext.Coordinator.NodeGeneration,
-            sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion);
+            sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion,
+            actorNodeGeneration,
+            expectedOwnerLeaseGeneration);
     }
 
     internal static IReadOnlyList<Message> EncodeJoinRequest(
@@ -679,7 +687,9 @@ string RelocationCoordinatorOwnerId = "",
 ulong RelocationCoordinatorLeaseGeneration = 0,
 byte[]? RelocationCoordinatorNodeRid = null,
 ulong RelocationCoordinatorNodeGeneration = 0,
-string RelocationCoordinatorExpectedAuthorityStoreVersion = "");
+string RelocationCoordinatorExpectedAuthorityStoreVersion = "",
+ulong ActorNodeGeneration = 0,
+ulong ExpectedOwnerLeaseGeneration = 0);
 
 internal readonly record struct ZLinkActorRelocationReservation(
     string Token,
