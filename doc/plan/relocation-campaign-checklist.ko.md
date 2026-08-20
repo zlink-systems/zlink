@@ -1137,10 +1137,11 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
 - [x] **canon-S4b 4언어 수신자 canonical 28 decode — 완주(Claude 독립 검증)**: node `989df945ad`·java `ac562c94a1`·cpp `7eb85827b0`·dotnet `1aad623520`. 모든 언어 raw dispatch가 canonical 28 multipart를 S4a 생성 decoder로 decode+S3 Store resolution 재사용+payload 복원+cmd20 reply tail, 사설 record(transferId)는 legacy 폴백. **실회귀 2건 캐치·수정**(node TicTacToe·cpp cutover — 사설 relocation도 cmd28 공유), dotnet export 위반은 생성코덱 internal화로 수정(게이트 무약화). STOP 2건(java ST-R1·dotnet docs)은 pre-existing 판명. 각 언어 게이트+샘플+relocation Claude 독립 검증: raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
       envelope decode→기존 Store fence/type resolution(S3) 재사용→payload를 typed message로 복원→command-20 canonical
       reply tail 반환. 사설 dialect 수신자는 default 유지.
-- [~] **canon-S4c 4언어 발신 canonical 28** — **node 완료 `9126956c4b`(Claude 독립 검증)**: node 발신자가
+- [~] **canon-S4c 4언어 발신 canonical 28** — **node `9126956c4b`·java `c110fd375c` 완료(2/4, Claude 독립 검증)**: node 발신자가
       capability(observed authority+admitted peer) 게이트 하에 canonical 28 multipart originate(생성 코덱), 미충족 시
       private JSON 폴백, bound-session은 S4d로 제외. **S4b+S4c로 node→node same-language canonical actorJoin 단대단 성립**.
       m6c 93/93(originate/round-trip 2 신규), 6샘플 통과. **java/dotnet/cpp 발신 잔여**:
+- [ ] **canon-S4c-cpp 발신 — 복잡(에이전트 STOP·회귀 discard)**: cpp canonical send 활성화(mesh_node_runtime.cpp:2317 gate)가 **Bingo·TicTacToe 샘플 회귀**(baseline 통과, S4c 실패 — cpp completion 경로 손상). dotnet과 동일하게 **S4d(relocation/completion state 통합) 선행 필요**. 미커밋 회귀 변경 discard, 트리 baseline 유지.
 - [ ] **canon-S4c-dotnet 발신 — 복잡(sender seam 필요, 에이전트 정직 STOP)**: .NET actor-join 발신자가 relocation
       reservation token/transfer state와 강결합. canonical 28 reply엔 그 상태 부재(§9 bookkeeping=language-internal).
       단순 transport 교체는 canonical 수신 후 commit/rollback 계약 파괴. 필요: canonical admission 결과를 local relocation
