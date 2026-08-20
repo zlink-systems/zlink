@@ -503,7 +503,17 @@
       (기계가독 선언이 부족한 항목은 스키마 기계가독부 보강 — 변경 전부 명시)
 - [ ] W-3 4언어 전면 스왑: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트 통과 후
       교체, 손 코덱 삭제. 언어별 unittest 전체 그린
-- [ ] W-4 수용: C-7 교차 언어 매트릭스 전 쌍 그린 — **1차 런(2026-08-20)
+- [x] **✅ W-4/C-7 수용 완료(2026-08-20, Claude 독립 검증)**: full `all`
+      스테이지 `result=passed` — **기본 교차언어 매트릭스 19/19 그린**(C++↔
+      .NET/Node/Java의 messaging·channel·fanout·STREAM·spot-route·message-follow,
+      실패 0) + **relocation 3쌍 결정적 그린**(dotnet→java 23/23, java→dotnet
+      10/10, node→dotnet 8/8). 세 relocation flake 근원=동일 u64-signed-sentinel
+      버그류 전부 수정. **W-1 파일럿(actorJoin 28 byte-equivalence) 커밋
+      `<w1>`**; W-2/W-3 전면 코덱 채택은 언어별 손코덱 비대칭으로 대형 후속
+      트랙(스코프 명시). 잔여: Java signed-sentinel 종합 소탕(재발 방지, 진행
+      중) + C-9e OPEN 5건(cpp cmd28 JSON fallback·cmd44 retry·config10/6
+      coverage·ST-C4). (구 기록:)
+- [ ] W-4 수용 (구) — **1차 런(2026-08-20)
       NOT ACCEPTED, 3계열 배정**: ① cpp E2E 픽스처가 제거된 socket config 멤버
       사용(컴파일 파손) ② cpp→node·java→node spot-route target 미등록 회귀
       (node ready인데 not_found — 971ed36314 이후 의심) ③ relocation 3쌍 —
