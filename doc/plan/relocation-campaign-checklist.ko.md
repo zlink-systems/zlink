@@ -897,3 +897,8 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
 - **캠페인 core 목표 달성**: 4언어 결정적 relocation 상호운용 + 재발 u64 버그류 종결 + cpp 프로토콜 정합(cmd28/44).
 - **방법론 확립**: message-flow 트레이싱 우선 디버깅(AGENTS.md §4.1 + framework/AGENTS.md 상세 가이드), 위임(작업=sonnet/리뷰=sol/리서치=codex) + Claude 직접 검증.
 - **후속 트랙(별도 세션)**: node TicTacToe mesh-pump 데드락(우선), Bingo stream flake, config 6/10 e2e 시나리오 authoring, W-2/W-3 전면 코덱 채택, F(e2e_inventory 168).
+
+### ✅ node TicTacToe mesh-pump 데드락 해소 (2026-08-20, 커밋 5a41d21fdc, Claude 검증)
+근본: relocationCutover(cmd34) Infrastructure dispatch 중 commitActorRoute→ensureNativeActorRoute(managed-stream.ts:237)의 completions.submit이, 같은 Infrastructure drain loop에서만 resolve되는 Completion을 그 loop 자신이 await → **단일 노드 self-deadlock**. **회귀 = 캠페인 커밋 ef19855326**(Application/Infrastructure lane 분리 시 dispatch-prep hatch의 reset을 Infra 플래그에 미러 안 함 → nested re-entrant drain rescue 사멸). 수정: hatch에서 domain=Infrastructure일 때 infra 플래그 reset(domain-gated, spec 46). **검증: TicTacToe 1/5→23/23(에이전트15+Claude8), 순서 샘플 무회귀.**
+→ **G-2 Node 최종 5/6**(TicTacToe 그린, Bingo만 pre-existing 교차언어 stream flake).
+→ **캠페인 유발 회귀 3건 전부 근절**: (1) generation 처닝(genfix) (2) u64-signed 센티널 3방향(Java 23사이트 소탕) (3) mesh-pump infra lane 데드락. 전부 정직한 message-flow 계측으로 계층별 도달.
