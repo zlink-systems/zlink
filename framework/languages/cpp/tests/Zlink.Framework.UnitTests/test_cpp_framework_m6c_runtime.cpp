@@ -5357,18 +5357,20 @@ void test_advertised_receive_chunk_limit_wiring (test_context_t &test)
       "an advertised cap smaller than the local budget must split the same payload into more chunks");
 }
 
-// C-5 increment 2b (updated for the cross-language actorJoin(28) fix): the
+// C-5 increment 2b (originate opt-in reverted b/49b6c-follow-up): the
 // actorJoin(28) originate fence-gate (mesh_node_runtime_t::
 // observe_spot_authority / admit_remote_application_actor_join_via_wire's
-// caller in join_application_actor_to_spot) is now populated by
-// join_application_actor_to_spot's remote branch itself: the freshly
-// resolved target (spot_address_resolver_t / actor_address_resolver_t)
-// already carries the exact peer + authority fence, so that branch calls
-// observe_spot_authority with it before checking the gate. The gate then
-// opens the canonical binary actorJoin(28) wire path only when that
-// observation is present AND the target peer is admitted at exactly that
-// lifecycle generation (has_admitted_peer); otherwise it still falls
-// through to the JSON path. This test does not exercise
+// caller in join_application_actor_to_spot) is a dormant mechanism. C++ does
+// NOT originate a live cross-node actorJoin(28) per spec 51 §9 ("C++ and .NET
+// ... do not originate a cross-node actorJoin operation"); the production
+// join_application_actor_to_spot remote branch does NOT call
+// observe_spot_authority, so observed_spot_authority always returns nullopt
+// there and the branch falls through to the JSON admission path. Activating
+// the opt-in (1b3b21b2e3, reverted) took an incomplete canonical receiver and
+// broke ST-B1; completing that receiver is H-12/H-15/H-4a. This test still
+// proves the gate MECHANISM is real (not dead code) "for whichever future
+// caller opts a peer in": it directly calls observe_spot_authority and reads
+// the observation back. It does not exercise
 // join_application_actor_to_spot directly (the full remote-join call chain
 // fails deep inside completion delivery for a synthetic, never-locally-
 // created Actor regardless of which path is taken, and so cannot

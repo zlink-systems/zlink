@@ -2240,28 +2240,18 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
                                 std::move (bound_session_node_rid),
                                 std::move (bound_session_rid)});
     state->source_spot = completion_source_spot;
-    // actorJoin(28) fence-gate: `target` is the just-resolved Spot address
-    // (spot_address_resolver_t / actor_address_resolver_t), so it already
-    // carries the exact peer + authority fence for the target Spot -- the
-    // "trust-establishing exchange" observe_spot_authority's doc comment
-    // was waiting on. Observe it here so a wire-admitted target (this node
-    // has both a fresh authority read AND a live RouteMesh admission at
-    // that generation, checked below) originates the canonical binary
-    // actorJoin(28) instead of falling through to the JSON admission path.
-    if (target.node_generation != 0 && target.authority_owner_generation != 0
-        && target.owner.lease_generation != 0) {
-        observe_spot_authority (
-          target.node_rid, target.spot_id, target.object_generation,
-          target.node_generation, target.authority_owner_generation,
-          static_cast<std::uint64_t> (target.owner.lease_generation));
-    }
     // actorJoin(28) fence-gate: wire only when this node has explicitly
     // observed the target Spot's authority fence AND the target peer is
-    // admitted at exactly that observed lifecycle generation. Falls
-    // through to the JSON admission path below when either does not hold
-    // (e.g. no live RouteMesh admission yet at the observed generation) --
-    // that JSON path remains the genuinely-internal fallback for callers
-    // that never resolve a wire-admitted target.
+    // admitted at exactly that observed lifecycle generation. Defaults (and
+    // today, always resolves) to the existing JSON admission path below --
+    // C++ does not originate a live cross-node actorJoin(28) (spec 51 §9:
+    // "C++ and .NET ... do not originate a cross-node actorJoin operation").
+    // Activating this via observe_spot_authority here (reverted from
+    // 1b3b21b2e3) took an incomplete canonical receiver path -- it requires a
+    // Session-owner lease resolver even for unbound actors and cannot resolve
+    // the actor stable type from the canonical body alone (51 §9 forbids
+    // extra wire fields), breaking ST-B1. Completing the canonical receiver
+    // is tracked as H-12/H-15/H-4a; until then the JSON path is authoritative.
     if (const auto observed = observed_spot_authority (
           target.node_rid, target.spot_id, target.object_generation);
         observed && has_admitted_peer (target.node_rid, observed->target_node_generation)) {
