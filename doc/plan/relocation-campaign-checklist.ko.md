@@ -938,10 +938,12 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       하니스. (상단 B-40·C-9e ⑩과 동일)
 - [ ] **H-2 ST-A3 결정적 실패 진단**: ST-B1 수정 전후 동일 재현되는 별도 timing/gate
       이슈. **진단-우선(코드변경 0·로그 보존)** — 알려진 timing-race 형태. (상단 B-156)
-- [ ] **H-3 node discovery-sharing 회귀 판정**: location-runtime "shares ClientServer
-      and fanout discovery through only opaque Store primitives"가 ignoredStale
-      수신(:1923) — canonical descriptor 수렴(9281b375b1)발 의심. 테스트 낡음 vs
-      코드 결함 판정 후 처리. (상단 C-397)
+- [x] **H-3 node discovery-sharing 회귀 판정 — 완료(2026-08-20, Claude 독립 검증)**:
+      판정=(b) 실제 코드 결함, 테스트 올바름. **현 HEAD에 이미 `97ff83ff1d`로 수정 반영됨**
+      (canonical descriptor round-trip 후 RoutingId 두 JS 형태 비교가 fresh renew를
+      ignoredStale로 오분류 → descriptorFingerprint를 canonical form으로 계산,
+      location-store-repository.ts:4060). interop-grade(타 언어 기록 row도 동일 무시됐을 것).
+      **Claude 독립 재현: node location-runtime.test.js 47/47 통과.** 추가 변경 0.
 - [ ] **H-4 ST-B1 후속 하니스 어휘 갱신**: ST-B1/B2/B3/C2 시나리오+feature-map을
       제거된 commit_request/commit_ack wire 어휘 → location_committed 기반 증거로
       갱신(의도 보존: commit-before-joined 순서·correlation). (상단 B-158)
