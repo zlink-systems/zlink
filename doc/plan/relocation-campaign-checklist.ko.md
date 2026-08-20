@@ -1114,3 +1114,6 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
 - **판정(게이트 무수정)**: **ST-C4** = H-1 소유(corruption-seam 격리 하니스 부재로 blocked, 유닛은 482561c9a0). **MON-A7**(config-7 Core HWM+job queue snapshot reset) = .NET 구현·**java/cpp 미구현**, RuntimeMonitoring=순수 F → **H-11(F) 소유**.
 - java `:zlink-framework-core:build` contractTest의 MON-A7·ST-C4 실패는 **sanctioned known 커버리지-gap**(게이트가 실제 미구현을 정확히 플래그 — 스트릭트 유지). 핵심 런타임 게이트 `:zlink-framework-core:test`는 그린. 해소=구현(H-1/H-11).
 - cpp e2e_inventory 게이트 green을 원하면 표준형 = 171 ID **명시 allowlist를 게이트에 체크인**(신규 gap은 게이트 편집 필요=리뷰 가시, 구현 스크랩은 여전히 실패) — Claude 판정 사항, 후속.
+
+### ✅ G-2 Node 6/6 재검증 (2026-08-20 심야, Claude)
+이 세션 node 변경(cmd44 one-way `d2a8eb25e6`·Authority DTO `91a7cc82ce`·Bingo S1 `d4f5055ebe`·discovery) 후 **node 6샘플 전부 PASS**(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·TicTacToe, exit=0). 무회귀 확인 + Bingo까지 그린(이전 4~5/6 → 6/6). G-2 Node 완전 그린.
