@@ -978,11 +978,14 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       route `routeNotConnected` blocker, ST-I3 spot relocation pre-move failure). H4 config-10
       base(source/target/session-owner+bound client+opaque network blocker) → H5 SpotWide/
       PerActor → H6 message-follow(delay proxy·3-node). 새 API 불필요.
-- [ ] **H-9 Bingo 교차언어 stream flake 수정**: 3 서버측 시그니처 — S1 node
-      StopObservingBingoEventsReq reply 미도착(stop-observing-handler.ts:27), S2 cpp
-      잘못된 actor/session identity 도착(observer guard 거부), S3 cpp MatchBingo 후
-      PlayerJoined/GameStarted notify 미수신(zlink_stream_calls.cpp:1841/1964).
-      서버측 message-flow 트레이싱 첫 재현부터.
+- [x] **H-9 Bingo — S1(node) 해소 `d4f5055ebe`(Claude 독립 검증), S2/S3(cpp) 미재현·잔여는 사용자 제외 reward-race**:
+      **S1 node 실수정**: ZLinkSpotActorMembership.leaveActor()가 handler turn 내 Entry
+      재합류 시 bare await로 serial gate 점유→control work 기아→StopObservingBingoEventsReq
+      reply ~30s hang→handler error. turn.yieldFrameworkPromise로 양보(mesh-pump 수정과
+      동형, spec 20/26). **Claude 검증: 새 테스트 통과, spot-manager 6실패=baseline 동일
+      (회귀 0), Node Bingo 2회 PASS(+에이전트 3회=5연속)**. **S2/S3(cpp) 이번 재현 안 됨**
+      (PlayerJoined/GameStarted 정상 RID). 잔여 cpp Bingo 블로커 = BingoRewardAnnounced
+      누락(사용자가 이미 제외한 reward-race, pre-existing) → cpp Bingo는 known-flaky 유지.
 - [ ] **H-10 dotnet→java relocation drain-vs-liveness race**: 저빈도 flaky 1방향
       (dotnet이 source로 dial할 때). source relocation drain/fence가 relocation
       TARGET peer의 admitted 연결(endpoint·descriptor·Peer객체·epoch) 교란 → command
