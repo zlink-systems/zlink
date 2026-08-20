@@ -664,6 +664,27 @@
       계측 커밋 안 함(revert, 트리 청정). **campaign 판정: relocation 기능
       동작 확인·저빈도 flaky 1방향 잔존 → known-flaky로 표시, focused 세션
       이월**(되던 기능 회귀 아님).
+      **⭐ 결정적 근본 원인 확정(2026-08-20, Claude 계측+가설검증, 20코어
+      무부하 환경)**: 계측 로그로 확인 — 실패 시 `liveness_expiry_deadmit
+      rid=java-relocation-target dir=Outbound`가 발화. 즉 source relocation
+      처리(~20s)가 **ZLinkManagedMeshNode.ReceiveLoop**(단일 루프: Drain
+      RawSocketAsync로 inbound liveness ACK 처리 + ProcessInfrastructure로
+      만료 검사)의 **liveness-ACK 처리를 15s peerTimeout 넘게 굶김** → java가
+      살아서 probe/ack를 보내는데도 dotnet이 target outbound peer를 false
+      만료로 판정 → **de-admit + `_peersByRid.Remove`(ZLinkManagedMeshNode.cs
+      liveness.IsExpired 분기)** → 재Hello 루프(Outbound+Connecting) +
+      SendCanonicalRelocationRecordAsync의 connection-changed → command 40
+      미전송 → DeadlineExceeded. **가설검증**: liveness-expiry 가드(만료 시
+      relocation target이면 Renew+skip, 스펙 §5 false-positive 회피)를
+      4파일에 구현했으나 통과율 **43%로 악화**(6/14) → **de-admit/재Hello는
+      부분 복구 경로라 증상 억제는 역효과**. 전량 revert(트리 청정). **진짜
+      수정 = ReceiveLoop 기아 제거**: liveness ACK 처리가 relocation/drain
+      처리와 독립적으로 진행되어야 함(node mesh-dispatch-pump의 infrastructure
+      독립 드레인 선례). 유력 지점: relocation/drain 흐름이 store CAS await를
+      넘어 `_gate`를 보유 → ReceiveLoop의 ProcessInfrastructure/DrainRawSocket
+      (동일 `_gate` 필요)가 차단. **focused 세션 과제**: `_gate` cross-await
+      보유 제거 또는 liveness 처리 레인 분리. terra 2회+본 세션 광범위
+      진단이 도달한 최종 근본 — 이제 수정 지점이 단일 확정됨.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
