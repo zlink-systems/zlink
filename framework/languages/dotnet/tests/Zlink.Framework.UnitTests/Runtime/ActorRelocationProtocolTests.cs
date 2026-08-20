@@ -2,10 +2,13 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Service;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -573,6 +576,80 @@ public sealed class ActorRelocationProtocolTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Canonical_actor_join_multipart_decodes_and_reuses_store_admission(
+        bool withPayload)
+    {
+        var frames = ServiceWirePilotCodec.EncodeActorJoin28(new(
+            42,
+            new ServiceWirePilotCodec.Fence(
+                "actor-1", 7, RoutingId.From("source-node").ToBytes().ToArray(), 11, 3, 5),
+            false,
+            new ServiceWirePilotCodec.Fence(
+                "target-spot", 9, RoutingId.From("target-node").ToBytes().ToArray(), 12, 4, 6),
+            withPayload
+                ? new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
+                    "JoinRequest", "application/json", [1, 2, 3])
+                : null));
+        var parts = frames.Select(Message.From).ToArray();
+        try
+        {
+            var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(parts, "mesh");
+
+            Assert.NotNull(canonical);
+            Assert.Equal((ulong)42, canonical!.Request.Request.Correlation);
+            Assert.Equal("actor-1", canonical.Request.Request.Actor.ActorId);
+            Assert.Equal(withPayload, canonical.Payload is not null);
+            if (withPayload)
+                Assert.Equal(new byte[] { 1, 2, 3 }, canonical.Payload!.Value.Payload.ToArray());
+
+            var stableType = await ZLinkFrameworkRuntime
+                .ResolveCanonicalActorJoinStableTypeAsync(
+                    canonical.Request.Request,
+                    new JoinAuthorityStore(Authority()),
+                    type => type == "store-player");
+            Assert.Equal("store-player", stableType);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public void Malformed_canonical_actor_join_falls_back_without_dropping_legacy_dispatch()
+    {
+        using var malformed = Message.From(new byte[] { 90, 77, 1, 28, 0, 0 });
+
+        Assert.Null(ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin([malformed], "mesh"));
+    }
+
+    [Theory]
+    [InlineData("missing", ZLinkFrameworkErrorKind.NotFound)]
+    [InlineData("fence", ZLinkFrameworkErrorKind.ProtocolError)]
+    [InlineData("no-factory", ZLinkFrameworkErrorKind.Rejected)]
+    public async Task Canonical_actor_join_store_admission_preserves_typed_terminals(
+        string scenario,
+        ZLinkFrameworkErrorKind expected)
+    {
+        var store = scenario switch
+        {
+            "missing" => new JoinAuthorityStore(),
+            "fence" => new JoinAuthorityStore(Authority() with
+            {
+                Allocation = Authority().Allocation with { DescriptorLifecycleGeneration = 12 }
+            }),
+            _ => new JoinAuthorityStore(Authority())
+        };
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+            () => ZLinkFrameworkRuntime.ResolveCanonicalActorJoinStableTypeAsync(
+                CanonicalJoinRequest(), store, _ => scenario != "no-factory").AsTask());
+
+        Assert.Equal(expected, failure.Kind);
+    }
+
+    [Theory]
     [InlineData("no-store", ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData("missing", ZLinkFrameworkErrorKind.NotFound)]
     [InlineData("unreadable", ZLinkFrameworkErrorKind.Unavailable)]
@@ -633,6 +710,20 @@ public sealed class ActorRelocationProtocolTests
         3,
         ActorNodeGeneration: 11,
         ExpectedOwnerLeaseGeneration: 5);
+
+    private static ActorJoinRequest CanonicalJoinRequest() => new(
+        42,
+        new ActorRef("actor-1", 7, "mesh", RoutingId.From("source-node")),
+        11,
+        3,
+        5,
+        false,
+        "target-spot",
+        9,
+        RoutingId.From("target-node"),
+        12,
+        4,
+        6);
 
     private static ZLinkAuthoritySnapshot Authority() => new(
         "v1",

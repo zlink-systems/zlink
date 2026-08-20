@@ -35,6 +35,21 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             payload.FlowOrigin,
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
+        if (joinRequest.Canonical is { } canonical)
+        {
+            try
+            {
+                await runtime.PrepareCanonicalActorJoinAsync(
+                        canonical.Request.Request,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                ReplyRejected(joinRequest, payload.MessageName, "canonical-store-admission", ex);
+                return;
+            }
+        }
         var hasHandler = actorJoins.TryResolve(out var descriptor)
                          && descriptor is not null;
         if (!hasHandler && !acceptActorJoinWithoutHandler)
@@ -108,6 +123,30 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             }
         }
 
+        if (joinRequest.Canonical is not null)
+        {
+            if (result.Reply is null)
+            {
+                nativeSpot.ReplyActorJoin(
+                    joinRequest,
+                    result.Accepted ? 0 : 1,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            var encoded = result.Reply.Encode(runtime.Registration.Codecs);
+            var application = ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                ZLinkMessageNameResolver.ResolveFromMessage(result.Reply),
+                encoded.ContentType,
+                encoded.Payload.Bytes.Span);
+            using var reply = Message.From(application);
+            nativeSpot.ReplyActorJoin(
+                joinRequest,
+                result.Accepted ? 0 : 1,
+                reply);
+            return;
+        }
+
         if (!payload.UsesEnvelope)
         {
             if (result.Reply is { } reply)
@@ -150,6 +189,41 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
 
     private JoinPayload DecodeJoinPayload(ZLinkBackendActorJoinRequest joinRequest)
     {
+        if (joinRequest.Canonical is { } canonical)
+        {
+            if (canonical.Payload is not { } application)
+                return new JoinPayload(
+                    false,
+                    typeof(ZLinkMessage).Name,
+                    ZLinkMessage.Empty,
+                    null,
+                    null,
+                    null);
+            try
+            {
+                using var request = Message.From(application.Payload);
+                return new JoinPayload(
+                    false,
+                    application.PacketName,
+                    ZLinkMessage.FromEnvelopePayload(
+                        application.ContentType,
+                        request,
+                        runtime.Registration.Codecs),
+                    null,
+                    null,
+                    null);
+            }
+            catch (Exception ex)
+            {
+                return new JoinPayload(
+                    false,
+                    application.PacketName,
+                    ZLinkMessage.Empty,
+                    ex,
+                    null,
+                    null);
+            }
+        }
         if (joinRequest.Parts.Count == 1)
         {
             try

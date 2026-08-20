@@ -171,7 +171,8 @@ internal class ZLinkBackendActorJoinRequest(
     string targetSpotId,
     ulong joinEpoch,
     Message message,
-    IReadOnlyList<Message> parts) : IDisposable
+    IReadOnlyList<Message> parts,
+    ZLinkCanonicalActorJoin? canonical = null) : IDisposable
 {
     private IDisposable? _creditOwner;
     public ZLinkBackendActorRef SourceActor { get; } = sourceActor;
@@ -187,6 +188,12 @@ internal class ZLinkBackendActorJoinRequest(
     public Message Message { get; } = message;
 
     public IReadOnlyList<Message> Parts { get; } = parts;
+
+    // Present only when the raw transport recognized schema command 28 with
+    // the generated decoder.  Private relocation records share command 28;
+    // they deliberately leave this null and continue through their legacy
+    // lifecycle path.
+    internal ZLinkCanonicalActorJoin? Canonical { get; } = canonical;
 
     internal void AttachCreditOwner(IDisposable creditOwner)
     {
@@ -210,6 +217,12 @@ internal class ZLinkBackendActorJoinRequest(
         }
     }
 }
+
+// The generated command-28 decoder is the wire authority.  This is only the
+// framework-owned adapter used by Store admission and typed Spot dispatch.
+internal sealed record ZLinkCanonicalActorJoin(
+    ZLinkServiceWireCodec.ActorJoinRequestRecord Request,
+    ZLinkApplicationPayloadEnvelope? Payload);
 
 internal readonly record struct ZLinkBackendSpotDispatchInfo(
     ZLinkBackendSpotDispatchEvent Event,

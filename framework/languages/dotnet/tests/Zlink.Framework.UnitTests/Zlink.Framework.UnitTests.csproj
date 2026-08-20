@@ -169,9 +169,4 @@
         <Compile Include="../Common/FrameworkTestEnvironment.cs" Link="Common/FrameworkTestEnvironment.cs"/>
         <Compile Include="../../scripts/PublicContractSnapshot.cs" Link="Runtime/PublicContractSnapshot.cs"/>
     </ItemGroup>
-
-    <ItemGroup>
-        <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWirePilotCodec.g.cs"
-                 Link="Runtime/Protocol/ServiceWirePilotCodec.g.cs"/>
-    </ItemGroup>
 </Project>
