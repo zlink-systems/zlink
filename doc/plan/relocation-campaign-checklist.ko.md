@@ -762,6 +762,14 @@
       eslint errors로 정지(baseline ~33 근접, `no-unnecessary-condition` 계열) →
       런타임 테스트 미실행. node baseline(lint 33·~28 test·10 dispatch-logger)
       대비 신규 회귀 구분 필요 → sonnet 에이전트 위임(새 정책: 작업=sonnet).
+      **node 판정(sonnet, 2026-08-20)**: ✅ build PASS, ✅ typecheck 0 errors,
+      eslint 36건 **전부 baseline**(relocation 배치 실제 diff 라인엔 lint 0 —
+      node-raw-mesh-backend.ts:1411 1건은 pre-batch 커밋 c360ad2601 소재),
+      런타임 140/141 파일 실행 25 실패 **전부 문서화 baseline**(channel-client
+      10 dispatch-logger 등, 배치 변경 파일과 무관), sample-regression.test.js
+      1건만 완료 대기. **판정: node 배치 신규 회귀 없음**.
+      **⇒ G-1 4언어 전부 신규 회귀 없이 그린 확인**(cpp·java·dotnet·node).
+      잔여: node sample-regression 최종 확인 + G 최종 보고 매트릭스 편입.
 - [ ] G-2 전체 샘플 실행 성공(zoneworld 제외): 6샘플(Bingo, DeliveryDispatch,
       GameQuest, ShoppingMall, SupportChat, TicTacToe) × 4언어+kotlin 전부
       최종 HEAD에서 재실행, 종료 코드 0 확인·로그 보존 (중간 검증과 별개로
