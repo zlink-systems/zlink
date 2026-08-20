@@ -724,6 +724,18 @@
       cross-language 경로 확인 후 소탕 필요.
       **Claude 독립 확인(2026-08-20, 커밋 HEAD, java 호스트 재빌드): dotnet→java
       8/8 PASS** → 에이전트 15/15 + 8/8 = **23/23, dotnet→java 결정적 그린 확정.**
+      **u64-signed 소탕 확대(2026-08-20, sonnet, Claude 검증, 커밋 `b7443ed9b4`)**:
+      추가 2곳 — ZLinkInMemoryLocationStore fanout leaseGeneration `<1→==0`
+      (ownerLeaseGeneration=nonzeroU64 exact owner-lease 토큰, spec 01-glossary;
+      lifecycle/revision은 로컬 mint·ordered라 미변경), ZLinkJavaRawSpotNode
+      .createSpot `<=0→==0`(cross-language envelope nonzeroU64 spot gen 경로).
+      core BUILD SUCCESSFUL·구 계약 테스트 없음 확인. **미결(reachable, 종합
+      소탕 대상)**: ZLinkSpotLifecycle:176, ZLinkUserSpotAggregateStagingOwner
+      :778, ZLinkStoreLocationResolvers:325(모두 `<=0`), ZLinkInMemoryLocationStore
+      :443(signed revision compare parity gap) — sol 리뷰(E)의 전수 리스트 +
+      C(STORE_UNAVAILABLE 진단) 후 일괄. **병렬 진행(2026-08-20)**: A(java→dotnet
+      특성화)·C(STORE_UNAVAILABLE codex 진단)·W(생성코덱 sonnet)·D(cpp e2e
+      sonnet)·E(C-9 최종 sol 리뷰) — 결과는 Claude가 직접 검토·검증 후 수용.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
