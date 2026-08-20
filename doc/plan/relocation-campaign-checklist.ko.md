@@ -1031,7 +1031,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       FrozenRecordCodec:201, MessageFollowWireCodec:200. 0x8000..이상 정상 .NET/C++/Node 토큰이
       Java에서 protocol error. 수정: opaque u64 helper는 `==0`만 거부, `<=0`은 deadline/revision/
       bounded counter 전용. high-bit golden vector 추가. 스펙 01-glossary:1512, 51 §12.
-- [ ] **H-14 [H] cpp negotiated receive chunk limit 미적용**: reply 값을 map에 기록만
+- [ ] **H-14 [H] cpp negotiated receive chunk limit 미적용 — H-12/H-15 canonical 트랙에 종속**: 미적용 지점(mesh_node_runtime.cpp:2562)은 actorJoin(28) canonical 수신 경로인데 origination이 revert(`ab0b4b39a4`)로 dormant → canonical actor-join 수신자 완성(H-12/H-15) 시 함께 적용. (원:) reply 값을 map에 기록만
       (mesh_node_runtime.cpp:2562), 실제 전송에 min(server, target 광고, in-flight budget) 미적용
       (consumer 연결 deferred 주석 2565, getter 2451 미소비). 수정: actor/relocation-attempt
       identity별 소비→direct-transfer chunk planner, 세 상한 min. high/low advertised interop vector.
