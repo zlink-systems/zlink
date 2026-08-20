@@ -800,15 +800,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw new ArgumentException(
                 "Command 40 manifest does not match the transfer payload.",
                 nameof(payload));
-        Peer? peer;
-        lock (_gate) _peersByRid.TryGetValue(targetNodeRid, out peer);
-        if (peer is null || !peer.Admitted
-            || peer.LifecycleGeneration != prepare.Target.NodeGeneration
-            || prepare.Target.NodeRid != targetNodeRid)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "The canonical relocation target is not connected.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
         var key = new PendingRelocationPrepareKey(
             targetNodeRid, prepare.RelocationId,
             prepare.TargetAttemptGeneration, prepare.Coordinator);
@@ -842,6 +833,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : TimeSpan.FromSeconds(30));
         try
         {
+            // Spec 30 §5-5.1 selects an admitted-and-ready target by its
+            // RID/lifecycle fence, not by a previously captured Peer object.
+            // A drain descriptor update may overlap a real connection
+            // handover; wait for the current admitted epoch before emitting
+            // command 40 rather than failing that transient replacement.
+            var peer = await WaitForCanonicalRelocationPeerAsync(
+                    targetNodeRid,
+                    prepare.Target.NodeGeneration,
+                    deadline.Token)
+                .ConfigureAwait(false);
             await SendCanonicalRelocationRecordAsync(
                     peer,
                     ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare),
@@ -873,6 +874,42 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _pendingRelocationPrepares.TryRemove(
                     new KeyValuePair<PendingRelocationPrepareKey,
                         PendingRelocationPrepare>(key, pending));
+        }
+    }
+
+    private async ValueTask<Peer> WaitForCanonicalRelocationPeerAsync(
+        RoutingId targetNodeRid,
+        ulong targetLifecycleGeneration,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            Task changed;
+            lock (_gate)
+            {
+                if (_peersByRid.TryGetValue(targetNodeRid, out var peer)
+                    && peer.Admitted
+                    && peer.State == MeshPeerState.Admitted
+                    && peer.LifecycleGeneration == targetLifecycleGeneration)
+                    return peer;
+                // There is nothing to re-establish when target selection did
+                // not leave an existing physical intent. Preserve the normal
+                // fail-fast Unavailable result for an unknown target; only a
+                // known peer's transient handover is awaited.
+                if (!_peersByIntent.Values.Any(candidate =>
+                        candidate.RoutingId == targetNodeRid
+                        || candidate.ExpectedRid == targetNodeRid))
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "The canonical relocation target is not connected.",
+                        ZLinkRetryAdvice.RetryAfterBackoff);
+                // RebuildChannelSelectionPlansUnderLock completes this edge
+                // for every admission/liveness transition. It lets relocation
+                // await re-admission without a polling sleep or a caller-side
+                // retry loop.
+                changed = _channelSelectionChanged.Task;
+            }
+            await changed.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -7509,12 +7546,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ? MeshPeerState.Draining
                 : MeshPeerState.Admitted;
             peer.Admitted = true;
-            peer.Liveness = new ZLinkServiceLiveness(
-                Stopwatch.GetTimestamp(),
-                peer.ConnectionGeneration);
+            // A descriptor update changes neither the admitted physical pipe
+            // nor its liveness epoch (service-wire §5). Replacing this state
+            // here drops an outstanding probe/ACK fence while a relocation
+            // drain is using the same target connection.
+            if (peer.Liveness is null)
+                peer.Liveness = new ZLinkServiceLiveness(
+                    Stopwatch.GetTimestamp(),
+                    peer.ConnectionGeneration);
             peer.LastChangedMs = checked((ulong)Environment.TickCount64);
             _peersByRid[sourceRid] = peer;
-            _state = MeshNodeState.Ready;
+            // Remote admission traffic must never reopen this node after its
+            // relocation drain has published Draining. In particular, a
+            // target descriptor update can overlap command 40 and must leave
+            // the target connection's identity and the local drain fence
+            // intact.
+            if (_state != MeshNodeState.Draining)
+                _state = MeshNodeState.Ready;
             RebuildChannelSelectionPlansUnderLock();
         }
 

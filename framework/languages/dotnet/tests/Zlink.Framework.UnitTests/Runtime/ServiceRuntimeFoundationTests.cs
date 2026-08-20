@@ -912,6 +912,49 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task ManagedNode_DrainingPeerUpdate_PreservesTargetConnectionFence()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "orders");
+        await using var target = new ZLinkManagedMeshNode(context, "orders");
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"draining-source-{suffix}");
+        var targetRid = RoutingId.From($"draining-target-{suffix}");
+        var sourceEndpoint = $"inproc://draining-source-{suffix}";
+        var targetEndpoint = $"inproc://draining-target-{suffix}";
+
+        source.SetRoutingId(sourceRid);
+        source.SetBind(sourceEndpoint);
+        source.AddChannel("orders");
+        source.ConnectPeer(targetEndpoint, targetRid);
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.AddChannel("orders");
+        target.Start();
+        source.Start();
+
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1);
+        var targetIntent = Assert.Single(source.Peers()).ConnectionIntentId;
+
+        // Spec 30 §5 requires the selected target to remain admitted and
+        // ready while source drain control is published. The target's
+        // descriptor update must not reopen the source or replace its peer
+        // epoch before command 40 is submitted.
+        source.PublishDraining();
+        target.SetChannelWeight("orders", 50);
+
+        await WaitUntilAsync(() =>
+            source.Status().State == MeshNodeState.Draining
+            && source.Peers().Any(peer =>
+                peer.ConnectionIntentId == targetIntent
+                && peer.RoutingId == targetRid
+                && peer.State == MeshPeerState.Admitted
+                && peer.DescriptorRevision == target.Status().DescriptorRevision));
+    }
+
+    [Fact]
     public async Task EntrySpotUsesItsMeshNodeLifecycleAsTheDescriptorFence()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
