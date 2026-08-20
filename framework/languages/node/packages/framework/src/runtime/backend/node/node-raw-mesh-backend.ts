@@ -2078,12 +2078,19 @@ function decodeMultipartRecord(
   if (stateful !== undefined) {
     return decodeStatefulRecord(record, stateful);
   }
-  // RawServiceMeshRuntime admits the frozen relocation/session controls as a
-  // single bare service-wire frame.  They are node-owned infrastructure work,
-  // not an M6A application envelope, so do not try to read a nonexistent
-  // second multipart frame here.  The host's relocation dispatcher decodes
-  // the canonical frame directly from `parts[0]`.
-  if (record.parts.length === 1) {
+  // RawServiceMeshRuntime admits the frozen relocation/session controls as
+  // bare service-wire frames on the infrastructure mailbox.  They are
+  // node-owned infrastructure work, not an M6A application envelope, so do
+  // not try to read `parts[1]` as an application payload frame here.  The
+  // host's relocation dispatcher decodes the canonical frame directly from
+  // `parts[0]` and any trailing frames (e.g. a Prepare's bound-session
+  // journal sideband, spec 28 §4.4) as its own node-internal ZLNI frames.
+  // Application dispatch (Channel*/NodeSend/NodeRequest 16-19 envelopes)
+  // always arrives on the application mailbox domain, so gating on
+  // `record.domain` here — rather than solely on part count — keeps a
+  // multi-frame infrastructure control (Prepare + sideband) from being
+  // misread as a 2-frame application envelope and dropped as invalid_frame.
+  if (record.parts.length === 1 || record.domain === 'infrastructure') {
     return {
       kind: ReceiveKind.NodeSend,
       domain: readyDomain(record.domain),

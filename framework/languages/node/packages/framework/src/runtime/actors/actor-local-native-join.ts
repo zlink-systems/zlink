@@ -354,7 +354,12 @@ export class ZLinkLocalNativeActorJoin {
       actorId: actor.context.actorId,
       actorType,
       actorRef,
-      expectedMembershipEpoch: state.spotMembershipEpoch,
+      // An actor's membership epoch starts at 0 (unassigned) until it is
+      // first placed in a Spot; the wire vocabulary requires a positive
+      // integer (relocation-envelope-v1), so an unassigned epoch advertises
+      // as its first value, matching the same `> 0n ? … : 1n` fallback used
+      // for every other membership-epoch wire projection in this runtime.
+      expectedMembershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n,
       actorEntryNodeRid: state.entryNodeRid ?? actorRef.nodeRid as unknown as RoutingId,
       actorCreateRequest: state.createRequestPayload,
       request,
@@ -522,7 +527,12 @@ export class ZLinkLocalNativeActorJoin {
         actorId: actor.context.actorId,
         actorType,
         actorRef,
-        expectedMembershipEpoch: state.spotMembershipEpoch,
+        // An actor's membership epoch starts at 0 (unassigned) until it is
+        // first placed in a Spot; the wire vocabulary requires a positive
+        // integer (relocation-envelope-v1), so an unassigned epoch advertises
+        // as its first value, matching the same `> 0n ? … : 1n` fallback used
+        // for every other membership-epoch wire projection in this runtime.
+        expectedMembershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n,
         actorEntryNodeRid: state.entryNodeRid ?? actorRef.nodeRid as unknown as RoutingId,
         actorCreateRequest: state.createRequestPayload,
         request,

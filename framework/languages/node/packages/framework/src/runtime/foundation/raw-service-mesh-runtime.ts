@@ -845,7 +845,18 @@ export class RawServiceMeshRuntime {
       if (stateful !== undefined) return stateful;
       if (
         header.flags === 0
-        && received.parts.length === 1
+        // A bare infrastructure control is normally exactly one frame, but a
+        // relocation Prepare now rides its bound-session journal as
+        // node-internal ZLNI frames trailing the canonical command frame
+        // (spec 28 §4.4). Gating on the command vocabulary alone — instead
+        // of also requiring exactly one part — keeps that multi-frame
+        // Prepare from missing this infrastructure-mailbox acceptance and
+        // falling through to the two-frame application-envelope check below,
+        // which does not recognize command 40 and rejected it as a
+        // protocolError (surfaced downstream as `invalid_frame`, stalling
+        // the source's Prepare resend loop past the relocation admission
+        // budget).
+        && received.parts.length >= 1
         && isBareInfrastructureControl(header.command)
       ) {
         const accepted = this.mailbox.tryEnqueue({
