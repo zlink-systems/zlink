@@ -618,24 +618,37 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return resolved.thenCompose(target -> {
                 rememberResolvedSpotAuthority(target);
                 ZLinkBackendActorRef currentActorRef = context.actorRef();
-                String actorType = actorTypeOrEmpty(currentActorRef.actorId());
-                String transferId = newRelocationId(operationId).toString();
-                List<Message> admissionParts =
-                    ZLinkActorSpotRoutePackets.createCanonicalAdmissionRequestParts(
-                    transferId,
-                    timeout,
-                    currentActorRef.actorId(),
-                    actorType,
-                    currentActorRef,
-                    context.entrySpotNodeRid(),
-                    context.entrySpotId(),
-                    entryRouterChannelId(target),
-                    context.boundSessionSourceNodeRid(),
-                    context.boundSessionSourceSessionRid(),
-                    requestPart,
-                    operationId);
-                try {
-                    return requestTransferWithReconciliation(
+                return services.actors().readActorJoinAuthority(
+                        currentActorRef.actorId())
+                    .thenCompose(authority -> {
+                        if (authority.objectGeneration()
+                                != currentActorRef.generation()
+                            || !authority.ownerNodeRid().equals(
+                                currentActorRef.nodeRid())) {
+                            return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                    "Actor Join Authority row does not match the source Actor fence"));
+                        }
+                        String actorType = authority.stableType();
+                        String transferId = newRelocationId(operationId).toString();
+                        List<Message> admissionParts =
+                            ZLinkActorSpotRoutePackets.createCanonicalAdmissionRequestParts(
+                            transferId,
+                            timeout,
+                            currentActorRef.actorId(),
+                            actorType,
+                            currentActorRef,
+                            context.entrySpotNodeRid(),
+                            context.entrySpotId(),
+                            entryRouterChannelId(target),
+                            context.boundSessionSourceNodeRid(),
+                            context.boundSessionSourceSessionRid(),
+                            requestPart,
+                            operationId,
+                            authority);
+                        try {
+                            return requestTransferWithReconciliation(
                             target, admissionParts, deadlineNanos)
                         .thenCompose(replyParts -> {
                             try {
@@ -666,10 +679,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         })
                         .whenComplete((ignored, admissionError) ->
                             admissionParts.forEach(Message::close));
-                } catch (RuntimeException error) {
-                    admissionParts.forEach(Message::close);
-                    throw error;
-                }
+                        } catch (RuntimeException error) {
+                            admissionParts.forEach(Message::close);
+                            throw error;
+                        }
+                    });
             });
     }
 

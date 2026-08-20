@@ -126,6 +126,7 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
             new ZLinkJsonMessageSerializer(),
             ZLinkHandlerActivator.reflection());
         runtime.setMeshName("mesh");
+        runtime.setDirectJoinRelocationStores(locations);
         runtime.setRemoteAddressResolver(new FixedTargetResolver());
         List<ZLinkActorSpotRoutePackets.TransferRequest> requests =
             new CopyOnWriteArrayList<>();
@@ -249,6 +250,7 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
             new ZLinkJsonMessageSerializer(),
             ZLinkHandlerActivator.reflection());
         runtime.setMeshName("mesh");
+        runtime.setDirectJoinRelocationStores(locations);
         runtime.setRemoteAddressResolver(new FixedTargetResolver());
         List<ZLinkActorSpotRoutePackets.TransferRequest> requests =
             new CopyOnWriteArrayList<>();

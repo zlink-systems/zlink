@@ -1,0 +1,155 @@
+package systems.zlink.framework.runtime.spots;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.lang.reflect.Proxy;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+
+final class ZLinkActorJoinStoreAdmissionTest {
+    private static final String ACTOR_ID = "actor-a";
+    private static final RoutingId NODE = RoutingId.from("node-a");
+
+    @Test
+    void storeResolvedTypeAdmitsBeforeApplicationCallback() {
+        AtomicInteger callbacks = new AtomicInteger();
+        var result = admission(Map.of("canonical-type", Factory.class))
+            .prepareRoutedActor(request("canonical-type"), null, NODE, "spot", new Object(),
+                actor -> CompletableFuture.completedFuture(null),
+                ignored -> {
+                    callbacks.incrementAndGet();
+                    return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+                })
+            .toCompletableFuture().join();
+
+        assertEquals(true, result.accepted());
+        assertEquals(1, callbacks.get());
+    }
+
+    @Test
+    void forgedWireTypeIsTypeMismatchBeforeApplicationCallback() {
+        AtomicInteger callbacks = new AtomicInteger();
+        CompletionException error = assertThrows(CompletionException.class,
+            () -> admission(Map.of("canonical-type", Factory.class))
+                .prepareRoutedActor(request("forged-type"), null, NODE, "spot", new Object(),
+                    actor -> CompletableFuture.completedFuture(null),
+                    ignored -> {
+                        callbacks.incrementAndGet();
+                        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+                    })
+                .toCompletableFuture().join());
+
+        assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+            ((ZLinkFrameworkException) error.getCause()).kind());
+        assertEquals(0, callbacks.get());
+    }
+
+    @Test
+    void mismatchedFenceIsProtocolErrorBeforeApplicationCallback() {
+        AtomicInteger callbacks = new AtomicInteger();
+        CompletionException error = assertThrows(CompletionException.class,
+            () -> admission(Map.of("canonical-type", Factory.class))
+                .prepareRoutedActor(request("canonical-type", 8L),
+                    null, NODE, "spot", new Object(),
+                    actor -> CompletableFuture.completedFuture(null),
+                    ignored -> {
+                        callbacks.incrementAndGet();
+                        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+                    })
+                .toCompletableFuture().join());
+
+        assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+            ((ZLinkFrameworkException) error.getCause()).kind());
+        assertEquals(0, callbacks.get());
+    }
+
+    @Test
+    void missingFactoryIsTypedRejectionBeforeApplicationCallback() {
+        AtomicInteger callbacks = new AtomicInteger();
+        var result = admission(Map.of())
+            .prepareRoutedActor(request("canonical-type"), null, NODE, "spot", new Object(),
+                actor -> CompletableFuture.completedFuture(null),
+                ignored -> {
+                    callbacks.incrementAndGet();
+                    return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+                })
+            .toCompletableFuture().join();
+
+        assertEquals(false, result.accepted());
+        assertEquals(0, callbacks.get());
+    }
+
+    private static ZLinkActorSpotAdmission admission(
+        Map<String, Class<? extends ZLinkActorFactory>> factories) {
+        ZLinkInternalSpotNode node = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
+            ZLinkInternalSpotNode.class.getClassLoader(),
+            new Class<?>[] {ZLinkInternalSpotNode.class},
+            (proxy, method, arguments) -> "routingId".equals(method.getName())
+                ? NODE : null);
+        ZLinkActorRuntime runtime = new ZLinkActorRuntime(
+            node, factories, Duration.ofSeconds(1), new ZLinkJsonMessageSerializer());
+        runtime.setDirectJoinRelocationStores(store());
+        ZLinkActorSpotAdmission admission = new ZLinkActorSpotAdmission();
+        admission.attach(runtime, () -> false, null);
+        return admission;
+    }
+
+    private static ZLinkActorSpotRoutePackets.TransferRequest request(String type) {
+        return request(type, -9L);
+    }
+
+    private static ZLinkActorSpotRoutePackets.TransferRequest request(
+        String type,
+        long nodeGeneration) {
+        return new ZLinkActorSpotRoutePackets.TransferRequest(
+            "admission", "transfer-a", 1_000L, ACTOR_ID, type, NODE, 7L,
+            RoutingId.from("entry"), "entry", "router", null, null, null,
+            0, false, 0L, 0L, 0L, 0L, 0L, 0L, null, new byte[0],
+            nodeGeneration, 2L, 3L);
+    }
+
+    private static ZLinkLocationRepository store() {
+        ZLinkAuthoritySnapshot row = new ZLinkAuthoritySnapshot(
+            "v1", new byte[0], 7L, 2L, "owner", 3L,
+            new ZLinkPlacementAllocation(ZLinkPlacementAllocationState.ACTIVE,
+                ZLinkPlacementObjectKind.ACTOR, "canonical-type",
+                new ZLinkMeshNodeDescriptorKey("mesh", NODE), -9L,
+                ZLinkPlacementCapacityBundle.actor(1)), Instant.now());
+        return (ZLinkLocationRepository) Proxy.newProxyInstance(
+            ZLinkLocationRepository.class.getClassLoader(),
+            new Class<?>[] {ZLinkLocationRepository.class},
+            (proxy, method, arguments) -> "read".equals(method.getName())
+                ? CompletableFuture.completedFuture(row) : null);
+    }
+
+    public static final class Factory implements ZLinkActorFactory {
+        @Override public java.util.concurrent.CompletionStage<ZLinkActor> create(
+            ZLinkActorContext context) {
+            return CompletableFuture.failedFuture(new AssertionError("not instantiated"));
+        }
+    }
+}

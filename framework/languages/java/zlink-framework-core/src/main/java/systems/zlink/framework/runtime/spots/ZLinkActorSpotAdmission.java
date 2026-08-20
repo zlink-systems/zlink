@@ -26,6 +26,8 @@ import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferRole;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
@@ -376,6 +378,41 @@ final class ZLinkActorSpotAdmission {
         }
         requireActors().traceActorTransferMarker(
             "target_admission_received", request.actorId(), request.transferId());
+        return requireActors().readActorJoinAuthority(request.actorId())
+            .thenCompose(authority -> {
+                validateAuthorityFence(request, authority);
+                if (!request.actorType().equals(authority.stableType())) {
+                    return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                        "Actor Join stable type does not match its Authority row: "
+                            + request.actorId()));
+                }
+                ZLinkActorSpotRoutePackets.TransferRequest storeResolved =
+                    request.withActorType(authority.stableType());
+                try {
+                    // Missing local factory is a typed Join rejection, not a
+                    // handler/configuration failure after user admission.
+                    requireActors().resolveActorFactoryType(
+                        storeResolved.actorType());
+                } catch (ZLinkConfigurationException noFactory) {
+                    return CompletableFuture.completedFuture(
+                        ZLinkSpotActorJoinResult.reject());
+                }
+                return prepareRoutedActorFromAuthority(
+                    storeResolved, routeChannelName, sourcePeerRid, targetSpotId,
+                    targetSpot, joinedCallback, callback);
+            });
+    }
+
+    private CompletionStage<ZLinkSpotActorJoinResult>
+        prepareRoutedActorFromAuthority(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        String routeChannelName,
+        RoutingId sourcePeerRid,
+        String targetSpotId,
+        Object targetSpot,
+        Function<ZLinkActor, CompletionStage<Void>> joinedCallback,
+        Function<String, CompletionStage<ZLinkSpotActorJoinResult>> callback) {
         return invokeAdmissionCallback(callback, request.actorId())
             .thenApply(ZLinkActorSpotAdmission::effectiveResponse)
             .thenApply(response -> {
@@ -417,6 +454,29 @@ final class ZLinkActorSpotAdmission {
                         .conservativeReceiveChunkLimitBytes()));
                 return response;
             });
+    }
+
+    private static void validateAuthorityFence(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        ZLinkActorRuntime.ActorJoinAuthority authority) {
+        // Object/owner generations are bounded counters. The node lifecycle
+        // generation is an opaque full-range equality token, where only zero
+        // means absent (spec 01 glossary; spec 51 §9).
+        if (request.actorGeneration() <= 0
+            || request.authorityOwnerGeneration() <= 0
+            || request.ownerLeaseGeneration() <= 0
+            || request.actorNodeGeneration() == 0
+            || request.actorGeneration() != authority.objectGeneration()
+            || !request.actorNodeRid().equals(authority.ownerNodeRid())
+            || request.actorNodeGeneration() != authority.ownerNodeGeneration()
+            || request.authorityOwnerGeneration()
+                != authority.authorityOwnerGeneration()
+            || request.ownerLeaseGeneration() != authority.ownerLeaseGeneration()) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "Actor Join Authority row does not exactly match its route fence: "
+                    + request.actorId());
+        }
     }
 
     CompletionStage<RoutedJoin> commitRoutedActor(
