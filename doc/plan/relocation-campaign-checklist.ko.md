@@ -1134,7 +1134,7 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       "Frame 0 body + optional application payload frame(application-payload-envelope-v1: version+length+packetName+
       contentType+bytes)" 모델로 확장(현재 body-only, decode 시 trailing 거부). 4언어 positive/negative fixture +
       request golden 고정. (스코핑: doc/plan/canonical-transport-swap-scope.ko.md)
-- [~] **canon-S4b 4언어 수신자 canonical 28 decode** — **node 완료 `989df945ad`(Claude 독립 검증)**: raw dispatch가 canonical 28 multipart를 S4a 생성 decoder로 decode+S1 Store resolution 재사용+payload 복원+cmd20 reply tail. **회귀 캐치·수정**(사설 relocation transfer도 cmd28 공유→transferId 마커로 legacy 분기+canonical 실패 시 legacy 폴백; TicTacToe 5연속). m6c 91/91. **java/dotnet/cpp 병렬 진행**(동일 가드레일): raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
+- [x] **canon-S4b 4언어 수신자 canonical 28 decode — 완주(Claude 독립 검증)**: node `989df945ad`·java `ac562c94a1`·cpp `7eb85827b0`·dotnet `1aad623520`. 모든 언어 raw dispatch가 canonical 28 multipart를 S4a 생성 decoder로 decode+S3 Store resolution 재사용+payload 복원+cmd20 reply tail, 사설 record(transferId)는 legacy 폴백. **실회귀 2건 캐치·수정**(node TicTacToe·cpp cutover — 사설 relocation도 cmd28 공유), dotnet export 위반은 생성코덱 internal화로 수정(게이트 무약화). STOP 2건(java ST-R1·dotnet docs)은 pre-existing 판명. 각 언어 게이트+샘플+relocation Claude 독립 검증: raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
       envelope decode→기존 Store fence/type resolution(S3) 재사용→payload를 typed message로 복원→command-20 canonical
       reply tail 반환. 사설 dialect 수신자는 default 유지.
 - [ ] **canon-S4c 4언어 발신 canonical 28**: 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
