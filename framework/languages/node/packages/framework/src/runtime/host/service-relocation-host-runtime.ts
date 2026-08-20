@@ -16,7 +16,7 @@ import type {
   ZLinkAuthoritySnapshot,
   ZLinkCapacityVector,
   ZLinkLocationOwnerToken
-} from '../../contracts/Locations';
+} from '../locations/internal-location-contracts';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,

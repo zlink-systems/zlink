@@ -1,4 +1,4 @@
-import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ServiceRelocationEnvelope } from './service-relocation-runtime';
 
 export interface ServiceRelocationStaging {

@@ -80,7 +80,7 @@ export interface ZLinkSpotActorTransferRuntime {
     membershipEpoch: bigint,
     deadlineAtMs: number,
     signal?: AbortSignal
-  ): Promise<import('../../contracts/Locations').ZLinkAuthoritySnapshot>;
+  ): Promise<import('../locations/internal-location-contracts').ZLinkAuthoritySnapshot>;
   rememberRoutedActorTransferTarget(
     actorId: string,
     target: ZLinkRemoteBoundSessionTarget | undefined

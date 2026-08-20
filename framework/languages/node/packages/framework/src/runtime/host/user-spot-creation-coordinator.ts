@@ -9,7 +9,7 @@ import type {
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken,
   ZLinkObjectReserveResult
-} from '../../contracts/Locations';
+} from '../locations/internal-location-contracts';
 import type { ZLinkAuthorityStore, ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
 import {
   ZLinkFrameworkException,

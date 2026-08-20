@@ -6,7 +6,7 @@ import type {
   ZLinkBlobReference,
   ZLinkRelocationStore
 } from '../../contracts';
-import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
 import { ZLinkEncodedPayload, ZLinkMessage } from '../../contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';

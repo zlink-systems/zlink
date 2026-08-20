@@ -54,8 +54,8 @@ import type {
   ZLinkOwnerLeaseReleaseResult,
   ZLinkOwnerLeaseRenewResult,
   ZLinkPlacementAllocation
-} from '../../contracts/Locations';
-import { ZLinkLocationWriteIntent } from '../../contracts/Locations';
+} from './internal-location-contracts';
+import { ZLinkLocationWriteIntent } from './internal-location-contracts';
 import type {
   ZLinkActorLocation,
   ZLinkActorLocationFilter,

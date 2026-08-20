@@ -3,7 +3,7 @@ import type { RoutingId } from '../../contracts/Common';
 import type {
   ZLinkAuthoritySnapshot,
   ZLinkAuthorityStoreVersion
-} from '../../contracts/Locations';
+} from './internal-location-contracts';
 import {
   ZLinkLocationKind,
   ZLinkLocationWriteIntent,

@@ -6,7 +6,7 @@ import {
   type ZLinkActorLocation
 } from './internal-location-contracts';
 import type { ZLinkActorLocationStore, ZLinkAuthorityStore } from './internal-store-contracts';
-import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from './internal-location-contracts';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import { ZLinkLocationKeyCodec } from './key-codec';

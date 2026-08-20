@@ -32,7 +32,7 @@ import { encodeAuthorityKey } from './authority-key-codec';
 import {
   ZLinkSpotKind
 } from '../../contracts/Spots';
-import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from './internal-location-contracts';
 import type {
   SpotHandle,
   ZLinkActorSpotHandleResolver,

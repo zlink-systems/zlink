@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ZLinkPlacementObjectKind } from '../../contracts/Locations';
-import type { ZLinkAuthorityKey } from '../../contracts/Locations';
+import type { ZLinkPlacementObjectKind, ZLinkAuthorityKey } from '../locations/internal-location-contracts';
 import {
   decodeServiceWireFrozenRecordPrefix
 } from './service-stateful-wire-codec';

@@ -13,7 +13,7 @@ import type {
   ZLinkAggregateId,
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken
-} from '../../contracts/Locations';
+} from '../locations/internal-location-contracts';
 import type {
   ZLinkAuthorityStore,
   ZLinkObjectCreationStore,
