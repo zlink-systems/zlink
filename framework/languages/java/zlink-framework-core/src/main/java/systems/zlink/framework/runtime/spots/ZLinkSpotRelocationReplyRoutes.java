@@ -536,11 +536,11 @@ final class ZLinkSpotRelocationReplyRoutes {
             // 01-glossary "Lifecycle generation"): full range, only zero is
             // unassigned, so a signed `<= 0` sentinel wrongly rejects a
             // legitimate negative-as-long value (bit 63 set). The other
-            // fields here (replyRouteId, objectGeneration,
-            // sourceOwnerLeaseGeneration, targetAuthorityOwnerGeneration)
-            // are spec-bounded to `1..long.MaxValue`, so `<= 0` is correct
-            // for them.
-            if (replyRouteId <= 0 || objectGeneration <= 0
+            // fields here (objectGeneration, sourceOwnerLeaseGeneration,
+            // targetAuthorityOwnerGeneration) are spec-bounded to
+            // `1..long.MaxValue`, so `<= 0` is correct for them. ReplyRouteId
+            // is separately a non-zero u64 identity (spec 51 §11).
+            if (replyRouteId == 0 || objectGeneration <= 0
                 || sourceOwnerLeaseGeneration <= 0
                 || sourceNodeGeneration == 0
                 || targetNodeGeneration == 0

@@ -61,6 +61,16 @@ final class ZLinkServiceMessageFollowWireCodecTest {
     }
 
     @Test
+    void highBitTargetGenerationRoundTripsAsAnOpaqueU64() {
+        long highBit = Long.MIN_VALUE;
+        var route = new ZLinkServiceMessageFollowWireCodec.SpotRoute(
+            "spot", 3, RoutingId.from("node"), highBit, 5, 6);
+        var notice = new ZLinkServiceMessageFollowWireCodec.Notice(
+            route, route, 1, 0, 0, 1, 2, 3);
+        assertEquals(notice, codec.decode(codec.encode(notice)));
+    }
+
+    @Test
     void rejectsWrongVersionLengthTrailingBytesAndZeroOperation() {
         var route = new ZLinkServiceMessageFollowWireCodec.SpotRoute(
             "spot", 3, RoutingId.from("node"), 4, 5, 6);

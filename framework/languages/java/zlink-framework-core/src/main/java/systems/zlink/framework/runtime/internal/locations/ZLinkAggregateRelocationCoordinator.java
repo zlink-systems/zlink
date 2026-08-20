@@ -562,9 +562,9 @@ public final class ZLinkAggregateRelocationCoordinator {
             Objects.requireNonNull(aggregateId, "aggregateId");
             if (aggregateId.equals(new UUID(0, 0))
                 || aggregateGeneration <= 0
-                || targetDescriptorLifecycleGeneration <= 0) {
+                || targetDescriptorLifecycleGeneration == 0) {
                 throw new IllegalArgumentException(
-                    "aggregate and lifecycle generations must be positive");
+                    "aggregate generation and lifecycle token must be non-zero");
             }
             participants = List.copyOf(
                 Objects.requireNonNull(participants, "participants"));

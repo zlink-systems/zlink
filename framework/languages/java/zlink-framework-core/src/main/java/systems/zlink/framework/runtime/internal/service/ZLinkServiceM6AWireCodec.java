@@ -189,7 +189,7 @@ public final class ZLinkServiceM6AWireCodec {
     public byte[] encodeNodeRequestHeader(long correlation, int flags) {
         requireCorrelation(correlation);
         Writer result = prefix(ServiceWireConstants.COMMAND_NODE_REQUEST, flags);
-        result.u64(correlation);
+        result.opaqueU64(correlation);
         return result.toByteArray();
     }
 
@@ -199,7 +199,7 @@ public final class ZLinkServiceM6AWireCodec {
             throw protocol("invalid nodeRequest header");
         }
         Reader reader = new Reader(frame, PREFIX_BYTES);
-        long correlation = reader.nonzeroU64("correlation");
+        long correlation = reader.opaqueNonzeroU64("correlation");
         reader.end();
         return correlation;
     }
@@ -228,7 +228,7 @@ public final class ZLinkServiceM6AWireCodec {
         requireCorrelation(correlation);
         Writer result =
             prefix(ServiceWireConstants.COMMAND_CHANNEL_REQUEST, flags);
-        result.u64(correlation);
+        result.opaqueU64(correlation);
         result.text8(channelName, "channelName");
         return result.toByteArray();
     }
@@ -239,7 +239,7 @@ public final class ZLinkServiceM6AWireCodec {
             throw protocol("invalid channelRequest header");
         }
         Reader reader = new Reader(frame, PREFIX_BYTES);
-        long correlation = reader.nonzeroU64("correlation");
+        long correlation = reader.opaqueNonzeroU64("correlation");
         String channelName = reader.text8("channelName");
         reader.end();
         return new ChannelRequest(correlation, channelName);
@@ -251,7 +251,7 @@ public final class ZLinkServiceM6AWireCodec {
         int failureCode) {
         validateReply(correlation, terminalResult, failureCode);
         Writer result = prefix(ServiceWireConstants.COMMAND_REPLY, 0);
-        result.u64(correlation);
+        result.opaqueU64(correlation);
         result.u32(terminalResult);
         result.u32(failureCode);
         return result.toByteArray();
@@ -274,7 +274,7 @@ public final class ZLinkServiceM6AWireCodec {
         //  Do not call reader.end() here: it would reject a reply that
         //  carries a non-empty tail.
         Reader reader = new Reader(frame, PREFIX_BYTES);
-        long correlation = reader.nonzeroU64("correlation");
+        long correlation = reader.opaqueNonzeroU64("correlation");
         int terminal = reader.intU32("terminalResult");
         int failure = reader.intU32("failureCode");
         validateReply(correlation, terminal, failure);
@@ -455,14 +455,14 @@ public final class ZLinkServiceM6AWireCodec {
         //  exact schema terminal, and an unknown failure code is rejected as a
         //  protocol error before dispatch. The generated predicate is the
         //  single source of that pairing table.
-        if (correlation <= 0
+        if (correlation == 0
             || !ServiceWireConstants.validTerminalFailure(terminal, failure)) {
             throw protocol("invalid reply terminal fields");
         }
     }
 
     private static void requireCorrelation(long correlation) {
-        if (correlation <= 0) {
+        if (correlation == 0) {
             throw protocol("correlation must be non-zero");
         }
     }

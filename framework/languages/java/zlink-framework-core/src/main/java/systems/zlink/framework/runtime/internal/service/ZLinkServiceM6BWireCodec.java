@@ -31,7 +31,7 @@ public final class ZLinkServiceM6BWireCodec {
         SpotRouteFence target) {
         if ((flags & ~ServiceWireConstants.FLAG_METADATA) != 0
             || request != (correlation != null)
-            || (correlation != null && correlation <= 0)
+            || (correlation != null && correlation == 0)
             || operationHigh == 0 && operationLow == 0
             || messageFollowHopCount < 0 || messageFollowHopCount > 8) {
             throw protocol("invalid Spot message header");
@@ -44,7 +44,7 @@ public final class ZLinkServiceM6BWireCodec {
                 : ServiceWireConstants.COMMAND_SPOT_SEND,
             flags);
         if (correlation != null) {
-            writer.u64(correlation);
+            writer.opaqueNonzero(correlation, "correlation");
         }
         writer.bits64(operationHigh);
         writer.bits64(operationLow);
@@ -53,7 +53,7 @@ public final class ZLinkServiceM6BWireCodec {
         writer.text8(target.spotId(), "targetSpotId");
         writer.nonzero(target.spotGeneration(), "targetSpotGeneration");
         writer.rid(target.targetNodeRid(), "targetNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             target.targetNodeGeneration(), "targetNodeGeneration");
         writer.nonzero(
             target.authorityOwnerGeneration(),
@@ -147,7 +147,7 @@ public final class ZLinkServiceM6BWireCodec {
                 | ServiceWireConstants.FLAG_SOURCE_SPOT_ID;
         if ((flags & ~(ServiceWireConstants.FLAG_METADATA | boundFlags)) != 0
             || request != (correlation != null)
-            || (correlation != null && correlation <= 0)
+            || (correlation != null && correlation == 0)
             || ((flags & boundFlags) != 0
                 && (flags & boundFlags) != boundFlags)
             || ((flags & boundFlags) == boundFlags)
@@ -163,7 +163,7 @@ public final class ZLinkServiceM6BWireCodec {
                 : ServiceWireConstants.COMMAND_ACTOR_SEND,
             flags);
         if (correlation != null) {
-            writer.u64(correlation);
+            writer.opaqueNonzero(correlation, "correlation");
         }
         writer.bits64(operationHigh);
         writer.bits64(operationLow);
@@ -178,7 +178,7 @@ public final class ZLinkServiceM6BWireCodec {
         writer.nonzero(
             target.actor().generation(), "targetActorGeneration");
         writer.rid(target.actor().nodeRid(), "targetNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             target.targetNodeGeneration(), "targetNodeGeneration");
         writer.nonzero(
             target.authorityOwnerGeneration(),
@@ -302,7 +302,7 @@ public final class ZLinkServiceM6BWireCodec {
         Writer writer = prefix(
             ServiceWireConstants.COMMAND_BOUND_SESSION_BIND,
             0);
-        writer.nonzero(binding.correlation(), "correlation");
+        writer.opaqueNonzero(binding.correlation(), "correlation");
         writeActorRoute(writer, binding.actor());
         writer.rid(binding.sessionRid(), "sessionRid");
         writer.u8(binding.active() ? 1 : 2);
@@ -356,7 +356,7 @@ public final class ZLinkServiceM6BWireCodec {
         writeActorRoute(writer, replacement.actorAuthority());
         RetiredSessionRouteFence retired = replacement.retiredSession();
         writer.rid(retired.sessionOwnerNodeRid(), "sessionOwnerNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             retired.sessionOwnerNodeGeneration(),
             "sessionOwnerNodeGeneration");
         writer.text8(retired.sessionOwnerId(), "sessionOwnerId");
@@ -440,7 +440,7 @@ public final class ZLinkServiceM6BWireCodec {
         }
         Writer route = new Writer();
         route.rid(message.route().targetNodeRid(), "targetNodeRid");
-        route.nonzero(
+        route.opaqueNonzero(
             message.route().targetNodeGeneration(),
             "targetNodeGeneration");
         route.text8(message.route().targetSpotId(), "targetSpotId");
@@ -462,7 +462,7 @@ public final class ZLinkServiceM6BWireCodec {
         writer.u8(1);
         writer.u16(routeBody.length);
         writer.bytes(routeBody);
-        writer.nonzero(
+        writer.opaqueNonzero(
             message.sourceNodeGeneration(), "sourceNodeGeneration");
         writer.rid(message.sourceNodeRid(), "sourceNodeRid");
         writer.optionalText8(message.sourceSpotId(), "sourceSpotId");
@@ -470,7 +470,7 @@ public final class ZLinkServiceM6BWireCodec {
         writer.bits64(message.operationHigh());
         writer.bits64(message.operationLow());
         if (message.replyRouteId() != null) {
-            writer.nonzero(message.replyRouteId(), "replyRouteId");
+            writer.opaqueNonzero(message.replyRouteId(), "replyRouteId");
         }
         return writer.toByteArray();
     }
@@ -541,11 +541,11 @@ public final class ZLinkServiceM6BWireCodec {
         Writer writer = prefix(
             ServiceWireConstants.COMMAND_USER_SPOT_CREATE,
             0);
-        writer.nonzero(message.correlation(), "correlation");
-        writer.u64(message.operationHigh());
-        writer.u64(message.operationLow());
+        writer.opaqueNonzero(message.correlation(), "correlation");
+        writer.bits64(message.operationHigh());
+        writer.bits64(message.operationLow());
         writer.rid(message.sourceNodeRid(), "sourceNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             message.sourceNodeGeneration(), "sourceNodeGeneration");
         writer.text8(message.spotId(), "spotId");
         writer.text8(message.stableType(), "stableType");
@@ -563,8 +563,8 @@ public final class ZLinkServiceM6BWireCodec {
             throw protocol("command is not userSpotCreate");
         }
         long correlation = reader.nonzeroU64("correlation");
-        long operationHigh = reader.u64("operation.high");
-        long operationLow = reader.u64("operation.low");
+        long operationHigh = reader.bits64("operation.high");
+        long operationLow = reader.bits64("operation.low");
         RoutingId sourceNodeRid = reader.rid("sourceNodeRid");
         long sourceNodeGeneration =
             reader.nonzeroU64("sourceNodeGeneration");
@@ -601,11 +601,11 @@ public final class ZLinkServiceM6BWireCodec {
             message.deadlineUnixMs());
         Writer writer = prefix(
             ServiceWireConstants.COMMAND_ACTOR_CREATE, 0);
-        writer.nonzero(message.correlation(), "correlation");
-        writer.u64(message.operationHigh());
-        writer.u64(message.operationLow());
+        writer.opaqueNonzero(message.correlation(), "correlation");
+        writer.bits64(message.operationHigh());
+        writer.bits64(message.operationLow());
         writer.rid(message.sourceNodeRid(), "sourceNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             message.sourceNodeGeneration(), "sourceNodeGeneration");
         writer.text8(message.actorId(), "actorId");
         writer.text8(message.stableType(), "stableType");
@@ -623,8 +623,8 @@ public final class ZLinkServiceM6BWireCodec {
             throw protocol("command is not actorCreate");
         }
         long correlation = reader.nonzeroU64("correlation");
-        long operationHigh = reader.u64("operation.high");
-        long operationLow = reader.u64("operation.low");
+        long operationHigh = reader.bits64("operation.high");
+        long operationLow = reader.bits64("operation.low");
         RoutingId sourceNodeRid = reader.rid("sourceNodeRid");
         long sourceNodeGeneration =
             reader.nonzeroU64("sourceNodeGeneration");
@@ -665,7 +665,7 @@ public final class ZLinkServiceM6BWireCodec {
             message.target().objectGeneration(), "objectGeneration");
         target.rid(
             message.target().targetNodeRid(), "targetNodeRid");
-        target.nonzero(
+        target.opaqueNonzero(
             message.target().targetNodeGeneration(),
             "targetNodeGeneration");
         target.nonzero(
@@ -678,11 +678,11 @@ public final class ZLinkServiceM6BWireCodec {
         Writer writer = prefix(
             ServiceWireConstants.COMMAND_USER_SPOT_CLOSE,
             0);
-        writer.nonzero(message.correlation(), "correlation");
-        writer.u64(message.operationHigh());
-        writer.u64(message.operationLow());
+        writer.opaqueNonzero(message.correlation(), "correlation");
+        writer.bits64(message.operationHigh());
+        writer.bits64(message.operationLow());
         writer.rid(message.sourceNodeRid(), "sourceNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             message.sourceNodeGeneration(), "sourceNodeGeneration");
         writer.u8(1);
         writer.u16(targetBody.length);
@@ -700,8 +700,8 @@ public final class ZLinkServiceM6BWireCodec {
             throw protocol("command is not userSpotClose");
         }
         long correlation = reader.nonzeroU64("correlation");
-        long operationHigh = reader.u64("operation.high");
-        long operationLow = reader.u64("operation.low");
+        long operationHigh = reader.bits64("operation.high");
+        long operationLow = reader.bits64("operation.low");
         RoutingId sourceNodeRid = reader.rid("sourceNodeRid");
         long sourceNodeGeneration =
             reader.nonzeroU64("sourceNodeGeneration");
@@ -1029,7 +1029,8 @@ public final class ZLinkServiceM6BWireCodec {
             selected.nonzero(route.currentAuthorityOwnerGeneration(),
                 "targetAuthorityOwnerGeneration");
             selected.rid(route.targetNodeRid(), "targetNodeRid");
-            selected.nonzero(route.targetNodeGeneration(), "targetNodeGeneration");
+            selected.opaqueNonzero(
+                route.targetNodeGeneration(), "targetNodeGeneration");
         } else {
             selected.nonzero(route.currentAuthorityOwnerGeneration(),
                 "currentAuthorityOwnerGeneration");
@@ -1505,7 +1506,7 @@ public final class ZLinkServiceM6BWireCodec {
         public BoundSessionBind {
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(sessionRid, "sessionRid");
-            if (correlation <= 0 || bindingGeneration <= 0) {
+            if (correlation == 0 || bindingGeneration <= 0) {
                 throw protocol(
                     "bound session generations must be nonzero");
             }
@@ -1840,7 +1841,7 @@ public final class ZLinkServiceM6BWireCodec {
         // lifecycle-generation opaque equality token (spec "Lifecycle
         // generation"): full range, only zero unassigned, so `<= 0` is
         // wrong there too.
-        if (correlation <= 0
+        if (correlation == 0
             || (operationHigh == 0 && operationLow == 0)
             || sourceNodeGeneration == 0
             || deadlineUnixMs <= 0) {
@@ -1861,7 +1862,7 @@ public final class ZLinkServiceM6BWireCodec {
             "authorityOwnerGeneration");
         writer.rid(
             reservation.targetNodeRid(), "targetNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             reservation.targetNodeGeneration(),
             "targetNodeGeneration");
         writer.text8(
@@ -1891,14 +1892,14 @@ public final class ZLinkServiceM6BWireCodec {
         long correlation,
         int terminalResult,
         int failureCode) {
-        if (correlation <= 0
+        if (correlation == 0
             || terminalResult < 0
             || failureCode < 0
             || !validTerminalFailurePair(terminalResult, failureCode)) {
             throw protocol("invalid terminal reply");
         }
         Writer writer = prefix(ServiceWireConstants.COMMAND_REPLY, 0);
-        writer.nonzero(correlation, "correlation");
+        writer.opaqueNonzero(correlation, "correlation");
         writer.u32(terminalResult, "terminalResult");
         writer.u32(failureCode, "failureCode");
         return writer;
@@ -1957,7 +1958,7 @@ public final class ZLinkServiceM6BWireCodec {
         writer.nonzero(coordinator.leaseGeneration(),
             "coordinatorLeaseGeneration");
         writer.rid(coordinator.nodeRid(), "coordinatorNodeRid");
-        writer.nonzero(coordinator.nodeGeneration(),
+        writer.opaqueNonzero(coordinator.nodeGeneration(),
             "coordinatorNodeGeneration");
         writer.text16(coordinator.expectedAuthorityStoreVersion(),
             "expectedAuthorityStoreVersion");
@@ -1990,7 +1991,7 @@ public final class ZLinkServiceM6BWireCodec {
         Writer writer,
         SessionOwnerFence session) {
         writer.rid(session.nodeRid(), "sessionOwnerNodeRid");
-        writer.nonzero(session.nodeGeneration(),
+        writer.opaqueNonzero(session.nodeGeneration(),
             "sessionOwnerNodeGeneration");
         writer.text8(session.ownerId(), "sessionOwnerId");
         writer.nonzero(session.ownerLeaseGeneration(),
@@ -2016,7 +2017,7 @@ public final class ZLinkServiceM6BWireCodec {
         writer.text8(target.actor().actorId(), "actorId");
         writer.nonzero(target.actor().generation(), "actorGeneration");
         writer.rid(target.actor().nodeRid(), "targetNodeRid");
-        writer.nonzero(
+        writer.opaqueNonzero(
             target.targetNodeGeneration(), "targetNodeGeneration");
         writer.nonzero(
             target.authorityOwnerGeneration(),
@@ -2095,6 +2096,13 @@ public final class ZLinkServiceM6BWireCodec {
                 throw protocol(field + " must be nonzero");
             }
             u64(value);
+        }
+
+        void opaqueNonzero(long value, String field) {
+            if (value == 0) {
+                throw protocol(field + " must be nonzero");
+            }
+            bits64(value);
         }
 
         void rid(RoutingId value, String field) {

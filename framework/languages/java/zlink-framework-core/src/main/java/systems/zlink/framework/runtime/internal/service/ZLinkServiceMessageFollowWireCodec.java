@@ -105,7 +105,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
             writeText8(body, actor.actorId(), "actorId");
             writeNonzero(body, actor.objectGeneration(), "objectGeneration");
             writeRid(body, actor.targetNodeRid(), "targetNodeRid");
-            writeNonzero(
+            writeOpaqueNonzero(
                 body, actor.targetNodeGeneration(), "targetNodeGeneration");
             writeNonzero(
                 body,
@@ -118,7 +118,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
             writeText8(body, spot.spotId(), "spotId");
             writeNonzero(body, spot.objectGeneration(), "objectGeneration");
             writeRid(body, spot.targetNodeRid(), "targetNodeRid");
-            writeNonzero(
+            writeOpaqueNonzero(
                 body, spot.targetNodeGeneration(), "targetNodeGeneration");
             writeNonzero(
                 body,
@@ -200,6 +200,14 @@ public final class ZLinkServiceMessageFollowWireCodec {
     private static void writeNonzero(
         ByteArrayOutputStream output, long value, String field) {
         if (value <= 0) {
+            throw protocol(field + " must be nonzero");
+        }
+        writeBits64(output, value);
+    }
+
+    private static void writeOpaqueNonzero(
+        ByteArrayOutputStream output, long value, String field) {
+        if (value == 0) {
             throw protocol(field + " must be nonzero");
         }
         writeBits64(output, value);

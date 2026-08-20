@@ -40,9 +40,9 @@ public record ZLinkAggregatePrepareRequest(
                 "inventoryDigest must contain exactly 32 bytes");
         }
         Objects.requireNonNull(targetDescriptor, "targetDescriptor");
-        if (targetDescriptorLifecycleGeneration <= 0) {
+        if (targetDescriptorLifecycleGeneration == 0) {
             throw new IllegalArgumentException(
-                "targetDescriptorLifecycleGeneration must be positive");
+                "targetDescriptorLifecycleGeneration must be non-zero");
         }
         Objects.requireNonNull(capacityBundle, "capacityBundle");
         Objects.requireNonNull(targetOwner, "targetOwner");
