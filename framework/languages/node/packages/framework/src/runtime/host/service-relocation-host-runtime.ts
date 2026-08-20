@@ -349,6 +349,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     new BoundedReplayMap<string, TerminalSessionRelocationControl>(
       SERVICE_CONTROL_TERMINAL_CAPACITY
     );
+  /**
+   * A command 44 submit has no response path. Keep a bounded record of a
+   * rejected one-way attempt without turning the committed relocation into a
+   * retry loop.
+   */
+  private readonly failedSessionRouteSubmits =
+    new BoundedReplayMap<string, SubmitResult>(SERVICE_CONTROL_TERMINAL_CAPACITY);
   private readonly sourceRelocationIds = new Set<string>();
   private readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
   /**
@@ -502,6 +509,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     this.pendingSessionRelocations.clear();
     this.terminalSessionRelocations.clear();
+    this.failedSessionRouteSubmits.clear();
     this.sourceActorJoinProfiles.clear();
     this.terminalActorJoinSourceLeaves.clear();
     this.options.boundSessionRelocation?.clear?.();
@@ -977,32 +985,22 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       return;
     }
-    //  Spec 32:87 — a route/connection that is not usable yet is the
-    //  retryable Unavailable class. A one-shot submit rejection here loses
-    //  the post-commit route publication (command 44), so the sealed
-    //  session is never released and dies on the seal timeout instead.
-    //  Retry the identical bytes within the seal window; identical-byte
-    //  resends of this one-way control are the same idempotent pattern
-    //  the command 42 loop uses.
+    //  Spec 20 §5.1 / config-10 ST-E1C: command 44 is a one-way control with
+    //  no response or application ACK. Submit exactly once; a rejected
+    //  submit is retained only as bounded per-attempt state. The receiving
+    //  Session owns seal-timeout cleanup, after which reconnect plus explicit
+    //  bind is the only recovery path -- never a second command 44 send.
     const bytes = encodeSessionRelocationRoute(request);
-    const deadline = Date.now() + 2_500;
-    for (;;) {
-      signal?.throwIfAborted();
-      const submitted = await this.sendInfrastructureControl(meshName,
-        targetNodeRid,
-        bytes
+    signal?.throwIfAborted();
+    const submitted = await this.sendInfrastructureControl(meshName,
+      targetNodeRid,
+      bytes
+    );
+    if (submitted !== SubmitResult.Ok) {
+      this.failedSessionRouteSubmits.remember(
+        sessionRelocationRouteSubmitKey(request, targetNodeRid),
+        submitted
       );
-      if (submitted === SubmitResult.Ok) return;
-      if (Date.now() > deadline) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
-          'Session relocation route was not accepted by RouteMesh'
-            + ` (submit=${String(submitted)}`
-            + ` target=${String(targetNodeRid)}).`,
-          true
-        );
-      }
-      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 
@@ -5016,6 +5014,13 @@ function controlResponseKey(packet: ZLinkServiceRelocationControlRequest): strin
 
 function sessionRelocationPendingKey(request: ServiceSessionRelocationSeal): string {
   return sessionRelocationIdentityKey(request, request.actor.actor);
+}
+
+function sessionRelocationRouteSubmitKey(
+  request: ServiceSessionRelocationRoute,
+  targetNodeRid: RoutingId
+): string {
+  return `${sessionRelocationIdentityKey(request, request.actor)}:${String(targetNodeRid)}`;
 }
 
 function sessionRelocationResponseKey(response: ServiceSessionRelocationSealed): string {

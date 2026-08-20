@@ -15,6 +15,7 @@ import {
   encodeServiceRelocationControlRequest
 } from '../../packages/framework/src/runtime/host/service-relocation-control';
 import {
+  decodeSessionRelocationRoute,
   decodeSessionRelocationSealed,
   encodeServiceWireFrozenActorApplicationRecord,
   encodeSessionRelocationRoute,
@@ -324,6 +325,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
   };
   const sent: Array<{ readonly target: string; readonly bytes: Buffer }> = [];
   const received: string[] = [];
+  let rejectRouteSubmit = false;
   const runtime = new ZLinkHostServiceRelocationRuntime({
     currentOwner: () => ({ ownerId: 'session-owner-id', leaseGeneration: 8n }),
     meshNode: () => ({
@@ -334,7 +336,9 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
       ],
       sendInfrastructureControl: (targetRid: string, bytes: Uint8Array) => {
         sent.push({ target: targetRid, bytes: Buffer.from(bytes) });
-        return SubmitResult.Ok;
+        return rejectRouteSubmit && targetRid === 'target'
+          ? SubmitResult.NotConnected
+          : SubmitResult.Ok;
       }
     }),
     boundSessionRelocation: {
@@ -400,6 +404,19 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     await runtime.sendSessionRelocationRoute('mesh-a', 'session-owner', selfRoute);
     assert.equal(sent.length, 1, 'self-target command 44 dispatches locally');
     assert.deepEqual(received, ['seal', 'route', 'seal', 'route']);
+
+    // A remote command 44 rejection is terminal for this one-way attempt:
+    // it neither retries the identical control nor changes the committed
+    // relocation terminal. The sealed Session performs its own timeout
+    // cleanup; later recovery requires reconnect and explicit bind.
+    rejectRouteSubmit = true;
+    await runtime.sendSessionRelocationRoute('mesh-a', 'target', route);
+    assert.equal(sent.length, 2, 'rejected command 44 has exactly one submit');
+    assert.equal(sent[1]!.target, 'target');
+    assert.deepEqual(decodeSessionRelocationRoute(sent[1]!.bytes), {
+      ...route,
+      actor: { ...route.actor, nodeRid: '' }
+    });
   } finally {
     await runtime.dispose();
   }
