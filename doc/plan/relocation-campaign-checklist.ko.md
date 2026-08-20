@@ -722,6 +722,8 @@
       트레이스 무발화 — java fix 무관, 미특성화·별도 세션) ⓑ 동일 버그류 미증거
       2곳(ZLinkInMemoryLocationStore:832 `<1`, ZLinkJavaRawSpotNode:415 `<=0`)
       cross-language 경로 확인 후 소탕 필요.
+      **Claude 독립 확인(2026-08-20, 커밋 HEAD, java 호스트 재빌드): dotnet→java
+      8/8 PASS** → 에이전트 15/15 + 8/8 = **23/23, dotnet→java 결정적 그린 확정.**
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
