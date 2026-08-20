@@ -1151,7 +1151,16 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       G-2 Node는 이 flake로 결정적 6/6 아님(운좋은 6/6). focused 세션 과제로 이월(캠페인 회귀 아님). 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
       observed target authority+admitted peer가 canonical capability 증명 시만 enable(아니면 dialect 유지). transfer ID/
       phase/reservation은 local state.
-- [ ] **canon-S4d bound Session 분리**: 28 전 42/43 seal + target commit 후 44 route update(28 sideband 금지).
+- [ ] **canon-S4d relocation-state 통합 seam(cpp/dotnet 발신 완주 근거) — 스코핑 완료(계획: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md)**:
+      language-internal `CanonicalActorJoinAttempt` seam(wire 무변경)으로 canonical accepted tail을 기존 relocation
+      prepare→transfer→CAS→handoff→cleanup→completion 체인에 연결. **불변식**: canonical accepted=admission accepted
+      (public Join/source completion terminal 아님), RelocationId/handoffId/reservation/completion identity는 wire 금지,
+      canonical correlation=idempotency key(public completion ID와 별개), pre-commit 실패=target abort+source seal rollback,
+      post-CAS 실패=reconciliation(source replay 금지). 슬라이스: (1) seam+lifecycle test → (2) **cpp target bridge**
+      (wireAttemptKey를 receiver+prepare 공유, seal_remote_application_actor_join 진입 필수, deliver 즉시호출 제거) →
+      (3) **.NET admission/relocation 분해**(SubmitRoutedJoinActorTransactionAsync→AcquireAdmissionContext+ContinueRelocation) →
+      (4) .NET canonical sender → (5) 검증(seam test + cpp Bingo/TicTacToe + .NET relocation sample).
+- [ ] **canon-S4d-b bound Session 분리**: 28 전 42/43 seal + target commit 후 44 route update(28 sideband 금지).
 - [ ] **canon-S4e 크로스랭 harness User Spot JoinSpot stage**: JoinEntrySpot 보존 + canonical 28 pairwise matrix(Node↔.NET↔Java↔C++)로
       canonical request/reply/rejected admission/payload round-trip/Store-fence rejection 검증.
 - [ ] **canon-S5 사설 dialect 제거**: S4 완주 후 4언어 사설 actor-join packet 삭제.
