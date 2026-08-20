@@ -646,6 +646,24 @@
       경로로 target peer를 demote하는지 프레임 단위 추적)** 필요. 되던 기능
       회귀가 아니라 첫 통합의 가장 깊은 꼬리. 체크포인트 `ef19855326`가
       2계층(generation·liveness)+durability+spec 구체화 전부 보존.
+      **정제 진단(2026-08-20, Claude 직접 계측 — throw 지점 로깅+반복 실행)**:
+      ⓐ **정숙 머신에서 dotnet→java ~85% 통과**(7~13회 중 1~2회 실패), 부하
+      시 실패율 급증 → 두 terra 에이전트가 "결정성 실패"한 것은 **자신의
+      무거운 빌드/테스트 부하가 레이스를 유발**한 탓. java→dotnet·node→dotnet
+      은 관측상 전부 그린. ⓑ **실패 모드 2가지 확인**: (1) connection-changed
+      (SendCanonicalRelocationRecordAsync의 ReferenceEquals — drain 중 Peer
+      객체 교체) (2) endpoint-rotation (drain/fence가 로컬 descriptor를
+      revision bump하며 재Hello 유발 → java 무응답 → 재admission 실패 →
+      timeout; java admit endpoint와 dotnet 재dial endpoint 불일치 관측). ⓒ
+      **공통 근본**: source의 relocation drain/admission-fence가 relocation
+      TARGET peer로의 mesh 연결을 교란(descriptor/endpoint/Peer객체 회전).
+      통과 런은 100KB 상태 완전 전송 — 메커니즘 정상, 레이스만 잔존. **수정
+      방향**(focused 세션): drain/fence가 relocation target peer의 admitted
+      연결(endpoint·descriptor·Peer객체·epoch)을 교란하지 않도록 격리
+      (node의 infrastructure 독립 드레인보다 강한 target-connection 불변식).
+      계측 커밋 안 함(revert, 트리 청정). **campaign 판정: relocation 기능
+      동작 확인·저빈도 flaky 1방향 잔존 → known-flaky로 표시, focused 세션
+      이월**(되던 기능 회귀 아님).
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
