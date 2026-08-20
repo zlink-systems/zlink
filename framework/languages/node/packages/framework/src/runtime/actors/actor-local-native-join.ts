@@ -354,6 +354,7 @@ export class ZLinkLocalNativeActorJoin {
       actorId: actor.context.actorId,
       actorType,
       actorRef,
+      actorAuthorityFence: remoteJoinAuthorityFence(node, state),
       // An actor's membership epoch starts at 0 (unassigned) until it is
       // first placed in a Spot; the wire vocabulary requires a positive
       // integer (relocation-envelope-v1), so an unassigned epoch advertises
@@ -527,6 +528,7 @@ export class ZLinkLocalNativeActorJoin {
         actorId: actor.context.actorId,
         actorType,
         actorRef,
+        actorAuthorityFence: remoteJoinAuthorityFence(node, state),
         // An actor's membership epoch starts at 0 (unassigned) until it is
         // first placed in a Spot; the wire vocabulary requires a positive
         // integer (relocation-envelope-v1), so an unassigned epoch advertises
@@ -580,6 +582,24 @@ export class ZLinkLocalNativeActorJoin {
     return completions;
   }
 
+}
+
+function remoteJoinAuthorityFence(
+  node: ZLinkBackendMeshNode,
+  state: ZLinkActorRuntimeState
+): {
+  readonly nodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
+} | undefined {
+  if (state.locationGeneration === undefined || state.ownerLeaseGeneration === undefined) {
+    return undefined;
+  }
+  return {
+    nodeGeneration: node.status().lifecycleGeneration,
+    authorityOwnerGeneration: state.locationGeneration,
+    ownerLeaseGeneration: state.ownerLeaseGeneration
+  };
 }
 
 function runtimeActorMeshName(

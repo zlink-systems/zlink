@@ -9,11 +9,23 @@ import {
 } from '../actors/actor-runtime-state';
 import { decodeRemoteActorJoinPayload } from '../actors/actor-remote-wire';
 import type { DefaultZLinkSpotManager } from '../spots';
-import { normalizeRoutingId, routingIdWireHex } from '../routing-id';
+import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
+import {
+  normalizeRoutingId,
+  routingIdWireHex,
+  routingIdsEqual
+} from '../routing-id';
 
 export interface ZLinkRemoteActorJoinReceiverOptions {
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
+  readonly authorityStore: () => ZLinkAuthorityStore | undefined;
 }
 
 export class ZLinkRemoteActorJoinReceiver {
@@ -30,9 +42,37 @@ export class ZLinkRemoteActorJoinReceiver {
     readonly actorGeneration: string;
     readonly reply?: string;
   }> {
-    const join = decodeRemoteActorJoinPayload(payload);
+    let join: ReturnType<typeof decodeRemoteActorJoinPayload>;
+    try {
+      join = decodeRemoteActorJoinPayload(payload);
+    } catch (error) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+        'Remote Actor Join payload is invalid.',
+        error
+      );
+    }
     const actorManager = this.requireActorManager();
-    const actor = await actorManager.getOrCreateActor(join.actorId, join.actorType);
+    const stableType = await this.resolveStableType(join);
+    if (join.actorType !== stableType) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorTypeMismatch,
+        `Actor '${join.actorId}' join stable type does not match its Authority row.`
+      );
+    }
+    let actor;
+    try {
+      actor = await actorManager.getOrCreateActor(join.actorId, stableType);
+    } catch (error) {
+      if (isMissingActorFactory(error)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestRejected,
+          `Actor '${join.actorId}' Authority stable type '${stableType}' is not registered locally.`,
+          error
+        );
+      }
+      throw error;
+    }
     const state = actorManager.getState(join.actorId);
     if (state === undefined) {
       throw new Error(`Actor '${join.actorId}' state was not created.`);
@@ -95,4 +135,99 @@ export class ZLinkRemoteActorJoinReceiver {
     }
     return manager;
   }
+
+  /**
+   * Spec 51 §9: the Authority row, not the legacy JSON actorType field, is
+   * the type source for receiver-side Actor Join admission.
+   */
+  private async resolveStableType(join: ReturnType<typeof decodeRemoteActorJoinPayload>): Promise<string> {
+    const store = this.options.authorityStore();
+    if (store === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
+        `Actor '${join.actorId}' Join cannot read its Authority row because Location Store is unavailable.`
+      );
+    }
+    let authority;
+    try {
+      authority = await store.readAuthority(encodeAuthorityKey('actor', join.actorId));
+    } catch (error) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
+        `Actor '${join.actorId}' Join could not read its Authority row.`,
+        error
+      );
+    }
+    if (authority.kind === 'missing') {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+        `Actor '${join.actorId}' has no Authority row for Join admission.`
+      );
+    }
+
+    const fence = decodeJoinAuthorityFence(join);
+    if (
+      authority.allocation.state !== 'active'
+      || authority.allocation.objectKind !== 'actor'
+      || authority.objectGeneration !== fence.objectGeneration
+      || !routingIdsEqual(authority.allocation.descriptor.rid, join.actorNodeRid)
+      || authority.allocation.descriptorLifecycleGeneration !== fence.nodeGeneration
+      || authority.authorityOwnerGeneration !== fence.authorityOwnerGeneration
+      || authority.ownerLeaseGeneration !== fence.ownerLeaseGeneration
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+        `Actor '${join.actorId}' Join Authority row does not exactly match its route fence.`
+      );
+    }
+    return authority.allocation.stableType;
+  }
+}
+
+function decodeJoinAuthorityFence(join: ReturnType<typeof decodeRemoteActorJoinPayload>): {
+  readonly objectGeneration: bigint;
+  readonly nodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
+} {
+  let objectGeneration: bigint;
+  let nodeGeneration: bigint;
+  let authorityOwnerGeneration: bigint;
+  let ownerLeaseGeneration: bigint;
+  try {
+    objectGeneration = BigInt(join.actorGeneration);
+    nodeGeneration = BigInt(join.actorNodeGeneration);
+    authorityOwnerGeneration = BigInt(join.expectedAuthorityOwnerGeneration);
+    ownerLeaseGeneration = BigInt(join.expectedOwnerLeaseGeneration);
+  } catch (error) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+      `Actor '${join.actorId}' Join carries an invalid Authority fence.`,
+      error
+    );
+  }
+  // object/owner generations are bounded counters; the MeshNode lifecycle is
+  // an opaque full-range token, for which only zero denotes absence.
+  if (
+    objectGeneration <= 0n
+    || nodeGeneration === 0n
+    || authorityOwnerGeneration <= 0n
+    || ownerLeaseGeneration <= 0n
+  ) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+      `Actor '${join.actorId}' Join carries an incomplete Authority fence.`
+    );
+  }
+  return {
+    objectGeneration,
+    nodeGeneration,
+    authorityOwnerGeneration,
+    ownerLeaseGeneration
+  };
+}
+
+function isMissingActorFactory(error: unknown): error is ZLinkConfigurationException {
+  return error instanceof ZLinkConfigurationException
+    && /^Actor factory '.+' is not registered\.$/.test(error.message);
 }

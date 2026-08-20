@@ -55,6 +55,9 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly actorNodeRid?: unknown;
   readonly actorNodeRidHex?: unknown;
   readonly actorGeneration?: unknown;
+  readonly actorNodeGeneration?: unknown;
+  readonly expectedAuthorityOwnerGeneration?: unknown;
+  readonly expectedOwnerLeaseGeneration?: unknown;
   readonly expectedMembershipEpoch?: unknown;
   readonly actorEntryNodeRid?: unknown;
   readonly actorEntryNodeRidHex?: unknown;
@@ -93,6 +96,12 @@ export interface ZLinkRemoteActorJoinRequestPayload {
   readonly actorNodeRid?: string;
   readonly actorNodeRidHex?: string;
   readonly actorGeneration?: string;
+  /** Current owner MeshNode lifecycle generation for the Actor authority fence. */
+  readonly actorNodeGeneration?: string;
+  /** Current Actor Authority owner-generation fence. */
+  readonly expectedAuthorityOwnerGeneration?: string;
+  /** Current Actor Authority owner-lease fence. */
+  readonly expectedOwnerLeaseGeneration?: string;
   readonly expectedMembershipEpoch?: string;
   readonly actorEntryNodeRid?: string;
   readonly actorEntryNodeRidHex?: string;
@@ -141,6 +150,15 @@ interface ZLinkRemoteActorJoinRequestPayloadOptions {
   readonly actorId?: string;
   readonly actorType: string;
   readonly actorRef?: ZLinkBackendActorRef;
+  /**
+   * The legacy JSON transport retains its shape for now, but remote admission
+   * still needs the complete Authority fence to verify the Store row.
+   */
+  readonly actorAuthorityFence?: {
+    readonly nodeGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  };
   readonly expectedMembershipEpoch?: bigint;
   readonly actorEntryNodeRid?: RoutingId;
   readonly actorCreateRequest?: Buffer;
@@ -162,6 +180,7 @@ export function buildRemoteActorJoinRequestPayload(
   options: ZLinkRemoteActorJoinRequestPayloadOptions
 ): ZLinkRemoteActorJoinRequestPayload {
   const actorRef = options.actorRef;
+  const actorAuthorityFence = options.actorAuthorityFence;
   const sourceSpotId = options.sourceSpotId;
   const boundSessionTarget = options.boundSessionTarget;
   return {
@@ -172,6 +191,9 @@ export function buildRemoteActorJoinRequestPayload(
     actorNodeRid: actorRef === undefined ? undefined : String(actorRef.nodeRid),
     actorNodeRidHex: actorRef === undefined ? undefined : encodeRoutingIdHex(actorRef.nodeRid),
     actorGeneration: actorRef === undefined ? undefined : actorRef.generation.toString(),
+    actorNodeGeneration: actorAuthorityFence?.nodeGeneration.toString(),
+    expectedAuthorityOwnerGeneration: actorAuthorityFence?.authorityOwnerGeneration.toString(),
+    expectedOwnerLeaseGeneration: actorAuthorityFence?.ownerLeaseGeneration.toString(),
     expectedMembershipEpoch: options.expectedMembershipEpoch?.toString(),
     actorEntryNodeRid: options.actorEntryNodeRid === undefined ? undefined : String(options.actorEntryNodeRid),
     actorEntryNodeRidHex: options.actorEntryNodeRid === undefined ? undefined : encodeRoutingIdHex(options.actorEntryNodeRid),
@@ -243,6 +265,9 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
   readonly actorType: string;
   readonly actorNodeRid: RoutingId;
   readonly actorGeneration: string;
+  readonly actorNodeGeneration: string;
+  readonly expectedAuthorityOwnerGeneration: string;
+  readonly expectedOwnerLeaseGeneration: string;
   readonly sourceSpotId?: SpotId;
   readonly routerChannelId?: string;
   readonly boundSessionRouterChannelId?: string;
@@ -260,6 +285,9 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
     typeof (payload as { actorType?: unknown }).actorType !== 'string' ||
     typeof (payload as { actorNodeRid?: unknown }).actorNodeRid !== 'string' ||
     typeof (payload as { actorGeneration?: unknown }).actorGeneration !== 'string' ||
+    typeof (payload as { actorNodeGeneration?: unknown }).actorNodeGeneration !== 'string' ||
+    typeof (payload as { expectedAuthorityOwnerGeneration?: unknown }).expectedAuthorityOwnerGeneration !== 'string' ||
+    typeof (payload as { expectedOwnerLeaseGeneration?: unknown }).expectedOwnerLeaseGeneration !== 'string' ||
     typeof (payload as { request?: unknown }).request !== 'string'
   ) {
     throw new Error('Remote actor join payload is invalid.');
@@ -273,6 +301,11 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
       optionalString(payload, 'actorNodeRidHex')
     ),
     actorGeneration: (payload as { actorGeneration: string }).actorGeneration,
+    actorNodeGeneration: (payload as { actorNodeGeneration: string }).actorNodeGeneration,
+    expectedAuthorityOwnerGeneration:
+      (payload as { expectedAuthorityOwnerGeneration: string }).expectedAuthorityOwnerGeneration,
+    expectedOwnerLeaseGeneration:
+      (payload as { expectedOwnerLeaseGeneration: string }).expectedOwnerLeaseGeneration,
     sourceSpotId: optionalSpotId(payload, 'sourceSpotId'),
     routerChannelId: optionalString(payload, 'routerChannelId'),
     boundSessionRouterChannelId: optionalString(payload, 'boundSessionRouterChannelId'),

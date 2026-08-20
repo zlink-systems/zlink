@@ -647,6 +647,7 @@ export class ZLinkFrameworkRuntimeHost implements
             );
       },
       actorLocationResolver: () => this.createActorLocationResolver(),
+      authorityStore: () => this.locationOwner.currentStores?.locationStore,
       flowCreationEnabled: () => this.flowCreationEnabled(),
       destroyedActorRefs: this.destroyedActorRefs,
       errorSink: () => this.errorSink ?? this.preStartErrorSink,
