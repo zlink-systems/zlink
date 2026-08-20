@@ -936,17 +936,29 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       경유로 재현. 현 blocker = corruption seam이 co-batched 시나리오와 단일 live
       actor-a↔actor-b 연결 공유 → 격리 부재(482561c9a0 헤더 기록). 선행: seam 격리
       하니스. (상단 B-40·C-9e ⑩과 동일)
-- [ ] **H-2 ST-A3 결정적 실패 진단**: ST-B1 수정 전후 동일 재현되는 별도 timing/gate
-      이슈. **진단-우선(코드변경 0·로그 보존)** — 알려진 timing-race 형태. (상단 B-156)
+- [x] **H-2 ST-A3 결정적 실패 진단 — 완료(2026-08-20, Claude 독립 검증)**: **현 HEAD에서
+      ST-A3 재현 안 됨** — 과거 원인(ProbeReq가 on_actor_joined 대기 중 handoff backlog에
+      park됐으나 dispatch_mesh_record가 success(nullopt)로 빈 성공 reply 조기 종결 →
+      handler 미실행·client future만 ready; spec 15 §4 "OnJoinedActor 완료 전 completion
+      금지" 위반)이 **`facfced111`(reply-token 3중 결함 수정)로 이미 해소**. **Claude 독립
+      재현: ST-A3 `passed`**(트레이스 joined_wait→handoff_request_frame→joined_released→
+      joined→join_completion_accepted→packet_handler). 진단 전용, 코드 변경 0.
+      **⚠️ 신규 발견(H-4로 이관)**: `1b3b21b2e3` canonical actorJoin(28) 활성화 후 ST-B1이
+      독립 실패 — bilateral-ready 후 actor-a가 direct actorJoin(28) 대기하나 actor-b가
+      command 28 미수신 → 10s evidence timeout. `raw_mesh_node_owner_t::request_actor_join`
+      direct ROUTER submit 경로 실버그(캠페인 회귀).
 - [x] **H-3 node discovery-sharing 회귀 판정 — 완료(2026-08-20, Claude 독립 검증)**:
       판정=(b) 실제 코드 결함, 테스트 올바름. **현 HEAD에 이미 `97ff83ff1d`로 수정 반영됨**
       (canonical descriptor round-trip 후 RoutingId 두 JS 형태 비교가 fresh renew를
       ignoredStale로 오분류 → descriptorFingerprint를 canonical form으로 계산,
       location-store-repository.ts:4060). interop-grade(타 언어 기록 row도 동일 무시됐을 것).
       **Claude 독립 재현: node location-runtime.test.js 47/47 통과.** 추가 변경 0.
-- [ ] **H-4 ST-B1 후속 하니스 어휘 갱신**: ST-B1/B2/B3/C2 시나리오+feature-map을
-      제거된 commit_request/commit_ack wire 어휘 → location_committed 기반 증거로
-      갱신(의도 보존: commit-before-joined 순서·correlation). (상단 B-158)
+- [ ] **H-4 ST-B1 (a) cpp actorJoin(28) direct submit 회귀 수정 + (b) 하니스 어휘 갱신**:
+      **(a) 우선·캠페인 회귀(H-2 진단 발견)**: `1b3b21b2e3` canonical actorJoin(28) 활성화 후
+      actor-b가 command 28 미수신 → `raw_mesh_node_owner_t::request_actor_join`의 direct
+      ROUTER submit/response 대기 경로 수정(JSON fallback·timeout 확대 금지). h9-bingo cpp
+      트리 종료 후 착수(빌드 경합 방지). **(b)**: ST-B1/B2/B3/C2 시나리오+feature-map을
+      제거된 commit_request/commit_ack → location_committed 기반 증거로 갱신(의도 보존).
 - [ ] **H-5 C-9 sol 리뷰 잔여 carry**: ① reconcile 기한 스윕 3분기(store authority
       조회→추종/복원/명시 unavailable) 잔여 검증 ② cold-probe 합성 follow의 op
       identity/deadline/source/reply-route 4값 보존 + 절대기한 전달 메커니즘
