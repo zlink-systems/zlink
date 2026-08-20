@@ -1066,3 +1066,41 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       SF-G3 invent → 제거(config-6 Track G는 G1/G2로 끝).
 - [ ] **H-19 [H] (=기존 트랙 재확인)**: finding 5=H-6(W-3 production 미스왑), 6=H-1(ST-C4 checksum
       actual-process), 7=H-8(config-10 G/H/I gate), 8=H-7(config-6 SF gate). 중복 추적 방지 — 해당 H에서 구동.
+
+---
+
+## 📊 세션 종합 진행 (2026-08-20 야간~심야, Claude 독립 검증) — correctness 목표 달성
+
+### 이 세션 종결 (16건, 각 Claude diff+독립 재현 검증)
+| 항목 | 커밋 | 검증 |
+|---|---|---|
+| dotnet actorDestroy schema-gap(ownerLeaseGeneration) | `111f8cf946` | 4언어 손코덱 정합, byte-equality |
+| cpp cmd44 one-way 문서 정정 | `2688ff99a5` | spec 18 §487 |
+| H-3 node discovery-sharing (기존 `97ff83ff1d` 확인) | — | m6a 47/47 재현 |
+| H-2 ST-A3 (기존 `facfced111` 확인) | — | ST-A3 재현 passed |
+| H-9 S1 Bingo node leaveActor serial-gate | `d4f5055ebe` | Node Bingo 5연속 |
+| H-4 revert 조기 canonical actorJoin28 origination | `ab0b4b39a4` | ST-B1 3/3·m6c gate |
+| H-7 R0 SF-C3 node replacement admission | `f8e769a278` | m6a 40/40·SF-C3 e2e |
+| H-10 dotnet→java relocation race | `d84ce2e365` | relocation 10/10 결정성 |
+| H-16 node Authority DTO public 제거 | `91a7cc82ce`+`c357d47fd0` | dist 0건·m6c 82/82 |
+| H-13 java u64 opaque 잔여 소탕 | `c843bb267a` | codec gradle·MIN_VALUE round-trip |
+| H-5 cpp cold-probe absolute deadline | `f357ef11f3` | actor_gateway·ST-B1 |
+| **canonical actorJoin28 수신자 스펙 결정(옵션 A)** | `8d8e5cdffd` | 51 §9+15 §4.2 en/ko |
+| H-17 spec51 originator(.NET latent 규명) | `14464dec6b` | 리서치 |
+| H-18 node cmd44 one-way 실버그 | `d2a8eb25e6` | relocation-node-dotnet 6/6 |
+| sol L 문서 2건(cpp obs·java SF-G3) | `978e7bdf26` | — |
+| Java u64 종합 소탕(이전 세션 `4957255224` 확대) | — | — |
+
+### 캠페인 유발 회귀 3건 전부 근절 (재확인)
+generation churn(genfix) · u64-signed 센티널 3방향(java 소탕) · mesh-pump infra lane 데드락. + dotnet→java drain race(H-10).
+
+### sol 전 문서 spec-gap 리뷰 13건 처리 상태
+C1(H-12 canonical, 스펙결정+미구현) · H7 중: 4=H-13 해소, 9=H-16 해소, 11=H-18 해소, 3/5=H-15 unblocked, 2=H-14 folded, 6/7/8=H-1/8/7. M3: 9 해소, 10=H-17 해소, 11 해소. L2: 12/13 해소.
+
+### 잔여 = forward-development phase (대형, 계획 문서 존재)
+- **canonical actor-join 4언어 구현**(H-12/H-14/H-15): 스펙 결정됨(8d8e5cdffd), Store-backed receiver+사설 dialect 제거. doc/plan/canonical-actor-join-receiver-research.ko.md.
+- **config-6/10 e2e fixture 하니스**(H-7 H1~H3/H-8 H4~H6): R0(SF-C3) 해소, 나머지 fixture authoring. doc/plan/config-6-10-authoring-plan.ko.md.
+- **F e2e_inventory 129 records**(H-11): doc/plan/f-e2e-inventory-plan.ko.md (H-18ⓐ feature-map 어휘 포함).
+- **W-3 4언어 코덱 스왑**(H-6): H-15와 통합.
+- **H-1 ST-C4 e2e**: corruption seam 격리 하니스 선행(현 불가).
+- **G-2/G-3/G-4 최종 게이트**: forward 트랙 종료 후 일괄.
