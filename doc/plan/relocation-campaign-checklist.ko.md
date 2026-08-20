@@ -1002,7 +1002,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       (회귀 0), Node Bingo 2회 PASS(+에이전트 3회=5연속)**. **S2/S3(cpp) 이번 재현 안 됨**
       (PlayerJoined/GameStarted 정상 RID). 잔여 cpp Bingo 블로커 = BingoRewardAnnounced
       누락(사용자가 이미 제외한 reward-race, pre-existing) → cpp Bingo는 known-flaky 유지.
-- [ ] **H-10 dotnet→java relocation drain-vs-liveness race**: 저빈도 flaky 1방향
+- [x] **H-10 dotnet→java relocation drain-vs-liveness race — 해소 `d84ce2e365`(Claude 독립 검증 10/10+에이전트 8/8)**: target-connection 불변식 강제(cmd40 전 RID/lifecycle fence로 현재 admitted peer 재확보 event-driven, descriptor update가 liveness epoch reset·Draining→Ready 되돌림 금지). 증상 억제 아님(이전 43% 악화 패턴과 대조). ServiceRuntimeFoundationTests 59/59, relocation-dotnet-java fresh-redis 10/10. **캠페인 유발 회귀 3건 전부 근절**(generation churn·u64 sentinel·mesh-pump + 이 race). (원 특성화:) 저빈도 flaky 1방향
       (dotnet이 source로 dial할 때). source relocation drain/fence가 relocation
       TARGET peer의 admitted 연결(endpoint·descriptor·Peer객체·epoch) 교란 → command
       40 미전송 → DeadlineExceeded. 통과 런은 100KB 완전 전송(메커니즘 정상, 레이스
@@ -1041,7 +1041,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       Node __zlink.actor.join_spot.request JSON. 스펙 51 §1/§9는 cmd28+40/52/cutover만 계약,
       transfer bookkeeping은 wire 금지. 수정: cross-node Actor Join은 카논 계약만, transfer
       부기는 runtime-local adapter 뒤로. **H-6(W-3)·H-12와 통합 대형 트랙.**
-- [ ] **H-16 [M] Node public package가 private Authority/domain DTO export**: Locations/index.ts:49가
+- [x] **H-16 [M] Node public Authority/domain DTO export — 해소 `91a7cc82ce`(Claude 독립 검증)**: Locations public barrel에서 `export * from './Authority'` 제거(정의는 유지, 내부는 internal-location-contracts re-export). dist barrel/top-level index에 Authority DTO 0건, typecheck·build·verify:m6c 82/82. governance 00 §174·node interface §5 준수. (원:) Locations/index.ts:49가
       Authority 전체 export(Authority.ts:9 authority key/snapshot/mutation/CAS/capacity DTO public),
       src/index.ts 재-export. governance 00 §174 + node exact-interface 08 §302는 private 규정.
       수정: public barrel에서 domain DTO 제거→runtime-internal. (외부 provider SPI 의도면 4언어
