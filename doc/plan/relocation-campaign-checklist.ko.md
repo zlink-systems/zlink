@@ -754,6 +754,14 @@
 - [ ] G-1 전체 unittest 4언어 일괄 그린: cpp ctest(framework-unit|contract 전체,
       알려진 환경 제외만 허용·사유 명기), dotnet 전체(conformance 처분 결과 반영),
       java gradle 전체, node npm 전체 — 각 언어 최종 HEAD에서 연속 실행, 결과 로그 보존
+      **1차 실행(2026-08-20, HEAD c103380d4a)**: ✅ **cpp** framework-unit 전체 그린
+      (`test_cpp_framework_async_contract`는 contract_headers 바이너리 별칭 —
+      빌드 후 100% pass) ✅ **java** `:zlink-framework-core:test` BUILD SUCCESSFUL
+      ✅ **dotnet** 1782 pass / 3 sanctioned fail(Legacy ×2 + timeout flake)만
+      = 인가 통과 ⏳ **node**: `npm test`(run_node_runtime_gate)가 lint에서 36
+      eslint errors로 정지(baseline ~33 근접, `no-unnecessary-condition` 계열) →
+      런타임 테스트 미실행. node baseline(lint 33·~28 test·10 dispatch-logger)
+      대비 신규 회귀 구분 필요 → sonnet 에이전트 위임(새 정책: 작업=sonnet).
 - [ ] G-2 전체 샘플 실행 성공(zoneworld 제외): 6샘플(Bingo, DeliveryDispatch,
       GameQuest, ShoppingMall, SupportChat, TicTacToe) × 4언어+kotlin 전부
       최종 HEAD에서 재실행, 종료 코드 0 확인·로그 보존 (중간 검증과 별개로
