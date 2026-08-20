@@ -1160,6 +1160,7 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       (wireAttemptKey를 receiver+prepare 공유, seal_remote_application_actor_join 진입 필수, deliver 즉시호출 제거) →
       (3) **.NET admission/relocation 분해**(SubmitRoutedJoinActorTransactionAsync→AcquireAdmissionContext+ContinueRelocation) →
       (4) .NET canonical sender → (5) 검증(seam test + cpp Bingo/TicTacToe + .NET relocation sample).
+- [ ] **canon-S4d attempt-binding 스펙 결정 필요(slice34 STOP 발견)**: canonical actorJoin(28)의 admission을 후속 relocation PREPARE(command 40)에 결합할 계약이 없다. JSON 경로는 handoffId로 결합하나 28 tail·command 40 모두 그 identity 부재(§9). .NET/cpp는 seal→prepare→cutover 전체 relocation 머신을 쓰므로 이 결합 필수(node/java는 안 씀). **Claude 스펙 판정 필요**: target parked canonical-28 admission을 command 40에 결합하는 방식(actor identity+objectGeneration exact-fence 매칭 vs command 40에 wireAttemptKey/RelocationId 참조 추가 vs command-20 reply로 binding 운반). RelocationId는 CSPRNG라 deterministic 유도 불가. 결정 후 .NET slice3-4·cpp bridge 진행 가능. (에이전트 4회 STOP=각 spec 갭에서 정직 정지 — deep 프로토콜 통합 확증)
 - [ ] **canon-S4d-b bound Session 분리**: 28 전 42/43 seal + target commit 후 44 route update(28 sideband 금지).
 - [ ] **canon-S4e 크로스랭 harness User Spot JoinSpot stage**: JoinEntrySpot 보존 + canonical 28 pairwise matrix(Node↔.NET↔Java↔C++)로
       canonical request/reply/rejected admission/payload round-trip/Store-fence rejection 검증.
