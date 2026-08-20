@@ -36,6 +36,16 @@ final class ZLinkInstanceSpotActivation
     private volatile long expectedOwnerLeaseGeneration = -1;
     private volatile long expectedAuthorityOwnerGeneration = -1;
     private volatile long expectedNodeGeneration = -1;
+    // expectedNodeGeneration carries a node lifecycle-generation opaque
+    // equality token (.NET ulong, spec 01-glossary "Lifecycle generation"):
+    // full 64-bit range, only zero is unassigned, so a value with bit 63 set
+    // decodes to a negative Java long that is a LEGITIMATE token. Unlike
+    // expectedOwnerLeaseGeneration/expectedAuthorityOwnerGeneration (spec
+    // "OwnerLeaseGeneration"/"AuthorityOwnerGeneration": contractually
+    // bounded to 1..long.MaxValue, so a negative sentinel can never collide
+    // with a real value), -1 cannot safely double as "not yet set" for this
+    // field. authorityFenceEstablished is the non-sign-based presence flag.
+    private volatile boolean authorityFenceEstablished;
     private volatile String sealedStoreVersion;
 
     ZLinkInstanceSpotActivation(
@@ -75,6 +85,7 @@ final class ZLinkInstanceSpotActivation
         expectedOwnerLeaseGeneration = ownerLeaseGeneration;
         expectedAuthorityOwnerGeneration = authorityOwnerGeneration;
         expectedNodeGeneration = nodeGeneration;
+        authorityFenceEstablished = true;
     }
 
     boolean authorityFenceMatches(
@@ -100,8 +111,21 @@ final class ZLinkInstanceSpotActivation
         return expectedNodeGeneration;
     }
 
+    boolean hasExpectedNodeGeneration() {
+        return authorityFenceEstablished;
+    }
+
     systems.zlink.framework.runtime.internal.service
         .ZLinkServiceM6BWireCodec.InstanceRouteFence authorityRouteFence() {
+        if (!authorityFenceEstablished) {
+            // Guards against ever shipping the unset -1 sentinel as a node
+            // lifecycle-generation opaque token: unlike a bounded field, -1
+            // is not distinguishable from a legitimate negative-as-long
+            // token here, so a fence built before setAuthorityFence() would
+            // be indistinguishable from a real (and wrong) value.
+            throw new IllegalStateException(
+                "Instance Spot authority fence requested before it was established");
+        }
         return new systems.zlink.framework.runtime.internal.service
             .ZLinkServiceM6BWireCodec.InstanceRouteFence(
                 context.nodeRid(),

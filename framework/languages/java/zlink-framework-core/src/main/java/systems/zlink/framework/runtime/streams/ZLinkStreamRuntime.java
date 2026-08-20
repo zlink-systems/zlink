@@ -1768,9 +1768,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         boolean matchesOwner(
             systems.zlink.framework.runtime.internal.service
                 .ZLinkServiceM6BWireCodec.RetiredSessionRouteFence retired) {
+            // ownerNodeGeneration is a node lifecycle-generation opaque
+            // equality token (.NET ulong, spec 01-glossary "Lifecycle
+            // generation"): full range, only zero is unassigned. `> 0`
+            // wrongly treats a legitimate negative-as-long value as unset.
+            // ownerLeaseGeneration is spec-bounded to a positive `long`
+            // ("OwnerLeaseGeneration"), so `> 0` is correct for it.
             return ownerNodeRid != null
                 && ownerNodeRid.equals(retired.sessionOwnerNodeRid())
-                && ownerNodeGeneration > 0
+                && ownerNodeGeneration != 0
                 && ownerNodeGeneration == retired.sessionOwnerNodeGeneration()
                 && ownerId != null
                 && ownerId.equals(retired.sessionOwnerId())

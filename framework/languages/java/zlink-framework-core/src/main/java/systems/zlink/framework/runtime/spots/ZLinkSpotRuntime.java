@@ -4051,7 +4051,7 @@ public final class ZLinkSpotRuntime
                 || !authority.spotId().equals(activation.context.spotId())
                 || !authority.meshName().equals(activation.context.meshName())
                 || !authority.nodeRid().equals(activation.context.nodeRid())
-                || (activation.expectedNodeGeneration() >= 0
+                || (activation.hasExpectedNodeGeneration()
                     && authority.nodeGeneration()
                         != activation.expectedNodeGeneration())
                 || snapshot.objectGeneration()
@@ -4164,7 +4164,7 @@ public final class ZLinkSpotRuntime
                 || !authority.spotId().equals(activation.context.spotId())
                 || !authority.meshName().equals(activation.context.meshName())
                 || !authority.nodeRid().equals(activation.context.nodeRid())
-                || (activation.expectedNodeGeneration() >= 0
+                || (activation.hasExpectedNodeGeneration()
                     && authority.nodeGeneration()
                         != activation.expectedNodeGeneration())
                 || snapshot.objectGeneration()

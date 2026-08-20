@@ -1614,9 +1614,16 @@ public final class ZLinkServiceM6BWireCodec {
                 throw protocol("reservation text fields are required");
             }
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            // targetNodeGeneration is a node lifecycle-generation opaque
+            // equality token (.NET ulong, spec 01-glossary "Lifecycle
+            // generation"): full range, only zero is unassigned. A signed
+            // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
+            // value. objectGeneration/authorityOwnerGeneration/
+            // targetOwnerLeaseGeneration are spec-bounded to
+            // `1..long.MaxValue`, so `<= 0` is correct for them.
             if (objectGeneration <= 0
                 || authorityOwnerGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || targetOwnerLeaseGeneration <= 0
                 || pendingCapacityDelta <= 0
                 || pendingCapacityDelta > 0xffff_ffffL) {
@@ -1730,8 +1737,15 @@ public final class ZLinkServiceM6BWireCodec {
         public UserSpotCloseFence {
             Objects.requireNonNull(spotId, "spotId");
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            // targetNodeGeneration is a node lifecycle-generation opaque
+            // equality token (.NET ulong, spec 01-glossary "Lifecycle
+            // generation"): full range, only zero is unassigned. A signed
+            // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
+            // value. objectGeneration/authorityOwnerGeneration are
+            // spec-bounded to `1..long.MaxValue`, so `<= 0` is correct for
+            // them.
             if (objectGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || authorityOwnerGeneration <= 0
                 || storeVersion == null
                 || storeVersion.isBlank()) {
@@ -1818,11 +1832,17 @@ public final class ZLinkServiceM6BWireCodec {
         long operationLow,
         long sourceNodeGeneration,
         long deadlineUnixMs) {
+        // operationHigh/operationLow together form a non-zero 128-bit
+        // opaque ID (.NET ulong pair, spec 01-glossary "Actor Join
+        // OperationId"): full range each half, only both-zero is invalid,
+        // so `< 0` on either half wrongly rejects a legitimate
+        // negative-as-long half. sourceNodeGeneration is likewise a node
+        // lifecycle-generation opaque equality token (spec "Lifecycle
+        // generation"): full range, only zero unassigned, so `<= 0` is
+        // wrong there too.
         if (correlation <= 0
             || (operationHigh == 0 && operationLow == 0)
-            || operationHigh < 0
-            || operationLow < 0
-            || sourceNodeGeneration <= 0
+            || sourceNodeGeneration == 0
             || deadlineUnixMs <= 0) {
             throw protocol("invalid terminal operation identity");
         }

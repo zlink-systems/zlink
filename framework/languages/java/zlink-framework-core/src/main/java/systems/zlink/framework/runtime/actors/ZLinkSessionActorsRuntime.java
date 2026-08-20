@@ -1141,8 +1141,13 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         long sourceNodeGeneration,
         ZLinkServiceM6BWireCodec.BoundSessionSend command) {
         var target = command.actor();
+        // sourceNodeGeneration is a node lifecycle-generation opaque
+        // equality token (.NET ulong, spec 01-glossary "Lifecycle
+        // generation"): full range, only zero is unassigned. A signed
+        // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
+        // value.
         if (!sourceNodeRid.equals(target.actor().nodeRid())
-            || sourceNodeGeneration <= 0
+            || sourceNodeGeneration == 0
             || sourceNodeGeneration != target.targetNodeGeneration()) {
             return null;
         }
@@ -1186,7 +1191,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         RoutingId sourceNodeRid,
         long sourceNodeGeneration,
         ZLinkServiceM6BWireCodec.BoundSessionSend command) {
-        if (relocationStopped || sourceNodeGeneration <= 0) {
+        if (relocationStopped || sourceNodeGeneration == 0) {
             return false;
         }
         var target = command.actor();
@@ -1330,10 +1335,18 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         long localOwnerLease = spotNode.localAuthorityLeaseGeneration();
         String localOwnerId = spotNode.localAuthorityOwnerId();
         var session = command.session();
-        return actorNodeGeneration > 0
+        // actorNodeGeneration/localNodeGeneration are node
+        // lifecycle-generation opaque equality tokens (.NET ulong, spec
+        // 01-glossary "Lifecycle generation"): full range, only zero is
+        // unassigned, so `> 0` wrongly treats a legitimate negative-as-long
+        // value as unset. actorAuthority/actorLease/localOwnerLease are
+        // spec-bounded to `1..long.MaxValue`/positive `long`
+        // (AuthorityOwnerGeneration/OwnerLeaseGeneration), so `> 0` is
+        // correct for them.
+        return actorNodeGeneration != 0
             && actorAuthority > 0
             && actorLease > 0
-            && localNodeGeneration > 0
+            && localNodeGeneration != 0
             && localOwnerLease > 0
             && localOwnerId != null
             && !localOwnerId.isBlank()
@@ -2131,9 +2144,17 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         long targetAuthorityOwnerGeneration,
         long bindingGeneration) {
         RelocationRouteUpdate {
+            // targetNodeGeneration is a node lifecycle-generation opaque
+            // equality token (.NET ulong, spec 01-glossary "Lifecycle
+            // generation"): full range, only zero is unassigned. A signed
+            // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
+            // value. objectGeneration/sourceAuthorityOwnerGeneration/
+            // bindingGeneration/targetAuthorityOwnerGeneration are
+            // spec-bounded to `1..long.MaxValue`, so `<= 0`/ordered compare
+            // is correct for them.
             if (actorId == null || actorId.isBlank()
                 || objectGeneration <= 0
-                || targetNodeGeneration <= 0
+                || targetNodeGeneration == 0
                 || sourceAuthorityOwnerGeneration <= 0
                 || bindingGeneration <= 0
                 || targetAuthorityOwnerGeneration

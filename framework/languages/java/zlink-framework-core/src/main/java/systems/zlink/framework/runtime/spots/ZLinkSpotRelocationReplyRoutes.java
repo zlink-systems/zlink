@@ -531,13 +531,22 @@ final class ZLinkSpotRelocationReplyRoutes {
             Objects.requireNonNull(sourceOwnerId, "sourceOwnerId");
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
             parts = parts.stream().map(byte[]::clone).toList();
+            // sourceNodeGeneration/targetNodeGeneration are node
+            // lifecycle-generation opaque equality tokens (.NET ulong, spec
+            // 01-glossary "Lifecycle generation"): full range, only zero is
+            // unassigned, so a signed `<= 0` sentinel wrongly rejects a
+            // legitimate negative-as-long value (bit 63 set). The other
+            // fields here (replyRouteId, objectGeneration,
+            // sourceOwnerLeaseGeneration, targetAuthorityOwnerGeneration)
+            // are spec-bounded to `1..long.MaxValue`, so `<= 0` is correct
+            // for them.
             if (replyRouteId <= 0 || objectGeneration <= 0
                 || sourceOwnerLeaseGeneration <= 0
-                || sourceNodeGeneration <= 0
-                || targetNodeGeneration <= 0
+                || sourceNodeGeneration == 0
+                || targetNodeGeneration == 0
                 || targetAuthorityOwnerGeneration <= 0) {
                 throw new IllegalArgumentException(
-                    "reply relay fence contains a non-positive value");
+                    "reply relay fence contains an invalid value");
             }
         }
 

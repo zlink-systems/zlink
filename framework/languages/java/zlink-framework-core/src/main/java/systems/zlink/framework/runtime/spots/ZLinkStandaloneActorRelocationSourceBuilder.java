@@ -113,9 +113,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         this.meshName = requireText(meshName, "meshName");
         this.localNodeRid = Objects.requireNonNull(
             localNodeRid, "localNodeRid");
-        if (localNodeGeneration <= 0) {
+        // localNodeGeneration is a node lifecycle-generation opaque equality
+        // token (.NET ulong, spec 01-glossary "Lifecycle generation"): full
+        // range, only zero is unassigned. A signed `<= 0` sentinel wrongly
+        // rejects a legitimate negative-as-long value.
+        if (localNodeGeneration == 0) {
             throw new IllegalArgumentException(
-                "local node generation must be positive");
+                "local node generation must be nonzero");
         }
         this.localNodeGeneration = localNodeGeneration;
         this.locations = Objects.requireNonNull(locations, "locations");

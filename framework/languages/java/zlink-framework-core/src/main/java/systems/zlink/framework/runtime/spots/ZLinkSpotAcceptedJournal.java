@@ -147,9 +147,15 @@ final class ZLinkSpotAcceptedJournal {
                 throw new IllegalArgumentException(
                     "accepted Spot operation identity must not be zero");
             }
+            // sourceNodeGeneration is a node lifecycle-generation opaque
+            // equality token (.NET ulong, spec 01-glossary "Lifecycle
+            // generation"): full range, only zero is unassigned. A signed
+            // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
+            // value. sourceOwnerLeaseGeneration/objectGeneration are
+            // spec-bounded to `1..long.MaxValue`, so `<= 0` is correct there.
             if (sourceOwnerId == null || sourceOwnerId.isBlank()
                 || sourceOwnerLeaseGeneration <= 0
-                || sourceNodeGeneration <= 0 || objectGeneration <= 0) {
+                || sourceNodeGeneration == 0 || objectGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "accepted Spot source fence is invalid");
             }

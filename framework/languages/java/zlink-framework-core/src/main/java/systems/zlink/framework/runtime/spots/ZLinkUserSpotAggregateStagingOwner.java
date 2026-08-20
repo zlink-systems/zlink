@@ -773,9 +773,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
         Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> acceptedJournal) {
         Request {
             Objects.requireNonNull(spotType, "spotType");
+            // objectGeneration is spec-bounded to `1..long.MaxValue`
+            // (01-glossary "ObjectGeneration"), so `<= 0` never
+            // misclassifies valid traffic. Aligned to `== 0` for
+            // consistency with the equivalent check already fixed at
+            // ZLinkJavaRawSpotNode.createSpot (commit b7443ed9b4).
             if (spotStableType == null || spotStableType.isBlank()
                 || spotId == null || spotId.isBlank()
-                || objectGeneration <= 0) {
+                || objectGeneration == 0) {
                 throw new IllegalArgumentException(
                     "Spot stable type, id and generation are required");
             }

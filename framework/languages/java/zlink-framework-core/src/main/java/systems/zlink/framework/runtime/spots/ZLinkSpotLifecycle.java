@@ -173,10 +173,16 @@ final class ZLinkSpotLifecycle {
         ZLinkMessage request) {
         requireRegistered(spotType);
         requireSpotId(spotId);
-        if (objectGeneration <= 0) {
+        // objectGeneration (Spot ObjectGeneration) is spec-bounded to
+        // `1..long.MaxValue` (01-glossary "ObjectGeneration": provider
+        // global counter, fails with GenerationExhausted instead of
+        // wrapping), so `<= 0` never misclassifies valid traffic. Aligned to
+        // `== 0` for consistency with the equivalent check already fixed at
+        // ZLinkJavaRawSpotNode.createSpot (commit b7443ed9b4).
+        if (objectGeneration == 0) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException(
-                    "objectGeneration must be positive"));
+                    "objectGeneration must be non-zero"));
         }
         SpotActivation existing = spots.get(spotId);
         if (existing != null) {

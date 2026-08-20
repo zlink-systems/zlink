@@ -3293,8 +3293,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         Consumer<List<Message>> reply,
         Consumer<Throwable> failure,
         Runnable terminalRelease) {
+        // sourceNodeGeneration is a node lifecycle-generation opaque
+        // equality token (.NET ulong, spec 01-glossary "Lifecycle
+        // generation"): full range, only zero is unassigned. A signed
+        // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
+        // value.
         if (sourceNodeRid == null
-            || sourceNodeGeneration <= 0
+            || sourceNodeGeneration == 0
             || header == null
             || parts == null
             || parts.size() != 2) {
@@ -3566,7 +3571,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             spotNode.actorAuthorityOwnerGeneration(sourceActor);
         long ownerLeaseGeneration =
             spotNode.actorAuthorityOwnerLeaseGeneration(sourceActor);
-        if (nodeGeneration <= 0
+        // nodeGeneration is a node lifecycle-generation opaque equality
+        // token (.NET ulong, spec 01-glossary "Lifecycle generation"): full
+        // range, only zero is unassigned. A signed `<= 0` sentinel wrongly
+        // rejects a legitimate negative-as-long value.
+        // authorityOwnerGeneration/ownerLeaseGeneration are spec-bounded to
+        // `1..long.MaxValue`/positive `long`, so `<= 0` is correct there.
+        if (nodeGeneration == 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
             throw new ZLinkConfigurationException(

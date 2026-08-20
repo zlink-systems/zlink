@@ -322,7 +322,13 @@ public final class ZLinkStoreLocationResolvers
     private static ActorRoute projectCanonicalActor(
         ZLinkAuthoritySnapshot snapshot,
         String actorId) {
-        if (snapshot.objectGeneration() <= 0
+        // snapshot.objectGeneration() is spec-bounded to `1..long.MaxValue`
+        // (01-glossary "ObjectGeneration"), so `<= 0` never misclassifies
+        // valid traffic. Aligned to `== 0` for consistency with the
+        // equivalent check already fixed at ZLinkJavaRawSpotNode.createSpot
+        // (commit b7443ed9b4). ownerLeaseGeneration is likewise
+        // spec-bounded (positive `long`), so `<= 0` is correct for it.
+        if (snapshot.objectGeneration() == 0
             || snapshot.ownerLeaseGeneration() <= 0
             || actorId == null
             || actorId.isBlank()
