@@ -1026,7 +1026,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       source ownership/state/queue 미이동 가능. 수정: cmd28 Accepted를 seal/capture/Restore/
       relay/cutover 파이프라인에 연결, public Accepted는 target owner CAS+queue-open 후에만.
       스펙 15 §4.2, 28 §128/§205/§296. **H-4a(cpp actorJoin28 ST-B1)와 동일 영역 — 함께 판정.**
-- [ ] **H-13 [H] Java u64 opaque token 잔여 소탕(재발 버그류)**: 4957255224 종합 소탕 후에도
+- [x] **H-13 [H] Java u64 opaque token 잔여 소탕 — 해소 `c843bb267a`(Claude 독립 검증)**: sol 5곳 + 추가 store lifecycle 3곳 + relocation reply-route. opaque(correlation·replyRouteId·lifecycleGeneration·OperationId·targetDescriptorLifecycleGeneration)→`==0`, bounded(objectGeneration)→`<=0` 유지(명확 구분). opaqueU64 헬퍼(byte-identical wire), Long.MIN_VALUE round-trip 테스트. focused codec/store gradle + :zlink-framework-core:test 통과. (원:) 4957255224 종합 소탕 후에도
       잔존 — ZLinkServiceM6AWireCodec:448(correlation `<=0`), M6BWireCodec:23/135,
       FrozenRecordCodec:201, MessageFollowWireCodec:200. 0x8000..이상 정상 .NET/C++/Node 토큰이
       Java에서 protocol error. 수정: opaque u64 helper는 `==0`만 거부, `<=0`은 deadline/revision/
