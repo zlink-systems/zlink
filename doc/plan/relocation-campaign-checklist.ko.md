@@ -973,7 +973,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       raw-service-mesh-runtime.ts:989 same-RID ready peer가 replacement candidate를 admit
       전 폐기(newer lifecycle generation 미승격) — spec 29 §199/§245 근거 5단계 수정(크기
       비교 금지, exact lifecycle fence). SF-F9·multi-role replacement 기반.
-- [ ] **H-8 config-10 Track E/G/H/I authoring (24 시나리오)** — **스코핑 완료(동일 계획 문서)**.
+- [ ] **H-8 config-10 Track E/G/H/I authoring (실제 22 시나리오 + ST-F3A orphan은 H-1)** — **스코핑 완료(동일 계획 문서)**. (기존 "28"은 오기 — 공통 문서 E/G/H/I ID는 ST-E1 제외 22개)
       전부 하니스/fixture(B) + 런타임 R+B 3건(ST-I1 large payload, ST-I2 node control
       route `routeNotConnected` blocker, ST-I3 spot relocation pre-move failure). H4 config-10
       base(source/target/session-owner+bound client+opaque network blocker) → H5 SpotWide/
@@ -990,5 +990,10 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       잔존). 수정 방향: drain/fence가 target-connection 불변식 격리(node infra 독립
       드레인보다 강함). terra 2회+본 세션 진단으로 국소화 완료(ManagedMeshNode.cs
       + drain의 target peer demote 경로).
-- [ ] **H-11 F: e2e_inventory 168 backlog**: relocation과 무관한 14개 문서 전반의
-      교차참조·feature-map 부채. (F 섹션 — 별도 계획 문서 필요)
+- [ ] **H-11 F: e2e_inventory backlog** — **스코핑 완료(계획: doc/plan/f-e2e-inventory-plan.ko.md)**.
+      "168"의 실제 = ~185 gate-closure 레코드(14 config): A(doc-xref 14)·B(feature-map 94)·
+      C(미구현 61)·D(source-only 16). **경계**: Config 6=H-7, Config 10=H-1/H-8 소유 →
+      **순수 F = 129(+16=145)**. 착수 순서: (1)인벤토리 정규화 (2)feature-map 행 대조(B 78,
+      Config14→5→2→3→8→11→7) (3)source-only(16) (4)실제 E2E authoring(C 37) (5)H 경계 재집계.
+      1~3은 framework/doc feature-map(Claude 소관), 4는 role process·fault seam 대형 구현.
+      **ST-F3A(relocation-adjacent orphan)는 H-1 소유로 편입**(F 흡수 금지).
