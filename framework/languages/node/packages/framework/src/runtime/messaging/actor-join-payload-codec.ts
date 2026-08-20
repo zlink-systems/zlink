@@ -6,7 +6,7 @@ import {
 import { frameworkPayloadContentType } from './payload-codec';
 
 const ACTOR_JOIN_MAGIC = Buffer.from([0x5a, 0x4c, 0x41, 0x4a]);
-const ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
+export const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 export interface ZLinkActorJoinPayload {
   readonly payload: Buffer;
@@ -15,7 +15,7 @@ export interface ZLinkActorJoinPayload {
 
 export function encodeFrameworkActorJoinPayload(request: Message): Buffer {
   const envelope = encodeApplicationPayload({
-    packetName: ACTOR_JOIN_PACKET_NAME,
+    packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
     contentType: frameworkPayloadContentType(request),
     payload: request.data()
   });
@@ -30,7 +30,7 @@ export function decodeFrameworkActorJoinPayload(
     return { payload: Buffer.from(payload), contentType: fallbackContentType };
   }
   const application = decodeApplicationPayload(payload.subarray(ACTOR_JOIN_MAGIC.length));
-  if (application.packetName !== ACTOR_JOIN_PACKET_NAME) {
+  if (application.packetName !== ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME) {
     throw new RangeError('Actor Join payload has an unexpected packet name.');
   }
   return {

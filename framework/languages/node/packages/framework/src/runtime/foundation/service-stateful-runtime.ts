@@ -76,8 +76,10 @@ import {
 import { routingIdsEqual } from '../routing-id';
 import {
   decodeActorJoin28,
+  encodeActorJoin28,
   type ActorJoin28
 } from '../protocol/service_wire_pilot_codec.generated';
+import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
 
 import {
   decodeApplicationPayload,
@@ -182,6 +184,18 @@ export interface ServiceStatefulMailboxData {
     payload?: ServiceApplicationPayload,
     tail?: ServiceStatefulReplyTail
   ) => boolean;
+}
+
+export interface ServiceCanonicalActorJoinCandidate {
+  readonly request: ServiceApplicationPayload;
+  readonly fallback: ServiceApplicationPayload;
+  readonly actorFence: {
+    readonly targetNodeGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  };
+  /** Local-only relocation bookkeeping; it is never encoded in command 28. */
+  readonly local: { readonly phase: 'admission'; readonly transferId: string };
 }
 
 export interface ServiceSessionDelivery {
@@ -1510,6 +1524,34 @@ export class ServiceStatefulRuntime {
     return pending;
   }
 
+  joinActorCanonical(
+    actor: ServiceActorRef,
+    targetNodeRid: string,
+    targetSpot: ServiceSpotRef,
+    targetSpotGeneration: bigint,
+    request: ServiceApplicationPayload,
+    fallback: ServiceApplicationPayload,
+    actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
+    local: ServiceCanonicalActorJoinCandidate['local'],
+    timeoutMs: number
+  ): ServiceStatefulPendingOperation {
+    const pending = this.operations.reserve(timeoutMs);
+    const target = this.trySpotFence(targetNodeRid, {
+      ...targetSpot,
+      generation: targetSpotGeneration
+    });
+    this.submitActorJoin(
+      pending,
+      actor,
+      targetNodeRid,
+      target,
+      fallback,
+      timeoutMs,
+      { request, fallback, actorFence, local }
+    );
+    return pending;
+  }
+
   joinActorEntrySpot(
     actor: ServiceActorRef,
     targetNodeRid: string,
@@ -1524,6 +1566,28 @@ export class ServiceStatefulRuntime {
       this.tryEntrySpotFence(targetNodeRid),
       payload,
       timeoutMs
+    );
+    return pending;
+  }
+
+  joinActorEntrySpotCanonical(
+    actor: ServiceActorRef,
+    targetNodeRid: string,
+    request: ServiceApplicationPayload,
+    fallback: ServiceApplicationPayload,
+    actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
+    local: ServiceCanonicalActorJoinCandidate['local'],
+    timeoutMs: number
+  ): ServiceStatefulPendingOperation {
+    const pending = this.operations.reserve(timeoutMs);
+    this.submitActorJoin(
+      pending,
+      actor,
+      targetNodeRid,
+      this.tryEntrySpotFence(targetNodeRid),
+      fallback,
+      timeoutMs,
+      { request, fallback, actorFence, local }
     );
     return pending;
   }
@@ -3133,7 +3197,12 @@ export class ServiceStatefulRuntime {
           })
     };
     const applicationFrame = payloadFrame ?? encodeApplicationPayload(emptyPayload());
-    const actorJoinPhase = actorJoinPhaseFromApplicationFrame(payloadFrame);
+    // Command 28 carries only the canonical proposal.  Its local transfer
+    // phase is therefore admission by definition; it must not be inferred
+    // from (or added to) the application envelope.
+    const actorJoinPhase = canonicalActorJoin === undefined
+      ? actorJoinPhaseFromApplicationFrame(payloadFrame)
+      : 'admission';
     const actorJoinTransferId = actorJoinTransferIdFromApplicationFrame(payloadFrame);
     return this.enqueueLifecycleFrame(
       ingress,
@@ -4160,9 +4229,13 @@ export class ServiceStatefulRuntime {
     targetNodeRid: string,
     target: ServiceSpotRouteFence | undefined,
     payload: ServiceApplicationPayload | undefined,
-    timeoutMs: number
+    timeoutMs: number,
+    canonical?: ServiceCanonicalActorJoinCandidate
   ): void {
-    const actorRoute = this.tryActorFence(actor);
+    const observedActorRoute = this.tryActorFence(actor);
+    const actorRoute = canonical === undefined
+      ? observedActorRoute
+      : this.acceptCanonicalActorFence(actor, canonical.actorFence, observedActorRoute);
     if (target === undefined || actorRoute === undefined) {
       this.operations.reply(pending.id, {
         terminalResult: RequestResult.NotFound,
@@ -4170,27 +4243,54 @@ export class ServiceStatefulRuntime {
       });
       return;
     }
-    const header = encodeActorJoinHeader(
-      pending.id,
-      actorRoute,
-      target.spot.spotId === targetNodeRid,
-      target
-    );
+    const canUseCanonical = canonical !== undefined
+      && this.canOriginateCanonicalActorJoin(targetNodeRid, target);
     this.actorJoinPhases.set(
       pending.id,
-      actorJoinMetadataFromMultipartPayload(payload?.payload)?.phase
+      canUseCanonical
+        ? canonical.local.phase
+        : actorJoinMetadataFromMultipartPayload(payload?.payload)?.phase
     );
     this.actorJoinTransferIds.set(
       pending.id,
-      actorJoinMetadataFromMultipartPayload(payload?.payload)?.transferId
+      canUseCanonical
+        ? canonical.local.transferId
+        : actorJoinMetadataFromMultipartPayload(payload?.payload)?.transferId
     );
     this.submitRequest(
       pending,
       targetNodeRid,
-      [
-        header,
-        ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
-      ],
+      canUseCanonical
+        ? encodeActorJoin28({
+            correlation: pending.id,
+            actor: {
+              id: actor.actorId,
+              generation: actor.generation,
+              targetNodeRid: Buffer.from(String(actor.nodeRid), 'utf8'),
+              targetNodeGeneration: actorRoute.targetNodeGeneration,
+              expectedAuthorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
+              expectedOwnerLeaseGeneration: actorRoute.ownerLeaseGeneration
+            },
+            entry: target.spot.spotId === targetNodeRid,
+            targetSpot: {
+              id: target.spot.spotId,
+              generation: target.spot.generation,
+              targetNodeRid: Buffer.from(target.targetNodeRid, 'utf8'),
+              targetNodeGeneration: target.targetNodeGeneration,
+              expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
+              expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
+            },
+            payload: canonical.request
+          }).map(frame => Buffer.from(frame))
+        : [
+            encodeActorJoinHeader(
+              pending.id,
+              actorRoute,
+              target.spot.spotId === targetNodeRid,
+              target
+            ),
+            ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
+          ],
       timeoutMs,
       'actorJoin',
       actor
@@ -4909,6 +5009,41 @@ export class ServiceStatefulRuntime {
     }
     const route = this.actorRoutes.get(actorKey(actor));
     return route !== undefined && sameActorRef(route.actor, actor) ? route : undefined;
+  }
+
+  private acceptCanonicalActorFence(
+    actor: ServiceActorRef,
+    fence: ServiceCanonicalActorJoinCandidate['actorFence'],
+    observed: ServiceActorRouteFence | undefined
+  ): ServiceActorRouteFence | undefined {
+    // Object/authority/lease are bounded counters.  Node lifecycle is a
+    // full-range opaque token, where only zero represents absence.
+    if (
+      observed === undefined
+      || actor.generation <= 0n
+      || fence.targetNodeGeneration === 0n
+      || fence.authorityOwnerGeneration <= 0n
+      || fence.ownerLeaseGeneration <= 0n
+      || observed.authorityOwnerGeneration !== fence.authorityOwnerGeneration
+    ) {
+      return undefined;
+    }
+    return {
+      actor,
+      targetNodeGeneration: fence.targetNodeGeneration,
+      authorityOwnerGeneration: fence.authorityOwnerGeneration,
+      ownerLeaseGeneration: fence.ownerLeaseGeneration
+    };
+  }
+
+  private canOriginateCanonicalActorJoin(
+    targetNodeRid: string,
+    target: ServiceSpotRouteFence
+  ): boolean {
+    if (targetNodeRid === this.nodeRid || target.targetNodeRid !== targetNodeRid) return false;
+    const peer = this.raw.topology.peer(targetNodeRid);
+    return peer?.descriptor.lifecycleGeneration === target.targetNodeGeneration
+      && peer.descriptor.protocolCapabilities.includes(SERVICE_WIRE_REQUIRED_CAPABILITY);
   }
 
   private trySpotFence(

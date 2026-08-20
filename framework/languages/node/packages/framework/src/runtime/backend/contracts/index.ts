@@ -38,6 +38,7 @@ import type {
   ServiceUserSpotOperationHandler,
   ServiceUserSpotOperationResult
 } from '../../foundation/service-stateful-runtime';
+import type { ServiceApplicationPayload } from '../../foundation/service-wire-m6a-codec';
 import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
@@ -293,10 +294,39 @@ export interface ZLinkBackendMeshNode {
     parts?: MessageLike | readonly MessageLike[],
     timeoutMs?: number
   ): MeshOperationId;
+  /** Internal canonical command-28 candidate; the transport owns its gate. */
+  joinActorSpotCanonical?(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    targetSpotId: unknown,
+    targetSpotGeneration: bigint,
+    request: ServiceApplicationPayload,
+    fallbackParts: MessageLike | readonly MessageLike[],
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
+    timeoutMs?: number
+  ): MeshOperationId;
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
     parts?: MessageLike | readonly MessageLike[],
+    timeoutMs?: number
+  ): MeshOperationId;
+  joinActorEntrySpotCanonical?(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    request: ServiceApplicationPayload,
+    fallbackParts: MessageLike | readonly MessageLike[],
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
     timeoutMs?: number
   ): MeshOperationId;
   sendToActor(

@@ -41,7 +41,11 @@ import {
   REMOTE_ACTOR_JOIN_ABORT,
   REMOTE_ACTOR_JOIN_ADMISSION,
 } from './actor-remote-wire';
-import { encodeFrameworkActorJoinPayload } from '../messaging/actor-join-payload-codec';
+import {
+  encodeFrameworkActorJoinPayload,
+  ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME
+} from '../messaging/actor-join-payload-codec';
+import { frameworkPayloadContentType } from '../messaging/payload-codec';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
 
 export interface ZLinkLocalNativeActorJoinOptions {
@@ -350,11 +354,13 @@ export class ZLinkLocalNativeActorJoin {
     if (completionOperationKey === relocationId) {
       throw new Error('Actor Join OperationId must be distinct from RelocationId.');
     }
+    const actorAuthorityFence = remoteJoinAuthorityFence(node, state);
+    const boundSessionTarget = enrichBoundSessionTransferTarget(state);
     const admissionPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
       actorId: actor.context.actorId,
       actorType,
       actorRef,
-      actorAuthorityFence: remoteJoinAuthorityFence(node, state),
+      actorAuthorityFence,
       // An actor's membership epoch starts at 0 (unassigned) until it is
       // first placed in a Spot; the wire vocabulary requires a positive
       // integer (relocation-envelope-v1), so an unassigned epoch advertises
@@ -367,27 +373,64 @@ export class ZLinkLocalNativeActorJoin {
       targetSpotId: target.spotId,
       routerChannelId: target.routerChannelId,
       sourceSpotId: state.spotId,
-      boundSessionTarget: enrichBoundSessionTransferTarget(state),
+      boundSessionTarget,
       phase: REMOTE_ACTOR_JOIN_ADMISSION,
       transferId: relocationId,
       completionOperationId
     })));
+    const canonicalAdmission = actorAuthorityFence === undefined || boundSessionTarget !== undefined
+      ? undefined
+      : {
+          request: {
+            packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
+            contentType: frameworkPayloadContentType(request),
+            payload: encodeFrameworkActorJoinPayload(request)
+          },
+          actorFence: {
+            targetNodeGeneration: actorAuthorityFence.nodeGeneration,
+            authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
+            ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
+          },
+          local: { phase: REMOTE_ACTOR_JOIN_ADMISSION, transferId: relocationId } as const
+        };
     const admission = await this.waitForJoinCompletion(
       () => entrySpot
-        ? node.joinActorEntrySpot(
-            actorRef,
-            toBackendRoutingId(target.targetNodeRid),
-            admissionPayload,
-            timeoutMs
-          )
-        : node.joinActorSpot(
-            actorRef,
-            toBackendRoutingId(target.targetNodeRid),
-            toBackendRoutingId(target.spotId),
-            target.targetSpotGeneration!,
-            admissionPayload,
-            timeoutMs
-          ),
+        ? canonicalAdmission !== undefined && node.joinActorEntrySpotCanonical !== undefined
+          ? node.joinActorEntrySpotCanonical(
+              actorRef,
+              toBackendRoutingId(target.targetNodeRid),
+              canonicalAdmission.request,
+              admissionPayload,
+              canonicalAdmission.actorFence,
+              canonicalAdmission.local,
+              timeoutMs
+            )
+          : node.joinActorEntrySpot(
+              actorRef,
+              toBackendRoutingId(target.targetNodeRid),
+              admissionPayload,
+              timeoutMs
+            )
+        : canonicalAdmission !== undefined && node.joinActorSpotCanonical !== undefined
+          ? node.joinActorSpotCanonical(
+              actorRef,
+              toBackendRoutingId(target.targetNodeRid),
+              toBackendRoutingId(target.spotId),
+              target.targetSpotGeneration!,
+              canonicalAdmission.request,
+              admissionPayload,
+              canonicalAdmission.actorFence,
+              canonicalAdmission.local,
+              timeoutMs
+            )
+          : node.joinActorSpot(
+              actorRef,
+              toBackendRoutingId(target.targetNodeRid),
+              toBackendRoutingId(target.spotId),
+              target.targetSpotGeneration!,
+              admissionPayload,
+              timeoutMs
+            ),
       completions,
       timeoutMs,
       signal

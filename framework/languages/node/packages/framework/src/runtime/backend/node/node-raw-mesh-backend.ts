@@ -40,6 +40,7 @@ import {
 import {
   decodeApplicationPayloadView,
   encodeMultipartApplicationPayload,
+  type ServiceApplicationPayload,
   ServiceWireProtocolError
 } from '../../foundation/service-wire-m6a-codec';
 import {
@@ -1168,6 +1169,37 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
+  joinActorSpotCanonical(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    targetSpotId: unknown,
+    targetSpotGeneration: bigint,
+    request: ServiceApplicationPayload,
+    fallbackParts: MessageLike | readonly MessageLike[],
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
+    timeoutMs = 30_000
+  ): MeshOperationId {
+    return this.observeStateful(
+      OperationKind.ActorJoin,
+      this.requireStateful().joinActorCanonical(
+        actor,
+        String(targetNodeRid),
+        { spotId: String(targetSpotId), generation: targetSpotGeneration },
+        targetSpotGeneration,
+        request,
+        encodeMultipart(fallbackParts),
+        actorFence,
+        local,
+        timeoutMs
+      )
+    );
+  }
+
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
@@ -1181,6 +1213,34 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         actor,
         target,
         parts === undefined ? undefined : encodeMultipart(parts),
+        timeoutMs
+      )
+    );
+  }
+
+  joinActorEntrySpotCanonical(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    request: ServiceApplicationPayload,
+    fallbackParts: MessageLike | readonly MessageLike[],
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
+    timeoutMs = 30_000
+  ): MeshOperationId {
+    const target = String(targetNodeRid);
+    return this.observeStateful(
+      OperationKind.ActorJoin,
+      this.requireStateful().joinActorEntrySpotCanonical(
+        actor,
+        target,
+        request,
+        encodeMultipart(fallbackParts),
+        actorFence,
+        local,
         timeoutMs
       )
     );
