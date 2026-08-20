@@ -635,6 +635,17 @@
       처리 보장 + PrepareCanonicalRelocationAsync가 transient replace된 peer
       를 admitted 재확립 후 진행. baseline 통과 런(committed=1|Relocated)이
       존재해 java target 처리는 정상 확인됨(레이스만 잔존).
+      **⛔ 미결(2026-08-20): 이 최종 레이스는 terra 2회 시도(orch 566k +
+      drain 186k 토큰) 모두 결정성 확보 실패·전부 revert(트리 청정 유지)**.
+      두 접근(peer 재바인딩·infrastructure 독립 스케줄링)이 lucky-timing
+      1회 통과는 얻으나 후속 fresh-redis 런에서 재실패. **정직한 판정**:
+      dotnet source-side relocation drain vs mesh peer 수명(admitted 유지)
+      동시성 레이스 — 정밀 국소화(ManagedMeshNode.cs:803 + drain이 target
+      peer를 demote)됐고 메커니즘은 통과 런으로 증명됐으나, 결정적 수정은
+      **전용 집중 세션(충분한 컨텍스트 예산 + 추가 계측: drain이 어느
+      경로로 target peer를 demote하는지 프레임 단위 추적)** 필요. 되던 기능
+      회귀가 아니라 첫 통합의 가장 깊은 꼬리. 체크포인트 `ef19855326`가
+      2계층(generation·liveness)+durability+spec 구체화 전부 보존.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
