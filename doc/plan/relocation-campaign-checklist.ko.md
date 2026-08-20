@@ -702,6 +702,26 @@
       dispatch 표면만, RouteMesh control-plane liveness는 spec 29/49 소관 —
       커버리지 갭). **수정: java 범위, ZLINK_JAVA_STREAM_TRACE로 (a)/(b)
       판별 후 spec 29/49 정합 수정** → sonnet 위임. 하니스 flow 배선 커밋됨.
+      **✅✅ 해소(2026-08-20, sonnet, 커밋 `5ada08d963`)**: 진짜 근본은 (a)/(b)도
+      아닌 **더 깊은 버그 — `ulong` lifecycle-generation opaque token에 signed
+      `>0`/`<=0` 센티널**(재발 u64-signed 버그류, 이전 소탕서 2곳 누락). 최상위
+      비트 켜진 ulong→java long 음수 디코드→양수-only 체크가 정당값 무음 거부
+      ~런당 동전던지기=관측 flakiness. ① `ZLinkJavaRawMeshNode
+      .hasCurrentInfrastructureControlSource(~:4032)` `lifecycleGeneration()>0`가
+      **모든 비-admission service-wire 프레임(liveness 5/6·relocation 40/52)을
+      게이트**→음수면 dispatch()가 service-received 트레이스 전에 무음 드롭→java
+      가 probe ack·command 40 미수신→dotnet de-admit→churn. `!= 0`으로 수정
+      (spec 29 §3/49). ② `ZLinkCanonicalRelocationProtocol.requirePositive→
+      requireNonZero(~:561)` 10개 opaque 펜싱 토큰 `<=0→==0`. 후보 (a)/(b)는
+      증거로 배제(무음 catch 0회, 프레임이 한 계층 위 dispatch() admission
+      게이트서 드롭). 무음 swallow 3곳 STREAM_TRACE 게이트 트레이스로 정식
+      승격(spec 26 Cost Rule·README "모든 실패는 flow에"). **검증: dotnet→java
+      15/15**(7/12 baseline에서), node→dotnet 3/3, java core BUILD SUCCESSFUL —
+      Claude 독립 확인 배치 진행 중. **잔여**: ⓐ java→dotnet 13/18 별도 flake
+      (`RELOCATION_FAILED→STORE_UNAVAILABLE`, redis 정상·relocation-control
+      트레이스 무발화 — java fix 무관, 미특성화·별도 세션) ⓑ 동일 버그류 미증거
+      2곳(ZLinkInMemoryLocationStore:832 `<1`, ZLinkJavaRawSpotNode:415 `<=0`)
+      cross-language 경로 확인 후 소탕 필요.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
