@@ -25,6 +25,164 @@ if (!actorJoin || !relocation || relocation.body?.$ref !== "relocation-envelope-
   throw new Error("service-wire pilot layouts changed; update generator before regenerating");
 }
 
+// W-2 mechanical command surface: bodies that use only primitives the pilot
+// already supports (nonzero-u64, text8, actor-route-fence). Each is verified
+// against the schema body layout below before any code is emitted, so a
+// schema change fails generation instead of silently drifting.
+const getCommand = (id, name) => {
+  const found = schema.commands.find((c) => c.id === id && c.name === name);
+  if (!found) throw new Error(`command ${name}(${id}) missing from schema`);
+  return found;
+};
+const assertBody = (cmd, expected) => {
+  const actual = cmd.body.map((f) => f.$ref).join(",");
+  if (actual !== expected.join(",")) {
+    throw new Error(`${cmd.name} body layout changed; update generator before regenerating`);
+  }
+};
+const mechanicalCommands = [
+  [5, "livenessProbe", ["nonzero-u64"]],
+  [6, "livenessAck", ["nonzero-u64"]],
+  [16, "nodeSend", []],
+  [17, "nodeRequest", ["nonzero-u64"]],
+  [18, "channelSend", ["text8"]],
+  [19, "channelRequest", ["nonzero-u64", "text8"]],
+  [23, "logicalMulticast", ["text8", "text8", "text8"]],
+  [26, "actorLookup", ["nonzero-u64", "text8"]],
+  [27, "actorDestroy", ["nonzero-u64", "actor-route-fence"]],
+].map(([id, name, expected]) => {
+  const cmd = getCommand(id, name);
+  assertBody(cmd, expected);
+  return cmd;
+});
+const pascal = (name) => name[0].toUpperCase() + name.slice(1);
+const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+const M0 = schema.protocol.magic[0];
+const M1 = schema.protocol.magic[1];
+const WM = schema.protocol.wireMajor;
+
+// -- Node/TypeScript ---------------------------------------------------
+function nodeField(f) {
+  switch (f.$ref) {
+    case "nonzero-u64":
+      return { ts: "bigint",
+        enc: `if(!value.${f.name}) throw new RangeError("${f.name}"); u64(out,value.${f.name});`,
+        dec: `const ${f.name}=read64(bytes,at); if(!${f.name}) throw new RangeError("${f.name}");` };
+    case "text8":
+      return { ts: "string", enc: `text8(out,value.${f.name});`, dec: `const ${f.name}=readText8(bytes,at);` };
+    case "actor-route-fence": case "spot-route-fence":
+      return { ts: "ServiceWireRouteFence", enc: `fence(out,value.${f.name});`, dec: `const ${f.name}=readFence(bytes,at);` };
+    default: throw new Error(`unsupported node field ${f.$ref}`);
+  }
+}
+function nodeCommandCode(cmd) {
+  const suffix = `${pascal(cmd.name)}${cmd.id}`;
+  const fields = cmd.body.map((f) => ({ ...f, ...nodeField(f) }));
+  const hasFields = fields.length > 0;
+  const iface = hasFields
+    ? `export interface ${suffix} { ${fields.map((f) => `readonly ${f.name}: ${f.ts};`).join(" ")} }\n` : "";
+  const param = hasFields ? `value: ${suffix}` : "";
+  const returnType = hasFields ? suffix : "void";
+  const returnExpr = hasFields ? `{ ${fields.map((f) => f.name).join(", ")} }` : "undefined";
+  return `${iface}export function encode${suffix}(${param}): Uint8Array { const out=[${M0},${M1},${WM},${cmd.id},0]; ${fields.map((f) => f.enc).join(" ")} return Uint8Array.from(out); }
+export function decode${suffix}(bytes: Uint8Array): ${returnType} { const at={value:0}; if(bytes.length<5 || bytes[at.value++]!==${M0} || bytes[at.value++]!==${M1} || bytes[at.value++]!==${WM} || bytes[at.value++]!==${cmd.id} || bytes[at.value++]!==0) throw new RangeError("${cmd.name} header"); ${fields.map((f) => f.dec).join(" ")} if(at.value!==bytes.length) throw new RangeError("${cmd.name} trailing"); return ${returnExpr}; }
+`;
+}
+const nodeMechanical = mechanicalCommands.map(nodeCommandCode).join("");
+
+// -- JVM/Java ------------------------------------------------------------
+function javaField(f) {
+  switch (f.$ref) {
+    case "nonzero-u64":
+      return { type: "long",
+        enc: `if(v.${f.name}()==0)throw new IOException("${f.name}");u64(o,v.${f.name}());`,
+        dec: `long ${f.name}=r64(i);if(${f.name}==0)throw new IOException("${f.name}");` };
+    case "text8":
+      return { type: "String", enc: `text8(o,v.${f.name}());`, dec: `String ${f.name}=text8(i);` };
+    case "actor-route-fence": case "spot-route-fence":
+      return { type: "Fence", enc: `fence(o,v.${f.name}());`, dec: `Fence ${f.name}=fence(i);` };
+    default: throw new Error(`unsupported java field ${f.$ref}`);
+  }
+}
+function javaCommandCode(cmd) {
+  const suffix = `${pascal(cmd.name)}${cmd.id}`;
+  const fields = cmd.body.map((f) => ({ ...f, ...javaField(f) }));
+  const hasFields = fields.length > 0;
+  const recordDecl = hasFields
+    ? `  public record ${suffix}(${fields.map((f) => `${f.type} ${f.name}`).join(",")}) {}\n` : "";
+  const param = hasFields ? `${suffix} v` : "";
+  const decodeReturnType = hasFields ? suffix : "void";
+  const trailingCheck = `if(i.available()!=0)throw new IOException("trailing");`;
+  const decodeBody = hasFields
+    ? `${fields.map((f) => f.dec).join("")}${trailingCheck}return new ${suffix}(${fields.map((f) => f.name).join(",")});`
+    : `${trailingCheck}`;
+  return `${recordDecl}  public static byte[] encode${suffix}(${param})throws IOException{var b=new ByteArrayOutputStream();var o=new DataOutputStream(b);o.write(new byte[]{${M0},${M1},${WM},${cmd.id},0});${fields.map((f) => f.enc).join("")}return b.toByteArray();}
+  public static ${decodeReturnType} decode${suffix}(byte[] b)throws IOException{var i=new DataInputStream(new ByteArrayInputStream(b));if(i.readUnsignedByte()!=${M0}||i.readUnsignedByte()!=${M1}||i.readUnsignedByte()!=${WM}||i.readUnsignedByte()!=${cmd.id}||i.readUnsignedByte()!=0)throw new IOException("header");${decodeBody}}
+`;
+}
+const javaMechanical = mechanicalCommands.map(javaCommandCode).join("");
+
+// -- .NET/C# ---------------------------------------------------------
+function dotnetField(f) {
+  const prop = pascal(f.name);
+  switch (f.$ref) {
+    case "nonzero-u64":
+      return { type: "ulong", prop,
+        enc: `if(v.${prop}==0)throw new InvalidDataException();U64(w,v.${prop});`,
+        dec: `var ${f.name}=R64(r);if(${f.name}==0)throw new InvalidDataException();` };
+    case "text8":
+      return { type: "string", prop, enc: `T(w,v.${prop});`, dec: `var ${f.name}=T(r);` };
+    case "actor-route-fence": case "spot-route-fence":
+      return { type: "Fence", prop, enc: `F(w,v.${prop});`, dec: `var ${f.name}=F(r);` };
+    default: throw new Error(`unsupported dotnet field ${f.$ref}`);
+  }
+}
+function dotnetCommandCode(cmd) {
+  const suffix = `${pascal(cmd.name)}${cmd.id}`;
+  const fields = cmd.body.map((f) => ({ ...f, ...dotnetField(f) }));
+  const hasFields = fields.length > 0;
+  const recordDecl = hasFields
+    ? `public sealed record ${suffix}(${fields.map((f) => `${f.type} ${f.prop}`).join(",")}); ` : "";
+  const param = hasFields ? `${suffix} v` : "";
+  const decodeReturnType = hasFields ? suffix : "void";
+  const trailingCheck = `if(r.BaseStream.Position!=r.BaseStream.Length)throw new InvalidDataException();`;
+  const decodeBody = hasFields
+    ? `${fields.map((f) => f.dec).join("")}${trailingCheck}return new(${fields.map((f) => f.name).join(",")});`
+    : `${trailingCheck}`;
+  return `${recordDecl}public static byte[] Encode${suffix}(${param}){using var m=new MemoryStream();using var w=new BinaryWriter(m);w.Write(new byte[]{${M0},${M1},${WM},${cmd.id},0});${fields.map((f) => f.enc).join("")}return m.ToArray();} public static ${decodeReturnType} Decode${suffix}(byte[] b){using var r=new BinaryReader(new MemoryStream(b));if(r.ReadByte()!=${M0}||r.ReadByte()!=${M1}||r.ReadByte()!=${WM}||r.ReadByte()!=${cmd.id}||r.ReadByte()!=0)throw new InvalidDataException();${decodeBody}} `;
+}
+const dotnetMechanical = mechanicalCommands.map(dotnetCommandCode).join("\n");
+
+// -- C++ -------------------------------------------------------------
+function cppField(f) {
+  switch (f.$ref) {
+    case "nonzero-u64":
+      return { type: "std::uint64_t",
+        enc: `if(!v.${f.name})throw std::invalid_argument("${f.name}");pilot_u64(o,v.${f.name});`,
+        dec: `v.${f.name}=pilot_r64(b,at);if(!v.${f.name})throw std::invalid_argument("${f.name}");` };
+    case "text8":
+      return { type: "std::string", enc: `pilot_text8(o,v.${f.name});`, dec: `v.${f.name}=pilot_read_text8(b,at);` };
+    case "actor-route-fence": case "spot-route-fence":
+      return { type: "service_wire_pilot_fence", enc: `pilot_write_fence(o,v.${f.name});`, dec: `v.${f.name}=pilot_fence(b,at);` };
+    default: throw new Error(`unsupported cpp field ${f.$ref}`);
+  }
+}
+function cppCommandCode(cmd) {
+  const base = `service_wire_pilot_${snake(cmd.name)}_${cmd.id}`;
+  const fnBase = `${snake(cmd.name)}_${cmd.id}`;
+  const fields = cmd.body.map((f) => ({ ...f, ...cppField(f) }));
+  const hasFields = fields.length > 0;
+  const structDecl = hasFields
+    ? `struct ${base} { ${fields.map((f) => `${f.type} ${f.name}${f.type === "std::uint64_t" ? " = 0" : ""};`).join(" ")} }; ` : "";
+  const encParam = hasFields ? `const ${base}&v` : "";
+  const decRet = hasFields ? base : "void";
+  const decBody = hasFields
+    ? `${base} v{};${fields.map((f) => f.dec).join("")}if(at!=b.size())throw std::invalid_argument("${cmd.name} trailing");return v;`
+    : `if(at!=b.size())throw std::invalid_argument("${cmd.name} trailing");`;
+  return `${structDecl}inline std::vector<std::uint8_t> encode_${fnBase}(${encParam}){std::vector<std::uint8_t> o={${M0},${M1},${WM},${cmd.id},0};${fields.map((f) => f.enc).join("")}return o;} inline ${decRet} decode_${fnBase}(const std::vector<std::uint8_t>&b){std::size_t at=0;if(b.size()<5||b[at++]!=${M0}||b[at++]!=${M1}||b[at++]!=${WM}||b[at++]!=${cmd.id}||b[at++]!=0)throw std::invalid_argument("${cmd.name} header");${decBody}} `;
+}
+const cppMechanical = `inline void pilot_text8(std::vector<std::uint8_t>&o,const std::string&v){if(v.empty()||v.size()>255)throw std::invalid_argument("text8");o.push_back(static_cast<std::uint8_t>(v.size()));o.insert(o.end(),v.begin(),v.end());} inline std::string pilot_read_text8(const std::vector<std::uint8_t>&b,std::size_t&at){if(at>=b.size())throw std::invalid_argument("truncated text8");const auto n=b[at++];if(!n||at+n>b.size())throw std::invalid_argument("invalid text8");std::string s(reinterpret_cast<const char*>(b.data()+at),n);at+=n;return s;} inline void pilot_write_fence(std::vector<std::uint8_t>&o,const service_wire_pilot_fence&x){if(x.id.empty()||x.id.size()>255||x.target_node_rid.empty()||x.target_node_rid.size()>255||!x.generation||!x.target_node_generation||!x.expected_authority_owner_generation||!x.expected_owner_lease_generation)throw std::invalid_argument("fence");o.push_back(static_cast<std::uint8_t>(x.id.size()));o.insert(o.end(),x.id.begin(),x.id.end());pilot_u64(o,x.generation);o.push_back(static_cast<std::uint8_t>(x.target_node_rid.size()));o.insert(o.end(),x.target_node_rid.begin(),x.target_node_rid.end());pilot_u64(o,x.target_node_generation);pilot_u64(o,x.expected_authority_owner_generation);pilot_u64(o,x.expected_owner_lease_generation);} ${mechanicalCommands.map(cppCommandCode).join("")}`;
+
 const banner = (comment) => `${comment} <auto-generated> DO NOT EDIT. schema-sha256: ${hash}\n`;
 const node = `${banner("//")}export interface ServiceWireRouteFence { readonly id: string; readonly generation: bigint; readonly targetNodeRid: Uint8Array; readonly targetNodeGeneration: bigint; readonly expectedAuthorityOwnerGeneration: bigint; readonly expectedOwnerLeaseGeneration: bigint; }
 export interface ActorJoin28 { readonly correlation: bigint; readonly actor: ServiceWireRouteFence; readonly entry: boolean; readonly targetSpot: ServiceWireRouteFence; }
@@ -55,5 +213,10 @@ const dotnet = `${banner("//")}using System; using System.IO; using System.Text;
 
 const cpp = `${banner("//")}#pragma once\n#include <cstdint>\n#include <cstddef>\n#include <stdexcept>\n#include <vector>\n#include <string>\nnamespace zlink::framework::runtime::protocol { struct service_wire_pilot_fence { std::string id; std::uint64_t generation; std::vector<std::uint8_t> target_node_rid; std::uint64_t target_node_generation, expected_authority_owner_generation, expected_owner_lease_generation; }; struct service_wire_pilot_actor_join_28 { std::uint64_t correlation; service_wire_pilot_fence actor; bool entry; service_wire_pilot_fence target_spot; }; inline void pilot_u64(std::vector<std::uint8_t>&o,std::uint64_t v){for(int i=7;i>=0;--i)o.push_back(static_cast<std::uint8_t>(v>>(i*8)));} inline std::uint64_t pilot_r64(const std::vector<std::uint8_t>&b,std::size_t&at){if(at+8>b.size())throw std::invalid_argument("truncated u64");std::uint64_t v=0;for(int i=0;i<8;++i)v=(v<<8)|b[at++];return v;} inline service_wire_pilot_fence pilot_fence(const std::vector<std::uint8_t>&b,std::size_t&at){if(at>=b.size())throw std::invalid_argument("truncated id");const auto n=b[at++];if(!n||at+n>b.size())throw std::invalid_argument("invalid id");service_wire_pilot_fence f;f.id.assign(reinterpret_cast<const char*>(b.data()+at),n);at+=n;f.generation=pilot_r64(b,at);if(!f.generation||at>=b.size())throw std::invalid_argument("invalid generation");const auto r=b[at++];if(!r||at+r>b.size())throw std::invalid_argument("invalid rid");f.target_node_rid.assign(b.begin()+static_cast<std::ptrdiff_t>(at),b.begin()+static_cast<std::ptrdiff_t>(at+r));at+=r;f.target_node_generation=pilot_r64(b,at);f.expected_authority_owner_generation=pilot_r64(b,at);f.expected_owner_lease_generation=pilot_r64(b,at);if(!f.target_node_generation||!f.expected_authority_owner_generation||!f.expected_owner_lease_generation)throw std::invalid_argument("invalid fence");return f;} inline std::vector<std::uint8_t> encode_actor_join_28(const service_wire_pilot_actor_join_28&v){if(!v.correlation)throw std::invalid_argument("correlation");std::vector<std::uint8_t> o={${schema.protocol.magic.join(",")},${schema.protocol.wireMajor},${actorJoin.id},0};auto f=[&](const service_wire_pilot_fence&x){if(x.id.empty()||x.id.size()>255||x.target_node_rid.empty()||x.target_node_rid.size()>255||!x.generation||!x.target_node_generation||!x.expected_authority_owner_generation||!x.expected_owner_lease_generation)throw std::invalid_argument("fence");o.push_back(x.id.size());o.insert(o.end(),x.id.begin(),x.id.end());pilot_u64(o,x.generation);o.push_back(x.target_node_rid.size());o.insert(o.end(),x.target_node_rid.begin(),x.target_node_rid.end());pilot_u64(o,x.target_node_generation);pilot_u64(o,x.expected_authority_owner_generation);pilot_u64(o,x.expected_owner_lease_generation);};pilot_u64(o,v.correlation);f(v.actor);o.push_back(v.entry?1:0);f(v.target_spot);return o;} inline service_wire_pilot_actor_join_28 decode_actor_join_28(const std::vector<std::uint8_t>&b){std::size_t at=0;if(b.size()<5||b[at++]!=${schema.protocol.magic[0]}||b[at++]!=${schema.protocol.magic[1]}||b[at++]!=${schema.protocol.wireMajor}||b[at++]!=${actorJoin.id}||b[at++]!=0)throw std::invalid_argument("actorJoin header");service_wire_pilot_actor_join_28 v{};v.correlation=pilot_r64(b,at);if(!v.correlation)throw std::invalid_argument("correlation");v.actor=pilot_fence(b,at);if(at>=b.size()||b[at]>1)throw std::invalid_argument("entry");v.entry=b[at++]==1;v.target_spot=pilot_fence(b,at);if(at!=b.size())throw std::invalid_argument("actorJoin trailing");return v;} inline std::vector<std::uint8_t> encode_relocation_envelope_v1(std::vector<std::uint8_t> logical){return logical;} inline std::vector<std::uint8_t> decode_relocation_envelope_v1(const std::vector<std::vector<std::uint8_t>>&chunks){std::vector<std::uint8_t>o;for(const auto&c:chunks)o.insert(o.end(),c.begin(),c.end());return o;} }\n`;
 
-const outputs = new Map([["generated/node/service_wire_pilot_codec.generated.ts",node],["generated/jvm/ServiceWirePilotCodec.java",java],["generated/dotnet/ServiceWirePilotCodec.g.cs",dotnet],["generated/cpp/service_wire_pilot_codec.hpp",cpp],["generated/fixtures/relocation-envelope-v1-pilot.json", `${JSON.stringify({ schema: "service-wire-v1", format: relocationFixture.format, input: relocationFixture.decoded, hex: relocationFixture.logicalHex }, null, 2)}\n`]]);
+const nodeOut = node + nodeMechanical;
+const javaOut = java.replace(/\}\n$/, `${javaMechanical}}\n`);
+const dotnetOut = dotnet.replace(/\}\n$/, `${dotnetMechanical}}\n`);
+const cppOut = cpp.replace(/\}\n$/, `${cppMechanical}}\n`);
+
+const outputs = new Map([["generated/node/service_wire_pilot_codec.generated.ts",nodeOut],["generated/jvm/ServiceWirePilotCodec.java",javaOut],["generated/dotnet/ServiceWirePilotCodec.g.cs",dotnetOut],["generated/cpp/service_wire_pilot_codec.hpp",cppOut],["generated/fixtures/relocation-envelope-v1-pilot.json", `${JSON.stringify({ schema: "service-wire-v1", format: relocationFixture.format, input: relocationFixture.decoded, hex: relocationFixture.logicalHex }, null, 2)}\n`]]);
 let stale=false; for(const [relative,content] of outputs){const target=path.join(root,relative);if(check){if(!fs.existsSync(target)||fs.readFileSync(target,"utf8")!==content){console.error(`stale: ${relative}`);stale=true;}}else{fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,content);}} if(stale)process.exit(1); console.log(`${check?"verified":"generated"} service-wire pilot codecs; schema=${hash}`);
