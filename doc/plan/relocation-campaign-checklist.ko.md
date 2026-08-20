@@ -285,7 +285,19 @@
 - [x] C-6 dotnet actorJoin 발신 — **완료(terra 구현 + sonnet 검증·수정)**: 디코더
       오류 분류 버그 수정, cpp와 byte 레이아웃 완전 일치 검증, 게이트 닫힘 증명
       (generation-0 계약 의존 — 전용 게이트 테스트는 D급 후속), 1756/1759 그린
-- [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 — **1차 라이브 검증
+- [x] **🎉 C-7 harness 교차 언어 relocation stage 전 쌍 결정적 그린 달성
+      (2026-08-20, Claude 독립 검증)**: **dotnet→java 23/23**(커밋 5ada08d963,
+      genfix 등) · **node→dotnet 그린** · **java→dotnet 10/10**(커밋 377de5e7ec).
+      세 방향 flake의 공통 근원은 **동일 u64-signed-sentinel 버그류**(opaque
+      ulong lifecycle/generation 토큰에 signed `>0`/`<=0` 센티널 → 상위 비트
+      켜진 값이 음수 디코드→오거부/오생략): dotnet→java=ZLinkJavaRawMeshNode
+      hasCurrentInfrastructureControlSource + ZLinkCanonicalRelocationProtocol,
+      java→dotnet=ZLinkSpotRelocationReplyRoutes committed-reply fence(→
+      STORE_UNAVAILABLE 마스킹), +store/spot 소탕(b7443ed9b4). 정직한 계측 +
+      message-flow 방법론 교정 + codex 리서치로 마스킹된 예외 표면화해 도달.
+      잔여: Java signed-sentinel 종합 소탕(진행 중, 재발 방지) + C-7 최종 수용은
+      W-4 전 매트릭스 1스윕과 통합. (구 기록 보존:)
+- [ ] C-7 (구) — **1차 라이브 검증
       (2026-08-19, HEAD bec7a9e48a) 결과: 기본 게이트 8/19 적색 + relocation 3쌍
       전부 store 계층 실패. 하니스 드리프트 수정 `dec1c2dd9a`(message-follow
       구주장은 드리프트로 판명·그린). 결함 8군 전량 배정:**
