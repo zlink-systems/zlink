@@ -1051,7 +1051,13 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       this yet"(mesh_node_runtime.hpp:443, .cpp:2469) stale. → Claude 문서 정정(단 H-12 continuation
       갭 해소 전엔 "지원 완료" 기록 금지). spec 51은 framework/doc(Claude).
       **판정(2026-08-20)**: **cpp 절반 = revert `ab0b4b39a4`로 자동 해소** — mesh_node_runtime.cpp:2461·hpp:443 "nothing calls this yet" 주석이 origination opt-in 제거로 다시 정확(gate 닫힘). **.NET 절반 = 미해결**: .NET은 ZLinkSpotOutboundTransport(:34/63/184/261)·BackendSpotNodeWrapper(:133) 등에서 **라이브로 ObserveSpotAuthority 호출** → 실제로 command 28 originate하므로 spec 51:600/609가 .NET에 부정확. .NET origination이 완전한지(→spec을 ".NET도 originate"로 개정) 미완성인지(→cpp처럼 revert)는 **H-12/H-15 canonical actor-join 수신자 완성 결정에 종속** — 그 결정 후 spec 51 일괄 정정.
-- [ ] **H-18 [M/L] E2E feature-map 문구 정정(제거된 ACK/retry + stale phase/scenario)**:
+- [ ] **H-18 [M/L] feature-map 어휘 + node cmd44 one-way 위반(신규 발견)**:
+      **⚠️ 신규 실버그(h18 STOP·escalate 2026-08-20)**: node `sendSessionRelocationRoute()`가 command 44를
+      최대 2.5초 재시도(service-relocation-host-runtime.ts:966) — 스펙 20 §391-408 위반("command 44 one-way,
+      no response-loss state"), ST-E1C 무재시도·seal-timeout·late-no-op. cpp는 1b3b21b2e3으로 이미 one-shot
+      (send_attempted guard). **판정: node도 one-way one-shot으로 수정**(실패 시 spec-defined seal-timeout+
+      reconnect-bind 복구 경로). 가드레일: node relocation-dotnet-java 8/8 그린 유지 필수(회귀 시 STOP). 이후
+      ST-E1C 시나리오를 one-way/late-no-op 검증으로 정합. (원 H-18ⓐ/ⓑ/ⓒ 중 ⓑⓒ는 `978e7bdf26`로 해소):
       ⓐ [M] .NET "Session location update retry"·Java "commit ack"·Node "commit ACK/durable commit
       ACK" → target location_committed/relay-ready/one-way route update/seal-timeout·late-no-op 관측
       으로 교체(ST-E1C: cmd44 one-way, 01-glossary:2200). H-4b와 동일. ⓑ [L] cpp ObservabilityOps
