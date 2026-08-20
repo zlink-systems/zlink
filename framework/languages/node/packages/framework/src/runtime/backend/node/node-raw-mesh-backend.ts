@@ -2168,9 +2168,11 @@ function decodeStatefulRecord(
   stateful: ServiceStatefulMailboxData
 ): ReceiveRecord {
   const payloadFrame = record.parts.length < 2 ? undefined : record.parts[1];
-  const application = payloadFrame === undefined
-    ? undefined
-    : decodeApplicationEnvelope(payloadFrame);
+  const canonicalActorJoin = stateful.kindData?.kind === 'actorControl'
+    && stateful.kindData.canonicalActorJoin !== undefined;
+  const application = canonicalActorJoin
+    ? stateful.canonicalApplicationPayload
+    : (payloadFrame === undefined ? undefined : decodeApplicationEnvelope(payloadFrame));
   const operationId = record.correlation === undefined
     ? { high: 0n, low: 0n }
     : { high: 2n, low: record.correlation };
@@ -2197,7 +2199,11 @@ function decodeStatefulRecord(
     terminalResult: 0,
     failureErrno: 0,
     ...ingressLifecycle,
-    parts: application === undefined ? [] : decodeMultipart(application.payload),
+    parts: application === undefined
+      ? []
+      : !canonicalActorJoin
+        ? decodeMultipart(application.payload)
+        : [Message.from(application.payload)],
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
     ...(stateful.messageFollowOrigin === undefined
@@ -2243,6 +2249,12 @@ function decodeStatefulRecord(
         }
       );
       return accepted ? SubmitResult.Ok : SubmitResult.InvalidState;
+    },
+    replyFailure(terminalResult, failureCode) {
+      if (stateful.reply === undefined) return SubmitResult.InvalidState;
+      return stateful.reply(terminalResult, failureCode)
+        ? SubmitResult.Ok
+        : SubmitResult.InvalidState;
     }
   };
 }

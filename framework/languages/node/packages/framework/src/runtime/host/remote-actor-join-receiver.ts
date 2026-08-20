@@ -22,6 +22,15 @@ import {
   routingIdsEqual
 } from '../routing-id';
 
+export interface ZLinkCanonicalActorJoinAuthorityFence {
+  readonly actorId: string;
+  readonly actorNodeRid: RoutingId;
+  readonly actorGeneration: bigint;
+  readonly actorNodeGeneration: bigint;
+  readonly expectedAuthorityOwnerGeneration: bigint;
+  readonly expectedOwnerLeaseGeneration: bigint;
+}
+
 export interface ZLinkRemoteActorJoinReceiverOptions {
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
@@ -120,6 +129,42 @@ export class ZLinkRemoteActorJoinReceiver {
     }
   }
 
+  /**
+   * Canonical command 28 carries no stable type or bound-session coordinates.
+   * The raw-mesh dispatcher invokes this before its normal typed Spot
+   * admission so both transports share the S1 Location Store fence/type
+   * decision without inventing a second admission path.
+   */
+  async prepareCanonicalActorJoin(join: ZLinkCanonicalActorJoinAuthorityFence): Promise<void> {
+    const actorManager = this.requireActorManager();
+    const stableType = await this.resolveStableType(join);
+    let actor;
+    try {
+      actor = await actorManager.getOrCreateActor(join.actorId, stableType);
+    } catch (error) {
+      if (isMissingActorFactory(error)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestRejected,
+          `Actor '${join.actorId}' Authority stable type '${stableType}' is not registered locally.`,
+          error
+        );
+      }
+      throw error;
+    }
+    if (actor === undefined) {
+      throw new Error(`Actor '${join.actorId}' factory did not return an Actor.`);
+    }
+    const state = actorManager.getState(join.actorId);
+    if (state === undefined) {
+      throw new Error(`Actor '${join.actorId}' state was not created.`);
+    }
+    state.setNativeActorRef({
+      nodeRid: join.actorNodeRid,
+      actorId: join.actorId,
+      generation: join.actorGeneration
+    } as unknown as ZLinkBackendActorRef);
+  }
+
   private requireActorManager(): DefaultZLinkActorManager {
     const manager = this.options.actorManager();
     if (manager === undefined) {
@@ -140,7 +185,7 @@ export class ZLinkRemoteActorJoinReceiver {
    * Spec 51 §9: the Authority row, not the legacy JSON actorType field, is
    * the type source for receiver-side Actor Join admission.
    */
-  private async resolveStableType(join: ReturnType<typeof decodeRemoteActorJoinPayload>): Promise<string> {
+  private async resolveStableType(join: JoinAuthorityFence): Promise<string> {
     const store = this.options.authorityStore();
     if (store === undefined) {
       throw createInternalFrameworkException(
@@ -184,7 +229,17 @@ export class ZLinkRemoteActorJoinReceiver {
   }
 }
 
-function decodeJoinAuthorityFence(join: ReturnType<typeof decodeRemoteActorJoinPayload>): {
+type JoinAuthorityFence = Pick<
+  ReturnType<typeof decodeRemoteActorJoinPayload>,
+  | 'actorId'
+  | 'actorNodeRid'
+  | 'actorGeneration'
+  | 'actorNodeGeneration'
+  | 'expectedAuthorityOwnerGeneration'
+  | 'expectedOwnerLeaseGeneration'
+> | ZLinkCanonicalActorJoinAuthorityFence;
+
+function decodeJoinAuthorityFence(join: JoinAuthorityFence): {
   readonly objectGeneration: bigint;
   readonly nodeGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;

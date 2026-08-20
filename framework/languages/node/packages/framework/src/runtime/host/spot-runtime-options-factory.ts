@@ -207,6 +207,15 @@ export class ZLinkSpotRuntimeOptionsFactory {
         const state = this.options.actorManager()?.getState(actorId);
         return state?.isMoving === true ? undefined : state?.actor;
       },
+      canonicalActorJoinResolver: (fence) =>
+        this.options.boundSessionRelay.actorJoins.prepareCanonicalActorJoin({
+          actorId: fence.actorId,
+          actorNodeRid: fence.actorNodeRid,
+          actorGeneration: fence.actorGeneration,
+          actorNodeGeneration: fence.actorNodeGeneration,
+          expectedAuthorityOwnerGeneration: fence.authorityOwnerGeneration,
+          expectedOwnerLeaseGeneration: fence.ownerLeaseGeneration
+        }),
       actorLifecycleResolver: (actorId) =>
         this.options.actorManager()?.getState(actorId)?.actor,
       actorDispatchOwnerResolver: (actorId) => {

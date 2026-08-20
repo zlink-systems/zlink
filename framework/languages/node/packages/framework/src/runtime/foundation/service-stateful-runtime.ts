@@ -74,6 +74,10 @@ import {
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
+import {
+  decodeActorJoin28,
+  type ActorJoin28
+} from '../protocol/service_wire_pilot_codec.generated';
 
 import {
   decodeApplicationPayload,
@@ -170,6 +174,8 @@ export interface ServiceStatefulMailboxData {
   /** Carries the local operation deadline into the lifecycle dispatch lane. */
   readonly deadlineUnixMs?: bigint;
   readonly onTerminalCompletion?: () => void | Promise<void>;
+  /** Decoded only by the canonical command-28 generator path. */
+  readonly canonicalApplicationPayload?: ServiceApplicationPayload;
   readonly reply?: (
     terminalResult: number,
     failureCode: number,
@@ -1842,8 +1848,30 @@ export class ServiceStatefulRuntime {
       return undefined;
     }
     let decoded: ServiceStatefulWireRecord;
+    let canonicalActorJoin: ActorJoin28 | undefined;
     try {
+      // Node's pre-canonical remote relocation uses command 28 too, but its
+      // multipart application body carries the local transfer id/phase.  That
+      // bookkeeping is expressly not part of the canonical command-28 body
+      // (spec 51 §9), so it must retain the legacy dispatch path.  In
+      // particular, running the canonical Store admission against it mutates
+      // the same-node rebind before the formal relocation state machine owns
+      // the transition.
       decoded = decodeStatefulHeader(record.parts[0]!);
+      const legacyNodeActorJoin = record.command === M6bServiceWireCommand.actorJoin
+        && hasLegacyNodeActorJoinTransfer(record.parts[1]);
+      if (record.command === M6bServiceWireCommand.actorJoin && !legacyNodeActorJoin) {
+        try {
+          canonicalActorJoin = decodeActorJoin28(record.parts);
+          decoded = statefulActorJoinFromCanonical(canonicalActorJoin);
+        } catch {
+          // Command 28 is shared with the private Node transport.  The
+          // generated decoder owns canonical recognition, but a failed
+          // recognition must never drop a private record merely because the
+          // command number overlaps.
+          canonicalActorJoin = undefined;
+        }
+      }
       const hasPayload = [
         'spotSend',
         'spotRequest',
@@ -1875,11 +1903,25 @@ export class ServiceStatefulRuntime {
       const metadataFrame = instanceMetadata
         ? validateServiceMetadataFrame(record.parts[1]!)
         : undefined;
-      const payloadFrame = record.parts.length >= 2
-        ? record.parts[record.parts.length - 1]
-        : undefined;
+      const canonicalPayload = canonicalActorJoin?.payload === undefined
+        ? undefined
+        : {
+            packetName: canonicalActorJoin.payload.packetName,
+            contentType: canonicalActorJoin.payload.contentType,
+            payload: Buffer.from(canonicalActorJoin.payload.payload)
+          };
+      const payloadFrame = canonicalPayload === undefined
+        ? (record.parts.length >= 2 ? record.parts[record.parts.length - 1] : undefined)
+        : encodeApplicationPayload(canonicalPayload);
       try {
-        return await this.handleIngress(record, decoded, payloadFrame, metadataFrame);
+        return await this.handleIngress(
+          record,
+          decoded,
+          payloadFrame,
+          metadataFrame,
+          canonicalActorJoin,
+          canonicalPayload
+        );
       } catch (error) {
         const correlation = statefulCorrelation(decoded);
         if (correlation !== undefined) {
@@ -1910,7 +1952,9 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     record: ServiceStatefulWireRecord,
     payloadFrame: Buffer | undefined,
-    metadataFrame?: Buffer
+    metadataFrame?: Buffer,
+    canonicalActorJoin?: ActorJoin28,
+    canonicalActorJoinPayload?: ServiceApplicationPayload
   ): Promise<RawServicePumpResult> {
     switch (record.kind) {
       case 'messageFollow': {
@@ -2041,7 +2085,13 @@ export class ServiceStatefulRuntime {
         return this.replyDestroy(ingress, record);
       case 'actorJoin':
         this.validateSpotFence(record.target);
-        return this.enqueueActorJoin(ingress, record, payloadFrame);
+        return this.enqueueActorJoin(
+          ingress,
+          record,
+          payloadFrame,
+          canonicalActorJoin,
+          canonicalActorJoinPayload
+        );
       case 'boundSessionBind':
         return this.replySessionBind(ingress, record);
       case 'boundSessionReplaced':
@@ -3048,7 +3098,9 @@ export class ServiceStatefulRuntime {
   private enqueueActorJoin(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'actorJoin' }>,
-    payloadFrame: Buffer | undefined
+    payloadFrame: Buffer | undefined,
+    canonicalActorJoin?: ActorJoin28,
+    canonicalApplicationPayload?: ServiceApplicationPayload
   ): RawServicePumpResult {
     const current = this.registry.actor(record.actor.actor.actorId);
     const previousEpoch = current?.membershipEpoch ?? 0n;
@@ -3067,7 +3119,18 @@ export class ServiceStatefulRuntime {
       currentSpotGeneration: record.target.spot.generation,
       previousMembershipEpoch: previousEpoch,
       currentMembershipEpoch: previousEpoch + 1n,
-      resultCode: 0
+      resultCode: 0,
+      ...(canonicalActorJoin === undefined
+        ? {}
+        : {
+            canonicalActorJoin: {
+              actorNodeRid: record.actor.actor.nodeRid,
+              actorGeneration: record.actor.actor.generation,
+              actorNodeGeneration: record.actor.targetNodeGeneration,
+              authorityOwnerGeneration: record.actor.authorityOwnerGeneration,
+              ownerLeaseGeneration: record.actor.ownerLeaseGeneration
+            }
+          })
     };
     const applicationFrame = payloadFrame ?? encodeApplicationPayload(emptyPayload());
     const actorJoinPhase = actorJoinPhaseFromApplicationFrame(payloadFrame);
@@ -3083,6 +3146,7 @@ export class ServiceStatefulRuntime {
         targetSpot: record.target.spot,
         targetActor: actor,
         kindData: control,
+        ...(canonicalApplicationPayload === undefined ? {} : { canonicalApplicationPayload }),
         reply: (terminalResult, failureCode, replyPayload, tail) => {
           const committedReplay = actorJoinTransferId !== undefined
             && this.hasCommittedActorJoin(actorJoinTransferId);
@@ -5454,6 +5518,46 @@ function emptyPayload(): ServiceApplicationPayload {
   };
 }
 
+/**
+ * The generated command-28 decoder is the canonical wire authority.  Keep
+ * the stateful mailbox's internal record shape as an adapter only; it must
+ * not re-parse the canonical bytes with the legacy hand-written decoder.
+ */
+function statefulActorJoinFromCanonical(value: ActorJoin28): Extract<
+  ServiceStatefulWireRecord,
+  { readonly kind: 'actorJoin' }
+> {
+  return {
+    kind: 'actorJoin',
+    correlation: value.correlation,
+    actor: {
+      actor: {
+        actorId: value.actor.id,
+        generation: value.actor.generation,
+        nodeRid: decodeCanonicalRoutingId(value.actor.targetNodeRid)
+      },
+      targetNodeGeneration: value.actor.targetNodeGeneration,
+      authorityOwnerGeneration: value.actor.expectedAuthorityOwnerGeneration,
+      ownerLeaseGeneration: value.actor.expectedOwnerLeaseGeneration
+    },
+    entry: value.entry,
+    target: {
+      spot: {
+        spotId: value.targetSpot.id,
+        generation: value.targetSpot.generation
+      },
+      targetNodeRid: decodeCanonicalRoutingId(value.targetSpot.targetNodeRid),
+      targetNodeGeneration: value.targetSpot.targetNodeGeneration,
+      authorityOwnerGeneration: value.targetSpot.expectedAuthorityOwnerGeneration,
+      ownerLeaseGeneration: value.targetSpot.expectedOwnerLeaseGeneration
+    }
+  };
+}
+
+function decodeCanonicalRoutingId(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
+}
+
 function actorJoinPhaseFromApplicationFrame(
   frame: Uint8Array | undefined
 ): 'admission' | 'commit' | 'abort' | undefined {
@@ -5478,6 +5582,10 @@ function actorJoinMetadataFromApplicationFrame(
   } catch {
     return undefined;
   }
+}
+
+function hasLegacyNodeActorJoinTransfer(frame: Uint8Array | undefined): boolean {
+  return actorJoinMetadataFromApplicationFrame(frame)?.transferId !== undefined;
 }
 
 function actorJoinMetadataFromMultipartPayload(

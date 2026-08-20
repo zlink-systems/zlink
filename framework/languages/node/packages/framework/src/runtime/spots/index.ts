@@ -64,7 +64,8 @@ import {
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  internalFrameworkWireReply
 } from '../framework-errors-internal';
 import type {
   ZLinkBackendSpot,
@@ -280,6 +281,14 @@ export interface ZLinkSpotManagerOptions {
   readonly createTopicMessage?: () => import('../backend').ZLinkBackendTopicMessage;
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;
+  readonly canonicalActorJoinResolver?: (fence: {
+    readonly actorId: string;
+    readonly actorNodeRid: string;
+    readonly actorGeneration: bigint;
+    readonly actorNodeGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  }) => Promise<void>;
   readonly actorLifecycleResolver?: (actorId: string) => ZLinkActor | undefined;
   readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
@@ -1838,6 +1847,24 @@ export class DefaultZLinkSpotManager {
     const applicationClaim = transferRequest === undefined
       ? this.options.admission?.claim(meshName, 'Actor join dispatch')
       : undefined;
+    if (control.canonicalActorJoin !== undefined) {
+      const resolver = this.options.canonicalActorJoinResolver;
+      if (resolver === undefined) {
+        throw new ZLinkConfigurationException(
+          'Canonical Actor Join dispatch requires the Location Store admission resolver.'
+        );
+      }
+      try {
+        await resolver({ actorId, ...control.canonicalActorJoin });
+      } catch (error) {
+        if (error instanceof ZLinkFrameworkException && record.replyFailure !== undefined) {
+          const terminal = internalFrameworkWireReply(error);
+          requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
+          return;
+        }
+        throw error;
+      }
+    }
     const resolvedActor = this.options.actorResolver?.(actorId);
     const lifecycleActor = targetsEntrySpot
       ? this.options.actorLifecycleResolver?.(actorId)

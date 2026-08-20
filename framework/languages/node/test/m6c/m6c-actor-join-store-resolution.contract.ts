@@ -7,6 +7,10 @@ import {
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 import { ZLinkConfigurationException } from '../../packages/framework/src/contracts/Configuration/ConfigurationException';
 import { ZLinkRemoteActorJoinReceiver } from '../../packages/framework/src/runtime/host/remote-actor-join-receiver';
+import {
+  decodeActorJoin28,
+  encodeActorJoin28
+} from '../../../../runtime/protocol/generated/node/service_wire_pilot_codec.generated';
 
 const actorId = 'store-resolved-actor';
 const actorGeneration = 17n;
@@ -28,6 +32,57 @@ test('remote Actor Join resolves its stable type from a matching active Authorit
 
   assert.equal(result.accepted, false);
   assert.equal(resolvedType, 'StoreActor');
+});
+
+test('canonical actorJoin(28) multipart payload and payload-free frames reuse Store admission', async () => {
+  const activated: string[] = [];
+  const receiver = receiverFor({
+    readAuthority: async () => authoritySnapshot(),
+    getOrCreateActor: async (_actorId, stableType) => {
+      activated.push(stableType);
+      return {};
+    }
+  });
+  const fence = {
+    id: actorId,
+    generation: actorGeneration,
+    targetNodeRid: Buffer.from('node-a'),
+    targetNodeGeneration: nodeGeneration,
+    expectedAuthorityOwnerGeneration: authorityOwnerGeneration,
+    expectedOwnerLeaseGeneration: ownerLeaseGeneration
+  } as const;
+  const targetSpot = { ...fence, id: 'spot-a' };
+
+  for (const frames of [
+    encodeActorJoin28({
+      correlation: 41n,
+      actor: fence,
+      entry: false,
+      targetSpot,
+      payload: {
+        packetName: 'JoinRequest',
+        contentType: 'application/json',
+        payload: Buffer.from('{"join":true}')
+      }
+    }),
+    encodeActorJoin28({ correlation: 42n, actor: fence, entry: true, targetSpot })
+  ]) {
+    const join = decodeActorJoin28(frames);
+    await receiver.prepareCanonicalActorJoin({
+      actorId: join.actor.id,
+      actorNodeRid: Buffer.from(join.actor.targetNodeRid).toString(),
+      actorGeneration: join.actor.generation,
+      actorNodeGeneration: join.actor.targetNodeGeneration,
+      expectedAuthorityOwnerGeneration: join.actor.expectedAuthorityOwnerGeneration,
+      expectedOwnerLeaseGeneration: join.actor.expectedOwnerLeaseGeneration
+    });
+  }
+  assert.deepEqual(activated, ['StoreActor', 'StoreActor']);
+});
+
+test('canonical actorJoin(28) malformed body is rejected by the generated decoder', () => {
+  const malformed = Buffer.from([0x5a, 0x4d, 1, 28, 0]);
+  assert.throws(() => decodeActorJoin28([malformed]));
 });
 
 test('remote Actor Join rejects an Authority fence mismatch as ProtocolError before activation', async () => {
