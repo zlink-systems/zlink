@@ -208,7 +208,8 @@ internal readonly record struct ActorDestroyOperation(
     ActorRef Actor,
     RoutingId TargetNodeRid,
     ulong TargetNodeGeneration,
-    ulong AuthorityOwnerGeneration);
+    ulong AuthorityOwnerGeneration,
+    ulong OwnerLeaseGeneration);
 
 internal sealed record ActorDestroyCompletion(bool Destroyed) : MeshRecordPayload;
 
@@ -819,6 +820,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         ActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
         out MeshOperationId operationId,
         TimeSpan timeout = default);
     IStreamSessionService CreateStreamSessionService(IStreamSocket stream);

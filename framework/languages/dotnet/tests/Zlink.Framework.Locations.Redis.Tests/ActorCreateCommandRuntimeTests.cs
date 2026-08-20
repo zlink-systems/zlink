@@ -166,6 +166,7 @@ public sealed class ActorCreateCommandRuntimeTests
                 actor,
                 targetGeneration,
                 23,
+                29,
                 out var operationId,
                 TimeSpan.FromSeconds(5)));
         await WaitUntilAsync(() =>
@@ -178,6 +179,7 @@ public sealed class ActorCreateCommandRuntimeTests
         Assert.Equal(
             targetGeneration,
             operationTarget.Last.TargetNodeGeneration);
+        Assert.Equal(29UL, operationTarget.Last.OwnerLeaseGeneration);
         Assert.Equal(23UL, operationTarget.Last.AuthorityOwnerGeneration);
     }
 

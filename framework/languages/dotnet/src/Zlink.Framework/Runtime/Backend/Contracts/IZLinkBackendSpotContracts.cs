@@ -354,6 +354,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         ZLinkBackendActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
         TimeSpan timeout,
         CancellationToken cancellationToken) =>
         throw new NotSupportedException();

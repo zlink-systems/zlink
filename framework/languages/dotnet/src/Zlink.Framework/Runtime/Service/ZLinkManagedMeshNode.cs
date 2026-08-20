@@ -1573,6 +1573,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
         out MeshOperationId operationId,
         TimeSpan timeout = default)
     {
@@ -1590,7 +1591,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     actor,
                     actor.NodeRid,
                     targetNodeGeneration,
-                    authorityOwnerGeneration)),
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration)),
             out operationId,
             timeout);
     }
@@ -1599,6 +1601,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
         MeshOperationId correlationId,
         TimeSpan timeout = default)
     {
@@ -1616,7 +1619,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     actor,
                     actor.NodeRid,
                     targetNodeGeneration,
-                    authorityOwnerGeneration)),
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration)),
             out _,
             timeout,
             correlationId);

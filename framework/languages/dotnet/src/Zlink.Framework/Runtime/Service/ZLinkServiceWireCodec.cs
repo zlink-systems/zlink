@@ -1175,7 +1175,8 @@ internal static partial class ZLinkServiceWireCodec
             || operation.TargetNodeRid.IsEmpty
             || operation.Actor.NodeRid != operation.TargetNodeRid
             || operation.TargetNodeGeneration == 0
-            || operation.AuthorityOwnerGeneration == 0)
+            || operation.AuthorityOwnerGeneration == 0
+            || operation.OwnerLeaseGeneration == 0)
             throw new ArgumentOutOfRangeException(nameof(operation));
         var body = new WireWriter();
         body.U64(operation.Correlation);
@@ -1184,6 +1185,7 @@ internal static partial class ZLinkServiceWireCodec
         body.Rid(operation.TargetNodeRid);
         body.U64(operation.TargetNodeGeneration);
         body.U64(operation.AuthorityOwnerGeneration);
+        body.U64(operation.OwnerLeaseGeneration);
         var result = Prefix(
             ServiceWireConstants.Command.ActorDestroy,
             ServiceWireConstants.Flag.None,
@@ -1222,6 +1224,8 @@ internal static partial class ZLinkServiceWireCodec
             || targetNodeGeneration == 0
             || !reader.TryU64(out var authorityOwnerGeneration)
             || authorityOwnerGeneration == 0
+            || !reader.TryU64(out var ownerLeaseGeneration)
+            || ownerLeaseGeneration == 0
             || reader.Remaining != 0)
         {
             error = reader.Truncated
@@ -1241,7 +1245,8 @@ internal static partial class ZLinkServiceWireCodec
                     targetNodeRid),
                 targetNodeRid,
                 targetNodeGeneration,
-                authorityOwnerGeneration));
+                authorityOwnerGeneration,
+                ownerLeaseGeneration));
         error = DecodeError.None;
         return true;
     }

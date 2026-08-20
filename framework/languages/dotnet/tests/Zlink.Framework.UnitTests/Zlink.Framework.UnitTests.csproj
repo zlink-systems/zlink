@@ -124,6 +124,7 @@
         <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>
         <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
         <Compile Include="Runtime/ServiceWireActorJoinReplyCodecTests.cs"/>
+        <Compile Include="Runtime/ServiceWireActorDestroyCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>
@@ -167,5 +168,10 @@
         <Compile Include="../Common/FrameworkGlobalUsings.cs" Link="GlobalUsings.cs"/>
         <Compile Include="../Common/FrameworkTestEnvironment.cs" Link="Common/FrameworkTestEnvironment.cs"/>
         <Compile Include="../../scripts/PublicContractSnapshot.cs" Link="Runtime/PublicContractSnapshot.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWirePilotCodec.g.cs"
+                 Link="Runtime/Protocol/ServiceWirePilotCodec.g.cs"/>
     </ItemGroup>
 </Project>

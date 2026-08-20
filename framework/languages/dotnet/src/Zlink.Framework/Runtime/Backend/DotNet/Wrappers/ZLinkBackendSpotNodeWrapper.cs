@@ -600,6 +600,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ZLinkBackendActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
@@ -628,6 +629,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ToNativeActor(actor),
                 targetNodeGeneration,
                 authorityOwnerGeneration,
+                ownerLeaseGeneration,
                 id,
                 timeout));
         if (submit != SubmitResult.Ok)
