@@ -1117,3 +1117,22 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
 
 ### ✅ G-2 Node 6/6 재검증 (2026-08-20 심야, Claude)
 이 세션 node 변경(cmd44 one-way `d2a8eb25e6`·Authority DTO `91a7cc82ce`·Bingo S1 `d4f5055ebe`·discovery) 후 **node 6샘플 전부 PASS**(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·TicTacToe, exit=0). 무회귀 확인 + Bingo까지 그린(이전 4~5/6 → 6/6). G-2 Node 완전 그린.
+
+## H-canon: canonical actor-join 4언어 구현 (사용자 우선순위 지정 2026-08-21) — H-12/14/15 통합 구동
+
+스펙 결정 `8d8e5cdffd`(51 §9 Receiver Stable-Type Resolution) 위에서 4언어 canonical actorJoin(28)
+경로를 구현하고 사설 dialect(cpp typed-JSON·.NET envelope·java newline·node JSON)를 제거한다.
+검증 가능한 슬라이스로 순차 진행:
+
+- [ ] **canon-S1 node canonical 28 수신자 Store-backed type resolution**: canonical 28 body 디코드
+      + Store Authority row(allocation.stableType, key authority\0actor\0{ActorId})에서 type 해석
+      + exact fence match(state=active·objectKind=actor·objectGeneration·owner node RID+lifecycle gen·
+      authorityOwnerGeneration·ownerLeaseGeneration) + typed terminal(Unavailable/NotFound/stale/
+      unknown-type). node 유닛/통합 테스트로 검증(valid+matching row→Store-resolved type admit,
+      mismatch→typed terminal, missing→Unavailable/NotFound). 사설 packet actorType 의존 제거.
+- [ ] **canon-S2 node canonical 28 origination**: 발신 경로를 사설 JSON→canonical 28 wire로. node→node
+      same-language actorJoin이 canonical 경로로 그린.
+- [ ] **canon-S3 java/dotnet/cpp 수신자 + origination**(언어별 슬라이스): 동일 Store-backed receiver + canonical 발신.
+- [ ] **canon-S4 크로스랭 harness actorJoin 테스트**: JoinEntrySpot 회피 해제, 4언어 actorJoin(28) 매트릭스.
+- [ ] **canon-S5 사설 dialect 제거**: 4언어 사설 actor-join packet 삭제.
+- [ ] **canon-S6 H-12 cpp continuation**: Accepted→seal/capture/Restore/relay/cutover 연결 + chunk limit 적용(H-14).
