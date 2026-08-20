@@ -1141,6 +1141,10 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       capability(observed authority+admitted peer) 게이트 하에 canonical 28 multipart originate(생성 코덱), 미충족 시
       private JSON 폴백, bound-session은 S4d로 제외. **S4b+S4c로 node→node same-language canonical actorJoin 단대단 성립**.
       m6c 93/93(originate/round-trip 2 신규), 6샘플 통과. **java/dotnet/cpp 발신 잔여**:
+- [ ] **canon-S4c-dotnet 발신 — 복잡(sender seam 필요, 에이전트 정직 STOP)**: .NET actor-join 발신자가 relocation
+      reservation token/transfer state와 강결합. canonical 28 reply엔 그 상태 부재(§9 bookkeeping=language-internal).
+      단순 transport 교체는 canonical 수신 후 commit/rollback 계약 파괴. 필요: canonical admission 결과를 local relocation
+      state에 연결 + gate 미충족 시 사설 폴백하는 sender seam. **S4d(relocation state 통합)와 함께 재설계.** (ZLinkActorRemoteJoiner.cs:463·ZLinkManagedMeshNode.cs:3076)
 - [ ] **⚠️ TicTacToe 잔여 간헐 flake(2026-08-21 재확인)**: baseline(S4c stash)에서도 4회 중 1회 실패(~25%). mesh-pump
       수정(5a41d21fdc) 후 잔존 저빈도 flake — 이 세션의 여러 "TicTacToe 통과"는 운. **S4b/S4c 회귀 아님**(baseline 동일 flake율).
       G-2 Node는 이 flake로 결정적 6/6 아님(운좋은 6/6). focused 세션 과제로 이월(캠페인 회귀 아님). 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
