@@ -172,8 +172,12 @@
       **판정: ST-B1/B2/B3/C2 시나리오+feature-map을 `location_committed` 기반
       증거로 갱신(의도 보존: commit-before-joined 순서·correlation) — e2e
       에이전트 진행 중** [발견·해소 2026-08-19]
-- [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
-      gap 0 확인 (완료 조건)
+- [x] **sol 전 문서 spec-gap 리뷰 — 실행 완료(2026-08-20, codex sol, 기준 543a5c32c1)**:
+      결과 **NOT-CLEAN, 13건**(C 1/H 7/M 3/L 2). 전문 doc/plan/sol-final-specgap-review.ko.md.
+      **확인된 정합(CLEAN)**: actorDestroy 수정(내 작업)·cpp cmd44 one-way 문서·cpp cmd28
+      receiver approval-only·store 21/22/23·spec 26/27. **13건 전부 아래 H-12~H-19에 배정**
+      (리뷰 자체는 완료 조건 충족; gap은 후속 트랙으로 구동). gap 0이 아니므로 최종 완료는
+      H-12~H-19 해소 후.
 - [x] **sol 문서 예비 리뷰(2026-08-19, 기준 bec7a9e48a) — 11건 발견·전량 배정** (2026-08-20 종결: ①②⑤⑥⑦⑧ 해소, ③④ cpp cmd28 origination+cmd44 재전송 제거 `1b3b21b2e3`+문서 06:188 정정, ⑨⑩⑪ = config/ST-C4 후속 트랙 H로 이관):
       ① [M] cmd-44 "commit" 문구 모순 → **해소(`9077314a7e`)** ② **[C] node authority allocation 레코드
       비규범**(target/spotKind/capacityBundle vs 규범 descriptor/descriptor
@@ -1000,3 +1004,46 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       Config14→5→2→3→8→11→7) (3)source-only(16) (4)실제 E2E authoring(C 37) (5)H 경계 재집계.
       1~3은 framework/doc feature-map(Claude 소관), 4는 role process·fault seam 대형 구현.
       **ST-F3A(relocation-adjacent orphan)는 H-1 소유로 편입**(F 흡수 금지).
+
+## H-2차: sol 전 문서 spec-gap 리뷰 13건 (2026-08-20, 전문 doc/plan/sol-final-specgap-review.ko.md)
+
+- [ ] **H-12 [C] cpp canonical actorJoin(28) Accepted→완료 오보고**: canonical 경로가
+      admission Accepted를 즉시 actor_join_reply_t로 바꿔 public completion callback 실행
+      (mesh_node_runtime.cpp:2562), seal/capture continuation(2593+)은 사설 JSON 경로(2388)
+      에서만 호출. → target이 임시 queue·admission만 끝냈는데 caller가 Accepted 수신,
+      source ownership/state/queue 미이동 가능. 수정: cmd28 Accepted를 seal/capture/Restore/
+      relay/cutover 파이프라인에 연결, public Accepted는 target owner CAS+queue-open 후에만.
+      스펙 15 §4.2, 28 §128/§205/§296. **H-4a(cpp actorJoin28 ST-B1)와 동일 영역 — 함께 판정.**
+- [ ] **H-13 [H] Java u64 opaque token 잔여 소탕(재발 버그류)**: 4957255224 종합 소탕 후에도
+      잔존 — ZLinkServiceM6AWireCodec:448(correlation `<=0`), M6BWireCodec:23/135,
+      FrozenRecordCodec:201, MessageFollowWireCodec:200. 0x8000..이상 정상 .NET/C++/Node 토큰이
+      Java에서 protocol error. 수정: opaque u64 helper는 `==0`만 거부, `<=0`은 deadline/revision/
+      bounded counter 전용. high-bit golden vector 추가. 스펙 01-glossary:1512, 51 §12.
+- [ ] **H-14 [H] cpp negotiated receive chunk limit 미적용**: reply 값을 map에 기록만
+      (mesh_node_runtime.cpp:2562), 실제 전송에 min(server, target 광고, in-flight budget) 미적용
+      (consumer 연결 deferred 주석 2565, getter 2451 미소비). 수정: actor/relocation-attempt
+      identity별 소비→direct-transfer chunk planner, 세 상한 min. high/low advertised interop vector.
+      스펙 28 §4.2(:137). (C-5 이월분)
+- [ ] **H-15 [H] 4언어 Actor Join 상위 경로 사설 wire dialect 잔존**: cpp ActorTransferAdmission
+      JSON(2323)·.NET __zlink.actor.join_spot.* JSON·Java __zlink.actor.joinSpot multipart·
+      Node __zlink.actor.join_spot.request JSON. 스펙 51 §1/§9는 cmd28+40/52/cutover만 계약,
+      transfer bookkeeping은 wire 금지. 수정: cross-node Actor Join은 카논 계약만, transfer
+      부기는 runtime-local adapter 뒤로. **H-6(W-3)·H-12와 통합 대형 트랙.**
+- [ ] **H-16 [M] Node public package가 private Authority/domain DTO export**: Locations/index.ts:49가
+      Authority 전체 export(Authority.ts:9 authority key/snapshot/mutation/CAS/capacity DTO public),
+      src/index.ts 재-export. governance 00 §174 + node exact-interface 08 §302는 private 규정.
+      수정: public barrel에서 domain DTO 제거→runtime-internal. (외부 provider SPI 의도면 4언어
+      interface+governance 선행 — 아니라고 판정 시 단순 제거.)
+- [ ] **H-17 [M] spec 51 + cpp 주석 cmd28 originator 상태 stale**: 스펙 51:600 "cpp/.NET은 live
+      cross-node actorJoin 미originate"인데 실제 originate함. cpp header/함수 주석 "nothing calls
+      this yet"(mesh_node_runtime.hpp:443, .cpp:2469) stale. → Claude 문서 정정(단 H-12 continuation
+      갭 해소 전엔 "지원 완료" 기록 금지). spec 51은 framework/doc(Claude).
+- [ ] **H-18 [M/L] E2E feature-map 문구 정정(제거된 ACK/retry + stale phase/scenario)**:
+      ⓐ [M] .NET "Session location update retry"·Java "commit ack"·Node "commit ACK/durable commit
+      ACK" → target location_committed/relay-ready/one-way route update/seal-timeout·late-no-op 관측
+      으로 교체(ST-E1C: cmd44 one-way, 01-glossary:2200). H-4b와 동일. ⓑ [L] cpp ObservabilityOps
+      feature-map "phase=error" → "dispatch_error, outcome=failed"(스펙 26엔 error phase 없음;
+      실제 assertion은 이미 outcome=failed). ⓒ [L] Java StoreFailure feature-map이 공통 계약에 없는
+      SF-G3 invent → 제거(config-6 Track G는 G1/G2로 끝).
+- [ ] **H-19 [H] (=기존 트랙 재확인)**: finding 5=H-6(W-3 production 미스왑), 6=H-1(ST-C4 checksum
+      actual-process), 7=H-8(config-10 G/H/I gate), 8=H-7(config-6 SF gate). 중복 추적 방지 — 해당 H에서 구동.
