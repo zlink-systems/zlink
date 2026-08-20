@@ -553,6 +553,47 @@ Actor's current Location owner lease, not a bound-Session token; an unbound Acto
 carries its owner lease, and a bound Session adds only the seal/route-update legs, so a
 receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 
+#### Admission Lifecycle And Abandonment Cleanup
+
+The canonical `actorJoin`(28) admission and the state transfer that follows it (the
+command 40 `relocationPrepare` leg) are **two independent tracks** that are not bound to
+one another by any identity. That separation defines who is responsible for cleanup when
+an admission is abandoned.
+
+- **Admission creates no relocation reservation.** Accepting a 28 does only two things on
+  the target: (a) resolve the stable type from the Store Actor Authority row, and (b)
+  provisionally secure an Actor of that type (an idempotent get-or-create keyed by the same
+  actor identity). The reservation, stage, and byte budget for the state transfer that
+  follows are owned by the command 40 leg, keyed by the relocation identity
+  (relocation / targetAttemptGeneration / coordinator). There is therefore no 28-to-40
+  identity binding on the canonical path, and a receiver MUST NOT create one.
+- **A source-side pre-commit failure cleans only the source seal.** If the source's own
+  capture/precommit fails after it has admitted a 28 but before it sends command 40 (or
+  after 40 but before the target CAS), the source rolls back only its own seal. There is no
+  relocation reservation on the target for it to direct a cleanup of, so the source does
+  NOT send an abort to the target admission state. The cleanup scope of a pre-commit
+  failure is bounded to the source seal.
+- **The target reclaims its own provisional state target-locally.** The Actor state the
+  target provisionally secured for a 28 is reclaimed by the target itself even when the
+  corresponding command 40 never arrives. That provisional Actor is (a) reused by the
+  idempotent secure of a later attempt for the same actor identity, and (b) reclaimed by
+  the normal Actor lifecycle (spot close, node teardown, target-local reclamation). The
+  target's correctness does NOT depend on a command 40 arriving. In other words, accepting
+  a 28 is a reclaimable preparation, not a correctness-bearing durable commitment, and it
+  is safe without any source-driven abort.
+- **Rejected alternative.** A design that keys a cross-message abort control on the
+  correlation so the source can remotely cancel a 28 admission is NOT adopted, because it
+  reintroduces exactly the 28-to-40 cross-message addressing this section excludes. On the
+  canonical path an abort reaches the target only through the command 40 family that
+  carries the relocation identity (for example 53 `relocationFailed`); a 28 has no abort
+  channel.
+
+Consequently each runtime's canonical 28 receive MUST NOT **conflate** admission (type
+resolution plus provisionally securing the Actor) with the relocation reservation. An
+implementation that installs an upper relocation reservation, seal, or immediate delivery
+at the moment it accepts a 28 violates this rule; the reservation MUST be kept separate,
+in the command 40 track.
+
 ### Session Seal And Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound
