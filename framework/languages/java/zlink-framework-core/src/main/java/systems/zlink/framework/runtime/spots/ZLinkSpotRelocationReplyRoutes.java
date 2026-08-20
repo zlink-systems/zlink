@@ -178,10 +178,16 @@ final class ZLinkSpotRelocationReplyRoutes {
         long targetAuthorityOwnerGeneration) {
         Objects.requireNonNull(acceptedRecords, "acceptedRecords");
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
-        if (targetNodeGeneration <= 0
+        // targetNodeGeneration is a lifecycle-generation opaque equality
+        // token (.NET ulong); a value with bit 63 set decodes to a negative
+        // Java long, which is legitimate — only zero is unassigned. A signed
+        // `<= 0` sentinel wrongly rejected it and flattened the failure to
+        // STORE_UNAVAILABLE (spec 01-glossary lifecycle generation).
+        if (targetNodeGeneration == 0
             || targetAuthorityOwnerGeneration <= 0) {
             throw new IllegalArgumentException(
-                "committed target reply fence must be positive");
+                "committed target reply fence requires a non-zero target node"
+                    + " generation and a positive authority owner generation");
         }
         List<Route> selected = new ArrayList<>();
         for (byte[] acceptedRecord : acceptedRecords) {
@@ -223,10 +229,16 @@ final class ZLinkSpotRelocationReplyRoutes {
         long targetAuthorityOwnerGeneration) {
         Objects.requireNonNull(acceptedRecords, "acceptedRecords");
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
-        if (targetNodeGeneration <= 0
+        // targetNodeGeneration is a lifecycle-generation opaque equality
+        // token (.NET ulong); a value with bit 63 set decodes to a negative
+        // Java long, which is legitimate — only zero is unassigned. A signed
+        // `<= 0` sentinel wrongly rejected it and flattened the failure to
+        // STORE_UNAVAILABLE (spec 01-glossary lifecycle generation).
+        if (targetNodeGeneration == 0
             || targetAuthorityOwnerGeneration <= 0) {
             throw new IllegalArgumentException(
-                "committed target reply fence must be positive");
+                "committed target reply fence requires a non-zero target node"
+                    + " generation and a positive authority owner generation");
         }
         List<Route> selected = new ArrayList<>();
         for (byte[] acceptedRecord : acceptedRecords) {
