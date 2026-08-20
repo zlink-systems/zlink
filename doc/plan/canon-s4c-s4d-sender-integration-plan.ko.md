@@ -154,3 +154,18 @@ Node/Java 패턴은 .NET에 직접 적용 가능합니다. 즉 source-side `Cano
 
 **결론: binding-at-first-40 규칙 미완성.** 3언어 모두 (1) 첫 40이 canonical 28 admission에 full triple pin·이후 다른 triple 40을 typed stale terminal 거부 = 없음, (2) later-attempt-wins 재park의 prior-40-binding 무효화 + superseded source terminal 구분 = 없음. **필요 = 신규 attempt-lifecycle 레이어**(admission attempt registry per (actorId,objectGeneration) + 첫 40 원자 pin + later 28 supersede + 명시 53 stale/superseded terminal + source rollback 의미 보존) — 3언어 부재. 이것은 스펙 단일 판정이 아니라 **집중 프로토콜-인프라 설계**(loop 슬라이스 불가).
 
+
+
+---
+
+## triple-at-28-mint 검증 (2026-08-21, advisor "붕괴" 가설 검증 — 두 질문 모두 NO)
+
+**Q1 (coordinator가 28-mint시 triple 아는가): 4언어 모두 NO.**
+- node: admission 전엔 relocationId만; coordinator/targetAttemptGeneration은 runCoordinator에서 40 구성시 처음 생성(service-relocation-host-runtime.ts:1924/1969). 28 mint(actor-local-native-join.ts:350)는 그 전.
+- java: 28은 fence만으로 mint(ZLinkJavaRawMeshNode.java:1345); relocation goal은 28 응답 **후** 생성(ZLinkActorSpotJoinCall.java:817). 전체 identity는 sourcePrepare(ZLinkCanonicalRelocationStateMachine.java:977).
+- dotnet: 28 mint=generic BeginJoin(ZLinkManagedMeshNode.cs:3054), triple은 CreatePrepare(40)에서 처음(ZLinkActorRemoteJoiner.cs:812). **게다가 hosted relocation-driven join은 JSON admission 사용, canonical-28 경로 아님**(ZLinkActorRemoteJoiner.cs:452).
+- cpp: **relocation-driven canonical-28 live 경로 없음** — production은 JSON fallback(mesh_node_runtime.cpp:2317). triple은 coordinator에서 40 구성시(mesh_node_runtime.cpp:1176/1219).
+
+**Q2 (optional trailing triple codec slot): clean slot 없음.** 현행 28 body는 Frame 0가 targetSpot에서 정확히 끝나야 하고 frame count 1..2, Frame 1은 application payload 전용, trailing byte reject. 유일 배치=Frame-0 presence-bool+triple(targetSpot 이후·Frame 1 이전) → schema/spec/generator/runtime 동기 개정 + capability/version gating 필요, 구decoder는 relocation-tail을 reject(하위호환 아님).
+
+**결론: advisor의 "28이 triple을 upfront 선언 → 문제 붕괴" 경로 불성립.** 근본 순서가 admission-first→40-mint(triple 생성)이므로 28은 triple 존재 이전. 더욱이 dotnet/cpp는 relocation-driven join이 canonical 28을 아직 쓰지도 않음(JSON). 따라서 cpp/dotnet canonical 발신 완주 = (a) relocation-driven join을 JSON→canonical 28로 전환 + (b) relocation identity 배선 + (c) 바인딩 확립, 이 셋을 요하는 집중 통합. **first-40-pin(수신측 바인딩) 또는 wire 확장 둘 중 하나가 불가피** — advisor 재판단 요청 대상.
