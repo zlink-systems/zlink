@@ -169,3 +169,18 @@ Node/Java 패턴은 .NET에 직접 적용 가능합니다. 즉 source-side `Cano
 **Q2 (optional trailing triple codec slot): clean slot 없음.** 현행 28 body는 Frame 0가 targetSpot에서 정확히 끝나야 하고 frame count 1..2, Frame 1은 application payload 전용, trailing byte reject. 유일 배치=Frame-0 presence-bool+triple(targetSpot 이후·Frame 1 이전) → schema/spec/generator/runtime 동기 개정 + capability/version gating 필요, 구decoder는 relocation-tail을 reject(하위호환 아님).
 
 **결론: advisor의 "28이 triple을 upfront 선언 → 문제 붕괴" 경로 불성립.** 근본 순서가 admission-first→40-mint(triple 생성)이므로 28은 triple 존재 이전. 더욱이 dotnet/cpp는 relocation-driven join이 canonical 28을 아직 쓰지도 않음(JSON). 따라서 cpp/dotnet canonical 발신 완주 = (a) relocation-driven join을 JSON→canonical 28로 전환 + (b) relocation identity 배선 + (c) 바인딩 확립, 이 셋을 요하는 집중 통합. **first-40-pin(수신측 바인딩) 또는 wire 확장 둘 중 하나가 불가피** — advisor 재판단 요청 대상.
+
+
+---
+
+## node/java 생존 방식 검증 (2026-08-21, advisor branch A/B 판별 — narrow node read)
+
+**정정: node/java는 relocation-driven join을 canonical 28로 통합했다(capability-gated).** sender submitActorJoin(service-stateful-runtime.ts:4246-4269)이 canUseCanonical시 encodeActorJoin28로 발신하고, canonical.local.transferId(=relocationId)는 **로컬 bookkeeping**일 뿐 wire body에 안 들어감(spec §9). 수신측은 wire 마커 부재→canonical decode(service-stateful-runtime.ts:1927-1930). 앞선 "node relocation=legacy only" 추론은 오류.
+
+**branch A 성립: 28→40 바인딩 race가 구조적으로 도달불가.**
+- canonical 수신 admission = admitActorJoin(spot-actor-membership.ts:54)이 activation serial turn 내 **evaluate→commit 동기 트랜잭션**. 나중 command 40을 기다리며 오래 park되는 free-floating 28 admission이 없음 → stale 40이 붙을 대상 부재.
+- command 40 state rendezvous = 별도 트랙 TargetRelocationReservation(service-relocation-host-runtime.ts:2416), **source가 mint한 relocation-identity(triple) 키**. 28 admission map(actorJoinPhases, pending.id 키)을 참조하지 않음.
+- 두 트랙은 commit시 actor fence로 만남. 28↔40 identity 바인딩 자체가 없으므로 "stale 40이 잘못된 28에 바인딩"하는 hole이 성립 불가.
+- 같은 actor 2차 canonical 28은 activation serial queue에 직렬화(병렬 parked admission 생성 안 함). legacy routed-admission(spot-routed-actor-admission.ts)은 transferId 키·idempotent, 별개 경로.
+
+**결론: 5-STOP 바인딩 saga는 실재하지 않는 hazard였다.** binding-at-first-40/28-carries-triple/새 attempt-lifecycle 레이어 모두 불필요. cpp/dotnet canonical 발신은 node/java 패턴(e2e 입증) 위에 **바인딩 spec ruling 없이** 구축 가능. advisor 확인 대상: branch A 확정 + 발신 슬라이스 재개 go.
