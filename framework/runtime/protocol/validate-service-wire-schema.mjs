@@ -7184,6 +7184,44 @@ function printFailure(error) {
   }
 }
 
+function validateActorJoinRequestFixture(schema, schemaPath) {
+  const fixturePath = path.resolve(path.dirname(schemaPath), "golden/actor-join-request-v1.json");
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+  const errors = [];
+  const fail = (message) => errors.push("fixture:actor-join-request-v1: " + message);
+  const command = schema.commands.find((entry) => entry.id === 28 && entry.name === "actorJoin");
+  if (!command || command.payload !== "optional" || command.payloadType?.$ref !== "application-payload-envelope-v1") fail("actorJoin payload contract");
+  if (fixture.format !== "actor-join-request-v1" || JSON.stringify(fixture.consumers) !== JSON.stringify(["cpp", "dotnet", "jvm", "node"])) fail("format or consumers");
+  const decode = (framesHex) => {
+    const frames = framesHex.map((hex) => Buffer.from(hex, "hex"));
+    const reject = (code) => { const error = new Error(code); error.code = code; throw error; };
+    if (frames.length < 1 || frames.length > 2) reject("actorJoin frames");
+    const body = frames[0]; let at = 0;
+    const take = (count, code) => { if (at + count > body.length) reject(code); const result = body.subarray(at, at + count); at += count; return result; };
+    const u64 = () => take(8, "actorJoin body").readBigUInt64BE();
+    const text8 = () => { const size = take(1, "actorJoin body")[0]; if (!size) reject("actorJoin body"); return take(size, "actorJoin body"); };
+    const fence = () => { text8(); const generation = u64(); const rid = text8(); const targetGeneration = u64(); const authorityGeneration = u64(); const leaseGeneration = u64(); if (!generation || !rid.length || !targetGeneration || !authorityGeneration || !leaseGeneration) reject("invalid fence"); };
+    if (take(5, "actorJoin body").compare(Buffer.from([90, 77, 1, 28, 0])) !== 0) reject("actorJoin header");
+    if (!u64()) reject("correlation"); fence(); const entry = take(1, "actorJoin body")[0]; if (entry > 1) reject("actorJoin body"); fence(); if (at !== body.length) reject("actorJoin body");
+    if (frames.length === 2) {
+      const payload = frames[1]; let payloadAt = 0;
+      const takePayload = (count, code) => { if (payloadAt + count > payload.length) reject(code); const result = payload.subarray(payloadAt, payloadAt + count); payloadAt += count; return result; };
+      if (takePayload(1, "payload version")[0] !== 1) reject("payload version");
+      const length = takePayload(4, "payload length").readUInt32BE(); if (length !== payload.length - payloadAt) reject("payload length");
+      const text = () => { const size = takePayload(1, "payload length")[0]; if (!size) reject("payload length"); takePayload(size, "payload length"); };
+      text(); text(); const opaqueLength = takePayload(4, "payload length").readUInt32BE(); if (opaqueLength !== payload.length - payloadAt) reject("payload bytes"); takePayload(opaqueLength, "payload bytes"); if (payloadAt !== payload.length) reject("payload trailing");
+    }
+  };
+  const validNames = ["no-payload", "json-payload", "non-json-payload"];
+  if (JSON.stringify((fixture.valid ?? []).map((entry) => entry.name)) !== JSON.stringify(validNames)) fail("valid matrix");
+  for (const entry of fixture.valid ?? []) { try { decode(entry.framesHex); } catch (error) { fail(entry.name + " rejected as " + (error.code ?? error.message)); } }
+  const invalidNames = ["truncated-envelope", "extra-frame", "malformed-fence"];
+  if (JSON.stringify((fixture.invalid ?? []).map((entry) => entry.name)) !== JSON.stringify(invalidNames)) fail("invalid matrix");
+  for (const entry of fixture.invalid ?? []) { try { decode(entry.framesHex); fail(entry.name + " was accepted"); } catch (error) { if (error.code !== entry.error) fail(entry.name + " expected " + entry.error + " but got " + (error.code ?? error.message)); } }
+  if (errors.length > 0) throw new SchemaValidationError(errors);
+  return 1;
+}
+
 const scriptPath = fileURLToPath(import.meta.url);
 if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
   const scriptDirectory = path.dirname(scriptPath);
@@ -7230,6 +7268,7 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
     const multipartFixtureCount = validateFrameworkMultipartFixture(schema, schemaPath);
     const authorityKeyFixtureCount = validateAuthorityKeyFixture(schema, schemaPath);
     const amendmentFixtureCount = validateContractAmendmentFixture(schemaPath);
+    const actorJoinFixtureCount = validateActorJoinRequestFixture(schema, schemaPath);
     const selfTestCount = selfTest
       ? runSelfTests(schema) + runGoldenFixtureSelfTests(schema, schemaPath)
         + runRelocationLogicalFixtureSelfTests(schema, schemaPath)
@@ -7243,7 +7282,8 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
         + `${logicalFixtureCount} logical fixture, ${jsonFixtureCount} JSON fixture, `
         + `${multipartFixtureCount} multipart fixture, `
         + `${authorityKeyFixtureCount} authority key fixture, `
-        + `${amendmentFixtureCount} amendment fixture${suffix}`,
+        + `${amendmentFixtureCount} amendment fixture, `
+        + `${actorJoinFixtureCount} actorJoin request fixture${suffix}`,
     );
   } catch (error) {
     printFailure(error);

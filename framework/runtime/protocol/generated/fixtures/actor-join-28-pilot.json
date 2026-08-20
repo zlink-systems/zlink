@@ -1,25 +1,127 @@
 {
-  "schema": "service-wire-v1",
-  "command": "actorJoin(28)",
-  "input": {
-    "correlation": "1",
-    "actor": {
-      "id": "actor",
-      "generation": "2",
-      "targetNodeRidHex": "0102",
-      "targetNodeGeneration": "3",
-      "expectedAuthorityOwnerGeneration": "4",
-      "expectedOwnerLeaseGeneration": "5"
+  "format": "actor-join-request-v1",
+  "consumers": [
+    "cpp",
+    "dotnet",
+    "jvm",
+    "node"
+  ],
+  "valid": [
+    {
+      "name": "no-payload",
+      "input": {
+        "correlation": "1",
+        "actor": {
+          "id": "actor",
+          "generation": "2",
+          "targetNodeRidHex": "0102",
+          "targetNodeGeneration": "3",
+          "expectedAuthorityOwnerGeneration": "4",
+          "expectedOwnerLeaseGeneration": "5"
+        },
+        "entry": true,
+        "targetSpot": {
+          "id": "spot",
+          "generation": "6",
+          "targetNodeRidHex": "0708",
+          "targetNodeGeneration": "9",
+          "expectedAuthorityOwnerGeneration": "10",
+          "expectedOwnerLeaseGeneration": "11"
+        }
+      },
+      "framesHex": [
+        "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b"
+      ]
     },
-    "entry": true,
-    "targetSpot": {
-      "id": "spot",
-      "generation": "6",
-      "targetNodeRidHex": "0708",
-      "targetNodeGeneration": "9",
-      "expectedAuthorityOwnerGeneration": "10",
-      "expectedOwnerLeaseGeneration": "11"
+    {
+      "name": "json-payload",
+      "input": {
+        "correlation": "1",
+        "actor": {
+          "id": "actor",
+          "generation": "2",
+          "targetNodeRidHex": "0102",
+          "targetNodeGeneration": "3",
+          "expectedAuthorityOwnerGeneration": "4",
+          "expectedOwnerLeaseGeneration": "5"
+        },
+        "entry": true,
+        "targetSpot": {
+          "id": "spot",
+          "generation": "6",
+          "targetNodeRidHex": "0708",
+          "targetNodeGeneration": "9",
+          "expectedAuthorityOwnerGeneration": "10",
+          "expectedOwnerLeaseGeneration": "11"
+        },
+        "payload": {
+          "packetName": "actor.join",
+          "contentType": "application/json",
+          "payloadHex": "7b226e616d65223a22416461227d"
+        }
+      },
+      "framesHex": [
+        "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b",
+        "010000002e0a6163746f722e6a6f696e106170706c69636174696f6e2f6a736f6e0000000e7b226e616d65223a22416461227d"
+      ]
+    },
+    {
+      "name": "non-json-payload",
+      "input": {
+        "correlation": "1",
+        "actor": {
+          "id": "actor",
+          "generation": "2",
+          "targetNodeRidHex": "0102",
+          "targetNodeGeneration": "3",
+          "expectedAuthorityOwnerGeneration": "4",
+          "expectedOwnerLeaseGeneration": "5"
+        },
+        "entry": true,
+        "targetSpot": {
+          "id": "spot",
+          "generation": "6",
+          "targetNodeRidHex": "0708",
+          "targetNodeGeneration": "9",
+          "expectedAuthorityOwnerGeneration": "10",
+          "expectedOwnerLeaseGeneration": "11"
+        },
+        "payload": {
+          "packetName": "join.bin",
+          "contentType": "application/x-zlink-test",
+          "payloadHex": "00ff10"
+        }
+      },
+      "framesHex": [
+        "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b",
+        "0100000029086a6f696e2e62696e186170706c69636174696f6e2f782d7a6c696e6b2d746573740000000300ff10"
+      ]
     }
-  },
-  "hex": "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b"
+  ],
+  "invalid": [
+    {
+      "name": "truncated-envelope",
+      "framesHex": [
+        "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b",
+        "010000002e0a6163746f722e6a6f696e106170706c69636174696f6e2f6a736f6e0000000e7b226e616d65223a2241646122"
+      ],
+      "error": "payload length"
+    },
+    {
+      "name": "extra-frame",
+      "framesHex": [
+        "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b",
+        "010000002e0a6163746f722e6a6f696e106170706c69636174696f6e2f6a736f6e0000000e7b226e616d65223a22416461227d",
+        "00"
+      ],
+      "error": "actorJoin frames"
+    },
+    {
+      "name": "malformed-fence",
+      "framesHex": [
+        "5a4d011c000000000000000001056163746f720000000000000000020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b"
+      ],
+      "error": "invalid fence"
+    }
+  ]
 }
