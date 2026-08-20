@@ -2,10 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import type {
   ActorRef
 } from '../../contracts';
-import type {
-  ZLinkAuthoritySnapshot,
-  ZLinkLocationOwnerToken
-} from '../../contracts/Locations';
+import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
 
 const ACTOR_AUTHORITY_VERSION = 1;

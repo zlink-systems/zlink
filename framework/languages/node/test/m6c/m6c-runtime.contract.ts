@@ -17,7 +17,7 @@ import type {
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken,
   ZLinkObjectCreationTarget
-} from '../../packages/framework/src/contracts/Locations';
+} from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import {
   decodeServiceRelocationEnvelope,
   encodeServiceRelocationEnvelope,

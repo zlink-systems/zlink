@@ -7,7 +7,7 @@ import type {
   ZLinkAuthorityKey,
   ZLinkLocationOwnerToken,
   ZLinkObjectCreationTarget
-} from '../../packages/framework/src/contracts/Locations';
+} from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,

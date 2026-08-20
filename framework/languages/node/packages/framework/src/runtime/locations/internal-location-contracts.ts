@@ -1,4 +1,5 @@
 export * from '../../contracts/Locations';
+export type * from '../../contracts/Locations/Authority';
 export type {
   ZLinkActorLocation,
   ZLinkPeerLocation,

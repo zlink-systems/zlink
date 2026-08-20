@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Message, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
-import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import {
   createServiceRelocationId,
   relocationFailedFailureCode,

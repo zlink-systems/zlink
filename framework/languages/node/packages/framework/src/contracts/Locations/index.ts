@@ -46,4 +46,3 @@ export * from './Diagnostics';
 export * from './RuntimeQuery';
 export * from './Readiness';
 export * from './RelocationStore';
-export * from './Authority';
