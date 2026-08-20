@@ -1130,7 +1130,21 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       authorityOwnerGeneration·ownerLeaseGeneration) + typed terminal(Unavailable/NotFound/stale/
       unknown-type). node 유닛/통합 테스트로 검증(valid+matching row→Store-resolved type admit,
       mismatch→typed terminal, missing→Unavailable/NotFound). 사설 packet actorType 의존 제거.
-- [ ] **canon-S2 node canonical 28 origination**: 발신 경로를 사설 JSON→canonical 28 wire로. node→node
+- [ ] **canon-S4a 생성기 multipart payload 확장(키스톤)**: generate-service-wire-pilot-codecs.mjs의 ActorJoin28을
+      "Frame 0 body + optional application payload frame(application-payload-envelope-v1: version+length+packetName+
+      contentType+bytes)" 모델로 확장(현재 body-only, decode 시 trailing 거부). 4언어 positive/negative fixture +
+      request golden 고정. (스코핑: doc/plan/canonical-transport-swap-scope.ko.md)
+- [ ] **canon-S4b 4언어 수신자 canonical 28 decode**: raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
+      envelope decode→기존 Store fence/type resolution(S3) 재사용→payload를 typed message로 복원→command-20 canonical
+      reply tail 반환. 사설 dialect 수신자는 default 유지.
+- [ ] **canon-S4c 4언어 발신 canonical 28**: 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
+      observed target authority+admitted peer가 canonical capability 증명 시만 enable(아니면 dialect 유지). transfer ID/
+      phase/reservation은 local state.
+- [ ] **canon-S4d bound Session 분리**: 28 전 42/43 seal + target commit 후 44 route update(28 sideband 금지).
+- [ ] **canon-S4e 크로스랭 harness User Spot JoinSpot stage**: JoinEntrySpot 보존 + canonical 28 pairwise matrix(Node↔.NET↔Java↔C++)로
+      canonical request/reply/rejected admission/payload round-trip/Store-fence rejection 검증.
+- [ ] **canon-S5 사설 dialect 제거**: S4 완주 후 4언어 사설 actor-join packet 삭제.
+- [ ] **canon-S2(폐기·S4c로 대체)**: 발신 경로를 사설 JSON→canonical 28 wire로. node→node
       same-language actorJoin이 canonical 경로로 그린.
 - [x] **canon-S3a java 수신자 Store-backed type resolution — 완료 `7a8c35f9b2`(Claude 독립 검증)**: ZLinkActorRuntime.readActorJoinAuthority + ZLinkActorSpotAdmission exact fence match, typed terminal, u64 규칙(descriptorLifecycleGeneration=opaque→==0). full :zlink-framework-core:test 1083/0 + 신규 테스트 독립 확인.
 - [x] **canon-S3b dotnet 수신자 Store-backed type resolution — 완료 `6d81735440`(Claude 독립 검증)**: ResolveRoutedActorJoinStableTypeAsync(Store 해석+7필드 fence match+typed terminal+u64 규칙). 전체 UnitTests 1791 pass/3 sanctioned(Legacy×2+timeout flake, 회귀 0)+ActorRelocationProtocolTests 27/27.
