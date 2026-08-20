@@ -4029,7 +4029,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         return current.peer(source)
             .filter(peer ->
-                peer.descriptor().lifecycleGeneration() > 0
+                // lifecycleGeneration is a non-zero opaque equality token
+                // (spec 01-glossary "Lifecycle generation": ".NET 표기: ulong
+                // LifecycleGeneration" / "숫자 크기로 실행 순서를 판단하지
+                // 않는다"). A remote ulong value with its top bit set decodes
+                // to a negative Java long; a signed `> 0` sentinel silently
+                // treats that legitimate generation as unassigned and drops
+                // every non-admission control frame (liveness probe/ack,
+                // relocation control) for the whole connection.
+                peer.descriptor().lifecycleGeneration() != 0
                     && peer.connectionId().equals(connectionIds.get(source)))
             .isPresent();
     }
@@ -4134,6 +4142,24 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     != infrastructureCommand
                 || !hasCurrentInfrastructureControlSource(
                     inbound.source(), infrastructureCommand))) {
+            if (STREAM_TRACE) {
+                Optional<ZLinkServiceTopologyRegistry.Peer> tracedPeer =
+                    topology.peer(inbound.source());
+                streamTrace("infrastructure-control-dropped command="
+                    + infrastructureCommand
+                    + " source=" + inbound.source()
+                    + " shapeMismatch=" + (allowedInfrastructureControlCommand(frames)
+                        != infrastructureCommand)
+                    + " peerPresent=" + tracedPeer.isPresent()
+                    + " peerConnectionId=" + tracedPeer
+                        .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
+                        .orElse("none")
+                    + " trackedConnectionId=" + connectionIds.get(inbound.source())
+                    + " lifecycleGeneration=" + tracedPeer
+                        .map(peer -> peer.descriptor().lifecycleGeneration())
+                        .map(String::valueOf)
+                        .orElse("none"));
+            }
             return;
         }
         ZLinkServiceM6AWireCodec.Header header;
@@ -4527,11 +4553,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     handler.handle(inbound.source(), command),
                     "canonical relocation handler returned null");
             completion.exceptionally(failure -> {
+                streamTrace(STREAM_TRACE ? "canonical-relocation-control-failed source="
+                    + inbound.source()
+                    + " failure=" + failure : null);
                 return null;
             });
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
             // Invalid or rejected maintenance records never enter an
             // application mailbox and have no request/reply terminal.
+            streamTrace(STREAM_TRACE ? "canonical-relocation-control-rejected source="
+                + inbound.source()
+                + " failure=" + failure : null);
         }
     }
 
@@ -6347,7 +6379,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     + " probe=" + probeId
                     + " accepted=" + acknowledged : null);
             }
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            streamTrace(STREAM_TRACE ? "liveness-dispatch-failed source="
+                + inbound.source()
+                + " command=" + command
+                + " failure=" + failure : null);
         }
     }
 

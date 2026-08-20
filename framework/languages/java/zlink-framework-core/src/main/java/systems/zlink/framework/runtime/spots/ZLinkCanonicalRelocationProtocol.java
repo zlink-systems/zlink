@@ -329,9 +329,9 @@ final class ZLinkCanonicalRelocationProtocol {
         String expectedAuthorityStoreVersion) {
         Coordinator {
             requireText(ownerId, "ownerId");
-            requirePositive(ownerLeaseGeneration, "ownerLeaseGeneration");
+            requireNonZero(ownerLeaseGeneration, "ownerLeaseGeneration");
             Objects.requireNonNull(nodeRid, "nodeRid");
-            requirePositive(nodeGeneration, "nodeGeneration");
+            requireNonZero(nodeGeneration, "nodeGeneration");
             requireText(expectedAuthorityStoreVersion,
                 "expectedAuthorityStoreVersion");
         }
@@ -344,9 +344,9 @@ final class ZLinkCanonicalRelocationProtocol {
         long ownerLeaseGeneration) {
         Target {
             Objects.requireNonNull(nodeRid, "nodeRid");
-            requirePositive(nodeGeneration, "nodeGeneration");
+            requireNonZero(nodeGeneration, "nodeGeneration");
             requireText(ownerId, "ownerId");
-            requirePositive(ownerLeaseGeneration, "ownerLeaseGeneration");
+            requireNonZero(ownerLeaseGeneration, "ownerLeaseGeneration");
         }
     }
 
@@ -362,14 +362,14 @@ final class ZLinkCanonicalRelocationProtocol {
             }
             requireText(objectId, "objectId");
             stableType = stableType == null ? "" : stableType;
-            requirePositive(objectGeneration, "objectGeneration");
+            requireNonZero(objectGeneration, "objectGeneration");
             if (kind == 3) {
                 requireText(stableType, "stableType");
                 if (expectedAuthorityOwnerGeneration != 0) {
                     throw invalid("instance owner generation");
                 }
             } else {
-                requirePositive(expectedAuthorityOwnerGeneration,
+                requireNonZero(expectedAuthorityOwnerGeneration,
                     "expectedAuthorityOwnerGeneration");
                 if (!stableType.isEmpty()) {
                     throw invalid("stateful object stable type");
@@ -416,7 +416,7 @@ final class ZLinkCanonicalRelocationProtocol {
             }
             Objects.requireNonNull(object, "object");
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-            requirePositive(sourceNodeGeneration, "sourceNodeGeneration");
+            requireNonZero(sourceNodeGeneration, "sourceNodeGeneration");
             Objects.requireNonNull(manifest, "manifest");
         }
     }
@@ -555,11 +555,18 @@ final class ZLinkCanonicalRelocationProtocol {
             && id.getLeastSignificantBits() == 0) {
             throw invalid("relocation id");
         }
-        requirePositive(attempt, "targetAttemptGeneration");
+        requireNonZero(attempt, "targetAttemptGeneration");
     }
 
-    private static void requirePositive(long value, String field) {
-        if (value <= 0) {
+    private static void requireNonZero(long value, String field) {
+        // Every caller passes an opaque *Generation/attempt token sourced
+        // from a remote .NET `ulong` (spec 01-glossary "Lifecycle
+        // generation": "형태: 0이 아닌 opaque equality token. 숫자 크기로
+        // 실행 순서를 판단하지 않는다." / ".NET 표기: ulong
+        // LifecycleGeneration"). A ulong value with its top bit set decodes
+        // to a negative Java long; `<= 0` wrongly rejects that legitimate
+        // token as unassigned. Only zero is unassigned.
+        if (value == 0) {
             throw invalid(field);
         }
     }
@@ -616,7 +623,7 @@ final class ZLinkCanonicalRelocationProtocol {
         }
 
         void nonzero(long value) {
-            requirePositive(value, "nonzero u64");
+            requireNonZero(value, "nonzero u64");
             u64(value);
         }
 
