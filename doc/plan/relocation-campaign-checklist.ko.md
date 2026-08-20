@@ -615,6 +615,26 @@
       source-side 오케스트레이션을 안 탐. 후속: source drain/fence/target-
       accept가 committed=0으로 종료하는 지점(왜 java-as-target을 commit
       대상으로 안 잡는지) 스펙(28/30/15) 근거 수정.
+      **orch 정밀 재진단(2026-08-20, terra, 코드변경 0·전부 revert)**:
+      committed=0은 red herring(빈 per-actor-shell phase). 실제 근본 =
+      **source-side transport epoch 손실**: java는 eligible target 선정됨
+      (ZLinkActorDrainCoordinator.cs:171), source seal/capture 후 canonical
+      prepare(ZLinkStandaloneActorRelocationRuntime.cs:225) 호출하나
+      **PrepareCanonicalRelocationAsync(ZLinkManagedMeshNode.cs:803)가 현재
+      admitted peer만 수용 — 실패 런에서 그 peer가 SendCanonicalRelocation
+      RecordAsync 직전에 demote/replace되어 `Unavailable: canonical
+      relocation connection changed` → command 40 미전송** → java는 hello/
+      update만 받고 timeout. 위반: 30-host-relocation-flow §5–§5.1(admitted-
+      and-ready target 선정/대기), 28-relocation-flow §4.2(cmd 40 direct-
+      transfer). orch 시도(ready 필터·peer 재바인딩) 모두 **더 낮은 계층
+      노출**: source drain 활성 중엔 그 peer 복원용 admission/liveness
+      control이 완료 못 함 = **drain이 control 레인을 기아**. 이는 node가
+      이미 고친 버그류("infrastructure 도메인 독립 드레인, 드레인 중 기아
+      차단", mesh-dispatch-pump)와 동형 — dotnet에 동일 도메인 분리 필요.
+      후속: dotnet drain 중 infrastructure control(admission/liveness) 독립
+      처리 보장 + PrepareCanonicalRelocationAsync가 transient replace된 peer
+      를 admitted 재확립 후 진행. baseline 통과 런(committed=1|Relocated)이
+      존재해 java target 처리는 정상 확인됨(레이스만 잔존).
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
 - [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
