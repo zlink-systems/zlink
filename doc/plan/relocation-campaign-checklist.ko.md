@@ -912,3 +912,54 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
 - [x] **config-6 authoring 판정 심화(2026-08-20, terra high, Claude 검증)**: 미구현 14 SF 시나리오는 단순 test authoring이 아니라 **프레임워크/하니스 표면 부재**(Instance Spot·periodic timer·lease-expiry request·multi-role host·1001-object paged-query API·cross-language participant·cold-activation gate·capacity/concurrency gate fixture 등)로 authoring 불가. SF-C3 시도는 **실제 런타임 갭**(same-role/RID replacement가 current ready peer로 미승격, client-SF-C3.stderr) blocked. → **프레임워크 기능+하니스 fixture 선행 대형 후속 트랙 확정.** 변경 0(정직 인벤토리).
 
 - [x] **Bingo flake 심화 진단(2026-08-20, sonnet, Claude 검증) — pre-existing 확정, 수정 없음(정직)**: node+cpp 공통 서버측 flake, 3 시그니처 특성화 — S1 node: StopObservingBingoEventsReq reply 미도착(stop-observing-handler.ts:27 leaveActor await 후보), S2 cpp: 요청이 잘못된 actor/session identity로 도착(observer guard 거부), S3 cpp: MatchBingo 후 client1이 PlayerJoined/GameStarted notify 미수신(zlink_stream_calls.cpp:1841/1964 wait timeout). sample-timing·env·reward-race 배제. **전용 후속 세션 필요**(서버측 message-flow 트레이싱 첫 재현부터). 코드 변경 0.
+
+---
+
+## H. 후속 트랙 전면 착수 (사용자 지시 2026-08-20 — "후속으로 표시된 것도 리스트업하고 모두 진행")
+
+이전까지 "별도 세션/후속 트랙"으로만 특성화됐던 항목을 전부 명시 항목화하고 착수한다.
+막힌 항목은 선행 조건(프레임워크 표면·하니스 격리)부터 만든다. 원칙은 동일 —
+스펙 근거·수정후 검증·4언어 전파·에이전트 결과는 Claude 직접 검토·검증.
+
+- [ ] **H-1 cpp e2e ST-C4 fault-injection variant**: config-10이 계약한 "동일
+      relocation identity의 checksum/길이 불일치" assembly 충돌을 계약 fault point
+      경유로 재현. 현 blocker = corruption seam이 co-batched 시나리오와 단일 live
+      actor-a↔actor-b 연결 공유 → 격리 부재(482561c9a0 헤더 기록). 선행: seam 격리
+      하니스. (상단 B-40·C-9e ⑩과 동일)
+- [ ] **H-2 ST-A3 결정적 실패 진단**: ST-B1 수정 전후 동일 재현되는 별도 timing/gate
+      이슈. **진단-우선(코드변경 0·로그 보존)** — 알려진 timing-race 형태. (상단 B-156)
+- [ ] **H-3 node discovery-sharing 회귀 판정**: location-runtime "shares ClientServer
+      and fanout discovery through only opaque Store primitives"가 ignoredStale
+      수신(:1923) — canonical descriptor 수렴(9281b375b1)발 의심. 테스트 낡음 vs
+      코드 결함 판정 후 처리. (상단 C-397)
+- [ ] **H-4 ST-B1 후속 하니스 어휘 갱신**: ST-B1/B2/B3/C2 시나리오+feature-map을
+      제거된 commit_request/commit_ack wire 어휘 → location_committed 기반 증거로
+      갱신(의도 보존: commit-before-joined 순서·correlation). (상단 B-158)
+- [ ] **H-5 C-9 sol 리뷰 잔여 carry**: ① reconcile 기한 스윕 3분기(store authority
+      조회→추종/복원/명시 unavailable) 잔여 검증 ② cold-probe 합성 follow의 op
+      identity/deadline/source/reply-route 4값 보존 + 절대기한 전달 메커니즘
+      (deadline 30s 관례 → 절대기한). (상단 C-461)
+- [ ] **H-6 W-3 4언어 전면 코덱 스왑**: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트
+      통과 후 교체·손 코덱 삭제, 언어별 unittest 전체 그린. 언어별 손코덱 비대칭이
+      난점. (상단 W-508)
+- [ ] **H-7 config-6 e2e authoring (프레임워크 표면 선행)**: 미구현 14 SF 시나리오 —
+      Instance Spot fixture·periodic timer·lease-expiry request·multi-role host·
+      1001-object paged-query API·cross-language participant·cold-activation gate·
+      capacity/concurrency gate fixture 선행 필요 + SF-C3 실런타임 갭(same-role/RID
+      replacement가 current ready peer 미승격).
+- [ ] **H-8 config-10 Track E/G/H/I authoring**: 28개 미구현 시나리오(client scenario
+      코드 부재). coverage authoring.
+- [ ] **H-9 Bingo 교차언어 stream flake 수정**: 3 서버측 시그니처 — S1 node
+      StopObservingBingoEventsReq reply 미도착(stop-observing-handler.ts:27), S2 cpp
+      잘못된 actor/session identity 도착(observer guard 거부), S3 cpp MatchBingo 후
+      PlayerJoined/GameStarted notify 미수신(zlink_stream_calls.cpp:1841/1964).
+      서버측 message-flow 트레이싱 첫 재현부터.
+- [ ] **H-10 dotnet→java relocation drain-vs-liveness race**: 저빈도 flaky 1방향
+      (dotnet이 source로 dial할 때). source relocation drain/fence가 relocation
+      TARGET peer의 admitted 연결(endpoint·descriptor·Peer객체·epoch) 교란 → command
+      40 미전송 → DeadlineExceeded. 통과 런은 100KB 완전 전송(메커니즘 정상, 레이스
+      잔존). 수정 방향: drain/fence가 target-connection 불변식 격리(node infra 독립
+      드레인보다 강함). terra 2회+본 세션 진단으로 국소화 완료(ManagedMeshNode.cs
+      + drain의 target peer demote 경로).
+- [ ] **H-11 F: e2e_inventory 168 backlog**: relocation과 무관한 14개 문서 전반의
+      교차참조·feature-map 부채. (F 섹션 — 별도 계획 문서 필요)
