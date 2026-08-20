@@ -973,7 +973,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       수신자 완성" 스펙 결정 필요**(receiver가 canonical body만으로 actor type 획득 방식).
       **Claude 스펙 판정 진행 중.** **(b)**: ST-B1/B2/B3/C2 시나리오+feature-map을
       제거된 commit_request/commit_ack → location_committed 기반 증거로 갱신(의도 보존, H-18ⓐ와 동일).
-- [ ] **H-5 C-9 sol 리뷰 잔여 carry**: ① reconcile 기한 스윕 3분기(store authority
+- [x] **H-5 C-9 sol 리뷰 잔여 carry — 해소 `f357ef11f3`(Claude 독립 검증)**: cold-probe 합성 relay가 client-managed absolute deadline을 다음 hop envelope에 보존(spec 28 §10, hop은 local 30s window만 재바운드). actor_gateway 테스트 통과, ST-B1 무회귀. (원:) ① reconcile 기한 스윕 3분기(store authority
       조회→추종/복원/명시 unavailable) 잔여 검증 ② cold-probe 합성 follow의 op
       identity/deadline/source/reply-route 4값 보존 + 절대기한 전달 메커니즘
       (deadline 30s 관례 → 절대기한). (상단 C-461)
