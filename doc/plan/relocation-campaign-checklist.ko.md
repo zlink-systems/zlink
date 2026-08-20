@@ -1134,7 +1134,7 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       same-language actorJoin이 canonical 경로로 그린.
 - [x] **canon-S3a java 수신자 Store-backed type resolution — 완료 `7a8c35f9b2`(Claude 독립 검증)**: ZLinkActorRuntime.readActorJoinAuthority + ZLinkActorSpotAdmission exact fence match, typed terminal, u64 규칙(descriptorLifecycleGeneration=opaque→==0). full :zlink-framework-core:test 1083/0 + 신규 테스트 독립 확인.
 - [x] **canon-S3b dotnet 수신자 Store-backed type resolution — 완료 `6d81735440`(Claude 독립 검증)**: ResolveRoutedActorJoinStableTypeAsync(Store 해석+7필드 fence match+typed terminal+u64 규칙). 전체 UnitTests 1791 pass/3 sanctioned(Legacy×2+timeout flake, 회귀 0)+ActorRelocationProtocolTests 27/27.
-- [ ] **canon-S3c cpp 수신자 Store-backed type resolution**(진행): cpp의 **live 사설-JSON actor-join 수신자**가 actor_type를 Store Authority row에서 해석(actor_type_from_authority 활용)+fence match+typed terminal. node/java/dotnet과 동형. (dormant canonical admit_wire_actor_join의 Accepted 조기완료=H-12/S6 별개)
+- [x] **canon-S3c cpp 수신자 Store-backed type resolution — 완료 `c878d4faca`(Claude 독립 검증)**: cpp live 사설-JSON 수신자가 actor_type_from_authority(store,wire,fence)로 Store 해석+7필드 exact fence match+typed terminal+u64 규칙(node_generation=opaque→==0). actor_gateway 1/1·ST-B1 e2e·m6c 1/1(vcpkg dir; build dir는 nlohmann ABI split). **▶▶ 4/4 언어 canonical 수신자 완료 마일스톤: 모든 언어가 스펙 51 §9대로 Store에서 type 해석(위조 type 거부, exact fence, typed terminal). H-12(cpp dormant canonical continuation)는 S6 잔여.**
 - [ ] **canon-S4 크로스랭 harness actorJoin 테스트**: JoinEntrySpot 회피 해제, 4언어 actorJoin(28) 매트릭스.
 - [ ] **canon-S5 사설 dialect 제거**: 4언어 사설 actor-join packet 삭제.
 - [ ] **canon-S6 H-12 cpp continuation**: Accepted→seal/capture/Restore/relay/cutover 연결 + chunk limit 적용(H-14).
