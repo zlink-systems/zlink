@@ -239,9 +239,19 @@ export class ZLinkMeshDispatchPump {
                 }
                 try {
                   // A handler may synchronously submit an operation whose
-                  // control/completion is owned by this same MeshNode.
+                  // control/completion is owned by this same MeshNode (e.g. a
+                  // native Completion record fed back through this node's own
+                  // Infrastructure claim). The active lane's scheduling state
+                  // must be released here, or a nested re-entrant drain can
+                  // never start to deliver that completion, and the awaiting
+                  // handler deadlocks against its own claim (spec
+                  // 46-internal-dispatch-loop, receive/dispatch wake/ordering).
                   this.scheduled = false;
                   this.drainPromise = undefined;
+                  if (domain === ReadyDomain.Infrastructure) {
+                    this.infrastructureScheduled = false;
+                    this.infrastructureDrainPromise = undefined;
+                  }
                   if (this.pendingDomains !== ReadyDomain.None) {
                     this.schedule();
                   }
