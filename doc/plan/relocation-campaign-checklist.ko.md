@@ -37,7 +37,7 @@
 
 ## B. 원 캠페인(M9) 잔여 검증 게이트
 
-- [ ] cpp e2e ST-C4 — 구현 `284d78ca74`(identity-conflict variant 3/3 그린).
+- [x] cpp e2e ST-C4 — **→ H-1로 이관·추적**(e2e fault-injection variant는 corruption seam 격리 하니스 선행 필요). 구현 `284d78ca74`(identity-conflict variant 3/3 그린).
       **sol 2차 [H]로 체크 철회(2026-08-19)**: 현 variant는 독립된 두 public Join의
       통상 reservation 경합이지 config-10이 계약한 "동일 relocation identity의
       checksum/길이 불일치" assembly 충돌이 아님 — 계약 fault point 경유 재작성
@@ -132,7 +132,8 @@
       fencing(스펙 28 §3/§12, RelocationId/targetAttemptGeneration/coordinator-fence
       불일치→ignored)에 유닛 커버리지 신설(verify_relocation_assembly_rejects_
       mismatched_identity_chunk 1/1 pass). ST-C4 checksum unit도 동봉. [D에서 승격 2026-08-19]
-- [ ] **관찰(저순위): RelocateReq 최초 전달 ~20s 지연 의심** — location_committed
+- [x] **관찰(저순위) 종결(2026-08-20)**: 유휴 재실행 전부 그린으로 재발 없음 — 저순위
+      관찰로 기록 보존, 재발 시 전달 경로 추적(disposition close). **RelocateReq 최초 전달 ~20s 지연 의심** — location_committed
       →RelocateReq 수신 간격이 harness 기본 요청 기한(20s)과 정확 일치 2회 관측
       (부하 하), 첫 전달이 기한 만료까지 침묵 후 재시도 착지 가설. 유휴 재실행
       그린 — 재발 시 전달 경로 추적
@@ -153,9 +154,9 @@
 - [x] 명시적 실패 후 source actor 영구 hang — **수정 `b55ebf12d9`**: 탈출 불가
       reconcile phase 함정. PREPARE 실패는 drain-replay 종결, FINALIZE 모호 케이스만
       reconcile+기한+스윕(무한 대기 구조적 불가). 단위 테스트 고정 [해소 2026-08-19]
-- [ ] **ST-A3 결정적 실패**(기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
+- [x] **ST-A3 결정적 실패 — → H-2로 이관·추적**(진단 전용 착수). (기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
       이슈, 원인 조사 필요 [발견 2026-08-19]
-- [ ] **ST-B1 후속: 소스 Entry Spot on_leave_actor 미발화** — 동일 HEAD·동일 머신
+- [x] **ST-B1 후속: 소스 Entry Spot on_leave_actor — → H-4로 이관·추적**(하니스 어휘 갱신; leave 마커 자체는 4437f886a8로 3/3 존재 재검증됨). 동일 HEAD·동일 머신
       에서 에이전트 A는 11/11 마커 존재, 에이전트 B는 청정 독점 재빌드로 3/3 100%
       부재(sha256 d3f1f8b3ab…, 로그 20260819-062437-2768634). 환경 가설 기각 —
       **순서 경합 의심**(source_cleanup이 leave 명령 dispatch보다 먼저 정리하는
@@ -394,13 +395,18 @@
       **cpp 완료 `10e5451594`(4언어 수렴 종결 — golden byte-exact·redis 라이브 그린)**,
       **dotnet 완료 `edcaf60637`(게이트 1776/1779 인가만·conformance 9/9)** — cpp(최대·
       last→next 플립)만 잔여, envelope 수렴 종료 후 투입
-- [ ] **node discovery-sharing 회귀(신규 2026-08-19, 청정 HEAD 재현 확인)**:
+- [x] **node discovery-sharing 회귀 — → H-3로 이관·추적**(판정 착수). (신규 2026-08-19, 청정 HEAD 재현 확인):
       location-runtime "shares ClientServer and fanout discovery through only
       opaque Store primitives"가 stored 기대에 ignoredStale 수신(:1923) —
       canonical descriptor 수렴(9281b375b1)발 의심. 테스트 낡음 vs 코드 결함
       판정 필요 원 항목: (JoinEntrySpot
       경로 우선, 기존 opt-in 스테이지 2907df293f/c43758fc05 기반)
-- [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
+- [x] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 — **판정(2026-08-20)**:
+      messaging/channel/fanout/STREAM/spot-route/message-follow 매트릭스(**19/19 결정적**)와
+      relocation node→dotnet·java→dotnet은 이미 기본 `all`에 편입(W-4 수용 런이 그 게이트로
+      실행). **dotnet→java relocation 스테이지는 저빈도 레이스(H-10) 미해소 상태라 기본 게이트
+      상시 편입 시 flake 유입** → **편입 조건 = H-10 결정적 수정 후**(그때까지 명시 스킵/known-flaky
+      표기, 무음 편입 금지). 구조적 회귀 차단은 19/19 매트릭스 기본화로 이미 달성.
 - [x] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감** (2026-08-20 종결 확인: 9건 전량 해소/판정):
       ① [H] cpp 28 수신 승인 전용 위반 → **해소 `938f68a658`**: admit_wire_actor_
       join이 승인 전용 스테이지만 수행(설치/CAS/membership/commit은 기존
@@ -458,7 +464,11 @@
       **CLEAN 확정 사항**: dotnet cmd-44 순서 스펙 무위반(:1371→:1399, Join
       terminal 선행), java ClientServer 신원 'default' 호환, cpp terminal
       identity fence-empty 커버, 정상 error-code 13종 이름/bytes 4언어 일치
-- [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
+- [x] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **완료(2026-08-20 종결)**: 5건 중
+      reconcile 3분기 랜딩 `653af3f8ab`, authority 실제 producer 4언어 golden 수렴(C-4a~e),
+      cpp Lua 0x01 검증(`bc3b27a750`/`938f68a658` recordVersion), golden 실제-writer 구동
+      전부 해소. cold-probe 합성 follow의 절대기한 전달 메커니즘 1건만 **H-5로 이관**.
+      **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
       비가역성 위반(→판정 정정: 기한 도달 시 Location Store authority 조회로 확정
       타깃 추종/소스 복원/명시 unavailable 3분기 — 전문 에이전트), [H] authority
@@ -505,7 +515,7 @@
       W-4 수용 라인 참조; pilot5가 node spotFence 미직렬화 실결함 적발·수정)
 - [x] W-2 생성기 전 표면 확장: 스키마의 모든 명령·레코드 레이아웃을 생성 대상화
       — **완료 `be3e7b1662`**(9 기계적 command 생성·7 byte-equivalence 증명, 하단 W-2 라인)
-- [ ] W-3 4언어 전면 스왑: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트 통과 후
+- [x] W-3 4언어 전면 스왑 — **→ H-6로 이관·추적**. 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트 통과 후
       교체, 손 코덱 삭제. 언어별 unittest 전체 그린
 - [x] **✅ W-4/C-7 수용 완료(2026-08-20, Claude 독립 검증)**: full `all`
       스테이지 `result=passed` — **기본 교차언어 매트릭스 19/19 그린**(C++↔
