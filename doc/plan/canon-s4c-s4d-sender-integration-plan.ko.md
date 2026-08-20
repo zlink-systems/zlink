@@ -146,3 +146,11 @@ Node/Java 패턴은 .NET에 직접 적용 가능합니다. 즉 source-side `Cano
 이번 작업은 읽기 전용 조사만 했으며 파일 변경·커밋·문서 수정은 없습니다.
 
 
+
+
+---
+
+## attempt-binding 검증 결과 (2026-08-21, advisor 처방 2검증 — 둘 다 불성립)
+
+**결론: binding-at-first-40 규칙 미완성.** 3언어 모두 (1) 첫 40이 canonical 28 admission에 full triple pin·이후 다른 triple 40을 typed stale terminal 거부 = 없음, (2) later-attempt-wins 재park의 prior-40-binding 무효화 + superseded source terminal 구분 = 없음. **필요 = 신규 attempt-lifecycle 레이어**(admission attempt registry per (actorId,objectGeneration) + 첫 40 원자 pin + later 28 supersede + 명시 53 stale/superseded terminal + source rollback 의미 보존) — 3언어 부재. 이것은 스펙 단일 판정이 아니라 **집중 프로토콜-인프라 설계**(loop 슬라이스 불가).
+
