@@ -1046,10 +1046,11 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       src/index.ts 재-export. governance 00 §174 + node exact-interface 08 §302는 private 규정.
       수정: public barrel에서 domain DTO 제거→runtime-internal. (외부 provider SPI 의도면 4언어
       interface+governance 선행 — 아니라고 판정 시 단순 제거.)
-- [ ] **H-17 [M] spec 51 + cpp 주석 cmd28 originator 상태 stale**: 스펙 51:600 "cpp/.NET은 live
+- [ ] **H-17 [M] spec 51 + cmd28 originator 상태 — cpp 절반 해소, .NET 절반 H-12/H-15 종속**: 스펙 51:600 "cpp/.NET은 live
       cross-node actorJoin 미originate"인데 실제 originate함. cpp header/함수 주석 "nothing calls
       this yet"(mesh_node_runtime.hpp:443, .cpp:2469) stale. → Claude 문서 정정(단 H-12 continuation
       갭 해소 전엔 "지원 완료" 기록 금지). spec 51은 framework/doc(Claude).
+      **판정(2026-08-20)**: **cpp 절반 = revert `ab0b4b39a4`로 자동 해소** — mesh_node_runtime.cpp:2461·hpp:443 "nothing calls this yet" 주석이 origination opt-in 제거로 다시 정확(gate 닫힘). **.NET 절반 = 미해결**: .NET은 ZLinkSpotOutboundTransport(:34/63/184/261)·BackendSpotNodeWrapper(:133) 등에서 **라이브로 ObserveSpotAuthority 호출** → 실제로 command 28 originate하므로 spec 51:600/609가 .NET에 부정확. .NET origination이 완전한지(→spec을 ".NET도 originate"로 개정) 미완성인지(→cpp처럼 revert)는 **H-12/H-15 canonical actor-join 수신자 완성 결정에 종속** — 그 결정 후 spec 51 일괄 정정.
 - [ ] **H-18 [M/L] E2E feature-map 문구 정정(제거된 ACK/retry + stale phase/scenario)**:
       ⓐ [M] .NET "Session location update retry"·Java "commit ack"·Node "commit ACK/durable commit
       ACK" → target location_committed/relay-ready/one-way route update/seal-timeout·late-no-op 관측
