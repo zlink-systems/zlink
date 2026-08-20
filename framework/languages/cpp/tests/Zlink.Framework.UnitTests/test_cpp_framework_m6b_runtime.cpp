@@ -119,31 +119,6 @@ class counting_location_repository_t final
     std::atomic<std::size_t> authority_reads{0};
 };
 
-void verify_session_relocation_route_retry_cadence ()
-{
-    using schedule_t =
-      host::relocation_detail::session_route_retry_schedule_t;
-    schedule_t retry;
-    const auto started_at =
-      schedule_t::clock_t::time_point{std::chrono::seconds (100)};
-    auto now = started_at;
-    constexpr std::array expected{
-      1s, 1s, 2s, 4s, 5s, 5s, 5s};
-    constexpr std::array absolute_attempts{
-      0s, 1s, 2s, 4s, 8s, 13s, 18s};
-
-    assert (retry.due (now));
-    for (std::size_t attempt = 0; attempt != expected.size (); ++attempt) {
-        assert (now - started_at == absolute_attempts[attempt]);
-        const auto timeout = retry.started (now);
-        assert (timeout == expected[attempt]);
-        assert (retry.attempts == attempt + 1);
-        assert (!retry.due (now + expected[attempt] - 1ms));
-        assert (retry.due (now + expected[attempt]));
-        now += expected[attempt];
-    }
-}
-
 void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
 {
     using namespace zlink::framework;
@@ -6577,7 +6552,6 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main ()
 {
-    verify_session_relocation_route_retry_cadence ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();
     verify_session_relocation_gateway_commit_is_atomic ();

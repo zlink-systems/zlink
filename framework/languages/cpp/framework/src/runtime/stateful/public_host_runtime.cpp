@@ -3094,8 +3094,11 @@ void public_host_runtime_t::expire_relocation_target_attempts ()
 
 void public_host_runtime_t::poll_relocation_target_attempts ()
 {
+    /* 28/52: command 44 (session_relocation_route) is a one-way send,
+     * submitted exactly once per route -- there is no periodic re-select
+     * and resend of an incomplete route here. Only attempts not yet
+     * finalized (S2 not yet reached) are polled to finalize. */
     std::vector<relocation_attempt_key_t> pending;
-    std::vector<relocation_attempt_key_t> route_updates;
     const auto now = std::chrono::steady_clock::now ();
     {
         std::lock_guard lock (_mutex);
@@ -3107,21 +3110,10 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
                         && attempt.ready_fallback_at <= now))) {
                 pending.push_back (key);
             }
-            else if (attempt.target_finalized
-                     && std::any_of (
-                       attempt.session_routes.begin (),
-                       attempt.session_routes.end (),
-                       [] (const auto &route) {
-                           return !route.completed;
-                       })) {
-                route_updates.push_back (key);
-            }
         }
     }
     for (const auto &key : pending)
         (void) try_finalize_relocation_target (key);
-    for (const auto &key : route_updates)
-        retry_relocation_session_routes (key);
 }
 
 void public_host_runtime_t::flush_pending_session_relocation_seals ()
@@ -3200,16 +3192,24 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     }
 }
 
-task_t<void> public_host_runtime_t::retry_relocation_session_routes (
+task_t<void> public_host_runtime_t::submit_relocation_session_routes (
   relocation_attempt_key_t key)
 {
+    /* 28 §4.7/52: command 44 is a one-way submit -- there is no application
+     * reply, so there is nothing to retry on. Each route is dispatched at
+     * most once: `send_attempted` is stamped under lock before the send is
+     * issued, so a re-entry for this key (this function may be invoked
+     * again for an already-finalized attempt on a duplicate cutover or
+     * relocationData delivery) can never re-dispatch a route that a prior
+     * call already attempted, whether that prior send succeeded or
+     * failed. A late duplicate 44 could otherwise cross with a newer
+     * relocation and corrupt routing. */
     struct due_route_t
     {
         std::size_t index = 0;
         protocol::session_relocation_route_t route;
     };
     std::vector<due_route_t> due;
-    const auto now = std::chrono::steady_clock::now ();
     {
         std::lock_guard lock (_mutex);
         const auto found = _relocation_target_attempts.find (key);
@@ -3219,9 +3219,9 @@ task_t<void> public_host_runtime_t::retry_relocation_session_routes (
         for (std::size_t index = 0;
              index != found->second.session_routes.size (); ++index) {
             auto &state = found->second.session_routes[index];
-            if (state.completed || !state.retry.due (now))
+            if (state.completed || state.send_attempted)
                 continue;
-            (void) state.retry.started (now);
+            state.send_attempted = true;
             due.push_back ({index, state.route});
         }
     }
@@ -3237,9 +3237,11 @@ task_t<void> public_host_runtime_t::retry_relocation_session_routes (
         catch (...) {
             submitted = false;
         }
-        if (!submitted)
-            continue;
-
+        /* Whether the one-way send succeeded or failed, this route will
+         * never be attempted again (Finding 8), so the source-local
+         * journal-terminal bookkeeping this route's seal prepared is done
+         * either way and must be released now -- there is no future retry
+         * left to release it on. */
         std::optional<stateful::durable_session_journal_root_t>
           completed_journal;
         std::shared_ptr<stateful::relocation_store_port_t>
@@ -3253,7 +3255,17 @@ task_t<void> public_host_runtime_t::retry_relocation_session_routes (
             auto &state = found->second.session_routes[pending.index];
             if (state.completed || state.route != pending.route)
                 continue;
-            state.completed = true;
+            if (submitted) {
+                state.completed = true;
+            }
+            else {
+                /* Record the failure in the (already-bounded, retention-
+                 * limited) per-attempt state rather than swallow it --
+                 * there is no gated trace/diagnostics sink reachable from
+                 * public_host_runtime_t to route this through instead.
+                 * This is a one-way send: it is not retried. */
+                state.send_failed = true;
+            }
             const auto journal =
               _session_journal_terminals.find (
                 session_relocation_key (state.route));
@@ -3406,7 +3418,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (
         }
     }
     if (attempt.target_finalized) {
-        retry_relocation_session_routes (key);
+        submit_relocation_session_routes (key);
         return true;
     }
 
@@ -3467,7 +3479,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (
           std::chrono::steady_clock::now () - attempt.authority_committed_at);
         _relocation_target_metrics.target_resume_seconds (elapsed.count ());
     }
-    retry_relocation_session_routes (key);
+    submit_relocation_session_routes (key);
     return true;
 }
 

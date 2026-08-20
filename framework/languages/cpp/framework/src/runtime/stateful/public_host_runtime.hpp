@@ -159,44 +159,6 @@ class bounded_terminal_journal_t
     std::map<Key, record_t> _records;
 };
 
-struct session_route_retry_schedule_t
-{
-    using clock_t = std::chrono::steady_clock;
-
-    std::size_t attempts = 0;
-    clock_t::time_point next_attempt{};
-
-    static constexpr std::chrono::seconds
-    delay_after_attempt (std::size_t attempt) noexcept
-    {
-        switch (attempt) {
-        case 0:
-        case 1:
-            return std::chrono::seconds (1);
-        case 2:
-            return std::chrono::seconds (2);
-        case 3:
-            return std::chrono::seconds (4);
-        default:
-            return std::chrono::seconds (5);
-        }
-    }
-
-    bool due (clock_t::time_point now) const noexcept
-    {
-        return next_attempt <= now;
-    }
-
-    std::chrono::seconds started (clock_t::time_point now) noexcept
-    {
-        const auto delay = delay_after_attempt (attempts);
-        next_attempt = now + delay;
-        if (attempts != std::numeric_limits<std::size_t>::max ())
-            ++attempts;
-        return delay;
-    }
-};
-
 } // namespace relocation_detail
 
 using call_id_t = runtime::call_id_t;
@@ -1111,7 +1073,15 @@ class public_host_runtime_t :
     struct relocation_target_attempt_t;
     bool try_finalize_relocation_target (
       const relocation_attempt_key_t &key);
-    task_t<void> retry_relocation_session_routes (
+    /* 28/52: command 44 (session_relocation_route) is submitted one-way
+     * exactly once per route after the target CAS commits (S2) -- there is
+     * no application reply and no retry loop; a late duplicate could cross
+     * with a newer relocation and corrupt routing. This may be invoked
+     * more than once for the same key (poll after S2, and a duplicate
+     * cutover/relocationData delivery that re-enters an already-finalized
+     * attempt); each route is only ever dispatched once, guarded by
+     * `send_attempted`. */
+    task_t<void> submit_relocation_session_routes (
       relocation_attempt_key_t key);
     void flush_pending_session_relocation_seals ();
     bool relocation_target_authority_committed (
@@ -1126,7 +1096,20 @@ class public_host_runtime_t :
         {
             protocol::session_relocation_route_t route;
             bool completed = false;
-            relocation_detail::session_route_retry_schedule_t retry;
+            /* Set before the one-way send is dispatched so a re-entry for
+             * the same key (see submit_relocation_session_routes) never
+             * dispatches command 44 a second time for this route, even if
+             * the first send failed. */
+            bool send_attempted = false;
+            /* Bounded record of a failed one-way send: this state lives
+             * inside _relocation_target_attempts, which is itself bounded
+             * by relocation_attempt_retention, so this is not unbounded
+             * ad-hoc logging. There is no gated trace/diagnostics sink
+             * reachable from public_host_runtime_t (message_flow_tracer_t
+             * and dispatch_error_reporter_t both require a
+             * dispatch_options_t this runtime does not hold); wiring one
+             * in is a separate, larger change. */
+            bool send_failed = false;
         };
         protocol::relocation_prepare_t prepare;
         stateful::relocation_restore_identity_t restore_identity;
