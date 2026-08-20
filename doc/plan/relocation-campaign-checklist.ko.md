@@ -1124,7 +1124,7 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
 경로를 구현하고 사설 dialect(cpp typed-JSON·.NET envelope·java newline·node JSON)를 제거한다.
 검증 가능한 슬라이스로 순차 진행:
 
-- [ ] **canon-S1 node canonical 28 수신자 Store-backed type resolution**: canonical 28 body 디코드
+- [x] **canon-S1 node canonical 28 수신자 Store-backed type resolution — 완료 `02b5026839`(Claude 독립 검증)**: node 수신자가 Store actor Authority row(allocation.stableType)에서 type 해석, 7필드 exact fence match, typed terminal 6종, u64 규칙 정확(nodeGeneration=opaque→===0n). verify:m6c 89/0(7 신규 케이스), m6b baseline 동일, 6샘플·relocation 그린. wire actorType는 대조용만. (사설 transport 유지=후속 slice) canonical 28 body 디코드
       + Store Authority row(allocation.stableType, key authority\0actor\0{ActorId})에서 type 해석
       + exact fence match(state=active·objectKind=actor·objectGeneration·owner node RID+lifecycle gen·
       authorityOwnerGeneration·ownerLeaseGeneration) + typed terminal(Unavailable/NotFound/stale/
@@ -1132,7 +1132,9 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       mismatch→typed terminal, missing→Unavailable/NotFound). 사설 packet actorType 의존 제거.
 - [ ] **canon-S2 node canonical 28 origination**: 발신 경로를 사설 JSON→canonical 28 wire로. node→node
       same-language actorJoin이 canonical 경로로 그린.
-- [ ] **canon-S3 java/dotnet/cpp 수신자 + origination**(언어별 슬라이스): 동일 Store-backed receiver + canonical 발신.
+- [ ] **canon-S3a java 수신자 Store-backed type resolution**(진행): S1 node와 동일 spec 51 §9.
+- [ ] **canon-S3b dotnet 수신자 Store-backed type resolution**(진행): S1 node와 동일 spec 51 §9.
+- [ ] **canon-S3c cpp 수신자 Store-backed type resolution**: admit_wire_actor_join의 local-map 조회→Store Authority row(actor_type_from_authority 연결). H-12 continuation과 통합.
 - [ ] **canon-S4 크로스랭 harness actorJoin 테스트**: JoinEntrySpot 회피 해제, 4언어 actorJoin(28) 매트릭스.
 - [ ] **canon-S5 사설 dialect 제거**: 4언어 사설 actor-join packet 삭제.
 - [ ] **canon-S6 H-12 cpp continuation**: Accepted→seal/capture/Restore/relay/cutover 연결 + chunk limit 적용(H-14).
