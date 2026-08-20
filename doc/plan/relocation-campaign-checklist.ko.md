@@ -1130,11 +1130,11 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       authorityOwnerGeneration·ownerLeaseGeneration) + typed terminal(Unavailable/NotFound/stale/
       unknown-type). node 유닛/통합 테스트로 검증(valid+matching row→Store-resolved type admit,
       mismatch→typed terminal, missing→Unavailable/NotFound). 사설 packet actorType 의존 제거.
-- [ ] **canon-S4a 생성기 multipart payload 확장(키스톤)**: generate-service-wire-pilot-codecs.mjs의 ActorJoin28을
+- [x] **canon-S4a 생성기 multipart payload 확장(키스톤) — 완료 `15500910bb`(Claude 독립 검증)**: actorJoin28 생성 코덱이 Frame 0 body + optional Frame 1 application-payload-envelope-v1. 4언어 encode/decode 1~2 frame, negative(truncated/extra/malformed) 거부. golden+fixture matrix. --check verified(무결성)+validator+byte-equivalence. (production 연결=S4b/c) generate-service-wire-pilot-codecs.mjs의 ActorJoin28을
       "Frame 0 body + optional application payload frame(application-payload-envelope-v1: version+length+packetName+
       contentType+bytes)" 모델로 확장(현재 body-only, decode 시 trailing 거부). 4언어 positive/negative fixture +
       request golden 고정. (스코핑: doc/plan/canonical-transport-swap-scope.ko.md)
-- [ ] **canon-S4b 4언어 수신자 canonical 28 decode**: raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
+- [ ] **canon-S4b 4언어 수신자 canonical 28 decode**(node부터): raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
       envelope decode→기존 Store fence/type resolution(S3) 재사용→payload를 typed message로 복원→command-20 canonical
       reply tail 반환. 사설 dialect 수신자는 default 유지.
 - [ ] **canon-S4c 4언어 발신 canonical 28**: 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
