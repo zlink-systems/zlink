@@ -1104,3 +1104,6 @@ C1(H-12 canonical, 스펙결정+미구현) · H7 중: 4=H-13 해소, 9=H-16 해�
 - **W-3 4언어 코덱 스왑**(H-6): H-15와 통합.
 - **H-1 ST-C4 e2e**: corruption seam 격리 하니스 선행(현 불가).
 - **G-2/G-3/G-4 최종 게이트**: forward 트랙 종료 후 일괄.
+
+### ✅ 세션 후 integration 재검증 (2026-08-20 심야, Claude)
+16건 변경 후 **full `all` cross-language 매트릭스 `result=passed`**(java 호스트 재빌드 포함) — 수용된 19/19 messaging/channel/fanout/STREAM/spot-route/message-follow 매트릭스 + relocation 무회귀 확인. G-3 "harness all 스테이지 최종 확인" 요소 그린. 세션의 correctness 작업이 통합 수준에서 견고함을 입증.
