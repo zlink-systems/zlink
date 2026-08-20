@@ -1019,7 +1019,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
 
 ## H-2차: sol 전 문서 spec-gap 리뷰 13건 (2026-08-20, 전문 doc/plan/sol-final-specgap-review.ko.md)
 
-- [ ] **H-12 [C] cpp canonical actorJoin(28) Accepted→완료 오보고**: canonical 경로가
+- [ ] **H-12 [C] cpp canonical actorJoin(28) 수신자 완성 — UNBLOCKED(스펙 결정 `8d8e5cdffd`), 미구현**: 스펙 공백(수신자 type resolution) 해소됨 = 51 §9 신설 "Receiver Stable-Type Resolution"(Store Authority row lookup+exact fence match, typed terminal)·15 §4.2. 잔여 구현 = cpp canonical 경로가 (a) Store Authority row에서 stableType 해석(actor_type_from_authority를 admit_wire_actor_join에 연결, sync local-map→async Store admission), (b) Accepted 후 seal/capture/Restore/relay/cutover continuation 연결, (c) public Accepted는 target owner CAS+queue-open 후에만. **4언어 공통 대형 트랙**(H-15와 통합). (원:) canonical 경로가
       admission Accepted를 즉시 actor_join_reply_t로 바꿔 public completion callback 실행
       (mesh_node_runtime.cpp:2562), seal/capture continuation(2593+)은 사설 JSON 경로(2388)
       에서만 호출. → target이 임시 queue·admission만 끝냈는데 caller가 Accepted 수신,
@@ -1036,7 +1036,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       (consumer 연결 deferred 주석 2565, getter 2451 미소비). 수정: actor/relocation-attempt
       identity별 소비→direct-transfer chunk planner, 세 상한 min. high/low advertised interop vector.
       스펙 28 §4.2(:137). (C-5 이월분)
-- [ ] **H-15 [H] 4언어 Actor Join 상위 경로 사설 wire dialect 잔존**: cpp ActorTransferAdmission
+- [ ] **H-15 [H] 4언어 Actor Join 사설 dialect → canonical 전환 — UNBLOCKED(스펙 `8d8e5cdffd`), 미구현**: 스펙 결정으로 canonical actorJoin(28) 수신자가 Store에서 type 해석(사설 packet actorType 불요)이 규범화됨. 잔여 = 4언어(cpp typed-JSON·.NET envelope·java newline·node JSON) 상위 경로를 canonical 28+Store-backed receiver로 교체, 사설 dialect 제거. H-12·H-14와 통합 대형 트랙. (원:) cpp ActorTransferAdmission
       JSON(2323)·.NET __zlink.actor.join_spot.* JSON·Java __zlink.actor.joinSpot multipart·
       Node __zlink.actor.join_spot.request JSON. 스펙 51 §1/§9는 cmd28+40/52/cutover만 계약,
       transfer bookkeeping은 wire 금지. 수정: cross-node Actor Join은 카논 계약만, transfer
@@ -1046,7 +1046,7 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       src/index.ts 재-export. governance 00 §174 + node exact-interface 08 §302는 private 규정.
       수정: public barrel에서 domain DTO 제거→runtime-internal. (외부 provider SPI 의도면 4언어
       interface+governance 선행 — 아니라고 판정 시 단순 제거.)
-- [ ] **H-17 [M] spec 51 + cmd28 originator 상태 — cpp 절반 해소, .NET 절반 H-12/H-15 종속**: 스펙 51:600 "cpp/.NET은 live
+- [x] **H-17 [M] spec 51 + cmd28 originator 상태 — 해소(2026-08-20)**: cpp 절반=revert `ab0b4b39a4`로 주석 정확. .NET 절반=리서치로 규명 — 하니스가 명시적으로 "4언어 dialect-incompatible actorJoin admission reply 때문에 cross-language 불가, JoinEntrySpot만 사용"(harness:933-938) → **어느 언어도 작동하는 canonical 28 수신자 없음** → .NET 라이브 originate는 대응 없는 latent(cpp와 동형). **판정: spec 51:600/609(cpp·.NET 미originate)는 정확한 target 계약으로 유지** — canonical 수신자(H-12/H-15)가 4언어 완성될 때 origination 유효화+spec 51 일괄 갱신. 그때까지 .NET latent origination은 H-12/H-15에 통합. (원:) 스펙 51:600 "cpp/.NET은 live
       cross-node actorJoin 미originate"인데 실제 originate함. cpp header/함수 주석 "nothing calls
       this yet"(mesh_node_runtime.hpp:443, .cpp:2469) stale. → Claude 문서 정정(단 H-12 continuation
       갭 해소 전엔 "지원 완료" 기록 금지). spec 51은 framework/doc(Claude).
