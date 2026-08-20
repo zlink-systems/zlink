@@ -3,11 +3,14 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+#include <service_wire_pilot_codec.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -1830,6 +1833,48 @@ int main ()
             rejected = true;
         }
         assert (rejected);
+    }
+
+    // S4b receiver recognition uses the generated canonical multipart
+    // decoder, including its optional application-payload-envelope-v1 frame.
+    // Pin both legal frame counts and a malformed payload rejection here so a
+    // manual header decoder cannot silently become the canonical authority.
+    {
+        const protocol::service_wire_pilot_actor_join_28 request{
+          73,
+          {"actor-7", 11, {'a', 'c', 't', 'o', 'r', '-', 'o', 'w', 'n', 'e', 'r'},
+           12, 13, 14},
+          true,
+          {"spot-8", 21, {'s', 'p', 'o', 't', '-', 'o', 'w', 'n', 'e', 'r'},
+           22, 23, 24},
+          std::nullopt};
+        const auto header_only = protocol::encode_actor_join_28 (request);
+        const auto decoded_header_only = protocol::decode_actor_join_28 (header_only);
+        if (decoded_header_only.correlation != request.correlation
+            || decoded_header_only.payload)
+            return 61;
+
+        auto with_payload = request;
+        with_payload.payload = protocol::service_wire_pilot_application_payload_envelope_v1{
+          "ActorJoin", "application/json", {1, 2, 3}};
+        const auto frames = protocol::encode_actor_join_28 (with_payload);
+        const auto decoded = protocol::decode_actor_join_28 (frames);
+        if (!decoded.payload || decoded.payload->packet_name != "ActorJoin"
+            || decoded.payload->content_type != "application/json"
+            || decoded.payload->payload != std::vector<std::uint8_t>{1, 2, 3})
+            return 62;
+
+        auto malformed = frames;
+        malformed.back ().pop_back ();
+        bool rejected = false;
+        try {
+            static_cast<void> (protocol::decode_actor_join_28 (malformed));
+        }
+        catch (const std::invalid_argument &) {
+            rejected = true;
+        }
+        if (!rejected)
+            return 63;
     }
     return 0;
 }

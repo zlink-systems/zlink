@@ -453,6 +453,10 @@ using actor_create_operation_completion_t = std::function<void (
 // _transport->reply_actor_join.
 struct actor_join_operation_result_t
 {
+    // A Store/fence/type failure is a command-20 typed terminal, distinct
+    // from the application-level accepted/rejected actorJoin tail.
+    std::uint32_t terminal_result = 0;
+    std::uint32_t failure_code = 0;
     protocol::actor_join_result_t join_result =
       protocol::actor_join_result_t::rejected;
     std::optional<protocol::actor_join_reply_spot_ref_t> spot;

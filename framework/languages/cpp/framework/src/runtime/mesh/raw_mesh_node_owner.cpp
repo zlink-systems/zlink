@@ -5,6 +5,8 @@
 
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <service_wire_pilot_codec.hpp>
+
 #include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
@@ -2348,7 +2350,9 @@ bool raw_mesh_node_owner_t::reply_actor_join (
   const protocol::actor_join_result_t &join_result,
   const std::optional<protocol::actor_join_reply_spot_ref_t> &spot,
   std::uint64_t membership_epoch,
-  std::uint32_t receive_chunk_limit_bytes)
+  std::uint32_t receive_chunk_limit_bytes,
+  std::uint32_t terminal_result,
+  std::uint32_t failure_code)
 {
     if (!request.correlation || request.source_routing_id.empty ()
         || !request.request_sequence)
@@ -2362,7 +2366,7 @@ bool raw_mesh_node_owner_t::reply_actor_join (
         return false;
     detail::backend::raw_message_t parts{
       protocol::encode_actor_join_reply (
-        *request.correlation, 0, 0, join_result, spot, membership_epoch,
+        *request.correlation, terminal_result, failure_code, join_result, spot, membership_epoch,
         receive_chunk_limit_bytes)};
     return port->reply (
       detail::backend::raw_received_t{
@@ -3084,11 +3088,37 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 || !received->request_sequence) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto request = protocol::decode_actor_join_request (
-              received->parts.front ());
-            if (received->parts.size () == 2)
-                (void) protocol::decode_application_payload (
-                  received->parts.back (), false);
+            protocol::actor_join_request_t request;
+            try {
+                // The generated schema decoder owns canonical command 28,
+                // including its optional application-payload-envelope-v1.
+                // Pre-canonical C++ relocation uses the same command with
+                // the older payload envelope (which carries transferId), so
+                // preserve that established route only when canonical
+                // recognition fails.
+                const auto canonical = protocol::decode_actor_join_28 (
+                  received->parts);
+                request = {
+                  canonical.correlation,
+                  {canonical.actor.id, canonical.actor.generation,
+                   canonical.actor.target_node_rid,
+                   canonical.actor.target_node_generation,
+                   canonical.actor.expected_authority_owner_generation,
+                   canonical.actor.expected_owner_lease_generation},
+                  canonical.entry,
+                  {canonical.target_spot.id, canonical.target_spot.generation,
+                   canonical.target_spot.target_node_rid,
+                   canonical.target_spot.target_node_generation,
+                   canonical.target_spot.expected_authority_owner_generation,
+                   canonical.target_spot.expected_owner_lease_generation}};
+            }
+            catch (const std::exception &) {
+                request = protocol::decode_actor_join_request (
+                  received->parts.front ());
+                if (received->parts.size () == 2)
+                    (void) protocol::decode_application_payload (
+                      received->parts.back (), false);
+            }
             const auto local = _topology.local_descriptor ();
             // request.actor's node fence identifies the sending (source)
             // node's own identity — the same "actor route fence targets the

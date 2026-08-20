@@ -12,6 +12,9 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include <service_wire_constants.hpp>
+#include <service_wire_pilot_codec.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -256,6 +259,69 @@ std::vector<zlink::message_t> decode_parts (
           "framework multipart payload has trailing bytes");
     }
     return parts;
+}
+
+struct canonical_actor_join_decode_t
+{
+    protocol::actor_join_request_t request;
+    std::optional<protocol::application_payload_t> payload;
+};
+
+std::optional<canonical_actor_join_decode_t>
+try_decode_canonical_actor_join (
+  const std::vector<std::vector<std::uint8_t>> &parts)
+{
+    try {
+        const auto decoded = protocol::decode_actor_join_28 (parts);
+        canonical_actor_join_decode_t result{
+          protocol::actor_join_request_t{
+            decoded.correlation,
+            protocol::actor_route_fence_t{
+              decoded.actor.id, decoded.actor.generation,
+              decoded.actor.target_node_rid, decoded.actor.target_node_generation,
+              decoded.actor.expected_authority_owner_generation,
+              decoded.actor.expected_owner_lease_generation},
+            decoded.entry,
+            protocol::spot_route_fence_t{
+              decoded.target_spot.id, decoded.target_spot.generation,
+              decoded.target_spot.target_node_rid,
+              decoded.target_spot.target_node_generation,
+              decoded.target_spot.expected_authority_owner_generation,
+              decoded.target_spot.expected_owner_lease_generation}},
+          std::nullopt};
+        if (decoded.payload) {
+            result.payload = protocol::application_payload_t{
+              decoded.payload->packet_name, decoded.payload->content_type,
+              decoded.payload->payload};
+        }
+        return result;
+    }
+    catch (const std::exception &) {
+        return std::nullopt;
+    }
+}
+
+bool has_legacy_actor_join_transfer (
+  const std::vector<std::vector<std::uint8_t>> &parts)
+{
+    if (parts.size () < 2)
+        return false;
+    try {
+        const auto envelope = protocol::decode_application_payload (
+          parts[1], false);
+        const auto multipart = decode_parts (envelope.payload);
+        if (multipart.empty ())
+            return false;
+        const auto bytes = multipart.front ().to_bytes ();
+        const auto metadata = nlohmann::json::parse (
+          bytes.begin (), bytes.end (), nullptr, false);
+        return !metadata.is_discarded () && metadata.is_object ()
+               && metadata.contains ("transferId")
+               && metadata.at ("transferId").is_string ();
+    }
+    catch (const std::exception &) {
+        return false;
+    }
 }
 
 struct route_owner_fence_read_t
@@ -4924,13 +4990,30 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || mailbox_record.parts.size () > 2)
                         throw protocol::service_wire_error_t (
                           "Actor join has an invalid part count");
-                    const auto request =
-                      protocol::decode_actor_join_request (
-                        mailbox_record.parts.front ());
+                    /* command 28 is shared with C++'s pre-canonical actor
+                     * relocation records.  A private transferId lives in its
+                     * multipart payload and is explicitly outside spec 51
+                     * section 9's canonical body, so leave that record on the
+                     * established decoder/dispatch path.  For all other
+                     * records, the generated decoder is the recognition
+                     * authority; a failed recognition deliberately falls
+                     * back instead of dropping a private command-28 record. */
+                    const auto canonical = has_legacy_actor_join_transfer (
+                                             mailbox_record.parts)
+                                             ? std::nullopt
+                                             : try_decode_canonical_actor_join (
+                                                 mailbox_record.parts);
+                    const auto request = canonical
+                                           ? canonical->request
+                                           : protocol::decode_actor_join_request (
+                                               mailbox_record.parts.front ());
                     std::optional<protocol::application_payload_t> payload;
-                    if (mailbox_record.parts.size () == 2)
+                    if (canonical) {
+                        payload = canonical->payload;
+                    } else if (mailbox_record.parts.size () == 2) {
                         payload = protocol::decode_application_payload (
                           mailbox_record.parts.back (), capture_flow ());
+                    }
                     if (!actor_join_target) {
                         (void) _transport->reply_actor_join (
                           mailbox_record,
@@ -4952,7 +5035,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             (void) host->_transport->reply_actor_join (
                               mailbox_record, result.join_result,
                               result.spot, result.membership_epoch,
-                              result.receive_chunk_limit_bytes);
+                              result.receive_chunk_limit_bytes,
+                              result.terminal_result, result.failure_code);
                         }
                         catch (...) {
                         }

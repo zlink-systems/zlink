@@ -12,6 +12,7 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
@@ -154,6 +155,28 @@ class controlled_worker_scheduler_t final : public zlink::framework::detail::wor
     std::queue<std::function<void (std::stop_token)>> worker_jobs;
     std::queue<std::function<void ()>> owner_jobs;
     std::stop_source cancellation;
+};
+
+class wire_actor_join_authority_store_t final :
+    public zlink::framework::runtime::in_memory_location_repository_t
+{
+  public:
+    std::optional<zlink::framework::authority_snapshot_t> snapshot;
+
+    zlink::framework::task_t<zlink::framework::authority_read_result_t>
+    read_authority (zlink::framework::authority_key_t,
+                    std::stop_token) override
+    {
+        if (snapshot) {
+            return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
+              zlink::framework::result_t<zlink::framework::authority_read_result_t>::success (
+                zlink::framework::authority_read_result_t{*snapshot}));
+        }
+        return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
+          zlink::framework::result_t<zlink::framework::authority_read_result_t>::success (
+            zlink::framework::authority_read_result_t{
+              zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}));
+    }
 };
 
 struct timer_activation_dependency_t
@@ -2430,16 +2453,39 @@ bool verify_remote_actor_prepare_is_idempotent ()
     const auto actor = actor_ref_access_t::make (
       node_rid_t::from_string ("source-node"),
       "player", "actor-1", 7);
+    auto store = std::make_shared<wire_actor_join_authority_store_t> ();
+    store->snapshot = authority_snapshot_t{
+      .store_version = "actor-prepare-v1",
+      .payload = runtime::encode_actor_authority_payload (actor, "source-spot", 1),
+      .object_generation = 7,
+      .authority_owner_generation = 19,
+      .owner = location_owner_token_t{"source-owner", 29},
+      .store_now = std::chrono::system_clock::now (),
+      .allocation = {.state = placement_allocation_state_t::active,
+                     .object_kind = placement_object_kind_t::actor,
+                     .stable_type = "player",
+                     .target = {.mesh_name = "actor-prepare",
+                                .node_rid = node_rid_t::from_string ("source-node"),
+                                .node_lifecycle_generation = 23,
+                                .owner = location_owner_token_t{"source-owner", 29}}}};
+    service_collection_t services;
+    services.add_factory<runtime::live_location_reader_t> (
+      [store] (service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (*store);
+      },
+      service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+    owner.bind_service_provider (provider);
     const auto request = zlink::message_t::from (std::string ("prepare"));
     const auto first = owner.admit_remote_actor_to_spot (
       "transfer-1", actor, spot_id_t ("source-spot"),
-      target->spot_id, request, 11, 13, 19);
+      target->spot_id, request, 11, 13, 19, 23, 29);
     const auto repeated = owner.admit_remote_actor_to_spot (
       "transfer-1", actor, spot_id_t ("source-spot"),
-      target->spot_id, request, 11, 13, 19);
+      target->spot_id, request, 11, 13, 19, 23, 29);
     const auto conflicting = owner.admit_remote_actor_to_spot (
       "transfer-1", actor, spot_id_t ("source-spot"),
-      target->spot_id, request, 11, 17, 19);
+      target->spot_id, request, 11, 17, 19, 23, 29);
 
     target->serial_queue->close ();
     target->serial_queue->drain ();
@@ -2514,11 +2560,35 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         return spot_actor_join_result_t::accept (message_t::from (std::string ("approved")));
     };
     target->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
-    node->actor_types_by_id["actor-1"] = "player";
 
     spot_node_runtime_t owner (node);
     const auto local_rid = zlink::routing_id_t::from (std::string ("wire-join-node"));
     const auto source_rid = zlink::routing_id_t::from (std::string ("wire-join-source"));
+    auto store = std::make_shared<wire_actor_join_authority_store_t> ();
+    const auto stored_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("wire-join-source"), "player", "actor-1", 7);
+    store->snapshot = authority_snapshot_t{
+      .store_version = "wire-join-v1",
+      .payload = runtime::encode_actor_authority_payload (stored_actor, "source-spot", 1),
+      .object_generation = 7,
+      .authority_owner_generation = 19,
+      .owner = location_owner_token_t{"source-owner", 5},
+      .store_now = std::chrono::system_clock::now (),
+      .allocation = {.state = placement_allocation_state_t::active,
+                     .object_kind = placement_object_kind_t::actor,
+                     .stable_type = "player",
+                     .target = {.mesh_name = "wire-join",
+                                .node_rid = node_rid_t::from_string ("wire-join-source"),
+                                .node_lifecycle_generation = 3,
+                                .owner = location_owner_token_t{"source-owner", 5}}}};
+    service_collection_t services;
+    services.add_factory<runtime::live_location_reader_t> (
+      [store] (service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (*store);
+      },
+      service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+    owner.bind_service_provider (provider);
     wire_join_spot_resolver_t resolver;
     resolver.address.node_rid = local_rid;
     resolver.address.spot_id = "target-spot";
@@ -3239,6 +3309,40 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     owner.bind_relocation_authority (authority);
     const auto actor = actor_ref_access_t::make (
       node_rid_t::from_string ("source-node"), "player", "actor-c2", 7);
+    // The private cutover path still enters the same Store-fenced admission
+    // boundary as canonical actorJoin(28).  Model its source Authority row
+    // rather than reviving the retired local actor-type cache.
+    auto store = std::make_shared<wire_actor_join_authority_store_t> ();
+    const auto set_source_authority = [store] (
+      const actor_ref_t &source_actor,
+      std::uint64_t authority_owner_generation) {
+        store->snapshot = authority_snapshot_t{
+          .store_version = "actor-cutover-v1",
+          .payload = runtime::encode_actor_authority_payload (
+            source_actor, "source-spot", 1),
+          .object_generation = source_actor.object_generation (),
+          .authority_owner_generation = authority_owner_generation,
+          .owner = location_owner_token_t{"source-owner", 29},
+          .store_now = std::chrono::system_clock::now (),
+          .allocation = {.state = placement_allocation_state_t::active,
+                         .object_kind = placement_object_kind_t::actor,
+                         .stable_type = "player",
+                         .target = {.mesh_name = "source-mesh",
+                                    .node_rid = node_rid_t::from_string (
+                                      std::string (source_actor.node_rid ().value ())),
+                                    .node_lifecycle_generation = 1,
+                                    .owner = location_owner_token_t{
+                                      "source-owner", 29}}}};
+    };
+    set_source_authority (actor, 19);
+    service_collection_t services;
+    services.add_factory<runtime::live_location_reader_t> (
+      [store] (service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (*store);
+      },
+      service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+    owner.bind_service_provider (provider);
     actor_gateway_runtime_t gateway;
     auto session = gateway.manager ();
     session_actor_manager_access_t::attach (session, stream_t{});
@@ -3292,7 +3396,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const std::string key = "player:actor-c2";
     const auto admitted = owner.admit_remote_actor_to_spot (
       transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
-        zlink::message_t::from (std::string ("prepare")), 11, 13, 19);
+        zlink::message_t::from (std::string ("prepare")), 11, 13, 19, 1, 29);
     if (!admitted || !admitted.value ().accepted) {
         return false;
     }
@@ -3303,8 +3407,6 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
-    service_collection_t services;
-    auto provider = services.build_provider ();
     spot_actor_commit_route_request_t cutover{
       .transfer_id = transfer_id,
       .actor_node_rid = "source-node",
@@ -3448,10 +3550,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("source-node"), "player", "actor-c3", 7);
     const std::string queued_transfer_id = "transfer-c3";
     const std::string queued_key = "player:actor-c3";
+    set_source_authority (queued_actor, 29);
     const auto queued_admitted = owner.admit_remote_actor_to_spot (
       queued_transfer_id, queued_actor, spot_id_t ("source-spot"),
       target->spot_id, zlink::message_t::from (std::string ("prepare")),
-      21, 23, 29);
+      21, 23, 29, 1, 29);
     const auto queued_prepared = owner.prepare_remote_actor_to_spot (
       queued_transfer_id, queued_actor, target->spot_id, zlink::message_t{},
       actor_gateway_runtime_t{}.actor_context (queued_actor), true);
@@ -3573,10 +3676,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("source-node"), "player", "actor-c4", 7);
     const std::string lifecycle_transfer_id = "transfer-c4";
     const std::string lifecycle_key = "player:actor-c4";
+    set_source_authority (lifecycle_actor, 41);
     const auto lifecycle_admitted = owner.admit_remote_actor_to_spot (
       lifecycle_transfer_id, lifecycle_actor, spot_id_t ("source-spot"),
       target->spot_id, zlink::message_t::from (std::string ("prepare")),
-      31, 37, 41);
+      31, 37, 41, 1, 29);
     const auto lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       lifecycle_transfer_id, lifecycle_actor, target->spot_id,
       zlink::message_t{}, gateway.actor_context (lifecycle_actor), true);
@@ -3688,10 +3792,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("source-node"), "player", "actor-c4-active", 7);
     const std::string active_lifecycle_transfer_id = "transfer-c4-active";
     const std::string active_lifecycle_key = "player:actor-c4-active";
+    set_source_authority (active_lifecycle_actor, 67);
     const auto active_lifecycle_admitted = owner.admit_remote_actor_to_spot (
       active_lifecycle_transfer_id, active_lifecycle_actor,
       spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 59, 61, 67);
+      zlink::message_t::from (std::string ("prepare")), 59, 61, 67, 1, 29);
     const auto active_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       active_lifecycle_transfer_id, active_lifecycle_actor, target->spot_id,
       zlink::message_t{}, gateway.actor_context (active_lifecycle_actor), true);
@@ -3785,10 +3890,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("source-node"), "player", "actor-c4-shutdown", 7);
     const std::string shutdown_lifecycle_transfer_id = "transfer-c4-shutdown";
     const std::string shutdown_lifecycle_key = "player:actor-c4-shutdown";
+    set_source_authority (shutdown_lifecycle_actor, 79);
     const auto shutdown_lifecycle_admitted = owner.admit_remote_actor_to_spot (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor,
       spot_id_t ("source-spot"), target->spot_id,
-      zlink::message_t::from (std::string ("prepare")), 71, 73, 79);
+      zlink::message_t::from (std::string ("prepare")), 71, 73, 79, 1, 29);
     const auto shutdown_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor,
       target->spot_id, zlink::message_t{},
@@ -3888,10 +3994,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       node_rid_t::from_string ("source-node"), "player", "actor-c5", 7);
     const std::string failed_transfer_id = "transfer-c5";
     const std::string failed_key = "player:actor-c5";
+    set_source_authority (failed_actor, 53);
     const auto failed_admitted = owner.admit_remote_actor_to_spot (
       failed_transfer_id, failed_actor, spot_id_t ("source-spot"),
       target->spot_id, zlink::message_t::from (std::string ("prepare")),
-      43, 47, 53);
+      43, 47, 53, 1, 29);
     const auto failed_prepared = owner.prepare_remote_actor_to_spot (
       failed_transfer_id, failed_actor, target->spot_id, zlink::message_t{},
       gateway.actor_context (failed_actor), true);
@@ -3962,10 +4069,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     const auto leave_order_actor = actor_ref_access_t::make (
       node_rid_t::from_string ("source-node"), "player", "actor-c6", 7);
     const std::string leave_order_transfer_id = "transfer-c6";
+    set_source_authority (leave_order_actor, 97);
     const auto leave_order_admitted = owner.admit_remote_actor_to_spot (
       leave_order_transfer_id, leave_order_actor, spot_id_t ("source-spot"),
       target->spot_id, zlink::message_t::from (std::string ("prepare")),
-      83, 89, 97);
+      83, 89, 97, 1, 29);
     const auto leave_order_prepared = owner.prepare_remote_actor_to_spot (
       leave_order_transfer_id, leave_order_actor, target->spot_id,
       zlink::message_t{}, gateway.actor_context (leave_order_actor), true);
@@ -4162,6 +4270,18 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
 
     spot_node_runtime_t source_spots (source_state->spot_state);
     spot_node_runtime_t target_spots (target_state->spot_state);
+    // The two-node command-28 receiver resolves the source Actor type and
+    // exact fence from the same authority repository the fixture commits
+    // below.  Bind that production dependency before peer traffic starts.
+    service_collection_t location_services;
+    location_services.add_factory<runtime::live_location_reader_t> (
+      [locations] (service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (*locations);
+      },
+      service_lifetime_t::singleton);
+    auto location_provider = location_services.build_provider ();
+    source_spots.bind_service_provider (location_provider);
+    target_spots.bind_service_provider (location_provider);
     source_spots.bind_relocation_store (relocations);
     source_spots.bind_relocation_authority (authority);
     target_spots.bind_relocation_store (relocations);

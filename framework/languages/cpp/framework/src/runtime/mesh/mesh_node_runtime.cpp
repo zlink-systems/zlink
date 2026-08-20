@@ -3,6 +3,8 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/sha256.hpp"
@@ -414,15 +416,83 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
                        const std::optional<runtime::protocol::application_payload_t> &payload)
 {
     host::actor_join_operation_result_t rejected;
+    const auto typed_terminal = [] (framework_error_kind_t kind) {
+        host::actor_join_operation_result_t result;
+        switch (kind) {
+            case framework_error_kind_t::not_found:
+                result.terminal_result = 102;
+                result.failure_code = static_cast<std::uint32_t> (
+                  runtime::protocol::framework_error_code::requestTargetNotFound);
+                break;
+            case framework_error_kind_t::protocol_error:
+                result.terminal_result = 104;
+                result.failure_code = static_cast<std::uint32_t> (
+                  runtime::protocol::framework_error_code::requestProtocolError);
+                break;
+            case framework_error_kind_t::type_mismatch:
+                result.terminal_result = 107;
+                result.failure_code = static_cast<std::uint32_t> (
+                  runtime::protocol::framework_error_code::actorTypeMismatch);
+                break;
+            case framework_error_kind_t::rejected:
+                result.terminal_result = 106;
+                result.failure_code = static_cast<std::uint32_t> (
+                  runtime::protocol::framework_error_code::requestRejected);
+                break;
+            case framework_error_kind_t::unavailable:
+            default:
+                result.terminal_result = 105;
+                result.failure_code = static_cast<std::uint32_t> (
+                  runtime::protocol::framework_error_code::requestFailed);
+                break;
+        }
+        return result;
+    };
     try {
         spot_node_runtime_t spot (spot_state);
         // The wire body carries no stable type (unlike actorCreate's
         // stableType) — spec 15's admission semantics key on actor
         // identity, and this node must already know that identity (via a
         // prior actorCreate or join) to admit it here.
-        const auto actor_type = spot.resolve_actor_type (request.actor.actor_id);
-        if (!actor_type)
-            return rejected;
+        auto actor_type = spot.resolve_actor_type (request.actor.actor_id);
+        if (!actor_type) {
+            // A cold target has no local actor-type cache.  Recover only the
+            // stable type needed to construct actor_ref from the canonical
+            // Authority row; admit_remote_actor_to_spot then performs the S3
+            // complete fence/type validation before it can mutate admission.
+            runtime::live_location_reader_t *store = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> lock (spot_state->mutex);
+                if (!spot_state->root_services)
+                    return typed_terminal (framework_error_kind_t::unavailable);
+                try {
+                    store = &spot_state->root_services
+                               ->get_required<runtime::live_location_reader_t> ();
+                }
+                catch (const std::exception &) {
+                    return typed_terminal (framework_error_kind_t::unavailable);
+                }
+            }
+            const auto read = store->read_authority (
+              runtime::actor_authority_key (request.actor.actor_id)).result ();
+            if (!read)
+                return typed_terminal (framework_error_kind_t::unavailable);
+            const auto *authority = std::get_if<authority_snapshot_t> (&read.value ());
+            if (authority == nullptr)
+                return typed_terminal (framework_error_kind_t::not_found);
+            if (authority->allocation.state != placement_allocation_state_t::active
+                || authority->allocation.object_kind != placement_object_kind_t::actor
+                || authority->allocation.stable_type.empty ()) {
+                return typed_terminal (framework_error_kind_t::protocol_error);
+            }
+            const auto projection = runtime::decode_actor_authority_payload (
+              authority->payload);
+            if (!projection
+                || projection->actor.actor_id ().value () != request.actor.actor_id) {
+                return typed_terminal (framework_error_kind_t::protocol_error);
+            }
+            actor_type = authority->allocation.stable_type;
+        }
         // The actor fence's node coordinates name the CURRENT owner — the
         // source node originating this proposal.
         const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
@@ -435,7 +505,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         if (request.entry) {
             const auto entry_spot_id = spot.resolve_entry_spot_id ();
             if (!entry_spot_id)
-                return rejected;
+                return typed_terminal (framework_error_kind_t::not_found);
             target_spot_id = *entry_spot_id;
         } else {
             target_spot_id = spot_id_t (request.target_spot.spot_id);
@@ -443,7 +513,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         const auto spot_generation =
           spot.resolve_spot_generation (local_node_rid, target_spot_id);
         if (!spot_generation || *spot_generation == 0)
-            return rejected;
+            return typed_terminal (framework_error_kind_t::not_found);
         if (!request.entry) {
             // Approval-only admission (spec 15 §478-527): run the
             // application admission callback and register the relocation
@@ -469,8 +539,12 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
             const auto admitted = spot.admit_remote_actor_to_spot (
               std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id,
               payload_message, request.actor.target_node_generation,
-              request.correlation, request.actor.authority_owner_generation);
-            if (!admitted || !admitted.value ().accepted)
+              request.correlation, request.actor.authority_owner_generation,
+              request.actor.target_node_generation,
+              request.actor.owner_lease_generation);
+            if (!admitted)
+                return typed_terminal (admitted.error_kind ());
+            if (!admitted.value ().accepted)
                 return rejected;
         }
         // JoinEntrySpot has no approval round trip in the store path and
@@ -493,7 +567,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         return result;
     }
     catch (...) {
-        return rejected;
+        return typed_terminal (framework_error_kind_t::unavailable);
     }
 }
 
