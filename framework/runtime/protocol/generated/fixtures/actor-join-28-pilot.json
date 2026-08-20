@@ -1,0 +1,25 @@
+{
+  "schema": "service-wire-v1",
+  "command": "actorJoin(28)",
+  "input": {
+    "correlation": "1",
+    "actor": {
+      "id": "actor",
+      "generation": "2",
+      "targetNodeRidHex": "0102",
+      "targetNodeGeneration": "3",
+      "expectedAuthorityOwnerGeneration": "4",
+      "expectedOwnerLeaseGeneration": "5"
+    },
+    "entry": true,
+    "targetSpot": {
+      "id": "spot",
+      "generation": "6",
+      "targetNodeRidHex": "0708",
+      "targetNodeGeneration": "9",
+      "expectedAuthorityOwnerGeneration": "10",
+      "expectedOwnerLeaseGeneration": "11"
+    }
+  },
+  "hex": "5a4d011c000000000000000001056163746f720000000000000002020102000000000000000300000000000000040000000000000005010473706f7400000000000000060207080000000000000009000000000000000a000000000000000b"
+}
