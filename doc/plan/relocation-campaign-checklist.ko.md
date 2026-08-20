@@ -1107,3 +1107,10 @@ C1(H-12 canonical, 스펙결정+미구현) · H7 중: 4=H-13 해소, 9=H-16 해�
 
 ### ✅ 세션 후 integration 재검증 (2026-08-20 심야, Claude)
 16건 변경 후 **full `all` cross-language 매트릭스 `result=passed`**(java 호스트 재빌드 포함) — 수용된 19/19 messaging/channel/fanout/STREAM/spot-route/message-follow 매트릭스 + relocation 무회귀 확인. G-3 "harness all 스테이지 최종 확인" 요소 그린. 세션의 correctness 작업이 통합 수준에서 견고함을 입증.
+
+
+### F 인벤토리 게이트 슬라이스 — 반려·재판정 (2026-08-20, Claude, advisor 검토)
+f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape hatch로 수정(JavaDocumentationRegressionTest.java·verify_common_inventory.sh) — **반려·전량 revert**. 사유: java 게이트는 광범위 red가 아니라 **정확히 MON-A7·ST-C4 2개만** 실패했는데 범용 면제 훅을 추가(스펙 정책 "E2E 기대를 구현 편의로 낮추지 않기" 위반); self-certifying(doc에 "known-gap" 문자열=통과)이라 permanently-red보다 약함; 중복 행+조용한 regex 변경 결함. F plan step2는 "판정 후 fix-or-promote"였으나 이탈.
+- **판정(게이트 무수정)**: **ST-C4** = H-1 소유(corruption-seam 격리 하니스 부재로 blocked, 유닛은 482561c9a0). **MON-A7**(config-7 Core HWM+job queue snapshot reset) = .NET 구현·**java/cpp 미구현**, RuntimeMonitoring=순수 F → **H-11(F) 소유**.
+- java `:zlink-framework-core:build` contractTest의 MON-A7·ST-C4 실패는 **sanctioned known 커버리지-gap**(게이트가 실제 미구현을 정확히 플래그 — 스트릭트 유지). 핵심 런타임 게이트 `:zlink-framework-core:test`는 그린. 해소=구현(H-1/H-11).
+- cpp e2e_inventory 게이트 green을 원하면 표준형 = 171 ID **명시 allowlist를 게이트에 체크인**(신규 gap은 게이트 편집 필요=리뷰 가시, 구현 스크랩은 여전히 실패) — Claude 판정 사항, 후속.
