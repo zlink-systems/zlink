@@ -198,3 +198,20 @@ advisor가 지적한 hole 2건 해소 (remote-actor-join-receiver.ts 전체 read
 - canonical 경로에 **28→40 identity 바인딩이 존재하지 않음**(코드로 확인). 40 state 복원은 relocation-identity 키 reservation의 별도 트랙, 28 admission은 spot membership 트랙. commit closure는 40을 await하지 않음. 따라서 "stale 40이 잘못된 28 admission에 바인딩"하는 hazard는 현 canonical 설계에 성립하지 않음.
 - **단, multi-attempt re-park 경로는 미검증(test-half).** node relocation e2e가 same actor에 2차 attempt(later-attempt-wins re-park)를 실행하는 테스트를 아직 확인하지 못함 → branch B(잠복·미검증) 가능성 배제 불가. 이는 **node/java 대상 별도 checklist 항목**으로 파일(발신 작업 차단 아님).
 - cpp/dotnet canonical 발신은 node/java 패턴(canonical 28=type resolution+정상 admission, transferId 로컬 전용·wire 무배치) 위에 **바인딩 spec ruling 없이** 구축 가능. 단 agent에게 "commit이 40 state를 await하지 않는다 = 동기 admission 형상"을 명시.
+
+
+---
+
+## .NET 발신 슬라이스 1차 시도 = 정직한 STOP (2026-08-21, 실질 설계질문)
+
+.NET agent(codex terra high, 파일 변경 0)가 well-formed 설계 질문에서 STOP:
+- .NET command 28 수신이 target actor를 **즉시 예약 생성**(ZLinkFrameworkRuntimeActors.cs:2678). 28 wire엔 correlation+fence만(abort/relocation-identity/deadline 없음, service-wire-v1.schema.json:7292). target abort는 command-40 relocation identity로만 주소지정(ZLinkStandaloneActorRelocationRuntime.cs:2454).
+- => 28 accepted 후 40 전 source precommit 실패 시 source가 target 28 예약을 식별·정리 불가. 28→40 바인딩 금지 + JSON token abort 흉내 금지 상태에서 해결 불가.
+- 3옵션: (1) canonical 28이 target 예약을 안 만들고 40 예약 트랙만 사용, (2) correlation 기반 canonical-attempt abort 신설, (3) target-local expiry/lease cleanup 허용.
+
+**진단(내가 부과한 invariant 오류):** "pre-commit failure가 target reservation을 정리" invariant 자체가 바인딩을 요구하는 모순이었음. node 형상 확인 결과:
+- node canonical 28 = canonicalActorJoinResolver→prepareCanonicalActorJoin(타입 resolution + getOrCreateActor + setNativeActorRef). relocation 예약을 만들지 않음.
+- node target abort/cleanup(abortTargetReservation/abortTargetStage, service-relocation-host-runtime.ts:3382/3390)은 **40 트랙(relocation identity 키)**이 소유.
+- 즉 node는 **option 1** 형상: 28은 타입+actor 보장만, relocation 예약은 40이 소유. abandonment시 정리할 28-예약 자체가 없음(source seal만 정리).
+
+**잠정 ruling(advisor 확인 대상): option 1.** .NET의 :2678이 admission과 relocation-reservation을 융합한 것이 .NET 특정 불일치. 수정 = canonical 28 수신은 타입 resolution + actor 보장만, relocation 예약은 40 트랙 소유로 분리. 이러면 pre-commit invariant는 "source seal만 정리"로 축소, 28→40 바인딩 불요, branch A와 일관. (단 이번 세션 node 내부 2회 오판 이력 → 단정 전 검증 필요.)
