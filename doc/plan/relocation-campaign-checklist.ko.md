@@ -1160,6 +1160,7 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       (wireAttemptKey를 receiver+prepare 공유, seal_remote_application_actor_join 진입 필수, deliver 즉시호출 제거) →
       (3) **.NET admission/relocation 분해**(SubmitRoutedJoinActorTransactionAsync→AcquireAdmissionContext+ContinueRelocation) →
       (4) .NET canonical sender → (5) 검증(seam test + cpp Bingo/TicTacToe + .NET relocation sample).
+- [ ] **canon-node-java-multiattempt-repark-untested (2026-08-21)**: node/java canonical relocation e2e가 same actor에 2차 attempt(later-attempt-wins re-park)를 실행하는 테스트 부재 확인 필요. 코드상 28→40 identity 바인딩 없음(branch A)이나 multi-attempt 재park 정확성(2차 28 supersede·40-reservation later-attempt 처리)은 미검증. 발신 작업 차단 아님. 근거: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md.
 - [ ] **canon-S4d attempt-binding — 검증 불성립·mode 전환(2026-08-21, advisor 신호)**: advisor 처방 2검증(first-40 바인딩·superseded terminal 구분) **둘 다 불성립** — 3언어 모두 신규 attempt-lifecycle 레이어(admission attempt registry+첫40 원자 pin+later28 supersede+명시 53 stale/superseded+source rollback 의미) 부재. 이는 스펙 단일판정이 아니라 **집중 프로토콜-인프라 설계**. 발신 트랙 5번째 갭 = advisor 명시 mode-전환 신호(loop 슬라이스 중단, 집중 단일작업 필요). 정밀 근거: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md. **canonical .NET/cpp 발신 완주 = dedicated 집중 세션 이월**(node/java 단대단·인프라 4/4·seam 타입은 견고한 기반으로 landing).
 - [ ] **canon-S4d-b bound Session 분리**: 28 전 42/43 seal + target commit 후 44 route update(28 sideband 금지).
 - [ ] **canon-S4e 크로스랭 harness User Spot JoinSpot stage**: JoinEntrySpot 보존 + canonical 28 pairwise matrix(Node↔.NET↔Java↔C++)로

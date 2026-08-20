@@ -184,3 +184,17 @@ Node/Java 패턴은 .NET에 직접 적용 가능합니다. 즉 source-side `Cano
 - 같은 actor 2차 canonical 28은 activation serial queue에 직렬화(병렬 parked admission 생성 안 함). legacy routed-admission(spot-routed-actor-admission.ts)은 transferId 키·idempotent, 별개 경로.
 
 **결론: 5-STOP 바인딩 saga는 실재하지 않는 hazard였다.** binding-at-first-40/28-carries-triple/새 attempt-lifecycle 레이어 모두 불필요. cpp/dotnet canonical 발신은 node/java 패턴(e2e 입증) 위에 **바인딩 spec ruling 없이** 구축 가능. advisor 확인 대상: branch A 확정 + 발신 슬라이스 재개 go.
+
+
+---
+
+## receiver 두 경로 확인 + overclaim 수정 (2026-08-21, advisor hole 해소)
+
+advisor가 지적한 hole 2건 해소 (remote-actor-join-receiver.ts 전체 read):
+- **receive (:43, legacy JSON)**: admitActorJoin(:106)의 commit closure(:110-113)는 동기 — setJoinedSpot + rollback 반환, command 40 state를 await하지 않음.
+- **prepareCanonicalActorJoin (:138, canonical 28)**: 주석(:132-137) "정상 typed Spot admission 이전에 호출". admitActorJoin을 호출하지 않음 — 타입 resolution + getOrCreateActor + setNativeActorRef(prepare)만 수행. 실제 admission은 정상 경로. lingering parked admission 없음.
+
+**방어가능한 결론(967ab22b0c의 "hazard does not exist" 과장 수정):**
+- canonical 경로에 **28→40 identity 바인딩이 존재하지 않음**(코드로 확인). 40 state 복원은 relocation-identity 키 reservation의 별도 트랙, 28 admission은 spot membership 트랙. commit closure는 40을 await하지 않음. 따라서 "stale 40이 잘못된 28 admission에 바인딩"하는 hazard는 현 canonical 설계에 성립하지 않음.
+- **단, multi-attempt re-park 경로는 미검증(test-half).** node relocation e2e가 same actor에 2차 attempt(later-attempt-wins re-park)를 실행하는 테스트를 아직 확인하지 못함 → branch B(잠복·미검증) 가능성 배제 불가. 이는 **node/java 대상 별도 checklist 항목**으로 파일(발신 작업 차단 아님).
+- cpp/dotnet canonical 발신은 node/java 패턴(canonical 28=type resolution+정상 admission, transferId 로컬 전용·wire 무배치) 위에 **바인딩 spec ruling 없이** 구축 가능. 단 agent에게 "commit이 40 state를 await하지 않는다 = 동기 admission 형상"을 명시.
