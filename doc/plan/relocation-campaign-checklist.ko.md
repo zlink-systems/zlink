@@ -1132,8 +1132,8 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       mismatch→typed terminal, missing→Unavailable/NotFound). 사설 packet actorType 의존 제거.
 - [ ] **canon-S2 node canonical 28 origination**: 발신 경로를 사설 JSON→canonical 28 wire로. node→node
       same-language actorJoin이 canonical 경로로 그린.
-- [ ] **canon-S3a java 수신자 Store-backed type resolution**(진행): S1 node와 동일 spec 51 §9.
-- [ ] **canon-S3b dotnet 수신자 Store-backed type resolution**(진행): S1 node와 동일 spec 51 §9.
+- [x] **canon-S3a java 수신자 Store-backed type resolution — 완료 `7a8c35f9b2`(Claude 독립 검증)**: ZLinkActorRuntime.readActorJoinAuthority + ZLinkActorSpotAdmission exact fence match, typed terminal, u64 규칙(descriptorLifecycleGeneration=opaque→==0). full :zlink-framework-core:test 1083/0 + 신규 테스트 독립 확인.
+- [~] **canon-S3b dotnet 수신자 Store-backed type resolution — 구현 완료·전체 게이트 검증 중**: ResolveRoutedActorJoinStableTypeAsync(Store 해석+7필드 fence match+typed terminal+u64 규칙 ActorNodeGeneration=opaque→==0), ActorRelocationProtocolTests 27/27. 전체 UnitTests 게이트 Claude 독립 실행 중.
 - [ ] **canon-S3c cpp 수신자 Store-backed type resolution**: admit_wire_actor_join의 local-map 조회→Store Authority row(actor_type_from_authority 연결). H-12 continuation과 통합.
 - [ ] **canon-S4 크로스랭 harness actorJoin 테스트**: JoinEntrySpot 회피 해제, 4언어 actorJoin(28) 매트릭스.
 - [ ] **canon-S5 사설 dialect 제거**: 4언어 사설 actor-join packet 삭제.
