@@ -259,8 +259,16 @@ internal static class TestHostScenarioConfigurator
         IServiceCollection services, TestHostOptions options, bool isSource)
     {
         services.AddSingleton(new TestHostEventSink(options.EventFilePath));
+        if (!string.IsNullOrWhiteSpace(options.EventFilePath))
+        {
+            services.AddSingleton(
+                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+        }
         services.AddZLinkFramework(framework =>
         {
+            if (!string.IsNullOrWhiteSpace(options.EventFilePath))
+                framework.ConfigureDispatch().Diagnostics
+                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
             var redisEndpoint = options.RedisEndpoint
                                  ?? throw new InvalidOperationException(
                                      "entry-spot-source/target mode requires --redis-endpoint.");
