@@ -1151,7 +1151,7 @@ f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape 
       G-2 Node는 이 flake로 결정적 6/6 아님(운좋은 6/6). focused 세션 과제로 이월(캠페인 회귀 아님). 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
       observed target authority+admitted peer가 canonical capability 증명 시만 enable(아니면 dialect 유지). transfer ID/
       phase/reservation은 local state.
-- [ ] **canon-S4d relocation-state 통합 seam(cpp/dotnet 발신 완주 근거) — 스코핑 완료(계획: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md)**:
+- [ ] **canon-S4d relocation-state 통합 seam(cpp/dotnet 발신 완주 근거) — slice1 완료 `0407b3e4bc`(.NET seam 타입+lifecycle 6/6, 격리·무회귀), slice2-5 진행**:
       language-internal `CanonicalActorJoinAttempt` seam(wire 무변경)으로 canonical accepted tail을 기존 relocation
       prepare→transfer→CAS→handoff→cleanup→completion 체인에 연결. **불변식**: canonical accepted=admission accepted
       (public Join/source completion terminal 아님), RelocationId/handoffId/reservation/completion identity는 wire 금지,
