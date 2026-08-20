@@ -178,7 +178,7 @@
       receiver approval-only·store 21/22/23·spec 26/27. **13건 전부 아래 H-12~H-19에 배정**
       (리뷰 자체는 완료 조건 충족; gap은 후속 트랙으로 구동). gap 0이 아니므로 최종 완료는
       H-12~H-19 해소 후.
-- [x] **sol 문서 예비 리뷰(2026-08-19, 기준 bec7a9e48a) — 11건 발견·전량 배정** (2026-08-20 종결: ①②⑤⑥⑦⑧ 해소, ③④ cpp cmd28 origination+cmd44 재전송 제거 `1b3b21b2e3`+문서 06:188 정정, ⑨⑩⑪ = config/ST-C4 후속 트랙 H로 이관):
+- [x] **sol 문서 예비 리뷰(2026-08-19, 기준 bec7a9e48a) — 11건 발견·전량 배정** (2026-08-20 종결: ①②⑤⑥⑦⑧ 해소, ④ cmd44 재전송 제거 `1b3b21b2e3`+문서 06:188 정정 해소, **③ cpp cmd28 origination = 조기 활성화가 미완성 canonical 수신자라 `ab0b4b39a4`로 revert → H-12/H-15 canonical 수신자 완성 트랙으로 재지정**, ⑨⑩⑪ = config/ST-C4 후속 트랙 H로 이관):
       ① [M] cmd-44 "commit" 문구 모순 → **해소(`9077314a7e`)** ② **[C] node authority allocation 레코드
       비규범**(target/spotKind/capacityBundle vs 규범 descriptor/descriptor
       LifecycleGeneration/capacity; 골든 테스트가 encodeAuthorityRecord 우회로
@@ -482,7 +482,7 @@
       [M] cpp Lua point-read 0x01 미검증(cpp store 에이전트), [M] golden 테스트가
       실제 producer 미구동+dotnet brace-less 잔재(각 언어 마감에 편입)
 - [x] **C-9e sol 전체 문서 스펙-갭 사전 리뷰(2026-08-20, PRELIMINARY) — 11건
-      루트** (2026-08-20 종결: 최우선 3건 = ⓐ node canonical authority `52caf2aaca` 해소, ⓑ cpp command-28 origination `1b3b21b2e3` 해소, ⓒ cpp command-44 재시도 제거 `1b3b21b2e3`+문서 06:188 정정 해소. config-10 ST-C4·config-6 커버리지는 후속 트랙 H로 이관): 최우선 3건 = ⓐ node canonical
+      루트** (2026-08-20 종결: 최우선 3건 = ⓐ node canonical authority `52caf2aaca` 해소, **ⓑ cpp command-28 origination = `1b3b21b2e3` 조기 활성화가 미완성 canonical 수신자→`ab0b4b39a4`로 revert, H-12/H-15로 재지정**, ⓒ cpp command-44 재시도 제거 `1b3b21b2e3`+문서 06:188 정정 해소. config-10 ST-C4·config-6 커버리지는 후속 트랙 H로 이관): 최우선 3건 = ⓐ node canonical
       authority records ⓑ cpp command-28 origination ⓒ cpp command-44 재시도
       제거+문서 정정. 그 외: config-10 ST-C4 checksum-mismatch 계약 미구현
       (B 잔여와 동일 항목), config-6 문서 26 시나리오 vs cpp 러너 14
@@ -957,7 +957,10 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       ignoredStale로 오분류 → descriptorFingerprint를 canonical form으로 계산,
       location-store-repository.ts:4060). interop-grade(타 언어 기록 row도 동일 무시됐을 것).
       **Claude 독립 재현: node location-runtime.test.js 47/47 통과.** 추가 변경 0.
-- [ ] **H-4 ST-B1 (a) cpp actorJoin(28) direct submit 회귀 수정 + (b) 하니스 어휘 갱신**:
+- [x] **H-4 ST-B1 — (a) 해소 `ab0b4b39a4`(revert), (b)→H-18ⓐ**: (a) ST-B1 회귀는 미완성
+      canonical 수신자 조기 활성화가 원인이라 origination opt-in을 revert해 JSON 경로 복원 →
+      **ST-B1 3/3 그린(Claude 독립 검증), ST-A3 무회귀, m6c gate 테스트 그린**. canonical 수신자
+      완성은 H-12/H-15. (b) feature-map commit_request/ack→location_committed 어휘는 H-18ⓐ로 이관.
       **(a) 우선·캠페인 회귀(H-2 진단 발견)**: `1b3b21b2e3` canonical actorJoin(28) 활성화 후
       actor-b가 command 28 미수신 → `raw_mesh_node_owner_t::request_actor_join`의 direct
       ROUTER submit/response 대기 경로 수정(JSON fallback·timeout 확대 금지).
