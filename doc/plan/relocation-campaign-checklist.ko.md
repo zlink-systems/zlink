@@ -966,13 +966,18 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
 - [ ] **H-6 W-3 4언어 전면 코덱 스왑**: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트
       통과 후 교체·손 코덱 삭제, 언어별 unittest 전체 그린. 언어별 손코덱 비대칭이
       난점. (상단 W-508)
-- [ ] **H-7 config-6 e2e authoring (프레임워크 표면 선행)**: 미구현 14 SF 시나리오 —
-      Instance Spot fixture·periodic timer·lease-expiry request·multi-role host·
-      1001-object paged-query API·cross-language participant·cold-activation gate·
-      capacity/concurrency gate fixture 선행 필요 + SF-C3 실런타임 갭(same-role/RID
-      replacement가 current ready peer 미승격).
-- [ ] **H-8 config-10 Track E/G/H/I authoring**: 28개 미구현 시나리오(client scenario
-      코드 부재). coverage authoring.
+- [ ] **H-7 config-6 e2e authoring** — **스코핑 완료(계획: doc/plan/config-6-10-authoring-plan.ko.md)**.
+      핵심 판정: **새 public API 불필요(c=0)** — 필요 surface(location_runtime_query 등)
+      4언어 기존. 필요=E2E 하니스/fixture(H1 stateful-store, H2 operational/multi-role/capacity,
+      H3 cross-lang) + 런타임 수정 **R0=SF-C3**. **R0(SF-C3) 키스톤 먼저**: Node
+      raw-service-mesh-runtime.ts:989 same-RID ready peer가 replacement candidate를 admit
+      전 폐기(newer lifecycle generation 미승격) — spec 29 §199/§245 근거 5단계 수정(크기
+      비교 금지, exact lifecycle fence). SF-F9·multi-role replacement 기반.
+- [ ] **H-8 config-10 Track E/G/H/I authoring (24 시나리오)** — **스코핑 완료(동일 계획 문서)**.
+      전부 하니스/fixture(B) + 런타임 R+B 3건(ST-I1 large payload, ST-I2 node control
+      route `routeNotConnected` blocker, ST-I3 spot relocation pre-move failure). H4 config-10
+      base(source/target/session-owner+bound client+opaque network blocker) → H5 SpotWide/
+      PerActor → H6 message-follow(delay proxy·3-node). 새 API 불필요.
 - [ ] **H-9 Bingo 교차언어 stream flake 수정**: 3 서버측 시그니처 — S1 node
       StopObservingBingoEventsReq reply 미도착(stop-observing-handler.ts:27), S2 cpp
       잘못된 actor/session identity 도착(observer guard 거부), S3 cpp MatchBingo 후
