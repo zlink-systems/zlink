@@ -864,3 +864,36 @@
 
 - [x] **G-2 cpp 샘플(2026-08-20, Claude 검증)**: 5 non-Bingo(DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·**TicTacToe 통과** — mesh-pump 데드락은 node 특정) exit=0. Bingo 1/3 → **Bingo는 node+cpp 공통 pre-existing flake**(stream connector wait timed out), 캠페인 무관.
 - [x] **G-2 종합 매트릭스**: Java 6/6·Kotlin 6/6·.NET 6/6 완전 그린. cpp 5/6(Bingo flake). Node 4/6 확정(+TicTacToe mesh-pump 데드락, +Bingo flake). 문제 2샘플 특성화: Bingo=교차언어 pre-existing stream flake; node TicTacToe=mesh-pump cross-node 데드락(캠페인 변경 mesh-dispatch-pump.ts, focused 세션).
+
+---
+
+## 📊 최종 게이트 매트릭스 + 종합 보고 (G-3/G-4, 2026-08-20, Claude 독립 검증)
+
+### 교차언어 상호운용 (C-7/W-4 수용) — ✅ 결정적 그린
+| 방향 | 결과 | 근원 수정 |
+|---|---|---|
+| 기본 매트릭스(messaging/channel/fanout/STREAM/spot-route/msg-follow) | **19/19** result=passed | — |
+| dotnet→java relocation | **23/23** 결정적 | genfix generation-stability + u64 lifecycle-token 센티널 |
+| java→dotnet relocation | **10/10** 결정적 | committed-reply fence targetNodeGeneration `==0` |
+| node→dotnet relocation | **8/8** 그린 | node stream 수렴 |
+
+세 방향 flake의 **공통 근원 = u64-signed-sentinel 버그류**(opaque ulong lifecycle/generation 토큰에 signed 센티널 → 상위비트 켜진 정당값 음수 디코드→오거부/오생략). Java 전량 소탕(23사이트/13파일). cpp Finding 7/8 활성화 후에도 19/19 유지 확인.
+
+### G-1 4언어 유닛 게이트 — ✅ 신규 회귀 없음
+cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sanctioned-3만) · node build/typecheck pass + 런타임 baseline만.
+
+### G-2 샘플 (6샘플 × 5언어, zoneworld 제외)
+| 언어 | 결과 |
+|---|---|
+| Java | **6/6** (SampleReleaseGate 포함 → u64 소탕 무해) |
+| Kotlin | **6/6** |
+| .NET | **6/6** |
+| cpp | **5/6** (Bingo pre-existing flake) |
+| Node | **4/6 확정** + TicTacToe(mesh-pump 데드락) + Bingo(flake) |
+
+**문제 2샘플(특성화 완료)**: ① **Bingo** = node+cpp 공통 pre-existing "stream connector wait timed out" flake(캠페인 무관). ② **node TicTacToe** = ZLinkMeshDispatchPump.drainDomain cross-node 데드락(mesh-dispatch-pump.ts, 캠페인 변경분 → 회귀 가능성, 우선 focused 후속).
+
+### 정직한 판정
+- **캠페인 core 목표 달성**: 4언어 결정적 relocation 상호운용 + 재발 u64 버그류 종결 + cpp 프로토콜 정합(cmd28/44).
+- **방법론 확립**: message-flow 트레이싱 우선 디버깅(AGENTS.md §4.1 + framework/AGENTS.md 상세 가이드), 위임(작업=sonnet/리뷰=sol/리서치=codex) + Claude 직접 검증.
+- **후속 트랙(별도 세션)**: node TicTacToe mesh-pump 데드락(우선), Bingo stream flake, config 6/10 e2e 시나리오 authoring, W-2/W-3 전면 코덱 채택, F(e2e_inventory 168).
