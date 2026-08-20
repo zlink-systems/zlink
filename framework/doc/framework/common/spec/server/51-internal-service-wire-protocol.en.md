@@ -636,11 +636,14 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   32 KiB — the general Compact data lower bound. This shape and its bounds are pinned by
   the `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`), which all four runtimes
-  (cpp, dotnet, java, node) decode identically. Java and Node wire
-  `receiveChunkLimitBytes` into their live cross-node `actorJoin` admission reply today;
-  C++ and .NET carry the same conformant wire codec for this reply tail but do not
-  originate a cross-node `actorJoin` operation, so the field is decoded and validated by
-  their codecs without being produced on a live admission path in those two runtimes.
+  (cpp, dotnet, java, node) decode identically. **All four runtimes** originate a canonical
+  `actorJoin`(28) — wiring `receiveChunkLimitBytes` into the admission reply — once the
+  target's canonical capability is observed (an authority fence plus a peer admitted at
+  that generation); when it is not, each runtime keeps its language-internal admission path
+  (a transitional fallback). The receiver resolves the stable type from the Store Actor
+  Authority row per §9, never from the wire. (An earlier revision stated C++ and .NET did
+  not originate; now that the Store-backed canonical receiver exists in all four runtimes,
+  origination is unified across all four.)
 
 ### Target CAS And Retained Store Roles
 

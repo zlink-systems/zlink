@@ -573,10 +573,13 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 쓴다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
-  dotnet, java, node) 모두 동일하게 decode한다. Java와 Node는 오늘 `receiveChunkLimitBytes`를
-  실제 cross-node `actorJoin` admission reply에 실어 보낸다. C++과 .NET은 같은 conformant wire
-  codec을 갖지만 cross-node `actorJoin` operation을 originate하지 않으므로, 이 field는 두
-  runtime에서 live admission 경로 없이 codec으로만 decode·검증된다.
+  dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** target의 canonical
+  capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
+  `actorJoin`(28)을 originate하고 admission reply에 `receiveChunkLimitBytes`를 실어 보낸다.
+  capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다(과도기 폴백).
+  수신측은 stable type을 wire가 아니라 §9대로 Store Actor Authority row에서 해석한다.
+  (이전 개정에서 C++·.NET은 originate하지 않는다고 명시했으나, 네 runtime의 Store-backed
+  canonical 수신자가 완성되어 네 runtime 모두 originate로 통일한다.)
 
 ### Target CAS와 남은 Store 역할
 
