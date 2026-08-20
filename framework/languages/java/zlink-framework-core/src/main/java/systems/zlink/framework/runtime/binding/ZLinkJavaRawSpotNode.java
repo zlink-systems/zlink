@@ -412,9 +412,9 @@ final class ZLinkJavaRawSpotNode
         String spotId,
         long lifecycleGeneration) {
         Objects.requireNonNull(spotId, "spotId");
-        if (lifecycleGeneration <= 0) {
+        if (lifecycleGeneration == 0) {
             throw new IllegalArgumentException(
-                "Spot lifecycle generation must be positive");
+                "Spot lifecycle generation must be non-zero");
         }
         ZLinkJavaRawSpot created = new ZLinkJavaRawSpot(
             this, spotId, lifecycleGeneration);

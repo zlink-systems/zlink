@@ -830,10 +830,13 @@ public final class ZLinkInMemoryLocationStore
                 "fanout descriptor identity and endpoint are required");
         }
         if (descriptor.lifecycleGeneration() < 1
-            || descriptor.descriptorRevision() < 1
-            || descriptor.leaseGeneration() < 1) {
+            || descriptor.descriptorRevision() < 1) {
             throw new IllegalArgumentException(
                 "fanout descriptor generations must be positive");
+        }
+        if (descriptor.leaseGeneration() == 0) {
+            throw new IllegalArgumentException(
+                "fanout descriptor lease generation must be non-zero");
         }
     }
 
