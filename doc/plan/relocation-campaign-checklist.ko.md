@@ -960,9 +960,16 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
 - [ ] **H-4 ST-B1 (a) cpp actorJoin(28) direct submit 회귀 수정 + (b) 하니스 어휘 갱신**:
       **(a) 우선·캠페인 회귀(H-2 진단 발견)**: `1b3b21b2e3` canonical actorJoin(28) 활성화 후
       actor-b가 command 28 미수신 → `raw_mesh_node_owner_t::request_actor_join`의 direct
-      ROUTER submit/response 대기 경로 수정(JSON fallback·timeout 확대 금지). h9-bingo cpp
-      트리 종료 후 착수(빌드 경합 방지). **(b)**: ST-B1/B2/B3/C2 시나리오+feature-map을
-      제거된 commit_request/commit_ack → location_committed 기반 증거로 갱신(의도 보존).
+      ROUTER submit/response 대기 경로 수정(JSON fallback·timeout 확대 금지).
+      **h4a 진단(2026-08-20, 정직 STOP·코드변경 0)**: submit 문제 아님. ST-B1 3/3 실패 근원 =
+      **canonical actorJoin(28) 수신 설계 미완성** — ⓐ canonical 경로가 unbound actor에도
+      Session-owner lease resolver 필수(mesh_node_runtime.cpp:2495 조기 반환), ⓑ receiver가
+      wire에 없는 actor stable type을 local record에서만 조회→target 무기록 reject(:419),
+      ⓒ actorJoin(28)은 추가 wire 필드 불허(51 §9). `1b3b21b2e3`이 fence-gate로 canonical
+      경로 조기 활성화(이전엔 JSON으로 항상 그린). → **H-12/H-15와 통합 "canonical actor-join
+      수신자 완성" 스펙 결정 필요**(receiver가 canonical body만으로 actor type 획득 방식).
+      **Claude 스펙 판정 진행 중.** **(b)**: ST-B1/B2/B3/C2 시나리오+feature-map을
+      제거된 commit_request/commit_ack → location_committed 기반 증거로 갱신(의도 보존, H-18ⓐ와 동일).
 - [ ] **H-5 C-9 sol 리뷰 잔여 carry**: ① reconcile 기한 스윕 3분기(store authority
       조회→추종/복원/명시 unavailable) 잔여 검증 ② cold-probe 합성 follow의 op
       identity/deadline/source/reply-route 4값 보존 + 절대기한 전달 메커니즘
