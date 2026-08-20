@@ -987,6 +987,8 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
       raw-service-mesh-runtime.ts:989 same-RID ready peer가 replacement candidate를 admit
       전 폐기(newer lifecycle generation 미승격) — spec 29 §199/§245 근거 5단계 수정(크기
       비교 금지, exact lifecycle fence). SF-F9·multi-role replacement 기반.
+      **R0(SF-C3) 런타임 해소 `f8e769a278`(Claude 독립 검증: m6a 40/40, SF-C3 e2e 통과)** —
+      provisional replacement 보존+exact fence admission. **잔여 = H1~H3 fixture 하니스 authoring(대형).**
 - [ ] **H-8 config-10 Track E/G/H/I authoring (실제 22 시나리오 + ST-F3A orphan은 H-1)** — **스코핑 완료(동일 계획 문서)**. (기존 "28"은 오기 — 공통 문서 E/G/H/I ID는 ST-E1 제외 22개)
       전부 하니스/fixture(B) + 런타임 R+B 3건(ST-I1 large payload, ST-I2 node control
       route `routeNotConnected` blocker, ST-I3 spot relocation pre-move failure). H4 config-10
