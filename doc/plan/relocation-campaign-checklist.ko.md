@@ -853,3 +853,5 @@
 - [x] **Java u64-signed-sentinel 종합 소탕 완료** (2026-08-20, 커밋 `4957255224`, Claude 검증): 23사이트/13파일 + 구조적 presence-flag(authorityFenceEstablished). 스펙 discriminator 확정 — full-range opaque(lifecycle/node/OperationId→`==0`) vs bounded 1..MaxValue counter(Object/AuthorityOwner/OwnerLease→`<=0` 정당). 세 relocation flake 유발 재발 버그류 Java 전량 종결.
 
 - [ ] **G-2 샘플 게이트 진행(2026-08-20)**: Java 6/6 · Kotlin 6/6 · .NET 6/6 PASS (Java는 SampleReleaseGateContractTest·fakeBackendTest 포함 → u64 소탕 샘플 무해성 확인). Node 5/6 PASS, **TicTacToe.Ts만 FAIL**(actor admission 1초 초과=5.016s, 4언어 동시 실행 경합 의심 → 정숙 재실행으로 판별 예정). cpp 샘플은 Finding 7/8 landing 후 실행. 잔여: Node TicTacToe 정숙 재현 + cpp 6샘플.
+
+- [ ] **Node TicTacToe.Ts 회귀(2026-08-20, Claude 완전정숙 재현 확정)**: 무부하 5회 중 4회 FAIL(actor admission interruption exceeded 1s, deferred actor join deadline). 부하 경합 아님=실결함. TicTacToe는 actor relocation 사용("zlink.runtime.relocation.changed"), 캠페인의 node relocation 배치(mesh-dispatch-pump·node-raw-mesh-backend·service-stateful-runtime) 유력 용의. 다른 5개 node 샘플은 통과. → message-flow 방법론 진단+수정 위임(sonnet). G-2 Node 완전 그린의 잔여 블로커.
