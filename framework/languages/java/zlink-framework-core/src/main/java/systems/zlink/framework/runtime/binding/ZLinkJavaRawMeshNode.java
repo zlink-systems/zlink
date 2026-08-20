@@ -1297,6 +1297,152 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             && liveness.isReady(peerRoutingId, peer.connectionId());
     }
 
+    @Override
+    public boolean canRequestCanonicalActorJoin(
+        ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (!hasCompleteCanonicalActorJoinFence(request)) {
+            return false;
+        }
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer = topology == null
+            ? Optional.empty()
+            : topology.peer(request.targetNodeRid());
+        if (peer.isEmpty()
+            || !isReadyPeer(peer.orElseThrow())
+            || peer.orElseThrow().descriptor().lifecycleGeneration()
+                != request.targetNodeGeneration()
+            || !peer.orElseThrow().descriptor().protocolCapabilities()
+                .contains(ServiceWireConstants.REQUIRED_CAPABILITY)) {
+            return false;
+        }
+        // The caller's Location resolver supplied this exact route fence.
+        // Require it to still be the observed route remembered by the raw
+        // Spot boundary; capability alone must not promote an unobserved
+        // target into canonical command 28.
+        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
+        return spots.spotAuthorityOwnerGeneration(
+                request.targetNodeRid(), request.targetSpotId(),
+                request.targetSpotGeneration())
+                == request.targetAuthorityOwnerGeneration()
+            && spots.spotAuthorityOwnerLeaseGeneration(
+                request.targetNodeRid(), request.targetSpotId(),
+                request.targetSpotGeneration())
+                == request.targetOwnerLeaseGeneration();
+    }
+
+    @Override
+    public CompletionStage<ZLinkInternalMeshNode.CanonicalActorJoinReply>
+        requestCanonicalActorJoin(
+            ZLinkInternalMeshNode.CanonicalActorJoinRequest request,
+            Duration timeout) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(timeout, "timeout");
+        if (!canRequestCanonicalActorJoin(request)) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "canonical actorJoin target is not authority-observed and admitted"));
+        }
+        final long correlation = allocateCorrelation();
+        final List<byte[]> frames;
+        try {
+            frames = ServiceWirePilotCodec.encodeActorJoin28(
+                new ServiceWirePilotCodec.ActorJoin28(
+                    correlation,
+                    new ServiceWirePilotCodec.Fence(
+                        request.actor().actorId(),
+                        request.actor().generation(),
+                        request.actor().nodeRid().toString()
+                            .getBytes(StandardCharsets.UTF_8),
+                        request.actorNodeGeneration(),
+                        request.actorAuthorityOwnerGeneration(),
+                        request.actorOwnerLeaseGeneration()),
+                    request.entry(),
+                    new ServiceWirePilotCodec.Fence(
+                        request.targetSpotId(),
+                        request.targetSpotGeneration(),
+                        request.targetNodeRid().toString()
+                            .getBytes(StandardCharsets.UTF_8),
+                        request.targetNodeGeneration(),
+                        request.targetAuthorityOwnerGeneration(),
+                        request.targetOwnerLeaseGeneration()),
+                    new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
+                        request.packetName(), request.contentType(),
+                        request.applicationPayload())));
+        } catch (IOException invalid) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin request is invalid", invalid));
+        }
+        return requestApplication(request.targetNodeRid(), frames, timeout)
+            .thenApply(reply -> decodeCanonicalActorJoinReply(correlation, reply));
+    }
+
+    private static boolean hasCompleteCanonicalActorJoinFence(
+        ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
+        // Object/authority/lease generations are bounded counters. Lifecycle
+        // generations are opaque full-range tokens, where only zero is absent.
+        return request.actor().generation() > 0
+            && request.actorNodeGeneration() != 0
+            && request.actorAuthorityOwnerGeneration() > 0
+            && request.actorOwnerLeaseGeneration() > 0
+            && request.targetSpotGeneration() > 0
+            && request.targetNodeGeneration() != 0
+            && request.targetAuthorityOwnerGeneration() > 0
+            && request.targetOwnerLeaseGeneration() > 0;
+    }
+
+    private ZLinkInternalMeshNode.CanonicalActorJoinReply
+        decodeCanonicalActorJoinReply(long correlation, List<byte[]> frames) {
+        if (frames.isEmpty() || frames.size() > 2) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin reply frame count is invalid");
+        }
+        // A rejected Store admission is still a command-20 typed terminal.
+        // Preserve its established framework mapping instead of mistaking the
+        // shorter no-tail failure reply for malformed canonical success.
+        if (frames.getFirst().length == 21) {
+            ZLinkServiceM6AWireCodec.Reply terminal = wire.decodeReplyHeader(
+                frames.getFirst());
+            if (terminal.correlation() != correlation
+                || terminal.terminalResult() == 0
+                || frames.size() != 1) {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "canonical actorJoin terminal reply is invalid");
+            }
+            ZLinkBackendRequestResult result = backendResult(
+                terminal.terminalResult());
+            throw new ZLinkFrameworkException(
+                result.toFrameworkErrorKind(terminal.failureCode()),
+                "canonical actorJoin rejected by target terminal="
+                    + terminal.terminalResult()
+                    + " failureCode=" + terminal.failureCode());
+        }
+        final ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply reply;
+        try {
+            reply = new ZLinkCanonicalActorJoinReplyCodec().decode(frames.getFirst());
+        } catch (RuntimeException invalid) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin reply is invalid", invalid);
+        }
+        if (reply.correlation() != correlation) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin reply correlation does not match");
+        }
+        List<Message> applicationReply = frames.size() == 2
+            ? decodeApplicationMessages(frames.get(1))
+            : List.of();
+        return new ZLinkInternalMeshNode.CanonicalActorJoinReply(
+            reply.accepted(),
+            reply.receiveChunkLimitBytes() == null
+                ? 0L
+                : reply.receiveChunkLimitBytes(),
+            applicationReply);
+    }
+
     private boolean hasSelectedApplicationTransportPair(
         ZLinkServiceTopologyRegistry.Peer peer) {
         TransportPair selected = transportPairs.get(peer.connectionId());

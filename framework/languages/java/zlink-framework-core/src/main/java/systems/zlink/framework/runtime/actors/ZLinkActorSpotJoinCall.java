@@ -37,6 +37,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
@@ -48,6 +49,10 @@ import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
+    private static final String CANONICAL_ACTOR_JOIN_PACKET_NAME =
+        "ZLinkFrameworkActorJoinRequest";
+    private static final String CANONICAL_ACTOR_JOIN_CONTENT_TYPE =
+        "application/json";
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private static final Logger LOGGER =
@@ -632,6 +637,23 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         }
                         String actorType = authority.stableType();
                         String transferId = newRelocationId(operationId).toString();
+                        if (!context.hasBoundSession()
+                            && canUseCanonicalActorJoin(
+                                services.canonicalMeshNode(),
+                                currentActorRef,
+                                authority,
+                                target)) {
+                            return requestCanonicalActorJoin(
+                                services.canonicalMeshNode(),
+                                target,
+                                currentActorRef,
+                                authority,
+                                requestPart,
+                                transferId,
+                                actorType,
+                                operationId,
+                                deadlineNanos);
+                        }
                         List<Message> admissionParts =
                             ZLinkActorSpotRoutePackets.createCanonicalAdmissionRequestParts(
                             transferId,
@@ -685,6 +707,89 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         }
                     });
             });
+    }
+
+    /**
+     * Spec 51 section 9 permits canonical command 28 only for the unbound
+     * admission leg.  The exact target authority comes from the observed
+     * Spot route, while the mesh transport additionally requires the active
+     * admitted peer to advertise the service-wire capability.
+     */
+    private static boolean canUseCanonicalActorJoin(
+        ZLinkInternalMeshNode meshNode,
+        ZLinkBackendActorRef actor,
+        ZLinkActorRuntime.ActorJoinAuthority authority,
+        SpotTransportAddress target) {
+        if (meshNode == null) {
+            return false;
+        }
+        return meshNode.canRequestCanonicalActorJoin(
+            canonicalActorJoinRequest(actor, authority, target, false, new byte[0]));
+    }
+
+    private CompletionStage<ZLinkBackendActorJoinResult> requestCanonicalActorJoin(
+        ZLinkInternalMeshNode meshNode,
+        SpotTransportAddress target,
+        ZLinkBackendActorRef sourceActor,
+        ZLinkActorRuntime.ActorJoinAuthority authority,
+        Message requestPart,
+        String transferId,
+        String actorType,
+        ZLinkActorJoinOperationId operationId,
+        long deadlineNanos) {
+        Duration remaining = remainingTimeout(deadlineNanos);
+        if (remaining == null) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                "Actor join deadline elapsed before canonical admission"));
+        }
+        byte[] payload = requestPart.toByteArray();
+        ZLinkInternalMeshNode.CanonicalActorJoinRequest canonical =
+            canonicalActorJoinRequest(sourceActor, authority, target, entryTarget, payload);
+        return meshNode.requestCanonicalActorJoin(canonical, remaining)
+            .thenCompose(reply -> {
+                Message applicationReply = reply.applicationReply().isEmpty()
+                    ? Message.from(new byte[0])
+                    : Message.from(reply.applicationReply().getFirst());
+                reply.applicationReply().forEach(Message::close);
+                if (!reply.accepted()) {
+                    return CompletableFuture.completedFuture(
+                        rejectedRemoteJoin(sourceActor, applicationReply));
+                }
+                return submitCanonicalRelocation(
+                    target,
+                    transferId,
+                    actorType,
+                    sourceActor,
+                    applicationReply,
+                    reply.receiveChunkLimitBytes(),
+                    operationId,
+                    deadlineNanos);
+            });
+    }
+
+    private static ZLinkInternalMeshNode.CanonicalActorJoinRequest
+        canonicalActorJoinRequest(
+            ZLinkBackendActorRef actor,
+            ZLinkActorRuntime.ActorJoinAuthority authority,
+            SpotTransportAddress target,
+            boolean entry,
+            byte[] payload) {
+        return new ZLinkInternalMeshNode.CanonicalActorJoinRequest(
+            actor,
+            authority.ownerNodeGeneration(),
+            authority.authorityOwnerGeneration(),
+            authority.ownerLeaseGeneration(),
+            target.targetNodeRid(),
+            target.targetNodeGeneration(),
+            target.spotId(),
+            target.spotGeneration(),
+            target.authorityOwnerGeneration(),
+            target.ownerLeaseGeneration(),
+            entry,
+            CANONICAL_ACTOR_JOIN_PACKET_NAME,
+            CANONICAL_ACTOR_JOIN_CONTENT_TYPE,
+            payload);
     }
 
     private CompletionStage<ZLinkBackendActorJoinResult>
@@ -953,6 +1058,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         SpotTransportAddressResolver remoteAddressResolver,
         ZLinkChannelRuntime routedTransport,
         TransferTransport transferTransport,
+        ZLinkInternalMeshNode canonicalMeshNode,
         Function<String, String> actorTypes,
         ZLinkMessageSerializer serializer,
         ZLinkMessageFlowTracer flow,

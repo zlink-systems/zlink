@@ -139,9 +139,7 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
                 Duration timeout) {
                 submittedGoal.set(goal);
                 return CompletableFuture.completedFuture(new Submission(
-                    new ZLinkBackendActorRef(
-                        TARGET, goal.sourceActor().actorId(),
-                        goal.sourceActor().generation())));
+                    goal.sourceActor()));
             }
 
             @Override
@@ -150,6 +148,24 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
             }
         };
         runtime.setActorJoinRelocationPort(port);
+        AtomicInteger canonicalCapabilityChecks = new AtomicInteger();
+        runtime.setActorJoinCanonicalMeshNode(
+            (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                Proxy.newProxyInstance(
+                    getClass().getClassLoader(),
+                    new Class<?>[] {
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkInternalMeshNode.class
+                    },
+                    (proxy, method, arguments) -> {
+                        if (method.getName().equals("canRequestCanonicalActorJoin")) {
+                            canonicalCapabilityChecks.incrementAndGet();
+                            return false;
+                        }
+                        if (method.getReturnType().equals(boolean.class)) return false;
+                        if (method.getReturnType().equals(long.class)) return 0L;
+                        return null;
+                    }));
         runtime.setActorJoinTransferTransport((address, parts, timeout, internal) -> {
             ZLinkActorSpotRoutePackets.TransferRequest decoded =
                 ZLinkActorSpotRoutePackets.decodeTransferRequest(parts.get(1));
@@ -185,6 +201,8 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
 
         assertEquals(1, requests.size(),
             "canonical Join has admission request/reply only; no commit reply");
+        assertEquals(1, canonicalCapabilityChecks.get(),
+            "a target without canonical capability must retain the private admission path");
         ZLinkActorSpotRoutePackets.TransferRequest admission = requests.getFirst();
         assertTrue(admission.admission());
         assertArrayEquals(new byte[0], admission.sessionRouteCommand44(),
@@ -197,6 +215,55 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
             relocationId,
             new UUID(operationId.high(), operationId.low()),
             "public OperationId is distinct from canonical RelocationId");
+
+        AtomicReference<systems.zlink.framework.runtime.internal.backend
+            .ZLinkInternalMeshNode.CanonicalActorJoinRequest> canonicalRequest =
+                new AtomicReference<>();
+        runtime.setActorJoinCanonicalMeshNode(
+            (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                Proxy.newProxyInstance(
+                    getClass().getClassLoader(),
+                    new Class<?>[] {
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkInternalMeshNode.class
+                    },
+                    (proxy, method, arguments) -> {
+                        if (method.getName().equals("canRequestCanonicalActorJoin")) {
+                            return true;
+                        }
+                        if (method.getName().equals("requestCanonicalActorJoin")) {
+                            canonicalRequest.set((systems.zlink.framework.runtime
+                                .internal.backend.ZLinkInternalMeshNode
+                                .CanonicalActorJoinRequest) arguments[0]);
+                            return CompletableFuture.completedFuture(
+                                new systems.zlink.framework.runtime.internal.backend
+                                    .ZLinkInternalMeshNode.CanonicalActorJoinReply(
+                                        true, 32_768L,
+                                        List.of(Message.from(new byte[0]))));
+                        }
+                        if (method.getReturnType().equals(boolean.class)) return false;
+                        if (method.getReturnType().equals(long.class)) return 0L;
+                        return null;
+                    }));
+        var canonicalOperationId = ZLinkActorSpotJoinCall.newOperationId();
+        CompletionStage<?> canonicalOperation = (CompletionStage<?>) execute.invoke(
+            actor.context().joinSpot(TARGET_SPOT).timeout(Duration.ofSeconds(2)),
+            canonicalOperationId);
+        canonicalOperation.toCompletableFuture().join();
+        var canonical = canonicalRequest.get();
+        assertEquals(1, requests.size(),
+            "capable canonical peer must replace the private transfer request");
+        assertEquals(ACTOR_ID, canonical.actor().actorId());
+        assertEquals(actorAuthority.objectGeneration(), canonical.actor().generation());
+        assertEquals(11L, canonical.actorNodeGeneration());
+        assertEquals(1L, canonical.actorAuthorityOwnerGeneration());
+        assertEquals(1L, canonical.actorOwnerLeaseGeneration());
+        assertEquals(TARGET_SPOT, canonical.targetSpotId());
+        assertEquals(19L, canonical.targetNodeGeneration());
+        assertEquals("ZLinkFrameworkActorJoinRequest", canonical.packetName());
+        assertEquals("application/json", canonical.contentType());
+        assertArrayEquals(new byte[0], canonical.applicationPayload());
+        assertEquals(canonicalOperationId, submittedGoal.get().operationId());
         runtime.closeAsync().toCompletableFuture().join();
     }
 

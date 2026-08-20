@@ -231,6 +231,7 @@ final class ZLinkFrameworkActorSubsystem {
             var meshNode = meshNodes.get(meshActorNode.meshName());
             if (meshNode != null) {
                 actors.setMessageFollowNoticeSender(meshNode::sendMessageFollow);
+                actors.setActorJoinCanonicalMeshNode(meshNode);
                 try {
                     meshNode.spotNode().setMessageFollowRelayHandler(
                         actors::relayMessageFollow);

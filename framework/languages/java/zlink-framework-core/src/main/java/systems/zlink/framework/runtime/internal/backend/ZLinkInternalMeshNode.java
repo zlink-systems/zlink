@@ -252,6 +252,28 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     /**
+     * Returns whether the exact observed Spot authority and its admitted peer
+     * can carry canonical service-wire actorJoin(28).  A false result keeps
+     * the caller on the established private transfer path.
+     */
+    default boolean canRequestCanonicalActorJoin(
+        CanonicalActorJoinRequest request) {
+        return false;
+    }
+
+    /**
+     * Sends one canonical actorJoin(28) request to its exact admitted peer.
+     * Transfer and relocation bookkeeping deliberately do not appear in this
+     * transport boundary (spec 51 section 9).
+     */
+    default CompletionStage<CanonicalActorJoinReply> requestCanonicalActorJoin(
+        CanonicalActorJoinRequest request,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException(
+            "Canonical actorJoin transport is unavailable"));
+    }
+
+    /**
      * Installs the durable source-owner resolver used before a remote Spot or
      * Actor operation enters an application queue.
      */
@@ -549,6 +571,42 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             RoutingId sourceNodeRid,
             systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
                 .ActorJoin28 join);
+    }
+
+    record CanonicalActorJoinRequest(
+        ZLinkBackendActorRef actor,
+        long actorNodeGeneration,
+        long actorAuthorityOwnerGeneration,
+        long actorOwnerLeaseGeneration,
+        RoutingId targetNodeRid,
+        long targetNodeGeneration,
+        String targetSpotId,
+        long targetSpotGeneration,
+        long targetAuthorityOwnerGeneration,
+        long targetOwnerLeaseGeneration,
+        boolean entry,
+        String packetName,
+        String contentType,
+        byte[] applicationPayload) {
+        public CanonicalActorJoinRequest {
+            Objects.requireNonNull(actor, "actor");
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            Objects.requireNonNull(targetSpotId, "targetSpotId");
+            Objects.requireNonNull(packetName, "packetName");
+            Objects.requireNonNull(contentType, "contentType");
+            applicationPayload = Objects.requireNonNull(
+                applicationPayload, "applicationPayload").clone();
+        }
+    }
+
+    record CanonicalActorJoinReply(
+        boolean accepted,
+        long receiveChunkLimitBytes,
+        List<Message> applicationReply) {
+        public CanonicalActorJoinReply {
+            applicationReply = List.copyOf(Objects.requireNonNull(
+                applicationReply, "applicationReply"));
+        }
     }
 
     @FunctionalInterface

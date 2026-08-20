@@ -90,6 +90,7 @@ import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
@@ -250,6 +251,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         new ZLinkActorLocationCoordinator(actorRegistry::actorType);
     private ZLinkChannelRuntime routedTransport;
     private ZLinkActorSpotJoinCall.TransferTransport actorJoinTransferTransport;
+    private ZLinkInternalMeshNode actorJoinCanonicalMeshNode;
     private Supplier<String> sourceEntrySpotId = () -> "";
     // Shared flow tracer (installed by the host); null = no tracing wired.
     private ZLinkMessageFlowTracer flow;
@@ -4202,6 +4204,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         actorJoinTransferTransport = transferTransport;
     }
 
+    public void setActorJoinCanonicalMeshNode(
+        ZLinkInternalMeshNode meshNode) {
+        actorJoinCanonicalMeshNode = meshNode;
+    }
+
     public CompletionStage<Void> notifyDisconnected(ZLinkActor actor) {
         if (actor == null) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
@@ -4899,6 +4906,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 remoteAddressResolver,
                 routedTransport,
                 actorJoinTransferTransport,
+                actorJoinCanonicalMeshNode,
                 actorRegistry::actorType,
                 serializer,
                 flow,
