@@ -973,7 +973,9 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
               zlink::message_t::from (request.payload),
               request.completion_operation_id_high,
               request.completion_operation_id_low,
-              request.actor_authority_owner_generation);
+              request.actor_authority_owner_generation,
+              request.actor_node_generation,
+              request.expected_owner_lease_generation);
             if (!admitted) {
                 return detail::propagate_failure<zlink::message_t> (admitted, "remote actor admission failed");
             }

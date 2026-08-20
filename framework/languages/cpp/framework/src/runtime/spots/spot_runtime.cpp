@@ -658,8 +658,85 @@ std::optional<std::string> actor_type_from_authority (runtime::live_location_rea
     const auto projection = runtime::decode_actor_authority_payload (snapshot->payload);
     if (!projection || projection->actor.actor_id ().value () != actor_id)
         return std::nullopt;
-    return std::string (
+  return std::string (
       ::zlink::framework::detail::actor_ref_access_t::actor_type (projection->actor));
+}
+
+struct actor_join_authority_fence_t
+{
+    std::uint64_t object_generation = 0;
+    std::uint64_t node_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+    std::uint64_t owner_lease_generation = 0;
+};
+
+result_t<std::string> actor_type_from_authority (
+  runtime::live_location_reader_t &store,
+  const actor_ref_t &wire_actor,
+  const actor_join_authority_fence_t &fence)
+{
+    const auto actor_id = wire_actor.actor_id ().value ();
+    // Object/authority-owner/owner-lease generations are bounded counters;
+    // the MeshNode lifecycle generation is an opaque full-range token.
+    if (actor_id.empty () || fence.object_generation == 0 || fence.node_generation == 0
+        || fence.authority_owner_generation == 0 || fence.owner_lease_generation == 0) {
+        return result_t<std::string>::failure (
+          framework_error_kind_t::protocol_error,
+          "remote Actor Join authority fence is incomplete");
+    }
+    try {
+        const auto read = store.read_authority (
+          runtime::actor_authority_key (actor_id)).result ();
+        if (!read) {
+            return result_t<std::string>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor Join could not read its Authority row");
+        }
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
+        if (snapshot == nullptr) {
+            return result_t<std::string>::failure (
+              framework_error_kind_t::not_found,
+              "remote Actor Join Actor Authority row is missing");
+        }
+        if (snapshot->allocation.state != placement_allocation_state_t::active
+            || snapshot->allocation.object_kind != placement_object_kind_t::actor
+            || snapshot->allocation.stable_type.empty ()
+            || snapshot->object_generation != fence.object_generation
+            || snapshot->allocation.target.node_rid.value () != wire_actor.node_rid ().value ()
+            || snapshot->allocation.target.node_lifecycle_generation != fence.node_generation
+            || snapshot->authority_owner_generation != fence.authority_owner_generation
+            || snapshot->owner.lease_generation <= 0
+            || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
+                 != fence.owner_lease_generation) {
+            return result_t<std::string>::failure (
+              framework_error_kind_t::protocol_error,
+              "remote Actor Join Authority row does not exactly match its route fence");
+        }
+        const auto projection = runtime::decode_actor_authority_payload (snapshot->payload);
+        if (!projection || projection->actor.actor_id ().value () != actor_id) {
+            return result_t<std::string>::failure (
+              framework_error_kind_t::protocol_error,
+              "remote Actor Join Actor Authority row is incomplete");
+        }
+        const auto stable_type = snapshot->allocation.stable_type;
+        if (::zlink::framework::detail::actor_ref_access_t::actor_type (wire_actor)
+            != stable_type) {
+            return result_t<std::string>::failure (
+              framework_error_kind_t::type_mismatch,
+              "remote Actor Join wire type does not match its Authority row");
+        }
+        return result_t<std::string>::success (stable_type);
+    }
+    catch (const std::exception &) {
+        return result_t<std::string>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join could not read its Authority row");
+    }
+    catch (...) {
+        return result_t<std::string>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join could not read its Authority row");
+    }
 }
 
 bool is_blank (const std::string &value)
@@ -5930,7 +6007,9 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
                                                  const zlink::message_t &request,
                                                  std::uint64_t completion_operation_id_high,
                                                  std::uint64_t completion_operation_id_low,
-                                                 std::uint64_t actor_authority_owner_generation)
+                                                 std::uint64_t actor_authority_owner_generation,
+                                                 std::uint64_t actor_node_generation,
+                                                 std::uint64_t expected_owner_lease_generation)
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
@@ -5939,25 +6018,57 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
           framework_error_kind_t::rejected,
           "spot node is draining and rejects new actor admission");
     }
-    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
-    cleanup_expired_actor_admissions ();
     if (transfer_id.empty () || ::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         return result_t<spot_actor_join_result_t>::failure (
           framework_error_kind_t::protocol_error,
           "remote actor admission requires transfer and actor identity");
     }
+
+    runtime::live_location_reader_t *store = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+        if (!_state->root_services) {
+            return result_t<spot_actor_join_result_t>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor Join Location Store is unavailable");
+        }
+        try {
+            store = &_state->root_services->get_required<runtime::live_location_reader_t> ();
+        }
+        catch (const std::exception &) {
+            return result_t<spot_actor_join_result_t>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor Join Location Store is unavailable");
+        }
+    }
+    const auto stable_type = actor_type_from_authority (
+      *store, actor_ref,
+      actor_join_authority_fence_t{actor_ref.object_generation (), actor_node_generation,
+                                   actor_authority_owner_generation,
+                                   expected_owner_lease_generation});
+    if (!stable_type) {
+        return detail::propagate_failure<spot_actor_join_result_t> (
+          stable_type, "remote Actor Join authority resolution failed");
+    }
+    const auto store_actor = ::zlink::framework::detail::actor_ref_access_t::make (
+      node_rid_t::from_string (std::string (actor_ref.node_rid ().value ())), stable_type.value (),
+      std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
+
+    std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
+    cleanup_expired_actor_admissions ();
     auto context = actor_join_context_unlocked (target_spot_id, request);
     if (!context) {
         return detail::propagate_failure<spot_actor_join_result_t> (
           context, "target spot is not registered");
     }
-    auto actor_factory = actor_factory_unlocked (actor_ref);
+    auto actor_factory = actor_factory_unlocked (store_actor);
     if (!actor_factory) {
-        return detail::propagate_failure<spot_actor_join_result_t> (actor_factory,
-                                                                    "actor factory failed");
+        return result_t<spot_actor_join_result_t>::failure (
+          framework_error_kind_t::rejected,
+          "remote Actor Join Authority stable type is not registered locally");
     }
     auto admission = actor_admission_unlocked (
-      context.value (), actor_factory.value ().get ().actor_type, target_spot_id, actor_ref);
+      context.value (), actor_factory.value ().get ().actor_type, target_spot_id, store_actor);
     if (!admission) {
         return detail::propagate_failure<spot_actor_join_result_t> (admission,
                                                                     "actor admission failed");
@@ -5978,7 +6089,7 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
     if (!target.run_serial_sync ("spot-actor-admission", [&] {
             const auto existing = _state->actor_transfer_coordinator.admission (transfer_id);
             if (existing) {
-                if (!existing->matches_prepare (actor_ref, source_spot_id, target_spot_id,
+                if (!existing->matches_prepare (store_actor, source_spot_id, target_spot_id,
                                                 completion_operation_id_high,
                                                 completion_operation_id_low)) {
                     admission_conflict = true;
@@ -5992,8 +6103,8 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
             if (response.accepted
                 && !_state->actor_transfer_coordinator.try_add_admission (
                   transfer_id, pending_actor_admission_t{
-                                 .actor_key = actor_key (actor_ref),
-                                 .source_actor = actor_ref,
+                                 .actor_key = actor_key (store_actor),
+                                 .source_actor = store_actor,
                                  .source_spot_id = source_spot_id,
                                  .target_spot_id = target_spot_id,
                                  .deadline = std::chrono::steady_clock::now () + admission_timeout,

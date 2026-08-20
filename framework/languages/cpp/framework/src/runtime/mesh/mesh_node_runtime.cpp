@@ -2343,6 +2343,17 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
           framework_error_kind_t::not_found, "source Framework Actor authority is unavailable");
         co_return fail_remote_actor_join (*s, failed, "source Framework Actor authority is unavailable");
     }
+    const auto source_owner =
+      _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
+    const auto source_status = _node->status ();
+    if (!source_owner || source_owner->lease_generation <= 0
+        || source_status.lifecycle_generation () == 0) {
+        const auto failed = result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::unavailable,
+          "source Actor Join authority fence is unavailable");
+        co_return fail_remote_actor_join (
+          *s, failed, "source Actor Join authority fence is unavailable");
+    }
     s->source_actor = *source;
     s->actor_authority_owner_generation = source->authority_owner_generation;
     runtime::messaging::client_call_codec_t codec;
@@ -2350,8 +2361,10 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
       s->transfer_id, std::string (s->actor.node_rid ().value ()),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor)),
       std::string (s->actor.actor_id ().value ()), s->actor.object_generation (),
-      s->actor_authority_owner_generation, s->completion_operation_id_high,
-      s->completion_operation_id_low, *s->source_spot, s->target.spot_id,
+      source_status.lifecycle_generation (), s->actor_authority_owner_generation,
+      static_cast<std::uint64_t> (source_owner->lease_generation),
+      s->completion_operation_id_high, s->completion_operation_id_low,
+      *s->source_spot, s->target.spot_id,
       s->request.to_bytes ()};
     const auto header = codec.create_envelope (
       runtime::messaging::message_kind_t::request, "spot",

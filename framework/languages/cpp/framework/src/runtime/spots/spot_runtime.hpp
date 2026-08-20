@@ -1051,7 +1051,9 @@ class spot_node_runtime_t
                                 const zlink::message_t &request,
                                 std::uint64_t completion_operation_id_high = 0,
                                 std::uint64_t completion_operation_id_low = 0,
-                                std::uint64_t actor_authority_owner_generation = 0);
+                                std::uint64_t actor_authority_owner_generation = 0,
+                                std::uint64_t actor_node_generation = 0,
+                                std::uint64_t expected_owner_lease_generation = 0);
     // handoff_backlog holds the in-flight packets the source preserved while the
     // actor was moving (§10.2-2). They are enqueued on the target actor's
     // dispatch queue before the committed location is published (§10.2-3), and

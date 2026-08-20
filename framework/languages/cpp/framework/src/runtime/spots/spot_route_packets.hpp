@@ -34,7 +34,9 @@ struct spot_actor_admission_route_request_t
     std::string actor_type;
     std::string actor_id;
     std::uint64_t actor_generation = 0;
+    std::uint64_t actor_node_generation = 0;
     std::uint64_t actor_authority_owner_generation = 0;
+    std::uint64_t expected_owner_lease_generation = 0;
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
     std::string source_spot_id;
