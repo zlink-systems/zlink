@@ -11,9 +11,15 @@
 - **제품은 동작한다(JSON/legacy 경로).** 4언어 유닛·6샘플·harness가 green인 것은 사설
   actor-join 전송(JSON dialect)으로 동작하기 때문이다. canonical wire는 아직 **게이트가 닫혀**
   생산 경로가 아니다(체크리스트 C-5/C-6/line185 참조).
-- **canonical 마이그레이션(단계 1~3)은 그 legacy를 spec 51 §9 통합 wire로 "교체"하는 작업**이다.
-  코드 골격은 있으나 활성화(수신자 wire 연결·발신 게이트 개방·dialect 제거)가 미완이다.
-  체크리스트가 직접 H-12/H-15를 "미구현·4언어 공통 대형 트랙"이라 부른다.
+- **canonical 마이그레이션(단계 1~3)은 actor-join의 wire/저장 포맷만 바꾸는 작업**이다 — 사설
+  JSON dialect를 canonical service-wire(command 28) binary로 교체. **relocation/admission 로직은
+  이미 완성돼 동작하며, 절대 바꾸지 않는다.** 포맷 변경에서 파생되는 유일한 실제 차이는:
+  canonical 28엔 actorType이 wire에 없으므로 **stable type을 Store Authority row에서 해석**(§9)하는
+  것 하나뿐. 그 외 admission·temp queue·CAS·cutover·relocation 흐름은 기존 로직을 **그대로 재사용**한다.
+  즉 수신자 = thin decode(+Store 타입해석) → 기존 admission 투입. **로직을 새로 만들거나 검증을
+  추가하면 그건 잘못된 방향이다**(이번 캠페인에서 이 착각으로 반복 실패). 체크리스트가 H-12/H-15를
+  "미구현·4언어 대형 트랙"이라 부르지만, 실제 남은 건 포맷 활성화(수신 decode 연결·발신 게이트·
+  dialect 제거)이지 로직 재작성이 아니다.
 - **작업의 성격상 두 부류**: canonical 마이그레이션(1~3)·코덱(4)은 **내부 전송 교체**,
   안정화(5)·샘플(6)·ZoneWorld(7)·e2e(9)는 **검증 확장**. 후자는 현 JSON 위에서도 진행 가능하나,
   **e2e(9)는 canonical까지 통합된 최종 상태에서 해야** 하므로 맨 마지막이다(단계 9 참조).
