@@ -380,8 +380,16 @@
     (ZLinkFrameworkRuntimeActors.cs:2399)하는 지점에서 admission이 미도달. 즉 **Node→.NET canonical actorJoin의
     relocating-payload 소비가 아직 end-to-end로 안 맞는** 마이그레이션 미완 지점이다(=진행 중인 canonical 작업의 일부).
   - **판정**: 새 결정·새 대규모 트랙 아님. canonical 커스텀바이너리 마이그레이션의 **일반 완료 항목**으로 다룬다.
-    다음: .NET `TryDecodeRelocating`이 기대하는 payload 구조 vs Node가 실제 넣는 값을 대조해 미완 배선을 마저 맞춘다
-    (즉석 admission 로직 재작성 금지, [[canonical-multiattempt-design-trap]] 원칙). harness 스테이지는 보존됨(`all` 미포함).
+  - **[확정] authority 포맷은 문제 아님(포맷 gap 지어낸 것 정정)**: `TryDecodeRelocating`은 .NET relocation/ownership
+    전반(SpotRetireTransport·ZLinkActorOwnershipCoordinator 등 다수)에서 쓰이고, **기존 whole-node Node→.NET
+    relocation 스테이지가 통과**한다 = **.NET은 이미 Node가 쓴 shared authority를 같은 `TryDecodeRelocating`으로
+    성공적으로 읽는다**. 따라서 Node↔.NET authority payload interop은 **이미 동작**(§0의 "authority/relocation 완성"과
+    일치). "Node JSON vs .NET binary" 진단은 이 사실로 **반증됨** — 파지 말 것.
+  - **실제 남은 것**: canonical User-Spot(joinSpot) Node→.NET 시나리오에서 admission이 source-authority 체크
+    (`AdmitCanonicalActorJoinAsync`, ZLinkFrameworkRuntimeActors.cs:2397-2405: ObjectGeneration/NodeRid/NodeGeneration
+    fence + relocating decode)에서 미도달. 원인은 **포맷이 아니라** 이 시나리오의 source가 기대 relocating authority
+    상태가 아니거나 canonical User-Spot 경로 배선/하니스 세팅. **§0 포맷-온리 틀에서** fence/state 정합만 맞춘다
+    (로직·검증 추가 금지). harness 스테이지는 보존(`all` 미포함).
 
 ## 3c. [A7] 사설 dialect 제거 (H-15 / S5)
 
