@@ -330,16 +330,20 @@
   (target `zlink_cpp_cross_language_host`), node `node_peer_host.js`, dotnet `Zlink.Framework.TestHost`,
   java host. 기존 `relocation*` 스테이지는 **JoinEntrySpot**(User-Spot mode·`all` 미편입). redis 페어링,
   ready/stop 파일 협약. 스테이지 선택: env `ZLINK_CPP_CROSS_LANGUAGE_STAGE`.
-- **실행 계획(항목별 4언어 lockstep, 작게 시작)**:
-  1. **첫 스테이지 1개**: 한 방향(예: `.NET producer → C++ consumer`) User-Spot JoinSpot canonical 28 스테이지 신설.
-     이를 위해 두 host에 **User-Spot actor-join mode 신설**(현재 entry-spot mode만; C++ host는 relocation mode
-     자체 부재). 결정적 그린까지.
-  2. **A5 multi-attempt 실증**: 그 스테이지에 **같은 actor 두 번째 canonical attempt**를 추가해 later-attempt-wins
-     (첫 시도 supersede/re-park)를 **실제 ingress**로 관측 → §3a 열린 설계 질문 판정(언어별 eager-materialize vs
-     parking 실제 동작 확인). 결함이면 STOP·설계 판정(즉석 수정 금지).
-  3. **12방향 확장**: Node↔.NET↔Java↔C++ 양방향(12). 방향별 4언어 lockstep + spec-gap gate.
-  4. **`all` 편입**: 통과 스테이지만 기본 `all`에 편입(무음 금지, flake는 명시 스킵).
-- **주의**: 대형·독립 세션 규모. host User-Spot mode 신설은 고난도 → sol. 각 스테이지 그린을 Claude가 독립 재현.
+- **호스트 mode 현황(recon 확정)**: 기존 relocation 스테이지는 **Node/.NET/Java·JoinEntrySpot**(`relocation`,
+  `relocation-{java-dotnet,dotnet-java,node-dotnet}`, cpp/run:47-50; cpp/run:932~ "entry-spot relocation").
+  **C++ host(cross_language_host.cpp)는 actor-join/relocation mode 자체가 없음**(modes: stream/channel/
+  spot-route만, :799~). → **C++ 관여 방향은 완전 새 mode 신설**(가장 큰 작업, 마지막).
+- **실행 계획(항목별 4언어 lockstep, 최소 증분 순서)**:
+  1. **첫 스테이지 = Node↔.NET User-Spot JoinSpot canonical 28**(기존 relocation 인프라 최다 재사용 → 최소 신규).
+     양 host에 **User-Spot actor-join mode 신설**(현재 entry-spot 의미만). 한 방향부터 결정적 그린.
+  2. **A5 multi-attempt 실증**: 그 스테이지에 **같은 actor 두 번째 canonical attempt** 추가 → later-attempt-wins
+     (첫 시도 supersede/re-park)를 **실제 ingress**로 관측 → §3a 열린 설계 질문 판정(eager-materialize vs
+     parking 실제 동작). 결함이면 STOP·설계 판정(즉석 admission 수정 금지).
+  3. **Java 방향 추가** → 4. **C++ 방향(신규 mode 신설, 최대)** → 5. **12방향 완성**(양방향).
+  6. **`all` 편입**: 통과 스테이지만(무음 금지, flake는 명시 스킵).
+- **주의**: 대형·독립 세션 규모. host User-Spot mode 신설(특히 cpp 신규 mode)은 고난도 → sol. 각 스테이지 그린을
+  Claude가 독립 재현. multi-attempt 결함 시 [[canonical-multiattempt-design-trap]] 원칙(즉석 수정 금지) 준수.
 
 ## 3c. [A7] 사설 dialect 제거 (H-15 / S5)
 
