@@ -514,16 +514,6 @@ canonical `actorJoin`(28) admission과 뒤이을 state 전송(command 40 `reloca
   reservation·stage·byte budget은 command 40 leg가 relocation identity(relocation·
   targetAttemptGeneration·coordinator)로 key하여 소유한다. 따라서 canonical 경로에는 28↔40
   identity binding이 존재하지 않으며, 수신자는 그런 binding을 만들어서는 안 된다.
-- **provisional 확보 = commit되나 cutover 전까지 dispatch 불가.** 28을 위해 Actor를 확보한다는 것은
-  그 Actor를 target Spot에 **moving(dispatch 불가) 상태로 commit**함을 뜻한다: 그 Actor로 라우팅된
-  요청은 진행 중 relocation이 moving Actor를 hold하는 것과 동일하게 **serve되지 않고 hold**된다.
-  이것이 relocation-driven 28이 command 40의 전송 state 도착 전에 serve하지 못하게 하는 메커니즘이며,
-  Actor는 relocation 완료(cutover) 시에만 dispatch 가능해진다. 평문(비-relocation) join은 state
-  전송도 기다릴 cutover도 없으므로 그 moving 상태는 **admission 즉시 해제**되어 Actor가 곧바로
-  dispatch 가능해진다. 28-admitted Actor를 (relocation-driven 경우에) **cutover 전에 dispatch 가능한
-  membership으로 publish**하는 수신자는 이 규칙을 위반한다 — 모든 28을 즉시 dispatch 가능으로
-  commit해 이 구분을 없애서는 안 된다. (28 수신 시점에 두 경우를 구분할 수 없는 수신자는 **모든
-  canonical 28을 moving으로 admit하고 평문 join이 즉시 해제**하도록 해도 된다 — 이는 결코 오분류하지 않는다.)
 - **source-side pre-commit 실패는 source seal만 정리한다.** source가 28 admission을 받은 뒤
   command 40을 보내기 전(또는 40 이후 target CAS 이전)에 자기 capture/precommit이 실패하면, source는
   자신의 seal만 rollback한다. target에는 지시하여 정리할 relocation reservation이 없으므로 source는
