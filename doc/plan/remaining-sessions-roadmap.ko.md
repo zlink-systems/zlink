@@ -289,7 +289,17 @@
     aggregateGeneration을 기입(service-relocation-runtime.ts:143)한 것이 비적합**(node→java 셀
     red의 원인 — Java는 envelope==Prepare 동등성 검증, 적합). .NET의 미검증은 minor L1 gap(백로그).
     Node 수정을 TTT 회귀 수정과 같은 태스크로 진행(파일 인접).
-  - [~] D1 ST-C4 fault-injection variant (cpp) — 계약 대조·seam 조사 중(opus)
+  - [~] D1 ST-C4 fault-injection variant (cpp) — **STOP·판정 완료(2026-08-22)**: 계약 fault point는
+    target assembly에 실존(relocation_transfer.hpp accept의 conflict + relocationDataLost=35 terminal)
+    하나, cpp 원격 Join은 state를 commit request에 **인라인** 전송해 relocationState(52) chunk를
+    전혀 안 씀(chunk 생산은 종료-drain relocation뿐 — 실측 kind 52 0건) → ST-C4의 판정 조항(source
+    생존)과 양립 불가. **판정: cpp canonical join 방향(3b)이 랜딩되어 Join이 40/52 chunk 경로를 타게
+    된 후 재작성**(e2e-only 트리거·계약 완화 기각). 제작된 ZMP chunk-corruption 프록시 seam
+    (SpotActorTransfer/Support/relocation_chunk_conflict_proxy.py, 미배선)은 그때 사용. SF-F7 주석
+    모순은 1런 판정법 기록됨.
+  - **[~] [신규 발견] cpp SpotActorTransfer e2e HEAD red(5/5 결정적)**: stale e2e 바이너리가 가리던
+    실패 — 재빌드 후 ST-C4/D2 `get_actor_ref` 404(원격 Join 후 target actor_directory find 실패),
+    ST-C2 session bind 실패. 용의: `ea7805d54b`(cpp ZLAU 정렬) 또는 `dd234c3110`. 회귀 판정 진행 중.
 - [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
 - [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어`
 - [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합`(집계=주로 JVM, 보고=전체)
