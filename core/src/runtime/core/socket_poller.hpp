@@ -19,6 +19,7 @@
 #include <unistd.h>
 #endif
 
+#include <unordered_set>
 #include <vector>
 
 #include "sockets/common/socket_base.hpp"
@@ -119,6 +120,12 @@ class socket_poller_t
     //  List of sockets
     typedef std::vector<item_t> items_t;
     items_t _items;
+
+    //  Stage 1 (plan 7.1): zlink_poll() builds a poller per call and adds every
+    //  item, so the duplicate check in add() was a linear scan per insertion,
+    //  i.e. O(N^2) registration for an N-socket poll. Keep an O(1) membership
+    //  set alongside the ordered item vector.
+    std::unordered_set<const socket_base_t *> _socket_index;
 
     items_t::iterator find_socket_item (const socket_base_t *socket_);
     items_t::iterator find_fd_item (fd_t fd_);

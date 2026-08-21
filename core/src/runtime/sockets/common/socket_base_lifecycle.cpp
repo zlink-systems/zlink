@@ -197,14 +197,6 @@ int zlink::socket_base_t::process_submit_commands ()
     return process_commands (0, true);
 }
 
-bool zlink::socket_base_t::async_mailbox_owns_commands () const
-{
-    const receive_runtime_t &receive = receive_runtime ();
-    return receive.async_command_handoff_pending.load (std::memory_order_acquire)
-           || lifecycle_coordinator ().is_async_mailbox_active ()
-           || lifecycle_coordinator ().is_async_quiesce_pending ();
-}
-
 #ifdef ZLINK_BUILD_TESTS
 void zlink::socket_base_t::test_receive_owner_snapshot (
   uint64_t *progress_epoch_out_, uint64_t *public_mailbox_drains_out_,

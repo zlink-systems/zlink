@@ -47,6 +47,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
                          void *handler_arg_,
                          mailbox_pre_post_t pre_post_ = NULL);
     void schedule_if_needed ();
+    void schedule_if_needed_unlocked ();
     bool reschedule_if_needed ();
     bool detach_io_context_if_idle ();
 

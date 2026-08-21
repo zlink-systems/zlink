@@ -738,7 +738,17 @@ class socket_base_t : public own_t,
     void notify_receive_progress_locked ();
     void notify_receive_progress ();
     int wait_receive_progress (uint64_t observed_epoch_, int timeout_ms_);
-    bool async_mailbox_owns_commands () const;
+    //  Stage 1 (plan 7.1): poll readiness consults this once per socket per
+    //  zlink_poll(), so keep it inlineable instead of a cross-TU call.
+    bool async_mailbox_owns_commands () const
+    {
+        const receive_runtime_t &receive = receive_runtime ();
+        const socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+        return receive.async_command_handoff_pending.load (
+                 std::memory_order_acquire)
+               || lifecycle.async_mailbox_active.load (std::memory_order_acquire)
+               || lifecycle.async_quiesce_pending.load (std::memory_order_acquire);
+    }
 #ifdef ZLINK_BUILD_TESTS
   public:
     void test_receive_owner_snapshot (uint64_t *progress_epoch_out_,

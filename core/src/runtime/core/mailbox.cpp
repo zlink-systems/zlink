@@ -54,12 +54,13 @@ void zlink::mailbox_t::send (const command_t &cmd_)
           _signalers.empty () || _primary_signaler_required.load (std::memory_order_acquire);
         if (send_primary_signaler)
             _signaler.send ();
+        //  Stage 1 (plan 7.1): the scheduling decision needs the same mutex
+        //  this critical section already holds, and send() runs once per
+        //  command. Doing it here removes one mutex round trip per command
+        //  instead of dropping and retaking _sync in schedule_if_needed().
+        schedule_if_needed_unlocked ();
     }
     _sync.unlock ();
-
-    if (!ok) {
-        schedule_if_needed ();
-    }
 }
 
 void zlink::mailbox_t::signal ()
@@ -162,10 +163,14 @@ void zlink::mailbox_t::set_io_context (boost::asio::io_context *io_context_,
 void zlink::mailbox_t::schedule_if_needed ()
 {
     _sync.lock ();
-    if (!_io_context || !_handler) {
-        _sync.unlock ();
+    schedule_if_needed_unlocked ();
+    _sync.unlock ();
+}
+
+void zlink::mailbox_t::schedule_if_needed_unlocked ()
+{
+    if (!_io_context || !_handler)
         return;
-    }
 
     if (!_scheduled.exchange (true, std::memory_order_acquire)) {
         boost::asio::io_context *io_context = _io_context;
@@ -176,7 +181,6 @@ void zlink::mailbox_t::schedule_if_needed ()
             pre_post (handler_arg);
         boost::asio::post (*io_context, [handler, handler_arg] () { handler (handler_arg); });
     }
-    _sync.unlock ();
 }
 
 bool zlink::mailbox_t::reschedule_if_needed ()
