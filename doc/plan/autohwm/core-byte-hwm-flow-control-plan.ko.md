@@ -594,7 +594,7 @@ Framework work started: no
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | 제거 기준점에서 public HWM option을 유지한 채 기능 test와 성능 회복을 확인했다. | `BLOCKED:` `doc/plan/autohwm/worklog/stage1-removal-baseline.md` — registry 회계·decoder reservation·drain wakeup·recv 공유 lock을 차례로 우회해도 회복 0. Bisect 결과 회귀 소유 commit은 `3ef4d09a37`(부모 164.7 → 62.2 Kops/s)이고 성격은 byte 회계 비용이 아니라 message당 blocking/wakeup 증가(총 CPU 감소, voluntary ctx switch 증가). Gate 재측정 median local/0.10.1 = throughput·bandwidth 69.9%, mean/p95/p99 142~147%. |
+| [ ] | 제거 기준점에서 public HWM option을 유지한 채 기능 test와 성능 회복을 확인했다. | `BLOCKED:` `doc/plan/autohwm/worklog/stage1-removal-baseline.md` — registry 회계·decoder reservation·drain wakeup·recv 공유 lock을 차례로 우회해도 회복 0. Bisect 결과 회귀 소유 commit은 `3ef4d09a37`(부모 164.7 → 62.2 Kops/s)이고 성격은 byte 회계 비용이 아니라 message당 blocking/wakeup 증가(총 CPU 감소, voluntary ctx switch 증가). Gate 재측정 median local/0.10.1 = throughput·bandwidth 69.9%, mean/p95/p99 142~147%. Walk-back(worklog §7) 후보 1~3도 회복 0이고 후보 4는 dead code. 계측 결과 `send_activate_read`는 회귀 전후 모두 message당 1회이고 engine input backpressure는 0회이므로 wakeup·차단 가설은 기각, 원인은 message당 user CPU +31%다. |
 | [ ] | 일반·delimiter·join·leave frame charge를 최소 pipe-local 구현으로 복구했다. | |
 | [ ] | Default·hint LWM과 blocked-writer drain wakeup을 복구했다. | |
 | [ ] | Oversize, incremental multipart, `EAGAIN`, `SNDTIMEO`와 send-ready test가 통과했다. | |

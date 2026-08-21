@@ -237,7 +237,94 @@ public Auto-HWM option, monitoring ABI와 다수의 기존 test를 함께 도입
 
 어느 쪽도 계획 본문의 gate를 완화하는 결정이므로 사용자 승인 없이 진행하지 않는다.
 
-## 7. 다음 stage로 넘어가는 조건
+## 7. Walk-back: `3ef4d09a37` 수신·dispatch 대기 구조 후보 제거
+
+Coordinator 결정에 따라 Stage 1의 제거 대상을 "byte-HWM 회계"에서
+"`3ef4d09a37`이 도입한 receive/dispatch 대기 구조"로 재정의하고 §5.4 후보를
+하나씩 부모(`2728d70d44`) 동작으로 되돌렸다. 각 후보마다 build → 8개 focused test
+→ paired 1회(local + 0.10.1) 신호 측정을 수행했다. **네 후보 모두 회복 없음**이며
+모두 revert했다. Public 계약, retained receive API, Auto-HWM option, monitoring ABI,
+기존 test는 전부 유지했다.
+
+| # | 후보 | 복원 내용 | Test | local / 0.10.1 (Kops/s) | 비율 | 판정 |
+|---|---|---|---|---|---|---|
+| 기준 | — | 변경 없음 (§4 median) | 8/8 | 121.5 / 173.8 | 69.9% | — |
+| 1 | `receive_once_guarded` / `wait_receive_progress` epoch+condvar 채널 | `read_activated`에서 `receive.sync` lock과 `notify_receive_progress_locked()` 제거(부모는 `xread_activated()`만 호출), `receive_once_guarded`의 `scoped_lock_t (runtime_.sync)` 제거 | 8/8 (1회 flaky 실패 관측) | 131.5 / 190.0 | 69.2% | 회복 없음 → revert |
+| 2 | `mailbox_t::recv`의 `_recv_sync` | command dequeue마다 잡던 추가 mutex 제거(부모에는 없음) | 8/8 | 131.8 / 185.9 | 70.9% | 회복 없음 → revert |
+| 3 | `choose_io_thread_transport` 분리 counter | `session_base_t::start_connecting`이 부모처럼 공유 `choose_io_thread` round-robin을 쓰게 복원 | 8/8 | 128.2 / 184.2 | 69.6% | 회복 없음 → revert |
+| 4 | `read_deferred` / `finish_deferred_read` prefetch | **적용 불가**: `fq_t::recvpipe_deferred`는 호출자가 없고 `router_t::_prefetched_credit_deferred`는 항상 false다. 현재 worktree에서 이미 dead code이므로 hot path 비용이 0이다. | — | — | — | 해당 없음 |
+
+후보 1의 paired 결과(131.5/190.0)는 기준(121.5/173.8)과 비율이 같다. 절대값 차이는
+host drift이며 비율로 판정했다. 세 후보 모두 noise(±8%) 안이다.
+
+Report tag: `autohwm-stage1b-cand1-local` / `-release-0101`,
+`autohwm-stage1b-cand2-*`, `autohwm-stage1b-cand3-*`
+(`bindings/c/perf/results/multi/report/`).
+
+### 7.1 계측 결과: wakeup 횟수는 회귀 원인이 아니다
+
+후보 추측을 끝내기 위해 임시 counter를 넣어(측정 후 전량 revert) worktree와
+부모를 같은 방식으로 계측했다. 5초 ROUTER_ROUTER_SENDSEND / tcp / 256 B, process당
+집계.
+
+| Runtime | msgs_read | send_activate_read | send_activate_write | engine input_stop | input_restart |
+|---|---|---|---|---|---|
+| worktree | 1,239,138 | 1,238,762 | 36 | 0 | 0 |
+| 부모 `2728d70d44` | 1,705,832 | 1,704,266 | 936 | — | — |
+
+- **`send_activate_read`는 두 runtime 모두 message당 1회**다(1.00 : 1.00). 즉
+  message당 mailbox command·signaler wakeup 횟수는 회귀 전후가 같다. §5.4에서
+  세운 "대기 채널이 wakeup을 늘렸다"는 가설은 **기각**된다.
+- `send_activate_write`(byte credit 반환)는 worktree 36회, 부모 936회로 둘 다
+  message 수 대비 무시할 수준이다. `input_stop` / `input_restart`가 **0**이므로
+  이 workload에서 engine input backpressure는 한 번도 발생하지 않는다. 즉
+  **byte HWM 차단은 이 회귀에 전혀 관여하지 않는다**(§2 #1의 HWM 128배 확대가
+  무효였던 이유와 일치).
+- 이 workload는 async mailbox handler를 등록하지 않으므로
+  `async_mailbox_owns_commands()`가 false다. 따라서 `wait_receive_progress`
+  condvar 경로는 애초에 실행되지 않는다(후보 1이 무효인 구조적 이유).
+
+### 7.2 재해석: 원인은 message당 순수 CPU 비용
+
+§5.4의 rusage를 message 단위로 환산하면 다음과 같다.
+
+| | 부모 | worktree | 변화 |
+|---|---|---|---|
+| Messages / 5s | 약 855 K | 약 617 K | -28% |
+| User CPU / message | 18.4 us | 24.2 us | **+31%** |
+| Sys CPU / message | 25.7 us | 29.8 us | +16% |
+| Voluntary ctx switch / message | 0.327 | 0.539 | +65% |
+
+message당 user CPU가 31% 증가했다. wakeup 횟수는 동일하므로 voluntary ctx switch
+증가는 처리량이 낮아 같은 시간에 더 자주 큐가 비는 2차 효과로 해석해야 한다.
+**회귀는 message당 순수 CPU 비용 증가이며, 특정 wakeup·차단 구조가 아니다.**
+
+### 7.3 남은 조사 범위
+
+`3ef4d09a37`이 다시 쓴 message당 공통 경로 중 아직 비용이 배제되지 않은 부분:
+
+| 파일 | commit diff 규모 | 배제 여부 |
+|---|---|---|
+| `sockets/common/socket_base.cpp` | 363 | 미조사 |
+| `sockets/common/socket_base_msg.cpp` (`recv_common`, `send_direct_with_retry` 재작성) | 316 | lock만 배제, 함수 구조 미조사 |
+| `sockets/common/socket_base_dispatch.cpp` | 279 | 미조사 |
+| `core/pipe.cpp` (`write_*` 변형 6종, `check_hwm_for_message`, `publish_outbound_frame_unlocked`) | 698 | drain wakeup만 배제 |
+| `sockets/internal/lb.cpp`, `dist.cpp`, `router_*` | 224 / 10 / 239 | PUBSUB도 같은 비율로 회귀하므로 공통 경로가 우선 |
+| `core/recv_internal.cpp` | 68 | 미조사 |
+
+PUBSUB(1,689 K → 1,157 K, 69%)와 ROUTER(74%)가 같은 비율로 떨어지므로 socket별
+경로보다 `pipe.cpp` + `socket_base*` 공통 경로를 먼저 본다. 다음 단계에서는 추측
+대신 sampling profiler가 필요하다. 이 host에는 `perf`, `gdb`, `valgrind`가 없고
+`gprof`만 있으므로, 정적 링크된 소형 bench에 `-pg`를 적용하거나 profiler를 설치할
+수 있는 host를 확보해야 한다.
+
+### 7.4 시도 횟수
+
+Coordinator가 허용한 추가 3회를 후보 1·2·3으로 모두 사용했다(후보 4는 dead code로
+적용 불가). 누적 회복이 0이므로 §5의 full gate 재실행은 수행하지 않았다. 최종
+worktree는 `447f41a9f2`와 동일하다.
+
+## 8. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
 `[ ]` 유지, Evidence에 `BLOCKED:`를 기록했다.
