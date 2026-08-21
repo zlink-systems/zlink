@@ -26,8 +26,8 @@
 
 ## 진행 규칙 (요약; 상세는 memory + 아카이브 체크리스트 §진행규칙)
 
-- 작업 agent = `codex exec -m gpt-5.6-terra -c model_reasoning_effort="high" -s danger-full-access --skip-git-repo-check`,
-  리뷰 = `codex exec -m gpt-5.6-sol ...`, 리서치 = codex.
+- 작업 agent = `codex exec -m gpt-5.6-terra ...`(일반 구현), 리뷰 = `codex exec -m gpt-5.6-sol ...`, 리서치 = codex.
+  **고난도 구현은 `gpt-5.6-sol`로 진행**(사용자 지시 — 여러 라운드 STOP·회귀 반복 같은 복잡 통합. 예: cpp canonical 발신 2c). 옵션은 동일(`-c model_reasoning_effort="high" -s danger-full-access --skip-git-repo-check`).
 - **Claude가 모든 agent 결과를 독립 검증**(diff 정독 + stash-baseline 재현 + 독립 테스트) **후
   sol 리뷰**, 두 결과 대조 후 판정·커밋. 맹신 금지.
 - **스펙 문서 규율(엄수)**: `framework/doc/**`(스펙·가이드·인터페이스)는 **sub 에이전트가 절대
