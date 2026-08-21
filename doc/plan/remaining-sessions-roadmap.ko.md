@@ -33,7 +33,59 @@
 
 ---
 
+## 새 세션 온보딩 — 착수 전 읽기 순서
+
+새 세션 작업자는 **이 순서로** 읽고 시작한다:
+
+1. **이 문서**(활성 트래커) — 어떤 세션을 집을지 고르고, 그 카드의 선행조건·DoD·스펙 확인.
+2. **`framework/AGENTS.md`** + 해당 언어 **`framework/languages/<lang>/AGENTS.md`** — 빌드·게이트·트리 규칙.
+   (현재 존재: `framework/AGENTS.md`, `framework/doc/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`.)
+3. **auto-memory** `/home/hep7/.claude/projects/-home-hep7-project-zlink/memory/MEMORY.md`
+   — 환경·테스트 quirk, 에이전트 정책, 언어별 게이트 명령, 알려진 flake.
+4. 집은 트랙의 **핵심 스펙**(아래 §스펙 인덱스, 각 트랙 카드의 "핵심 스펙" 줄).
+5. 필요 시 **세션 근거 plan**(config-6-10 / f-e2e-inventory / canon-s4c-s4d) + **이력**
+   `doc/plan/archive/relocation-campaign-checklist.ko.md`(커밋해시·과거 판정).
+
+## 스펙 문서 인덱스 (server spec, `framework/doc/framework/common/spec/server/`)
+
+각 파일은 `NN-name.ko.md` + `NN-name.en.md` 쌍으로 존재한다. **스펙 수정은 Claude 단독**(agent 금지).
+
+| 스펙 | 파일 | 이 캠페인에서의 역할 |
+|---|---|---|
+| **51** internal-service-wire-protocol | `51-internal-service-wire-protocol.{ko,en}.md` | **canonical actor-join(28) 본체.** §9 "Receiver Stable-Type Resolution", "Admission Lifecycle And Abandonment Cleanup"(2026-08-21 신설), §4 admission. **Track A 1순위.** |
+| **15** spot-actor | `15-spot-actor.{ko,en}.md` | §4.2 "다른 node의 spot으로 actor를 join하는 순서", factory stable type=Store Authority row. |
+| **14** actor-model | `14-actor-model.{ko,en}.md` | Actor 수명주기·정체성 기반. |
+| **21** location-runtime | `21-location-runtime.{ko,en}.md` | §2.3/§2.4 Authority row·descriptor 스키마(canonical key `authority\0actor\0{ActorId}`). |
+| **22** location-store-redis | `22-location-store-redis.{ko,en}.md` | §7 store 레코드 규범·counter 3행. |
+| **23** relocation-store-redis | `23-relocation-store-redis.{ko,en}.md` | §8 relocation blob 규범(raw STRING PSETEX). |
+| **28** relocation-flow | `28-relocation-flow.{ko,en}.md` | §3 assembly identity-fencing, §4.2 direct transfer payload(logical stream), §12 bounded generation. |
+| **52** internal-relocation-handoff | `52-internal-relocation-handoff.{ko,en}.md` | relocationState(52) wire·handoff. |
+| **44** internal-relocation-continuity | `44-internal-relocation-continuity.{ko,en}.md` | relocation continuity 내부 계약. |
+| **18** object-routing | `18-object-routing.{ko,en}.md` | §487 command 44/45(one-way, 무재시도) 라우트 갱신. |
+| **20** session-actor-dispatch | `20-session-actor-dispatch.{ko,en}.md` | reply/completion terminal, Join completion. |
+| **48** internal-session-binding | `48-internal-session-binding.{ko,en}.md` | bound Session seal(42/43)·route(44) — canon-S4d-b. |
+| **26** message-flow-tracing | `26-message-flow-tracing.{ko,en}.md` | **디버깅 1순위**(임시 로그 대신 이 트레이싱). |
+| **32** framework-error-model | `32-framework-error-model.{ko,en}.md` | typed terminal·DeadlineExceeded·u64 규칙 근거. |
+| **13** mesh-node | `13-mesh-node.{ko,en}.md` | connection admission·generation·중복 선택. |
+| **30/31** host-relocation·failover | `30-host-relocation-flow`, `31-failure-failover-policy` | 호스트 relocation·실패 정책(Track B/D). |
+
+## 프로토콜 도구 (`framework/runtime/protocol/`)
+
+- **스키마**: `service-wire-v1.schema.json` (command body 계약).
+- **생성기**: `generate-service-wire-pilot-codecs.mjs`(4언어 코덱 생성, `--check` 무결성),
+  `generate-service-wire-assets.mjs`.
+- **검증기**: `validate-service-wire-schema.mjs`, `verify-service-wire-decoder-fixtures.mjs`.
+- **golden 픽스처**: `golden/actor-join-request-v1.json`, `golden/actor-join-reply-v1.json`(수신
+  chunk-limit tail 고정), `golden/store-record-v1.json`, `golden/relocation-{control,data-chunk,
+  envelope,manifest}-v1.json` 등 — 4언어 byte-동치 conformance 기준.
+
+---
+
 # Track A — Canonical actor-join 마이그레이션 (최대·최심)
+
+**핵심 스펙**: 51 §9(1순위) · 15 §4.2 · 14 · 21 §2.4 · 22 §7 · 28 §3/§4.2/§12 · 52 · 44 ·
+18 §487(cmd44) · 20(completion) · 48(bound Session). **golden**: actor-join-request/reply,
+store-record, relocation-*. **도구**: service-wire-v1.schema.json + 생성기 `--check`.
 
 목표: 4언어 사설 actor-join dialect를 spec 51 §9 canonical wire(command 28 + Store-backed
 수신자)로 통일하고 사설 packet을 제거한다. 근거 스펙: 51 §9(Receiver Stable-Type Resolution,
@@ -115,6 +167,11 @@ Admission Lifecycle And Abandonment Cleanup), 15 §4.2, 28 §4.2.
 
 # Track B — Config / F e2e authoring (A와 독립)
 
+**핵심 스펙**: 15(spot-actor) · 18(object-routing) · 28(relocation-flow) · 30(host-relocation) ·
+31(failover). **세션 근거 plan**: `doc/plan/config-6-10-authoring-plan.ko.md`(B1/B2),
+`doc/plan/f-e2e-inventory-plan.ko.md`(B3). **시나리오 소스**: 각 언어 sample/e2e 하니스 +
+`feature-map.ko.md`(구현/blocked 표기).
+
 ## B1. H-7 config-6 e2e authoring (14 시나리오)
 
 - **범위**: config6 SF-B3/C3/C4/C5/C5A/F1/F4~F10/G1/G2 등 14건 — 클라이언트 시나리오 코드
@@ -138,6 +195,10 @@ Admission Lifecycle And Abandonment Cleanup), 15 §4.2, 28 §4.2.
 
 # Track C — W-3 생성 코덱 전면 스왑 (A와 독립, 대형)
 
+**핵심 스펙**: 51(service-wire) · 41(internal-serialization). **도구**(1순위):
+`framework/runtime/protocol/generate-service-wire-pilot-codecs.mjs`(+`--check`),
+`validate-service-wire-schema.mjs`, `service-wire-v1.schema.json`, `golden/*` byte-동치 기준.
+
 ## C1. H-6 W-3 4언어 손 코덱 → 생성 코덱 스왑
 
 - **범위**: 4언어 surface별 hand 코덱을 생성 코덱으로 교체, surface별 byte-동치 게이트.
@@ -148,6 +209,10 @@ Admission Lifecycle And Abandonment Cleanup), 15 §4.2, 28 §4.2.
 ---
 
 # Track D — 최종 게이트 (A/B/C 결과 수용)
+
+**핵심 스펙**: 24(monitoring) · 25(metrics) · 31(failover) · 32(error-model). **게이트 명령**:
+언어별 unittest·6샘플·harness `all`·doc 게이트(memory 및 각 AGENTS.md 참조). **완료 조건**:
+아카이브 체크리스트 line 24-25(A·B·C 전 항목 + 전 테스트 그린 + 6샘플×언어 + sol spec-gap 리뷰).
 
 ## D1. H-1 cpp e2e ST-C4 fault-injection variant
 
