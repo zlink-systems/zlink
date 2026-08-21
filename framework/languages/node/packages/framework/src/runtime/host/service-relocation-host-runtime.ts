@@ -2646,6 +2646,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       await stage.owner.normalize(stage.staging, authority, signal);
       await stage.owner.publish(stage.staging, authority, signal);
       await this.finalizeActorJoinProfiles(meshName, stage, signal);
+      // Actor Join completion may advance its accepted-completion journal in
+      // the canonical authority slot. Try to clear that final publication
+      // before admission becomes externally visible so a later Join cannot
+      // reserve against the previous root. A bounded CAS conflict must not
+      // roll back already committed target ownership or strand its staged
+      // object: the next reservation recognizes the retained journal root and
+      // continues its existing cleanup/retry path.
+      try {
+        await this.clearTargetRelocationPublication(stage, authority, signal);
+      } catch (error) {
+        console.warn('[zlink.runtime.relocation.publication_clear_failed]', stagingId, error);
+        this.options.metrics?.count('zlink.relocation.publication_clear_failed', 1, {
+          mesh_name: meshName
+        });
+      }
       await stage.owner.openAdmission(stage.staging, signal);
       // S2→S3: owner confirmation to application dispatch opening.
       this.options.metrics?.duration(
@@ -2660,7 +2675,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         this.targetReplyRelayCoordinator(meshName, stage, authority),
         signal
       );
-      await this.clearTargetRelocationPublication(stage, authority, signal);
       stage.phase = 'open';
       this.terminalTargets.remember(stagingId, stage.offer.prepareFingerprint);
       this.targetStages.delete(stagingId);

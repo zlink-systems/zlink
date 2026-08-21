@@ -86,7 +86,15 @@ export async function isDeferredJoinAcceptedRootPublication(
   const read = await relocation.read({ value: reference } as ZLinkBlobReference, signal);
   if (read.kind !== 'found' || crc32c(read.bytes) !== checksumCrc32c) return false;
   if (hasJournalRootMagic(read.bytes)) {
-    return false;
+    try {
+      const root = decodeRoot(read.bytes);
+      return expected.aggregateId === operationAggregateId(root.operationId)
+        && expected.aggregateGeneration === root.actor.objectGeneration
+        && expected.authorityKey === encodeAuthorityKey('actor', root.actor.actorId).value
+        && expected.objectGeneration === root.actor.objectGeneration;
+    } catch {
+      return false;
+    }
   }
   const root = await readCanonicalDeferredJoinRoot(relocation, read.bytes, signal);
   return root !== undefined

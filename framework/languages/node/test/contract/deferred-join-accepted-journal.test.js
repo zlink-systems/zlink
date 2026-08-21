@@ -396,6 +396,48 @@ test('canonical journal-root classification requires the exact participant and a
   ), false);
 });
 
+test('standalone journal-root classification requires the exact Actor and operation fence', async () => {
+  const context = harness();
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  const root = await context.journal.prepare(
+    actorRef.actorId,
+    { high: 11n, low: 12n },
+    actorRef,
+    Buffer.from('reply')
+  );
+  const exact = {
+    authorityKey: encodeAuthorityKey('actor', actorRef.actorId).value,
+    objectKind: 'actor',
+    objectGeneration: actorRef.objectGeneration,
+    aggregateId: '00000000-0000-000b-0000-00000000000c',
+    aggregateGeneration: actorRef.objectGeneration
+  };
+
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    exact
+  ), true);
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    { ...exact, aggregateId: '00000000-0000-000b-0000-00000000000d' }
+  ), false);
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    { ...exact, authorityKey: encodeAuthorityKey('actor', 'actor-other').value }
+  ), false);
+});
+
 test('canonical ZLJC round-trip preserves a custom reply content type', async () => {
   const contentType = 'application/x-zlink-custom-reply';
   const context = harness({

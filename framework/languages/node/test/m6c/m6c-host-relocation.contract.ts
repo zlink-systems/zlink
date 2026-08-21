@@ -30,7 +30,10 @@ import {
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
-import { crc32c } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
+import {
+  crc32c,
+  ServiceRelocationAuthorityPayloadCodec
+} from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
@@ -933,7 +936,7 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
   assert.equal(committed.authorityOwnerGeneration, 12n);
 });
 
-test('ActorJoin profile reuses the Host terminal owner and a failed one-way source leave submit does not gate Accepted', async () => {
+test('ActorJoin target clears its publication before admission and preserves post-open relay order', async () => {
   const events: string[] = [];
   const actor = { context: { actorId: 'actor-join', meshName: 'mesh-a' } };
   const nativeRef = { actorId: 'actor-join', generation: 5n, nodeRid: 'target' };
@@ -999,9 +1002,9 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
     events.push('cas');
     return authority;
   };
-  internals.relayTerminalReplies = async () => {};
+  internals.relayTerminalReplies = async () => { events.push('replies:relay'); };
   internals.targetReplyRelayCoordinator = () => ({});
-  internals.clearTargetRelocationPublication = async () => {};
+  internals.clearTargetRelocationPublication = async () => { events.push('publication:clear'); };
   const envelope = {
     aggregateId: '00000000-0000-0000-0000-000000000021',
     aggregateGeneration: 1n,
@@ -1045,9 +1048,129 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
     'sourceLeave:submit',
     'sourceLeave:warning',
     'accepted',
+    'publication:clear',
     'dispatch:open',
-    'command44'
+    'command44',
+    'replies:relay'
   ]);
+});
+
+test('target admission opens after bounded publication-clear conflicts and a later cleanup retry clears it', async () => {
+  const events: string[] = [];
+  const key = encodeAuthorityKey('actor', 'actor-clear-retry');
+  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const publication = {
+    reference: 'relocation-root',
+    checksumCrc32c: 7,
+    aggregateId: '00000000-0000-0000-0000-000000000022',
+    aggregateGeneration: 1n,
+    inventoryDigest: '0'.repeat(64),
+    targetOwnerId: target.ownerId,
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration
+  } as const;
+  let current = {
+    kind: 'snapshot',
+    storeVersion: { value: 'target-v2' } as never,
+    payload: codec.publish(Buffer.from('actor-state'), publication),
+    objectGeneration: 5n,
+    authorityOwnerGeneration: 12n,
+    ownerId: target.ownerId,
+    ownerLeaseGeneration: target.ownerLeaseGeneration,
+    allocation: {
+      state: 'active',
+      objectKind: 'actor',
+      stableType: 'Player',
+      descriptor: { meshName: 'mesh-a', rid: 'target' },
+      descriptorLifecycleGeneration: 6n,
+      capacity: { actors: 1, spots: 0 }
+    },
+    storeNow: new Date()
+  } as ZLinkAuthoritySnapshot;
+  let conflictsRemaining = 16;
+  let clearAttempts = 0;
+  let actorAvailable = false;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    spotManager: () => undefined,
+    locationStore: () => ({
+      async readAuthority() { return current; },
+      async compareExchangeAuthority(_key: unknown, _version: unknown, mutation: { payload: Uint8Array }) {
+        clearAttempts += 1;
+        if (conflictsRemaining > 0) {
+          conflictsRemaining -= 1;
+          return { kind: 'conflict' };
+        }
+        current = {
+          ...current,
+          storeVersion: { value: `target-v${clearAttempts + 2}` } as never,
+          payload: Buffer.from(mutation.payload)
+        };
+        return { kind: 'stored' };
+      }
+    }),
+    metrics: {
+      count(name: string) { events.push(`metric:${name}`); },
+      duration() {}
+    }
+  } as never);
+  const internals = runtime as unknown as {
+    commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
+    relayTerminalReplies: () => Promise<void>;
+    targetReplyRelayCoordinator: () => unknown;
+    clearTargetRelocationPublication: (
+      stage: unknown,
+      authority: ZLinkAuthoritySnapshot
+    ) => Promise<void>;
+    finalizeTargetStage: (
+      meshName: string,
+      stagingId: string,
+      stage: unknown
+    ) => Promise<void>;
+  };
+  internals.commitTargetReservation = async () => current;
+  internals.relayTerminalReplies = async () => {};
+  internals.targetReplyRelayCoordinator = () => ({});
+  const envelope = {
+    aggregateId: publication.aggregateId,
+    aggregateGeneration: publication.aggregateGeneration,
+    participants: [],
+    memberships: []
+  };
+  const stage = {
+    offer: { prepareFingerprint: 'clear-retry' },
+    owner: {
+      async normalize() {},
+      async publish() {},
+      async openAdmission() { actorAvailable = true; }
+    },
+    staging: {
+      primaryAuthorityKey: key,
+      envelope,
+      hidden: new Map()
+    },
+    phase: 'ready',
+    lane: Promise.resolve(),
+    cutoverReceived: true,
+    boundaryRelay: []
+  };
+  const originalWarn = console.warn;
+  console.warn = marker => events.push(String(marker));
+  try {
+    await internals.finalizeTargetStage('mesh-a', 'clear-retry-stage', stage);
+    assert.equal(actorAvailable, true, 'the committed Actor must be dispatchable after clear conflicts');
+    assert.equal(stage.phase, 'open');
+    assert.equal(clearAttempts, 16);
+    assert.deepEqual(events, [
+      '[zlink.runtime.relocation.publication_clear_failed]',
+      'metric:zlink.relocation.publication_clear_failed'
+    ]);
+
+    await internals.clearTargetRelocationPublication(stage, current);
+    assert.equal(clearAttempts, 17, 'the retained publication must be clearable by follow-up cleanup');
+    assert.equal(codec.read(current.payload), undefined);
+  } finally {
+    console.warn = originalWarn;
+    await runtime.dispose();
+  }
 });
 
 test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner before target completion', async () => {
