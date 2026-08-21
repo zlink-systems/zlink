@@ -177,7 +177,7 @@
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
-  - [~] 2c [A4] C++ 발신 `cpp단일` — **재진단: FORMAT-ONLY 가능**(2c-fix의 'semantic 필요'는 오진). #3 generation split은 phantom(spot_generation=object_generation=같은 Spot Authority row 값). 진짜 원인=발신이 approval을 바로 Accepted+deliver_remote_actor_join, seal→PREPARE→FINALIZE **continuation 건너뜀**(2c-v2는 넣어서 cutover 통과했음). fix: continuation 유지 + #1 production observe 배선 + #2 app payload 실 packet name + #4 terminal NotFound/ProtocolError+테스트 revert + #3 단순 equality(reply gen==snapshot, 덮어쓰기 아님) + committed authority 대기 후 Accepted(.NET처럼). 근거: 2c-gen-diagnose.
+  - [x] 2c [A4] C++ 발신 — `cpp단일` `7ca95170ac` (production canonical 활성화; continuation bridge·off-wire handoff id .NET byte-parity·app payload·generation equality·terminal 보존·allow-list; sol 구현+리뷰, 6/6 검증·샘플 통과·CAS 무변경. deferred: 수신자 app-reply 전달=3b)
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
   - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
