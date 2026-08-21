@@ -171,7 +171,8 @@
 동시) · **`혼합`**. (kotlin은 java 프레임워크 공유 — 샘플만 kotlin.) 단일언어 단계도 종료 시
 **L1 parity(다른 3언어 대조)** 필수.
 
-- [ ] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (이전 diff는 branch-A 오모델로 폐기; §15 §4.2에 충실히 재구현 예정. robustness 요구 #2~#6 포함)
+- [x] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` — `e8409034c6` (포맷만·기존 admission 재사용·단일책임; sol 9/10 해소, 게이트 무회귀. fast-follow: 실제 wire→admission 통합 테스트 = sol #10 LOW/비차단)
+- [ ] **canon-A1-real-wire-admission-integration-test (fast-follow)**: ProcessCanonicalActorJoin→AdmitCanonicalActorJoinAsync→AdmitRoutedActorJoinAsync 실제 경로 구동 테스트(accepted tail·Authority-row fence mismatch·TypeMismatch·malformed→ProtocolError·mailbox-full). sol #10(LOW/비차단). 기존 admission이 JSON 테스트로 커버되나 canonical 배선은 미커버.
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
   - [~] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` (agent 진행 중, A1과 병렬)
