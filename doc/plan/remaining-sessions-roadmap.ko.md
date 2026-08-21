@@ -57,6 +57,17 @@
 
 ---
 
+## 진행 방식 전환 (2026-08-22, 사용자 지시 — 직렬 발견 → 감사-후-배치)
+
+지금까지 canonical blocker를 "스테이지 실행→timeout→진단→단건 수정"으로 **직렬 발견**했으나,
+드러난 blocker가 전부 한 패턴(스펙이 정의한 경계의 언어별 사설 표현 잔존: ZLAJ·JSON-ZLAP·
+ZLRA3·one-way 전송·applicationVersion 오용·eager materialize)이므로, **4언어 병렬 스펙-정합
+감사(읽기 전용, 확정 ruling 기준표 포함)로 delta를 전수 나열 → Claude가 병합·판정 → 언어별
+배치 수정 → 스테이지 일괄 디버깅** 방식으로 전환한다. 감사 기준·표면 정의는
+스크래치 `audit-common.md`(세션 산출물, 요지: 전송 종별·payload/envelope 포맷·admission
+provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 ruling 8건). 개별 수정의 검증·리뷰·
+파일명시 커밋 규율은 그대로 유지한다.
+
 ## 0. 현재 진실 (착수 전 반드시 읽기)
 
 - **제품은 동작한다(JSON/legacy 경로).** 4언어 유닛·6샘플·harness가 green인 것은 사설
