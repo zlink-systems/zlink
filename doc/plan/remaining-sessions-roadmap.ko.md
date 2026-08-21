@@ -175,9 +175,9 @@
 - [ ] **canon-2a-sender-app-reply-delivery (follow-up, 단계 3b서 닫음)**: .NET canonical 발신자가 target handler의 non-empty application reply를 조인 caller에 전달하지 못함(sol HIGH, latent — 현재 테스트 미커버). 단계 3b(A6 크로스랭 pairwise app-reply)에서 해소.
 - [ ] **canon-A1-real-wire-admission-integration-test (fast-follow)**: ProcessCanonicalActorJoin→AdmitCanonicalActorJoinAsync→AdmitRoutedActorJoinAsync 실제 경로 구동 테스트(accepted tail·Authority-row fence mismatch·TypeMismatch·malformed→ProtocolError·mailbox-full). sol #10(LOW/비차단). 기존 admission이 JSON 테스트로 커버되나 canonical 배선은 미커버.
 - [ ] **단계 2 — canonical 수신·발신 활성화**
-  - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
+  - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
-  - [ ] 2c [A4] C++ 발신(S4c-cpp) `cpp단일`
+  - [~] 2c [A4] C++ 발신(S4c-cpp) `cpp단일` (agent 진행 중, 2a 동형 포맷-only)
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
   - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
