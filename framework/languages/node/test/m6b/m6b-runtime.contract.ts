@@ -2067,7 +2067,8 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
       spot: { spotId: 'entry-node', generation: 7n },
       targetNodeRid: 'entry-node',
       targetNodeGeneration: 7n,
-      authorityOwnerGeneration: 7n
+      authorityOwnerGeneration: 7n,
+      ownerLeaseGeneration: 7n
     });
   }
   runtime.close();
