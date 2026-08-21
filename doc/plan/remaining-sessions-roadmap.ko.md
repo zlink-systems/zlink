@@ -264,8 +264,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     `6bb05dce85`(flags 판별·eviction race·typed 21), .NET `63e551c2b4`(47/48/49 request/reply·
     raw-20 차단·typed 21), C++ `2032cb6ba5`(**원격 Join을 인라인에서 ZLJR+40/52 canonical chunk로
     전환** — 3b C++ 방향의 핵심 전제 완성, ZLJR metadata ordered-json으로 Node 고정 벡터 byte-핀).
-    Java 2셀은 admission accepted까지 전진(이전 rung들 해소), join 완주 rung 진단 중(유력: Java의
-    ZLJR 생산/소비). 이하 이전 기록:
+    **Java 2셀 그린 `fef06c1e4a`** — Java ZLJR producer/consumer 신설(4언어 공통 Node hex 벡터로
+    byte-핀 완성) + admission의 Store-resolved actorType(51 §9) 수정. **매트릭스 4/12: C++ host가
+    필요 없는 방향 전부 그린**(node↔dotnet, node→java, java→dotnet + 기존 relocation 스테이지
+    무회귀). 남은 큰 조각 = C++ cross-language host의 actor-join mode 신설(런타임 쪽 chunk 경로는
+    `2032cb6ba5`로 완비 — host 하니스만 남음) → C++ 관여 6방향 → 나머지 2방향(dotnet→java 등
+    User-Spot 역조합) → `all` 편입. 이하 이전 기록:
     **완료(2026-08-22)**: ① **stage-1 Node→.NET 결정적 그린** `de17ac7179`(6단 사다리 — ⭐핸드오프·
     §3b 사다리 기록 참조) ② multi-attempt 실증 스테이지 `327c2b86c1` ③ cpp app-reply 양방향
     (`dd234c3110`) ④ .NET app-reply 보존 ⑤ 4언어 durable-authority conformance 대칭
