@@ -370,32 +370,18 @@
   - **구현 전 해소할 불확실성**: ① canonical-only observable(위 Flow로) ② target User Spot가 source 시작 전 완성
     (placement가 source 택하거나 fallback 방지) ③ automatic discovery 유지(PeerConnections.Connect 추가 시 .NET
     maintenance-relocation 제약 재현) ④ 런너의 "cross-lang User-Spot reply 비호환" 주석은 **stale**, 무시.
-- **🚨 발견된 spec-gap (BLOCKER · 3b 진행 전 해소 필요 · 에스컬레이션) — actor Authority row payload 포맷 미통일**:
-  stage-1 구현(`harness e96334f07e`, 스테이지 존재·`all` 미포함)이 **실제 크로스랭 production interop gap** 노출.
-  - **증상**: Node source가 canonical 28 정상 전송(observable로 `wire_command=28 canonical=true` 증명, force-private
-    음성검증도 통과)하나 **.NET admission 미도달**. 근본원인: **actor Authority row payload 포맷이 4언어 미통일** —
-    Node는 **JSON**(`actor-authority-publication.ts` `encodeActorAuthorityIdentity`), .NET은 **binary**
-    (`ZLinkActorAuthorityPayloadCodec` magic `ZLAU`, relocation `ZLAP`)로 읽음 → .NET이 Node JSON row 디코드 실패.
-  - **스펙 근거**: 51 §9(:478-498)는 canonical 28 수신자가 **공유 Store Authority row**(`authority\0actor\0{ActorId}`,
-    per-Actor 단일 진실 원천)를 **반드시 읽어** `allocation.stableType`·fence 검증하라 명시. "읽을 수 없는 row는
-    Unavailable". 즉 **payload 포맷은 크로스랭 canonical이어야 함** → 스펙 버그 아니라 **구현 gap**(Node가 canonical
-    포맷 미기록). 기존 whole-node relocate 스테이지는 이 크로스랭 row-read를 안 해서 **잠복**, canonical 28이 노출.
-  - **규모/판정 — 실제로 3가지 포맷으로 갈림(더 근본적)**: authority-row payload codec이 언어별로 상이:
-    · **Node = JSON**(`actor-authority-publication.ts:113` `encodeActorAuthorityIdentity`)
-    · **.NET = binary "ZLAU"**(`ZLinkActorAuthorityPayloadCodec.cs:225` magic, relocation은 `ZLAP` 0x50414c5a)
-    · **Java = binary "ZLAU"**(`ZLinkActorAuthorityPayloadCodec.java:16` MAGIC {0x5a,0x4c,0x41,0x55} = .NET과 일치)
-    · **C++ = 커스텀 길이접두**(`actor_authority_payload.hpp:28`, 헤더 문자열 `"zlink:actor-authority:v1"` — ZLAU도
-      JSON도 아닌 제3형식).
-    → **.NET·Java는 ZLAU 합의, Node·C++는 각자 다른 형식**. 4언어 authority row interop이 성립 안 함.
-  - **⚠ 확인 필요(fix 세션 선행)**: 위 codec들이 **모두 동일한 공유 Store authority row payload**인지, 아니면 서로
-    다른 authority 표현(예: C++ 것은 특정 projection)인지 **먼저 확정**할 것. 기존 Node↔.NET relocation 스테이지가
-    통과했다면 그 경로가 이 row를 크로스랭으로 안 읽었기 때문(§9 canonical 28만 신규로 크로스랭 row-read 요구).
-  - **판정·규모**: 대규모·민감(authority/relocation) 영역. canonical 정본 포맷 결정(ZLAU가 2언어 합의 = 유력 정본?)
-    → Node·C++를 정본으로 전환 → 4언어 Store row interop 검증. **즉석 자율 수정 금지**(고난도 sol, 검증 다중화 금지
-    [[canonical-multiattempt-design-trap]]). 스펙 §9는 명확(스펙 버그 아님) → **구현 통일** 과제.
-  - **다음(선행 = 3b·3c 진행 전)**: (a) 4언어 codec이 동일 공유 row인지 확정, (b) 정본 포맷 결정(유저 판정 권장 —
-    ZLAU 채택 시 Node·C++ 전환 범위 큼), (c) Node·C++ authority publish/read 전환(고난도 sol), (d) stage-1 재실행
-    그린 → multi-attempt 실증(§3a) → 12방향.
+- **[정정됨] stage-1이 노출한 것 = Node→.NET canonical 28 admission 미완(별도 대규모 작업 아님)**:
+  ⚠ 이전 커밋(e96334f07e·6addd7c720·4de89c8248)에 "authority row 포맷이 3가지로 갈린 대규모 gap"이라 적었으나 **틀렸다**.
+  스펙 21 §2.4(:490-505)가 명확: **authority record는 canonical JSON(4언어 공통)**, `allocation.stableType`은 JSON field,
+  `payload`만 base64 opaque bytes. **Node의 JSON authority는 정상(적합)**. ZLAU/ZLAP/`v1`은 authority row가 아니라 그
+  안의 opaque `payload`/relocation 인코딩(별개 계층)이다.
+  - **실제 관측**: Node가 canonical 28을 정상 전송(observable `wire_command=28 canonical=true`, force-private 음성검증
+    통과)한 뒤, .NET `AdmitCanonicalActorJoinAsync`가 source authority의 `payload`를 `TryDecodeRelocating`
+    (ZLinkFrameworkRuntimeActors.cs:2399)하는 지점에서 admission이 미도달. 즉 **Node→.NET canonical actorJoin의
+    relocating-payload 소비가 아직 end-to-end로 안 맞는** 마이그레이션 미완 지점이다(=진행 중인 canonical 작업의 일부).
+  - **판정**: 새 결정·새 대규모 트랙 아님. canonical 커스텀바이너리 마이그레이션의 **일반 완료 항목**으로 다룬다.
+    다음: .NET `TryDecodeRelocating`이 기대하는 payload 구조 vs Node가 실제 넣는 값을 대조해 미완 배선을 마저 맞춘다
+    (즉석 admission 로직 재작성 금지, [[canonical-multiattempt-design-trap]] 원칙). harness 스테이지는 보존됨(`all` 미포함).
 
 ## 3c. [A7] 사설 dialect 제거 (H-15 / S5)
 
