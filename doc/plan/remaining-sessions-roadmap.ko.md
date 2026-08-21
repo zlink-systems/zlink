@@ -180,7 +180,7 @@
   - [x] 2c [A4] C++ 발신 — `cpp단일` `7ca95170ac` (production canonical 활성화; continuation bridge·off-wire handoff id .NET byte-parity·app payload·generation equality·terminal 보존·allow-list; sol 구현+리뷰, 6/6 검증·샘플 통과·CAS 무변경. deferred: 수신자 app-reply 전달=3b)
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
-  - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
+  - [~] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어` (스코핑 착수)
   - [ ] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어`
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합`
