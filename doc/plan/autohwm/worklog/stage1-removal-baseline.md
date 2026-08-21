@@ -324,7 +324,152 @@ Coordinator가 허용한 추가 3회를 후보 1·2·3으로 모두 사용했다
 적용 불가). 누적 회복이 0이므로 §5의 full gate 재실행은 수행하지 않았다. 최종
 worktree는 `447f41a9f2`와 동일하다.
 
-## 8. 다음 stage로 넘어가는 조건
+## 8. Sampling profile과 수정
+
+### 8.1 gprof는 이 workload를 측정할 수 없다
+
+`core/v0.10.1`~worktree를 같은 toolchain으로 static build하고 perf harness의
+bench source를 그대로 링크해 `-pg`로 측정했다. 결과는 사용할 수 없었다.
+
+- glibc의 gmon histogram은 사실상 main thread만 sampling한다. 8초 run에서
+  process 전체가 약 35 s CPU를 쓰는데 gprof가 잡은 self-time은 두 process 합쳐
+  2.4 s(약 7%)였다. 회귀가 있는 io thread는 전혀 보이지 않는다.
+- `-pg` shared library는 mcount arc가 main executable text 범위 밖이라 버려진다.
+  따라서 동적 링크로는 call count조차 얻을 수 없다.
+- 이름이 바뀐 함수(`pipe_t::read` → `read_internal`,
+  `fq_t::recvpipe` → `recvpipe_internal`)는 join되지 않아 차분표가 왜곡된다.
+
+### 8.2 대체 수단: 전 thread SIGPROF sampler
+
+`perf`, `gdb`, `valgrind`가 없고 `sudo`가 password-gated이므로, bench 실행 파일에
+링크되는 독립 sampler(`scratchpad/sampler.cpp`, repo source 무수정)를 만들었다.
+`ITIMER_PROF` 1 ms + `SA_SIGINFO` handler가 어느 thread에서 인터럽트되든
+`REG_RIP`를 기록하고, leaf가 공유 library면 stack에서 실행 파일 text 범위에 있는
+첫 return address를 찾아 호출자에 귀속시킨다. 종료 시 PC 히스토그램과
+`/proc/self/maps`를 덤프해 libc/libssl symbol까지 해석한다.
+
+같은 sampler object를 worktree와 부모(`2728d70d44`, `git worktree`로 checkout)
+양쪽에 링크했고, LTO 없는 `-O2 -g` static build가 실제 회귀를 재현했다
+(worktree 127.6 K vs 부모 163.3 K = 78%).
+
+### 8.3 차분 profile (client, us/message, 최초 측정)
+
+| delta | worktree | parent | symbol |
+|---|---|---|---|
+| +0.356 | 0.427 | 0.071 | `libc:__lll_lock_wait_private` (futex wait) |
+| +0.180 | 1.009 | 0.829 | (zlink text 합계) |
+| +0.140 | 0.179 | 0.039 | `libc:poll` |
+| +0.104 | 0.208 | 0.104 | `libc:pthread_mutex_unlock` |
+| +0.100 | 0.229 | 0.129 | `libc:pthread_mutex_lock` |
+| +0.063 | 0.063 | 0.000 | `libc:eventfd` |
+| +0.047 | 0.047 | 0.000 | `libc:close` |
+| +0.038 | 0.038 | 0.000 | `mailbox_t::remove_signaler` |
+
+`eventfd`/`close`/`remove_signaler`가 부모에서 **정확히 0**인 것이 결정적이었다.
+
+### 8.4 원인: `zlink_poll`마다 poller signaler를 모든 mailbox에 등록
+
+`zlink_poll()`은 호출마다 `socket_poller_t`를 새로 만든다
+(`core/src/api/monitoring/poller_poll_once.cpp:27`). `3ef4d09a37` 이전 POSIX
+poller는 socket마다 자기 mailbox descriptor를 pollset에 넣었다. 그 commit이
+POSIX에도 Windows용 공유 signaler 방식을 도입하면서
+`socket_poller_t::rebuild()`가 **모든 socket mailbox에 poller 소유 signaler를
+등록**하고 소멸 시 다시 해제한다. 100 socket을 poll하면 호출당 mailbox mutex
+왕복 200회 + eventfd 생성·close 1회가 발생하고, 이 mutex는 io thread가 command를
+넣을 때 쓰는 것과 같아 futex wait이 폭증한다.
+
+### 8.5 적용한 수정과 delta
+
+각 수정 뒤 build → 8개 focused test → paired 1회.
+
+| # | 수정 | Test | local / 0.10.1 | 비율 | 판정 |
+|---|---|---|---|---|---|
+| 0 | 기준 (§4) | 8/8 | 121.5 / 173.8 | 69.9% | — |
+| 1 | `socket_poller`: POSIX descriptor pollset 복원 | 8/8 | 141.7 / 188.3 | 75.3% | keep |
+| 2 | poller signaler를 lazy 생성 (일반 경로는 eventfd 미할당) | 8/8 | 145.1 / 184.7 | 78.6% | keep |
+| 3 | `read_activated`·recv step의 공유 receive mutex를 async 소유 시에만 획득 | 8/8 | 146.6 / 186.0 | 78.8% | keep (noise 내이나 계약 불변, per-message work 제거) |
+| 4 | `has_in()`의 공유 receive mutex를 async 소유 시에만 획득 | 8/8 | rested A/B median 131.0 → 134.1 | +2.4% | keep |
+| 5 | `mailbox_t::recv`의 `_recv_sync` 제거 | — | 30.1 / 123.1 / 125.1 (불안정) | — | **reject**: command pipe read endpoint가 경쟁해 처리량이 붕괴한다 |
+
+Commit: `d58a179033`(1·2), `b818c03f71`(3), `5ad65a4627`(4).
+
+### 8.6 수정 후 재-profile
+
+수정 1·2 뒤 다시 sampling하면 `eventfd`·`close`·`remove_signaler` 항목이 완전히
+사라진다. 남은 client 상위 delta(호출자 귀속 기준, us/msg)는 다음과 같다.
+
+| delta | wt | par | 호출자 |
+|---|---|---|---|
+| +0.168 | 0.182 | 0.014 | `socket_base_t::has_in` (수정 4의 대상) |
+| +0.162 | 0.201 | 0.040 | `socket_poller_t::wait` |
+| +0.119 | 0.166 | 0.047 | `router_t::xhas_in` |
+| +0.118 | 0.161 | 0.043 | `mailbox_t::schedule_if_needed` |
+| +0.163 | 0.235 | 0.072 | `enter_public_api` + `leave_public_api` |
+| +0.126 | 0.188 | 0.062 | `socket_poller_t::add_item` + `find_socket_item` |
+
+남은 비용은 전부 **poll 경로**다. `zlink_poll`이 호출마다 poller를 만들고 100개
+item을 등록(`add_item`마다 `enter_public_api`/`inc_mailbox_ref`,
+`find_socket_item`은 선형 탐색이라 등록이 O(N²))한 뒤, 준비 여부를 socket마다
+`get_events_internal` → `process_commands` + `has_in`으로 조회한다. 이 구조는
+부모에도 있었지만 `3ef4d09a37`이 각 단계에 lock과 admission을 추가하면서
+비용이 3~10배가 됐다.
+
+### 8.7 test_retained_hwm_credit의 기존 flakiness
+
+수정 중 이 test가 간헐 실패했다. 40회 반복으로 확인한 결과 **원본 worktree
+`447f41a9f2`에서도 14/40 실패**하고, 수정 후에도 15/40로 같다(host load 약 2.0
+이상일 때). 이 flakiness는 이번 작업이 만든 것이 아니며, 한산한 host에서는
+8/8 통과한다. 별도 조사 대상으로 기록한다.
+
+### 8.8 최종 gate (plan §8.2.1, §8.2.3)
+
+Tag `autohwm-stage1-final-local` / `autohwm-stage1-final-release-0101`,
+local/release 교대 3회, `--runs 1`, host load 0.71에서 실행.
+
+Report 경로 (실행 순서):
+
+1. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_081154_autohwm-stage1-final-local.txt`
+2. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_081200_autohwm-stage1-final-release-0101.txt`
+3. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_081205_autohwm-stage1-final-local.txt`
+4. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_081211_autohwm-stage1-final-release-0101.txt`
+5. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_081217_autohwm-stage1-final-local.txt`
+6. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_081222_autohwm-stage1-final-release-0101.txt`
+
+| Run | Version | Throughput (Kops/s) | Bandwidth (MB/s) | Mean(ms) | P95(ms) | P99(ms) |
+|---|---|---|---|---|---|---|
+| 1 | local | 146.143 | 74.825 | 0.330 | 0.509 | 0.623 |
+| 2 | 0.10.1 | 185.215 | 94.830 | 0.251 | 0.387 | 0.488 |
+| 3 | local | 149.960 | 76.780 | 0.320 | 0.500 | 0.607 |
+| 4 | 0.10.1 | 177.472 | 90.866 | 0.263 | 0.404 | 0.496 |
+| 5 | local | 128.965 | 66.030 | 0.374 | 0.557 | 0.677 |
+| 6 | 0.10.1 | 173.842 | 89.007 | 0.268 | 0.411 | 0.509 |
+
+| Metric | Local median | 0.10.1 median | Local/0.10.1 | Stage 1 시작 | 판정 |
+|---|---|---|---|---|---|
+| Throughput (Kops/s) | 146.143 | 177.472 | 82.3% | 69.9% | FAIL |
+| Bandwidth (MB/s) | 74.825 | 90.866 | 82.3% | 69.9% | FAIL |
+| Lat.Mean (ms) | 0.330 | 0.263 | 125.5% | 144.2% | FAIL |
+| Lat.P95 (ms) | 0.509 | 0.404 | 126.0% | 146.9% | FAIL |
+| Lat.P99 (ms) | 0.623 | 0.496 | 125.6% | 125.6%→ 142.0% | FAIL |
+
+5개 metric 모두 여전히 미달이지만 격차는 절반 가까이 줄었다(처리량 69.9% →
+82.3%, latency 142~147% → 125~126%). 참고로 이 host에서 부모 `2728d70d44` 자체가
+0.10.1의 약 94.8%(164.7 vs 173.8)이므로, 남은 격차는 "부모까지 약 12%p" +
+"부모와 0.10.1 사이 약 5%p"로 나뉜다.
+
+### 8.9 시도 횟수와 중단
+
+Coordinator가 허용한 추가 3회 수정 기회를 수정 1·2(1회), 3(2회), 4(3회)로
+사용했고 5는 안전하지 않아 폐기했다. 같은 root cause(=`3ef4d09a37`이 다시 쓴
+per-message 경로)에서 gate가 여전히 실패하므로 여기서 중단하고 보고한다.
+
+다음 작업자를 위한 남은 후보는 §8.6 표다. 가장 큰 단일 항목은 `zlink_poll`의
+per-call poller 구조 자체이며, 이를 고치려면 poller 재사용 또는 item 등록
+경로(`add_item`의 O(N²) 선형 탐색, item마다의 `enter_public_api`/mailbox ref)를
+바꿔야 한다. 이는 byte-HWM 계약과 무관한 poll API 내부 설계 변경이므로 범위
+승인이 필요하다.
+
+## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
 `[ ]` 유지, Evidence에 `BLOCKED:`를 기록했다.
