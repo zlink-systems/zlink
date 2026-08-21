@@ -40,6 +40,12 @@
   OperationId, handoff/transfer/completion id)은 `== 0`/`!= 0`만. bounded counter(Object/
   AuthorityOwner/OwnerLease/DescriptorRevision, 1..2^63-1)만 `<= 0` 허용.
 - 디버깅은 기존 message-flow 트레이싱(spec 26)부터. 임시 콘솔 로그 추가-후-재실행 금지.
+- **검증 단일 책임(relocation/actor-join — 심플 유지, 엄수)**: spec 28 §2 — "한 주체가 다른
+  주체의 결정을 반복해서 검증하지 않는다." 계층별 책임을 **한 곳에서만** 검증한다: **Transport**=
+  authenticated peer·node 실행세대·frame 형식만, **Target admission(Location Store CAS)**=Store 타입
+  해석 + actor/spot/owner fence, **Session owner**=current binding. **fence/type 검증을 transport 등
+  여러 곳에 흩뿌리지 말 것** — 과거 relocation 검증을 다중화해 복잡해지며 구현이 두 번 실패했다.
+  근본 해결은 항상 **심플**하게(28-relocation-flow.ko.md를 따른다).
 - **최대 병렬(기본 원칙)**: 가능한 한 최대로 병렬 진행한다. 코디네이터(Claude)는 지시를
   기다리지 말고 **유휴 자원(언어 트리·리뷰·검증·문서)이 생기는 즉시 안전한 병렬 작업을 스스로
   투입**한다. 구체적으로: ① 한 단계 안에서 서로 다른 언어 트리를 건드리는 하위 작업은 동시
