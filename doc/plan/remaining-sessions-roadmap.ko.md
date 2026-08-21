@@ -175,7 +175,7 @@
 - [ ] **canon-A1-real-wire-admission-integration-test (fast-follow)**: ProcessCanonicalActorJoin→AdmitCanonicalActorJoinAsync→AdmitRoutedActorJoinAsync 실제 경로 구동 테스트(accepted tail·Authority-row fence mismatch·TypeMismatch·malformed→ProtocolError·mailbox-full). sol #10(LOW/비차단). 기존 admission이 JSON 테스트로 커버되나 canonical 배선은 미커버.
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
-  - [~] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` (agent 진행 중, A1과 병렬)
+  - [~] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` (agent 진행 중, 포맷-only 패턴)
   - [ ] 2c [A4] C++ 발신(S4c-cpp) `cpp단일`
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
