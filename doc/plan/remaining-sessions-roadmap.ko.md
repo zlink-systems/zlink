@@ -138,28 +138,32 @@
 .NET 28 수신 decouple+seam 바인딩 제거(clean subset) `ab26a6527b` · node/java canonical 발신(S4c)
 · 4언어 canonical 수신자 골격(단 .NET wire-ingress 미연결=단계 1) · S4d seam 타입 `0407b3e4bc`.
 
-- [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** (agent 완료, Claude 검증+sol 대기)
-- [ ] **단계 2 — canonical 4언어 수신·발신 활성화**
-  - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영)
-  - [ ] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14)
-  - [ ] 2c [A4] C++ 발신(S4c-cpp)
+언어범위 태그: **`dotnet단일`** · **`cpp단일`** · **`4언어`**(node·dotnet·JVM(java+kotlin)·cpp
+동시) · **`혼합`**. (kotlin은 java 프레임워크 공유 — 샘플만 kotlin.) 단일언어 단계도 종료 시
+**L1 parity(다른 3언어 대조)** 필수.
+
+- [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (agent 완료, Claude 검증+sol 대기)
+- [ ] **단계 2 — canonical 수신·발신 활성화**
+  - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
+  - [ ] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일`
+  - [ ] 2c [A4] C++ 발신(S4c-cpp) `cpp단일`
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
-  - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b)
-  - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e)
-  - [ ] 3c [A7] 사설 dialect 제거(H-15/S5)
-- [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)**
-- [ ] **단계 5 — [B0] 하니스 안정화**
-  - [ ] H-10 dotnet→java relocation 레이스
-  - [ ] TicTacToe 간헐 flake
-  - [ ] D1 ST-C4 fault-injection variant
-- [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green**
-- [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)**
-- [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비**
-- [ ] **단계 9 — 모든 e2e 추가·구현·실행 (맨 마지막 작업, 항목별 4언어 lockstep)**
+  - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
+  - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
+  - [ ] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어`
+- [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
+- [ ] **단계 5 — [B0] 하니스 안정화** `혼합`
+  - [ ] H-10 dotnet→java relocation 레이스 (dotnet+java)
+  - [ ] TicTacToe 간헐 flake (샘플별)
+  - [ ] D1 ST-C4 fault-injection variant (cpp)
+- [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
+- [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어`
+- [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합`(집계=주로 JVM, 보고=전체)
+- [ ] **단계 9 — 모든 e2e 추가·구현·실행 (맨 마지막 작업)** `4언어`(항목별 lockstep)
   - [ ] B1 config-6 (14 시나리오)
   - [ ] B2 config-10 Track E/G/H/I (~28 시나리오)
   - [ ] B3 F e2e_inventory backlog
-- [ ] **단계 10 — [D5] 최종 완료 판정(sign-off)**
+- [ ] **단계 10 — [D5] 최종 완료 판정(sign-off)** `전체`
 
 ---
 
