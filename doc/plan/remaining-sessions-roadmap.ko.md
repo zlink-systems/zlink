@@ -307,15 +307,20 @@ Admission Lifecycle And Abandonment Cleanup), 15 §4.2, 28 §4.2.
 4. **C1** — W-3 4언어 생성 코덱 스왑(canonical 안정화 후, 또는 A와 병행 스트림).
 5. **B0** — 하니스 안정화(H-10 relocation 레이스 · TicTacToe flake · ST-C4/D1). 6·8단계 선행.
 6. **D2 — 6샘플×4언어 결정적 green**(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·
-   TicTacToe). ← 여기까지 완료돼야 다음.
+   TicTacToe).
 7. **Z1 — ZoneWorld 구현**(7번째 샘플 완성 + 게이트 편입).
-8. **B1 → B2 → B3 — 모든 e2e 테스트 추가·구현·실행**. **항목별 4언어 lockstep + spec-gap 게이트**
-   (Track B "실행 방식" 필수 준수): 한 e2e 항목을 4언어 동시 확인 → spec-gap 없음 확인 → 다음 항목.
-9. **D3 → D4 → D5 — 최종 게이트·보고**(java/kotlin 집계·doc 게이트·harness `all` → 매트릭스 보고
-   → 완료 조건 판정: 전 테스트 green + 6샘플+ZoneWorld×언어 + sol spec-gap 리뷰).
+8. **D3 → D4 — 집계·doc·harness 게이트 + 매트릭스 보고 준비**(java/kotlin 집계·doc 게이트·harness
+   `all`; canonical·6샘플·ZoneWorld 결과 수용).
+9. **B1 → B2 → B3 — 모든 e2e 테스트 추가·구현·실행 [맨 마지막 단계]**. **항목별 4언어 lockstep +
+   spec-gap 게이트**(Track B "실행 방식" 필수 준수): 한 e2e 항목을 4언어 동시 확인 → spec-gap
+   없음 확인 → 다음 항목. **왜 마지막인가**: e2e는 가장 포괄적인 교차-언어 검증이라, canonical
+   마이그레이션(A)·ZoneWorld(Z)까지 통합된 **최종 상태**를 대상으로 해야 의미가 있다. 앞 단계가
+   끝나기 전 e2e를 채우면 이후 변경으로 재작업된다.
+10. **D5 — 최종 완료 판정**(e2e green 포함 전 조건: 전 테스트 green + 6샘플+ZoneWorld×언어 +
+    모든 e2e + sol spec-gap 리뷰 통과 = 캠페인 종료). ※ 이는 작업이 아니라 sign-off.
 
-**tail 고정 순서(사용자 확정)**: … → **6단계 6샘플 완료** → **7단계 ZoneWorld 구현** →
-**8단계 모든 e2e 추가·실행** → **9단계 최종**.
+**tail 고정 순서(사용자 확정)**: … → **6샘플 완료** → **ZoneWorld 구현** → **(집계·보고 게이트)**
+→ **모든 e2e 추가·실행 [맨 마지막 작업 단계]** → **최종 완료 판정(sign-off)**.
 
 병행 허용: A 스트림(1~3) · C(4) · B0(5)는 서로 다른 세션에서 동시 진행 가능(파일 소유권 분리).
-단 6→7→8→9 tail은 순차.
+단 6→7→8→9→10 tail은 순차이며, **9(모든 e2e)가 마지막 작업 단계**다.
