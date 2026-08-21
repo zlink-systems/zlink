@@ -101,8 +101,8 @@
 
 | 스펙 | 파일 | 역할 | 관련 단계 |
 |---|---|---|---|
-| **51** internal-service-wire-protocol | `51-internal-service-wire-protocol.{ko,en}.md` | **canonical actor-join(28) 본체.** §9 "Receiver Stable-Type Resolution", "Admission Lifecycle And Abandonment Cleanup"(2026-08-21 신설), §4 admission. | 1·2·3·4 |
-| **15** spot-actor | `15-spot-actor.{ko,en}.md` | §4.2 다른 node의 spot으로 actor join 순서, factory stable type=Store Authority row. | 1·2·7·9 |
+| **51** internal-service-wire-protocol | `51-internal-service-wire-protocol.{ko,en}.md` | canonical actor-join(28) wire. §9 "Receiver Stable-Type Resolution"(Store Authority row 타입해석·typed terminal), §4 admission. **admission 흐름 권위는 §15 §4.2**. | 1·2·3·4 |
+| **15** spot-actor | `15-spot-actor.{ko,en}.md` | **§4.2 다른 node의 spot으로 actor join 순서 = admission 단일 권위**(28 승인에서 temp queue 등록+factory 준비+chunk limit reply, 40이 재사용). factory stable type=Store Authority row. | 1·2·7·9 |
 | **14** actor-model | `14-actor-model.{ko,en}.md` | Actor 수명주기·정체성. | 1·2 |
 | **21** location-runtime | `21-location-runtime.{ko,en}.md` | §2.3/§2.4 Authority row·descriptor(`authority\0actor\0{ActorId}`). | 1·2 |
 | **22** location-store-redis | `22-location-store-redis.{ko,en}.md` | §7 store 레코드 규범·counter 3행. | 1·2 |
