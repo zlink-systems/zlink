@@ -567,6 +567,19 @@ an admission is abandoned.
   follows are owned by the command 40 leg, keyed by the relocation identity
   (relocation / targetAttemptGeneration / coordinator). There is therefore no 28-to-40
   identity binding on the canonical path, and a receiver MUST NOT create one.
+- **Provisionally secured means committed but NOT dispatchable until cutover.** Securing the
+  Actor for a 28 commits it to the target Spot in a **moving (non-dispatchable) state**:
+  requests routed to it are held, not served, exactly as an in-flight relocation holds its
+  moving Actor. This is the mechanism that keeps a relocation-driven 28 from serving before
+  command 40 delivers the transferred state — the Actor becomes dispatchable only when the
+  relocation completes (cutover). A plain (non-relocation-driven) join has no state transfer
+  and no cutover to wait for, so its moving state **clears immediately upon admission** and
+  the Actor becomes dispatchable at once. A receiver that publishes a 28-admitted Actor as
+  **dispatchable membership before cutover** (for the relocation-driven case) violates this
+  rule; the distinction MUST NOT be dropped by committing every 28 as immediately
+  dispatchable. (A receiver that cannot tell the two cases apart at 28-receive time MAY
+  admit every canonical 28 as moving and let a plain join clear it immediately — this never
+  misclassifies.)
 - **A source-side pre-commit failure cleans only the source seal.** If the source's own
   capture/precommit fails after it has admitted a 28 but before it sends command 40 (or
   after 40 but before the target CAS), the source rolls back only its own seal. There is no
