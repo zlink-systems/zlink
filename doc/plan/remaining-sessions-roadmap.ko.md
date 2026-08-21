@@ -308,7 +308,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     된 후 재작성**(e2e-only 트리거·계약 완화 기각). 제작된 ZMP chunk-corruption 프록시 seam
     (SpotActorTransfer/Support/relocation_chunk_conflict_proxy.py, 미배선)은 그때 사용. SF-F7 주석
     모순은 1런 판정법 기록됨.
-  - **[~] [신규 발견] cpp SpotActorTransfer e2e HEAD red(5/5 결정적)**: stale e2e 바이너리가 가리던
+  - **[ ] [신규 등재] cpp 샘플 기존 결함 2건(단계 5 대상, baseline 실증)**: ① TicTacToe —
+    `location_committed` marker가 completion 완료 증거가 아님(marker 후 on_actor_joined→source
+    leave→completion 순서, spot_runtime.cpp:6216) + 앱 callback의 JoinGameNotify가 bound Session
+    `.submit()`만 해 detached delivery terminal과 미결합(player_actor.hpp:90) → 간헐 미수신(baseline
+    3/5). ② Bingo — detached FIFO `pending.dispatch()` 사후 실패 시 `target_closed`
+    (actor_gateway_runtime.cpp:119, baseline 재현). 모두 Join-chunk 전환과 무관한 기존 결함으로
+    5회×2(현/base) 대조 판정.
+  - **[x] [해소] cpp SpotActorTransfer e2e HEAD red(5/5 결정적)**: stale e2e 바이너리가 가리던
     실패 — 재빌드 후 ST-C4/D2 `get_actor_ref` 404(원격 Join 후 target actor_directory find 실패),
     ST-C2 session bind 실패. 용의: `ea7805d54b`(cpp ZLAU 정렬) 또는 `dd234c3110`. 회귀 판정 진행 중.
 - [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
