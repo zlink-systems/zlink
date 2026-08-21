@@ -62,6 +62,40 @@ internal interface IZLinkBackendLocalActorAuthorityReader
         out ulong ownerLeaseGeneration);
 }
 
+// The canonical command-28 transport is deliberately narrower than the
+// relocation workflow.  Its candidate contains only the schema body and the
+// optional application payload; transfer and completion identities remain in
+// the host's local relocation bookkeeping.
+internal readonly record struct ZLinkBackendCanonicalActorJoinRequest(
+    ZLinkBackendActorRef Actor,
+    ulong ActorNodeGeneration,
+    ulong ActorAuthorityOwnerGeneration,
+    ulong ActorOwnerLeaseGeneration,
+    bool Entry,
+    RoutingId TargetNodeRid,
+    string TargetSpotId,
+    ulong TargetSpotGeneration,
+    ulong TargetNodeGeneration,
+    ulong TargetAuthorityOwnerGeneration,
+    ulong TargetOwnerLeaseGeneration,
+    string PacketName,
+    string ContentType,
+    ReadOnlyMemory<byte> ApplicationPayload);
+
+internal interface IZLinkBackendCanonicalActorJoin
+{
+    // False is an ordinary capability/authority fallback decision.  The
+    // caller retains the established JSON admission path in that case.
+    bool CanRequestCanonicalActorJoin(
+        ZLinkBackendCanonicalActorJoinRequest request);
+
+    bool RequestCanonicalActorJoin(
+        ZLinkBackendCanonicalActorJoinRequest request,
+        ActorJoinCallback callback,
+        TimeSpan? timeout,
+        out ulong correlation);
+}
+
 internal readonly record struct ZLinkBackendActorJoinResult(
     RequestResult Result,
     int JoinResultCode,
@@ -72,7 +106,8 @@ internal readonly record struct ZLinkBackendActorJoinResult(
     //  Fine failure code (ServiceWireConstants.FrameworkErrorCode) from the join
     //  reply header, 0 (None) on success or when the reply carried no fine code.
     //  Defaulted so existing/test constructors need not thread it.
-    int FailureErrno = 0);
+    int FailureErrno = 0,
+    ulong JoinedSpotGeneration = 0);
 
 internal readonly record struct ZLinkBackendActorJoinEntrySpotResult(
     RequestResult Result,

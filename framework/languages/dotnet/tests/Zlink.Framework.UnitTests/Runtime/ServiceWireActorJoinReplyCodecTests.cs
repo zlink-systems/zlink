@@ -1,5 +1,8 @@
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -33,6 +36,68 @@ public sealed class ServiceWireActorJoinReplyCodecTests
             encoded, "mesh", out var decoded, out var error));
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(request, decoded.Request);
+    }
+
+    [Fact]
+    public void Canonical_sender_uses_the_direct_application_payload_frame()
+    {
+        var actorNode = RoutingId.From(new byte[] { 1, 2, 3 });
+        var request = new ActorJoinRequest(
+            42,
+            new ActorRef("actor-1", 7, "mesh", actorNode),
+            8, 9, 10, false,
+            "spot-1", 11, RoutingId.From(new byte[] { 4, 5, 6 }), 12, 13, 14);
+        var application = ZLinkApplicationPayloadEnvelopeCodec.Encode(
+            "ZLinkFrameworkActorJoinRequest",
+            "application/json",
+            "{\"request\":true}"u8);
+        var frames = new[]
+        {
+            Message.From(ZLinkServiceWireCodec.EncodeActorJoinRequest(request)),
+            Message.From(application)
+        };
+
+        try
+        {
+            var decoded = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
+                frames, "mesh");
+
+            Assert.NotNull(decoded);
+            Assert.Equal(request, decoded!.Request.Request);
+            Assert.Equal("ZLinkFrameworkActorJoinRequest", decoded.Payload!.Value.PacketName);
+            Assert.Equal("application/json", decoded.Payload!.Value.ContentType);
+            Assert.Equal("{\"request\":true}"u8.ToArray(),
+                decoded.Payload!.Value.Payload.ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(frames);
+        }
+    }
+
+    [Fact]
+    public void Canonical_handoff_identity_is_deterministic_local_bookkeeping()
+    {
+        var source = RoutingId.From(new byte[] { 1, 2, 3 });
+        var handoff = ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+            source, "actor-1", 7, 8, 42);
+
+        Assert.Equal(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 7, 8, 42));
+        Assert.True(Guid.TryParseExact(handoff, "N", out _));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 7, 8, 43));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-2", 7, 8, 42));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 8, 8, 42));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 7, 9, 42));
     }
 
     [Fact]

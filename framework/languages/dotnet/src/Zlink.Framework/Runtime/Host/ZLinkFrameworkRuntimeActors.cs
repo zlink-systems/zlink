@@ -2372,7 +2372,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                ZLinkFrameworkErrorKind.NotFound,
                $"Actor '{actorId}' relocation cannot publish authority because the Location runtime is unavailable.");
 
-    internal ValueTask<ZLinkRemoteActorAdmissionReply> AdmitCanonicalActorJoinAsync(
+    internal async ValueTask<ZLinkRemoteActorAdmissionReply> AdmitCanonicalActorJoinAsync(
         string spotId,
         ActorJoinRequest request,
         ZLinkApplicationPayloadEnvelope? payload,
@@ -2386,26 +2386,77 @@ internal sealed partial class ZLinkFrameworkRuntime
             typeof(ZLinkMessage).Name,
             ZLinkEnvelopeCodec.DefaultContentType,
             ReadOnlyMemory<byte>.Empty);
+        var authorityStore = Registration.Locations.ResolveStore()
+                             ?? throw new ZLinkFrameworkException(
+                                 ZLinkFrameworkErrorKind.Unavailable,
+                                 "Canonical actorJoin requires an available Authority Store.");
+        var sourceAuthorityRead = await authorityStore.ReadAuthorityAsync(
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.Actor.ActorId),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (sourceAuthorityRead is not ZLinkAuthorityReadResult.Found source
+            || source.Snapshot.ObjectGeneration != request.Actor.ObjectGeneration
+            || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                source.Snapshot.Payload.Span, out var sourceAuthority)
+            || sourceAuthority.NodeRid != request.Actor.NodeRid
+            || sourceAuthority.NodeGeneration != request.ActorNodeGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"Canonical actorJoin source authority for '{request.Actor.ActorId}' changed before admission.");
+        var sourceSpotId = ZLinkActorRemoteJoiner.ResolveSourceSpotId(sourceAuthority);
+        var stableType = await ResolveCanonicalActorJoinStableTypeAsync(
+                request,
+                authorityStore,
+                type => ZLinkActorRelocationRegistry.TryResolve(
+                    Registration, type, request.TargetNodeRid, out _),
+                cancellationToken)
+            .ConfigureAwait(false);
+        ZLinkActorRelocationRegistry.TryResolve(
+            Registration,
+            stableType,
+            request.TargetNodeRid,
+            out var relocation);
+        if (relocation is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                $"Actor type '{stableType}' relocation policy is not registered on the target node.");
+        using var applicationMessage = Message.From(application.Payload);
+        var reservationPayload = ZLinkMessage.FromEnvelopePayload(
+            application.ContentType,
+            applicationMessage,
+            Registration.Codecs);
+        var predictedPayloadBytes =
+            ZLinkRemoteActorJoinPackets.MeasurePredictedRelocationPayloadBytes(
+                reservationPayload,
+                Registration.Codecs,
+                relocation.PolicyKind == 2);
+        var handoffId = ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+            request.Actor.NodeRid,
+            request.Actor.ActorId,
+            request.Actor.ObjectGeneration,
+            request.ActorNodeGeneration,
+            request.Correlation);
         // The canonical request has no private handoff identifier or type.
         // This deterministic local reservation key is only the existing
         // admission/prewarm bookkeeping identity; stable type and every
         // route fence stay Store-owned in AdmitRoutedActorJoinAsync.
         var admission = new ZLinkRemoteActorAdmissionRequest(
             request.Actor.ActorId,
-            string.Empty,
-            string.Empty,
+            stableType,
+            sourceSpotId,
             request.Actor.NodeRid.ToBytes().ToArray(),
             application.ContentType,
             application.Payload.ToArray(),
-            $"canonical:{request.Actor.NodeRid.ToHex()}:{request.Correlation}",
+            handoffId,
             deadline.ToUnixTimeMilliseconds(),
             request.Actor.ObjectGeneration,
             request.ActorAuthorityOwnerGeneration,
-            Math.Max(application.Payload.Length, 1),
+            predictedPayloadBytes,
             request.TargetSpotGeneration,
             request.TargetAuthorityOwnerGeneration,
             new ZLinkCanonicalActorJoinAdmission(request));
-        return AdmitRoutedActorJoinAsync(spotId, admission, cancellationToken);
+        return await AdmitRoutedActorJoinAsync(spotId, admission, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     internal async ValueTask<ZLinkRemoteActorAdmissionReply> AdmitRoutedActorJoinAsync(
@@ -2592,19 +2643,21 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 $"admitting Actor '{request.ActorId}' relocation");
                         var expectedTargetAuthorityOwnerGeneration = checked(
                             authority.Snapshot.AuthorityOwnerGeneration + 1);
+                        var payload =
+                            ZLinkRemoteActorJoinPackets
+                                .DecodeAdmissionRequestPayload(
+                                    request,
+                                    Registration.Codecs);
                         var reservation = new ZLinkActorRelocationReservation(
-                            Guid.NewGuid().ToString("N"),
+                            canonical is null
+                                ? Guid.NewGuid().ToString("N")
+                                : request.HandoffId,
                             request.PredictedPayloadBytes,
                             target.NodeRid,
                             targetNodeGeneration,
                             targetSpotGeneration,
                             expectedTargetAuthorityOwnerGeneration,
                             request.TargetSpotAuthorityOwnerGeneration);
-                        var payload =
-                            ZLinkRemoteActorJoinPackets
-                                .DecodeAdmissionRequestPayload(
-                                    request,
-                                    Registration.Codecs);
                         ZLinkSpotActorJoinResult result;
                         if (target.UserSpot is { } userSpot)
                             result = await userSpot.AdmitRemoteActorJoinAsync(

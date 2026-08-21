@@ -2113,6 +2113,117 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ownerLeaseGeneration);
     }
 
+    internal bool CanRequestCanonicalActorJoin(
+        ZLinkBackendCanonicalActorJoinRequest request)
+    {
+        // Lifecycle generations are opaque equality tokens; only zero means
+        // absent.  The remaining generation fields are bounded counters, but
+        // this is a selection gate rather than a second admission validator.
+        if (request.Actor.NodeRid != _routingId
+            || request.Actor.Generation == 0
+            || request.ActorNodeGeneration == 0
+            || request.ActorAuthorityOwnerGeneration == 0
+            || request.ActorOwnerLeaseGeneration == 0
+            || request.TargetNodeRid == _routingId
+            || string.IsNullOrWhiteSpace(request.TargetSpotId)
+            || request.TargetSpotGeneration == 0
+            || request.TargetNodeGeneration == 0
+            || request.TargetAuthorityOwnerGeneration == 0
+            || request.TargetOwnerLeaseGeneration == 0
+            || string.IsNullOrWhiteSpace(request.PacketName)
+            || string.IsNullOrWhiteSpace(request.ContentType))
+            return false;
+
+        if (!_observedSpotAuthorities.TryGetValue(
+                new ObservedSpotAuthorityKey(
+                    request.TargetNodeRid,
+                    request.TargetSpotId,
+                    request.TargetSpotGeneration),
+                out var observed)
+            || observed.TargetNodeGeneration != request.TargetNodeGeneration
+            || observed.AuthorityOwnerGeneration
+               != request.TargetAuthorityOwnerGeneration
+            || observed.OwnerLeaseGeneration != request.TargetOwnerLeaseGeneration)
+            return false;
+
+        lock (_gate)
+        {
+            return _peersByRid.TryGetValue(request.TargetNodeRid, out var peer)
+                   && peer.Admitted
+                   // Admission only becomes non-null after the required
+                   // framework-service capability has been decoded.
+                   && peer.Admission is not null
+                   && peer.LifecycleGeneration == request.TargetNodeGeneration;
+        }
+    }
+
+    internal SubmitResult TryRequestCanonicalActorJoin(
+        ZLinkBackendCanonicalActorJoinRequest request,
+        MeshOperationId correlationId,
+        TimeSpan timeout)
+    {
+        if (!CanRequestCanonicalActorJoin(request))
+            return SubmitResult.NotConnected;
+        if (!TryBeginOperation(
+                MeshOperationKind.ActorJoin,
+                correlationId,
+                timeout,
+                out var operation))
+            return SubmitResult.Backpressured;
+
+        Peer? peer;
+        lock (_gate)
+            _peersByRid.TryGetValue(request.TargetNodeRid, out peer);
+        if (peer is null
+            || !peer.Admitted
+            || peer.Admission is null
+            || peer.LifecycleGeneration != request.TargetNodeGeneration)
+        {
+            RemoveManagedOperation(operation);
+            return SubmitResult.NotConnected;
+        }
+
+        var actor = new ActorRef(
+            request.Actor.ActorId,
+            request.Actor.Generation,
+            _meshName,
+            request.Actor.NodeRid);
+        operation.ActorJoinOrigin = new ActorJoinOrigin(
+            actor,
+            request.TargetNodeRid,
+            request.TargetSpotId,
+            request.TargetSpotGeneration);
+        var head = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+            new ActorJoinRequest(
+                operation.OperationId.Low,
+                actor,
+                request.ActorNodeGeneration,
+                request.ActorAuthorityOwnerGeneration,
+                request.ActorOwnerLeaseGeneration,
+                request.Entry,
+                request.TargetSpotId,
+                request.TargetSpotGeneration,
+                request.TargetNodeRid,
+                request.TargetNodeGeneration,
+                request.TargetAuthorityOwnerGeneration,
+                request.TargetOwnerLeaseGeneration));
+        var payload = ZLinkApplicationPayloadEnvelopeCodec.Encode(
+            request.PacketName,
+            request.ContentType,
+            request.ApplicationPayload.Span);
+        if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, [head, payload]))
+        {
+            CompleteManagedOperation(
+                operation,
+                RequestResult.Backpressured,
+                0,
+                Array.Empty<Message>());
+        }
+        else
+            Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: request.TargetNodeRid);
+        return SubmitResult.Ok;
+    }
+
     internal void SetLocalOwnerLeaseGeneration(ulong ownerLeaseGeneration)
     {
         if (ownerLeaseGeneration is 0 or > long.MaxValue)

@@ -1,4 +1,7 @@
-﻿namespace Zlink.Framework.Runtime.Actors;
+﻿using System.Buffers.Binary;
+using System.Security.Cryptography;
+
+namespace Zlink.Framework.Runtime.Actors;
 
 internal static class ZLinkRemoteActorJoinPackets
 {
@@ -22,6 +25,37 @@ internal static class ZLinkRemoteActorJoinPackets
     //  by a target admission accept. 0 (default) means not advertised — the
     //  source then falls back to its own RelocationPayloadChunkLimit only.
     internal const ulong ConservativeReceiveChunkLimitBytes = 32_768;
+
+    // Command 28 deliberately carries no handoff id. Both ends derive this
+    // valid local relocation identity from the authenticated source Actor
+    // route and the command correlation; it is never serialized on the wire.
+    internal static string CreateCanonicalHandoffId(
+        RoutingId sourceActorNodeRid,
+        string actorId,
+        ulong actorGeneration,
+        ulong sourceActorNodeGeneration,
+        ulong correlation)
+    {
+        var source = sourceActorNodeRid.ToBytes();
+        var actor = System.Text.Encoding.UTF8.GetBytes(actorId);
+        var material = new byte[checked(
+            source.Length + sizeof(ushort) + actor.Length + (sizeof(ulong) * 3))];
+        var offset = 0;
+        source.CopyTo(material);
+        offset += source.Length;
+        BinaryPrimitives.WriteUInt16BigEndian(material.AsSpan(offset), checked((ushort)actor.Length));
+        offset += sizeof(ushort);
+        actor.CopyTo(material, offset);
+        offset += actor.Length;
+        BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), actorGeneration);
+        offset += sizeof(ulong);
+        BinaryPrimitives.WriteUInt64BigEndian(
+            material.AsSpan(offset), sourceActorNodeGeneration);
+        offset += sizeof(ulong);
+        BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), correlation);
+        var hash = SHA256.HashData(material);
+        return new Guid(hash.AsSpan(0, 16)).ToString("N");
+    }
 
     //  Spec 28 direct transfer chunk sizing: the source clamps to the
     //  smaller of its own configured limit and the target's advertised

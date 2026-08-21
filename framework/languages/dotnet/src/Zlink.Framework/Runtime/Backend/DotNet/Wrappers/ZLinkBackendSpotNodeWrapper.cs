@@ -18,6 +18,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendAuthorityObserver,
     IZLinkBackendRequestSourceFenceObserver,
     IZLinkBackendLocalActorAuthorityReader,
+    IZLinkBackendCanonicalActorJoin,
     IZLinkBackendActorMessageFollowIngress,
     IZLinkBackendMessageFollowNotifications,
     IZLinkBackendBoundSessionReplacementNotifications
@@ -147,6 +148,31 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             ToNativeActor(actor),
             out authorityOwnerGeneration,
             out ownerLeaseGeneration);
+
+    public bool CanRequestCanonicalActorJoin(
+        ZLinkBackendCanonicalActorJoinRequest request) =>
+        _node.CanRequestCanonicalActorJoin(request);
+
+    public bool RequestCanonicalActorJoin(
+        ZLinkBackendCanonicalActorJoinRequest request,
+        ActorJoinCallback callback,
+        TimeSpan? timeout,
+        out ulong correlation)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        EnsureStarted();
+        var correlationId = _node.AllocateOperationId();
+        correlation = correlationId.Low;
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, replyParts) =>
+                callback(BuildJoinResult(record, request.Actor), replyParts),
+            id => _node.TryRequestCanonicalActorJoin(
+                request,
+                id,
+                timeout ?? default));
+        return submit == SubmitResult.Ok;
+    }
 
     private ActorRef ToNativeActor(ZLinkBackendActorRef actor) =>
         actor.ToNative(_node.MeshName);
@@ -1058,7 +1084,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             completion?.Location.SpotId ?? string.Empty,
             completion?.Location.MembershipEpoch ?? 0,
             completion?.ReceiveChunkLimitBytes ?? 0,
-            record.FailureErrno);
+            record.FailureErrno,
+            completion?.Location.SpotGeneration ?? 0);
     }
 
     private static ZLinkBackendActorJoinEntrySpotResult BuildEntrySpotJoinResult(
