@@ -594,12 +594,11 @@ an admission is abandoned.
   target's correctness does NOT depend on a command 40 arriving. In other words, accepting
   a 28 is a reclaimable preparation, not a correctness-bearing durable commitment, and it
   is safe without any source-driven abort.
-- **Rejected alternative.** A design that keys a cross-message abort control on the
-  correlation so the source can remotely cancel a 28 admission is NOT adopted, because it
-  reintroduces exactly the 28-to-40 cross-message addressing this section excludes. On the
-  canonical path an abort reaches the target only through the command 40 family that
-  carries the relocation identity (for example 53 `relocationFailed`); a 28 has no abort
-  channel.
+- **A 28 has no abort channel.** The source MUST NOT remotely cancel a 28 admission, and
+  there is no correlation-keyed cross-message abort control (that would reintroduce the
+  28-to-40 cross-message addressing this section excludes). On the canonical path an abort
+  reaches the target only through the command 40 family that carries the relocation identity
+  (for example 53 `relocationFailed`).
 
 Consequently each runtime's canonical 28 receive MUST NOT **conflate** admission (type
 resolution plus provisionally securing the Actor) with the relocation reservation. An

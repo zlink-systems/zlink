@@ -24,9 +24,14 @@
   리뷰 = `codex exec -m gpt-5.6-sol ...`, 리서치 = codex.
 - **Claude가 모든 agent 결과를 독립 검증**(diff 정독 + stash-baseline 재현 + 독립 테스트) **후
   sol 리뷰**, 두 결과 대조 후 판정·커밋. 맹신 금지.
-- agent는 `framework/doc/**` 수정 금지(스펙/가이드/인터페이스=Claude 단독). 커밋은 Claude가
-  파일 명시 `git add`(광역 `-A` 금지). agent `git reset/checkout/stash` 금지.
-- 스펙 변경은 오류·개선만(구현 편의 완화 금지). 판정·전파(4언어)는 Claude 단독.
+- **스펙 문서 규율(엄수)**: `framework/doc/**`(스펙·가이드·인터페이스)는 **sub 에이전트가 절대
+  수정하지 않는다.** 오직 **main 작업자(Claude)**만 편집하며, 그것도 **Claude가 진짜 스펙 버그
+  (오류·개선)라고 판단할 때만** — 구현 편의로 완화하려고 손대지 않는다. 판정·4언어 전파도 Claude
+  단독. **스펙 문서는 순수 규범 텍스트로만 존재한다**: 진행로그·날짜·finding 번호·sol/리뷰 언급·
+  커밋해시·"신설/기각한 대안" 같은 결정-로그성 문구를 스펙에 넣지 않는다(그런 기록은 plan 문서·
+  커밋 메시지·아카이브에만). agent에게 스펙 근거를 줄 때는 **읽기 전용으로 인용**하고 "수정 금지"를
+  프롬프트에 명시한다.
+- 커밋은 Claude가 파일 명시 `git add`(광역 `-A` 금지). agent `git reset/checkout/stash` 금지.
 - u64 규칙: 전범위 opaque equality 토큰(lifecycle/node generation, correlation, replyRouteId,
   OperationId, handoff/transfer/completion id)은 `== 0`/`!= 0`만. bounded counter(Object/
   AuthorityOwner/OwnerLease/DescriptorRevision, 1..2^63-1)만 `<= 0` 허용.

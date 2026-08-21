@@ -535,10 +535,10 @@ canonical `actorJoin`(28) admission과 뒤이을 state 전송(command 40 `reloca
   (b) 정상 Actor lifecycle(spot close·node teardown·target-local 회수)로 정리된다. target의
   정확성은 command 40 도착을 필요로 하지 않는다. 즉 28 수용은 correctness-bearing durable
   commitment가 아니라 회수 가능한 준비이며, source-driven abort 없이도 안전하다.
-- **기각한 대안.** correlation을 cross-message abort control의 key로 삼아 source가 28 admission을
-  원격 취소하게 하는 설계는 채택하지 않는다. 그것은 이 절이 배제한 28↔40 cross-message addressing을
-  재도입하기 때문이다. canonical 경로의 abort는 오직 relocation identity를 실은 command 40 계열
-  (예: 53 `relocationFailed`)로만 target에 도달하며, 28은 abort 채널을 갖지 않는다.
+- **28은 abort 채널을 갖지 않는다.** source는 28 admission을 원격 취소해서는 안 되며, correlation을
+  key로 하는 cross-message abort control도 없다(그것은 이 절이 배제한 28↔40 cross-message addressing을
+  재도입한다). canonical 경로의 abort는 오직 relocation identity를 실은 command 40 계열
+  (예: 53 `relocationFailed`)로만 target에 도달한다.
 
 따라서 각 runtime의 canonical 28 수신은 admission(type 해석 + provisional Actor 확보)과 relocation
 reservation을 **융합해서는 안 된다**. 28 수용 시점에 상위 relocation reservation·seal·즉시 전달을
