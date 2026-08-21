@@ -198,17 +198,17 @@
 
 # 단계 1 — [A1] .NET canonical 28 수신자 wire-ingress 연결
 
-**근거 스펙(권위)**: **15 §4.2**(actor-join 순서 — admission 단일 권위: 28 승인에서 relocation temp queue 등록 + factory 준비 + Store 타입해석, reply에 chunk limit; Restore(40)가 재사용) · 51 §9 Receiver Stable-Type Resolution · 21 §2.4. **주의**: 이전 세션의 branch-A 모델(28은 reservation 안 만듦·40이 소유)은 §15 §4.2와 충돌해 **폐기**됨(스펙에서 제거). A1은 §15 §4.2에 충실히 구현한다.
+**근거 스펙(권위)**: **15 §4.2**(actor-join admission 단일 권위) · 51 §9 Receiver Stable-Type Resolution · **28 §2**(검증 단일책임). **성격 = 포맷 배선만**: canonical 28 binary를 decode해 **기존 admission 로직에 투입**한다. 로직·검증을 새로 만들지 않는다.
 
 - **문제**: `ZLinkManagedMeshNode.ProcessReceivedAsync`의 수신 whitelist가 ActorJoin(28)을
   제외 → wire로 온 28이 protocol error로 drop. 수신 경로 `PrepareCanonicalActorJoinAsync`
   (`ZLinkFrameworkRuntimeActors.cs:2678`)는 `ZLinkSpotActorJoinDispatcher`에서만 호출돼 raw
   수신 미연결. ("S3 receivers 4/4"가 .NET에선 틀렸음.)
-- **단계**: ProcessReceivedAsync가 canonical 28을 decode(`TryDecodeActorJoinRequest`)→admission
-  (§9 Store fence 해석→provisional secure→spot admission)→reply tail(receiveChunkLimitBytes)로
-  라우팅. entry bool8 존중. 실패는 typed terminal(Unavailable/NotFound/ProtocolError/
-  TypeMismatch/Rejected), silent drop 금지. node 형상 미러(`service-stateful-runtime.ts`
-  decodeActorJoin28, `remote-actor-join-receiver.ts` prepareCanonicalActorJoin).
+- **단계(thin transport)**: ProcessReceivedAsync가 canonical 28을 decode(생성 decoder+legacy
+  guard로 private 28은 fallthrough)하고, **peer/node세대/frame만 확인 후 기존 target admission
+  경로에 그대로 라우팅**(fence/type 재검증 금지 — spec 28 §2). 포맷상 유일한 차이 = actorType이
+  wire에 없어 **Store Authority row에서 stable type 해석**(§9). entry bool8로 Entry/User Spot 구분.
+  admission이 소유한 fence/temp-queue/reply(chunk limit)·typed terminal은 기존 로직 재사용.
 - **DoD**: wire로 온 28이 실제로 admit되는 신규 in-process/loopback 테스트 + mismatched-fence가
   typed terminal. 전체 dotnet 게이트 무회귀(sanctioned 3건만). sol CLEAN.
 - **선행**: 없음(clean subset 커밋 `ab26a6527b` 기반).
@@ -217,32 +217,28 @@
 
 # 단계 2 — canonical 4언어 수신·발신 활성화
 
-## 2a. [A3] .NET canonical 28 발신 (재작업 — sol 6건 반영)
+## 2a. [A3] .NET canonical 28 발신
 
-**근거 스펙**: 51 §9 · 20(completion). **근거 plan**: `canon-s4c-s4d-sender-integration-plan.ko.md`.
+**근거 스펙**: 51 §9(28 body layout) · 15 §4.2. **성격 = 포맷 발신만.**
 
-- **배경**: 1차 발신 시도는 sol NOT-CLEAN 6건으로 clean subset(decouple+바인딩 제거)만 landing,
-  origination(발신+gate+수신 dispatch+completion) revert. 6건:
-  (1) 수신 dispatch 미연결 = 단계 1이 해소, (2) 28-accept 시 membership commit(=node와 동일 형상,
-  moving 게이트로 dispatch 차단 확인 → ruling 위반 아님), (3) empty recovery로 public Join
-  completion 유실, (4) entry 하드코딩 false, (5) bound-session을 admission 제외로 처리(ruling은
-  seal/route leg만), (6) production invariant 미테스트.
-- **DoD**: 단계 1 위에서 발신 재구현, (3)(4)(5)(6) 해소, 전체 게이트 무회귀, sol CLEAN.
-- **선행**: 단계 1(수신자 없으면 .NET↔.NET 왕복 검증 불가).
+- **단계**: capability + observed-authority 게이트가 충족되면 사설 JSON 대신 **canonical 28 binary를
+  encode해 발신**하고, 그 뒤 **기존 relocation prepare/data/cutover/CAS 흐름을 그대로 구동**한다.
+  transfer/handoff/completion id는 language-internal(§9 — wire 무배치). capability 미충족 시 JSON 폴백.
+  relocation 로직·completion 처리는 재사용(새로 만들지 않음).
+- **DoD**: 게이트 아래 canonical 28 발신, 기존 흐름 무변경 통과, .NET↔.NET 왕복 + 전체 게이트 무회귀, sol CLEAN.
+- **선행**: 단계 1(수신자).
 
 ## 2b. [A2] C++ canonical 28 수신자 완성 (H-12) + chunk limit (H-14)
 
 **근거 스펙**: 51 §9 · 15 §4.2 · 21 §2.4 · 28.
 
-- **문제**: cpp canonical 경로가 (a) Store Authority row에서 stableType 해석 미연결
-  (`actor_type_from_authority`를 `admit_wire_actor_join`에 연결, sync local-map→async Store),
-  (b) Accepted 후 seal/capture/Restore/relay/cutover continuation 미연결, (c) public Accepted가
-  target owner CAS+queue-open 후에만. chunk limit(H-14)은 `mesh_node_runtime.cpp:2562`에서 수신
-  경로에 미적용(origination revert `ab0b4b39a4`로 dormant).
-- **주의**: 체크리스트 slice2(line 126) "canonical-accepted를 `seal_remote_application_actor_join()`
-  경유"는 §9 "admission-time seal/commit 금지"와 충돌 — **spec §9에 맞춰 재작성 후 착수**.
-- **DoD**: cpp가 canonical 28 수신·admission·chunk limit 적용, focused + 관련 e2e 무회귀, sol CLEAN.
-- **선행**: 단계 1(§9 해석 형상 참조), spec 결정 `8d8e5cdffd`(이미 확정).
+- **성격 = 포맷 decode 배선만**(.NET A1과 동형): canonical 28을 decode해 **기존 cpp admission
+  (`admit_wire_actor_join`)에 투입**. 포맷상 유일 차이 = **Store Authority row에서 stable type 해석**
+  (`actor_type_from_authority` 연결, sync local-map→async Store). chunk limit(H-14)은 admission이
+  reply로 협상하는 기존 값(negotiated) 그대로. seal/capture/Restore/cutover 등 relocation continuation은
+  **기존 로직 재사용**(새로 배선·검증 추가 금지 — spec 28 §2 단일책임).
+- **DoD**: cpp가 canonical 28을 decode해 기존 admission 투입·chunk limit 협상, focused + 관련 e2e 무회귀, sol CLEAN.
+- **선행**: 단계 1(포맷 배선 패턴 참조). A1에서 검증된 "포맷만" 패턴을 cpp에 반복.
 
 ## 2c. [A4] C++ canonical 28 발신 (S4c-cpp)
 
@@ -262,14 +258,14 @@
 
 **근거 스펙**: 51 §9 · 48(bound Session) · 28 §3.
 
-- **배경**: 28→40 identity 바인딩은 **불필요**로 판정됨(branch A: canonical admission은 40을
-  기다리지 않고, 40 reservation은 relocation identity로 별도 트랙). 단 multi-attempt
-  later-attempt-wins 재park 정확성은 node/java에서도 미검증(canon-node-java-multiattempt-repark).
-- **단계**: (a) node/java multi-attempt 재park 테스트로 branch A/B 확정(코드상 바인딩 없음
-  확인됨), (b) 필요 시 target-local supersession 규칙 spec 명문화, (c) bound Session은 28 전
-  42/43 seal + target commit 후 44 route update(28 sideband 금지).
-- **DoD**: 재park 정확성 테스트 존재, bound Session 분리 동작, sol CLEAN.
-- **선행**: 단계 1·2a(수신·발신 활성화 후라야 실경로 검증).
+- **성격**: attempt-lifecycle·bound Session은 **기존 relocation 로직이 이미 처리**한다. canonical은
+  포맷만 바꾸므로 새 바인딩·supersession 로직을 만들 필요가 없다. 이 카드는 **기존 동작이 canonical
+  28 포맷에서도 그대로 성립하는지 검증**하는 것이다.
+- **단계**: (a) 기존 multi-attempt(later-attempt-wins 재park)·bound Session(28 전 42/43 seal + commit
+  후 44 route, 28 sideband 금지) 동작을 canonical 28 경로에서 재확인, (b) 발산 발견 시에만 최소 수정
+  (로직 재작성 아님). 실 gap이면 STOP·판정.
+- **DoD**: canonical 28 경로에서 multi-attempt·bound Session 기존 동작 유지 확인, sol CLEAN.
+- **선행**: 단계 1·2a.
 
 ## 3b. [A6] 크로스랭 harness canonical 매트릭스 (S4e)
 
