@@ -237,13 +237,25 @@
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
   - [x] 2c [A4] C++ 발신 — `cpp단일` `7ca95170ac` (production canonical 활성화; continuation bridge·off-wire handoff id .NET byte-parity·app payload·generation equality·terminal 보존·allow-list; sol 구현+리뷰, 6/6 검증·샘플 통과·CAS 무변경. deferred: 수신자 app-reply 전달=3b)
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
-  - [~] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합` — **검증 완료**: canonical 회귀 없음(Property 2 parity PASS, Property 1 3언어 static PASS). Node multi-attempt는 열린 설계 질문으로 3b 이월(시도 fix revert). 상세 아래 §3a.
+  - [x] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합` — **완료(2026-08-22)**: Property 2(bound
+    Session) canonical parity PASS + Property 1(multi-attempt) **실제 ingress 실증으로 판정 완료**
+    (`327c2b86c1` probe + sol 정합 분석): later-attempt-wins는 admission registry 계층서 동작,
+    Node/.NET 대칭. 잔여 스펙-gap 3건(typed terminal 21·.NET post-PREPARE abort·Node eager-materialize
+    정리)은 별도 semantic 카드(§3a 판정 기록). 상세 아래 §3a.
   - [x] **A6-cpp-app-reply-parity (양방향 완료)** — `dd234c3110` (`cpp단일`, 포맷만): cpp canonical actorJoin app-reply를 node/java/.NET과 양방향 parity로 정렬. sol 2라운드 구현 + sol 2라운드 리뷰 + Claude 독립 검증(diff·클린 재빌드·ctest 5/5·TicTacToe/Bingo).
     - [x] **수신자(send)**: `actor_join_operation_result_t.application_reply` 추가 + `admit_wire_actor_join`가 handler reply를 framework-multipart(`[u32BE count=1][u32BE size][bytes]`) application_payload로 감싸 command-20 tail 뒤 2번째 frame으로 전송; `terminal_result!=0`이면 payload 거부. **.NET `EncodeFrameworkMultipart`/Java `encodeFrameworkMultipart`와 바이트 단위 일치**(BE count+per-part len).
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
     - [x] **serializer 가드 축소**: `canonical_actor_join_application_reply` → `result_t<optional>`; reply 없으면 serializers 없이도 admit, reply 있는데 serializers null이면 typed protocol_error. 기존 동작 회귀 없음.
     - 이월(3b서 자연 해소): ① full source-path end-to-end 커버(Java→cpp/.NET→cpp pairwise가 정확히 구동) ② throwing reply serializer 시 pending-admission unwind(pathological) ③ **.NET source(ZLinkActorRemoteJoiner:1044) non-unwrap 의심 → pairwise서 확인**.
-  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **스코핑 완료(대형 트랙)**. canonical User Spot JoinSpot 스테이지 현재 0개(기존 3개는 JoinEntrySpot·`all` 미포함). 남은 필요: ① **12 pairwise 방향**(Node↔.NET↔Java↔C++ 양방향) 신규 스테이지 ② **4언어 cross-language host에 User Spot actor-join mode 신설**(현 entry-spot mode만; C++ host는 relocation mode 자체 없음) ⑤ 통과 스테이지 `all` 편입(무음 금지). **완료: ③ cpp receiver/source app-reply 양방향(`dd234c3110`) ④ .NET app-reply 보존**. 진행: 항목별 4언어 lockstep + spec-gap. 하니스: framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 근거: a6-scope 진단.
+  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **진행 중(1/12 방향 그린)**.
+    **완료(2026-08-22)**: ① **stage-1 Node→.NET 결정적 그린** `de17ac7179`(6단 사다리 — ⭐핸드오프·
+    §3b 사다리 기록 참조) ② multi-attempt 실증 스테이지 `327c2b86c1` ③ cpp app-reply 양방향
+    (`dd234c3110`) ④ .NET app-reply 보존 ⑤ 4언어 durable-authority conformance 대칭
+    (`077aa29987`·`7dd0813b96`·`ea7805d54b`·`387ee43361` — cpp는 ZLAU 정렬 포함, drift 오라클 확보).
+    **진행 중**: 역방향 .NET→Node 스테이지(`user-spot-join-dotnet-node`) 구현. **남은 것**:
+    Java 방향(host User-Spot mode 신설) → C++ 방향(host actor-join mode 완전 신설, 최대) →
+    12방향 완성 → 통과 스테이지 `all` 편입(무음 금지). 하니스:
+    framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 진행: 항목별 lockstep + spec-gap.
   - [ ] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어`
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합`
