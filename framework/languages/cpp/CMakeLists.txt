@@ -1008,6 +1008,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_actor_authority_payload
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_authority_payload.cpp)
+  target_compile_features(test_cpp_framework_actor_authority_payload PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_actor_authority_payload PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_actor_authority_payload PRIVATE
+    ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/durable-authority-v1.json")
+  target_link_libraries(test_cpp_framework_actor_authority_payload PRIVATE
+    nlohmann_json::nlohmann_json
+    zlink::framework)
+  add_test(NAME test_cpp_framework_actor_authority_payload
+    COMMAND test_cpp_framework_actor_authority_payload)
+  set_tests_properties(test_cpp_framework_actor_authority_payload PROPERTIES
+    LABELS "framework-unit;framework-contract;protocol"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_store_record_golden
     tests/Zlink.Framework.UnitTests/test_cpp_framework_store_record_golden.cpp)
   target_compile_features(test_cpp_framework_store_record_golden PRIVATE cxx_std_20)

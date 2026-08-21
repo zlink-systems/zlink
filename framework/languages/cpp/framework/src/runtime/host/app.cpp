@@ -178,7 +178,9 @@ class store_actor_directory_t final : public actor_directory_t
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         const auto projection =
-          snapshot ? runtime::decode_actor_authority_payload (snapshot->payload) : std::nullopt;
+          snapshot ? runtime::decode_actor_authority_payload (
+                       snapshot->payload, snapshot->object_generation)
+                   : std::nullopt;
         if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
             || snapshot->allocation.object_kind != placement_object_kind_t::actor || !projection
             || projection->actor.actor_id ().value () != actor_id) {

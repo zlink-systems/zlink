@@ -194,7 +194,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (!authority) {
             return completed (std::optional<spot_address_t>{});
         }
-        const auto projection = decode_actor_authority_payload (authority->payload);
+        const auto projection = decode_actor_authority_payload (
+          authority->payload, authority->object_generation);
         if (!projection || projection->actor.actor_id ().value () != actor_id)
             return completed (std::optional<spot_address_t>{});
         auto address = spot_address_t{

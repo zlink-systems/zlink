@@ -655,7 +655,8 @@ std::optional<std::string> actor_type_from_authority (runtime::live_location_rea
     if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
         || snapshot->allocation.object_kind != placement_object_kind_t::actor)
         return std::nullopt;
-    const auto projection = runtime::decode_actor_authority_payload (snapshot->payload);
+    const auto projection = runtime::decode_actor_authority_payload (
+      snapshot->payload, snapshot->object_generation);
     if (!projection || projection->actor.actor_id ().value () != actor_id)
         return std::nullopt;
   return std::string (
@@ -713,7 +714,8 @@ result_t<std::string> actor_type_from_authority (
               framework_error_kind_t::protocol_error,
               "remote Actor Join Authority row does not exactly match its route fence");
         }
-        const auto projection = runtime::decode_actor_authority_payload (snapshot->payload);
+        const auto projection = runtime::decode_actor_authority_payload (
+          snapshot->payload, snapshot->object_generation);
         if (!projection || projection->actor.actor_id ().value () != actor_id) {
             return result_t<std::string>::failure (
               framework_error_kind_t::protocol_error,
@@ -7231,8 +7233,19 @@ spot_node_runtime_t::commit_remote_actor_authority (const std::string &transfer_
           target_owner};
         published = _state->relocation_authority->publish (
           source, target, target_owner, target_placement, {}, 0, inventory_digest,
-          runtime::encode_actor_authority_payload (target_actor, target_spot_id,
-                                                   target_spot_generation));
+          runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+            .state = runtime::actor_authority_state_t::ready,
+            .stable_type = std::string (
+              ::zlink::framework::detail::actor_ref_access_t::actor_type (target_actor)),
+            .actor_id = std::string (target_actor.actor_id ().value ()),
+            .current_spot_id = target_spot_id,
+            .current_spot_generation = target_spot_generation,
+            .current_spot_kind = runtime::actor_authority_spot_kind_t::user,
+            .owner_id = target_owner.owner_id,
+            .owner_lease_generation = static_cast<std::uint64_t> (target_owner.lease_generation),
+            .mesh_name = target_placement.mesh_name,
+            .node_rid = target_placement.node_rid,
+            .node_generation = target_placement.node_lifecycle_generation}));
         if (published.status != runtime::stateful::authority_publish_status_t::published
             || !published.current) {
             published.current = _state->relocation_authority->read (source.kind, source.key);

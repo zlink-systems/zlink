@@ -523,11 +523,18 @@ mesh_node_host_service_t::complete_remote_actor_creation (
             {reserve_key,
              fence,
              object_creation_completed_t{
-               encode_actor_authority_payload (
-                 created,
-                 target.entry_spot_id.value_or (
-                   target.rid.to_string ()),
-                 target.lifecycle_generation),
+               encode_actor_authority_payload (actor_authority_payload_t{
+                 .state = actor_authority_state_t::ready,
+                 .stable_type = stable_type,
+                 .actor_id = std::string (actor_id.value ()),
+                 .current_spot_id = target.entry_spot_id.value_or (target.rid.to_string ()),
+                 .current_spot_generation = target.lifecycle_generation,
+                 .current_spot_kind = actor_authority_spot_kind_t::entry,
+                 .owner_id = target.owner_id,
+                 .owner_lease_generation = static_cast<std::uint64_t> (target.lease_generation),
+                 .mesh_name = target.mesh_name,
+                 .node_rid = actor_authority_node_rid (target.rid),
+                 .node_generation = target.lifecycle_generation}),
                publication}})
           .result ();
         if (!completed)
@@ -1096,11 +1103,18 @@ mesh_node_host_service_t::create_actor (
             if (accepted)
                 completion =
                   object_creation_completed_t{
-                    encode_actor_authority_payload (
-                      created.value (),
-                      target.entry_spot_id.value_or (
-                        target.rid.to_string ()),
-                      target.lifecycle_generation),
+                    encode_actor_authority_payload (actor_authority_payload_t{
+                      .state = actor_authority_state_t::ready,
+                      .stable_type = stable_type,
+                      .actor_id = std::string (actor_id.value ()),
+                      .current_spot_id = target.entry_spot_id.value_or (target.rid.to_string ()),
+                      .current_spot_generation = target.lifecycle_generation,
+                      .current_spot_kind = actor_authority_spot_kind_t::entry,
+                      .owner_id = target.owner_id,
+                      .owner_lease_generation = static_cast<std::uint64_t> (target.lease_generation),
+                      .mesh_name = target.mesh_name,
+                      .node_rid = actor_authority_node_rid (target.rid),
+                      .node_generation = target.lifecycle_generation}),
                     publication};
             else
                 completion =
@@ -1195,7 +1209,8 @@ mesh_node_host_service_t::find_actor (
         return task_t<std::optional<actor_ref_t>> (
           result_t<std::optional<actor_ref_t>>::success (
             std::nullopt));
-    const auto projection = decode_actor_authority_payload (snapshot->payload);
+    const auto projection = decode_actor_authority_payload (
+      snapshot->payload, snapshot->object_generation);
     if (!projection) {
         return task_t<std::optional<actor_ref_t>> (
           result_t<std::optional<actor_ref_t>>::success (std::nullopt));
@@ -1224,7 +1239,8 @@ mesh_node_host_service_t::find_actor_spot (
     if (snapshot
         && snapshot->allocation.object_kind == placement_object_kind_t::actor
         && snapshot->allocation.state == placement_allocation_state_t::active) {
-        const auto projection = decode_actor_authority_payload (snapshot->payload);
+        const auto projection = decode_actor_authority_payload (
+          snapshot->payload, snapshot->object_generation);
         if (projection && projection->actor.actor_id ().value () == actor_id.value ())
             return task_t<std::optional<spot_ref_t>> (
               result_t<std::optional<spot_ref_t>>::success (

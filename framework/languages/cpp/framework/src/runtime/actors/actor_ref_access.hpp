@@ -17,9 +17,11 @@ class actor_ref_access_t final
     static actor_ref_t make (node_rid_t node_rid,
                              std::string actor_type,
                              std::string actor_id,
-                             std::uint64_t generation)
+                             std::uint64_t generation,
+                             std::string mesh_name = {})
     {
-        actor_ref_t result (actor_id_t (std::move (actor_id)), generation, {},
+        actor_ref_t result (actor_id_t (std::move (actor_id)), generation,
+                            std::move (mesh_name),
                             std::move (node_rid));
         result._actor_type = std::move (actor_type);
         return result;
