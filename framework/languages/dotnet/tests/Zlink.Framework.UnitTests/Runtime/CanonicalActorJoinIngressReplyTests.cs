@@ -1,0 +1,739 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
+using System.Net;
+using System.Net.Sockets;
+
+namespace Zlink.Framework.UnitTests;
+
+public sealed class CanonicalActorJoinIngressReplyTests
+{
+    [Fact]
+    public async Task CanonicalActorJoinRequest_TerminatesOnNativeReplyChannelExactlyOnce()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var target = new ZLinkManagedMeshNode(context, "mesh");
+        await using var monitor = target.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
+        var targetRid = RoutingId.From($"actor-join-target-{suffix}");
+        var targetEndpoint = $"inproc://actor-join-target-{suffix}";
+        var sourceEndpoint = $"inproc://actor-join-source-{suffix}";
+        const string targetSpotId = "target-spot";
+
+        target.SetRoutingId(targetRid);
+        target.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
+        target.SetBind(targetEndpoint);
+        var targetSpot = target.GetOrCreateSpot(targetSpotId, out var created);
+        Assert.True(created);
+        target.Start();
+
+        await using var source = context.CreateDealerSocket();
+        source.SetRoutingId(sourceRid);
+        source.Connect(targetEndpoint);
+        using (var hello = Message.From(
+                   ZLinkServiceWireCodec.EncodeRouteAdmission(
+                       ServiceWireConstants.Command.Hello,
+                       "mesh",
+                       sourceEndpoint,
+                       lifecycleGeneration: 1,
+                       descriptorRevision: 1,
+                       new Dictionary<string, uint>(StringComparer.Ordinal),
+                       objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
+            await source.Send().Message(hello).Async(CancellationToken.None);
+
+        await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
+
+        var acceptedRequest = CreateRequest(
+            correlation: 41,
+            sourceRid,
+            targetRid,
+            target.Status().LifecycleGeneration,
+            targetSpotId,
+            targetSpot.LifecycleGeneration);
+        var acceptedReplyTask = SendRequestAsync(source, acceptedRequest);
+        var acceptedIngress = await ReceiveActorJoinAsync(target);
+        Assert.Equal(
+            SubmitResult.Ok,
+            acceptedIngress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            acceptedIngress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+
+        var acceptedReply = await acceptedReplyTask.WaitAsync(
+            TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(acceptedReply, acceptedRequest.Correlation);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                reply,
+                out var completion,
+                out var error));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
+            Assert.Equal(targetSpotId, completion.Spot!.Value.SpotId);
+            Assert.Equal(targetSpot.LifecycleGeneration,
+                completion.Spot.Value.SpotGeneration);
+            Assert.Equal(
+                checked((uint)ZLinkRemoteActorJoinPackets
+                    .ConservativeReceiveChunkLimitBytes),
+                completion.ReceiveChunkLimitBytes);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(acceptedReply);
+        }
+
+        var errorRequest = acceptedRequest with { Correlation = 42 };
+        var errorReplyTask = SendRequestAsync(source, errorRequest);
+        var errorIngress = await ReceiveActorJoinAsync(target);
+        Assert.Equal(
+            SubmitResult.Ok,
+            errorIngress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            errorIngress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+
+        var errorReply = await errorReplyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(errorReply, errorRequest.Correlation);
+            Assert.Equal((int)RequestResult.InternalError, reply.TerminalResult);
+            Assert.Equal(
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+                reply.FailureCode);
+            Assert.Empty(reply.Tail);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(errorReply);
+        }
+
+        var rejectedRequest = acceptedRequest with
+        {
+            Correlation = 43,
+            TargetNodeGeneration = checked(
+                target.Status().LifecycleGeneration + 1)
+        };
+        var rejectedReply = await SendRequestAsync(source, rejectedRequest)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(rejectedReply, rejectedRequest.Correlation);
+            Assert.Equal((int)RequestResult.ProtocolError, reply.TerminalResult);
+            Assert.Equal(
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                reply.FailureCode);
+            Assert.Empty(reply.Tail);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(rejectedReply);
+        }
+
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        var oneWayRequest = acceptedRequest with { Correlation = 44 };
+        using (var head = Message.From(
+                   ZLinkServiceWireCodec.EncodeActorJoinRequest(oneWayRequest)))
+        using (var payload = Message.From(
+                   ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                       "ZLinkFrameworkActorJoinRequest",
+                       "application/json",
+                       "{}"u8)))
+            await source.Send()
+                .Message(head)
+                .Message(payload)
+                .Async(CancellationToken.None);
+        await WaitUntilAsync(() =>
+            monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_RetriesPreservedNativeReplyAfterBackpressure()
+    {
+        var attempts = 0;
+        var wireSubmits = 0;
+        await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
+        {
+            if (Interlocked.Increment(ref attempts) == 1)
+                return SubmitResult.Backpressured;
+            reply.Submit();
+            Interlocked.Increment(ref wireSubmits);
+            return SubmitResult.Ok;
+        });
+        var request = CreateRequest(
+            correlation: 51,
+            runtime.SourceRid,
+            runtime.TargetRid,
+            runtime.Target.Status().LifecycleGeneration,
+            runtime.TargetSpotId,
+            runtime.TargetSpotGeneration);
+
+        var replyTask = SendRequestAsync(runtime.Source, request);
+        var ingress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            ingress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+
+        var parts = await replyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.Equal(2, Volatile.Read(ref attempts));
+            Assert.Equal(1, Volatile.Read(ref wireSubmits));
+            var reply = DecodeReply(parts, request.Correlation);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                reply,
+                out var completion,
+                out var error));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_FinalRetryFailureConsumesReplyGate()
+    {
+        var attempts = 0;
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
+        {
+            if (Interlocked.Increment(ref attempts) == 1)
+                return SubmitResult.Backpressured;
+            return SubmitResult.Terminated;
+        });
+        await using var monitor = runtime.Target.OpenMonitor();
+        var request = CreateRequest(
+            correlation: 53,
+            runtime.SourceRid,
+            runtime.TargetRid,
+            runtime.Target.Status().LifecycleGeneration,
+            runtime.TargetSpotId,
+            runtime.TargetSpotGeneration);
+
+        _ = SendRequestAsync(runtime.Source, request);
+        var ingress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            ingress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+
+        await WaitUntilAsync(() =>
+            Volatile.Read(ref attempts) == 2
+            && monitor.Status().ProtocolErrors != 0);
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            ingress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+        Assert.Equal(2, Volatile.Read(ref attempts));
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_PendingReplyIsDiscardedAfterInboundDisconnectAndReconnect()
+    {
+        var attempts = 0;
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
+        {
+            Interlocked.Increment(ref attempts);
+            return SubmitResult.Backpressured;
+        });
+        await using var monitor = runtime.Target.OpenMonitor();
+        var staleRequest = CreateRequest(
+            correlation: 54,
+            runtime.SourceRid,
+            runtime.TargetRid,
+            runtime.Target.Status().LifecycleGeneration,
+            runtime.TargetSpotId,
+            runtime.TargetSpotGeneration);
+        _ = SendRequestAsync(runtime.Source, staleRequest);
+        var staleIngress = await ReceiveActorJoinAsync(runtime.Target);
+        var pendingRequest = staleRequest with { Correlation = 55 };
+
+        _ = SendRequestAsync(runtime.Source, pendingRequest);
+        var pendingIngress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            pendingIngress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+
+        await runtime.DisconnectSourceAsync();
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
+        var attemptsAtDiscard = Volatile.Read(ref attempts);
+        await runtime.ReconnectAsync();
+        Assert.Equal(
+            SubmitResult.Terminated,
+            staleIngress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+        await Task.Delay(150);
+        Assert.Equal(attemptsAtDiscard, Volatile.Read(ref attempts));
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            pendingIngress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_HandoverHelloBeforePriorDisconnect_DiscardsOnlyPriorReplyEpoch()
+    {
+        var attempts = 0;
+        var allowSubmit = 0;
+        await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
+        {
+            Interlocked.Increment(ref attempts);
+            if (Volatile.Read(ref allowSubmit) == 0)
+                return SubmitResult.Backpressured;
+            reply.Submit();
+            return SubmitResult.Ok;
+        });
+        await using var monitor = runtime.Target.OpenMonitor();
+        var staleRequest = CreateRequest(
+            correlation: 56,
+            runtime.SourceRid,
+            runtime.TargetRid,
+            runtime.Target.Status().LifecycleGeneration,
+            runtime.TargetSpotId,
+            runtime.TargetSpotGeneration);
+
+        _ = SendRequestAsync(runtime.Source, staleRequest);
+        var staleIngress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            staleIngress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        await runtime.HandoverAsync();
+        await WaitUntilAsync(() =>
+            monitor.Status().ProtocolErrors > protocolErrors);
+        var attemptsAfterHandover = Volatile.Read(ref attempts);
+
+        await runtime.DisconnectPriorSourceAsync();
+        await Task.Delay(150);
+        Assert.Equal(attemptsAfterHandover, Volatile.Read(ref attempts));
+
+        Volatile.Write(ref allowSubmit, 1);
+        var replacementRequest = staleRequest with { Correlation = 57 };
+        var replacementReplyTask = SendRequestAsync(runtime.Source, replacementRequest);
+        var replacementIngress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Ok,
+            replacementIngress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+
+        var replacementReply = await replacementReplyTask.WaitAsync(
+            TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(replacementReply, replacementRequest.Correlation);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                reply,
+                out var completion,
+                out var error));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(replacementReply);
+        }
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_PendingReplyUsesTerminalDeadline()
+    {
+        var attempts = 0;
+        var time = new ManualTimeProvider();
+        await using var runtime = await ConnectedRuntime.CreateAsync(
+            _ =>
+            {
+                Interlocked.Increment(ref attempts);
+                return SubmitResult.Backpressured;
+            },
+            time);
+        await using var monitor = runtime.Target.OpenMonitor();
+        var request = CreateRequest(
+            correlation: 55,
+            runtime.SourceRid,
+            runtime.TargetRid,
+            runtime.Target.Status().LifecycleGeneration,
+            runtime.TargetSpotId,
+            runtime.TargetSpotGeneration);
+
+        _ = SendRequestAsync(runtime.Source, request);
+        var ingress = await ReceiveActorJoinAsync(runtime.Target);
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            ingress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+
+        time.Advance(TimeSpan.FromSeconds(6));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
+        var expiredAttempts = Volatile.Read(ref attempts);
+        await Task.Delay(150);
+        Assert.Equal(expiredAttempts, Volatile.Read(ref attempts));
+        Assert.Equal(
+            SubmitResult.InvalidState,
+            ingress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>()));
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_ConcurrentAcceptedAndErrorSubmitOneWire()
+    {
+        var wireSubmits = 0;
+        await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
+        {
+            reply.Submit();
+            Interlocked.Increment(ref wireSubmits);
+            return SubmitResult.Ok;
+        });
+        var request = CreateRequest(
+            correlation: 52,
+            runtime.SourceRid,
+            runtime.TargetRid,
+            runtime.Target.Status().LifecycleGeneration,
+            runtime.TargetSpotId,
+            runtime.TargetSpotGeneration);
+        var replyTask = SendRequestAsync(runtime.Source, request);
+        var ingress = await ReceiveActorJoinAsync(runtime.Target);
+        var start = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var accepted = Task.Run(async () =>
+        {
+            await start.Task;
+            return ingress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                Array.Empty<Message>());
+        });
+        var error = Task.Run(async () =>
+        {
+            await start.Task;
+            return ingress.ReplyTerminal(
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed);
+        });
+
+        start.SetResult();
+        var acceptedResult = await accepted;
+        var errorResult = await error;
+        var results = new[] { acceptedResult, errorResult };
+        Assert.Contains(SubmitResult.Ok, results);
+        Assert.Contains(SubmitResult.InvalidState, results);
+        Assert.Equal(1, Volatile.Read(ref wireSubmits));
+
+        var parts = await replyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(parts, request.Correlation);
+            if (acceptedResult == SubmitResult.Ok)
+            {
+                Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                    reply,
+                    out var completion,
+                    out var decodeError));
+                Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, decodeError);
+                Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
+            }
+            else
+            {
+                Assert.Equal(
+                    (int)RequestResult.InternalError,
+                    reply.TerminalResult);
+                Assert.Equal(
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+                    reply.FailureCode);
+            }
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    private static ActorJoinRequest CreateRequest(
+        ulong correlation,
+        RoutingId sourceRid,
+        RoutingId targetRid,
+        ulong targetNodeGeneration,
+        string targetSpotId,
+        ulong targetSpotGeneration) => new(
+        correlation,
+        new ActorRef("actor-1", 7, "mesh", sourceRid),
+        ActorNodeGeneration: 1,
+        ActorAuthorityOwnerGeneration: 3,
+        ActorOwnerLeaseGeneration: 5,
+        Entry: false,
+        targetSpotId,
+        targetSpotGeneration,
+        targetRid,
+        targetNodeGeneration,
+        TargetAuthorityOwnerGeneration: 4,
+        TargetOwnerLeaseGeneration: 6);
+
+    private static Task<IReadOnlyList<Message>> SendRequestAsync(
+        IDealerSocket source,
+        ActorJoinRequest request)
+    {
+        using var head = Message.From(
+            ZLinkServiceWireCodec.EncodeActorJoinRequest(request));
+        using var payload = Message.From(
+            ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                "ZLinkFrameworkActorJoinRequest",
+                "application/json",
+                "{}"u8));
+        return source.Request()
+            .Message(head)
+            .Message(payload)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async(CancellationToken.None);
+    }
+
+    private static ZLinkServiceWireCodec.ReplyRecord DecodeReply(
+        IReadOnlyList<Message> parts,
+        ulong correlation)
+    {
+        Assert.Single(parts);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
+            parts[0].AsReadOnlyMemory().Span,
+            out var reply,
+            out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(correlation, reply.Correlation);
+        return reply;
+    }
+
+    private static async Task<MeshReceiveRecord> ReceiveActorJoinAsync(
+        ZLinkManagedMeshNode target)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            using var ready = new MeshReadyBatch();
+            target.DrainReady(
+                MeshReadyDomains.Application,
+                ready,
+                RecvFlags.DontWait);
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                while (claim.Receive(received, RecvFlags.DontWait))
+                {
+                    for (var recordIndex = 0;
+                         recordIndex < received.Count;
+                         recordIndex++)
+                    {
+                        var record = received[recordIndex];
+                        if (record.OperationKind == MeshOperationKind.ActorJoin)
+                            return record;
+                    }
+                    received.Reset();
+                }
+            }
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("Canonical actorJoin ingress was not queued.");
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException("Canonical actorJoin setup did not complete.");
+            await Task.Delay(10);
+        }
+    }
+
+    private static async Task<Received> ReceiveAsync(IDealerSocket source)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var received = Received.Create();
+            if (source.Recv(received, RecvFlags.DontWait))
+                return received;
+            received.Dispose();
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("Route admission reply was not received.");
+    }
+
+    private static async Task SendHelloAsync(
+        IDealerSocket source,
+        string sourceEndpoint)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (true)
+        {
+            try
+            {
+                using var hello = Message.From(
+                    ZLinkServiceWireCodec.EncodeRouteAdmission(
+                        ServiceWireConstants.Command.Hello,
+                        "mesh",
+                        sourceEndpoint,
+                        lifecycleGeneration: 1,
+                        descriptorRevision: 1,
+                        new Dictionary<string, uint>(StringComparer.Ordinal),
+                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
+                await source.Send().Message(hello).Async(CancellationToken.None);
+                return;
+            }
+            catch (ZlinkSubmitException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10);
+            }
+        }
+    }
+
+    private static string AllocateTcpEndpoint()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = Assert.IsType<IPEndPoint>(listener.LocalEndpoint);
+        return $"tcp://127.0.0.1:{endpoint.Port}";
+    }
+
+    private sealed class ConnectedRuntime : IAsyncDisposable
+    {
+        private ConnectedRuntime(
+            IContext context,
+            ZLinkManagedMeshNode target,
+            IDealerSocket source,
+            RoutingId sourceRid,
+            RoutingId targetRid,
+            string targetSpotId,
+            ulong targetSpotGeneration,
+            string targetEndpoint,
+            string sourceEndpoint)
+        {
+            Context = context;
+            Target = target;
+            Source = source;
+            SourceRid = sourceRid;
+            TargetRid = targetRid;
+            TargetSpotId = targetSpotId;
+            TargetSpotGeneration = targetSpotGeneration;
+            TargetEndpoint = targetEndpoint;
+            SourceEndpoint = sourceEndpoint;
+        }
+
+        internal IContext Context { get; }
+        internal ZLinkManagedMeshNode Target { get; }
+        internal IDealerSocket Source { get; private set; }
+        internal RoutingId SourceRid { get; }
+        internal RoutingId TargetRid { get; }
+        internal string TargetSpotId { get; }
+        internal ulong TargetSpotGeneration { get; }
+        private string TargetEndpoint { get; }
+        private string SourceEndpoint { get; }
+        private IDealerSocket? PriorSource { get; set; }
+
+        internal ValueTask DisconnectSourceAsync() => Source.DisposeAsync();
+
+        internal async Task ReconnectAsync()
+        {
+            var replacement = Context.CreateDealerSocket();
+            replacement.SetRoutingId(SourceRid);
+            replacement.Connect(TargetEndpoint);
+            Source = replacement;
+            await SendHelloAsync(replacement, SourceEndpoint);
+            using var admission = await ReceiveAsync(replacement);
+        }
+
+        internal async Task HandoverAsync()
+        {
+            var replacement = Context.CreateDealerSocket();
+            replacement.SetRoutingId(SourceRid);
+            replacement.Connect(TargetEndpoint);
+            await SendHelloAsync(replacement, SourceEndpoint);
+            using var admission = await ReceiveAsync(replacement);
+            PriorSource = Source;
+            Source = replacement;
+        }
+
+        internal async ValueTask DisconnectPriorSourceAsync()
+        {
+            if (PriorSource is not { } prior)
+                throw new InvalidOperationException("No prior source is available.");
+            PriorSource = null;
+            await prior.DisposeAsync();
+        }
+
+        internal static async Task<ConnectedRuntime> CreateAsync(
+            Func<ReplySubmitOperation, SubmitResult> submit,
+            TimeProvider? deadlineTimeProvider = null)
+        {
+            var context = Systems.Zlink.Zlink.CreateContext();
+            var target = new ZLinkManagedMeshNode(
+                context,
+                "mesh",
+                deadlineTimeProvider: deadlineTimeProvider,
+                nativeTerminalReplySubmitOverride: submit);
+            var suffix = Guid.NewGuid().ToString("N");
+            var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
+            var targetRid = RoutingId.From($"actor-join-target-{suffix}");
+            var targetEndpoint = AllocateTcpEndpoint();
+            var sourceEndpoint = $"inproc://actor-join-source-{suffix}";
+            const string targetSpotId = "target-spot";
+
+            target.SetRoutingId(targetRid);
+            target.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
+            target.SetBind(targetEndpoint);
+            var targetSpot = target.GetOrCreateSpot(
+                targetSpotId,
+                out var created);
+            Assert.True(created);
+            target.Start();
+
+            var source = context.CreateDealerSocket();
+            source.SetRoutingId(sourceRid);
+            source.Connect(targetEndpoint);
+            await SendHelloAsync(source, sourceEndpoint);
+
+            await WaitUntilAsync(() =>
+                target.Status().AdmittedPeerCount == 1);
+            return new ConnectedRuntime(
+                context,
+                target,
+                source,
+                sourceRid,
+                targetRid,
+                targetSpotId,
+                targetSpot.LifecycleGeneration,
+                targetEndpoint,
+                sourceEndpoint);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (PriorSource is { } prior)
+                await prior.DisposeAsync();
+            await Source.DisposeAsync();
+            await Target.DisposeAsync();
+            await Context.DisposeAsync();
+        }
+    }
+}

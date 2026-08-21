@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Message, SubmitResult } from '@zlink-systems/zlink';
+import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import {
@@ -37,6 +37,12 @@ import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/r
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
 import { createInitialActorMessageFollowContext } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import { ReceiveKind } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
+import {
+  ServiceStatefulRuntime,
+  type ServiceStatefulMailboxData
+} from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+import { SERVICE_WIRE_REQUIRED_CAPABILITY } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
+import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
@@ -65,6 +71,19 @@ const object = {
   objectGeneration: 5n,
   expectedAuthorityOwnerGeneration: 11n
 } as const;
+
+function actorJoinApplicationJobOwner() {
+  const permit = {
+    markApplicationQueued() {},
+    detachForHandlerTurn() {},
+    releaseBeforeHandler() {},
+    releaseAfterInternalProcessing() {}
+  };
+  return {
+    takeInitial: () => permit,
+    close() {}
+  };
+}
 
 test('relocation identity retries zero and local collisions with all 128 entropy bits', () => {
   const zero = Buffer.alloc(16);
@@ -1112,6 +1131,47 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
   }
 });
 
+test('canonical ActorJoin admission recovery crosses command 28 into command 40 without preloaded admission state', async () => {
+  const harness = createActorJoinHostHarness({ canonicalRecovery: true });
+  try {
+    const relocated = await harness.relocate();
+    await harness.targetIdle();
+
+    assert.equal(String(relocated.actorRef.nodeRid), 'target');
+    const recovery = harness.canonicalRecoveryIdentity();
+    assert.notEqual(recovery, undefined);
+    assert.equal(recovery!.request.sourceSpotId, 'source-room');
+    assert.equal(
+      recovery!.request.relocationAggregateId.replaceAll('-', ''),
+      recovery!.request.handoffId,
+      'canonical HandoffId must own the relocation aggregate'
+    );
+    assert.equal(recovery!.request.reservationToken, recovery!.request.handoffId);
+    assert.equal(
+      recovery!.request.reservedPayloadBytes,
+      BigInt((64 * 1024) + (16 * 1024 * 1024) + Buffer.byteLength('canonical-request'))
+    );
+    assert.deepEqual(harness.controlKinds, ['prepare', 'state', 'data', 'cutover']);
+    assert.deepEqual(harness.events.filter(value =>
+      value === 'recovery:prepared'
+      || value === 'onJoined'
+      || value === 'accepted:completed'
+      || value.startsWith('queue:merged:')
+      || value.startsWith('replay:')
+    ), [
+      'recovery:prepared',
+      'queue:merged:B1,B2,D1',
+      'onJoined',
+      'accepted:completed',
+      'replay:B1',
+      'replay:B2',
+      'replay:D1'
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 test('ActorJoin threads the admission-advertised chunk cap into the state chunk plan', async () => {
   // Spec 15 §4.2: the source uses min(configured, advertised, conservative
   // floor) for that join's relocation state chunks. A small advertised cap
@@ -1316,6 +1376,7 @@ interface ActorJoinHarnessOptions {
   readonly readyResults?: number[];
   readonly sourceLeaveResult?: number;
   readonly dropCutover?: boolean;
+  readonly canonicalRecovery?: boolean;
 }
 
 function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
@@ -1323,6 +1384,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const controlKinds: string[] = [];
   const prepareFingerprints: string[] = [];
   const relocationId = '00000000-0000-0000-0000-000000000091';
+  let canonicalHandoffId: string | undefined;
   const actorId = 'actor-host-profile';
   const completionOperationId = { high: 61n, low: 67n };
   const sourceActor = { context: { actorId, meshName: 'mesh-a' } };
@@ -1350,7 +1412,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       ownerNodeGeneration: 2n,
       owner: { ownerId: 'source-owner', leaseGeneration: 3n },
       spotId: 'source-room',
-      spotGeneration: 4n
+      spotGeneration: 4n,
+      spotKind: ZLinkSpotKind.User
     }),
     objectGeneration: 5n,
     authorityOwnerGeneration: 11n,
@@ -1379,7 +1442,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorType: 'Player',
     actor: sourceActor,
     meshName: 'mesh-a',
-    spotId: 'source-room',
+    spotId: options.canonicalRecovery === true ? 'entry-spot-estimate' : 'source-room',
     spotMembershipEpoch: 8n,
     nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
     locationGeneration: 11n,
@@ -1469,22 +1532,25 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const admissions = new ZLinkFormalRemoteActorAdmissionRegistry();
-  admissions.begin({
-    actorId,
-    actorType: 'Player',
-    actorRef: sourceActorRef as never,
-    spotId: 'entry-target' as never,
-    targetSpotGeneration: 6n,
-    expectedMembershipEpoch: 8n,
-    requestFingerprint: 'public-admission',
-    transferId: relocationId,
-    completionOperationId
-  });
-  admissions.complete(relocationId, {
-    accepted: true,
-    actorRef: sourceActorRef as never,
-    deferredJoinRoot: { reference: 'accepted-root' } as never
-  });
+  let restoredCanonicalRecovery: CanonicalActorJoinRecovery | undefined;
+  if (options.canonicalRecovery !== true) {
+    admissions.begin({
+      actorId,
+      actorType: 'Player',
+      actorRef: sourceActorRef as never,
+      spotId: 'entry-target' as never,
+      targetSpotGeneration: 6n,
+      expectedMembershipEpoch: 8n,
+      requestFingerprint: 'public-admission',
+      transferId: relocationId,
+      completionOperationId
+    });
+    admissions.complete(relocationId, {
+      accepted: true,
+      actorRef: sourceActorRef as never,
+      deferredJoinRoot: { reference: 'accepted-root' } as never
+    });
+  }
   assert.notEqual(`${completionOperationId.high.toString(16)}:${completionOperationId.low.toString(16)}`, relocationId);
 
   let sourceRuntime!: ZLinkHostServiceRelocationRuntime;
@@ -1589,14 +1655,21 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   const targetSpotManager = {
     formalRemoteActorAdmissions: admissions,
+    formalRemoteTransfers: { delete() {} },
     activations: { resolve: () => undefined },
     resolveRelocationActivation: () => undefined,
     options: {
       entryNodeRid: 'entry-target',
+      canonicalActorJoinResolver: async () => ({ actorType: 'Player' }),
+      actorResolver: () => targetActor,
       async dispatchEntryActorJoin() {
         events.push('onJoined');
       },
       actorTransferRuntime: {
+        async prepareDeferredJoinAccepted() {
+          events.push('recovery:prepared');
+          return { reference: 'recovered-root' };
+        },
         async commitAndDeliverDeferredJoinAccepted() {
           events.push('accepted:started');
           await acceptedGate;
@@ -1604,9 +1677,138 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         }
       }
     },
+    dispatchMeshActorJoin: DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin,
+    async restoreCanonicalActorJoinRecovery(
+      recovery: CanonicalActorJoinRecovery,
+      signal?: AbortSignal
+    ) {
+      restoredCanonicalRecovery = recovery;
+      await DefaultZLinkSpotManager.prototype.restoreCanonicalActorJoinRecovery.call(
+        this as never,
+        recovery,
+        signal
+      );
+    },
     finalizeActorJoinRelocation:
       DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation
   };
+  let canonicalIngress: ((record: {
+    readonly command: number;
+    readonly flags: number;
+    readonly sourceRoutingId: string;
+    readonly parts: readonly Buffer[];
+    readonly applicationJobOwner: ReturnType<typeof actorJoinApplicationJobOwner>;
+  }) => Promise<unknown>) | undefined;
+  let canonicalReply: ((parts: readonly Buffer[]) => void) | undefined;
+  let canonicalMailboxTask = Promise.resolve();
+  const targetCanonicalRuntime = new ServiceStatefulRuntime({
+    topology: {
+      peer: (rid: string) => rid === 'source'
+        ? {
+            descriptor: {
+              lifecycleGeneration: 2n,
+              protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY]
+            }
+          }
+        : undefined
+    },
+    mailbox: {
+      tryEnqueue(record: {
+        readonly stateful?: ServiceStatefulMailboxData;
+      }) {
+        const stateful = record.stateful!;
+        canonicalMailboxTask = (async () => {
+          const requestPayload = stateful.canonicalApplicationPayload!;
+          const request = Message.from(requestPayload.payload);
+          try {
+            await DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
+              targetSpotManager as never,
+              'mesh-a',
+              { spotId: 'entry-target' } as never,
+              {
+                kindData: stateful.kindData,
+                parts: [request],
+                contentType: requestPayload.contentType,
+                isPending: () => true,
+                replyActorJoin: (joinResult: 0 | 1) => stateful.reply?.(
+                  RequestResult.Ok,
+                  0,
+                  undefined,
+                  {
+                    kind: 'actorJoin',
+                    joinResult,
+                    spot: { spotId: 'entry-target', generation: 6n },
+                    membershipEpoch: 8n
+                  }
+                ) === true ? SubmitResult.Ok : SubmitResult.NotConnected
+              } as never
+            );
+          } finally {
+            request.close();
+          }
+        })();
+        return true;
+      }
+    },
+    setServiceIngress(handler: typeof canonicalIngress) { canonicalIngress = handler; },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      canonicalReply?.(parts.map(part => Buffer.from(part)));
+    }
+  } as never, 'target', 6n);
+  const canonicalTargetSpot = targetCanonicalRuntime.restoreUserSpotAuthority(
+    'entry-target',
+    'Entry',
+    6n,
+    1n
+  );
+  const sourceCanonicalRuntime = new ServiceStatefulRuntime({
+    topology: {
+      peer: (rid: string) => rid === 'target'
+        ? {
+            descriptor: {
+              lifecycleGeneration: 6n,
+              protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY]
+            }
+          }
+        : undefined
+    },
+    setServiceIngress() {},
+    async requestService(_rid: string, parts: readonly Buffer[]) {
+      const reply = new Promise<readonly Buffer[]>(resolve => { canonicalReply = resolve; });
+      const applicationJobOwner = actorJoinApplicationJobOwner();
+      try {
+        await canonicalIngress!({
+          command: 28,
+          flags: 0,
+          sourceRoutingId: 'source',
+          parts,
+          applicationJobOwner
+        });
+        await canonicalMailboxTask;
+        return await reply;
+      } finally {
+        applicationJobOwner.close();
+      }
+    }
+  } as never, 'source', 2n);
+  sourceCanonicalRuntime.restoreUserSpotAuthority('source-room', 'Room', 4n, 1n);
+  const canonicalSourceActor = sourceCanonicalRuntime.restoreActorAuthority(
+    actorId,
+    'Player',
+    5n,
+    11n,
+    'source-room',
+    4n,
+    7n
+  );
+  sourceCanonicalRuntime.rememberSpotRoute({
+    spot: canonicalTargetSpot.ref,
+    targetNodeRid: 'target',
+    targetNodeGeneration: 6n,
+    authorityOwnerGeneration: canonicalTargetSpot.authorityOwnerGeneration,
+    ownerLeaseGeneration: 14n,
+    storeVersion: 'target-entry-v1'
+  });
   const common = {
     registration,
     locationStore: () => location,
@@ -1646,6 +1848,43 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
 
   const relocate = async (advertisedReceiveChunkLimitBytes?: number) => {
     sourceSignal = new AbortController();
+    if (options.canonicalRecovery === true && canonicalHandoffId === undefined) {
+      const admission = sourceCanonicalRuntime.joinActorCanonical(
+        canonicalSourceActor.ref,
+        'target',
+        canonicalTargetSpot.ref,
+        canonicalTargetSpot.ref.generation,
+        {
+          packetName: '__zlink.actor.join_spot.request',
+          contentType: 'application/json',
+          payload: Buffer.from('canonical-request')
+        },
+        {
+          packetName: 'ZLinkFrameworkMultipart',
+          contentType: 'application/vnd.zlink.framework-multipart',
+          payload: Buffer.from('private-fallback')
+        },
+        {
+          targetNodeGeneration: 2n,
+          authorityOwnerGeneration: 11n,
+          ownerLeaseGeneration: 3n
+        },
+        { phase: 'admission', transferId: 'private-local-transfer' },
+        5_000
+      );
+      const admissionResult = await admission.promise;
+      assert.equal(admissionResult.terminalResult, RequestResult.Ok);
+      assert.equal(admissionResult.kindData?.kind, 'actorJoinCompletion');
+      canonicalHandoffId = admissionResult.kindData?.kind === 'actorJoinCompletion'
+        ? admissionResult.kindData.canonicalHandoffId
+        : undefined;
+      assert.notEqual(canonicalHandoffId, undefined);
+    }
+    const activeRelocationId = options.canonicalRecovery === true
+      ? `${canonicalHandoffId!.slice(0, 8)}-${canonicalHandoffId!.slice(8, 12)}`
+        + `-${canonicalHandoffId!.slice(12, 16)}-${canonicalHandoffId!.slice(16, 20)}`
+        + `-${canonicalHandoffId!.slice(20)}`
+      : relocationId;
     const result = await sourceRuntime.relocateActorJoin({
       meshName: 'mesh-a',
       actor: sourceActor as never,
@@ -1658,8 +1897,25 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         targetSpotGeneration: 6n,
         targetNodeGeneration: 6n
       },
-      relocationId,
-      completionOperationId: `${completionOperationId.high.toString(16)}:${completionOperationId.low.toString(16)}`,
+      relocationId: activeRelocationId,
+      completionOperationId,
+      ...(options.canonicalRecovery !== true
+        ? {}
+        : {
+            canonicalRecovery: {
+              handoffId: canonicalHandoffId!,
+              requestContentType: 'application/json',
+              request: Buffer.from('canonical-request'),
+              replyContentType: 'application/octet-stream',
+              reply: Buffer.alloc(0),
+              actorNodeGeneration: 2n,
+              expectedOwnerLeaseGeneration: 3n,
+              targetNodeGeneration: 6n,
+              targetSpotGeneration: 6n,
+              targetAuthorityOwnerGeneration: 12n,
+              targetSpotAuthorityOwnerGeneration: 1n
+            }
+          }),
       advertisedReceiveChunkLimitBytes,
       signal: sourceSignal.signal
     });
@@ -1675,6 +1931,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     prepareFingerprints,
     location,
     targetActorManager,
+    canonicalRecoveryIdentity: () => restoredCanonicalRecovery,
     relocate,
     releaseAccepted,
     releaseSourceLeave,
@@ -1734,7 +1991,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       releaseAccepted();
       releaseSourceLeave();
       admissions.delete(relocationId);
+      if (canonicalHandoffId !== undefined) admissions.delete(canonicalHandoffId);
       await Promise.all([...targetDeliveries, ...sourceDeliveries]);
+      sourceCanonicalRuntime.close();
+      targetCanonicalRuntime.close();
       await sourceRuntime.dispose();
       await targetRuntime.dispose();
     }

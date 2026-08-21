@@ -135,7 +135,9 @@ export class ZLinkRemoteActorJoinReceiver {
    * admission so both transports share the S1 Location Store fence/type
    * decision without inventing a second admission path.
    */
-  async prepareCanonicalActorJoin(join: ZLinkCanonicalActorJoinAuthorityFence): Promise<void> {
+  async prepareCanonicalActorJoin(
+    join: ZLinkCanonicalActorJoinAuthorityFence
+  ): Promise<{ readonly actorType: string }> {
     const actorManager = this.requireActorManager();
     const stableType = await this.resolveStableType(join);
     let actor;
@@ -163,6 +165,7 @@ export class ZLinkRemoteActorJoinReceiver {
       actorId: join.actorId,
       generation: join.actorGeneration
     } as unknown as ZLinkBackendActorRef);
+    return { actorType: stableType };
   }
 
   private requireActorManager(): DefaultZLinkActorManager {

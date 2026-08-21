@@ -26,6 +26,7 @@ const MAGIC_1 = SERVICE_WIRE_MAGIC[1];
 const MAJOR = SERVICE_WIRE_MAJOR;
 
 export const M6bServiceWireCommand = ServiceWireCommand;
+export const M6bPrivateActorJoinFlag = 0x01;
 
 export interface ServiceWireOperationId {
   readonly high: bigint;
@@ -635,7 +636,7 @@ export function encodeActorJoinHeader(
   target: ServiceSpotRouteFence
 ): Buffer {
   return concat(
-    prefix(M6bServiceWireCommand.actorJoin),
+    prefix(M6bServiceWireCommand.actorJoin, M6bPrivateActorJoinFlag),
     u64(correlation),
     actorFence(actor),
     Buffer.of(entry ? 1 : 0),
@@ -1146,7 +1147,7 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
       return result;
     }
     case M6bServiceWireCommand.actorJoin: {
-      requireFlags(command.flags, 0);
+      requireFlags(command.flags, M6bPrivateActorJoinFlag);
       const correlation = reader.nonZeroU64('correlation');
       const actor = reader.actorFence();
       const entry = reader.bool8('entry');

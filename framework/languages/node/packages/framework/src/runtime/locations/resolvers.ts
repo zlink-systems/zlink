@@ -396,7 +396,8 @@ export class ZLinkStoreLocationResolvers implements
     );
     if (current.kind !== 'snapshot' || current.allocation.state !== 'active') return undefined;
     const decoded = decodeActorAuthorityIdentity(
-      serviceRelocationAuthorityApplicationPayload(current.payload)
+      serviceRelocationAuthorityApplicationPayload(current.payload),
+      current.objectGeneration
     );
     const currentOwner = {
       ownerId: current.ownerId,
@@ -419,7 +420,7 @@ export class ZLinkStoreLocationResolvers implements
       );
     }
     let enclosingSpotRoute: ZLinkSpotRouteTarget | undefined;
-    if (decoded.spotId !== undefined) {
+    if (decoded.spotKind === ZLinkSpotKind.User) {
       try {
         enclosingSpotRoute = await this.authoritySpotResolver.resolve(decoded.spotId, signal);
       } catch (error) {
@@ -432,8 +433,7 @@ export class ZLinkStoreLocationResolvers implements
         throw error;
       }
       if (
-        decoded.spotGeneration === undefined
-        || enclosingSpotRoute.targetSpotGeneration !== decoded.spotGeneration
+        enclosingSpotRoute.targetSpotGeneration !== decoded.spotGeneration
         || !routingIdsEqual(enclosingSpotRoute.targetNodeRid, decoded.actor.nodeRid)
       ) {
         return undefined;
@@ -452,8 +452,9 @@ export class ZLinkStoreLocationResolvers implements
       ownerLeaseGeneration: currentOwner.leaseGeneration,
       authorityOwnerGeneration: current.authorityOwnerGeneration,
       authorityStoreVersion: current.storeVersion.value,
-      spotId: decoded.spotId,
-      spotGeneration: decoded.spotGeneration,
+      ...(decoded.spotKind === ZLinkSpotKind.User
+        ? { spotId: decoded.spotId, spotGeneration: decoded.spotGeneration }
+        : {}),
       enclosingSpotRoute
     };
     return this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);

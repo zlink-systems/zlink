@@ -307,7 +307,10 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
           actor: { actorId: 'actor-1', nodeRid: 'node-a', objectGeneration: 7n },
           meshName: 'play',
           ownerNodeGeneration: 11n,
-          owner: { ownerId: 'owner-a', leaseGeneration: 13n }
+          owner: { ownerId: 'owner-a', leaseGeneration: 13n },
+          spotId: 'entry-a',
+          spotGeneration: 11n,
+          spotKind: framework.ZLinkSpotKind.Entry
         })),
         objectGeneration: 7n,
         authorityOwnerGeneration: 17n,
@@ -417,7 +420,10 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
           actor: { actorId: 'actor-follow', nodeRid, objectGeneration: 7n },
           meshName: 'play',
           ownerNodeGeneration: nodeGeneration,
-          owner: { ownerId: 'owner-a', leaseGeneration: ownerLeaseGeneration }
+          owner: { ownerId: 'owner-a', leaseGeneration: ownerLeaseGeneration },
+          spotId: 'entry-a',
+          spotGeneration: nodeGeneration,
+          spotKind: framework.ZLinkSpotKind.Entry
         }),
         objectGeneration: 7n,
         authorityOwnerGeneration,

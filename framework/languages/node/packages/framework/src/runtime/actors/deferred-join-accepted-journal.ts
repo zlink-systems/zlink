@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   ActorRef,
   ZLinkActor,
@@ -12,20 +13,28 @@ import { ZLinkEncodedPayload, ZLinkMessage } from '../../contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import {
   crc32c,
+  ServiceRelocationAuthorityPayloadCodec,
   replaceServiceRelocationAuthorityApplicationPayload,
-  serviceRelocationAuthorityApplicationPayload
+  serviceRelocationAuthorityApplicationPayload,
+  type ServiceRelocationPublication
 } from '../foundation/service-relocation-runtime';
 import { putNewRelocationBlob } from '../locations/relocation-blob';
 import { decodeRoutingId, routingIdWireHex } from '../routing-id';
 import {
-  decodeActorAuthorityIdentity,
+  decodeRelocatingActorAuthorityIdentity,
   encodeActorAuthorityIdentity
 } from './actor-authority-publication';
+import {
+  replaceActorRelocationAuthorityApplicationPayload
+} from './actor-authority-payload-codec';
 
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
 const ROOT_VERSION = 2;
-const AUTHORITY_VERSION = 1;
 const MAX_ROOT_BYTES = 1024 * 1024;
+const JOURNAL_INVENTORY_DOMAIN = Buffer.from(
+  'zlink-node-deferred-join-authority-v1\0',
+  'utf8'
+);
 
 export type ZLinkDeferredJoinDeliveryCursor =
   | 'prepared'
@@ -46,6 +55,10 @@ interface DeferredJoinAuthorityPublication {
   readonly applicationPayload: Buffer;
   readonly reference: ZLinkBlobReference;
   readonly checksumCrc32c: number;
+  readonly aggregateId: string;
+  readonly aggregateGeneration: bigint;
+  readonly targetOwnerId: string;
+  readonly targetOwnerLeaseGeneration: bigint;
 }
 
 /**
@@ -98,7 +111,11 @@ export class ZLinkDeferredJoinAcceptedJournal {
           ?? serviceRelocationAuthorityApplicationPayload(read.payload)
       ),
       reference: root.reference,
-      checksumCrc32c: root.checksumCrc32c
+      checksumCrc32c: root.checksumCrc32c,
+      aggregateId: operationAggregateId(operationId),
+      aggregateGeneration: actor.objectGeneration,
+      targetOwnerId: read.ownerId,
+      targetOwnerLeaseGeneration: read.ownerLeaseGeneration
     };
     const result = await this.authority.compareExchangeAuthority(
       key,
@@ -108,7 +125,7 @@ export class ZLinkDeferredJoinAcceptedJournal {
         generationTransition: 'preserve',
         //  Preserve the outer relocation metadata: only the inner
         //  application payload belongs to this journal.
-        payload: replaceServiceRelocationAuthorityApplicationPayload(
+        payload: replaceDeferredJoinAuthorityPublication(
           read.payload,
           encodeAuthorityPublication(publication)
         )
@@ -184,7 +201,7 @@ export class ZLinkDeferredJoinAcceptedJournal {
         {
           kind: 'put',
           generationTransition: 'preserve',
-          payload: replaceServiceRelocationAuthorityApplicationPayload(
+          payload: replaceDeferredJoinAuthorityPublication(
             read.payload,
             publication.applicationPayload
           )
@@ -268,7 +285,7 @@ export class ZLinkDeferredJoinAcceptedJournal {
         {
           kind: 'put',
           generationTransition: 'preserve',
-          payload: replaceServiceRelocationAuthorityApplicationPayload(
+          payload: replaceDeferredJoinAuthorityPublication(
             read.payload,
             publication.applicationPayload
           )
@@ -321,7 +338,10 @@ export class ZLinkDeferredJoinAcceptedJournal {
       await this.deleteBestEffort(replacement.reference);
       throw new Error('Actor authority lost its deferred Join publication.');
     }
-    const identity = decodeActorAuthorityIdentity(publication.applicationPayload);
+    const identity = decodeRelocatingActorAuthorityIdentity(
+      publication.applicationPayload,
+      read.objectGeneration
+    );
     if (identity === undefined) {
       await this.deleteBestEffort(replacement.reference);
       throw new Error('Actor authority identity is invalid.');
@@ -332,12 +352,16 @@ export class ZLinkDeferredJoinAcceptedJournal {
       {
         kind: 'put',
         generationTransition: 'preserve',
-        payload: replaceServiceRelocationAuthorityApplicationPayload(
+        payload: replaceDeferredJoinAuthorityPublication(
           read.payload,
           encodeAuthorityPublication({
+            ...publication,
             applicationPayload: actor === undefined
               ? publication.applicationPayload
-              : encodeActorAuthorityIdentity({ ...identity, actor }),
+              : replaceActorRelocationAuthorityApplicationPayload(
+                  publication.applicationPayload,
+                  encodeActorAuthorityIdentity({ ...identity, actor })
+                ),
             reference: replacement.reference,
             checksumCrc32c: replacement.checksumCrc32c
           })
@@ -430,9 +454,10 @@ export class ZLinkDeferredJoinAcceptedJournal {
 
 function requireAuthorityActor(payload: Uint8Array, actor: ActorRef): void {
   const publication = decodeAuthorityPublication(payload);
-  const identity = decodeActorAuthorityIdentity(
+  const identity = decodeRelocatingActorAuthorityIdentity(
     publication?.applicationPayload
-      ?? serviceRelocationAuthorityApplicationPayload(payload)
+      ?? serviceRelocationAuthorityApplicationPayload(payload),
+    actor.objectGeneration
   );
   if (
     identity === undefined
@@ -517,56 +542,89 @@ function decodeRoot(
 }
 
 function encodeAuthorityPublication(value: DeferredJoinAuthorityPublication): Buffer {
-  return Buffer.from(JSON.stringify({
-    version: AUTHORITY_VERSION,
-    applicationPayload: value.applicationPayload.toString('base64'),
-    deferredJoin: {
+  return Buffer.from(new ServiceRelocationAuthorityPayloadCodec().publish(
+    value.applicationPayload,
+    {
       reference: value.reference.value,
-      checksumCrc32c: value.checksumCrc32c
+      checksumCrc32c: value.checksumCrc32c,
+      aggregateId: value.aggregateId,
+      aggregateGeneration: value.aggregateGeneration,
+      inventoryDigest: journalInventoryDigest(value.applicationPayload),
+      targetOwnerId: value.targetOwnerId,
+      targetOwnerLeaseGeneration: value.targetOwnerLeaseGeneration
     }
-  }), 'utf8');
+  ));
 }
 
 function decodeAuthorityPublication(
   payload: Uint8Array
 ): DeferredJoinAuthorityPublication | undefined {
-  let value: {
-    readonly version?: unknown;
-    readonly applicationPayload?: unknown;
-    readonly deferredJoin?: {
-      readonly reference?: unknown;
-      readonly checksumCrc32c?: unknown;
-    };
-  };
-  try {
-    //  A cross-node Join relocation wraps the owner authority payload in the
-    //  relocation envelope (spec 28 §8: the same CAS carries the relocation
-    //  publication). The deferred-Join root lives in the INNER application
-    //  payload; decoding the raw payload here made every cross-node deferred
-    //  Join lose its completion root right after the owner CAS.
-    value = JSON.parse(
-      serviceRelocationAuthorityApplicationPayload(payload).toString('utf8')
-    );
-  } catch {
-    return undefined;
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  const candidates = Buffer.from(outerApplication).equals(Buffer.from(payload))
+    ? [Buffer.from(payload)]
+    : [Buffer.from(outerApplication), Buffer.from(payload)];
+  for (const candidate of candidates) {
+    const publication = decodeDirectAuthorityPublication(candidate);
+    if (publication !== undefined) return publication;
   }
+  return undefined;
+}
+
+function replaceDeferredJoinAuthorityPublication(
+  payload: Uint8Array,
+  replacement: Uint8Array
+): Buffer {
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
   if (
-    value.version !== AUTHORITY_VERSION
-    || typeof value.applicationPayload !== 'string'
-    || typeof value.deferredJoin?.reference !== 'string'
-    || typeof value.deferredJoin.checksumCrc32c !== 'number'
+    !Buffer.from(outerApplication).equals(Buffer.from(payload))
+    && decodeDirectAuthorityPublication(outerApplication) !== undefined
   ) {
-    return undefined;
+    return replaceServiceRelocationAuthorityApplicationPayload(payload, replacement);
   }
-  const applicationPayload = Buffer.from(value.applicationPayload, 'base64');
-  if (applicationPayload.toString('base64') !== value.applicationPayload) {
-    throw new Error('Deferred Join authority application payload is invalid.');
-  }
+  return decodeDirectAuthorityPublication(payload) === undefined
+    ? replaceServiceRelocationAuthorityApplicationPayload(payload, replacement)
+    : Buffer.from(replacement);
+}
+
+function decodeDirectAuthorityPublication(
+  payload: Uint8Array
+): DeferredJoinAuthorityPublication | undefined {
+  const publication = new ServiceRelocationAuthorityPayloadCodec().read(payload);
+  if (publication === undefined) return undefined;
+  const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
+  return publication.inventoryDigest === journalInventoryDigest(applicationPayload)
+    ? deferredJoinPublication(applicationPayload, publication)
+    : undefined;
+}
+
+function deferredJoinPublication(
+  applicationPayload: Buffer,
+  publication: ServiceRelocationPublication
+): DeferredJoinAuthorityPublication {
   return {
     applicationPayload,
-    reference: { value: value.deferredJoin.reference } as ZLinkBlobReference,
-    checksumCrc32c: value.deferredJoin.checksumCrc32c
+    reference: { value: publication.reference } as ZLinkBlobReference,
+    checksumCrc32c: publication.checksumCrc32c,
+    aggregateId: publication.aggregateId,
+    aggregateGeneration: publication.aggregateGeneration,
+    targetOwnerId: publication.targetOwnerId,
+    targetOwnerLeaseGeneration: publication.targetOwnerLeaseGeneration
   };
+}
+
+function journalInventoryDigest(applicationPayload: Uint8Array): string {
+  return createHash('sha256')
+    .update(JOURNAL_INVENTORY_DOMAIN)
+    .update(applicationPayload)
+    .digest('hex');
+}
+
+function operationAggregateId(operationId: ZLinkActorJoinOperationId): string {
+  const encoded = [operationId.high, operationId.low]
+    .map(value => BigInt.asUintN(64, value).toString(16).padStart(16, '0'))
+    .join('');
+  return `${encoded.slice(0, 8)}-${encoded.slice(8, 12)}-${encoded.slice(12, 16)}`
+    + `-${encoded.slice(16, 20)}-${encoded.slice(20)}`;
 }
 
 function validateIdentity(

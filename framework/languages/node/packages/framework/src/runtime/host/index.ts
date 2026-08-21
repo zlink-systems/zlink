@@ -61,6 +61,7 @@ import {
   ZLinkFrameworkTerminationReason,
   ZLinkObjectRole,
   ZLinkPeerState,
+  ZLinkSpotKind,
   zlinkMessageMetadata,
   ZLinkSpotCreateState
 } from '../../contracts';
@@ -134,7 +135,7 @@ import {
   ZLinkActorHandoffCoordinator,
   ZLinkActorTransferRegistry,
   decodeRemoteActorSourceLeaveTerminal,
-  decodeActorAuthorityIdentity,
+  isActorAuthorityPayload,
   publishInitialActorAuthority,
   rewriteActorAuthorityOwner
 } from '../actors';
@@ -2112,6 +2113,7 @@ export class ZLinkFrameworkRuntimeHost implements
           meshName,
           nodeRid: selected.rid,
           nodeGeneration: selected.lifecycleGeneration,
+          entrySpotId: selected.entrySpotId!,
           owner: {
             ownerId: selected.ownerId,
             leaseGeneration: selected.leaseGeneration
@@ -2403,6 +2405,8 @@ export class ZLinkFrameworkRuntimeHost implements
                   ...local.actorRef,
                   meshName
                 },
+                entrySpotId: String(entrySpot.routingId),
+                entrySpotGeneration: entrySpot.lifecycleGeneration,
                 ...(reply === undefined ? {} : { reply }),
                 onPublished: () => actors.adoptCreatedAuthority(
                   record.actorId,
@@ -2519,12 +2523,21 @@ export class ZLinkFrameworkRuntimeHost implements
             `Actor '${actorRef.actorId}' authority requires an active owner and Actor RouteMesh.`
           );
         }
+        const entrySpotId = this.spotNodeRuntime?.entrySpotIdForMesh(meshName);
+        if (entrySpotId === undefined) {
+          throw new ZLinkConfigurationException(
+            `Actor '${actorRef.actorId}' authority requires its RouteMesh Entry Spot.`
+          );
+        }
         await publishInitialActorAuthority(store, {
           actorType,
           actor: actorRef,
           meshName,
           ownerNodeGeneration,
-          owner
+          owner,
+          spotId: entrySpotId,
+          spotGeneration: ownerNodeGeneration,
+          spotKind: ZLinkSpotKind.Entry
         }, signal);
         this.actorClientLocationResolver?.invalidateActorRoute(actorRef.actorId);
       },
@@ -3280,7 +3293,7 @@ function rewriteAuthorityPayloadForOwner(
   owner: ZLinkLocationOwnerToken
 ): Uint8Array {
   const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
-  const rewritten = decodeActorAuthorityIdentity(applicationPayload) !== undefined
+  const rewritten = isActorAuthorityPayload(applicationPayload)
     ? rewriteActorAuthorityOwner(applicationPayload, owner)
     : rewriteServiceAuthorityOwner(applicationPayload, owner) ?? applicationPayload;
   return replaceServiceRelocationAuthorityApplicationPayload(payload, rewritten);

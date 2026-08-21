@@ -429,13 +429,40 @@ function encodeAuthorityEnvelope(
   base: Uint8Array,
   publication: ServiceRelocationPublication
 ): Buffer {
-  const encoded = {
-    magic: 'ZLAR',
-    version: 2,
-    base: Buffer.from(base).toString('base64'),
-    publication: encodePublication(publication)
-  };
-  const payload = Buffer.from(JSON.stringify(encoded), 'utf8');
+  const checksum = safeInteger(publication.checksumCrc32c, 'relocation checksum');
+  if (checksum < 0 || checksum > 0xffff_ffff) {
+    throw new TypeError('Relocation checksum must be an unsigned 32-bit integer.');
+  }
+  if (!/^[a-f0-9]{64}$/u.test(publication.inventoryDigest)) {
+    throw new TypeError('Relocation inventory digest must be lowercase SHA-256.');
+  }
+  const aggregateGeneration = positiveBigInt(
+    publication.aggregateGeneration,
+    'aggregate generation'
+  );
+  const targetOwnerLeaseGeneration = positiveBigInt(
+    publication.targetOwnerLeaseGeneration,
+    'target owner lease generation'
+  );
+  if (
+    aggregateGeneration > 0x7fff_ffff_ffff_ffffn
+    || targetOwnerLeaseGeneration > 0x7fff_ffff_ffff_ffffn
+  ) {
+    throw new TypeError('Relocation publication generations must fit signed 64-bit storage.');
+  }
+  const payload = Buffer.concat([
+    // BinaryWriter.Write(0x5a4c4152u) is little-endian in the .NET reference codec.
+    Buffer.from([0x52, 0x41, 0x4c, 0x5a]),
+    u16le(1),
+    text16le(requireText(publication.reference, 'relocation reference')),
+    u32le(checksum),
+    dotnetGuidBytes(canonicalUuid(publication.aggregateId, 'aggregate id')),
+    u64le(aggregateGeneration),
+    bytes32le(Buffer.from(publication.inventoryDigest, 'hex')),
+    text16le(requireText(publication.targetOwnerId, 'target owner id')),
+    i64le(targetOwnerLeaseGeneration),
+    bytes32le(base)
+  ]);
   if (payload.byteLength > 1024 * 1024) {
     throw new TypeError('Location authority relocation payload exceeds 1 MiB.');
   }
@@ -446,76 +473,44 @@ function decodeAuthorityEnvelope(
   payload: Uint8Array
 ): ServiceRelocationAuthorityEnvelope | undefined {
   try {
-    const decoded = record(
-      JSON.parse(Buffer.from(payload).toString('utf8')),
-      'authority payload'
+    const reader = new DotnetBinaryReader(payload);
+    reader.expect(Buffer.from([0x52, 0x41, 0x4c, 0x5a]));
+    if (reader.u16() !== 1) return undefined;
+    const reference = requireText(reader.text16(), 'relocation reference');
+    const checksumCrc32c = reader.u32();
+    const aggregateId = canonicalUuid(
+      canonicalUuidFromDotnetBytes(reader.take(16)),
+      'aggregate id'
     );
-    requireExactKeys(decoded, ['base', 'magic', 'publication', 'version'], 'authority payload');
-    if (decoded.magic !== 'ZLAR' || decoded.version !== 2) return undefined;
-    const publication = record(decoded.publication, 'authority publication');
-    requireExactKeys(publication, [
-      'aggregateGeneration',
-      'aggregateId',
-      'checksumCrc32c',
-      'inventoryDigest',
-      'reference',
-      'targetOwnerId',
-      'targetOwnerLeaseGeneration'
-    ], 'authority publication');
-    const checksum = safeInteger(publication.checksumCrc32c, 'relocation checksum');
-    if (checksum < 0 || checksum > 0xffff_ffff) return undefined;
+    const aggregateGeneration = reader.u64();
+    const inventoryDigestBytes = reader.bytes32();
+    const targetOwnerId = requireText(reader.text16(), 'target owner id');
+    const targetOwnerLeaseGeneration = reader.i64();
+    const base = reader.bytes32();
     if (
-      typeof publication.inventoryDigest !== 'string'
-      || !/^[a-f0-9]{64}$/u.test(publication.inventoryDigest)
+      !reader.done
+      || aggregateGeneration === 0n
+      || aggregateGeneration > 0x7fff_ffff_ffff_ffffn
+      || inventoryDigestBytes.byteLength !== 32
+      || targetOwnerLeaseGeneration <= 0n
     ) {
       return undefined;
     }
     return {
-      base: base64(decoded.base, 'authority application payload'),
+      base,
       publication: {
-        reference: requireText(publication.reference, 'relocation reference'),
-        checksumCrc32c: checksum,
-        aggregateId: canonicalUuid(publication.aggregateId, 'aggregate id'),
-        aggregateGeneration: positiveBigInt(
-          publication.aggregateGeneration,
-          'aggregate generation'
-        ),
-        inventoryDigest: publication.inventoryDigest,
-        targetOwnerId: requireText(publication.targetOwnerId, 'target owner id'),
-        targetOwnerLeaseGeneration: positiveBigInt(
-          publication.targetOwnerLeaseGeneration,
-          'target owner lease generation'
-        )
+        reference,
+        checksumCrc32c,
+        aggregateId,
+        aggregateGeneration,
+        inventoryDigest: inventoryDigestBytes.toString('hex'),
+        targetOwnerId,
+        targetOwnerLeaseGeneration
       }
     };
   } catch {
     return undefined;
   }
-}
-
-function encodePublication(publication: ServiceRelocationPublication) {
-  const checksum = safeInteger(publication.checksumCrc32c, 'relocation checksum');
-  if (checksum < 0 || checksum > 0xffff_ffff) {
-    throw new TypeError('Relocation checksum must be an unsigned 32-bit integer.');
-  }
-  if (!/^[a-f0-9]{64}$/u.test(publication.inventoryDigest)) {
-    throw new TypeError('Relocation inventory digest must be lowercase SHA-256.');
-  }
-  return {
-    reference: requireText(publication.reference, 'relocation reference'),
-    checksumCrc32c: checksum,
-    aggregateId: canonicalUuid(publication.aggregateId, 'aggregate id'),
-    aggregateGeneration: positiveBigInt(
-      publication.aggregateGeneration,
-      'aggregate generation'
-    ).toString(),
-    inventoryDigest: publication.inventoryDigest,
-    targetOwnerId: requireText(publication.targetOwnerId, 'target owner id'),
-    targetOwnerLeaseGeneration: positiveBigInt(
-      publication.targetOwnerLeaseGeneration,
-      'target owner lease generation'
-    ).toString()
-  };
 }
 
 function encodeMemberships(
@@ -587,27 +582,6 @@ export function crc32c(payload: Uint8Array): number {
   return (crc ^ 0xffff_ffff) >>> 0;
 }
 
-function record(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError(`Invalid relocation ${label}.`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireExactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-  label: string
-): void {
-  const actual = Object.keys(value).sort();
-  if (
-    actual.length !== expected.length
-    || actual.some((key, index) => key !== expected[index])
-  ) {
-    throw new TypeError(`Invalid relocation ${label} fields.`);
-  }
-}
-
 function requireText(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) {
     throw new TypeError(`${label} must be non-empty text without NUL.`);
@@ -624,30 +598,130 @@ function canonicalUuid(value: unknown, label: string): string {
   return text;
 }
 
-function base64(value: unknown, label: string): Buffer {
-  if (typeof value !== 'string' || value.length % 4 !== 0) {
-    throw new TypeError(`${label} must be canonical base64.`);
+function text16le(value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.byteLength < 1 || bytes.byteLength > 0xffff) {
+    throw new TypeError('Relocation text must contain 1..65535 UTF-8 bytes.');
   }
-  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
-  const contentLength = value.length - padding;
-  for (let index = 0; index < contentLength; index++) {
-    const code = value.charCodeAt(index);
-    if (!((code >= 0x41 && code <= 0x5a)
-      || (code >= 0x61 && code <= 0x7a)
-      || (code >= 0x30 && code <= 0x39)
-      || code === 0x2b
-      || code === 0x2f)) {
-      throw new TypeError(`${label} must be canonical base64.`);
+  return Buffer.concat([u16le(bytes.byteLength), bytes]);
+}
+
+function bytes32le(value: Uint8Array): Buffer {
+  const bytes = Buffer.from(value);
+  if (bytes.byteLength > 1024 * 1024) {
+    throw new TypeError('Relocation byte field exceeds 1 MiB.');
+  }
+  const length = Buffer.alloc(4);
+  length.writeInt32LE(bytes.byteLength);
+  return Buffer.concat([length, bytes]);
+}
+
+function u16le(value: number): Buffer {
+  const result = Buffer.alloc(2);
+  result.writeUInt16LE(value);
+  return result;
+}
+
+function u32le(value: number): Buffer {
+  const result = Buffer.alloc(4);
+  result.writeUInt32LE(value);
+  return result;
+}
+
+function u64le(value: bigint): Buffer {
+  const result = Buffer.alloc(8);
+  result.writeBigUInt64LE(value);
+  return result;
+}
+
+function i64le(value: bigint): Buffer {
+  const result = Buffer.alloc(8);
+  result.writeBigInt64LE(value);
+  return result;
+}
+
+function dotnetGuidBytes(value: string): Buffer {
+  const canonical = Buffer.from(value.replaceAll('-', ''), 'hex');
+  return Buffer.from([
+    canonical[3]!, canonical[2]!, canonical[1]!, canonical[0]!,
+    canonical[5]!, canonical[4]!,
+    canonical[7]!, canonical[6]!,
+    ...canonical.subarray(8)
+  ]);
+}
+
+function canonicalUuidFromDotnetBytes(value: Uint8Array): string {
+  const bytes = Buffer.from(value);
+  if (bytes.byteLength !== 16) throw new TypeError('Relocation aggregate id is invalid.');
+  const canonical = Buffer.from([
+    bytes[3]!, bytes[2]!, bytes[1]!, bytes[0]!,
+    bytes[5]!, bytes[4]!,
+    bytes[7]!, bytes[6]!,
+    ...bytes.subarray(8)
+  ]).toString('hex');
+  return `${canonical.slice(0, 8)}-${canonical.slice(8, 12)}-${canonical.slice(12, 16)}`
+    + `-${canonical.slice(16, 20)}-${canonical.slice(20)}`;
+}
+
+class DotnetBinaryReader {
+  readonly bytes: Buffer;
+  offset = 0;
+
+  constructor(payload: Uint8Array) {
+    this.bytes = Buffer.from(payload);
+    if (this.bytes.byteLength > 1024 * 1024) {
+      throw new TypeError('Location authority relocation payload exceeds 1 MiB.');
     }
   }
-  for (let index = contentLength; index < value.length; index++) {
-    if (value.charCodeAt(index) !== 0x3d) {
-      throw new TypeError(`${label} must be canonical base64.`);
+
+  get done(): boolean {
+    return this.offset === this.bytes.byteLength;
+  }
+
+  expect(expected: Uint8Array): void {
+    if (!this.take(expected.byteLength).equals(Buffer.from(expected))) {
+      throw new TypeError('Location authority relocation magic is invalid.');
     }
   }
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.toString('base64') !== value) throw new TypeError(`${label} must be canonical base64.`);
-  return bytes;
+
+  u16(): number {
+    return this.take(2).readUInt16LE(0);
+  }
+
+  u32(): number {
+    return this.take(4).readUInt32LE(0);
+  }
+
+  u64(): bigint {
+    return this.take(8).readBigUInt64LE(0);
+  }
+
+  i64(): bigint {
+    return this.take(8).readBigInt64LE(0);
+  }
+
+  text16(): string {
+    const length = this.u16();
+    if (length === 0) throw new TypeError('Location authority relocation text is empty.');
+    return this.take(length).toString('utf8');
+  }
+
+  bytes32(): Buffer {
+    const length = this.take(4).readInt32LE(0);
+    if (length < 0 || length > 1024 * 1024) {
+      throw new TypeError('Location authority relocation byte field is invalid.');
+    }
+    return Buffer.from(this.take(length));
+  }
+
+  take(length: number): Buffer {
+    if (length < 0 || this.offset + length > this.bytes.byteLength) {
+      throw new TypeError('Location authority relocation payload is truncated.');
+    }
+    const result = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return result;
+  }
 }
 
 function positiveBigInt(value: unknown, label: string): bigint {

@@ -347,7 +347,7 @@ export class ZLinkLocalNativeActorJoin {
       );
     }
     const completions = this.requireCompletions();
-    const relocationId = randomUUID();
+    let relocationId: string = randomUUID();
     const completionOperationKey = completionOperationId === undefined
       ? undefined
       : operationIdentityKey(completionOperationId);
@@ -384,7 +384,7 @@ export class ZLinkLocalNativeActorJoin {
           request: {
             packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
             contentType: frameworkPayloadContentType(request),
-            payload: encodeFrameworkActorJoinPayload(request)
+            payload: Buffer.from(request.data())
           },
           actorFence: {
             targetNodeGeneration: actorAuthorityFence.nodeGeneration,
@@ -476,6 +476,13 @@ export class ZLinkLocalNativeActorJoin {
       );
     }
     disposeParts(admission.parts.slice(1));
+    if (control.canonicalHandoffId !== undefined && canonicalAdmission !== undefined) {
+      // Command 28 derives the canonical handoff identity from its authenticated
+      // source fence and correlation. Direct recovery requires that exact value
+      // to own the relocation aggregate as well; the public OperationId remains
+      // a separate request-completion identity.
+      relocationId = canonicalHandoffRelocationId(control.canonicalHandoffId);
+    }
     const relocation = this.options.actorJoinRelocation;
     if (relocation === undefined) {
       admission.parts[0]?.close();
@@ -499,13 +506,41 @@ export class ZLinkLocalNativeActorJoin {
     }
     let relocated;
     try {
+      if (completionOperationKey === relocationId) {
+        throw new Error('Actor Join OperationId must be distinct from RelocationId.');
+      }
       relocated = await relocation.relocateActorJoin({
         meshName: runtimeActorMeshName(actor, state, target.routerChannelId),
         actor,
         state,
         target,
         relocationId,
-        completionOperationId: completionOperationKey,
+        completionOperationId,
+        ...(control.canonicalHandoffId === undefined || canonicalAdmission === undefined
+          ? {}
+          : {
+              canonicalRecovery: {
+                handoffId: control.canonicalHandoffId,
+                requestContentType: canonicalAdmission.request.contentType,
+                request: Buffer.from(canonicalAdmission.request.payload),
+                ...(completionOperationId === undefined
+                  ? {}
+                  : {
+                      replyContentType: control.replyContentType ?? 'application/octet-stream'
+                    }),
+                reply: completionOperationId === undefined
+                  ? Buffer.alloc(0)
+                  : Buffer.from(admission.parts[0]?.data() ?? []),
+                actorNodeGeneration: actorAuthorityFence!.nodeGeneration,
+                expectedOwnerLeaseGeneration: actorAuthorityFence!.ownerLeaseGeneration,
+                targetNodeGeneration: target.targetNodeGeneration!,
+                targetSpotGeneration: control.location.spotGeneration,
+                targetAuthorityOwnerGeneration:
+                  actorAuthorityFence!.authorityOwnerGeneration + 1n,
+                targetSpotAuthorityOwnerGeneration:
+                  target.authorityOwnerGeneration ?? 1n
+              }
+            }),
         advertisedReceiveChunkLimitBytes: control.receiveChunkLimitBytes,
         signal
       });
@@ -643,6 +678,15 @@ function remoteJoinAuthorityFence(
     authorityOwnerGeneration: state.locationGeneration,
     ownerLeaseGeneration: state.ownerLeaseGeneration
   };
+}
+
+function canonicalHandoffRelocationId(handoffId: string): string {
+  const hex = handoffId.replaceAll('-', '').toLowerCase();
+  if (!/^[0-9a-f]{32}$/u.test(hex) || /^0+$/u.test(hex)) {
+    throw new TypeError('Canonical Actor Join handoff id is not a non-zero 128-bit identity.');
+  }
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}`
+    + `-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function runtimeActorMeshName(

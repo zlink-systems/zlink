@@ -86,7 +86,9 @@ export {
 } from './deferred-join-accepted-journal';
 export {
   decodeActorAuthorityIdentity,
+  decodeRelocatingActorAuthorityIdentity,
   encodeActorAuthorityIdentity,
+  isActorAuthorityPayload,
   rewriteActorAuthorityRoute,
   rewriteActorAuthorityOwner,
   publishInitialActorAuthority,

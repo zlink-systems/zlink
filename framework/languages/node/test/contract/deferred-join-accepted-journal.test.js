@@ -8,9 +8,12 @@ const {
   ZLinkActorDispatchMailbox
 } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
 const {
+  decodeActorAuthorityIdentity,
+  decodeRelocatingActorAuthorityIdentity,
   encodeActorAuthorityIdentity
 } = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
 const {
+  crc32c,
   ServiceRelocationAuthorityPayloadCodec,
   serviceRelocationAuthorityApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
@@ -43,17 +46,23 @@ function harness(options = {}) {
     owner: {
       ownerId: 'owner-a',
       leaseGeneration: 5n
-    }
+    },
+    spotId: 'entry-a',
+    spotGeneration: 1n,
+    spotKind: 'entry'
   });
+  const storedActorAuthorityPayload = options.actorRelocationEnvelope === true
+    ? encodeActorRelocationEnvelope(actorAuthorityPayload)
+    : actorAuthorityPayload;
   let authority = {
     kind: 'snapshot',
     storeVersion: { value: String(authorityVersion) },
     payload: options.relocationEnvelope === true
       ? new ServiceRelocationAuthorityPayloadCodec().publish(
-          actorAuthorityPayload,
+          storedActorAuthorityPayload,
           relocationPublication
         )
-      : actorAuthorityPayload,
+      : storedActorAuthorityPayload,
     objectGeneration: 17n,
     authorityOwnerGeneration: 3n,
     ownerId: 'owner-a',
@@ -130,7 +139,10 @@ function harness(options = {}) {
 }
 
 test('deferred Join cursor and release writes preserve the relocation authority envelope', async () => {
-  const { journal, authorityPayload } = harness({ relocationEnvelope: true });
+  const { journal, authorityPayload } = harness({
+    relocationEnvelope: true,
+    actorRelocationEnvelope: true
+  });
   const codec = new ServiceRelocationAuthorityPayloadCodec();
   const sourceActorRef = {
     nodeRid: 'node-a',
@@ -147,9 +159,36 @@ test('deferred Join cursor and release writes preserve the relocation authority 
     Buffer.from('"accepted"')
   );
   assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+  const preparedActorAuthority = deferredJoinApplicationPayload(authorityPayload());
+  const preparedRelocationPrefix = actorRelocationPrefix(preparedActorAuthority);
+  assert.equal(preparedRelocationPrefix.subarray(6, 22).toString('hex'),
+    '00112233445566778899aabbccddeeff');
+  assert.equal(preparedRelocationPrefix[22], 2, 'relocation phase');
+  assert.equal(preparedRelocationPrefix[23], 1, 'bound-session route flag');
+  assert.equal(preparedRelocationPrefix.includes(Buffer.from('binding-a')), true);
+  assert.equal(
+    decodeRelocatingActorAuthorityIdentity(
+      preparedActorAuthority,
+      17n
+    ).actor.nodeRid,
+    'node-a'
+  );
 
   const committed = await journal.markCommitted(prepared, targetActorRef);
   assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+  const committedActorAuthority = deferredJoinApplicationPayload(authorityPayload());
+  assert.deepEqual(
+    actorRelocationPrefix(committedActorAuthority),
+    preparedRelocationPrefix,
+    'markCommitted must preserve relocation id, phase, and bound-session route'
+  );
+  assert.equal(
+    decodeRelocatingActorAuthorityIdentity(
+      committedActorAuthority,
+      17n
+    ).actor.nodeRid,
+    'node-b'
+  );
 
   const delivered = await journal.deliver(
     committed,
@@ -163,8 +202,92 @@ test('deferred Join cursor and release writes preserve the relocation authority 
     serviceRelocationAuthorityApplicationPayload(authorityPayload()).byteLength,
     0
   );
+  assert.equal(
+    decodeRelocatingActorAuthorityIdentity(
+      serviceRelocationAuthorityApplicationPayload(authorityPayload()),
+      17n
+    ).actor.nodeRid,
+    'node-b'
+  );
   assert.equal(await journal.recover(targetActorRef.actorId), undefined);
 });
+
+function deferredJoinApplicationPayload(payload) {
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  assert.notEqual(
+    new ServiceRelocationAuthorityPayloadCodec().read(outerApplication),
+    undefined
+  );
+  const application = serviceRelocationAuthorityApplicationPayload(outerApplication);
+  assert.equal(application.subarray(0, 4).toString('ascii'), 'ZLAP');
+  return application;
+}
+
+function actorRelocationPrefix(payload) {
+  const applicationOffset = payload.indexOf(Buffer.from('ZLAU'));
+  assert.ok(applicationOffset > 4, 'ZLAP application payload must contain canonical ZLAU');
+  return Buffer.from(payload.subarray(0, applicationOffset - 4));
+}
+
+function encodeActorRelocationEnvelope(authority) {
+  const parts = [
+    Buffer.from('ZLAP'),
+    u16le(6),
+    Buffer.from('00112233445566778899aabbccddeeff', 'hex'),
+    Buffer.of(2, 1),
+    bytes8('node-b'),
+    bytes8('session-a'),
+    text16('binding-a'),
+    u64le(1n),
+    u64le(17n),
+    u64le(3n),
+    text16('game'),
+    u64le(4n),
+    u64le(5n),
+    u64le(6n),
+    u64le(0n),
+    text16('session-owner-a'),
+    u64le(7n),
+    i32le(authority.byteLength),
+    authority
+  ];
+  const envelope = Buffer.concat(parts);
+  return Buffer.concat([envelope, u32le(crc32c(envelope))]);
+}
+
+function bytes8(value) {
+  const bytes = Buffer.from(value, 'utf8');
+  return Buffer.concat([Buffer.of(bytes.byteLength), bytes]);
+}
+
+function text16(value) {
+  const bytes = Buffer.from(value, 'utf8');
+  return Buffer.concat([u16le(bytes.byteLength), bytes]);
+}
+
+function u16le(value) {
+  const result = Buffer.alloc(2);
+  result.writeUInt16LE(value);
+  return result;
+}
+
+function u32le(value) {
+  const result = Buffer.alloc(4);
+  result.writeUInt32LE(value);
+  return result;
+}
+
+function i32le(value) {
+  const result = Buffer.alloc(4);
+  result.writeInt32LE(value);
+  return result;
+}
+
+function u64le(value) {
+  const result = Buffer.alloc(8);
+  result.writeBigUInt64LE(value);
+  return result;
+}
 
 test('discarding a prepared Join preserves the relocation authority envelope', async () => {
   const { journal, authorityPayload } = harness({ relocationEnvelope: true });

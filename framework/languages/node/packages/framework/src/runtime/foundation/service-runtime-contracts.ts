@@ -119,6 +119,7 @@ export interface ActorControlPayload {
    * to run the spec 51 Store-backed type admission before dispatch.
    */
   readonly canonicalActorJoin?: {
+    readonly handoffId: string;
     readonly actorNodeRid: string;
     readonly actorGeneration: bigint;
     readonly actorNodeGeneration: bigint;
@@ -134,6 +135,10 @@ export interface ActorJoinCompletionPayload {
   readonly location: ActorLocation;
   /** Target's advertised relocation state chunk cap from the accepted admission reply. 0/undefined = not advertised. */
   readonly receiveChunkLimitBytes?: number;
+  /** Exact application payload content type retained for canonical recovery. */
+  readonly replyContentType?: string;
+  /** Present only when this operation was emitted as canonical command 28. */
+  readonly canonicalHandoffId?: string;
 }
 
 export interface ActorLookupCompletionPayload {

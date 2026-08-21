@@ -114,7 +114,7 @@ import {
 } from '../actors/actor-handoff';
 import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
 import {
-  decodeActorAuthorityIdentity,
+  decodeRelocatingActorAuthorityIdentity,
   rewriteActorAuthorityRoute
 } from '../actors/actor-authority-publication';
 import { rewriteServiceAuthorityRoute } from '../foundation/service-authority-payload-codec';
@@ -170,6 +170,11 @@ import {
   decodeRemoteActorSourceLeaveTerminal,
   ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL
 } from '../actors/actor-remote-wire';
+import {
+  decodeCanonicalActorJoinRecoverySavedWork,
+  encodeCanonicalActorJoinRecoverySavedWork,
+  type CanonicalActorJoinRecovery
+} from '../foundation/actor-join-recovery-codec';
 
 export class ZLinkRelocationStateIncompatibleError extends Error {
   constructor(message: string) {
@@ -293,7 +298,13 @@ interface SourceActorJoinProfile {
   readonly state: ZLinkActorRuntimeState;
   readonly sourceActorRef: NonNullable<ZLinkActorRuntimeState['nativeActorRef']>;
   readonly sourceSpotId: RoutingId | undefined;
-  readonly completionOperationId?: string;
+  readonly targetSpotId: RoutingId;
+  readonly targetNodeRid: RoutingId;
+  readonly relocationContentType: string;
+  readonly completionOperationId?: Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]['completionOperationId'];
+  readonly canonicalRecovery?: NonNullable<
+    Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]['canonicalRecovery']
+  >;
   readonly ready: Promise<void>;
   readonly resolveReady: () => void;
 }
@@ -418,7 +429,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       state: input.state,
       sourceActorRef: sourceRef,
       sourceSpotId: input.state.spotId,
+      targetSpotId: input.target.spotId,
+      targetNodeRid: input.target.targetNodeRid,
+      relocationContentType: this.actorRegistration(
+        input.state.meshName ?? input.meshName,
+        input.state.actorType ?? ''
+      ).relocation.kind === 'snapshot'
+        ? 'application/vnd.zlink.actor-relocation.snapshot'
+        : 'application/vnd.zlink.actor-relocation.recreate',
       completionOperationId: input.completionOperationId,
+      canonicalRecovery: input.canonicalRecovery,
       ready,
       resolveReady
     });
@@ -1945,11 +1965,20 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // The captured payload stays in source memory: this copy is the only
     // handoff original until the cutover submit terminal and the
     // retransmission window end (spec 28 §4.2).
-    const transportEnvelope = canonicalizeCapturedHandoffBacklog(
+    const canonicalEnvelope = canonicalizeCapturedHandoffBacklog(
       captured.envelope,
       coordinator,
       targetFence
     );
+    const actorJoinProfile = this.sourceActorJoinProfiles.get(captured.envelope.aggregateId);
+    const transportEnvelope = actorJoinProfile?.canonicalRecovery === undefined
+      ? canonicalEnvelope
+      : appendCanonicalActorJoinRecovery(
+          canonicalEnvelope,
+          actorJoinProfile,
+          coordinator,
+          primary
+        );
     const encoded = encodeServiceRelocationEnvelope(transportEnvelope);
     const limits = this.relocationLimits();
     // Actor Join threads the target's admission-time advertised cap in;
@@ -2684,7 +2713,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       await manager.finalizeActorJoinRelocation(
         meshName,
-        stage.staging.envelope.aggregateId,
+        actorJoinAdmissionIdentity(stage.staging.envelope),
         hidden.actor,
         toFrameworkActorRef(nativeRef, meshName),
         sourceNodeRid => this.submitActorJoinSourceLeave(
@@ -3312,6 +3341,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const publication = relocationPublication(prepare, envelope);
     const participants = envelope.participants.map(participant => {
       const expected = authorities.get(participant.key)!;
+      const membership = actorMembershipTarget(envelope, participant.key);
+      const entrySpotId = expected.allocation.objectKind === 'actor'
+        && membership === undefined
+        ? this.options.spotManager()?.entrySpotIdForMesh(meshName)
+        : undefined;
+      if (
+        expected.allocation.objectKind === 'actor'
+        && membership === undefined
+        && entrySpotId === undefined
+      ) {
+        throw new Error(`Relocation target RouteMesh '${meshName}' has no Entry Spot.`);
+      }
       return {
         key: { value: participant.key } as ZLinkAuthorityKey,
         expected,
@@ -3324,7 +3365,19 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           meshName,
           nodeRid: prepare.target.nodeRid,
           nodeGeneration: prepare.target.nodeGeneration,
-          ...actorMembershipTarget(envelope, participant.key)
+          objectGeneration: expected.objectGeneration,
+          ...(membership === undefined
+            ? expected.allocation.objectKind === 'actor'
+              ? {
+                  actorSpotId: entrySpotId!,
+                  actorSpotGeneration: prepare.target.nodeGeneration,
+                  actorSpotKind: ZLinkSpotKind.Entry as const
+                }
+              : {}
+            : {
+                ...membership,
+                actorSpotKind: ZLinkSpotKind.User as const
+              })
         }),
         membershipMutation: encodeMembershipMutation(envelope.memberships, participant.key)
       };
@@ -3355,8 +3408,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly meshName: string;
       readonly nodeRid: string;
       readonly nodeGeneration: bigint;
+      readonly objectGeneration: bigint;
       readonly actorSpotId?: string;
       readonly actorSpotGeneration?: bigint;
+      readonly actorSpotKind?: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
     }
   ): Uint8Array {
     const existing = this.codec.read(payload);
@@ -3555,7 +3610,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         for (const candidate of page.items) {
           if (candidate.key.value === primaryKey.value
             || decodeAuthorityKey(candidate.key).kind !== 'actor') continue;
-          const actor = decodeActorAuthorityIdentity(candidate.snapshot.payload);
+          const actor = decodeRelocatingActorAuthorityIdentity(
+            candidate.snapshot.payload,
+            candidate.snapshot.objectGeneration
+          );
           if (actor?.spotId === request.object.spotId) {
             entries.push(candidate);
           }
@@ -3859,11 +3917,31 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 }
 
+function canonicalActorJoinRecovery(
+  participants: readonly ServiceRelocationParticipant[]
+): CanonicalActorJoinRecovery | undefined {
+  const matches = participants.flatMap(participant => participant.queuedMessages.flatMap(message => {
+    const recovery = decodeCanonicalActorJoinRecoverySavedWork(message.payload);
+    return recovery === undefined ? [] : [recovery];
+  }));
+  if (matches.length > 1) {
+    throw new Error('Actor relocation contains duplicate canonical Join recovery records.');
+  }
+  return matches[0];
+}
+
+function actorJoinAdmissionIdentity(envelope: ServiceRelocationEnvelope): string {
+  return canonicalActorJoinRecovery(envelope.participants)?.request.handoffId
+    ?? envelope.aggregateId;
+}
+
 function actorJoinTargetMembership(
   manager: DefaultZLinkSpotManager | undefined,
   relocationId: string,
   participants: readonly ServiceRelocationParticipant[]
 ): readonly ServiceRelocationMembership[] {
+  const recovery = canonicalActorJoinRecovery(participants);
+  const admissionId = recovery?.request.handoffId ?? relocationId;
   const admission = (manager as unknown as {
     readonly formalRemoteActorAdmissions?: {
       get(id: string): {
@@ -3874,7 +3952,7 @@ function actorJoinTargetMembership(
         };
       } | undefined;
     };
-  } | undefined)?.formalRemoteActorAdmissions?.get(relocationId);
+  } | undefined)?.formalRemoteActorAdmissions?.get(admissionId);
   const actor = participants.find(value => value.objectKind === 'actor');
   if (admission === undefined || actor === undefined) {
     throw new Error(`Actor relocation '${relocationId}' has no accepted target membership.`);
@@ -4093,6 +4171,14 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     if (hidden.actor === undefined) {
       throw new Error('Only Actor relocation participants can contain packet backlog.');
     }
+    const recovery = decodeCanonicalActorJoinRecoverySavedWork(message.payload);
+    if (recovery !== undefined) {
+      if (recovery.request.actorId !== hidden.actor.context.actorId) {
+        throw new Error('Canonical Actor Join recovery names a different staged Actor.');
+      }
+      await this.requireSpotManager().restoreCanonicalActorJoinRecovery(recovery);
+      return;
+    }
     const packet = decodeQueuedHandoffPacket(message);
     const state = this.requireActorManager().getState(hidden.actor.context.actorId);
     if (state === undefined) throw new Error('Relocated Actor state is not staged.');
@@ -4210,12 +4296,17 @@ function rewriteAuthorityApplicationRoute(
     readonly meshName: string;
     readonly nodeRid: string;
     readonly nodeGeneration: bigint;
+    readonly objectGeneration: bigint;
     readonly actorSpotId?: string;
     readonly actorSpotGeneration?: bigint;
+    readonly actorSpotKind?: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
   }
 ): Buffer {
   const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
-  const actor = decodeActorAuthorityIdentity(applicationPayload);
+  const actor = decodeRelocatingActorAuthorityIdentity(
+    applicationPayload,
+    target.objectGeneration
+  );
   if (actor !== undefined) {
     return rewriteActorAuthorityRoute(
       applicationPayload,
@@ -4227,6 +4318,7 @@ function rewriteAuthorityApplicationRoute(
       },
       target.actorSpotId ?? actor.spotId ?? target.nodeRid,
       target.actorSpotGeneration ?? actor.spotGeneration ?? target.nodeGeneration,
+      target.actorSpotKind ?? actor.spotKind,
       target.nodeGeneration,
       target.owner
     );
@@ -4380,6 +4472,92 @@ function canonicalizeCapturedHandoffBacklog(
           }))
         })
   };
+}
+
+function appendCanonicalActorJoinRecovery(
+  envelope: ServiceRelocationEnvelope,
+  profile: SourceActorJoinProfile,
+  coordinator: ServiceWireRelocationCoordinatorFence,
+  sourceAuthoritySnapshot: ZLinkAuthoritySnapshot
+): ServiceRelocationEnvelope {
+  const recovery = profile.canonicalRecovery!;
+  const actorType = profile.state.actorType;
+  const sourceAuthority = decodeRelocatingActorAuthorityIdentity(
+    sourceAuthoritySnapshot.payload,
+    sourceAuthoritySnapshot.objectGeneration
+  );
+  if (
+    actorType === undefined
+    || sourceAuthority === undefined
+    || sourceAuthority.actor.actorId !== profile.state.actorId
+    || sourceAuthority.actor.objectGeneration !== profile.sourceActorRef.generation
+    || !routingIdsEqual(
+      sourceAuthority.actor.nodeRid,
+      profile.sourceActorRef.nodeRid as unknown as RoutingId
+    )
+    || sourceAuthority.ownerNodeGeneration !== recovery.actorNodeGeneration
+    || sourceAuthoritySnapshot.authorityOwnerGeneration !== profile.state.locationGeneration
+  ) {
+    throw new Error(`Actor '${profile.state.actorId}' canonical Join recovery identity is incomplete.`);
+  }
+  let attached = false;
+  const participants = envelope.participants.map(participant => {
+    if (participant.objectKind !== 'actor'
+      || decodeAuthorityKey({ value: participant.key } as ZLinkAuthorityKey).globalId
+        !== profile.state.actorId) {
+      return participant;
+    }
+    if (attached) throw new Error('Canonical Actor Join recovery has duplicate Actor participants.');
+    attached = true;
+    const encoded = encodeCanonicalActorJoinRecoverySavedWork({
+      actorId: profile.state.actorId,
+      actorType,
+      handoffId: recovery.handoffId,
+      // The command-28 target admitted this same fenced Store authority. Keep
+      // its CurrentSpotId as the recovery identity instead of projecting the
+      // application Actor state (which may already name an Entry fallback).
+      sourceSpotId: sourceAuthority.spotId,
+      sourceNodeRid: profile.sourceActorRef.nodeRid as unknown as RoutingId,
+      actorGeneration: profile.sourceActorRef.generation,
+      actorAuthorityOwnerGeneration: sourceAuthoritySnapshot.authorityOwnerGeneration,
+      actorNodeGeneration: recovery.actorNodeGeneration,
+      expectedOwnerLeaseGeneration: recovery.expectedOwnerLeaseGeneration,
+      relocationId: envelope.aggregateId,
+      relocationContentType: profile.relocationContentType,
+      requestContentType: recovery.requestContentType,
+      request: recovery.request,
+      targetSpotId: String(profile.targetSpotId),
+      targetNodeRid: profile.targetNodeRid,
+      targetNodeGeneration: recovery.targetNodeGeneration,
+      targetSpotGeneration: recovery.targetSpotGeneration,
+      targetAuthorityOwnerGeneration: recovery.targetAuthorityOwnerGeneration,
+      targetSpotAuthorityOwnerGeneration: recovery.targetSpotAuthorityOwnerGeneration,
+      coordinator: {
+        ownerId: coordinator.ownerId,
+        leaseGeneration: coordinator.leaseGeneration,
+        nodeRid: coordinator.nodeRid as RoutingId,
+        nodeGeneration: coordinator.nodeGeneration,
+        expectedAuthorityStoreVersion: coordinator.expectedAuthorityStoreVersion
+      },
+      operationId: profile.completionOperationId,
+      ...(recovery.replyContentType === undefined
+        ? {}
+        : { replyContentType: recovery.replyContentType }),
+      reply: recovery.reply
+    });
+    return {
+      ...participant,
+      queuedMessages: [
+        { sequence: 1n, payload: encoded },
+        ...participant.queuedMessages.map(message => ({
+          ...message,
+          sequence: message.sequence + 1n
+        }))
+      ]
+    };
+  });
+  if (!attached) throw new Error('Canonical Actor Join recovery Actor participant is missing.');
+  return { ...envelope, participants };
 }
 
 function isCanonicalFrozenRecord(payload: Uint8Array): boolean {

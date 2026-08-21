@@ -62,6 +62,7 @@
         <Compile Include="Runtime/AuthorityKeyCodecTests.cs"/>
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
         <Compile Include="Runtime/CanonicalActorJoinAttemptTests.cs"/>
+        <Compile Include="Runtime/CanonicalActorJoinIngressReplyTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>

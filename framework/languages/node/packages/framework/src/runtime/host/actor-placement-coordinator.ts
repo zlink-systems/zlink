@@ -10,6 +10,7 @@ import type {
   RoutingId,
   ZLinkActorCreateResult
 } from '../../contracts';
+import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken,
@@ -40,6 +41,7 @@ export interface ZLinkActorPlacementTarget {
   readonly meshName: string;
   readonly nodeRid: RoutingId;
   readonly nodeGeneration: bigint;
+  readonly entrySpotId: string;
   readonly owner: ZLinkLocationOwnerToken;
   readonly isLocal: boolean;
 }
@@ -98,7 +100,11 @@ export class ZLinkActorPlacementCoordinator {
           },
           meshName: target.meshName,
           ownerNodeGeneration: target.nodeGeneration,
-          owner: target.owner
+          owner: target.owner,
+          state: 'creating',
+          spotId: target.entrySpotId,
+          spotGeneration: target.nodeGeneration,
+          spotKind: ZLinkSpotKind.Entry
         });
         const reserved = await this.options.store.reserve({
           key: { kind: 'actor', globalId: actorId },
@@ -233,6 +239,8 @@ export class ZLinkActorPlacementCoordinator {
       readonly actor?: ActorRef;
       readonly reply?: Uint8Array;
       readonly onPublished?: () => void;
+      readonly entrySpotId?: string;
+      readonly entrySpotGeneration?: bigint;
     }>,
     signal: AbortSignal
   ): Promise<ServiceUserSpotOperationResult> {
@@ -249,7 +257,7 @@ export class ZLinkActorPlacementCoordinator {
       );
     }
     if (current.allocation.state === 'active') {
-      const identity = decodeActorAuthorityIdentity(current.payload);
+      const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
       if (identity === undefined) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
@@ -289,7 +297,10 @@ export class ZLinkActorPlacementCoordinator {
                 owner: {
                   ownerId: current.ownerId,
                   leaseGeneration: current.ownerLeaseGeneration
-                }
+                },
+                spotId: local.entrySpotId!,
+                spotGeneration: local.entrySpotGeneration!,
+                spotKind: ZLinkSpotKind.Entry
               }),
               terminal: terminalPublication(record, terminal)
             }
@@ -362,7 +373,7 @@ function existingActor(
   ) {
     return undefined;
   }
-  const identity = decodeActorAuthorityIdentity(snapshot.payload);
+  const identity = decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration);
   return identity?.actor.actorId === actorId
     ? withActorAuthorityFence(identity.actor, snapshot)
     : undefined;

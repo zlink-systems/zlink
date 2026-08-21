@@ -35,11 +35,16 @@
   ProtocolError로 거부(ZLinkManagedMeshNode.cs:5263).
 
 **다음 세션 착수점(§0 포맷-온리 틀에서만; 로직/검증 추가 금지)**
-1. **정본 판정 먼저(Claude 단독, 스펙 근거)**: canonical actor-authority **payload 표현**의 정본 포맷이 무엇인지 스펙/스키마로
-   확정 — spec 21(21-location-runtime §2.4: record는 JSON, `payload`는 opaque base64)·22(Redis provider)·
-   service-wire schema(`authority-payload-v1`)를 읽고, 언어별 실제 표현 대조: **Node=JSON, .NET/Java=binary `ZLAU`,
-   C++=`zlink:actor-authority:v1`**. (주의: record 껍데기 JSON은 정상. 문제는 그 안의 actor-authority `payload` 계층.)
-   정본이 binary라면 Node·(C++ 정렬 여부)만 전환, JSON이라면 .NET/Java 디코더가 이미 왜 binary를 요구하는지 재확인.
+1. **[x] 정본 판정 완료(2026-08-21, Claude 단독)**: 정본 = **ZLAU binary `authority-payload-v1`**.
+   근거: `service-wire-v1.schema.json` **durableFormats**가 `authority-payload-v1`을 magic "ZLAU"·
+   formatVersion 1·big-endian·u32 body length·trailing CRC-32C(Castagnoli)로 규정하고, golden fixture
+   `golden/durable-authority-v1.json`이 `"consumers":["cpp","dotnet","jvm","node"]`로 4언어 소비를 명시.
+   .NET `ZLinkActorAuthorityPayloadCodec`은 이 durable format과 정확히 일치(기준 구현), Java도 ZLAU 일치.
+   spec 21 §2.4의 "payload=opaque"는 **Store/provider 관점**(schema `providerInterpretation:"opaque-bytes"`와
+   정합)이며 포맷 부재가 아니므로 스펙 충돌 없음(스펙 수정 불요). → **Node(JSON)·C++(text `v1`)가 비정합**.
+   Node를 지금 정렬하고, C++는 3b C++ 방향 착수 시 정렬. 참고: 어떤 언어도 durable-authority golden
+   conformance test를 실행하지 않고 있었음(=drift 원인; Node 정렬에 conformance test 포함).
+   .NET `TryDecodeRelocating`은 ZLAP/ZLAR envelope를 optional로 벗기므로 bare ZLAU도 fence 통과.
 2. **최소 포맷 정렬**: 정본에 맞춰 Node의 actor Authority publication이 canonical representation을 쓰도록(같은
    generation/RID/lifecycle 값 유지). `joinSpot` 자체는 packet-format 선택 경로로 그대로 둔다. **admission 로직 무변경.**
    하니스로 row를 수동 덮어쓰는 우회는 금지(실제 Node-created actor를 검증 못 함).
@@ -110,6 +115,13 @@
   하고 push**한다. 미커밋 상태를 오래 두지 않는다(공유 트리 오염·유실 위험 최소화). 커밋 메시지는
   backtick/`<`/`>` 회피(bash `-m` 손상) — `git commit -F <file>` 사용. 각 세션은 최소 1회
   green 커밋+push로 마감한다.
+  - **사다리형(다단 blocker) 작업의 커밋 단위**: 최종 목표(예: 스테이지 그린)가 여러 blocker
+    사다리로 쪼개질 때, 전체가 그린이 될 때까지 diff를 키우지 말고 **자체 검증+리뷰가 끝난
+    중간 단(rung)도 트리-로컬 게이트 그린이면 개별 커밋**한다(커밋 메시지에 "스테이지는 아직
+    red, N차 blocker 해소" 명시). 2026-08-22 stage-1에서 6단 사다리 diff가 30여 파일로 커진
+    교훈.
+  - **병렬 스트림 합류**: 언어 트리별 병렬 작업의 완료분은 한 덩어리로 모으지 말고 **스트림별
+    검증+리뷰 통과 즉시 파일 명시 add로 개별 커밋**한다(다른 스트림 미완이 커밋을 막지 않게).
 - **리팩토링(각 단계에 상시 포함)**: 기능 완료로 끝내지 말고, 그 단계 범위 안에서
   ① **성능** 개선(핫패스 할당·복사·잠금 경합 제거, 불필요한 async/await·박싱 정리),
   ② **POSDDD**(Prove-Once → 죽은 코드는 oracle/커버리지로 미도달 증명 후 **일괄 삭제**;
@@ -426,16 +438,90 @@
     (ZLinkFrameworkRuntimeActors.cs:2399)하는 지점에서 admission이 미도달. 즉 **Node→.NET canonical actorJoin의
     relocating-payload 소비가 아직 end-to-end로 안 맞는** 마이그레이션 미완 지점이다(=진행 중인 canonical 작업의 일부).
   - **판정**: 새 결정·새 대규모 트랙 아님. canonical 커스텀바이너리 마이그레이션의 **일반 완료 항목**으로 다룬다.
-  - **[확정] authority 포맷은 문제 아님(포맷 gap 지어낸 것 정정)**: `TryDecodeRelocating`은 .NET relocation/ownership
-    전반(SpotRetireTransport·ZLinkActorOwnershipCoordinator 등 다수)에서 쓰이고, **기존 whole-node Node→.NET
-    relocation 스테이지가 통과**한다 = **.NET은 이미 Node가 쓴 shared authority를 같은 `TryDecodeRelocating`으로
-    성공적으로 읽는다**. 따라서 Node↔.NET authority payload interop은 **이미 동작**(§0의 "authority/relocation 완성"과
-    일치). "Node JSON vs .NET binary" 진단은 이 사실로 **반증됨** — 파지 말 것.
-  - **실제 남은 것**: canonical User-Spot(joinSpot) Node→.NET 시나리오에서 admission이 source-authority 체크
-    (`AdmitCanonicalActorJoinAsync`, ZLinkFrameworkRuntimeActors.cs:2397-2405: ObjectGeneration/NodeRid/NodeGeneration
-    fence + relocating decode)에서 미도달. 원인은 **포맷이 아니라** 이 시나리오의 source가 기대 relocating authority
-    상태가 아니거나 canonical User-Spot 경로 배선/하니스 세팅. **§0 포맷-온리 틀에서** fence/state 정합만 맞춘다
-    (로직·검증 추가 금지). harness 스테이지는 보존(`all` 미포함).
+  - **[정정의 정정 — 위 "[확정] 포맷 문제 아님"(구판)은 틀렸음]**: "whole-node Node→.NET relocation 스테이지
+    통과가 authority interop을 증명한다"는 전제가 **오류** — 그 경로는 `relocate()`+commit 시 authority rewrite라
+    `AdmitCanonicalActorJoinAsync`/`TryDecodeRelocating`을 거치지 않는다(별도 경로, node_peer_host.js:493,
+    actor-transfer-runtime.ts:1233). canonical 28 admission의 크로스랭 authority-read는 3b 스테이지가 처음이다.
+    **최종 grounded 결론(⭐핸드오프와 동일): 포맷 mismatch가 맞다** — Node payload=JSON vs .NET decoder=ZLAU 요구.
+  - **정본 판정·진행(2026-08-21, ⭐핸드오프 항목 1 참조)**: 정본 = ZLAU binary `authority-payload-v1`
+    (schema durableFormats + golden `durable-authority-v1.json` consumers 4언어). Node 정렬(포맷-온리:
+    ZLAU 코덱 신설 + JSON payload 경로 제거 + binary ZLAP/ZLAR envelope 정렬 + golden conformance test)을
+    codex sol로 진행. **admission 로직·검증 무변경**, harness 스테이지 보존(`all` 미포함). C++ 텍스트 포맷은
+    3b C++ 방향 착수 시 정렬. sol 리뷰 4건(잔존 JSON journal writer·ZLAP phase 이원화·zero-generation
+    거부·conformance 강화) 수정 완료, Node 게이트 그린(기존 baseline m6b 1건 제외 — `remote Entry Spot
+    actor join derives the well-known node route fence`는 stash-baseline에서도 동일 실패로 확인된 기존 이슈).
+  - **[2차 blocker 진단 완료(2026-08-21, dump-증거)] canonical 28 payload 이중 포장**: ZLAU 정렬 후
+    `TryDecodeRelocating` fence는 통과. 다음 실패 = Node canonical 발신이 command 28의
+    `application-payload-envelope-v1` payload(schema :7292) 안에 `encodeFrameworkActorJoinPayload`의
+    **`ZLAJ` 중첩 포장**을 넣음(actor-local-native-join.ts:384 → actor-join-payload-codec.ts:16 →
+    service-stateful-runtime.ts:4264). .NET target은 외부 envelope를 벗겨 raw bytes를 application
+    request로 쓰므로 handler JSON decode가 첫 바이트 'Z'에서 즉시 fault → Accepted/reply 미생성 →
+    Node deferred join 30s 절대 deadline까지 대기. Store fence 구간은 36ms(admission 지연 아님, 4개
+    지연 가설 전부 기각). **수정 완료(sol)**: canonical 발신=raw `request.data()` 직접
+    (actor-local-native-join.ts:384), canonical 수신=ZLAJ 스킵·raw 전달(spots/index.ts:1923),
+    legacy 경로 ZLAJ 보존(:104/:236). .NET(ZLinkActorRemoteJoiner.cs:979)·Java(ZLinkActorSpotJoinCall.java:746)와
+    동형 확인. Node 게이트 그린(baseline 1건 제외). → **.NET typed admission Accepted 도달**(2 run 재현).
+  - **[~] 3차 blocker(진단 완료·수정 중) = .NET reply 경로 결함**: .NET canonical actorJoin ingress가
+    `MessageType=Request`/`RequestSeq`를 보존하지 않고(ZLinkManagedMeshNode.cs:5513) admission
+    terminal(Accepted 20 + chunk-limit tail, payload는 정상)을 `TryScheduleRoutedSend` **one-way**로
+    발송(:5679) → Node request promise 미완료(unsolicited frame 거부), `reply_received` 없음 →
+    capture/Restore/cutover 미시작 → 30s deadline. rejection/error terminal도 동일 경로(= follow-up A와
+    동일 근원, 이 수정으로 함께 해소 기대). Node continuation 배선은 완전함이 확인됨
+    (actor-local-native-join.ts:396→:479; Node↔Node는 ingress reply callback으로 완주,
+    service-stateful-runtime.ts:3829). .NET target은 prewarm/temp queue 등록 후 Restore 대기(정상).
+    위반 스펙: 51(:180·:571 — 20은 request terminal reply), 26(:35), 15 §4.2(:420). 기준 패턴 =
+    `SendNativeTerminalReply`(:8969, `_socket.Reply(sourceRid, requestSeq)`). **수정 완료**
+    (ZLinkManagedMeshNode.cs:5263/8997 exactly-once reply gate) — 코디네이터 stage 재실행으로
+    accepted 즉시 소비 확인. Java/C++는 동일 결함 없음(읽기 대조 — .NET만 outlier였음).
+  - **[x] stage-1 그린(2026-08-22)**: `user-spot-join-node-dotnet` **3/3 결정적 통과** + 기존
+    `relocation-node-dotnet` 무회귀(코디네이터 직접 실행). 사다리 요약: ① ZLAU 정렬 → ② ZLAJ
+    이중포장 제거 → ③ .NET terminal reply 경로(one-way→`_socket.Reply` exactly-once+backpressure
+    재제출+gate 수명) → ④ 28↔40 ZLJR recovery 배선 + canonical 판별 ruling(private flag 0x01) →
+    ⑤ SourceSpotId=Store snapshot CurrentSpotId(추정값 제거) → ⑥ HandoffId=AggregateId 재사용 +
+    reservation token/bytes 실값 전달. sol 리뷰 5회(각 라운드 findings 전부 해소), Claude 독립
+    검증(스테이지 3회+회귀+baseline 대조). m6b 1건·stream-runtime 2건은 stash-baseline 동일 실패
+    확인(기존 이슈, 비차단).
+  - **[x] 4차 blocker(해소) = 28↔40 handoff identity 단절**: Node canonical source가
+    admission(28)과 Restore(40)를 잇는 canonical handoff identity/Actor-Join recovery를 manifest에
+    싣지 않음 → .NET target의 relocation envelope에 `remoteJoinRecovery == null`
+    (ZLinkStandaloneActorRelocationRuntime.cs:1750/2037) → Restore가 **generic maintenance import**
+    (:1994, marker `relocation_target_complete_entry`)로 처리, accepted prewarm claim 경로
+    (:1987→PrepareCanonicalRoutedActorJoinTargetAsync→CompleteCanonicalRoutedActorJoinLifecycleAsync
+    :1166) 미실행 → queue migration·OnJoinedActorAsync·completion·source leave 미실행, prewarm은
+    deadline timer(ZLinkFrameworkRuntimeActorJoinPrewarm.cs:90)로 만료. 근거 스펙 15 §4.2(:303
+    OperationId manifest 보존·:433/:451 temp queue 재사용·:464 순서)·28(:170·:261). C++ 2c의
+    "off-wire handoff id .NET byte-parity"의 Node 대응물이 빠진 것. **주의**: m6c host-relocation
+    테스트는 admission을 사전 주입해 이 seam을 못 잡음 — 실제 28→40 관통 테스트 필요.
+    **sol 수정 진행**(Node 트리; 병렬로 리뷰3 High 2건도 수정 — .NET terminal reply
+    backpressure 재제출 포함).
+  - **[판정] Node canonical/legacy 28 판별 ruling(2026-08-21, Claude 단독)**: probe 결과 Node
+    사설 flavor와 canonical 28은 **전체 multipart가 byte-identical**(사설이 canonical frame 형태를
+    그대로 사용) → 구조 판별 불가로 sol STOP. 판정: **command 28 = canonical 전용**(4언어 수신자
+    계약 동형 — .NET/C++: 28 head ⇒ canonical, 실패 ⇒ ProtocolError, fallthrough 없음). Node
+    사설 flavor가 **private flag bit**로 이동(canonical decoder는 flags==0 요구라 자동 거부 —
+    구조적 판별 확보; frame이 flags 불가면 private command id 대안). 사설 flavor는 Node↔Node
+    전용(크로스랭 사설은 이미 .NET이 ProtocolError — 동작 무변화), 3c에서 경로 자체 삭제 예정인
+    과도기 조치. payload sniffing은 opaque 계약 위반으로 최종 기각.
+    (참고: Java canonical typed 경로는 content type을 `application/json`으로 고정 — Node/.NET은 실제
+    serializer content type 보존. 잠재 L1 parity 관찰 항목, 비차단.)
+  - **[ ] follow-up A(비차단, 후속)**: target application decode fault 시 .NET dispatcher의 fast-fail
+    terminal(ZLinkSpotActorJoinDispatcher.cs:52)이 source에서 관측되지 않아 typed failure 대신 30s
+    deadline으로 실패함 — malformed canonical payload의 즉시 typed 실패 전파를 focused 크로스랭
+    검증으로 확인 필요(spec 26 §caller `reply_received` 계약).
+  - **[ ] OPEN RULING — activationRecoveryState 인코딩 3자 발산(스펙-gap, Claude 판정 대기, 3b 비차단)**:
+    opus 조사(2026-08-22, byte-offset 증거)로 확정된 사실 — schema 텍스트(u16 reference + u8-prefix
+    sha256, 59B, replayCursor 없음) vs golden bytes(u8 reference + bare sha256, 57B) vs 구현:
+    Java==golden(단 reference 255B cap), Node service codec==schema prefix **+ schema에 없는
+    replayCursor u64**(67B, instance-activation 실사용), .NET ZLAU=항상 absent(tail opaque 통과),
+    .NET 실제 recovery는 별개 ZLIS 포맷(u32 LE prefix, CRC32C, ReplayCursor), C++=absent.
+    validator의 golden 검사는 손코딩 거울이라 어떤 게이트도 못 잡음. recovery present 시
+    Java↔Node 상호 해독 불능. **판정 필요 사항**: 정본 인코딩(u8 vs u16/sha256 prefix),
+    replayCursor의 규범 여부(semantic — Node·ZLIS만 보유), Java reference bound, golden 재생성
+    + validator를 schema-유도로 교정, 4언어 전파. Node를 golden에 맞추는 건 replayCursor 유실이라
+    포맷-온리 아님 — 설계 판정 후 진행. (actor-join 경로는 recovery를 소비하지 않아 3b 비차단.)
+  - **[ ] follow-up B(비차단, 관측성)**: .NET `ZLinkSpotActorJoinDispatcher.ZLinkFlowContext.Enter`(:35)가
+    context만 설정하고 command-28 admission flow 이벤트를 방출하지 않아 spec 26 계측으로 admission
+    내부가 안 보임 — 반복 디버깅 비용 발생 시 spec 26 정식 이벤트로 승격 검토([[zlink-debugging-message-flow]]).
 
 ## 3c. [A7] 사설 dialect 제거 (H-15 / S5)
 

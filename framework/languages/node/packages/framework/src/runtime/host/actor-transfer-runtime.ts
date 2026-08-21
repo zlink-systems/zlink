@@ -9,6 +9,7 @@ import type {
   ZLinkRelocationStore,
   ZLinkSpot
 } from '../../contracts';
+import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAggregateId,
   ZLinkAuthoritySnapshot,
@@ -1262,6 +1263,7 @@ export class ZLinkActorTransferRuntime {
           targetActorRef,
           String(spotId),
           spotGeneration,
+          ZLinkSpotKind.User,
           local.lifecycleGeneration,
           owner
         ),

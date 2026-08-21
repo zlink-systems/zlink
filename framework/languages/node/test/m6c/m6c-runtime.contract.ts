@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import {
   ServiceMaintenanceRuntime,
   classifyRelocationRecovery
@@ -1150,7 +1151,8 @@ async function createActorAuthority(
     ownerNodeGeneration: 1n,
     owner: target.owner,
     spotId: 'room-a',
-    spotGeneration: 1n
+    spotGeneration: 1n,
+    spotKind: ZLinkSpotKind.User
   });
   const reserved = await authority.reserve({
     key: { kind: 'actor', globalId: actorId },

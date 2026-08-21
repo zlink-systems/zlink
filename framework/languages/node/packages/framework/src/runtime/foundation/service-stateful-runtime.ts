@@ -58,6 +58,7 @@ import {
   encodeUserSpotCreateHeader,
   M6bServiceWireCommand,
   M6bServiceWireFlag,
+  M6bPrivateActorJoinFlag,
   sessionBindingFromWire,
   type ServiceActorRouteFence,
   type ServiceBoundSessionActorAuthority,
@@ -80,6 +81,10 @@ import {
   type ActorJoin28
 } from '../protocol/service_wire_pilot_codec.generated';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
+import {
+  canonicalActorJoinHandoffId,
+  routingIdBytes
+} from './actor-join-recovery-codec';
 
 import {
   decodeApplicationPayload,
@@ -375,6 +380,7 @@ export class ServiceStatefulRuntime {
   private readonly instanceApplicationWaiters = new Map<string, Set<() => void>>();
   private readonly actorJoinPhases = new Map<bigint, 'admission' | 'commit' | 'abort' | undefined>();
   private readonly actorJoinTransferIds = new Map<bigint, string | undefined>();
+  private readonly canonicalActorJoinHandoffs = new Map<bigint, string>();
   private readonly actorJoinCommittedTransfers = new Map<string, number>();
   private readonly actorJoinSourceLeaves = new Map<string, number>();
   private readonly actorRoutes = new Map<string, ServiceActorRouteFence>();
@@ -1914,27 +1920,21 @@ export class ServiceStatefulRuntime {
     let decoded: ServiceStatefulWireRecord;
     let canonicalActorJoin: ActorJoin28 | undefined;
     try {
-      // Node's pre-canonical remote relocation uses command 28 too, but its
-      // multipart application body carries the local transfer id/phase.  That
-      // bookkeeping is expressly not part of the canonical command-28 body
-      // (spec 51 §9), so it must retain the legacy dispatch path.  In
-      // particular, running the canonical Store admission against it mutates
-      // the same-node rebind before the formal relocation state machine owns
-      // the transition.
-      decoded = decodeStatefulHeader(record.parts[0]!);
-      const legacyNodeActorJoin = record.command === M6bServiceWireCommand.actorJoin
-        && hasLegacyNodeActorJoinTransfer(record.parts[1]);
-      if (record.command === M6bServiceWireCommand.actorJoin && !legacyNodeActorJoin) {
-        try {
-          canonicalActorJoin = decodeActorJoin28(record.parts);
+      if (record.command === M6bServiceWireCommand.actorJoin) {
+        if (record.flags === 0) {
+          try {
+            canonicalActorJoin = decodeActorJoin28(record.parts);
+          } catch {
+            return 'protocolError';
+          }
           decoded = statefulActorJoinFromCanonical(canonicalActorJoin);
-        } catch {
-          // Command 28 is shared with the private Node transport.  The
-          // generated decoder owns canonical recognition, but a failed
-          // recognition must never drop a private record merely because the
-          // command number overlaps.
-          canonicalActorJoin = undefined;
+        } else if (record.flags === M6bPrivateActorJoinFlag) {
+          decoded = decodeStatefulHeader(record.parts[0]!);
+        } else {
+          return 'protocolError';
         }
+      } else {
+        decoded = decodeStatefulHeader(record.parts[0]!);
       }
       const hasPayload = [
         'spotSend',
@@ -3188,6 +3188,13 @@ export class ServiceStatefulRuntime {
         ? {}
         : {
             canonicalActorJoin: {
+              handoffId: canonicalActorJoinHandoffId({
+                sourceActorNodeRid: canonicalActorJoin.actor.targetNodeRid,
+                actorId: record.actor.actor.actorId,
+                actorGeneration: record.actor.actor.generation,
+                sourceActorNodeGeneration: record.actor.targetNodeGeneration,
+                correlation: record.correlation
+              }),
               actorNodeRid: record.actor.actor.nodeRid,
               actorGeneration: record.actor.actor.generation,
               actorNodeGeneration: record.actor.targetNodeGeneration,
@@ -4217,6 +4224,7 @@ export class ServiceStatefulRuntime {
         if (operationKind === 'actorJoin') {
           this.actorJoinPhases.delete(pending.id);
           this.actorJoinTransferIds.delete(pending.id);
+          this.canonicalActorJoinHandoffs.delete(pending.id);
         }
         this.operations.fail(pending.id, error);
       }
@@ -4257,6 +4265,15 @@ export class ServiceStatefulRuntime {
         ? canonical.local.transferId
         : actorJoinMetadataFromMultipartPayload(payload?.payload)?.transferId
     );
+    if (canUseCanonical) {
+      this.canonicalActorJoinHandoffs.set(pending.id, canonicalActorJoinHandoffId({
+        sourceActorNodeRid: routingIdBytes(actor.nodeRid as never),
+        actorId: actor.actorId,
+        actorGeneration: actor.generation,
+        sourceActorNodeGeneration: actorRoute.targetNodeGeneration,
+        correlation: pending.id
+      }));
+    }
     this.submitRequest(
       pending,
       targetNodeRid,
@@ -4266,7 +4283,7 @@ export class ServiceStatefulRuntime {
             actor: {
               id: actor.actorId,
               generation: actor.generation,
-              targetNodeRid: Buffer.from(String(actor.nodeRid), 'utf8'),
+              targetNodeRid: routingIdBytes(actor.nodeRid as never),
               targetNodeGeneration: actorRoute.targetNodeGeneration,
               expectedAuthorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
               expectedOwnerLeaseGeneration: actorRoute.ownerLeaseGeneration
@@ -4275,7 +4292,7 @@ export class ServiceStatefulRuntime {
             targetSpot: {
               id: target.spot.spotId,
               generation: target.spot.generation,
-              targetNodeRid: Buffer.from(target.targetNodeRid, 'utf8'),
+              targetNodeRid: routingIdBytes(target.targetNodeRid as never),
               targetNodeGeneration: target.targetNodeGeneration,
               expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
               expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
@@ -4549,6 +4566,9 @@ export class ServiceStatefulRuntime {
     const actorJoinTransferId = operationKind === 'actorJoin'
       ? this.actorJoinTransferIds.get(pending.id)
       : undefined;
+    const canonicalActorJoinHandoffId = operationKind === 'actorJoin'
+      ? this.canonicalActorJoinHandoffs.get(pending.id)
+      : undefined;
     try {
       if (reply.length < 1 || reply.length > 2) throw new ServiceWireProtocolError('Invalid M6B reply parts.');
       const decoded = decodeStatefulReply(reply[0]!, pending.id, operationKind, reply.length >= 2);
@@ -4577,7 +4597,8 @@ export class ServiceStatefulRuntime {
         payload,
         decoded.tail,
         targetNodeRid,
-        actor
+        actor,
+        canonicalActorJoinHandoffId
       ));
     } catch (error) {
       //  Spec 32-framework-error-model:58-60, 91-92 — an unprocessable remote
@@ -4588,6 +4609,7 @@ export class ServiceStatefulRuntime {
       if (operationKind === 'actorJoin') {
         this.actorJoinPhases.delete(pending.id);
         this.actorJoinTransferIds.delete(pending.id);
+        this.canonicalActorJoinHandoffs.delete(pending.id);
       }
     }
   }
@@ -4620,7 +4642,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload | undefined,
     tail: ServiceStatefulReplyTail | undefined,
     targetNodeRid: string,
-    actor: ServiceActorRef | undefined
+    actor: ServiceActorRef | undefined,
+    canonicalActorJoinHandoffId?: string
   ): ServiceStatefulResult {
     let kindData: ReceiveKindData | undefined;
     if (tail?.kind === 'actorLookup') {
@@ -4655,7 +4678,11 @@ export class ServiceStatefulRuntime {
         },
         ...(tail.receiveChunkLimitBytes === undefined
           ? {}
-          : { receiveChunkLimitBytes: tail.receiveChunkLimitBytes })
+          : { receiveChunkLimitBytes: tail.receiveChunkLimitBytes }),
+        ...(payload === undefined ? {} : { replyContentType: payload.contentType }),
+        ...(canonicalActorJoinHandoffId === undefined
+          ? {}
+          : { canonicalHandoffId: canonicalActorJoinHandoffId })
       } satisfies ActorJoinCompletionPayload;
     }
     return {
@@ -5717,10 +5744,6 @@ function actorJoinMetadataFromApplicationFrame(
   } catch {
     return undefined;
   }
-}
-
-function hasLegacyNodeActorJoinTransfer(frame: Uint8Array | undefined): boolean {
-  return actorJoinMetadataFromApplicationFrame(frame)?.transferId !== undefined;
 }
 
 function actorJoinMetadataFromMultipartPayload(
