@@ -129,6 +129,45 @@ function installCanonicalWireProbe(app, meshName) {
     stateful.canOriginateCanonicalActorJoin = () => false;
     appendFlow('canonical actorJoin: forced_private=true');
   }
+
+  if (mode !== 'user-spot-join-source-multiattempt') return;
+  if (typeof nativeNode.joinActorSpotCanonical !== 'function'
+    || typeof stateful.joinActorCanonical !== 'function') {
+    throw new Error('canonical multi-attempt ingress could not find the active canonical Actor Join transport');
+  }
+
+  const originalJoinActorCanonical = stateful.joinActorCanonical;
+  let attempt = 0;
+  stateful.joinActorCanonical = function joinActorCanonicalWithTerminalCapture(...callArgs) {
+    attempt += 1;
+    const attemptName = attempt === 1 ? 'first' : attempt === 2 ? 'second' : `unexpected-${attempt}`;
+    const pending = originalJoinActorCanonical.apply(this, callArgs);
+    appendEvent(
+      `canonical-multiattempt-sent|attempt=${attemptName}|correlation=${pending.id}`
+    );
+    void pending.promise.then(
+      result => appendEvent(
+        `canonical-multiattempt-terminal|attempt=${attemptName}|correlation=${pending.id}`
+        + `|terminal=${result.terminalResult}|failure=${result.failureCode}`
+      ),
+      error => appendEvent(
+        `canonical-multiattempt-terminal|attempt=${attemptName}|correlation=${pending.id}`
+        + `|error=${errorKindName(error?.kind)}|message=${String(error?.message ?? error)}`
+      )
+    );
+    return pending;
+  };
+
+  const originalJoinActorSpotCanonical = nativeNode.joinActorSpotCanonical;
+  nativeNode.joinActorSpotCanonical = function joinActorSpotCanonicalWithMultiAttempt(...callArgs) {
+    const first = originalJoinActorSpotCanonical.apply(this, callArgs);
+    // The normal public joinSpot().defer() owns the first attempt.  This
+    // test-only ingress sends a second command-28 through the same canonical
+    // transport immediately, so its OperationRegistry reservation produces a
+    // distinct correlation without a second public deferred join.
+    originalJoinActorSpotCanonical.apply(this, callArgs);
+    return first;
+  };
 }
 
 class UserSpotActorCreateReq {
@@ -353,7 +392,7 @@ async function userSpotJoinSource() {
 }
 
 async function main() {
-  if (mode !== 'user-spot-join-source') {
+  if (mode !== 'user-spot-join-source' && mode !== 'user-spot-join-source-multiattempt') {
     throw new Error(`unsupported mode '${mode}'`);
   }
   await userSpotJoinSource();

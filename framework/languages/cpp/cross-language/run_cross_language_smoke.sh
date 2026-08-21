@@ -50,6 +50,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-node-dotnet" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet-multiattempt" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -1027,6 +1028,11 @@ stage_node_source_dotnet_target_relocation() {
 
 # --- User-Spot JoinSpot: Node source -> .NET target, canonical actorJoin(28) --
 stage_node_source_dotnet_target_user_spot_join() {
+  local source_mode="${1:-user-spot-join-source}"
+  local multiattempt=false
+  if [[ "${source_mode}" == "user-spot-join-source-multiattempt" ]]; then
+    multiattempt=true
+  fi
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file force_private_args
   redis_port="$(free_port)"
@@ -1055,7 +1061,7 @@ stage_node_source_dotnet_target_user_spot_join() {
   wait_for_ready "${RUN_DIR}/dotnet-user-spot-target.ready" 180
   wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
 
-  start_node_user_spot_join node-user-spot-join-source user-spot-join-source \
+  start_node_user_spot_join node-user-spot-join-source "${source_mode}" \
     --mesh-name cross.user-spot-join \
     --node-rid node-user-spot-join-source \
     --bind-endpoint "${source_endpoint}" \
@@ -1076,6 +1082,19 @@ stage_node_source_dotnet_target_user_spot_join() {
   # canonical application packet. The private JSON fallback uses a different
   # packet name, so lifecycle success alone cannot satisfy this assertion.
   wait_for_canonical_actor_join "${source_events}.flow"
+  if [[ "${multiattempt}" == true ]]; then
+    wait_for_line "${source_events}" "canonical-multiattempt-sent|attempt=first" 90
+    wait_for_line "${source_events}" "canonical-multiattempt-sent|attempt=second" 90
+    wait_for_line "${source_events}" "canonical-multiattempt-terminal|attempt=first" 90
+    wait_for_line "${source_events}" "canonical-multiattempt-terminal|attempt=second" 90
+    # This experiment records the terminal fate of both real command-28
+    # ingress attempts. It intentionally does not prescribe newest-wins,
+    # first-wins, eager materialization, or a particular failure code.
+    grep -F "canonical-multiattempt-" "${source_events}"
+    stop_all
+    RESULTS+=("User-Spot Join multi-attempt observation: Node source -> .NET target (two canonical actorJoin(28) ingress attempts)")
+    return
+  fi
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
   wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
@@ -1260,6 +1279,14 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=user-spot-join-node-dotnet result=passed"
+    exit 0
+    ;;
+  user-spot-join-node-dotnet-multiattempt)
+    stage_node_source_dotnet_target_user_spot_join user-spot-join-source-multiattempt
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-node-dotnet-multiattempt result=observed"
     exit 0
     ;;
   all)
