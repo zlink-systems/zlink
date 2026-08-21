@@ -269,7 +269,10 @@
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합` — 3건 병렬 착수(2026-08-22, canonical과 독립이므로
   단계 6 최단경로로 선행 투입)
-  - [~] H-10 dotnet→java relocation 레이스 (dotnet+java) — 재현·원인 조사 중
+  - [x] H-10 dotnet→java relocation 레이스 (dotnet+java) — **판정(2026-08-22)**: 22회 반복(수정 전
+    12 + 편입 후 10)에서 레이스 재현 0회 — 문서화 이후의 다수 relocation 수정으로 이미 해소된 것으로
+    판정. 실제 잔여 문제는 스테이지가 기본 `all`에 호출되지 않던 것 → 명시 편입(10/10 그린, 무음
+    아님·근거 run-dir 보존). 러너 diff는 Java 방향 작업과 같은 파일이라 그 커밋에 동승 예정.
   - [~] TicTacToe 간헐 flake (샘플별) — **STOP 판정 대기**: Node TTT 8회 중 6회 실패(기록된
     baseline 1/4보다 악화). 실패모드 A(4/8)= target restore 'Relocation authority contains another
     published root'(service-relocation-host-runtime.ts:3334/:3403)→wire 17, 모드 B(2/8)=
