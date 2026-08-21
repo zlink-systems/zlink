@@ -172,6 +172,7 @@
 **L1 parity(다른 3언어 대조)** 필수.
 
 - [x] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` — `e8409034c6` (포맷만·기존 admission 재사용·단일책임; sol 9/10 해소, 게이트 무회귀. fast-follow: 실제 wire→admission 통합 테스트 = sol #10 LOW/비차단)
+- [ ] **canon-2a-sender-app-reply-delivery (follow-up, 단계 3b서 닫음)**: .NET canonical 발신자가 target handler의 non-empty application reply를 조인 caller에 전달하지 못함(sol HIGH, latent — 현재 테스트 미커버). 단계 3b(A6 크로스랭 pairwise app-reply)에서 해소.
 - [ ] **canon-A1-real-wire-admission-integration-test (fast-follow)**: ProcessCanonicalActorJoin→AdmitCanonicalActorJoinAsync→AdmitRoutedActorJoinAsync 실제 경로 구동 테스트(accepted tail·Authority-row fence mismatch·TypeMismatch·malformed→ProtocolError·mailbox-full). sol #10(LOW/비차단). 기존 admission이 JSON 테스트로 커버되나 canonical 배선은 미커버.
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
