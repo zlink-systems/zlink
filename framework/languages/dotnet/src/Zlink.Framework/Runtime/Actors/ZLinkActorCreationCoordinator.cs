@@ -90,6 +90,36 @@ internal sealed class ZLinkActorCreationCoordinator(
         }
     }
 
+    // Canonical actorJoin(28) secure is deliberately not a relocation
+    // reservation.  It creates (or reuses) a target-local provisional Actor
+    // without a Store claim, dispatch seal, or relocation-stage ownership.
+    public async ValueTask<CreateActorResult> EnsureProvisionalActorAsync(
+        ZLinkActorRuntimeState state,
+        string actorId,
+        string actorType,
+        ulong objectGeneration,
+        ulong authorityOwnerGeneration,
+        CancellationToken cancellationToken)
+    {
+        var factoryType = ResolveActorFactory(actorType);
+        var creation = await state.GetOrStartActorCreationAsync(
+                actorType,
+                false,
+                () => ActivateActorCoreAsync(
+                    state,
+                    actorId,
+                    actorType,
+                    factoryType,
+                    ZLinkMessage.Empty,
+                    CancellationToken.None,
+                    objectGeneration,
+                    authorityOwnerGeneration).AsTask(),
+                cancellationToken)
+            .ConfigureAwait(false);
+        var actor = await creation.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new CreateActorResult(actor, creation.Created, ZLinkMessage.Empty);
+    }
+
     public async ValueTask<CreateActorResult> RelocateAndBindActorAsync(
         ZLinkActorRuntimeState state,
         string actorId,

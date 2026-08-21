@@ -37,23 +37,20 @@ public sealed class CanonicalActorJoinAttemptTests
     }
 
     [Fact]
-    public void Relocation_and_reservation_identities_are_local_to_the_attempt()
+    public void Relocation_identity_is_local_to_the_attempt()
     {
         var attempt = CreateAttempt();
         attempt.RecordAdmissionAccepted(Accepted(chunkLimit: 1));
 
-        var prepareKey = attempt.GetPrepareBindingKey();
-
         Assert.Equal("11111111222243338444555555555555", attempt.HandoffId);
         Assert.Equal(Guid.Parse("11111111-2222-4333-8444-555555555555"),
             attempt.RelocationId);
-        Assert.Equal(attempt.WireAttemptKey, prepareKey.WireAttemptKey);
         Assert.NotEqual(attempt.PublicCompletionId.Low,
             attempt.WireAttemptKey.Correlation);
     }
 
     [Fact]
-    public void Pre_commit_failure_aborts_attempt_and_requests_source_seal_rollback()
+    public void Pre_commit_failure_rolls_back_only_the_source_seal()
     {
         var attempt = CreateAttempt();
         attempt.RecordAdmissionAccepted(Accepted(chunkLimit: 1));
@@ -65,7 +62,6 @@ public sealed class CanonicalActorJoinAttemptTests
             attempt.Phase);
         Assert.Equal(ZLinkCanonicalActorJoinSourceSealState.RollbackRequired,
             attempt.SourceSealState);
-        Assert.True(abort.AbortTargetAdmission);
         Assert.True(abort.RollbackSourceSeal);
     }
 

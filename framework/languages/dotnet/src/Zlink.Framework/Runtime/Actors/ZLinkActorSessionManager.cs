@@ -138,6 +138,28 @@ internal sealed partial class ZLinkActorSessionManager(
             .ConfigureAwait(false);
     }
 
+    internal async ValueTask<CreateActorResult> EnsureProvisionalActorAsync(
+        string actorId,
+        string actorType,
+        ulong objectGeneration,
+        ulong authorityOwnerGeneration,
+        CancellationToken cancellationToken)
+    {
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        if (state.Actor is null && state.RetiredLocalActorRef is not null)
+            await PrepareForTransferredActivationAsync(state, cancellationToken)
+                .ConfigureAwait(false);
+        return await ActorCreation.EnsureProvisionalActorAsync(
+                state,
+                actorId,
+                actorType,
+                objectGeneration,
+                authorityOwnerGeneration,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     internal void PublishReservedActor(string actorId)
     {
         if (_actorSessions.TryGet(

@@ -14,11 +14,6 @@ internal readonly record struct ZLinkCanonicalActorJoinWireAttemptKey(
     ZLinkServiceWireCodec.RequestSourceFence Source,
     ulong Correlation);
 
-// The later relocation prepare path uses this local key to find the admission
-// context.  It is never encoded into the canonical actorJoin request or reply.
-internal readonly record struct ZLinkCanonicalActorJoinTargetAdmissionKey(
-    ZLinkCanonicalActorJoinWireAttemptKey WireAttemptKey);
-
 internal sealed record ZLinkCanonicalActorJoinApplicationReply(
     string ContentType,
     ReadOnlyMemory<byte> Payload);
@@ -47,7 +42,6 @@ internal enum ZLinkCanonicalActorJoinSourceSealState
 }
 
 internal readonly record struct ZLinkCanonicalActorJoinPreCommitAbort(
-    bool AbortTargetAdmission,
     bool RollbackSourceSeal);
 
 internal readonly record struct ZLinkCanonicalActorJoinPostCasReconciliation(
@@ -73,15 +67,12 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
         PublicCompletionId = publicCompletionId;
         SourceAuthority = sourceAuthority;
         TargetAuthority = targetAuthority;
-        TargetAdmissionKey = new ZLinkCanonicalActorJoinTargetAdmissionKey(
-            wireAttemptKey);
     }
 
     internal ZLinkCanonicalActorJoinWireAttemptKey WireAttemptKey { get; }
     internal Guid RelocationId { get; }
     internal string HandoffId { get; }
     internal ZLinkActorJoinOperationId PublicCompletionId { get; }
-    internal ZLinkCanonicalActorJoinTargetAdmissionKey TargetAdmissionKey { get; }
     internal ZLinkAuthoritySnapshot SourceAuthority { get; }
     internal ZLinkAuthoritySnapshot TargetAuthority { get; }
     internal ZLinkCanonicalActorJoinAdmissionAccepted? Admission { get; private set; }
@@ -153,14 +144,6 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
         Phase = ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted;
     }
 
-    internal ZLinkCanonicalActorJoinTargetAdmissionKey GetPrepareBindingKey()
-    {
-        if (Admission is null)
-            throw new InvalidOperationException(
-                "A relocation prepare cannot bind before canonical admission is accepted.");
-        return TargetAdmissionKey;
-    }
-
     internal void MarkSourceSealed()
     {
         if (Phase != ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted)
@@ -169,8 +152,9 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
         SourceSealState = ZLinkCanonicalActorJoinSourceSealState.Sealed;
     }
 
-    // Before target-only CAS, the staged target and matching source seal can
-    // be explicitly aborted (28-relocation-flow.md §9 and §4.5).
+    // Command 28 owns no target relocation state. Before target-only CAS a
+    // failed source attempt rolls back only its own seal; command 40 owns any
+    // target-stage abort under its separate relocation identity.
     internal ZLinkCanonicalActorJoinPreCommitAbort AbortBeforeCommit()
     {
         if (Phase is not ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted)
@@ -181,9 +165,7 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
         Phase = ZLinkCanonicalActorJoinAttemptPhase.AbortedBeforeCommit;
         if (rollbackSourceSeal)
             SourceSealState = ZLinkCanonicalActorJoinSourceSealState.RollbackRequired;
-        return new ZLinkCanonicalActorJoinPreCommitAbort(
-            AbortTargetAdmission: true,
-            RollbackSourceSeal: rollbackSourceSeal);
+        return new ZLinkCanonicalActorJoinPreCommitAbort(rollbackSourceSeal);
     }
 
     internal void MarkTargetOnlyCasCommitted()

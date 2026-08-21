@@ -2700,13 +2700,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (state.Actor is not null)
             return;
 
-        // The Store fence is already the target's reservation.  This mirrors
-        // the existing relocation prepare path: create the exact reserved
-        // native incarnation without re-claiming the Authority row.
-        await _actorSessionManager.PrepareReservedActorAsync(
+        // This is target-local provisional existence only. Command 40 owns
+        // the relocation reservation, staging queue, and byte budget under
+        // its relocation identity; do not create any of those at command 28.
+        await _actorSessionManager.EnsureProvisionalActorAsync(
                 request.Actor.ActorId,
                 stableType,
-                ZLinkMessage.Empty,
                 request.Actor.ObjectGeneration,
                 request.ActorAuthorityOwnerGeneration,
                 cancellationToken)
