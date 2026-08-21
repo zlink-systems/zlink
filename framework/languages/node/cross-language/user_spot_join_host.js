@@ -179,13 +179,25 @@ function installCanonicalReceiverProbe(app) {
 
   const originalPrepare = receiver.prepareCanonicalActorJoin;
   receiver.prepareCanonicalActorJoin = async function prepareCanonicalActorJoinWithProbe(join) {
-    const prepared = await originalPrepare.call(this, join);
     appendFlow(
       `canonical actorJoin: wire_command=28 canonical=true packet=${CANONICAL_ACTOR_JOIN_PACKET}`
-      + ` receiver=prepareCanonicalActorJoin actor=${join.actorId}`
+      + ` receiver=prepareCanonicalActorJoin ingress=true actor=${join.actorId}`
       + ` actor_node=${join.actorNodeRid} target_authority=${join.expectedAuthorityOwnerGeneration}`
     );
-    return prepared;
+    try {
+      return await originalPrepare.call(this, join);
+    } catch (error) {
+      const kind = errorKindName(error?.kind);
+      const message = String(error?.message ?? error);
+      appendFlow(
+        `canonical actorJoin: receiver=prepareCanonicalActorJoin outcome=error`
+        + ` error_kind=${kind} error_message=${message}`
+      );
+      appendEvent(
+        `canonical-actor-join-prepare-failed|kind=${kind}|message=${message}`
+      );
+      throw error;
+    }
   };
 }
 
@@ -462,7 +474,6 @@ async function userSpotJoinTarget() {
           .setPlacementWeight(100);
         mesh.channel(meshName).server();
         const objects = mesh.objects().server();
-        objects.addEntrySpot(RelocationEntrySpot);
         objects.addSpotFactory(
           'cross-lang-relocation-user-spot-type',
           RelocationUserSpot,
@@ -494,6 +505,12 @@ async function userSpotJoinTarget() {
   appendEvent(
     `user-spot-created|spot=${created.spot.spotId}|nodeRid=${created.spot.nodeRid}|state=${created.state}`
   );
+  // Match the reciprocal .NET target: after its fixed User Spot is created,
+  // it must not be eligible for the source's Entry-Spot actor placement.
+  // Keep the actor factory so this target can materialize the actor after the
+  // User-Spot join transfers ownership.
+  const runtimeOptions = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false });
+  runtimeOptions.mesh(meshName).placementWeight = 0;
   writeReady();
 
   await new Promise(() => {});

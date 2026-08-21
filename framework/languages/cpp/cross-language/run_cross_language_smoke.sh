@@ -52,6 +52,8 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet-multiattempt" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-node" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-dotnet" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-java" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -1152,6 +1154,124 @@ stage_dotnet_source_node_target_user_spot_join() {
   RESULTS+=("User-Spot Join: .NET source -> Node target (canonical actorJoin(28), admission, joined lifecycle)")
 }
 
+# --- User-Spot JoinSpot: Java source -> .NET target, canonical actorJoin(28) --
+# Same scenario as stage_node_source_dotnet_target_user_spot_join with the Java
+# cross-language host in the source role. NOTE: the canonical-28 wire assertion
+# (wait_for_canonical_actor_join) is deliberately absent here -- that line is
+# produced only by the Node host's own decode probes, and the .NET
+# TestHostMessageFlowListener emits generic flow lines only. This cell asserts
+# the lifecycle markers; Java-as-sender canonical-28 wire evidence is not
+# available in this matrix cell.
+stage_java_source_dotnet_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events start_file
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/java-user-spot-join-source.events"
+  target_events="${RUN_DIR}/dotnet-user-spot-target-java.events"
+  start_file="${RUN_DIR}/user-spot-join-java-dotnet.start"
+
+  start_redis user-spot-join-redis-java-dotnet "${redis_port}"
+  start_dotnet dotnet-user-spot-target-java user-spot-target \
+    --mesh-name cross.user-spot-join \
+    --peer-rid java-user-spot-join-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-user-spot-target-java.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+
+  start_java java-user-spot-join-source user-spot-source \
+    --mesh-name cross.user-spot-join \
+    --node-rid java-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${source_events}" \
+    --start-file "${start_file}"
+
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
+  wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
+  wait_for_line "${target_events}" "user-spot-probe|nodeRid=" 90
+  if grep -qF "user-spot-probe-timeout" "${target_events}"; then
+    echo "User-Spot Join stage: target-side Actor probe did not reach the target RID" >&2
+    exit 1
+  fi
+  stop_all
+  RESULTS+=("User-Spot Join: Java source -> .NET target (JoinSpot admission, joined lifecycle, target-owner probe)")
+}
+
+# --- User-Spot JoinSpot: Node source -> Java target, canonical actorJoin(28) --
+# Reuses the Node source mode verbatim; the Java host owns the fixed target
+# User Spot (and, unlike the .NET target, also registers an Entry Spot).
+stage_node_source_java_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events start_file
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/node-user-spot-join-source-java.events"
+  target_events="${RUN_DIR}/java-user-spot-target.events"
+  start_file="${RUN_DIR}/user-spot-join-node-java.start"
+
+  start_redis user-spot-join-redis-node-java "${redis_port}"
+  start_java java-user-spot-target user-spot-target \
+    --mesh-name cross.user-spot-join \
+    --node-rid java-user-spot-join-target \
+    --peer-rid node-user-spot-join-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/java-user-spot-target.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+
+  start_node_user_spot_join node-user-spot-join-source-java user-spot-join-source \
+    --mesh-name cross.user-spot-join \
+    --node-rid node-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${source_events}" \
+    --start-file "${start_file}"
+
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+
+  wait_for_canonical_actor_join "${source_events}.flow"
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
+  wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
+  wait_for_line "${target_events}" "user-spot-probe|nodeRid=" 90
+  if grep -qF "user-spot-probe-timeout" "${target_events}"; then
+    echo "User-Spot Join stage: target-side Actor probe did not reach the target RID" >&2
+    exit 1
+  fi
+  stop_all
+  RESULTS+=("User-Spot Join: Node source -> Java target (canonical actorJoin(28), admission, joined lifecycle, target-owner probe)")
+}
+
 # --- entry-spot relocation: Java source -> .NET target ------------------------
 # Same scenario as stage_node_source_dotnet_target_relocation, but both sides
 # now use pure automatic (Location-Store-only) discovery -- confirmed by
@@ -1342,6 +1462,22 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
     echo "cross-language smoke stage=user-spot-join-dotnet-node result=passed"
     exit 0
     ;;
+  user-spot-join-java-dotnet)
+    stage_java_source_dotnet_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-java-dotnet result=passed"
+    exit 0
+    ;;
+  user-spot-join-node-java)
+    stage_node_source_java_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-node-java result=passed"
+    exit 0
+    ;;
   all)
     ;;
   *)
@@ -1363,6 +1499,10 @@ stage_node_publisher_cpp_subscriber
 stage_node_connector_cpp_stream_server
 stage_cpp_node_message_follow
 run_spot_route_stages
+# H-10: keep the .NET -> Java automatic-discovery relocation handoff in the
+# default gate.  Run it explicitly so its result is reported alongside the
+# other default smoke stages rather than being silently omitted.
+stage_dotnet_source_java_target_relocation
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"

@@ -25,11 +25,22 @@ import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteRequ
 import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangActorCreateReq;
 import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangProbeReq;
 import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangProbeRes;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.BeginUserSpotJoinReq;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotCreateReq;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotDiscoveryProbeReq;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotDiscoveryProbeRes;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotJoinRes;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotProbeReq;
+import systems.zlink.crosslanguage.host.UserSpotJoinContracts.UserSpotProbeRes;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.spots.ZLinkSpotCreateResult;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
@@ -180,6 +191,53 @@ public final class Program {
                     factory -> factory.preserveStateWith(RelocationActorAdapter.class));
                 return;
             }
+            if ("user-spot-source".equals(mode) || "user-spot-target".equals(mode)) {
+                // User-Spot JoinSpot (spec 15 section 4.2): an Actor created
+                // through the local Entry Spot joins a fixed User Spot owned
+                // by the foreign peer. The runtime alone decides whether the
+                // admission leg travels as canonical command 28 (spec 51
+                // section 9) -- this host never selects the transport.
+                boolean target = "user-spot-target".equals(mode);
+                String meshName = args.require("mesh-name");
+                // Message-flow evidence lands in the host log (the framework
+                // traces through SLF4J); no <event-file>.flow is produced by
+                // the Java host, so no canonical-28 wire probe exists here.
+                options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+                if (locationStore != null) {
+                    options.addLocationStore(locationStore);
+                }
+                if (relocationStore != null) {
+                    options.addRelocationStore(relocationStore);
+                }
+                var mesh = options.addRouteMesh(meshName)
+                    .listen(args.require("bind-endpoint"))
+                    .setRoutingId(RoutingId.from(args.require("node-rid")))
+                    // The target drops to zero once its fixed Spot exists, so
+                    // the source always wins the Actor's initial placement.
+                    .setPlacementWeight(100);
+                mesh.channelName(meshName).server();
+                mesh.addRouteRequestHandler(
+                    UserSpotDiscoveryProbeHandler.class,
+                    UserSpotDiscoveryProbeReq.class,
+                    UserSpotDiscoveryProbeRes.class);
+                mesh.objects().client();
+                var objects = mesh.objects().server();
+                // The target registers an Entry Spot too: without it the
+                // arriving Actor has no local Entry Spot placement path.
+                objects.addEntrySpot(RelocationEntrySpot.class);
+                objects.addActorFactory(
+                    ENTRY_RELOCATION_ACTOR_TYPE,
+                    RelocationActor.class,
+                    RelocationActorFactory.class,
+                    factory -> factory.preserveStateWith(RelocationActorAdapter.class));
+                if (target) {
+                    objects.addSpotFactory(
+                        RelocationUserSpot.SPOT_TYPE,
+                        RelocationUserSpot.class,
+                        factory -> factory.disableRelocation());
+                }
+                return;
+            }
             if ("spot-route-server".equals(mode)) {
                 String channel = args.require("channel-name");
                 var mesh = options.addRouteMesh(channel)
@@ -225,6 +283,263 @@ public final class Program {
     @Bean
     SpotRouteFailRequestHandler spotRouteFailRequestHandler() {
         return new SpotRouteFailRequestHandler();
+    }
+
+    @Bean
+    UserSpotJoinObserver userSpotJoinObserver() {
+        return new UserSpotJoinObserver();
+    }
+
+    @Bean
+    NodeIdentity nodeIdentity(HostArgs args) {
+        return new NodeIdentity(args.option("node-rid", ""));
+    }
+
+    @Bean
+    UserSpotDiscoveryProbeHandler userSpotDiscoveryProbeHandler(NodeIdentity identity) {
+        return new UserSpotDiscoveryProbeHandler(identity);
+    }
+
+    @Bean(name = "userSpotJoinRunner")
+    ApplicationRunner userSpotJoinRunner(
+        HostArgs args,
+        EventSink sink,
+        UserSpotJoinObserver observer,
+        ObjectProvider<ZLinkSpotManager> spotsProvider,
+        ObjectProvider<ZLinkActorManager> actorsProvider,
+        ObjectProvider<ZLinkActorClient> actorClientProvider,
+        ObjectProvider<ZLinkRouteClient> routeClientProvider,
+        ObjectProvider<ZLinkRouteMeshRuntime> meshRuntimeProvider,
+        ObjectProvider<ZLinkRouteMeshRuntimeOptions> runtimeOptionsProvider) {
+        return applicationArguments -> {
+            String mode = args.mode();
+            if ("user-spot-source".equals(mode)) {
+                Thread worker = new Thread(
+                    () -> runUserSpotSource(
+                        args,
+                        sink,
+                        actorsProvider.getObject(),
+                        actorClientProvider.getObject(),
+                        meshRuntimeProvider.getObject()),
+                    "user-spot-source");
+                worker.setDaemon(true);
+                worker.start();
+                return;
+            }
+            if ("user-spot-target".equals(mode)) {
+                runUserSpotTarget(
+                    args,
+                    sink,
+                    observer,
+                    spotsProvider.getObject(),
+                    actorClientProvider.getObject(),
+                    routeClientProvider.getObject(),
+                    meshRuntimeProvider.getObject(),
+                    runtimeOptionsProvider.getObject());
+            }
+        };
+    }
+
+    private static void runUserSpotSource(
+        HostArgs args,
+        EventSink sink,
+        ZLinkActorManager actors,
+        ZLinkActorClient actorClient,
+        ZLinkRouteMeshRuntime meshRuntime) {
+        String meshName = args.require("mesh-name");
+        String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
+        String targetSpotId = args.require("spot-id");
+        try {
+            long discoveryDeadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+            while (meshRuntime.snapshot(meshName).readyPeerCount() == 0) {
+                if (System.nanoTime() >= discoveryDeadline) {
+                    sink.append("user-spot-source-peer-ready|ready=false|reason=discovery-timeout");
+                    return;
+                }
+                sleepQuietly(100);
+            }
+            sink.append("user-spot-source-peer-ready|ready=true");
+
+            // Optional reciprocal barrier: the harness touches this file once
+            // BOTH sides have observed the peer, matching the Node source.
+            String startFile = args.option("start-file", null);
+            if (startFile != null && !startFile.isBlank()) {
+                Path path = Path.of(startFile);
+                long startDeadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+                while (!Files.exists(path)) {
+                    if (System.nanoTime() >= startDeadline) {
+                        sink.append("user-spot-source-start-timeout|file=" + startFile);
+                        return;
+                    }
+                    sleepQuietly(25);
+                }
+            }
+
+            ZLinkActorCreateResult created = actors
+                .getOrCreate(actorId, ENTRY_RELOCATION_ACTOR_TYPE)
+                .inMesh(meshName)
+                .request(new CrossLangActorCreateReq(7, 4))
+                .timeout(Duration.ofSeconds(15))
+                .submit()
+                .toCompletableFuture()
+                .get(20, TimeUnit.SECONDS);
+            String createStatus = switch (created) {
+                case ZLinkActorCreateResult.Created ignored -> "created";
+                case ZLinkActorCreateResult.Existing ignored -> "existing";
+                case ZLinkActorCreateResult.Rejected ignored -> "rejected";
+            };
+            String ownerNode = switch (created) {
+                case ZLinkActorCreateResult.Created value -> value.actor().nodeRid().toString();
+                case ZLinkActorCreateResult.Existing value -> value.actor().nodeRid().toString();
+                default -> "none";
+            };
+            sink.append("user-spot-source-actor-created|status=" + createStatus
+                + "|node=" + ownerNode);
+
+            UserSpotJoinRes reply = actorClient
+                .requestToActor(actorId, new BeginUserSpotJoinReq(targetSpotId, "canonical-28"))
+                .timeout(Duration.ofSeconds(45))
+                .submit(UserSpotJoinRes.class)
+                .toCompletableFuture()
+                .get(50, TimeUnit.SECONDS);
+            sink.append("user-spot-join-request-reply|accepted=" + reply.accepted()
+                + "|actor=" + reply.actorId() + "|spot=" + reply.spotId());
+        } catch (ExecutionException | TimeoutException error) {
+            sink.append("user-spot-source-error|" + describe(error));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void runUserSpotTarget(
+        HostArgs args,
+        EventSink sink,
+        UserSpotJoinObserver observer,
+        ZLinkSpotManager spots,
+        ZLinkActorClient actorClient,
+        ZLinkRouteClient routes,
+        ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkRouteMeshRuntimeOptions runtimeOptions) {
+        String meshName = args.require("mesh-name");
+        String spotId = args.require("spot-id");
+        String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
+        String sourceNodeRid = args.require("peer-rid");
+        try {
+            ZLinkSpotCreateResult created = spots
+                .getOrCreate(spotId, RelocationUserSpot.SPOT_TYPE)
+                .inMesh(meshName)
+                .request(new UserSpotCreateReq("cross-language-user-spot"))
+                .timeout(Duration.ofSeconds(15))
+                .submit()
+                .toCompletableFuture()
+                .get(20, TimeUnit.SECONDS);
+            String targetNodeRid = created.spot().nodeRid().toString();
+            // The fixed target Spot exists now. Exclude this node from the
+            // source Actor's Entry-Spot placement so the join is a real
+            // cross-node admission rather than a local self-join.
+            runtimeOptions.mesh(meshName).setPlacementWeight(0);
+            sink.append("user-spot-created|spot=" + created.spot().spotId()
+                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name());
+            // ApplicationRunners run before main() writes the ready file, and
+            // the source only starts after it appears; write it here.
+            writeReadyFile(args);
+            startDaemon("user-spot-target-discovery",
+                () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
+            startDaemon("user-spot-target-probe",
+                () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
+        } catch (ExecutionException | TimeoutException error) {
+            sink.append("user-spot-target-error|" + describe(error));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void observeSourcePeer(
+        EventSink sink,
+        ZLinkRouteClient routes,
+        ZLinkRouteMeshRuntime meshRuntime,
+        String meshName,
+        String sourceNodeRid) {
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(120).toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            int readyPeers = meshRuntime.snapshot(meshName).readyPeerCount();
+            if (readyPeers > 0) {
+                try {
+                    UserSpotDiscoveryProbeRes reply = routes
+                        .requestToNode(
+                            meshName,
+                            RoutingId.from(sourceNodeRid),
+                            new UserSpotDiscoveryProbeReq("reciprocal-discovery"))
+                        .timeout(Duration.ofSeconds(2))
+                        .submit(UserSpotDiscoveryProbeRes.class)
+                        .toCompletableFuture()
+                        .get(4, TimeUnit.SECONDS);
+                    if (sourceNodeRid.equals(reply.nodeRid())) {
+                        sink.append("user-spot-source-peer-ready|ready=true|peers=" + readyPeers);
+                        return;
+                    }
+                } catch (ExecutionException | TimeoutException ignored) {
+                    // Peer edge not admitted in both directions yet.
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            sleepQuietly(100);
+        }
+        sink.append("user-spot-source-peer-ready|ready=false|reason=probe-timeout");
+    }
+
+    private static void probeJoinedActor(
+        EventSink sink,
+        UserSpotJoinObserver observer,
+        ZLinkActorClient actorClient,
+        String actorId,
+        String targetNodeRid) {
+        try {
+            observer.joined().get(75, TimeUnit.SECONDS);
+        } catch (ExecutionException | TimeoutException error) {
+            sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid
+                + "|failure=join-not-observed");
+            return;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+        String lastFailure = "none";
+        while (System.nanoTime() < deadlineNanos) {
+            try {
+                UserSpotProbeRes reply = actorClient
+                    .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
+                    .timeout(Duration.ofSeconds(5))
+                    .submit(UserSpotProbeRes.class)
+                    .toCompletableFuture()
+                    .get(7, TimeUnit.SECONDS);
+                if (targetNodeRid.equals(reply.nodeRid())) {
+                    sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
+                        + "|targetRid=" + targetNodeRid
+                        + "|actor=" + reply.actorId()
+                        + "|stateVersion=" + reply.stateVersion());
+                    return;
+                }
+                lastFailure = "unexpected-owner:" + reply.nodeRid();
+            } catch (ExecutionException | TimeoutException error) {
+                lastFailure = describe(error);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            sleepQuietly(500);
+        }
+        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid
+            + "|failure=" + lastFailure);
+    }
+
+    private static void startDaemon(String name, Runnable body) {
+        Thread thread = new Thread(body, name);
+        thread.setDaemon(true);
+        thread.start();
     }
 
     @Bean(name = "entryRelocationRunner")
