@@ -304,7 +304,7 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
     if (unlikely (0 != endpoint_runtime ().endpoints.count (endpoint_uri_)))
         return 0;
 
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
+    io_thread_t *io_thread = choose_io_thread_transport (options.affinity);
     if (!io_thread) {
         errno = EMTHREAD;
         return -1;

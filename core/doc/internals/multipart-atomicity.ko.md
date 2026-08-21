@@ -3,7 +3,7 @@ title: "Multipart atomicity"
 ---
 
 <!-- zlink-nav:start -->
-[가이드 목차](../guide/README.ko.md) | [이전: Connection별 memory](connection-memory.ko.md) | [다음: Core raw runtime 내부 경계](runtime-boundary.ko.md)
+[가이드 목차](../guide/README.ko.md) | [이전: Auto HWM 내부 설계](auto-hwm.ko.md) | [다음: Core raw runtime 내부 경계](runtime-boundary.ko.md)
 <!-- zlink-nav:end -->
 
 # Multipart atomicity

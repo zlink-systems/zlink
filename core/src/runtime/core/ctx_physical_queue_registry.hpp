@@ -16,13 +16,26 @@
 namespace zlink
 {
 class pipe_t;
+class ctx_physical_queue_registry_t;
 struct physical_queue_record_t;
 typedef std::shared_ptr<physical_queue_record_t> physical_queue_handle_t;
 
 struct retained_credit_control_t;
 struct retained_credit_origin_t;
-struct decoder_frame_reservation_control_t;
-struct decoder_frame_reservation_t;
+
+struct decoder_frame_reservation_t
+{
+    decoder_frame_reservation_t ();
+    void reset ();
+
+    uint64_t queue_id;
+    uint64_t generation;
+    uint64_t frame_bytes;
+    uint64_t payload_bytes;
+    unsigned char msg_flags;
+    bool multipart_started_empty;
+    bool active;
+};
 
 struct decoder_frame_reservation_request_t
 {
@@ -31,6 +44,7 @@ struct decoder_frame_reservation_request_t
     uint64_t payload_bytes;
     unsigned char msg_flags;
     bool multipart_started_empty;
+    bool qualify_multipart_from_queue_state;
 };
 
 //  Move-only ownership for one physical frame removed from a queue without
@@ -63,12 +77,6 @@ class retained_credit_token_t
 
 void release_retained_credit_origin (
   std::shared_ptr<retained_credit_origin_t> *origin_);
-
-//  Decoder reservations can outlive a pipe generation while an engine is
-//  unwinding.  Release through the registry-owned control block so an old
-//  token never dereferences a detached pipe or a destroyed registry.
-void release_decoder_frame_reservation (
-  decoder_frame_reservation_t **reservation_);
 
 struct physical_queue_registry_snapshot_t
 {
@@ -136,7 +144,8 @@ class ctx_physical_queue_registry_t
                          uint64_t final_frame_bytes_,
                          bool counted_message_,
                          bool oversize_admission_);
-    void rollback_provisional (const physical_queue_handle_t &direction_);
+    void rollback_provisional (const physical_queue_handle_t &direction_,
+                               uint64_t frame_bytes_ = 0);
     void release_committed_frame (const physical_queue_handle_t &direction_,
                                   uint64_t frame_bytes_,
                                   uint64_t counted_message_count_);
@@ -148,8 +157,10 @@ class ctx_physical_queue_registry_t
     int reserve_decoder_frame (
       const physical_queue_handle_t &direction_,
       const decoder_frame_reservation_request_t &request_,
+      decoder_frame_reservation_t *reservation_storage_,
       decoder_frame_reservation_t **reservation_out_);
     int commit_decoder_frame (
+      const physical_queue_handle_t &direction_,
       decoder_frame_reservation_t **reservation_, uint64_t payload_bytes_,
       unsigned char msg_flags_, bool counted_message_,
       bool *oversize_admission_out_);
@@ -167,8 +178,6 @@ class ctx_physical_queue_registry_t
     uint64_t current_accounted_bytes (
       const physical_queue_handle_t &direction_) const;
     uint64_t generation (const physical_queue_handle_t &direction_) const;
-    bool snapshot_queue_empty (
-      const physical_queue_handle_t &direction_) const;
     void advance_generation (const physical_queue_handle_t &direction_);
     void release_endpoint (physical_queue_handle_t *direction_);
     void snapshot (physical_queue_registry_snapshot_t *out_) const;
@@ -180,8 +189,6 @@ class ctx_physical_queue_registry_t
     friend class retained_credit_token_t;
     friend void release_retained_credit_origin (
       std::shared_ptr<retained_credit_origin_t> *origin_);
-    friend void release_decoder_frame_reservation (
-      decoder_frame_reservation_t **reservation_);
     uint64_t allocate_queue_id_unlocked ();
 
     mutable mutex_t _sync;
@@ -190,9 +197,9 @@ class ctx_physical_queue_registry_t
     uint64_t _application_reserved_minimum_bytes;
     std::atomic<uint64_t> _application_current_accounted_bytes;
     std::atomic<uint64_t> _application_provisional_accounted_bytes;
-    std::atomic<uint64_t> _application_peak_accounted_bytes;
+    mutable std::atomic<uint64_t> _application_peak_accounted_bytes;
     std::atomic<uint64_t> _completion_current_accounted_bytes;
-    std::atomic<uint64_t> _completion_peak_accounted_bytes;
+    mutable std::atomic<uint64_t> _completion_peak_accounted_bytes;
     std::atomic<uint64_t> _completion_pending_message_count;
     std::atomic<uint64_t> _monitor_current_accounted_bytes;
     std::atomic<uint64_t> _application_lease_accounted_bytes;
@@ -206,9 +213,7 @@ class ctx_physical_queue_registry_t
     std::shared_ptr<retained_credit_control_t> _retained_control;
     std::map<uint64_t, retained_credit_origin_t *> _retained_origins;
     uint64_t _next_retained_origin_id;
-    std::shared_ptr<decoder_frame_reservation_control_t> _decoder_control;
-    std::map<uint64_t, decoder_frame_reservation_t *> _decoder_reservations;
-    uint64_t _next_decoder_reservation_id;
+    std::atomic<bool> _decoder_accepting;
 
     bool transfer_retained_origin_to_application (
       retained_credit_origin_t *origin_);
@@ -218,10 +223,6 @@ class ctx_physical_queue_registry_t
       const physical_queue_handle_t &direction_);
     void cancel_decoder_reservations_unlocked (
       const physical_queue_handle_t &direction_, uint64_t generation_);
-    void refund_decoder_reservation_unlocked (
-      decoder_frame_reservation_t *reservation_);
-    void release_decoder_frame_unlocked (
-      decoder_frame_reservation_t *reservation_);
     void force_cancel_decoder_reservations ();
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (ctx_physical_queue_registry_t)

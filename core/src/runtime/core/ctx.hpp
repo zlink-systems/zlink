@@ -81,6 +81,10 @@ class ctx_t ZLINK_FINAL
     //  Returns NULL if no I/O thread is available.
     zlink::io_thread_t *choose_io_thread (uint64_t affinity_);
 
+    //  Transport sessions use a separate round-robin cursor so auxiliary
+    //  monitor/dispatch owners cannot skew network connection placement.
+    zlink::io_thread_t *choose_io_thread_transport (uint64_t affinity_);
+
     //  STREAM-specific I/O thread selection policy.
     //  Selection is controlled by ZLINK_ASIO_STREAM_SESSION_SCHED:
     //   - rr (default): round-robin across eligible threads

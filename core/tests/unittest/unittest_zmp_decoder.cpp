@@ -181,6 +181,49 @@ void test_payload_admission_precedes_body_allocation_and_can_retry ()
     TEST_ASSERT_EQUAL_MEMORY ("body", decoder.msg ()->data (), 4);
 }
 
+void test_admission_retry_consumes_only_current_zero_copy_frame ()
+{
+    zlink::zmp_decoder_t decoder (64, -1);
+    fake_frame_admission_t admission;
+    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
+                                         NULL, &admission);
+
+    unsigned char *input = NULL;
+    size_t input_capacity = 0;
+    decoder.get_buffer (&input, &input_capacity);
+    const size_t frame_size = zlink::zmp_header_size + 4;
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT64 (2 * frame_size, input_capacity);
+
+    build_header (input, zlink::zmp_flag_more, 4);
+    memcpy (input + zlink::zmp_header_size, "body", 4);
+    build_header (input + frame_size, 0, 4);
+    memcpy (input + frame_size + zlink::zmp_header_size, "next", 4);
+
+    size_t processed = 0;
+    TEST_ASSERT_EQUAL_INT (
+      -1, decoder.decode (input, 2 * frame_size, processed));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_UINT64 (zlink::zmp_header_size, processed);
+
+    admission.allow = true;
+    TEST_ASSERT_EQUAL_INT (0, decoder.retry_frame_admission ());
+
+    processed = 0;
+    TEST_ASSERT_EQUAL_INT (
+      1, decoder.decode (input + zlink::zmp_header_size,
+                         2 * frame_size - zlink::zmp_header_size, processed));
+    TEST_ASSERT_EQUAL_UINT64 (4, processed);
+    TEST_ASSERT_EQUAL_MEMORY ("body", decoder.msg ()->data (), 4);
+    *decoder.frame_reservation_slot () = NULL;
+
+    processed = 0;
+    TEST_ASSERT_EQUAL_INT (
+      1, decoder.decode (input + frame_size, frame_size, processed));
+    TEST_ASSERT_EQUAL_UINT64 (frame_size, processed);
+    TEST_ASSERT_EQUAL_MEMORY ("next", decoder.msg ()->data (), 4);
+    *decoder.frame_reservation_slot () = NULL;
+}
+
 void test_protocol_control_bypasses_application_admission ()
 {
     zlink::zmp_decoder_t decoder (64, -1);
@@ -294,6 +337,7 @@ int main (void)
     RUN_TEST (test_body_too_large);
     RUN_TEST (test_more_identity_allowed);
     RUN_TEST (test_payload_admission_precedes_body_allocation_and_can_retry);
+    RUN_TEST (test_admission_retry_consumes_only_current_zero_copy_frame);
     RUN_TEST (test_protocol_control_bypasses_application_admission);
     RUN_TEST (test_synchronously_discarded_frame_releases_reservation_once);
     RUN_TEST (test_metadata_parse_valid);

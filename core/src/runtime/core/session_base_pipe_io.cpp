@@ -138,17 +138,22 @@ int zlink::session_base_t::reserve_decoder_frame (
       (msg_flags_ & msg_t::routing_id) == 0
       || self->options.recv_routing_id;
     const int rc = self->_pipe->reserve_inbound_decoder_frame (
-      payload_bytes_, msg_flags_, track_multipart, &reservation);
+      payload_bytes_, msg_flags_, track_multipart,
+      &self->_decoder_frame_reservation, &reservation);
     *reservation_out_ = reservation;
     return rc;
 }
 
 void zlink::session_base_t::release_decoder_frame (
-  void *, void *reservation_)
+  void *subject_, void *reservation_)
 {
     decoder_frame_reservation_t *reservation =
       static_cast<decoder_frame_reservation_t *> (reservation_);
-    release_decoder_frame_reservation (&reservation);
+    session_base_t *const self = static_cast<session_base_t *> (subject_);
+    if (self && self->_pipe)
+        self->_pipe->release_decoder_frame_reservation (&reservation);
+    else if (reservation)
+        reservation->reset ();
 }
 
 int zlink::session_base_t::push_msg_internal (msg_t *msg_,

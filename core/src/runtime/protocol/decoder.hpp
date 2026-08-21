@@ -70,23 +70,6 @@ template <typename T, typename A = c_single_allocator> class decoder_base_t : pu
     {
         bytes_used_ = 0;
 
-        //  In case of zero-copy simply adjust the pointers, no copying
-        //  is required. Also, run the state machine in case all the data
-        //  were processed.
-        if (data_ == _read_pos) {
-            zlink_assert (size_ <= _to_read);
-            _read_pos += size_;
-            _to_read -= size_;
-            bytes_used_ = size_;
-
-            while (!_to_read) {
-                const int rc = (static_cast<T *> (this)->*_next) (data_ + bytes_used_);
-                if (rc != 0)
-                    return rc;
-            }
-            return 0;
-        }
-
         while (bytes_used_ < size_) {
             //  Copy the data from buffer to the message.
             const size_t to_copy = std::min (_to_read, size_ - bytes_used_);

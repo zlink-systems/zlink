@@ -229,6 +229,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     }
     if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER)
         emit_transport_pair_ready (ready_application);
+    if (ready_application && ready_completion)
+        cache_completion_pipe_routing_id (ready_application);
     const bool transport_write_released =
       ready_application
       && ready_application->release_writes_for_transport_pair ();
@@ -467,6 +469,8 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
     bool completion_notified = false;
     int drained_completions = 0;
     if (events_ & ZLINK_POLLCOMPLETION) {
+        zlink_assert (_completion_poller_refs.load (std::memory_order_acquire)
+                      != 0);
         scoped_lock_t owner_lock (_completion_owner_sync);
         const completion_drain_scope_t drain_scope (this);
         completion_notified =
@@ -932,6 +936,31 @@ zlink::pipe_t *zlink::socket_base_t::completion_pipe_for_transport_pair (
     return it == _transport_pairs.end () || !it->second.ready
              ? NULL
              : it->second.completion;
+}
+
+void zlink::socket_base_t::cache_completion_pipe_routing_id (
+  pipe_t *application_pipe_)
+{
+    if (!application_pipe_
+        || application_pipe_->get_transport_lane ()
+             != transport_lane_application)
+        return;
+
+    const blob_t &routing_id = application_pipe_->get_routing_id ();
+    if (routing_id.size () == 0)
+        return;
+
+    const transport_pair_key_t key (
+      application_pipe_->get_transport_pair_id (),
+      application_pipe_->get_transport_pair_generation ());
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::const_iterator it = _transport_pairs.find (key);
+    if (it == _transport_pairs.end () || !it->second.ready
+        || it->second.application != application_pipe_
+        || !it->second.completion)
+        return;
+    if (it->second.completion->get_routing_id ().size () == 0)
+        it->second.completion->set_router_socket_routing_id (routing_id);
 }
 
 bool zlink::socket_base_t::transport_pair_application_ready (

@@ -123,7 +123,11 @@ option(
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION "${ENABLE_LTO}")
 
 add_library(zlink_c INTERFACE)
-target_include_directories(zlink_c INTERFACE include)
+set(ZLINK_C_PUBLIC_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+if(EXISTS "${ZLINK_C_CORE_BUILD_DIR}/include/zlink.h")
+  set(ZLINK_C_PUBLIC_INCLUDE_DIR "${ZLINK_C_CORE_BUILD_DIR}/include")
+endif()
+target_include_directories(zlink_c INTERFACE "${ZLINK_C_PUBLIC_INCLUDE_DIR}")
 target_link_libraries(zlink_c INTERFACE ${ZLINK_C_CORE_TARGET})
 
 if(NOT DEFINED ZLINK_C_REGISTER_CTEST)

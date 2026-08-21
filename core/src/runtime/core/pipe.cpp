@@ -95,12 +95,14 @@ int zlink::pipepair (object_t *parents_[2],
     pipes_[0] = new (std::nothrow)
       pipe_t (parents_[0], upipe1, upipe2, hwms_[1], hwms_[0], conflate_[0],
               session_pipe_, transport_lifetime, physical_queues[0],
-              physical_queues[1]);
+              physical_queues[1],
+              resolved_queue_class != physical_queue_class_application);
     alloc_assert (pipes_[0]);
     pipes_[1] = new (std::nothrow)
       pipe_t (parents_[1], upipe2, upipe1, hwms_[0], hwms_[1], conflate_[1],
               session_pipe_, transport_lifetime, physical_queues[1],
-              physical_queues[0]);
+              physical_queues[0],
+              resolved_queue_class != physical_queue_class_application);
     alloc_assert (pipes_[1]);
 
     pipes_[0]->set_peer (pipes_[1]);
@@ -187,7 +189,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
                        bool session_pipe_,
                        const std::shared_ptr<transport_lifetime_t> &transport_lifetime_,
                        const std::shared_ptr<physical_queue_record_t> &in_physical_queue_,
-                       const std::shared_ptr<physical_queue_record_t> &out_physical_queue_) :
+                       const std::shared_ptr<physical_queue_record_t> &out_physical_queue_,
+                       bool registry_accounting_) :
     object_t (parent_),
     _in_pipe (inpipe_),
     _out_pipe (outpipe_),
@@ -233,6 +236,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _in_physical_queue (in_physical_queue_),
     _out_physical_queue (out_physical_queue_),
     _transport_lane (transport_lane_application),
+    _registry_accounting (registry_accounting_),
     _transport_pair_id (0),
     _transport_pair_generation (0),
     _locally_initiated (false)
@@ -449,9 +453,16 @@ uint64_t zlink::pipe_t::get_rcv_pending_msgs_approx () const
 uint64_t zlink::pipe_t::get_snd_pending_bytes () const
 {
     scoped_optional_fast_lock_t lock (const_cast<fast_mutex_t *> (&_out_sync));
-    if (_bytes_written <= _peers_bytes_read)
+    uint64_t peer_bytes_read = _peers_bytes_read;
+    if (_peer) {
+        const uint64_t published =
+          _peer->_published_bytes_read.load (std::memory_order_relaxed);
+        if (published > peer_bytes_read)
+            peer_bytes_read = published;
+    }
+    if (_bytes_written <= peer_bytes_read)
         return 0;
-    return _bytes_written - _peers_bytes_read;
+    return _bytes_written - peer_bytes_read;
 }
 
 uint64_t zlink::pipe_t::get_rcv_pending_bytes_approx () const
@@ -663,7 +674,7 @@ bool zlink::pipe_t::check_read ()
 
 bool zlink::pipe_t::read (msg_t *msg_)
 {
-    return read_internal (msg_, NULL);
+    return read_internal (msg_, NULL, false);
 }
 
 bool zlink::pipe_t::read_retained (msg_t *msg_,
@@ -674,11 +685,12 @@ bool zlink::pipe_t::read_retained (msg_t *msg_,
         return false;
     }
     token_out_->reset ();
-    return read_internal (msg_, token_out_);
+    return read_internal (msg_, token_out_, false);
 }
 
 bool zlink::pipe_t::read_internal (msg_t *msg_,
-                                   retained_credit_token_t *token_out_)
+                                   retained_credit_token_t *token_out_,
+                                   bool defer_credit_)
 {
     if (unlikely (_state != active && _state != waiting_for_delimiter))
         return false;
@@ -696,10 +708,10 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
 
         //  If this is a credential, ignore it and receive next message.
         if (unlikely (msg_->is_credential ())) {
-            get_ctx ()->_physical_queue_registry.release_committed_frame (
-              _in_physical_queue, frame_accounted_bytes (msg_),
-              counted_pending_message_ref (*msg_));
-            refresh_inbound_lwm_from_physical_queue ();
+            if (_registry_accounting)
+                get_ctx ()->_physical_queue_registry.release_committed_frame (
+                  _in_physical_queue, frame_accounted_bytes (msg_),
+                  counted_pending_message_ref (*msg_));
             account_inbound_frame (msg_);
             const int rc = msg_->close ();
             zlink_assert (rc == 0);
@@ -714,17 +726,17 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
         return false;
     }
 
-    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-    const uint64_t counted_messages = counted_pending_message_ref (*msg_);
     if (token_out_) {
+        const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+        const uint64_t counted_messages = counted_pending_message_ref (*msg_);
         if (get_ctx ()->_physical_queue_registry.retain_dequeued_frame (
               _in_physical_queue, this, frame_bytes, counted_messages,
               token_out_)
             != 0) {
             const int saved_errno = errno;
-            get_ctx ()->_physical_queue_registry.release_committed_frame (
-              _in_physical_queue, frame_bytes, counted_messages);
-            refresh_inbound_lwm_from_physical_queue ();
+            if (_registry_accounting)
+                get_ctx ()->_physical_queue_registry.release_committed_frame (
+                  _in_physical_queue, frame_bytes, counted_messages);
             account_inbound_frame (msg_);
             const int close_rc = msg_->close ();
             zlink_assert (close_rc == 0);
@@ -733,18 +745,47 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
             errno = saved_errno;
             return false;
         }
-    } else {
-        get_ctx ()->_physical_queue_registry.release_committed_frame (
-          _in_physical_queue, frame_bytes, counted_messages);
-        refresh_inbound_lwm_from_physical_queue ();
+    } else if (!defer_credit_) {
+        if (_registry_accounting) {
+            const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+            const uint64_t counted_messages = counted_pending_message_ref (*msg_);
+            get_ctx ()->_physical_queue_registry.release_committed_frame (
+              _in_physical_queue, frame_bytes, counted_messages);
+        }
         account_inbound_frame (msg_);
     }
 
     return true;
 }
 
+bool zlink::pipe_t::read_deferred (msg_t *msg_)
+{
+    // Deferred credit is used only by socket-local prefetch. Completion and
+    // monitor queues require immediate registry accounting on dequeue.
+    zlink_assert (!_registry_accounting);
+    return read_internal (msg_, NULL, true);
+}
+
+int zlink::pipe_t::finish_deferred_read (
+  const msg_t *msg_, retained_credit_token_t *token_out_)
+{
+    if (!msg_) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (token_out_) {
+        token_out_->reset ();
+        return get_ctx ()->_physical_queue_registry.retain_dequeued_frame (
+          _in_physical_queue, this, frame_accounted_bytes (msg_),
+          counted_pending_message_ref (*msg_), token_out_);
+    }
+    account_inbound_frame (msg_);
+    return 0;
+}
+
 int zlink::pipe_t::reserve_inbound_decoder_frame (
   uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
+  decoder_frame_reservation_t *reservation_storage_,
   decoder_frame_reservation_t **reservation_out_)
 {
     if (!reservation_out_) {
@@ -753,28 +794,81 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
     }
     *reservation_out_ = NULL;
 
-    scoped_fast_lock_t lock (_out_sync);
+    scoped_optional_fast_lock_t lock (_session_pipe ? NULL : &_out_sync);
     if (_state != active || !_out_physical_queue) {
         errno = ETERM;
         return -1;
     }
 
-    decoder_frame_reservation_request_t request;
-    request.payload_bytes = payload_bytes_;
-    request.msg_flags = msg_flags_;
-    request.multipart_started_empty =
-      track_multipart_ && _decoder_multipart_started_empty;
-    if (track_multipart_ && !_decoder_multipart_started_empty)
-        request.multipart_started_empty =
-          get_ctx ()->_physical_queue_registry.snapshot_queue_empty (
-            _out_physical_queue);
+    const bool multipart_started_empty = track_multipart_
+      && (_decoder_multipart_started_empty
+          || (_out_incomplete_bytes == 0
+              && _bytes_written <= _peers_bytes_read));
 
-    int rc = get_ctx ()->_physical_queue_registry.reserve_decoder_frame (
-      _out_physical_queue, request, reservation_out_);
+    const uint64_t frame_bytes =
+      payload_bytes_ > UINT64_MAX - static_cast<uint64_t> (sizeof (msg_t))
+        ? UINT64_MAX
+        : payload_bytes_ + static_cast<uint64_t> (sizeof (msg_t));
+    const uint64_t candidate_bytes =
+      frame_bytes == UINT64_MAX
+          || _out_incomplete_bytes > UINT64_MAX - frame_bytes
+        ? UINT64_MAX
+        : _out_incomplete_bytes + frame_bytes;
+    const bool more = (msg_flags_ & msg_t::more) != 0;
+    const bool allow_empty_exception =
+      !more && multipart_started_empty;
+    const bool byte_credit_ready =
+      _hwm == 0 || allow_empty_exception
+      || (candidate_bytes != UINT64_MAX
+          && (_bytes_written <= _peers_bytes_read
+                ? candidate_bytes <= _hwm
+                : _bytes_written - _peers_bytes_read <= _hwm
+                    && candidate_bytes
+                         <= _hwm - (_bytes_written - _peers_bytes_read)));
+    if (!byte_credit_ready) {
+        refresh_peer_credit_snapshot_unlocked ();
+        const uint64_t in_flight =
+          _bytes_written > _peers_bytes_read
+            ? _bytes_written - _peers_bytes_read
+            : 0;
+        if (_hwm > 0 && !allow_empty_exception
+            && (candidate_bytes == UINT64_MAX || in_flight > _hwm
+                || candidate_bytes > _hwm - in_flight)) {
+            _out_active = false;
+            _waiting_for_byte_credit.store (true, std::memory_order_release);
+            errno = EAGAIN;
+            return -1;
+        }
+    }
+
+    int rc = 0;
+    if (!_registry_accounting) {
+        if (reservation_storage_->active) {
+            errno = EBUSY;
+            return -1;
+        }
+        reservation_storage_->queue_id = 0;
+        reservation_storage_->generation = _out_generation;
+        reservation_storage_->frame_bytes = frame_bytes;
+        reservation_storage_->payload_bytes = payload_bytes_;
+        reservation_storage_->msg_flags = msg_flags_;
+        reservation_storage_->multipart_started_empty =
+          multipart_started_empty;
+        reservation_storage_->active = true;
+        *reservation_out_ = reservation_storage_;
+    } else {
+        decoder_frame_reservation_request_t request;
+        request.payload_bytes = payload_bytes_;
+        request.msg_flags = msg_flags_;
+        request.multipart_started_empty = multipart_started_empty;
+        request.qualify_multipart_from_queue_state = false;
+        rc = get_ctx ()->_physical_queue_registry.reserve_decoder_frame (
+          _out_physical_queue, request, reservation_storage_, reservation_out_);
+    }
     if (rc == 0) {
         if (track_multipart_ && (msg_flags_ & msg_t::more) != 0)
             _decoder_multipart_started_empty =
-              request.multipart_started_empty;
+              multipart_started_empty;
         _out_active = true;
         _waiting_for_byte_credit.store (false, std::memory_order_release);
         return 0;
@@ -789,14 +883,19 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
     _out_active = false;
     _waiting_for_byte_credit.store (true, std::memory_order_release);
     refresh_peer_credit_snapshot_unlocked ();
+    decoder_frame_reservation_request_t request;
+    request.payload_bytes = payload_bytes_;
+    request.msg_flags = msg_flags_;
+    request.multipart_started_empty = multipart_started_empty;
+    request.qualify_multipart_from_queue_state = false;
     rc = get_ctx ()->_physical_queue_registry.reserve_decoder_frame (
-      _out_physical_queue, request, reservation_out_);
+      _out_physical_queue, request, reservation_storage_, reservation_out_);
     if (rc == 0) {
         _out_active = true;
         _waiting_for_byte_credit.store (false, std::memory_order_release);
         if (track_multipart_ && (msg_flags_ & msg_t::more) != 0)
             _decoder_multipart_started_empty =
-              request.multipart_started_empty;
+              multipart_started_empty;
     }
     return rc;
 }
@@ -808,12 +907,67 @@ int zlink::pipe_t::write_reserved_decoder_frame (
         errno = EFAULT;
         return -1;
     }
-    scoped_fast_lock_t lock (_out_sync);
+    scoped_optional_fast_lock_t lock (_session_pipe ? NULL : &_out_sync);
     if (_state != active || !_out_pipe) {
         get_ctx ()->_physical_queue_registry.release_decoder_frame (
           reservation_);
         errno = ETERM;
         return -1;
+    }
+
+    decoder_frame_reservation_t *const reserved = *reservation_;
+    if (!_registry_accounting) {
+        *reservation_ = NULL;
+        if (!reserved->active
+            || reserved->payload_bytes != static_cast<uint64_t> (msg_->size ())
+            || reserved->msg_flags != msg_->flags ()) {
+            reserved->active = false;
+            errno = EPROTO;
+            return -1;
+        }
+        reserved->active = false;
+
+        if (reserved->frame_bytes == UINT64_MAX
+            || _out_incomplete_bytes
+                 > UINT64_MAX - reserved->frame_bytes
+            || _out_incomplete_payload_bytes
+                 > UINT64_MAX - reserved->payload_bytes) {
+            errno = EMSGSIZE;
+            return -1;
+        }
+        _out_incomplete_bytes += reserved->frame_bytes;
+        _out_incomplete_payload_bytes += reserved->payload_bytes;
+
+        const bool more = (reserved->msg_flags & msg_t::more) != 0;
+        const bool complete_frame = !more && !msg_->is_delimiter ();
+        const uint64_t in_flight =
+          _bytes_written > _peers_bytes_read
+            ? _bytes_written - _peers_bytes_read
+            : 0;
+        const bool oversize =
+          complete_frame && _hwm > 0 && in_flight == 0
+          && _out_incomplete_bytes > _hwm;
+
+        _out_pipe->write (*msg_, more);
+        if (complete_frame) {
+            const uint64_t message_bytes = _out_incomplete_bytes;
+            _bytes_written = UINT64_MAX - _bytes_written < message_bytes
+                               ? UINT64_MAX
+                               : _bytes_written + message_bytes;
+            if (!msg_->is_routing_id () && !msg_->is_credential ())
+                ++_msgs_written;
+            if (oversize) {
+                ++_oversize_message_admission_count;
+                _oversize_message_admission_max_bytes =
+                  std::max (_oversize_message_admission_max_bytes,
+                            message_bytes);
+            }
+            _out_incomplete_bytes = 0;
+            _out_incomplete_payload_bytes = 0;
+            _out_multipart_started_empty = false;
+            _decoder_multipart_started_empty = false;
+        }
+        return 0;
     }
 
     const uint64_t incomplete_before = _out_incomplete_bytes;
@@ -839,16 +993,24 @@ int zlink::pipe_t::write_reserved_decoder_frame (
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
     const bool complete_frame = !more && !msg_->is_delimiter ();
-    bool oversize = false;
-    if (get_ctx ()->_physical_queue_registry.commit_decoder_frame (
-          reservation_, payload_bytes, msg_->flags (),
-          counted_pending_message_ref (*msg_), &oversize)
-        != 0) {
+    const uint64_t in_flight =
+      _bytes_written > _peers_bytes_read
+        ? _bytes_written - _peers_bytes_read
+        : 0;
+    bool oversize = complete_frame && _hwm > 0 && in_flight == 0
+                    && _out_incomplete_bytes > _hwm;
+    bool registry_oversize = false;
+    const int commit_rc =
+      get_ctx ()->_physical_queue_registry.commit_decoder_frame (
+        _out_physical_queue, reservation_, payload_bytes, msg_->flags (),
+        counted_pending_message_ref (*msg_), &registry_oversize);
+    if (commit_rc != 0) {
         _out_incomplete_bytes = incomplete_before;
         _out_incomplete_payload_bytes = payload_before;
         _out_multipart_started_empty = multipart_started_empty_before;
         return -1;
     }
+    oversize = oversize || registry_oversize;
 
     publish_outbound_frame_unlocked (*msg_, more);
     if (complete_frame) {
@@ -875,7 +1037,11 @@ int zlink::pipe_t::write_reserved_decoder_frame (
 void zlink::pipe_t::release_decoder_frame_reservation (
   decoder_frame_reservation_t **reservation_)
 {
-    get_ctx ()->_physical_queue_registry.release_decoder_frame (reservation_);
+    if (!reservation_ || !*reservation_)
+        return;
+    decoder_frame_reservation_t *const reservation = *reservation_;
+    *reservation_ = NULL;
+    reservation->active = false;
 }
 
 void zlink::pipe_t::finish_direct_decoder_frame (
@@ -883,7 +1049,7 @@ void zlink::pipe_t::finish_direct_decoder_frame (
 {
     if ((msg_flags_ & msg_t::more) != 0)
         return;
-    scoped_fast_lock_t lock (_out_sync);
+    scoped_optional_fast_lock_t lock (_session_pipe ? NULL : &_out_sync);
     _decoder_multipart_started_empty = false;
 }
 
@@ -1224,7 +1390,7 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         uint64_t drained_message_bytes = 0;
         while (_out_pipe->read (&msg)) {
             const uint64_t frame_bytes = frame_accounted_bytes (&msg);
-            if (!msg.is_delimiter ())
+            if (!msg.is_delimiter () && _registry_accounting)
                 get_ctx ()->_physical_queue_registry.release_committed_frame (
                   _out_physical_queue, frame_bytes,
                   counted_pending_message_ref (msg));
@@ -1246,12 +1412,14 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         }
         release_discarded_pipe_accounting (_out_pipe,
                                            _out_physical_queue);
+        const uint64_t incomplete_bytes = _out_incomplete_bytes;
         _out_incomplete_bytes = 0;
         _out_incomplete_payload_bytes = 0;
         _out_multipart_started_empty = false;
         _decoder_multipart_started_empty = false;
-        get_ctx ()->_physical_queue_registry.rollback_provisional (
-          _out_physical_queue);
+        if (incomplete_bytes > 0 && _registry_accounting)
+            get_ctx ()->_physical_queue_registry.rollback_provisional (
+              _out_physical_queue, incomplete_bytes);
         LIBZLINK_DELETE (_out_pipe);
 
         //  Plug in the new outpipe.
@@ -1379,7 +1547,7 @@ void zlink::pipe_t::process_pipe_term_ack ()
     if (!_conflate) {
         msg_t msg;
         while (_in_pipe->read (&msg)) {
-            if (!msg.is_delimiter ())
+            if (!msg.is_delimiter () && _registry_accounting)
                 get_ctx ()->_physical_queue_registry.release_committed_frame (
                   _in_physical_queue, frame_accounted_bytes (&msg),
                   counted_pending_message_ref (msg));
@@ -1759,6 +1927,11 @@ zlink::transport_lane_t zlink::pipe_t::get_transport_lane () const
     return _transport_lane;
 }
 
+bool zlink::pipe_t::uses_registry_accounting () const
+{
+    return _registry_accounting;
+}
+
 uint64_t zlink::pipe_t::get_transport_pair_id () const
 {
     return _transport_pair_id;
@@ -1841,6 +2014,11 @@ bool zlink::pipe_t::counted_pending_message_ref (const msg_t &msg_)
 void zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_,
                                                       bool more_)
 {
+    if (!_registry_accounting) {
+        _out_pipe->write (msg_, more_);
+        return;
+    }
+
     ypipe_replacement_accounting_t replaced;
     _out_pipe->write_with_replacement_accounting (
       msg_, more_, &pipe_t::committed_frame_accounted_bytes_ref,
@@ -1859,7 +2037,7 @@ void zlink::pipe_t::release_discarded_pipe_accounting (
     pipe_->discard_accounting (&pipe_t::committed_frame_accounted_bytes_ref,
                                &pipe_t::counted_pending_message_ref,
                                &discarded);
-    if (discarded.bytes > 0)
+    if (discarded.bytes > 0 && _registry_accounting)
         get_ctx ()->_physical_queue_registry.release_committed_frame (
           queue_, discarded.bytes, discarded.complete_messages);
 }
@@ -1984,36 +2162,40 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         return false;
     }
 
-    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-    if (_conflate && !msg_->is_delimiter ()) {
-        //  A conflate ypipe retains at most its latest frame and does not
-        //  preserve multipart prefixes. Account each physically retained
-        //  frame as committed so replacement can return that exact charge.
-        get_ctx ()->_physical_queue_registry.commit_message (
-          _out_physical_queue, frame_bytes,
-          counted_pending_message_ref (*msg_), false);
-    } else if (more) {
-        get_ctx ()->_physical_queue_registry.account_provisional_frame (
-          _out_physical_queue, frame_bytes);
-    } else if (!msg_->is_delimiter ()) {
-        const uint64_t in_flight =
-          _bytes_written > _peers_bytes_read
-            ? _bytes_written - _peers_bytes_read
-            : 0;
-        const bool oversize_admission =
-          enforce_hwm_ && _hwm > 0 && in_flight == 0
-          && (_out_incomplete_bytes > _hwm
-              || UINT64_MAX - in_flight < _out_incomplete_bytes
-              || in_flight + _out_incomplete_bytes > _hwm);
-        get_ctx ()->_physical_queue_registry.commit_message (
-          _out_physical_queue, frame_bytes,
-          counted_pending_message_ref (*msg_),
-          oversize_admission);
+    if (_registry_accounting) {
+        const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+        if (_conflate && !msg_->is_delimiter ()) {
+            //  A conflate ypipe retains at most its latest frame and does not
+            //  preserve multipart prefixes. Account each physically retained
+            //  frame as committed so replacement can return that exact charge.
+            get_ctx ()->_physical_queue_registry.commit_message (
+              _out_physical_queue, frame_bytes,
+              counted_pending_message_ref (*msg_), false);
+        } else if (more) {
+            get_ctx ()->_physical_queue_registry.account_provisional_frame (
+              _out_physical_queue, frame_bytes);
+        } else if (!msg_->is_delimiter ()) {
+            const uint64_t in_flight =
+              _bytes_written > _peers_bytes_read
+                ? _bytes_written - _peers_bytes_read
+                : 0;
+            const bool oversize_admission =
+              enforce_hwm_ && _hwm > 0 && in_flight == 0
+              && (_out_incomplete_bytes > _hwm
+                  || UINT64_MAX - in_flight < _out_incomplete_bytes
+                  || in_flight + _out_incomplete_bytes > _hwm);
+            get_ctx ()->_physical_queue_registry.commit_message (
+              _out_physical_queue, frame_bytes,
+              counted_pending_message_ref (*msg_),
+              oversize_admission);
+        }
+        //  Completion and monitor queues retain per-frame registry charge.
+        publish_outbound_frame_unlocked (*msg_, more);
+    } else {
+        //  Application queues account the complete message in pipe-local
+        //  counters; keep their frame publication equal to the legacy path.
+        _out_pipe->write (*msg_, more);
     }
-    //  Charge the shared physical direction before publishing the frame. A
-    //  conflate pipe may make a frame visible to its reader from write(), so
-    //  charging after this call would allow the reader to return credit first.
-    publish_outbound_frame_unlocked (*msg_, more);
     if (commits_bytes) {
         const uint64_t message_bytes = _out_incomplete_bytes;
         const uint64_t in_flight =
@@ -2096,8 +2278,9 @@ void zlink::pipe_t::rollback_unlocked ()
             errno_assert (rc == 0);
         }
     }
-    get_ctx ()->_physical_queue_registry.rollback_provisional (
-      _out_physical_queue);
+    if (_out_incomplete_bytes > 0 && _registry_accounting)
+        get_ctx ()->_physical_queue_registry.rollback_provisional (
+          _out_physical_queue, _out_incomplete_bytes);
     _out_incomplete_bytes = 0;
     _out_incomplete_payload_bytes = 0;
     _out_multipart_started_empty = false;

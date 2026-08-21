@@ -34,6 +34,7 @@ class fq_t
     int recvpipe (msg_t *msg_, pipe_t **pipe_);
     int recvpipe_retained (msg_t *msg_, pipe_t **pipe_,
                            retained_credit_token_t *token_out_);
+    int recvpipe_deferred (msg_t *msg_, pipe_t **pipe_);
     bool has_in ();
 
 #ifdef ZLINK_BUILD_TESTS
@@ -45,7 +46,8 @@ class fq_t
   private:
     bool try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_);
     int recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
-                           retained_credit_token_t *token_out_);
+                           retained_credit_token_t *token_out_,
+                           bool defer_credit_ = false);
     void normalize_state ();
     pipes_t _pipes;
 

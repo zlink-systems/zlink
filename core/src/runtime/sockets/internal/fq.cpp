@@ -174,8 +174,14 @@ int zlink::fq_t::recvpipe_retained (msg_t *msg_, pipe_t **pipe_,
     return recvpipe_internal (msg_, pipe_, token_out_);
 }
 
+int zlink::fq_t::recvpipe_deferred (msg_t *msg_, pipe_t **pipe_)
+{
+    return recvpipe_internal (msg_, pipe_, NULL, true);
+}
+
 int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
-                                    retained_credit_token_t *token_out_)
+                                    retained_credit_token_t *token_out_,
+                                    bool defer_credit_)
 {
     normalize_state ();
 
@@ -202,9 +208,11 @@ int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
             return -1;
         }
 #endif
-        const bool fetched = token_out_
-                               ? current_pipe->read_retained (msg_, token_out_)
-                               : current_pipe->read (msg_);
+        const bool fetched = defer_credit_
+                               ? current_pipe->read_deferred (msg_)
+                               : (token_out_
+                                    ? current_pipe->read_retained (msg_, token_out_)
+                                    : current_pipe->read (msg_));
 
         //  Note that when message is not fetched, current pipe is deactivated
         //  and replaced by another active pipe. Thus we don't have to increase

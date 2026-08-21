@@ -7,7 +7,7 @@ ZLINK_VERSION_FILE="${ZLINK_REPO_ROOT}/VERSION"
 ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-release}"
 ZLINK_REPOSITORY_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${ZLINK_VERSION_FILE}")"
 ZLINK_CORE_VERSION="${ZLINK_CORE_RELEASE_VERSION:-$ZLINK_REPOSITORY_VERSION}"
-if [[ "$ZLINK_CORE_VERSION" != "$ZLINK_REPOSITORY_VERSION" ]]; then
+if [[ "$ZLINK_CORE_VERSION" != "$ZLINK_REPOSITORY_VERSION" && "${ZLINK_CORE_ALLOW_VERSION_MISMATCH:-0}" != "1" ]]; then
   echo "ZLINK_CORE_RELEASE_VERSION $ZLINK_CORE_VERSION must match repository VERSION $ZLINK_REPOSITORY_VERSION" >&2
   return 2 2>/dev/null || exit 2
 fi
@@ -19,6 +19,9 @@ case "${ZLINK_CORE_SOURCE}" in
   release)
     if [[ -z "${ZLINK_CORE_PACKAGE_PREFIX}" ]]; then
       release_args=(--version "${ZLINK_CORE_VERSION}")
+      if [[ "${ZLINK_CORE_ALLOW_VERSION_MISMATCH:-0}" == "1" ]]; then
+        release_args+=(--allow-version-mismatch)
+      fi
       if [[ -n "${ZLINK_CORE_CACHE_DIR:-}" ]]; then
         release_args+=(--cache-dir "${ZLINK_CORE_CACHE_DIR}")
       fi

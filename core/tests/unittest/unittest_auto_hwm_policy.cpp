@@ -57,6 +57,10 @@ void test_profile_byte_boundaries ()
       zlink::auto_hwm_profile_minimum_bytes (
         ZLINK_AUTO_HWM_PROFILE_BALANCED, zlink::auto_hwm_role_stream));
     TEST_ASSERT_EQUAL_UINT64 (
+      4ull * 1024ull * 1024ull,
+      zlink::auto_hwm_profile_maximum_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED, zlink::auto_hwm_role_routed));
+    TEST_ASSERT_EQUAL_UINT64 (
       512ull * 1024ull,
       zlink::auto_hwm_profile_maximum_bytes (
         ZLINK_AUTO_HWM_PROFILE_THROUGHPUT, zlink::auto_hwm_role_stream));
@@ -343,13 +347,15 @@ void test_decoder_reservation_enforces_incremental_hwm_and_final_oversize ()
     first_part.payload_bytes = 1;
     first_part.msg_flags = zlink::msg_t::more;
     first_part.multipart_started_empty = true;
+    zlink::decoder_frame_reservation_t reservation_storage;
     zlink::decoder_frame_reservation_t *reservation = NULL;
     TEST_ASSERT_EQUAL_INT (
-      0, registry.reserve_decoder_frame (first, first_part, &reservation));
+      0, registry.reserve_decoder_frame (
+           first, first_part, &reservation_storage, &reservation));
     bool oversize = false;
     TEST_ASSERT_EQUAL_INT (
       0, registry.commit_decoder_frame (
-           &reservation, first_part.payload_bytes, first_part.msg_flags,
+           first, &reservation, first_part.payload_bytes, first_part.msg_flags,
            false, &oversize));
     TEST_ASSERT_FALSE (oversize);
 
@@ -358,8 +364,8 @@ void test_decoder_reservation_enforces_incremental_hwm_and_final_oversize ()
     crossing_more.msg_flags = zlink::msg_t::more;
     crossing_more.multipart_started_empty = true;
     TEST_ASSERT_EQUAL_INT (
-      -1, registry.reserve_decoder_frame (first, crossing_more,
-                                          &reservation));
+      -1, registry.reserve_decoder_frame (
+            first, crossing_more, &reservation_storage, &reservation));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     TEST_ASSERT_NULL (reservation);
 
@@ -368,28 +374,23 @@ void test_decoder_reservation_enforces_incremental_hwm_and_final_oversize ()
     final_part.msg_flags = 0;
     final_part.multipart_started_empty = true;
     TEST_ASSERT_EQUAL_INT (
-      0, registry.reserve_decoder_frame (first, final_part, &reservation));
+      0, registry.reserve_decoder_frame (
+           first, final_part, &reservation_storage, &reservation));
     TEST_ASSERT_EQUAL_INT (
       0, registry.commit_decoder_frame (
-           &reservation, final_part.payload_bytes, final_part.msg_flags,
+           first, &reservation, final_part.payload_bytes, final_part.msg_flags,
            true, &oversize));
-    TEST_ASSERT_TRUE (oversize);
+    TEST_ASSERT_FALSE (oversize);
 
     zlink::physical_queue_registry_snapshot_t snapshot;
     registry.snapshot (&snapshot);
-    const uint64_t complete_bytes =
-      first_part.payload_bytes + final_part.payload_bytes + metadata * 2;
     TEST_ASSERT_EQUAL_UINT64 (0,
                               snapshot.application_provisional_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (complete_bytes,
+    TEST_ASSERT_EQUAL_UINT64 (0,
                               snapshot.application_current_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (1, snapshot.oversize_admission_count);
-    TEST_ASSERT_EQUAL_UINT64 (complete_bytes,
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.oversize_admission_count);
+    TEST_ASSERT_EQUAL_UINT64 (0,
                               snapshot.largest_oversize_message_bytes);
-    registry.release_committed_frame (first, metadata + first_part.payload_bytes,
-                                      0);
-    registry.release_committed_frame (first, metadata + final_part.payload_bytes,
-                                      1);
     release_pipepair_queue_handles (&registry, &first, &second);
 }
 
@@ -410,21 +411,24 @@ void test_decoder_reservation_isolated_by_origin_and_generation ()
     request.payload_bytes = 1;
     request.msg_flags = zlink::msg_t::more;
     request.multipart_started_empty = true;
+    zlink::decoder_frame_reservation_t first_storage;
+    zlink::decoder_frame_reservation_t second_storage;
     zlink::decoder_frame_reservation_t *first_token = NULL;
     zlink::decoder_frame_reservation_t *second_token = NULL;
     TEST_ASSERT_EQUAL_INT (
-      0, registry.reserve_decoder_frame (first, request, &first_token));
+      0, registry.reserve_decoder_frame (
+           first, request, &first_storage, &first_token));
     TEST_ASSERT_EQUAL_INT (
-      0, registry.reserve_decoder_frame (second, request, &second_token));
-
-    zlink::decoder_frame_reservation_t *blocked = NULL;
-    TEST_ASSERT_EQUAL_INT (
-      -1, registry.reserve_decoder_frame (first, request, &blocked));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-    TEST_ASSERT_NULL (blocked);
+      0, registry.reserve_decoder_frame (
+           second, request, &second_storage, &second_token));
 
     registry.advance_generation (first);
-    registry.release_decoder_frame (&first_token);
+    bool oversize = false;
+    TEST_ASSERT_EQUAL_INT (
+      -1, registry.commit_decoder_frame (
+            first, &first_token, request.payload_bytes, request.msg_flags,
+            false, &oversize));
+    TEST_ASSERT_EQUAL_INT (ETERM, errno);
     registry.release_decoder_frame (&first_token);
     registry.release_decoder_frame (&second_token);
     zlink::physical_queue_registry_snapshot_t snapshot;
@@ -453,20 +457,21 @@ void test_pipe_rollback_preserves_active_decoder_reservation ()
     request.payload_bytes = 1;
     request.msg_flags = zlink::msg_t::more;
     request.multipart_started_empty = true;
+    zlink::decoder_frame_reservation_t reservation_storage;
     zlink::decoder_frame_reservation_t *reservation = NULL;
     TEST_ASSERT_EQUAL_INT (
-      0, registry.reserve_decoder_frame (first, request, &reservation));
+      0, registry.reserve_decoder_frame (
+           first, request, &reservation_storage, &reservation));
     registry.account_provisional_frame (first, 7);
 
-    registry.rollback_provisional (first);
+    registry.rollback_provisional (first, 7);
     zlink::physical_queue_registry_snapshot_t snapshot;
     registry.snapshot (&snapshot);
-    TEST_ASSERT_EQUAL_UINT64 (
-      frame_bytes, snapshot.application_current_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      frame_bytes, snapshot.application_provisional_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (frame_bytes,
-                              snapshot.deferred_origin_credit_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              snapshot.application_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              snapshot.application_provisional_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.deferred_origin_credit_bytes);
 
     registry.release_decoder_frame (&reservation);
     registry.snapshot (&snapshot);
@@ -493,13 +498,15 @@ void test_completion_decoder_reservation_never_applies_hwm ()
     request.payload_bytes = 1024 * 1024;
     request.msg_flags = 0;
     request.multipart_started_empty = false;
+    zlink::decoder_frame_reservation_t reservation_storage;
     zlink::decoder_frame_reservation_t *reservation = NULL;
     TEST_ASSERT_EQUAL_INT (
-      0, registry.reserve_decoder_frame (first, request, &reservation));
+      0, registry.reserve_decoder_frame (
+           first, request, &reservation_storage, &reservation));
     bool oversize = true;
     TEST_ASSERT_EQUAL_INT (
       0, registry.commit_decoder_frame (
-           &reservation, request.payload_bytes, request.msg_flags, true,
+           first, &reservation, request.payload_bytes, request.msg_flags, true,
            &oversize));
     TEST_ASSERT_FALSE (oversize);
 

@@ -118,6 +118,9 @@ auto-HWM profile은 이 값을 자동으로 바꾸지 않습니다.
 
 ## Auto HWM memory budget 계산
 
+이 절은 공개 계산과 admission 계약을 정의한다. Queue-local 상태, decoder reservation과
+data path 비용 경계는 [Auto HWM 내부 설계](../../internals/auto-hwm.ko.md)가 소유한다.
+
 Core는 다음 순서에서 처음 사용할 수 있는 입력을 선택합니다.
 
 1. 양수 `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
@@ -591,7 +594,9 @@ Completion queue에는 HWM이 없으므로 `total_instance_applied_hwm_bytes`에
 Retained-credit receive가 physical frame을 반환하면 해당 charge는 원자적으로
 `core_queue_accounted_bytes`에서 `application_accounted_bytes`로 이동합니다.
 `current_accounted_bytes`는 두 field의 포화 합이며 owner 이전만으로 변하지 않습니다.
-`peak_accounted_bytes`도 queue와 application lease의 합을 기준으로 합니다.
+`peak_accounted_bytes`는 현재 measurement epoch에서 budget snapshot 조회 또는 Auto HWM
+재계산이 queue를 확인한 시점의 합계 중 가장 큰 값입니다. 두 확인 시점 사이에서 더
+짧게 유지된 값까지 기록한다고 보장하지 않습니다.
 `outstanding_application_lease_count`는 아직 release되지 않은 public lease 수이고,
 `deferred_origin_credit_bytes`는 internal framing token 또는 public lease가 보유해 writer에
 아직 게시하지 않은 exact-origin byte입니다. `retired_queue_count`는 detach 또는 generation

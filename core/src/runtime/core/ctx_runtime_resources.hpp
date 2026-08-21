@@ -31,6 +31,7 @@ class ctx_runtime_resources_t
     void stop_reaper ();
 
     io_thread_t *choose_io_thread (uint64_t affinity_);
+    io_thread_t *choose_io_thread_transport (uint64_t affinity_);
     io_thread_t *choose_io_thread_stream (uint64_t affinity_);
 
   private:

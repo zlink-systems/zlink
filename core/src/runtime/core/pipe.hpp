@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "core/auto_hwm_policy.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 #include "core/ypipe_base.hpp"
 #include "utils/config.hpp"
 #include "core/object.hpp"
@@ -22,10 +23,7 @@
 namespace zlink
 {
 class pipe_t;
-class ctx_physical_queue_registry_t;
-struct physical_queue_record_t;
 class retained_credit_token_t;
-struct decoder_frame_reservation_t;
 
 enum pipe_write_status_t
 {
@@ -165,8 +163,12 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Reads a message to the underlying pipe.
     bool read (msg_t *msg_);
     bool read_retained (msg_t *msg_, retained_credit_token_t *token_out_);
+    bool read_deferred (msg_t *msg_);
+    int finish_deferred_read (const msg_t *msg_,
+                              retained_credit_token_t *token_out_ = NULL);
     int reserve_inbound_decoder_frame (
       uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
+      decoder_frame_reservation_t *reservation_storage_,
       decoder_frame_reservation_t **reservation_out_);
     int write_reserved_decoder_frame (
       msg_t *msg_, decoder_frame_reservation_t **reservation_);
@@ -281,6 +283,7 @@ class pipe_t ZLINK_FINAL : public object_t,
                              uint64_t pair_id_,
                              uint64_t generation_);
     transport_lane_t get_transport_lane () const;
+    bool uses_registry_accounting () const;
     uint64_t get_transport_pair_id () const;
     uint64_t get_transport_pair_generation () const;
     void set_locally_initiated (bool value_);
@@ -355,7 +358,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool check_hwm_with_peer_snapshot_unlocked ();
     void refresh_peer_credit_snapshot_unlocked ();
     void account_inbound_frame (const msg_t *msg_);
-    bool read_internal (msg_t *msg_, retained_credit_token_t *token_out_);
+    bool read_internal (msg_t *msg_, retained_credit_token_t *token_out_,
+                        bool defer_credit_ = false);
     void refresh_inbound_lwm_from_physical_queue ();
 
     //  Constructor is private. Pipe can only be created using
@@ -369,7 +373,8 @@ class pipe_t ZLINK_FINAL : public object_t,
             bool session_pipe_,
             const std::shared_ptr<transport_lifetime_t> &transport_lifetime_,
             const std::shared_ptr<physical_queue_record_t> &in_physical_queue_,
-            const std::shared_ptr<physical_queue_record_t> &out_physical_queue_);
+            const std::shared_ptr<physical_queue_record_t> &out_physical_queue_,
+            bool registry_accounting_);
 
     //  Pipepair uses this function to let us know about
     //  the peer pipe object.
@@ -516,6 +521,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::shared_ptr<physical_queue_record_t> _in_physical_queue;
     std::shared_ptr<physical_queue_record_t> _out_physical_queue;
     transport_lane_t _transport_lane;
+    const bool _registry_accounting;
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;
     bool _locally_initiated;

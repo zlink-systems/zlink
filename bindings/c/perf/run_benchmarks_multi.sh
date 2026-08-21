@@ -3,6 +3,49 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+CORE_VERSION_OPTION=""
+SCRIPT_ARGUMENTS=("$@")
+for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
+  case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --core-version)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]}"
+      ;;
+    --core-version=*)
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if [[ ! "${requested_core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: --core-version must be MAJOR.MINOR.PATCH: ${requested_core_version:-<missing>}" >&2
+    exit 1
+  fi
+  if [[ -n "${CORE_VERSION_OPTION}" && "${CORE_VERSION_OPTION}" != "${requested_core_version}" ]]; then
+    echo "Error: --core-version may be specified only once." >&2
+    exit 1
+  fi
+  CORE_VERSION_OPTION="${requested_core_version}"
+done
+
+# Use the current workspace Core by default. An explicit --core-version selects
+# the downloaded release package for that version instead.
+if [[ -n "${CORE_VERSION_OPTION}" ]]; then
+  if [[ -n "${ZLINK_CORE_SOURCE:-}" && "${ZLINK_CORE_SOURCE}" != "release" ]]; then
+    echo "Error: --core-version cannot be combined with ZLINK_CORE_SOURCE=${ZLINK_CORE_SOURCE}." >&2
+    exit 1
+  fi
+  export ZLINK_CORE_SOURCE=release
+  export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
+  export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+else
+  export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+fi
 source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 PERF_COMPARISON_SCRIPT="${SCRIPT_DIR}/run_comparison.py"
@@ -125,6 +168,17 @@ is_positive_u64() {
     normalized="${normalized:1}"
   done
   [[ "${normalized}" != "0" ]] || return 1
+  [[ "${#normalized}" -lt 20 ]] && return 0
+  [[ "${#normalized}" -eq 20 && ! "${normalized}" > "18446744073709551615" ]]
+}
+
+is_u64() {
+  local value="${1:-}"
+  local normalized="${value}"
+  is_uint "${value}" || return 1
+  while [[ "${#normalized}" -gt 1 && "${normalized:0:1}" == "0" ]]; do
+    normalized="${normalized:1}"
+  done
   [[ "${#normalized}" -lt 20 ]] && return 0
   [[ "${#normalized}" -eq 20 && ! "${normalized}" > "18446744073709551615" ]]
 }
@@ -276,22 +330,11 @@ ensure_memory_budget() {
 }
 
 resolve_configured_core_build_dir() {
-  local build_dir="${1:-${OFFICIAL_BUILD_DIR}}"
-  local cache_path="${build_dir}/CMakeCache.txt"
-  local configured_dir=""
   if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
     printf '%s\n' "${ZLINK_CORE_PACKAGE_PREFIX}"
     return
   fi
-  if [[ -f "${cache_path}" ]]; then
-    configured_dir="$(
-      sed -n 's/^ZLINK_C_CORE_BUILD_DIR:PATH=//p' "${cache_path}" | tail -n 1
-    )"
-  fi
-  if [[ -z "${configured_dir}" ]]; then
-    configured_dir="${DEFAULT_CORE_BUILD_DIR}"
-  fi
-  realpath -m "${configured_dir}"
+  realpath -m "${DEFAULT_CORE_BUILD_DIR}"
 }
 
 resolve_core_runtime_library() {
@@ -398,8 +441,6 @@ prepare_core_runtime() {
   local core_build_dir=""
   local runtime_lib=""
   local newer_source=""
-  local need_build=0
-  local reason=""
   core_build_dir="$(resolve_configured_core_build_dir "${build_dir}")"
   if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
     if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
@@ -411,46 +452,64 @@ prepare_core_runtime() {
     return 0
   fi
 
+  # Always let the Core build system resolve source changes before a local
+  # benchmark. An unchanged tree is an inexpensive incremental no-op.
+  build_core_runtime "${core_build_dir}"
   if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
-    need_build=1
-    reason="core runtime library not found under ${core_build_dir}"
-  else
-    newer_source="$(
-      find \
-        "${ROOT_DIR}/core/src" \
-        "${ROOT_DIR}/core/include" \
-        -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
-    )"
-    if [[ -n "${newer_source}" ]]; then
-      need_build=1
-      reason="stale core runtime (newer source: ${newer_source})"
-    fi
+    echo "Error: core runtime library missing after local build under ${core_build_dir}." >&2
+    return 1
   fi
-
-  if (( need_build == 1 )); then
-    echo "Note: ${reason}; rebuilding core/build automatically before perf run." >&2
-    build_core_runtime "${core_build_dir}"
-    if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
-      echo "Error: core runtime library still missing after auto-build under ${core_build_dir}." >&2
-      return 1
-    fi
-    newer_source="$(
-      find \
-        "${ROOT_DIR}/core/src" \
-        "${ROOT_DIR}/core/include" \
-        -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
-    )"
-    if [[ -n "${newer_source}" ]]; then
-      echo "Error: core runtime still stale after auto-build for bindings/c/perf." >&2
-      echo "  runtime: ${runtime_lib}" >&2
-      echo "  newer source: ${newer_source}" >&2
-      return 1
-    fi
+  newer_source="$(
+    find \
+      "${ROOT_DIR}/core/src" \
+      "${ROOT_DIR}/core/include" \
+      -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
+  )"
+  if [[ -n "${newer_source}" ]]; then
+    echo "Error: core runtime still stale after local build for bindings/c/perf." >&2
+    echo "  runtime: ${runtime_lib}" >&2
+    echo "  newer source: ${newer_source}" >&2
+    return 1
   fi
 
   echo "Perf core build dir: ${core_build_dir}"
   echo "Perf runtime libzlink: ${runtime_lib}"
   return 0
+}
+
+verify_benchmark_core_runtime() {
+  if [[ "${IS_WINDOWS}" -eq 1 || "$(uname -s)" != Linux* ]]; then
+    return 0
+  fi
+
+  local expected_runtime
+  expected_runtime="$(realpath -e "${CORE_RUNTIME_PATH}")"
+  local target
+  local binary
+  local loaded_runtime
+  local -a runtime_check_targets
+  mapfile -t runtime_check_targets < <(resolve_multi_build_targets)
+  for target in "${runtime_check_targets[@]}"; do
+    binary="${BUILD_DIR}/perf/${target}"
+    if [[ ! -x "${binary}" ]]; then
+      echo "Error: benchmark runtime check target is missing: ${binary}" >&2
+      return 1
+    fi
+    loaded_runtime="$({ ldd "${binary}" | sed -n 's/^[[:space:]]*libzlink\.so\.0 => \([^[:space:]]*\).*/\1/p' | head -n 1; } || true)"
+    if [[ -z "${loaded_runtime}" ]]; then
+      echo "Error: failed to resolve libzlink.so.0 for benchmark: ${binary}" >&2
+      return 1
+    fi
+    loaded_runtime="$(realpath -e "${loaded_runtime}")"
+    if [[ "${loaded_runtime}" != "${expected_runtime}" ]]; then
+      echo "Error: benchmark resolved a different Core runtime." >&2
+      echo "  benchmark: ${binary}" >&2
+      echo "  expected:  ${expected_runtime}" >&2
+      echo "  resolved:  ${loaded_runtime}" >&2
+      return 1
+    fi
+  done
+  echo "Verified benchmark Core runtime: ${expected_runtime}"
 }
 
 usage() {
@@ -471,6 +530,8 @@ Policy contract:
 Options:
   --pattern NAME         Benchmark pattern (default: all patterns above).
                          Alias: streams => STREAM
+  --core-version VERSION Download and use the specified released Core version.
+                         Without this option, use the local core/build runtime.
   --help                 Show this help.
   --reuse-build          Reuse existing build directory as-is (skip configure/build).
   --clean-build          Remove build directory and do a clean build.
@@ -753,6 +814,16 @@ while [[ $# -gt 0 ]]; do
         expand_and_add_explicit_pattern "${p}"
       done
       shift 2
+      ;;
+    --core-version)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --core-version=*)
+      shift
       ;;
     --results-tag)
       HAS_EXPLICIT_RESULTS_TAG=1
@@ -1042,16 +1113,16 @@ if ! is_uint "${MONITOR_HWM_BYTES}"; then
   echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
   exit 1
 fi
-if [[ -n "${HWM}" ]] && ! is_positive_u64 "${HWM}"; then
-  echo "Error: --hwm must be a positive integer." >&2
+if [[ -n "${HWM}" ]] && ! is_u64 "${HWM}"; then
+  echo "Error: --hwm must be an unsigned 64-bit integer." >&2
   exit 1
 fi
-if [[ -n "${SNDHWM}" ]] && ! is_positive_u64 "${SNDHWM}"; then
-  echo "Error: --send-hwm must be a positive integer." >&2
+if [[ -n "${SNDHWM}" ]] && ! is_u64 "${SNDHWM}"; then
+  echo "Error: --send-hwm must be an unsigned 64-bit integer." >&2
   exit 1
 fi
-if [[ -n "${RCVHWM}" ]] && ! is_positive_u64 "${RCVHWM}"; then
-  echo "Error: --recv-hwm must be a positive integer." >&2
+if [[ -n "${RCVHWM}" ]] && ! is_u64 "${RCVHWM}"; then
+  echo "Error: --recv-hwm must be an unsigned 64-bit integer." >&2
   exit 1
 fi
 if [[ -n "${SNDTIMEO_MS}" ]] && ( ! is_uint "${SNDTIMEO_MS}" || (( SNDTIMEO_MS < 1 )) ); then
@@ -1276,6 +1347,13 @@ if [[ -n "${CONNECT_CONCURRENCY}" ]]; then
 fi
 
 BUILD_DIR="${OFFICIAL_BUILD_DIR}"
+# A benchmark executable records the Core library directory in its runtime
+# search path. Keep each released Core version in a separate CMake build tree
+# so `--reuse-build` cannot silently execute the Core that was linked by a
+# previous run.
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  BUILD_DIR="${OFFICIAL_BUILD_DIR}-release-${ZLINK_CORE_VERSION}"
+fi
 case "${BUILD_MODE}" in
   reuse)
     if [[ ! -d "${BUILD_DIR}" ]]; then
@@ -1342,6 +1420,31 @@ if [[ "${IS_WINDOWS}" -eq 1 ]]; then
 fi
 prepare_core_runtime "${BUILD_DIR}"
 
+CORE_RUNTIME_PATH="$(resolve_core_runtime_library "${CORE_BUILD_DIR}")"
+CORE_RUNTIME_PATH="$(realpath -m "${CORE_RUNTIME_PATH}")"
+echo "Perf Core source/version: ${ZLINK_CORE_SOURCE}/${ZLINK_CORE_VERSION}"
+CORE_PROVENANCE_REVISION=""
+CORE_RELEASE_TAG=""
+CORE_DIRTY="0"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  CORE_PROVENANCE_MANIFEST="${ZLINK_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json"
+  CORE_PROVENANCE_REVISION="$(sed -n 's/^[[:space:]]*"revision":[[:space:]]*"\([^"]*\)".*/\1/p' "${CORE_PROVENANCE_MANIFEST}" | head -n 1)"
+  CORE_RELEASE_TAG="$(sed -n 's/^[[:space:]]*"tag":[[:space:]]*"\([^"]*\)".*/\1/p' "${CORE_PROVENANCE_MANIFEST}" | head -n 1)"
+else
+  CORE_PROVENANCE_REVISION="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
+  if ! git -C "${ROOT_DIR}" diff --quiet -- core; then
+    CORE_DIRTY="1"
+  fi
+fi
+RUN_ENV+=(PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}")
+RUN_ENV+=(PERF_CORE_VERSION="${ZLINK_CORE_VERSION}")
+RUN_ENV+=(PERF_CORE_RUNTIME="${CORE_RUNTIME_PATH}")
+RUN_ENV+=(PERF_CORE_REVISION="${CORE_PROVENANCE_REVISION:-unknown}")
+RUN_ENV+=(PERF_CORE_DIRTY="${CORE_DIRTY}")
+if [[ -n "${CORE_RELEASE_TAG}" ]]; then
+  RUN_ENV+=(PERF_CORE_RELEASE_TAG="${CORE_RELEASE_TAG}")
+fi
+
 if [[ "${BUILD_MODE}" != "reuse" ]]; then
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
     CMAKE_ARGS=(
@@ -1388,6 +1491,8 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
   fi
 fi
 
+verify_benchmark_core_runtime
+
 PATTERN_CSV="$(IFS=,; echo "${RUN_PATTERNS[*]}")"
 PATTERN_CSV_DISPLAY="$(
   local_items=()
@@ -1424,6 +1529,7 @@ RUN_CMD=(
   "${PATTERN_CSV}"
   "${RUN_BASE_ARGS[@]}"
   "${SCRIPT_ARGS[@]}"
+  --build-dir "${BUILD_DIR}"
 )
 
 if [[ -n "${OUTPUT_FILE}" ]]; then

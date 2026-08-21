@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+
 #include <limits>
 #include <string>
 #include <vector>
@@ -53,11 +54,10 @@ class reply_target_reservation_t
         return true;
     }
 
-    bool commit ()
+    bool commit_locked ()
     {
         if (!_active)
             return false;
-        std::lock_guard<std::mutex> lock (_state->mutex);
         zlink_assert (_state->reply_target_reservations > 0);
         --_state->reply_target_reservations;
         _active = false;
@@ -411,11 +411,11 @@ int recv_router_message_direct (socket_handle_t handle_,
                     errno = EPROTO;
                     return -1;
                 }
-            }
-            if (!reply_target_reservation.commit ()) {
-                zlink::close_msg_frames (&raw_parts);
-                zlink::recv_tls_view::abort ();
-                return -1;
+                if (!reply_target_reservation.commit_locked ()) {
+                    zlink::close_msg_frames (&raw_parts);
+                    zlink::recv_tls_view::abort ();
+                    return -1;
+                }
             }
         }
         for (size_t i = 0; i < start_index; ++i)
@@ -542,10 +542,10 @@ int recv_dealer_message_direct (
             target.pipe = source_pipe;
             target.request_seq = envelope.request_seq;
             state_->dealer_reply_targets[exported_seq] = target;
-        }
-        if (!reply_target_reservation.commit ()) {
-            zlink::close_msg_frames (&raw_parts);
-            return -1;
+            if (!reply_target_reservation.commit_locked ()) {
+                zlink::close_msg_frames (&raw_parts);
+                return -1;
+            }
         }
         exported_type = ZLINK_DEALER_MESSAGE_REQUEST;
         start_index = zlink::request_reply::control_part_count;

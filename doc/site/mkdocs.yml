@@ -564,6 +564,7 @@ nav:
         - Stream Socket: internals/stream-socket.md
         - Socket Options: internals/socket-option-defaults.md
         - Connection Memory: internals/connection-memory.md
+        - Auto HWM: internals/auto-hwm.md
         - Multipart Atomicity: internals/multipart-atomicity.md
         - Runtime Boundary: internals/runtime-boundary.md
         - Protocol ZMP: internals/protocol-zmp.md

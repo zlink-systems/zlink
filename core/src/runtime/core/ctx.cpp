@@ -291,6 +291,11 @@ zlink::io_thread_t *zlink::ctx_t::choose_io_thread (uint64_t affinity_)
     return _runtime_resources.choose_io_thread (affinity_);
 }
 
+zlink::io_thread_t *zlink::ctx_t::choose_io_thread_transport (uint64_t affinity_)
+{
+    return _runtime_resources.choose_io_thread_transport (affinity_);
+}
+
 zlink::io_thread_t *zlink::ctx_t::choose_io_thread_stream (uint64_t affinity_)
 {
     return _runtime_resources.choose_io_thread_stream (affinity_);

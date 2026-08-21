@@ -115,6 +115,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
 
     //  Pipe connecting the session to its socket.
     zlink::pipe_t *_pipe;
+    decoder_frame_reservation_t _decoder_frame_reservation;
 
     //  Socket-side peer retained while the session engine can read or update
     //  handshake metadata. The reference prevents endpoint teardown from

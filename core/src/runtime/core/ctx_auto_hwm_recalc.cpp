@@ -8,6 +8,31 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/clock.hpp"
 
+namespace
+{
+uint64_t add_counter_saturating (uint64_t current_, uint64_t amount_,
+                                 bool *overflow_)
+{
+    if (UINT64_MAX - current_ < amount_) {
+        if (overflow_)
+            *overflow_ = true;
+        return UINT64_MAX;
+    }
+    return current_ + amount_;
+}
+
+uint32_t admission_ratio_ppm (uint64_t attempts_, uint64_t blocked_)
+{
+    if (attempts_ == 0 || blocked_ == 0)
+        return 0;
+    if (blocked_ >= attempts_)
+        return 1000000;
+    return static_cast<uint32_t> (
+      static_cast<long double> (blocked_) * 1000000.0L
+      / static_cast<long double> (attempts_));
+}
+}
+
 void zlink::ctx_t::auto_hwm_recalc_task_main (void *arg_)
 {
     static_cast<ctx_t *> (arg_)->auto_hwm_recalc_task ();
@@ -158,29 +183,58 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     _auto_hwm.copy_budget_snapshot (out_);
     physical_queue_registry_snapshot_t queues;
     _physical_queue_registry.snapshot (&queues);
+    std::vector<socket_base_t *> sockets;
+    _socket_registry.collect_sockets (&sockets);
+    uint64_t sampled_application_bytes = 0;
+    uint64_t sampled_oversize_count = 0;
+    uint64_t sampled_oversize_max = 0;
+    uint64_t attempts = 0;
+    uint64_t blocked = 0;
+    bool sampled_overflow = false;
+    for (std::vector<socket_base_t *>::const_iterator it = sockets.begin ();
+         it != sockets.end (); ++it) {
+        uint64_t socket_bytes = 0;
+        uint64_t socket_oversize_count = 0;
+        uint64_t socket_oversize_max = 0;
+        (*it)->auto_hwm_queue_counters (&socket_bytes,
+                                        &socket_oversize_count,
+                                        &socket_oversize_max);
+        sampled_application_bytes = add_counter_saturating (
+          sampled_application_bytes, socket_bytes, &sampled_overflow);
+        sampled_oversize_count = add_counter_saturating (
+          sampled_oversize_count, socket_oversize_count, &sampled_overflow);
+        sampled_oversize_max =
+          std::max (sampled_oversize_max, socket_oversize_max);
+        uint64_t socket_attempts = 0;
+        uint64_t socket_blocked = 0;
+        (*it)->auto_hwm_admission_counters (&socket_attempts,
+                                            &socket_blocked);
+        attempts = add_counter_saturating (attempts, socket_attempts,
+                                           &sampled_overflow);
+        blocked = add_counter_saturating (blocked, socket_blocked,
+                                          &sampled_overflow);
+    }
     out_->active_directional_queue_count =
       queues.active_application_direction_count;
     out_->active_completion_directional_queue_count =
       queues.active_completion_direction_count;
     out_->retired_queue_count = queues.retired_direction_count;
-    out_->core_queue_accounted_bytes =
-      queues.application_current_accounted_bytes;
     out_->application_accounted_bytes =
       queues.application_lease_accounted_bytes;
+    out_->core_queue_accounted_bytes =
+      sampled_application_bytes > out_->application_accounted_bytes
+        ? sampled_application_bytes - out_->application_accounted_bytes
+        : 0;
     out_->outstanding_application_lease_count =
       queues.outstanding_application_lease_count;
     out_->deferred_origin_credit_bytes =
       queues.deferred_origin_credit_bytes;
-    const bool application_sum_overflow =
-      UINT64_MAX - queues.application_current_accounted_bytes
-      < out_->application_accounted_bytes;
-    out_->current_accounted_bytes = application_sum_overflow
-                                      ? UINT64_MAX
-                                      : queues.application_current_accounted_bytes
-                                          + out_->application_accounted_bytes;
+    const bool application_sum_overflow = false;
+    out_->current_accounted_bytes = sampled_application_bytes;
     out_->provisional_accounted_bytes =
       queues.application_provisional_accounted_bytes;
-    out_->peak_accounted_bytes = queues.application_peak_accounted_bytes;
+    out_->peak_accounted_bytes = std::max (
+      queues.application_peak_accounted_bytes, sampled_application_bytes);
     out_->completion_current_accounted_bytes =
       queues.completion_current_accounted_bytes;
     out_->completion_peak_accounted_bytes =
@@ -215,13 +269,12 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
         ? UINT64_MAX
         : out_->total_messaging_accounted_bytes
             + out_->monitor_queue_accounted_bytes;
-    out_->oversize_admission_count = queues.oversize_admission_count;
-    out_->largest_oversize_message_bytes =
-      queues.largest_oversize_message_bytes;
-    out_->blocked_ratio_ppm = queues.blocked_ratio_ppm;
+    out_->oversize_admission_count = sampled_oversize_count;
+    out_->largest_oversize_message_bytes = sampled_oversize_max;
+    out_->blocked_ratio_ppm = admission_ratio_ppm (attempts, blocked);
     if (queues.aggregate_overflow || application_sum_overflow
         || messaging_sum_overflow || instance_applied_sum_overflow
-        || instance_accounted_sum_overflow)
+        || instance_accounted_sum_overflow || sampled_overflow)
         out_->flags |= ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW;
     return 0;
 }
@@ -235,5 +288,10 @@ int zlink::ctx_t::reset_auto_hwm_budget_metrics ()
     }
     _auto_hwm.reset_budget_metrics ();
     _physical_queue_registry.reset_metrics ();
+    std::vector<socket_base_t *> sockets;
+    _socket_registry.collect_sockets (&sockets);
+    for (std::vector<socket_base_t *>::const_iterator it = sockets.begin ();
+         it != sockets.end (); ++it)
+        (*it)->reset_auto_hwm_admission_counters ();
     return 0;
 }

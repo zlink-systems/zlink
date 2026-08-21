@@ -234,6 +234,7 @@ class socket_base_t : public own_t,
     //  at the router_admission call site.
     pipe_t *completion_pipe_for_transport_pair (uint64_t transport_pair_id_,
                                                 uint64_t transport_pair_generation_) const;
+    void cache_completion_pipe_routing_id (pipe_t *application_pipe_);
     //  Request/reply submit entries write to transport pipes directly instead
     //  of going through send()/recv(). They still have to drain pending socket
     //  commands (throttled, exactly like the send() entry does); otherwise a
@@ -390,6 +391,12 @@ class socket_base_t : public own_t,
     virtual int get_peer_state (const void *routing_id_, size_t routing_id_size_) const;
 
     int monitor_snapshot (zlink_monitor_status_t *out_);
+    void auto_hwm_admission_counters (uint64_t *attempts_,
+                                      uint64_t *blocked_) const;
+    void auto_hwm_queue_counters (uint64_t *current_bytes_,
+                                  uint64_t *oversize_count_,
+                                  uint64_t *oversize_max_bytes_) const;
+    void reset_auto_hwm_admission_counters ();
     auto_hwm_socket_plan_t prepare_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_);
     void collect_auto_hwm_queue_policies (
       std::vector<physical_queue_endpoint_policy_t> *out_);

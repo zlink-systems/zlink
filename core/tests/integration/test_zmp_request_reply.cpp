@@ -1761,6 +1761,70 @@ void test_completion_poller_exclusively_owns_routed_async_completion ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_completion_poller_quiesces_callbackless_async_owner ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    const char endpoint[] = "inproc://completion-owner-quiesce";
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_bind (router, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint));
+    msleep (SETTLE_TIME);
+
+    completion_owner_probe_t probe;
+    zlink_msg_t request;
+    init_string_part (&request, "quiesce-owner-request");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer, &request, 1,
+                            &capture_completion_owner_reply, &probe,
+                            ZLINK_SEND_FLAGS_NONE, 3000));
+
+    // Request submission starts the callbackless async mailbox owner. Adding
+    // the first public completion poller must quiesce it before returning.
+    request_handler_probe_t request_probe;
+    recv_router_request_into_probe (router, &request_probe);
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, dealer, NULL, ZLINK_POLLCOMPLETION));
+    send_captured_reply (router, &request_probe, "quiesce-owner-reply");
+
+    const std::thread::id poller_thread = std::this_thread::get_id ();
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (SETTLE_TIME * 10);
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock (probe.mutex);
+            if (probe.done)
+                break;
+        }
+        zlink_poller_event_t event;
+        TEST_ASSERT_TRUE (zlink_poller_wait (poller, &event, 1, 25, NULL) >= 0);
+        TEST_ASSERT_TRUE_MESSAGE (
+          std::chrono::steady_clock::now () < deadline,
+          "public completion poller did not drain the quiesced-owner reply");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock (probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, probe.result);
+        TEST_ASSERT_EQUAL_UINT64 (1, probe.callback_count);
+        TEST_ASSERT_EQUAL_STRING ("quiesce-owner-reply", probe.payload.c_str ());
+        TEST_ASSERT_TRUE (probe.callback_thread == poller_thread);
+    }
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_remove (poller, dealer));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_last_completion_poller_release_resumes_pending_request ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -3227,6 +3291,7 @@ int main ()
     RUN_SELECTED (test_router_poller_combines_input_and_completion_ownership);
     RUN_SELECTED (test_socket_poller_wakes_after_async_owner_applies_input);
     RUN_SELECTED (test_completion_poller_exclusively_owns_routed_async_completion);
+    RUN_SELECTED (test_completion_poller_quiesces_callbackless_async_owner);
     RUN_SELECTED (test_last_completion_poller_release_resumes_pending_request);
     RUN_SELECTED (test_application_only_poller_does_not_take_completion_ownership);
     RUN_SELECTED (test_disconnect_of_paired_endpoint_stops_reconnecting);

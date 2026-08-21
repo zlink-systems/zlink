@@ -102,6 +102,7 @@ class router_t : public routing_socket_base_t
       uint64_t *connection_id_out_,
       zlink::pipe_t **source_pipe_out_,
       retained_credit_token_t *token_out_);
+    int finish_prefetched_credit (retained_credit_token_t *token_out_);
 
     //  Fair queueing object for inbound pipes.
     fq_t _fq;
@@ -119,6 +120,7 @@ class router_t : public routing_socket_base_t
     //  Holds the prefetched message.
     msg_t _prefetched_msg;
     retained_credit_token_t _prefetched_credit;
+    bool _prefetched_credit_deferred;
 
     //  The pipe we are currently reading from
     zlink::pipe_t *_current_in;

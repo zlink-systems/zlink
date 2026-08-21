@@ -3599,6 +3599,17 @@ def build_meta_items(num_runs, selected_patterns):
     meta_items.append(("cores", str(os.cpu_count() or 0)))
     meta_items.append(("build", detect_build_type(BUILD_DIR)))
     meta_items.append(("commit", get_commit_short_sha()))
+    for key, env_name in (
+        ("core_source", "PERF_CORE_SOURCE"),
+        ("core_version", "PERF_CORE_VERSION"),
+        ("core_runtime", "PERF_CORE_RUNTIME"),
+        ("core_revision", "PERF_CORE_REVISION"),
+        ("core_dirty", "PERF_CORE_DIRTY"),
+        ("core_release_tag", "PERF_CORE_RELEASE_TAG"),
+    ):
+        value = _read_env_value(env_name) or ""
+        if value:
+            meta_items.append((key, value))
     local_now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     meta_items.append(("timestamp", local_now))
     load_avg = get_load_avg()

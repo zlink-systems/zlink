@@ -108,6 +108,10 @@ automatically.
 
 ## Auto HWM Memory-Budget Calculation
 
+This section defines the public calculation and admission contract. The
+[Auto HWM internals](../../internals/auto-hwm.en.md) own queue-local state,
+decoder reservations, and data-path cost boundaries.
+
 Core selects the first available input in this order:
 
 1. A positive `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
@@ -620,8 +624,10 @@ When retained-credit receive returns a physical frame, its charge moves
 atomically from `core_queue_accounted_bytes` to
 `application_accounted_bytes`. `current_accounted_bytes` is the saturating sum
 of those fields and does not change for an ownership transfer alone.
-`peak_accounted_bytes` likewise observes the sum of queue and application-lease
-charge. `outstanding_application_lease_count` is the number of public leases
+`peak_accounted_bytes` is the largest such sum observed when a budget snapshot
+or an automatic HWM recalculation samples the queues during the current
+measurement epoch. It does not promise to capture a shorter-lived value between
+two sampling boundaries. `outstanding_application_lease_count` is the number of public leases
 not yet released. `deferred_origin_credit_bytes` is exact-origin byte credit
 held by either an internal framing token or a public lease and not yet
 published to the writer. `retired_queue_count` counts directional queue

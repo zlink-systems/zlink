@@ -463,6 +463,72 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
     test_context_socket_close_zero_linger (receiver);
 }
 
+void test_auto_hwm_applied_limit_blocks_and_resumes_after_drain ()
+{
+    void *ctx = get_test_context ();
+    const uint64_t core_budget = 256ull * 1024ull;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_ctx_set (ctx, ZLINK_CTX_OPT_AUTO_HWM_PROFILE,
+                     ZLINK_AUTO_HWM_PROFILE_BALANCED));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_ctx_set_data (ctx, ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES,
+                          &core_budget, sizeof (core_budget)));
+
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://auto-hwm-applied-backpressure"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://auto-hwm-applied-backpressure"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_auto_hwm_recalculate (ctx));
+
+    const zlink_auto_hwm_budget_snapshot_t applied =
+      read_auto_hwm_budget_snapshot (ctx);
+    TEST_ASSERT_EQUAL_UINT64 (2, applied.active_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (0, applied.manual_reserved_hwm_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (core_budget,
+                              applied.total_planned_hwm_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (core_budget,
+                              applied.total_applied_hwm_bytes);
+
+    const size_t message_size = 4096;
+    char payload[message_size];
+    memset (payload, 'a', sizeof (payload));
+    int queued = 0;
+    while (queued < 1024
+           && zlink_send (sender, payload, sizeof (payload), ZLINK_DONTWAIT)
+                == static_cast<int> (sizeof (payload)))
+        ++queued;
+    TEST_ASSERT_GREATER_THAN_INT (0, queued);
+    TEST_ASSERT_LESS_THAN_INT (1024, queued);
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+
+    std::future<int> blocked_send =
+      std::async (std::launch::async, [&] () {
+          return zlink_send (sender, payload, sizeof (payload), 0);
+      });
+
+    char received[message_size];
+    for (int i = 0;
+         i < queued
+         && blocked_send.wait_for (std::chrono::milliseconds (0))
+              != std::future_status::ready;
+         ++i) {
+        TEST_ASSERT_EQUAL_INT (
+          static_cast<int> (sizeof (received)),
+          zlink_recv (receiver, received, sizeof (received), 0));
+        (void) blocked_send.wait_for (std::chrono::milliseconds (20));
+    }
+    TEST_ASSERT_EQUAL_INT (
+      std::future_status::ready,
+      blocked_send.wait_for (std::chrono::seconds (1)));
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)),
+                           blocked_send.get ());
+
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
+}
+
 void test_auto_hwm_physical_queue_registry_counts_inproc_pair_once ()
 {
     void *ctx = get_test_context ();
@@ -777,6 +843,7 @@ int main (void)
     RUN_TEST (test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot);
     RUN_TEST (test_ctx_option_auto_hwm_budget_snapshot_abi_and_reset);
     RUN_TEST (test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt);
+    RUN_TEST (test_auto_hwm_applied_limit_blocks_and_resumes_after_drain);
     RUN_TEST (test_auto_hwm_physical_queue_registry_counts_inproc_pair_once);
     RUN_TEST (test_auto_hwm_inproc_manual_endpoint_resolution_counts_queue_once);
     RUN_TEST (test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connection);

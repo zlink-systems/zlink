@@ -299,7 +299,9 @@ void zlink::asio_ipc_listener_t::create_engine (fd_t fd_)
     }
     alloc_assert (engine);
 
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
+    io_thread_t *io_thread = options.type == ZLINK_CORE_SOCKET_STREAM
+                               ? choose_io_thread_stream (options.affinity)
+                               : choose_io_thread_transport (options.affinity);
     zlink_assert (io_thread);
 
     session_base_t *session = session_base_t::create (io_thread, false, _socket, options, NULL);

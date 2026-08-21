@@ -4,6 +4,50 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+CORE_VERSION_OPTION=""
+SCRIPT_ARGUMENTS=("$@")
+for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
+  case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --core-version)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]}"
+      ;;
+    --core-version=*)
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if [[ ! "${requested_core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: --core-version must be MAJOR.MINOR.PATCH: ${requested_core_version:-<missing>}" >&2
+    exit 1
+  fi
+  if [[ -n "${CORE_VERSION_OPTION}" && "${CORE_VERSION_OPTION}" != "${requested_core_version}" ]]; then
+    echo "Error: --core-version may be specified only once." >&2
+    exit 1
+  fi
+  CORE_VERSION_OPTION="${requested_core_version}"
+done
+
+if [[ -n "${CORE_VERSION_OPTION}" ]]; then
+  if [[ -n "${ZLINK_CORE_SOURCE:-}" && "${ZLINK_CORE_SOURCE}" != "release" ]]; then
+    echo "Error: --core-version cannot be combined with ZLINK_CORE_SOURCE=${ZLINK_CORE_SOURCE}." >&2
+    exit 1
+  fi
+  export ZLINK_CORE_SOURCE=release
+  export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
+  export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+  # Older released runtimes do not expose the current monitor snapshot ABI.
+  # Keep the workload identical but skip optional post-run introspection.
+  export PERF_PRINT_AUTO_HWM_DETAIL=0
+else
+  export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+fi
 source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 
@@ -202,6 +246,7 @@ Options:
   --msg-sizes LIST            Comma-separated sizes (e.g., 64,1024,65536).
   --transports LIST           Comma-separated transports.
   --auto-hwm-profile NAME     Set auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
+  --core-version VERSION      Download and use the specified released Core version.
 
 Notes:
   - result is saved under results/single/report/ as
@@ -228,21 +273,12 @@ set_build_mode() {
 
 resolve_configured_core_build_dir() {
   local build_dir="${1:-${OFFICIAL_BUILD_DIR}}"
-  local cache_path="${build_dir}/CMakeCache.txt"
-  local configured_dir=""
+  : "${build_dir}"
   if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
     printf '%s\n' "${ZLINK_CORE_PACKAGE_PREFIX}"
     return
   fi
-  if [[ -f "${cache_path}" ]]; then
-    configured_dir="$(
-      sed -n 's/^ZLINK_C_CORE_BUILD_DIR:PATH=//p' "${cache_path}" | tail -n 1
-    )"
-  fi
-  if [[ -z "${configured_dir}" ]]; then
-    configured_dir="${DEFAULT_CORE_BUILD_DIR}"
-  fi
-  realpath -m "${configured_dir}"
+  realpath -m "${DEFAULT_CORE_BUILD_DIR}"
 }
 
 resolve_core_runtime_library() {
@@ -493,6 +529,11 @@ while [[ $# -gt 0 ]]; do
       CTX_AUTO_HWM_PROFILE="${2:-}"
       shift
       ;;
+    --core-version)
+      shift
+      ;;
+    --core-version=*)
+      ;;
     -h|--help)
       usage
       exit 0
@@ -642,11 +683,18 @@ if [[ -z "${RUNS}" || ! "${RUNS}" =~ ^[0-9]+$ || "${RUNS}" -lt 1 ]]; then
   echo "Runs must be a positive integer." >&2
   exit 1
 fi
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  BUILD_DIR="${OFFICIAL_BUILD_DIR}-release-${ZLINK_CORE_VERSION}"
+fi
 BUILD_DIR="$(realpath -m "${BUILD_DIR}")"
 ROOT_DIR="$(realpath -m "${ROOT_DIR}")"
 PERF_COMPARISON_SCRIPT="$(realpath -m "${PERF_COMPARISON_SCRIPT}")"
-if [[ "${BUILD_DIR}" != "${OFFICIAL_BUILD_DIR}" ]]; then
-  echo "Build directory must be exactly: ${OFFICIAL_BUILD_DIR}" >&2
+EXPECTED_BUILD_DIR="${OFFICIAL_BUILD_DIR}"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  EXPECTED_BUILD_DIR="${OFFICIAL_BUILD_DIR}-release-${ZLINK_CORE_VERSION}"
+fi
+if [[ "${BUILD_DIR}" != "${EXPECTED_BUILD_DIR}" ]]; then
+  echo "Build directory must be exactly: ${EXPECTED_BUILD_DIR}" >&2
   exit 1
 fi
 
@@ -773,6 +821,23 @@ if ! prepare_core_runtime "${BUILD_DIR}"; then
   exit 1
 fi
 
+CORE_RUNTIME_PATH="$(resolve_core_runtime_library "${CORE_BUILD_DIR}")"
+CORE_RUNTIME_PATH="$(realpath -m "${CORE_RUNTIME_PATH}")"
+echo "Perf Core source/version: ${ZLINK_CORE_SOURCE}/${ZLINK_CORE_VERSION}"
+CORE_PROVENANCE_REVISION=""
+CORE_RELEASE_TAG=""
+CORE_DIRTY="0"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  CORE_PROVENANCE_MANIFEST="${ZLINK_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json"
+  CORE_PROVENANCE_REVISION="$(sed -n 's/^[[:space:]]*"revision":[[:space:]]*"\([^"]*\)".*/\1/p' "${CORE_PROVENANCE_MANIFEST}" | head -n 1)"
+  CORE_RELEASE_TAG="$(sed -n 's/^[[:space:]]*"tag":[[:space:]]*"\([^"]*\)".*/\1/p' "${CORE_PROVENANCE_MANIFEST}" | head -n 1)"
+else
+  CORE_PROVENANCE_REVISION="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
+  if ! git -C "${ROOT_DIR}" diff --quiet -- core; then
+    CORE_DIRTY="1"
+  fi
+fi
+
 if [[ "${BUILD_MODE}" != "reuse" ]]; then
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
     CMAKE_ARGS=(
@@ -874,6 +939,14 @@ RUN_CMD+=("--result-file" "${RESULT_FILE}")
 
 RUN_ENV=()
 RUN_ENV+=(PYTHONUNBUFFERED=1)
+RUN_ENV+=(PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}")
+RUN_ENV+=(PERF_CORE_VERSION="${ZLINK_CORE_VERSION}")
+RUN_ENV+=(PERF_CORE_RUNTIME="${CORE_RUNTIME_PATH}")
+RUN_ENV+=(PERF_CORE_REVISION="${CORE_PROVENANCE_REVISION:-unknown}")
+RUN_ENV+=(PERF_CORE_DIRTY="${CORE_DIRTY}")
+if [[ -n "${CORE_RELEASE_TAG}" ]]; then
+  RUN_ENV+=(PERF_CORE_RELEASE_TAG="${CORE_RELEASE_TAG}")
+fi
 if [[ -n "${PERF_IO_THREADS}" ]]; then
   RUN_ENV+=(PERF_IO_THREADS="${PERF_IO_THREADS}")
 fi

@@ -242,10 +242,10 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_transport_pair_generation_,
                                &first_admission)
                : xsend_pipe (msg_, pipe_out_, &first_admission);
-    if (record_context_admission_ && first_admission != pipe_message_admission_invalid
-        && get_ctx ())
-        get_ctx ()->record_auto_hwm_admission_attempt (
-          rc != 0 && first_admission == pipe_message_admission_hwm_full);
+    if (record_context_admission_ && rc != 0
+        && first_admission == pipe_message_admission_hwm_full)
+        _auto_hwm_send_blocked_attempts.fetch_add (
+          1, std::memory_order_relaxed);
     if (rc == 0) {
         dispatch_runtime ().clear_send_recovery_pending ();
         return 0;
@@ -314,7 +314,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             --attempts_left;
 
             prepare_direct_send_message (msg_, flags_);
-            _auto_hwm_send_attempts.fetch_add (1, std::memory_order_relaxed);
 #ifdef ZLINK_BUILD_TESTS
             if (zlink::socket_submit_retry_fault::consume (&injected_errno)) {
                 rc = -1;
@@ -364,8 +363,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         errno = failure_errno;
         return -1;
     }
-    _auto_hwm_send_blocked_attempts.fetch_add (1, std::memory_order_relaxed);
-
     if ((flags_ & ZLINK_DONTWAIT) || options.sndtimeo == 0) {
         const bool was_pending = dispatch_runtime ().send_recovery_pending ();
         dispatch_runtime ().mark_send_recovery_pending ();
@@ -391,7 +388,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         }
         if (!hold_sync_during_retry)
             send_scope.reacquire_sync_after_retry ();
-        _auto_hwm_send_attempts.fetch_add (1, std::memory_order_relaxed);
         rc = target_rid_
                ? xsend_routed (target_rid_, msg_, connection_id_out_,
                                expected_connection_id_, pipe_out_,
@@ -408,7 +404,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             dispatch_runtime ().clear_send_recovery_pending ();
             return -1;
         }
-        _auto_hwm_send_blocked_attempts.fetch_add (1, std::memory_order_relaxed);
         const bool was_pending = dispatch_runtime ().send_recovery_pending ();
         dispatch_runtime ().mark_send_recovery_pending ();
         if (!was_pending)

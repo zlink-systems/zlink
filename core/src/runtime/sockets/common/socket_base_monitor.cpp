@@ -61,8 +61,7 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
 
         for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {
             pipe_t *pipe = endpoint_runtime ().attached_pipe (i);
-            if (!pipe
-                || pipe->get_transport_lane () == transport_lane_completion)
+            if (!pipe || pipe->uses_registry_accounting ())
                 continue;
             application_pipe_seen = true;
             if (!add_snapshot_counter (
@@ -134,6 +133,53 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
     out_->rcv_pending_bytes = out_->rcv_bytes_in_flight;
 
     return 0;
+}
+
+void zlink::socket_base_t::auto_hwm_admission_counters (
+  uint64_t *attempts_, uint64_t *blocked_) const
+{
+    if (attempts_)
+        *attempts_ = _auto_hwm_send_attempts.load (std::memory_order_relaxed);
+    if (blocked_)
+        *blocked_ =
+          _auto_hwm_send_blocked_attempts.load (std::memory_order_relaxed);
+}
+
+void zlink::socket_base_t::auto_hwm_queue_counters (
+  uint64_t *current_bytes_, uint64_t *oversize_count_,
+  uint64_t *oversize_max_bytes_) const
+{
+    uint64_t current = 0;
+    uint64_t oversize_count = 0;
+    uint64_t oversize_max = 0;
+    scoped_lock_t lock (monitor_runtime ().sync);
+    for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count ();
+         i != size; ++i) {
+        const pipe_t *pipe = endpoint_runtime ().attached_pipe (i);
+        if (!pipe || pipe->uses_registry_accounting ())
+            continue;
+        const uint64_t send = pipe->get_snd_pending_bytes ();
+        current = UINT64_MAX - current < send ? UINT64_MAX : current + send;
+        const uint64_t pipe_oversize =
+          pipe->get_oversize_message_admission_count ();
+        oversize_count = UINT64_MAX - oversize_count < pipe_oversize
+                           ? UINT64_MAX
+                           : oversize_count + pipe_oversize;
+        oversize_max = std::max (
+          oversize_max, pipe->get_oversize_message_admission_max_bytes ());
+    }
+    if (current_bytes_)
+        *current_bytes_ = current;
+    if (oversize_count_)
+        *oversize_count_ = oversize_count;
+    if (oversize_max_bytes_)
+        *oversize_max_bytes_ = oversize_max;
+}
+
+void zlink::socket_base_t::reset_auto_hwm_admission_counters ()
+{
+    _auto_hwm_send_attempts.store (0, std::memory_order_relaxed);
+    _auto_hwm_send_blocked_attempts.store (0, std::memory_order_relaxed);
 }
 
 uint32_t zlink::socket_base_t::monitor_ready_count () const

@@ -427,6 +427,9 @@ inline void emit_single_socket_hwm_detail (void *socket_,
 {
     if (!socket_ || !pattern_ || !component_)
         return;
+    const char *const print_detail = std::getenv ("PERF_PRINT_AUTO_HWM_DETAIL");
+    if (print_detail && std::strcmp (print_detail, "0") == 0)
+        return;
 
     zlink_socket_monitor_open_options_t options;
     std::memset (&options, 0, sizeof (options));

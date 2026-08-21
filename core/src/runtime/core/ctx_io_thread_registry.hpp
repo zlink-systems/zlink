@@ -23,6 +23,7 @@ class ctx_io_thread_registry_t
     void destroy_all ();
 
     io_thread_t *choose (uint64_t affinity_);
+    io_thread_t *choose_transport (uint64_t affinity_);
     io_thread_t *choose_stream (uint64_t affinity_);
 
   private:
@@ -30,6 +31,7 @@ class ctx_io_thread_registry_t
 
     io_threads_t _threads;
     atomic_counter_t _next_io_thread;
+    atomic_counter_t _next_transport_io_thread;
     atomic_counter_t _next_stream_io_thread;
 };
 }

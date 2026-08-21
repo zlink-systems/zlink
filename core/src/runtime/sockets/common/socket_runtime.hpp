@@ -490,6 +490,7 @@ class socket_public_api_lock_scope_t
     bool _locked;
 };
 
+
 class socket_public_send_scope_t
 {
   public:

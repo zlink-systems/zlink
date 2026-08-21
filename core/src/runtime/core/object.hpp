@@ -56,6 +56,9 @@ class object_t
     //  Chooses least loaded I/O thread.
     zlink::io_thread_t *choose_io_thread (uint64_t affinity_) const;
 
+    //  Chooses a transport I/O thread independently from auxiliary owners.
+    zlink::io_thread_t *choose_io_thread_transport (uint64_t affinity_) const;
+
     //  Chooses I/O thread using STREAM-specific policy.
     zlink::io_thread_t *choose_io_thread_stream (uint64_t affinity_) const;
 

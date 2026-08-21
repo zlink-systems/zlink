@@ -455,13 +455,18 @@ def read_cmake_cache_value(cmake_root: str, key: str) -> str:
     if not os.path.isfile(cache_path):
         return ""
     prefix = f"{key}:"
+    cache_file = None
     try:
-        with open(cache_path, "r", encoding="utf-8", errors="ignore") as cache_file:
-            for line in cache_file:
-                if line.startswith(prefix) and "=" in line:
-                    return line.split("=", 1)[1].strip()
-    except OSError:
+        cache_file = open(cache_path, "r", encoding="utf-8", errors="ignore")
+        for line in cache_file:
+            if line.startswith(prefix) and "=" in line:
+                return line.split("=", 1)[1].strip()
+    except (OSError, TypeError):
         pass
+    finally:
+        close = getattr(cache_file, "close", None)
+        if callable(close):
+            close()
     return ""
 
 
@@ -1052,6 +1057,55 @@ def print_effective_options(label: str, items: List[Tuple[str, str]]) -> None:
         print(f"- {key}: {value}")
 
 
+def get_commit_short_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", ROOT_DIR, "rev-parse", "--short", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def detect_build_type(build_dir: str) -> str:
+    cmake_dir = derive_cmake_build_dir(build_dir)
+    if cmake_dir:
+        build_type = read_cmake_cache_value(cmake_dir, "CMAKE_BUILD_TYPE")
+        if build_type:
+            return build_type
+    return "Release"
+
+
+def build_single_meta_items(build_dir: str, runs: int) -> List[Tuple[str, str]]:
+    items: List[Tuple[str, str]] = [
+        ("os", f"{platform.system()} {platform.release()}".strip()),
+        ("cpu", platform.processor().strip() or "unknown"),
+        ("cores", str(os.cpu_count() or 0)),
+        ("build", detect_build_type(build_dir)),
+        ("commit", get_commit_short_sha()),
+    ]
+    for key, env_name in (
+        ("core_source", "PERF_CORE_SOURCE"),
+        ("core_version", "PERF_CORE_VERSION"),
+        ("core_runtime", "PERF_CORE_RUNTIME"),
+        ("core_revision", "PERF_CORE_REVISION"),
+        ("core_dirty", "PERF_CORE_DIRTY"),
+        ("core_release_tag", "PERF_CORE_RELEASE_TAG"),
+    ):
+        value = env_get(env_name).strip()
+        if value:
+            items.append((key, value))
+    items.append(("timestamp", datetime.datetime.now().astimezone().isoformat(timespec="seconds")))
+    items.append(("runs", str(runs)))
+    return items
+
+
+def print_meta_lines(items: List[Tuple[str, str]]) -> None:
+    for key, value in items:
+        print(f"META,{key},{value}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Measure current zlink single-pattern benchmarks from bindings/c/build."
@@ -1166,6 +1220,7 @@ def main() -> int:
     sys.stdout = TeeStream(orig_stdout, result_log_fh)
     sys.stderr = TeeStream(orig_stderr, result_log_fh)
 
+    print_meta_lines(build_single_meta_items(build_dir, args.runs))
     pattern_transports: Dict[str, List[str]] = {}
     pattern_sizes: Dict[str, List[int]] = {}
     requested_combo_count = 0

@@ -88,12 +88,28 @@ int zlink::socket_base_t::ensure_completion_processing ()
 
 void zlink::socket_base_t::acquire_completion_poller ()
 {
-    // Keep the event-driven mailbox owner alive for routed readiness,
-    // retained-credit commands, and later completion handoff. The owner gate
-    // fences an in-flight completion drain before the first public poller
-    // registration returns; refs then make the worker skip completion work.
-    scoped_lock_t owner_lock (_completion_owner_sync);
-    _completion_poller_refs.fetch_add (1, std::memory_order_acq_rel);
+    bool quiesce_async_owner = false;
+    {
+        //  The owner gate fences an in-flight completion drain before the
+        //  first public poller registration returns.
+        scoped_lock_t owner_lock (_completion_owner_sync);
+        const uint32_t previous =
+          _completion_poller_refs.fetch_add (1, std::memory_order_acq_rel);
+        quiesce_async_owner =
+          previous == 0
+          && lifecycle_coordinator ().is_async_mailbox_active ()
+          && current_async_mailbox_dispatch_socket () != this
+          && !socket_msg_dispatch_active () && !send_ready_handler_active ()
+          && !routed_send_ready_handler_active ();
+        if (quiesce_async_owner)
+            stop_async_mailbox_processing ();
+    }
+    //  With no async callback consumer, the public poller can process mailbox
+    //  commands and completions itself.  Quiescing the second mailbox owner
+    //  also keeps normal receive readiness single-threaded while the poller
+    //  registration exists.
+    if (quiesce_async_owner)
+        wait_async_quiesced (10000);
 }
 
 void zlink::socket_base_t::release_completion_poller ()

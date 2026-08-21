@@ -69,6 +69,18 @@ void subtract_exact (std::atomic<uint64_t> *value_, uint64_t amount_)
     }
 }
 
+bool try_subtract_exact (std::atomic<uint64_t> *value_, uint64_t amount_)
+{
+    uint64_t current = value_->load (std::memory_order_relaxed);
+    while (current >= amount_) {
+        if (value_->compare_exchange_weak (current, current - amount_,
+                                           std::memory_order_relaxed,
+                                           std::memory_order_relaxed))
+            return true;
+    }
+    return false;
+}
+
 void observe_peak (std::atomic<uint64_t> *peak_, uint64_t current_)
 {
     uint64_t peak = peak_->load (std::memory_order_relaxed);
@@ -154,9 +166,9 @@ struct physical_queue_record_t
     }
 
     const uint64_t queue_id;
-    uint64_t generation;
+    std::atomic<uint64_t> generation;
     std::atomic<int> lane;
-    uint32_t endpoint_refs;
+    std::atomic<uint32_t> endpoint_refs;
     const uint64_t minimum_reservation_bytes;
     std::atomic<uint64_t> planned_hwm;
     std::atomic<uint64_t> applied_hwm;
@@ -222,52 +234,6 @@ struct retained_credit_origin_t
     owner_t owner;
 };
 
-struct decoder_frame_reservation_control_t
-{
-    explicit decoder_frame_reservation_control_t (
-      ctx_physical_queue_registry_t *registry_) :
-        registry (registry_), accepting (true)
-    {
-    }
-
-    std::mutex sync;
-    ctx_physical_queue_registry_t *registry;
-    bool accepting;
-};
-
-struct decoder_frame_reservation_t
-{
-    decoder_frame_reservation_t (
-      uint64_t id_,
-      const std::shared_ptr<decoder_frame_reservation_control_t> &control_,
-      const physical_queue_handle_t &queue_,
-      uint64_t generation_, uint64_t frame_bytes_, uint64_t payload_bytes_,
-      unsigned char msg_flags_, bool multipart_started_empty_) :
-        id (id_),
-        control (control_),
-        queue (queue_),
-        queue_id (queue_->queue_id),
-        generation (generation_),
-        frame_bytes (frame_bytes_),
-        payload_bytes (payload_bytes_),
-        msg_flags (msg_flags_),
-        multipart_started_empty (multipart_started_empty_),
-        active (true)
-    {
-    }
-
-    const uint64_t id;
-    std::shared_ptr<decoder_frame_reservation_control_t> control;
-    physical_queue_handle_t queue;
-    const uint64_t queue_id;
-    const uint64_t generation;
-    const uint64_t frame_bytes;
-    const uint64_t payload_bytes;
-    const unsigned char msg_flags;
-    const bool multipart_started_empty;
-    bool active;
-};
-
 namespace
 {
 int accounting_lane (const zlink::physical_queue_record_t &direction_)
@@ -324,8 +290,33 @@ uint64_t add_snapshot_value (uint64_t current_, uint64_t amount_,
 }
 
 zlink::decoder_frame_reservation_request_t::decoder_frame_reservation_request_t () :
-    payload_bytes (0), msg_flags (0), multipart_started_empty (false)
+    payload_bytes (0),
+    msg_flags (0),
+    multipart_started_empty (false),
+    qualify_multipart_from_queue_state (false)
 {
+}
+
+zlink::decoder_frame_reservation_t::decoder_frame_reservation_t () :
+    queue_id (0),
+    generation (0),
+    frame_bytes (0),
+    payload_bytes (0),
+    msg_flags (0),
+    multipart_started_empty (false),
+    active (false)
+{
+}
+
+void zlink::decoder_frame_reservation_t::reset ()
+{
+    queue_id = 0;
+    generation = 0;
+    frame_bytes = 0;
+    payload_bytes = 0;
+    msg_flags = 0;
+    multipart_started_empty = false;
+    active = false;
 }
 }
 
@@ -418,29 +409,6 @@ void zlink::release_retained_credit_origin (
         control->registry->release_retained_origin (origin.get (), false);
 }
 
-void zlink::release_decoder_frame_reservation (
-  decoder_frame_reservation_t **reservation_)
-{
-    if (!reservation_ || !*reservation_)
-        return;
-
-    decoder_frame_reservation_t *reservation = *reservation_;
-    *reservation_ = NULL;
-    const std::shared_ptr<decoder_frame_reservation_control_t> control =
-      reservation->control;
-    if (control) {
-        std::lock_guard<std::mutex> control_lock (control->sync);
-        if (control->registry) {
-            scoped_lock_t registry_lock (control->registry->_sync);
-            control->registry->release_decoder_frame_unlocked (reservation);
-        }
-    }
-    reservation->active = false;
-    reservation->queue.reset ();
-    reservation->control.reset ();
-    LIBZLINK_DELETE (reservation);
-}
-
 zlink::physical_queue_registry_snapshot_t::physical_queue_registry_snapshot_t () :
     active_application_direction_count (0),
     active_completion_direction_count (0),
@@ -496,10 +464,7 @@ zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
       std::make_shared<retained_credit_control_t> (this)),
     _retained_origins (),
     _next_retained_origin_id (1),
-    _decoder_control (
-      std::make_shared<decoder_frame_reservation_control_t> (this)),
-    _decoder_reservations (),
-    _next_decoder_reservation_id (1)
+    _decoder_accepting (true)
 {
 }
 
@@ -507,7 +472,6 @@ zlink::ctx_physical_queue_registry_t::~ctx_physical_queue_registry_t ()
 {
     force_cancel_decoder_reservations ();
     force_release_retained_credit ();
-    zlink_assert (_decoder_reservations.empty ());
     zlink_assert (_directions.empty ());
     zlink_assert (_application_current_accounted_bytes.load (
                     std::memory_order_relaxed)
@@ -668,26 +632,12 @@ void zlink::ctx_physical_queue_registry_t::account_provisional_frame (
     saturating_add (&direction_->provisional_accounted_bytes, frame_bytes_,
                     &_aggregate_overflow);
     if (lane == physical_queue_lane_application) {
-        saturating_add (&_application_provisional_accounted_bytes,
-                        frame_bytes_, &_aggregate_overflow);
-        const uint64_t current = saturating_add (
-          &_application_current_accounted_bytes, frame_bytes_,
-          &_aggregate_overflow);
-        const uint64_t leased = _application_lease_accounted_bytes.load (
-          std::memory_order_relaxed);
-        observe_peak (&_application_peak_accounted_bytes,
-                      UINT64_MAX - current < leased ? UINT64_MAX
-                                                    : current + leased);
+        // Context aggregates are sampled from queue-local counters.
     } else {
         if (lane == physical_queue_lane_completion) {
-            const uint64_t current = saturating_add (
-              &_completion_current_accounted_bytes, frame_bytes_,
-              &_aggregate_overflow);
-            observe_peak (&_completion_peak_accounted_bytes, current);
+            // Context aggregates are sampled from queue-local counters.
         } else {
             zlink_assert (lane == physical_queue_lane_monitor);
-            saturating_add (&_monitor_current_accounted_bytes, frame_bytes_,
-                            &_aggregate_overflow);
         }
     }
 }
@@ -711,17 +661,6 @@ void zlink::ctx_physical_queue_registry_t::commit_message (
                     &_aggregate_overflow);
 
     if (lane == physical_queue_lane_application) {
-        if (provisional > 0)
-            subtract_exact (&_application_provisional_accounted_bytes,
-                            provisional);
-        const uint64_t current = saturating_add (
-          &_application_current_accounted_bytes, final_frame_bytes_,
-          &_aggregate_overflow);
-        const uint64_t leased = _application_lease_accounted_bytes.load (
-          std::memory_order_relaxed);
-        observe_peak (&_application_peak_accounted_bytes,
-                      UINT64_MAX - current < leased ? UINT64_MAX
-                                                    : current + leased);
         if (oversize_admission_) {
             saturating_add (&_oversize_admission_count, 1,
                             &_aggregate_overflow);
@@ -729,67 +668,34 @@ void zlink::ctx_physical_queue_registry_t::commit_message (
                           message_bytes);
         }
     } else if (lane == physical_queue_lane_completion) {
-        const uint64_t current = saturating_add (
-          &_completion_current_accounted_bytes, final_frame_bytes_,
-          &_aggregate_overflow);
-        observe_peak (&_completion_peak_accounted_bytes, current);
         if (counted_message_)
             saturating_add (&direction_->completion_pending_message_count, 1,
                             &_aggregate_overflow);
-        if (counted_message_)
-            saturating_add (&_completion_pending_message_count, 1,
-                            &_aggregate_overflow);
     } else {
         zlink_assert (lane == physical_queue_lane_monitor);
-        saturating_add (&_monitor_current_accounted_bytes,
-                        final_frame_bytes_, &_aggregate_overflow);
     }
 }
 
 void zlink::ctx_physical_queue_registry_t::rollback_provisional (
-  const physical_queue_handle_t &direction_)
+  const physical_queue_handle_t &direction_, uint64_t frame_bytes_)
 {
     if (!direction_)
         return;
 
-    scoped_lock_t lock (_sync);
-    uint64_t decoder_reserved_bytes = 0;
-    for (std::map<uint64_t, decoder_frame_reservation_t *>::const_iterator it =
-           _decoder_reservations.begin ();
-         it != _decoder_reservations.end (); ++it) {
-        const decoder_frame_reservation_t *const reservation = it->second;
-        if (!reservation || !reservation->active
-            || reservation->queue.get () != direction_.get ())
-            continue;
-        zlink_assert (UINT64_MAX - decoder_reserved_bytes
-                      >= reservation->frame_bytes);
-        decoder_reserved_bytes += reservation->frame_bytes;
+    uint64_t removed = frame_bytes_;
+    if (removed == 0) {
+        removed = direction_->provisional_accounted_bytes.exchange (
+          0, std::memory_order_relaxed);
+    } else {
+        subtract_exact (&direction_->provisional_accounted_bytes, removed);
     }
-
-    const uint64_t total_provisional =
-      direction_->provisional_accounted_bytes.load (
-        std::memory_order_relaxed);
-    zlink_assert (total_provisional >= decoder_reserved_bytes);
-    const uint64_t pipe_provisional =
-      total_provisional - decoder_reserved_bytes;
-    if (pipe_provisional == 0)
+    if (removed == 0)
         return;
-
-    subtract_exact (&direction_->provisional_accounted_bytes,
-                    pipe_provisional);
     const int lane = accounting_lane (*direction_);
     if (lane == physical_queue_lane_application) {
-        subtract_exact (&_application_provisional_accounted_bytes,
-                        pipe_provisional);
-        subtract_exact (&_application_current_accounted_bytes,
-                        pipe_provisional);
     } else if (lane == physical_queue_lane_completion) {
-        subtract_exact (&_completion_current_accounted_bytes,
-                        pipe_provisional);
     } else {
         zlink_assert (lane == physical_queue_lane_monitor);
-        subtract_exact (&_monitor_current_accounted_bytes,
-                        pipe_provisional);
     }
     apply_deferred_hwm_if_drained (direction_.get ());
 }
@@ -803,18 +709,13 @@ void zlink::ctx_physical_queue_registry_t::release_committed_frame (
     subtract_exact (&direction_->committed_accounted_bytes, frame_bytes_);
     const int lane = accounting_lane (*direction_);
     if (lane == physical_queue_lane_application) {
-        subtract_exact (&_application_current_accounted_bytes, frame_bytes_);
     } else if (lane == physical_queue_lane_completion) {
-        subtract_exact (&_completion_current_accounted_bytes, frame_bytes_);
         if (counted_message_count_ > 0) {
             subtract_exact (&direction_->completion_pending_message_count,
-                            counted_message_count_);
-            subtract_exact (&_completion_pending_message_count,
                             counted_message_count_);
         }
     } else {
         zlink_assert (lane == physical_queue_lane_monitor);
-        subtract_exact (&_monitor_current_accounted_bytes, frame_bytes_);
     }
     apply_deferred_hwm_if_drained (direction_.get ());
 }
@@ -822,13 +723,18 @@ void zlink::ctx_physical_queue_registry_t::release_committed_frame (
 int zlink::ctx_physical_queue_registry_t::reserve_decoder_frame (
   const physical_queue_handle_t &direction_,
   const decoder_frame_reservation_request_t &request_,
+  decoder_frame_reservation_t *reservation_storage_,
   decoder_frame_reservation_t **reservation_out_)
 {
-    if (!direction_ || !reservation_out_) {
+    if (!direction_ || !reservation_storage_ || !reservation_out_) {
         errno = EFAULT;
         return -1;
     }
     *reservation_out_ = NULL;
+    if (reservation_storage_->active) {
+        errno = EBUSY;
+        return -1;
+    }
     const uint64_t metadata_bytes = static_cast<uint64_t> (sizeof (msg_t));
     if (UINT64_MAX - request_.payload_bytes < metadata_bytes) {
         errno = EMSGSIZE;
@@ -836,24 +742,15 @@ int zlink::ctx_physical_queue_registry_t::reserve_decoder_frame (
     }
     const uint64_t frame_bytes = request_.payload_bytes + metadata_bytes;
 
-    const std::shared_ptr<decoder_frame_reservation_control_t> control =
-      _decoder_control;
-    std::lock_guard<std::mutex> control_lock (control->sync);
-    if (!control->accepting || control->registry != this) {
-        errno = ETERM;
-        return -1;
-    }
-
-    scoped_lock_t lock (_sync);
-    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-      _directions.find (direction_->queue_id);
-    if (known == _directions.end ()
-        || known->second.get () != direction_.get ()
+    if (!_decoder_accepting.load (std::memory_order_acquire)
         || direction_->endpoint_refs == 0) {
         errno = ETERM;
         return -1;
     }
-
+    const bool multipart_started_empty =
+      request_.multipart_started_empty
+      || (request_.qualify_multipart_from_queue_state
+          && current_queue_bytes (*direction_) == 0);
     const int lane = accounting_lane (*direction_);
     if (lane != physical_queue_lane_application) {
         if (lane != physical_queue_lane_completion) {
@@ -875,53 +772,28 @@ int zlink::ctx_physical_queue_registry_t::reserve_decoder_frame (
         //  data frame. MORE frames never use the exception; only the final
         //  frame may complete the one message that began on an empty origin.
         const bool final_oversize =
-          !more && request_.multipart_started_empty;
+          !more && multipart_started_empty;
         if (!fits && !final_oversize) {
             errno = EAGAIN;
             return -1;
         }
     }
 
-    uint64_t id = 0;
-    do {
-        id = _next_decoder_reservation_id;
-        _next_decoder_reservation_id = id == UINT64_MAX ? 1 : id + 1;
-    } while (_decoder_reservations.find (id)
-             != _decoder_reservations.end ());
-    decoder_frame_reservation_t *reservation =
-      new (std::nothrow) decoder_frame_reservation_t (
-        id, control, direction_, direction_->generation, frame_bytes,
-        request_.payload_bytes, request_.msg_flags,
-        request_.multipart_started_empty);
-    alloc_assert (reservation);
-    _decoder_reservations.insert (std::make_pair (id, reservation));
-    saturating_add (&direction_->provisional_accounted_bytes, frame_bytes,
-                    &_aggregate_overflow);
-    if (lane == physical_queue_lane_application) {
-        saturating_add (&_application_provisional_accounted_bytes, frame_bytes,
-                        &_aggregate_overflow);
-        saturating_add (&_deferred_origin_credit_bytes, frame_bytes,
-                        &_aggregate_overflow);
-        const uint64_t current = saturating_add (
-          &_application_current_accounted_bytes, frame_bytes,
-          &_aggregate_overflow);
-        const uint64_t total_leased = _application_lease_accounted_bytes.load (
-          std::memory_order_relaxed);
-        observe_peak (&_application_peak_accounted_bytes,
-                      UINT64_MAX - current < total_leased
-                        ? UINT64_MAX
-                        : current + total_leased);
-    } else {
-        const uint64_t current = saturating_add (
-          &_completion_current_accounted_bytes, frame_bytes,
-          &_aggregate_overflow);
-        observe_peak (&_completion_peak_accounted_bytes, current);
-    }
+    decoder_frame_reservation_t *const reservation = reservation_storage_;
+    reservation->queue_id = direction_->queue_id;
+    reservation->generation = direction_->generation.load (
+      std::memory_order_acquire);
+    reservation->frame_bytes = frame_bytes;
+    reservation->payload_bytes = request_.payload_bytes;
+    reservation->msg_flags = request_.msg_flags;
+    reservation->multipart_started_empty = multipart_started_empty;
+    reservation->active = true;
     *reservation_out_ = reservation;
     return 0;
 }
 
 int zlink::ctx_physical_queue_registry_t::commit_decoder_frame (
+  const physical_queue_handle_t &direction_,
   decoder_frame_reservation_t **reservation_, uint64_t payload_bytes_,
   unsigned char msg_flags_, bool counted_message_,
   bool *oversize_admission_out_)
@@ -932,95 +804,56 @@ int zlink::ctx_physical_queue_registry_t::commit_decoder_frame (
     }
     decoder_frame_reservation_t *reservation = *reservation_;
     *reservation_ = NULL;
-    const std::shared_ptr<decoder_frame_reservation_control_t> control =
-      reservation->control;
-    if (!control) {
-        LIBZLINK_DELETE (reservation);
-        errno = ETERM;
-        return -1;
-    }
-
-    std::lock_guard<std::mutex> control_lock (control->sync);
     bool oversize = false;
     int failure_errno = 0;
-    if (!control->accepting || control->registry != this) {
-        reservation->active = false;
-        reservation->queue.reset ();
-        reservation->control.reset ();
-        LIBZLINK_DELETE (reservation);
-        errno = ETERM;
-        return -1;
+    const bool same_generation =
+      direction_ && direction_->queue_id == reservation->queue_id
+      && direction_->endpoint_refs.load (std::memory_order_acquire) > 0
+      && direction_->generation.load (std::memory_order_acquire)
+           == reservation->generation;
+    if (!_decoder_accepting.load (std::memory_order_acquire)
+        || !reservation->active || !same_generation) {
+        failure_errno = ETERM;
+    } else if (reservation->payload_bytes != payload_bytes_
+               || reservation->msg_flags != msg_flags_) {
+        failure_errno = EPROTO;
     }
 
-    {
-        scoped_lock_t lock (_sync);
-        const physical_queue_handle_t direction = reservation->queue;
-        const std::map<uint64_t, decoder_frame_reservation_t *>::iterator token_it =
-          _decoder_reservations.find (reservation->id);
-        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-          direction ? _directions.find (reservation->queue_id)
-                    : _directions.end ();
-        if (!reservation->active
-            || token_it == _decoder_reservations.end ()
-            || token_it->second != reservation || !direction
-            || known == _directions.end ()
-            || known->second.get () != direction.get ()
-            || direction->queue_id != reservation->queue_id
-            || direction->endpoint_refs == 0
-            || direction->generation != reservation->generation) {
-            failure_errno = ETERM;
-        } else if (reservation->payload_bytes != payload_bytes_
-                   || reservation->msg_flags != msg_flags_) {
-            failure_errno = EPROTO;
-        }
-
-        if (failure_errno != 0) {
-            release_decoder_frame_unlocked (reservation);
-        } else {
-            const int lane = accounting_lane (*direction);
-            zlink_assert (lane == physical_queue_lane_application
-                          || lane == physical_queue_lane_completion);
-            if ((msg_flags_ & msg_t::more) == 0) {
-                const uint64_t message_bytes =
-                  direction->provisional_accounted_bytes.exchange (
-                    0, std::memory_order_relaxed);
-                zlink_assert (message_bytes >= reservation->frame_bytes);
-                saturating_add (&direction->committed_accounted_bytes,
-                                message_bytes, &_aggregate_overflow);
-                if (lane == physical_queue_lane_application) {
-                    subtract_exact (&_application_provisional_accounted_bytes,
-                                    message_bytes);
-                    const uint64_t hwm = direction->applied_hwm.load (
-                      std::memory_order_acquire);
-                    oversize = hwm > 0 && message_bytes > hwm
-                               && reservation->multipart_started_empty;
-                    if (oversize) {
-                        saturating_add (&_oversize_admission_count, 1,
-                                        &_aggregate_overflow);
-                        observe_peak (&_largest_oversize_message_bytes,
-                                      message_bytes);
-                    }
-                } else if (counted_message_) {
-                    saturating_add (
-                      &direction->completion_pending_message_count, 1,
-                      &_aggregate_overflow);
-                    saturating_add (&_completion_pending_message_count, 1,
-                                    &_aggregate_overflow);
-                }
+    if (failure_errno == 0) {
+        const int lane = accounting_lane (*direction_);
+        zlink_assert (lane == physical_queue_lane_application
+                      || lane == physical_queue_lane_completion);
+        if (lane == physical_queue_lane_application) {
+            // Application queues enforce byte admission and publish in-flight
+            // totals from their owning pipe. The reservation carries metadata
+            // only and does not mutate shared registry counters.
+        } else if ((msg_flags_ & msg_t::more) == 0) {
+            const uint64_t message_bytes =
+              direction_->provisional_accounted_bytes.exchange (
+                0, std::memory_order_relaxed);
+            const bool overflow = UINT64_MAX - message_bytes
+                                  < reservation->frame_bytes;
+            const uint64_t committed_bytes =
+              overflow ? UINT64_MAX
+                       : message_bytes + reservation->frame_bytes;
+            if (overflow)
+                _aggregate_overflow.store (true, std::memory_order_relaxed);
+            saturating_add (&direction_->committed_accounted_bytes,
+                            committed_bytes, &_aggregate_overflow);
+            if (counted_message_) {
+                saturating_add (&direction_->completion_pending_message_count,
+                                1, &_aggregate_overflow);
             }
-            if (lane == physical_queue_lane_application)
-                subtract_exact (&_deferred_origin_credit_bytes,
-                                reservation->frame_bytes);
-            _decoder_reservations.erase (token_it);
-            reservation->active = false;
+        } else {
+            saturating_add (&direction_->provisional_accounted_bytes,
+                            reservation->frame_bytes, &_aggregate_overflow);
         }
+        reservation->active = false;
     }
 
     if (oversize_admission_out_)
         *oversize_admission_out_ = oversize;
-    reservation->queue.reset ();
-    reservation->control.reset ();
-    LIBZLINK_DELETE (reservation);
+    reservation->reset ();
     if (failure_errno != 0) {
         errno = failure_errno;
         return -1;
@@ -1031,69 +864,19 @@ int zlink::ctx_physical_queue_registry_t::commit_decoder_frame (
 void zlink::ctx_physical_queue_registry_t::release_decoder_frame (
   decoder_frame_reservation_t **reservation_)
 {
-    release_decoder_frame_reservation (reservation_);
-}
-
-void zlink::ctx_physical_queue_registry_t::refund_decoder_reservation_unlocked (
-  decoder_frame_reservation_t *reservation_)
-{
-    if (!reservation_ || !reservation_->active || !reservation_->queue)
+    if (!reservation_ || !*reservation_)
         return;
-
-    physical_queue_record_t *const direction = reservation_->queue.get ();
-    subtract_exact (&direction->provisional_accounted_bytes,
-                    reservation_->frame_bytes);
-    const int lane = accounting_lane (*direction);
-    if (lane == physical_queue_lane_application) {
-        subtract_exact (&_application_provisional_accounted_bytes,
-                        reservation_->frame_bytes);
-        subtract_exact (&_application_current_accounted_bytes,
-                        reservation_->frame_bytes);
-        subtract_exact (&_deferred_origin_credit_bytes,
-                        reservation_->frame_bytes);
-    } else if (lane == physical_queue_lane_completion) {
-        subtract_exact (&_completion_current_accounted_bytes,
-                        reservation_->frame_bytes);
-    } else {
-        zlink_assert (false);
-    }
-    reservation_->active = false;
-    apply_deferred_hwm_if_drained (direction);
-}
-
-void zlink::ctx_physical_queue_registry_t::release_decoder_frame_unlocked (
-  decoder_frame_reservation_t *reservation_)
-{
-    if (!reservation_)
-        return;
-    const std::map<uint64_t, decoder_frame_reservation_t *>::iterator it =
-      _decoder_reservations.find (reservation_->id);
-    if (it == _decoder_reservations.end () || it->second != reservation_) {
-        reservation_->active = false;
-        return;
-    }
-    refund_decoder_reservation_unlocked (reservation_);
-    _decoder_reservations.erase (it);
+    decoder_frame_reservation_t *const reservation = *reservation_;
+    *reservation_ = NULL;
+    reservation->active = false;
+    reservation->reset ();
 }
 
 void zlink::ctx_physical_queue_registry_t::cancel_decoder_reservations_unlocked (
-  const physical_queue_handle_t &direction_, uint64_t generation_)
+  const physical_queue_handle_t &, uint64_t)
 {
-    if (!direction_)
-        return;
-    for (std::map<uint64_t, decoder_frame_reservation_t *>::iterator it =
-           _decoder_reservations.begin ();
-         it != _decoder_reservations.end ();) {
-        decoder_frame_reservation_t *const reservation = it->second;
-        if (reservation && reservation->queue.get () == direction_.get ()
-            && reservation->queue_id == direction_->queue_id
-            && reservation->generation == generation_) {
-            refund_decoder_reservation_unlocked (reservation);
-            it = _decoder_reservations.erase (it);
-        } else {
-            ++it;
-        }
-    }
+    //  Inline reservations carry metadata only; no queue charge is owned
+    //  until the frame is committed.
 }
 
 int zlink::ctx_physical_queue_registry_t::retain_dequeued_frame (
@@ -1127,10 +910,7 @@ int zlink::ctx_physical_queue_registry_t::retain_dequeued_frame (
           _directions.find (direction_->queue_id);
         if (direction_it == _directions.end ()
             || direction_it->second.get () != direction_.get ()
-            || accounting_lane (*direction_) != physical_queue_lane_application
-            || direction_->committed_accounted_bytes.load (
-                 std::memory_order_relaxed)
-                 < frame_bytes_) {
+            || accounting_lane (*direction_) != physical_queue_lane_application) {
             invalid_direction = true;
         } else {
             uint64_t origin_id = _next_retained_origin_id;
@@ -1151,8 +931,6 @@ int zlink::ctx_physical_queue_registry_t::retain_dequeued_frame (
             saturating_add (&direction_->held_dequeued_bytes, frame_bytes_,
                             &_aggregate_overflow);
             saturating_add (&direction_->held_dequeued_count, 1,
-                            &_aggregate_overflow);
-            saturating_add (&_deferred_origin_credit_bytes, frame_bytes_,
                             &_aggregate_overflow);
         }
     }
@@ -1187,8 +965,7 @@ bool zlink::ctx_physical_queue_registry_t::transfer_retained_origin_to_applicati
 
     subtract_exact (&direction->held_dequeued_bytes, origin_->bytes);
     subtract_exact (&direction->held_dequeued_count, 1);
-    subtract_exact (&direction->committed_accounted_bytes, origin_->bytes);
-    subtract_exact (&_application_current_accounted_bytes, origin_->bytes);
+    try_subtract_exact (&direction->committed_accounted_bytes, origin_->bytes);
     saturating_add (&direction->application_lease_accounted_bytes,
                     origin_->bytes, &_aggregate_overflow);
     saturating_add (&direction->application_lease_count, 1,
@@ -1232,10 +1009,8 @@ void zlink::ctx_physical_queue_registry_t::release_retained_origin (
             if (queue_token_owner) {
                 subtract_exact (&direction->held_dequeued_bytes, origin_->bytes);
                 subtract_exact (&direction->held_dequeued_count, 1);
-                subtract_exact (&direction->committed_accounted_bytes,
-                                origin_->bytes);
-                subtract_exact (&_application_current_accounted_bytes,
-                                origin_->bytes);
+                try_subtract_exact (&direction->committed_accounted_bytes,
+                                    origin_->bytes);
                 if (origin_->generation != direction->generation)
                     subtract_exact (
                       &direction->retired_held_dequeued_bytes,
@@ -1252,7 +1027,6 @@ void zlink::ctx_physical_queue_registry_t::release_retained_origin (
                       &direction->active_application_lease_bytes,
                       origin_->bytes);
             }
-            subtract_exact (&_deferred_origin_credit_bytes, origin_->bytes);
             publish_credit = !force_ && direction->endpoint_refs > 0
                              && direction->generation == origin_->generation;
             publish_credit_inline = publish_credit && queue_token_owner;
@@ -1535,20 +1309,6 @@ uint64_t zlink::ctx_physical_queue_registry_t::generation (
     return direction_->generation;
 }
 
-bool zlink::ctx_physical_queue_registry_t::snapshot_queue_empty (
-  const physical_queue_handle_t &direction_) const
-{
-    if (!direction_)
-        return false;
-    scoped_lock_t lock (_sync);
-    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-      _directions.find (direction_->queue_id);
-    return known != _directions.end ()
-           && known->second.get () == direction_.get ()
-           && direction_->endpoint_refs > 0
-           && current_queue_bytes (*direction_) == 0;
-}
-
 void zlink::ctx_physical_queue_registry_t::advance_generation (
   const physical_queue_handle_t &direction_)
 {
@@ -1605,16 +1365,15 @@ void zlink::ctx_physical_queue_registry_t::release_endpoint (
             // Normal read, rollback, hiccup and termination paths publish
             // prompt refunds. Last-endpoint retirement is the sole lifecycle
             // backstop for record-owned charge that can no longer be observed.
-            const uint64_t provisional =
-              direction->provisional_accounted_bytes.exchange (
-                0, std::memory_order_relaxed);
-            const uint64_t committed =
-              direction->committed_accounted_bytes.load (
-                std::memory_order_relaxed);
+            direction->provisional_accounted_bytes.store (
+              0, std::memory_order_relaxed);
             const uint64_t held = direction->held_dequeued_bytes.load (
               std::memory_order_relaxed);
-            zlink_assert (committed >= held);
-            const uint64_t queued_committed = committed - held;
+            // Application queues account normal in-flight bytes in the pipe,
+            // so a retained frame can have no matching registry commitment
+            // while its endpoint is alive. Once the last endpoint retires,
+            // promote the held bytes into the registry-owned commitment so
+            // snapshots keep observing them until the retained token releases.
             direction->committed_accounted_bytes.store (
               held, std::memory_order_relaxed);
             const uint64_t completion_pending =
@@ -1622,37 +1381,13 @@ void zlink::ctx_physical_queue_registry_t::release_endpoint (
                 0, std::memory_order_relaxed);
             const int lane = accounting_lane (*direction);
             if (lane == physical_queue_lane_application) {
-                if (provisional > 0) {
-                    subtract_exact (
-                      &_application_provisional_accounted_bytes, provisional);
-                    subtract_exact (&_application_current_accounted_bytes,
-                                    provisional);
-                }
-                if (queued_committed > 0)
-                    subtract_exact (&_application_current_accounted_bytes,
-                                    queued_committed);
                 zlink_assert (completion_pending == 0);
             } else if (lane == physical_queue_lane_completion) {
                 zlink_assert (held == 0);
-                if (provisional > 0)
-                    subtract_exact (&_completion_current_accounted_bytes,
-                                    provisional);
-                if (queued_committed > 0)
-                    subtract_exact (&_completion_current_accounted_bytes,
-                                    queued_committed);
-                if (completion_pending > 0)
-                    subtract_exact (&_completion_pending_message_count,
-                                    completion_pending);
             } else {
                 zlink_assert (lane == physical_queue_lane_monitor);
                 zlink_assert (held == 0);
                 zlink_assert (completion_pending == 0);
-                if (provisional > 0)
-                    subtract_exact (&_monitor_current_accounted_bytes,
-                                    provisional);
-                if (queued_committed > 0)
-                    subtract_exact (&_monitor_current_accounted_bytes,
-                                    queued_committed);
             }
             erase_direction_if_retired_and_drained_unlocked (direction);
         }
@@ -1701,11 +1436,65 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
            _directions.begin ();
          it != _directions.end (); ++it) {
         const physical_queue_record_t &direction = *it->second;
+        const int lane = direction.lane.load (std::memory_order_acquire);
+        const uint64_t provisional =
+          direction.provisional_accounted_bytes.load (
+            std::memory_order_relaxed);
+        const uint64_t committed = direction.committed_accounted_bytes.load (
+          std::memory_order_relaxed);
+        if (lane == physical_queue_lane_application) {
+            current.application_provisional_accounted_bytes =
+              add_snapshot_value (
+                current.application_provisional_accounted_bytes, provisional,
+                &current.aggregate_overflow);
+            current.application_current_accounted_bytes = add_snapshot_value (
+              current.application_current_accounted_bytes, provisional,
+              &current.aggregate_overflow);
+            current.application_current_accounted_bytes = add_snapshot_value (
+              current.application_current_accounted_bytes, committed,
+              &current.aggregate_overflow);
+            const uint64_t lease =
+              direction.application_lease_accounted_bytes.load (
+                std::memory_order_relaxed);
+            current.application_lease_accounted_bytes = add_snapshot_value (
+              current.application_lease_accounted_bytes, lease,
+              &current.aggregate_overflow);
+            current.outstanding_application_lease_count = add_snapshot_value (
+              current.outstanding_application_lease_count,
+              direction.application_lease_count.load (
+                std::memory_order_relaxed),
+              &current.aggregate_overflow);
+            current.deferred_origin_credit_bytes = add_snapshot_value (
+              current.deferred_origin_credit_bytes,
+              direction.held_dequeued_bytes.load (std::memory_order_relaxed),
+              &current.aggregate_overflow);
+            current.deferred_origin_credit_bytes = add_snapshot_value (
+              current.deferred_origin_credit_bytes, lease,
+              &current.aggregate_overflow);
+        } else if (lane == physical_queue_lane_completion) {
+            current.completion_current_accounted_bytes = add_snapshot_value (
+              current.completion_current_accounted_bytes, provisional,
+              &current.aggregate_overflow);
+            current.completion_current_accounted_bytes = add_snapshot_value (
+              current.completion_current_accounted_bytes, committed,
+              &current.aggregate_overflow);
+            current.completion_pending_message_count = add_snapshot_value (
+              current.completion_pending_message_count,
+              direction.completion_pending_message_count.load (
+                std::memory_order_relaxed),
+              &current.aggregate_overflow);
+        } else if (lane == physical_queue_lane_monitor) {
+            current.monitor_current_accounted_bytes = add_snapshot_value (
+              current.monitor_current_accounted_bytes, provisional,
+              &current.aggregate_overflow);
+            current.monitor_current_accounted_bytes = add_snapshot_value (
+              current.monitor_current_accounted_bytes, committed,
+              &current.aggregate_overflow);
+        }
         if (direction.endpoint_refs == 0) {
             current.retired_direction_count +=
               direction.retained_origin_counts_by_generation.size ();
-        } else if (direction.lane.load (std::memory_order_acquire)
-                   == physical_queue_lane_application) {
+        } else if (lane == physical_queue_lane_application) {
             ++current.active_application_direction_count;
             for (std::map<uint64_t, uint64_t>::const_iterator generation_it =
                    direction.retained_origin_counts_by_generation.begin ();
@@ -1715,11 +1504,9 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
                 if (generation_it->first != direction.generation)
                     ++current.retired_direction_count;
             }
-        } else if (direction.lane.load (std::memory_order_acquire)
-                   == physical_queue_lane_completion) {
+        } else if (lane == physical_queue_lane_completion) {
             ++current.active_completion_direction_count;
-        } else if (direction.lane.load (std::memory_order_acquire)
-                   == physical_queue_lane_monitor) {
+        } else if (lane == physical_queue_lane_monitor) {
             const uint64_t applied = direction.applied_hwm.load (
               std::memory_order_acquire);
             zlink_assert (applied > 0);
@@ -1728,26 +1515,19 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
               &current.aggregate_overflow);
         }
     }
-    current.application_current_accounted_bytes =
-      _application_current_accounted_bytes.load (std::memory_order_relaxed);
-    current.application_provisional_accounted_bytes =
-      _application_provisional_accounted_bytes.load (std::memory_order_relaxed);
+    uint64_t sampled_application_total =
+      current.application_current_accounted_bytes;
+    sampled_application_total = add_snapshot_value (
+      sampled_application_total, current.application_lease_accounted_bytes,
+      &current.aggregate_overflow);
+    observe_peak (&_application_peak_accounted_bytes,
+                  sampled_application_total);
     current.application_peak_accounted_bytes =
       _application_peak_accounted_bytes.load (std::memory_order_relaxed);
-    current.completion_current_accounted_bytes =
-      _completion_current_accounted_bytes.load (std::memory_order_relaxed);
+    observe_peak (&_completion_peak_accounted_bytes,
+                  current.completion_current_accounted_bytes);
     current.completion_peak_accounted_bytes =
       _completion_peak_accounted_bytes.load (std::memory_order_relaxed);
-    current.completion_pending_message_count =
-      _completion_pending_message_count.load (std::memory_order_relaxed);
-    current.monitor_current_accounted_bytes =
-      _monitor_current_accounted_bytes.load (std::memory_order_relaxed);
-    current.application_lease_accounted_bytes =
-      _application_lease_accounted_bytes.load (std::memory_order_relaxed);
-    current.outstanding_application_lease_count =
-      _outstanding_application_lease_count.load (std::memory_order_relaxed);
-    current.deferred_origin_credit_bytes =
-      _deferred_origin_credit_bytes.load (std::memory_order_relaxed);
     current.oversize_admission_count =
       _oversize_admission_count.load (std::memory_order_relaxed);
     current.largest_oversize_message_bytes =
@@ -1767,31 +1547,44 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
 void zlink::ctx_physical_queue_registry_t::reset_metrics ()
 {
     scoped_lock_t lock (_sync);
-    const uint64_t queue_current =
-      _application_current_accounted_bytes.load (std::memory_order_relaxed);
-    const uint64_t lease_current =
-      _application_lease_accounted_bytes.load (std::memory_order_relaxed);
-    const uint64_t application_current =
-      UINT64_MAX - queue_current < lease_current ? UINT64_MAX
-                                                 : queue_current + lease_current;
+    uint64_t application_current = 0;
+    uint64_t completion_current = 0;
+    bool overflow = false;
+    for (std::map<uint64_t, physical_queue_handle_t>::const_iterator it =
+           _directions.begin ();
+         it != _directions.end (); ++it) {
+        const physical_queue_record_t &direction = *it->second;
+        const int lane = direction.lane.load (std::memory_order_acquire);
+        uint64_t direction_current =
+          direction.provisional_accounted_bytes.load (
+            std::memory_order_relaxed);
+        direction_current = add_snapshot_value (
+          direction_current,
+          direction.committed_accounted_bytes.load (std::memory_order_relaxed),
+          &overflow);
+        if (lane == physical_queue_lane_application) {
+            direction_current = add_snapshot_value (
+              direction_current,
+              direction.application_lease_accounted_bytes.load (
+                std::memory_order_relaxed),
+              &overflow);
+            application_current = add_snapshot_value (
+              application_current, direction_current, &overflow);
+        } else if (lane == physical_queue_lane_completion) {
+            completion_current = add_snapshot_value (
+              completion_current, direction_current, &overflow);
+        }
+    }
     _application_peak_accounted_bytes.store (application_current,
                                               std::memory_order_relaxed);
-    observe_peak (&_application_peak_accounted_bytes,
-                  _application_current_accounted_bytes.load (
-                    std::memory_order_relaxed));
-    const uint64_t completion_current =
-      _completion_current_accounted_bytes.load (std::memory_order_relaxed);
     _completion_peak_accounted_bytes.store (completion_current,
                                              std::memory_order_relaxed);
-    observe_peak (&_completion_peak_accounted_bytes,
-                  _completion_current_accounted_bytes.load (
-                    std::memory_order_relaxed));
     _oversize_admission_count.store (0, std::memory_order_relaxed);
     _largest_oversize_message_bytes.store (0, std::memory_order_relaxed);
     _total_admission_attempts.store (0, std::memory_order_relaxed);
     _first_blocked_admission_attempts.store (0,
                                               std::memory_order_relaxed);
-    _aggregate_overflow.store (false, std::memory_order_relaxed);
+    _aggregate_overflow.store (overflow, std::memory_order_relaxed);
 }
 
 void zlink::ctx_physical_queue_registry_t::stop_retained_transfers ()
@@ -1804,22 +1597,7 @@ void zlink::ctx_physical_queue_registry_t::stop_retained_transfers ()
 
 void zlink::ctx_physical_queue_registry_t::force_cancel_decoder_reservations ()
 {
-    const std::shared_ptr<decoder_frame_reservation_control_t> control =
-      _decoder_control;
-    if (!control)
-        return;
-
-    std::lock_guard<std::mutex> control_lock (control->sync);
-    control->accepting = false;
-    {
-        scoped_lock_t registry_lock (_sync);
-        while (!_decoder_reservations.empty ()) {
-            decoder_frame_reservation_t *const reservation =
-              _decoder_reservations.begin ()->second;
-            release_decoder_frame_unlocked (reservation);
-        }
-    }
-    control->registry = NULL;
+    _decoder_accepting.store (false, std::memory_order_release);
 }
 
 void zlink::ctx_physical_queue_registry_t::force_release_retained_credit ()

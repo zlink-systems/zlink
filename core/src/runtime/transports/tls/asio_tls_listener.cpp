@@ -299,7 +299,7 @@ void zlink::asio_tls_listener_t::create_engine (
     //  Choose I/O thread to run engine in
     io_thread_t *io_thread = options.type == ZLINK_CORE_SOCKET_STREAM
                                ? choose_io_thread_stream (options.affinity)
-                               : choose_io_thread (options.affinity);
+                               : choose_io_thread_transport (options.affinity);
     zlink_assert (io_thread);
 
     //  Create and launch a session

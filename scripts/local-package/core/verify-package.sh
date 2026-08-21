@@ -4,10 +4,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
 prefix=""
+allow_version_mismatch=0
 
 usage() {
   cat <<'EOF'
-Usage: verify-package.sh --prefix ABSOLUTE_DIR
+Usage: verify-package.sh --prefix ABSOLUTE_DIR [--allow-version-mismatch]
 
 Checks the installed Core package version, public headers, exact runtime,
 runtime ABI SONAME, and a clean C consumer. The current release is 0.11.1 and
@@ -18,6 +19,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix) prefix="${2:-}"; shift 2 ;;
+    --allow-version-mismatch) allow_version_mismatch=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -72,7 +74,8 @@ NODE
 core_version="${metadata[0]}"
 runtime="${metadata[1]}"
 runtime_sha="${metadata[2]}"
-[[ "$core_version" = "$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")" ]] || {
+[[ "$core_version" = "$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")" \
+   || "$allow_version_mismatch" -eq 1 ]] || {
   echo "Installed Core version does not match repository VERSION" >&2
   exit 1
 }

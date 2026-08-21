@@ -57,6 +57,19 @@ void format_blob_routing_id_debug (const zlink::blob_t &routing_id_, char *buf_,
 
 }
 
+int zlink::router_t::finish_prefetched_credit (
+  retained_credit_token_t *token_out_)
+{
+    if (!_prefetched_credit_deferred)
+        return 0;
+    zlink_assert (_current_in);
+    const int rc = _current_in->finish_deferred_read (
+      &_prefetched_msg, token_out_);
+    _current_in->release_lifetime_ref ();
+    _prefetched_credit_deferred = false;
+    return rc;
+}
+
 void zlink::router_t::copy_router_pipe_source_rid (pipe_t *pipe_,
                                                     zlink_routing_id_t *out_) const
 {
@@ -211,9 +224,11 @@ int zlink::router_t::xrecv_with_credit (
             errno_assert (rc == 0);
             _routing_id_sent = true;
         } else {
+            if (finish_prefetched_credit (token_out_) != 0)
+                return -1;
             const int rc = msg_->move (_prefetched_msg);
             errno_assert (rc == 0);
-            if (token_out_)
+            if (token_out_ && !_prefetched_credit.empty ())
                 *token_out_ = std::move (_prefetched_credit);
             else
                 _prefetched_credit.reset ();
@@ -277,8 +292,66 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
                                   uint64_t *connection_id_out_,
                                   pipe_t **source_pipe_out_)
 {
-    return xrecv_routed_with_credit (
-      msg_, source_rid_out_, connection_id_out_, source_pipe_out_, NULL);
+    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
+    if (connection_id_out_)
+        *connection_id_out_ = 0;
+    if (source_pipe_out_)
+        *source_pipe_out_ = NULL;
+    if (_prefetched) {
+        if (source_rid_out_)
+            copy_router_pipe_source_rid (_current_in, source_rid_out_);
+        if (connection_id_out_ && _current_in)
+            *connection_id_out_ =
+              _prefetched_msg.transport_connection_id ();
+        if (source_pipe_out_)
+            *source_pipe_out_ = _current_in;
+
+        const int rc = msg_->move (_prefetched_msg);
+        errno_assert (rc == 0);
+        _prefetched = false;
+        _routing_id_sent = true;
+        _more_in = (msg_->flags () & msg_t::more) != 0;
+
+        if (!_more_in) {
+            if (_terminate_current_in) {
+                _current_in->terminate (true);
+                _terminate_current_in = false;
+            }
+            _current_in = NULL;
+        }
+        return 0;
+    }
+
+    pipe_t *pipe = NULL;
+    int rc = _fq.recvpipe (msg_, &pipe);
+    while (rc == 0 && msg_->is_routing_id ())
+        rc = _fq.recvpipe (msg_, &pipe);
+    if (rc != 0)
+        return -1;
+
+    zlink_assert (pipe != NULL);
+    if (!_more_in) {
+        _current_in = pipe;
+        if (source_rid_out_)
+            copy_router_pipe_source_rid (pipe, source_rid_out_);
+        _routing_id_sent = true;
+    } else if (_current_in && source_rid_out_) {
+        copy_router_pipe_source_rid (_current_in, source_rid_out_);
+    }
+    if (connection_id_out_)
+        *connection_id_out_ = msg_->transport_connection_id ();
+    if (source_pipe_out_)
+        *source_pipe_out_ = _current_in;
+
+    _more_in = (msg_->flags () & msg_t::more) != 0;
+    if (!_more_in) {
+        if (_terminate_current_in) {
+            _current_in->terminate (true);
+            _terminate_current_in = false;
+        }
+        _current_in = NULL;
+    }
+    return 0;
 }
 
 int zlink::router_t::xrecv_routed_retained (
@@ -310,9 +383,11 @@ int zlink::router_t::xrecv_routed_with_credit (
         if (source_pipe_out_)
             *source_pipe_out_ = _current_in;
 
+        if (finish_prefetched_credit (token_out_) != 0)
+            return -1;
         const int rc = msg_->move (_prefetched_msg);
         errno_assert (rc == 0);
-        if (token_out_)
+        if (token_out_ && !_prefetched_credit.empty ())
             *token_out_ = std::move (_prefetched_credit);
         else
             _prefetched_credit.reset ();
@@ -331,9 +406,11 @@ int zlink::router_t::xrecv_routed_with_credit (
     }
 
     pipe_t *pipe = NULL;
-    int rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
-                        : _fq.recvpipe (msg_, &pipe);
+    int rc = _fq.recvpipe (msg_, &pipe);
 
+    // Routing-id frames are Core-owned metadata and are never exposed to the
+    // caller. Return their byte credit immediately; only retain the first
+    // caller-visible frame when a public HWM lease was requested.
     while (rc == 0 && msg_->is_routing_id ())
         rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
                         : _fq.recvpipe (msg_, &pipe);
@@ -397,18 +474,15 @@ bool zlink::router_t::xhas_in ()
         return true;
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe_retained (&_prefetched_msg, &pipe,
-                                    &_prefetched_credit);
+    int rc = _fq.recvpipe (&_prefetched_msg, &pipe);
 
     while (rc == 0 && _prefetched_msg.is_routing_id ())
-        rc = _fq.recvpipe_retained (&_prefetched_msg, &pipe,
-                                    &_prefetched_credit);
+        rc = _fq.recvpipe (&_prefetched_msg, &pipe);
 
     if (rc != 0)
         return false;
 
     zlink_assert (pipe != NULL);
-
     const blob_t &routing_id = pipe->get_routing_id ();
     rc = _prefetched_id.init_size (routing_id.size ());
     errno_assert (rc == 0);

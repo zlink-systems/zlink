@@ -295,6 +295,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
 
     pipe_->set_router_socket_routing_id (routing_id_);
     add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_);
+    cache_completion_pipe_routing_id (pipe_);
     if (pipe_->get_transport_pair_id () != 0
         && pipe_->get_transport_lane () == transport_lane_application
         && completion_pipe_for_transport_pair (

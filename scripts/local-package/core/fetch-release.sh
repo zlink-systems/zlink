@@ -8,11 +8,13 @@ version="${ZLINK_CORE_RELEASE_VERSION:-$repo_version}"
 cache_root="${ZLINK_CORE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/zlink/core}"
 platform="${ZLINK_CORE_RELEASE_PLATFORM:-}"
 force=0
+allow_version_mismatch=0
 
 usage() {
   cat <<'EOF'
 Usage: fetch-release.sh [--version VERSION] [--platform PLATFORM]
                         [--cache-dir ABSOLUTE_DIR] [--force]
+                        [--allow-version-mismatch]
 
 Downloads a tagged Core release, verifies its release provenance and platform
 checksums, and materializes a standard Core install prefix. The final prefix
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     --platform) platform="${2:-}"; shift 2 ;;
     --cache-dir) cache_root="${2:-}"; shift 2 ;;
     --force) force=1; shift ;;
+    --allow-version-mismatch) allow_version_mismatch=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -38,7 +41,7 @@ done
   echo "Core release version must be MAJOR.MINOR.PATCH: ${version:-<missing>}" >&2
   exit 2
 }
-[[ "$version" = "$repo_version" ]] || {
+[[ "$version" = "$repo_version" || "$allow_version_mismatch" -eq 1 ]] || {
   echo "Core release version $version must match repository VERSION $repo_version" >&2
   exit 2
 }
@@ -289,7 +292,11 @@ fs.writeFileSync(
 NODE
 
 if [[ "$platform" == linux-* ]]; then
-  PREFIX="$stage" bash "$script_dir/verify-package.sh" --prefix "$stage" >/dev/null
+  verify_args=(--prefix "$stage")
+  if [[ "$allow_version_mismatch" -eq 1 ]]; then
+    verify_args+=(--allow-version-mismatch)
+  fi
+  PREFIX="$stage" bash "$script_dir/verify-package.sh" "${verify_args[@]}" >/dev/null
 fi
 
 rm -rf "$prefix"

@@ -29,7 +29,8 @@ stream_sched_mode_t parse_stream_session_sched_mode ()
 }
 
 zlink::ctx_io_thread_registry_t::ctx_io_thread_registry_t () :
-    _next_io_thread (0), _next_stream_io_thread (0)
+    _next_io_thread (0), _next_transport_io_thread (0),
+    _next_stream_io_thread (0)
 {
 }
 
@@ -37,6 +38,7 @@ void zlink::ctx_io_thread_registry_t::clear ()
 {
     _threads.clear ();
     _next_io_thread.set (0);
+    _next_transport_io_thread.set (0);
     _next_stream_io_thread.set (0);
 }
 
@@ -83,6 +85,24 @@ zlink::io_thread_t *zlink::ctx_io_thread_registry_t::choose (uint64_t affinity_)
     }
 
     return selected_io_thread;
+}
+
+zlink::io_thread_t *
+zlink::ctx_io_thread_registry_t::choose_transport (uint64_t affinity_)
+{
+    if (_threads.empty ())
+        return NULL;
+
+    const io_threads_t::size_type size = _threads.size ();
+    const io_threads_t::size_type start_index =
+      static_cast<io_threads_t::size_type> (
+        _next_transport_io_thread.add (1) % size);
+    for (io_threads_t::size_type n = 0; n != size; ++n) {
+        const io_threads_t::size_type i = (start_index + n) % size;
+        if (!affinity_ || (affinity_ & (uint64_t (1) << i)))
+            return _threads[i];
+    }
+    return NULL;
 }
 
 zlink::io_thread_t *zlink::ctx_io_thread_registry_t::choose_stream (uint64_t affinity_)

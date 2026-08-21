@@ -156,10 +156,21 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
     while (rc == 0 || errno == EINTR) {
         if (rc == 0) {
             // Pipe commands mutate inbound state before reaching the socket
-            // sink. Keep each transition, fq activation and epoch update in
-            // the same receive-state critical section as public xrecv().
-            scoped_lock_t receive_owner (receive.sync);
-            cmd.destination->process_command (cmd);
+            // sink.  When the monitor-owned mailbox runs on an I/O thread,
+            // it can also attach or detach a pipe while a public send uses a
+            // socket-specific distribution state.  Serialize that mutation
+            // with the public send scope as well as the receive state.
+            if (async_executor
+                && (options.type == ZLINK_CORE_SOCKET_PUB
+                    || options.type == ZLINK_CORE_SOCKET_XPUB)) {
+                socket_public_api_lock_scope_t api_owner (
+                  lifecycle_coordinator ());
+                scoped_lock_t receive_owner (receive.sync);
+                cmd.destination->process_command (cmd);
+            } else {
+                scoped_lock_t receive_owner (receive.sync);
+                cmd.destination->process_command (cmd);
+            }
             processed_command = true;
         }
         rc = _mailbox->recv (&cmd, 0);
