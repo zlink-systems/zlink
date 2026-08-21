@@ -128,6 +128,39 @@
 - 병행: 1~3(canonical)·4(코덱)·5(안정화)는 서로 다른 세션에서 동시 진행 가능(파일 소유권 분리).
 - **고정 tail(사용자 확정)**: 6 → 7 → 8 → **9 모든 e2e(맨 마지막 작업)** → 10 sign-off.
 
+## 진행 현황 체크리스트
+
+상태 표기: `[ ]` 미착수 · `[~]` 진행 중 · `[x]` 완료(커밋해시 병기). **카드 DoD 충족 시 즉시
+체크하고 커밋해시를 적는다**(진행 규칙의 커밋·push 원칙과 동일). sol CLEAN + Claude 독립검증
+통과가 `[x]`의 조건이다.
+
+**이미 랜딩된 기반(참고, 이 로드맵 이전)**: spec 51 §9 admission-lifecycle ruling `8b8f3c9a36` ·
+.NET 28 수신 decouple+seam 바인딩 제거(clean subset) `ab26a6527b` · node/java canonical 발신(S4c)
+· 4언어 canonical 수신자 골격(단 .NET wire-ingress 미연결=단계 1) · S4d seam 타입 `0407b3e4bc`.
+
+- [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** (agent 완료, Claude 검증+sol 대기)
+- [ ] **단계 2 — canonical 4언어 수신·발신 활성화**
+  - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영)
+  - [ ] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14)
+  - [ ] 2c [A4] C++ 발신(S4c-cpp)
+- [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
+  - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b)
+  - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e)
+  - [ ] 3c [A7] 사설 dialect 제거(H-15/S5)
+- [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)**
+- [ ] **단계 5 — [B0] 하니스 안정화**
+  - [ ] H-10 dotnet→java relocation 레이스
+  - [ ] TicTacToe 간헐 flake
+  - [ ] D1 ST-C4 fault-injection variant
+- [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green**
+- [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)**
+- [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비**
+- [ ] **단계 9 — 모든 e2e 추가·구현·실행 (맨 마지막 작업, 항목별 4언어 lockstep)**
+  - [ ] B1 config-6 (14 시나리오)
+  - [ ] B2 config-10 Track E/G/H/I (~28 시나리오)
+  - [ ] B3 F e2e_inventory backlog
+- [ ] **단계 10 — [D5] 최종 완료 판정(sign-off)**
+
 ---
 
 # 단계 1 — [A1] .NET canonical 28 수신자 wire-ingress 연결  ⟶ (진행 중)
