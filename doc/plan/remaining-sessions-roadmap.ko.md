@@ -161,7 +161,7 @@
 - [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (sol NOT-CLEAN 7건 — 랜딩 보류, #1 §9 membership tension advisor 판정 대기)
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
-  - [ ] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일`
+  - [~] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` (agent 진행 중, A1과 병렬)
   - [ ] 2c [A4] C++ 발신(S4c-cpp) `cpp단일`
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
