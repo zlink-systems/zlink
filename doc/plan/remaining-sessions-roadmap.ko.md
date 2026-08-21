@@ -344,6 +344,32 @@
   6. **`all` 편입**: 통과 스테이지만(무음 금지, flake는 명시 스킵).
 - **주의**: 대형·독립 세션 규모. host User-Spot mode 신설(특히 cpp 신규 mode)은 고난도 → sol. 각 스테이지 그린을
   Claude가 독립 재현. multi-attempt 결함 시 [[canonical-multiattempt-design-trap]] 원칙(즉석 수정 금지) 준수.
+- **stage-1 설계(리서치 매핑 완료, execution-ready)**:
+  - **기존 relocation 스테이지는 actorJoin(28)을 안 씀** — Entry-Spot actor + whole-node `relocate()`이며 `joinSpot`
+    호출·28 admission 자체가 없다. 3b는 **진짜 새 종류**(User-Spot JoinSpot)를 신설한다.
+  - **Node source mode `user-spot-join-source`**: Entry Spot로 source actor 생성 후 handler에서
+    `actor.context.joinSpot(targetSpotId, request).timeout(..).defer()` 호출 → remote User-Spot join
+    (actor-remote-joiner.ts:97 → actor-local-native-join.ts:330). canonical 선택은 런타임 자동
+    (authority fence + no bound session + peer capability, actor-local-native-join.ts:357;
+    peer lifecycle gen 일치 + service-wire capability, service-stateful-runtime.ts:5039).
+  - **.NET target mode `user-spot-target`**: `AddSpotFactory<RelocationUserSpot>`(entry-spot mode 인프라 재사용),
+    ready 전에 고정 target User Spot 생성(`spots.GetOrCreate(spotId, UserSpotType).InMesh(..).Request(..).Async`,
+    ActorNodeEndpoints.cs:422 패턴). `OnActorJoinAsync`가 admission+typed app-reply, `OnJoinedActorAsync`가
+    lifecycle 마커. 수신은 `ZLinkSpotActorJoinDispatcher`→`AdmitCanonicalActorJoinAsync`.
+  - **canonical-only 관측 신호(리서치 최대 리스크 → 해소책)**: host 마커만으론 canonical vs 사설 fallback 구분 불가.
+    **기존 message-flow 트레이싱(spec 26, [[zlink-debugging-message-flow]])을 사용** — .NET dispatch는 이미
+    `ZLinkFlowContext.Enter`(ZLinkSpotActorJoinDispatcher.cs:35), Node는 `decodeActorJoin28`
+    (service-stateful-runtime.ts:1929)에서 canonical 분기. Flow capture를 켜고 **command-28 decode/admit 지점의
+    canonical-특화 flow 이벤트**를 스테이지 성공 조건에 넣는다(새 콘솔 계측 추가 금지). 구현자가 정확한 flow 이벤트 확정.
+  - **multi-attempt 훅(A5 §3a 실증)**: 공개 `joinSpot().defer()` 2회 금지(deferred-join이 concurrent pending 거부).
+    **test-only host ingress 송신**으로 같은 actor identity·distinct correlation의 canonical attempt 2개를 실제
+    `joinActorSpotCanonical` transport로 겹치게 발사 → newest-wins((ActorId,ObjectGeneration) 키) 관측. 사설 JSON
+    hand-encode 금지, 반드시 실제 transport 사용.
+  - **런너 배선**: .NET `user-spot-target` 먼저 기동→ready+`user-spot-created` 대기→Node `user-spot-join-source`.
+    전용 selector `user-spot-join-node-dotnet`(기존 `relocation-node-dotnet`에 접지 말 것 — 다른 admission 경계).
+  - **구현 전 해소할 불확실성**: ① canonical-only observable(위 Flow로) ② target User Spot가 source 시작 전 완성
+    (placement가 source 택하거나 fallback 방지) ③ automatic discovery 유지(PeerConnections.Connect 추가 시 .NET
+    maintenance-relocation 제약 재현) ④ 런너의 "cross-lang User-Spot reply 비호환" 주석은 **stale**, 무시.
 
 ## 3c. [A7] 사설 dialect 제거 (H-15 / S5)
 
