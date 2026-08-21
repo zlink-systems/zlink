@@ -159,7 +159,7 @@
 동시) · **`혼합`**. (kotlin은 java 프레임워크 공유 — 샘플만 kotlin.) 단일언어 단계도 종료 시
 **L1 parity(다른 3언어 대조)** 필수.
 
-- [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (sol NOT-CLEAN 7건 — 랜딩 보류, #1 §9 membership tension advisor 판정 대기)
+- [ ] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (이전 diff는 branch-A 오모델로 폐기; §15 §4.2에 충실히 재구현 예정. robustness 요구 #2~#6 포함)
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
   - [~] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` (agent 진행 중, A1과 병렬)
@@ -184,9 +184,9 @@
 
 ---
 
-# 단계 1 — [A1] .NET canonical 28 수신자 wire-ingress 연결  ⟶ (진행 중)
+# 단계 1 — [A1] .NET canonical 28 수신자 wire-ingress 연결
 
-**근거 스펙**: 51 §9(Receiver Stable-Type Resolution) · 15 §4.2 · 21 §2.4.
+**근거 스펙(권위)**: **15 §4.2**(actor-join 순서 — admission 단일 권위: 28 승인에서 relocation temp queue 등록 + factory 준비 + Store 타입해석, reply에 chunk limit; Restore(40)가 재사용) · 51 §9 Receiver Stable-Type Resolution · 21 §2.4. **주의**: 이전 세션의 branch-A 모델(28은 reservation 안 만듦·40이 소유)은 §15 §4.2와 충돌해 **폐기**됨(스펙에서 제거). A1은 §15 §4.2에 충실히 구현한다.
 
 - **문제**: `ZLinkManagedMeshNode.ProcessReceivedAsync`의 수신 whitelist가 ActorJoin(28)을
   제외 → wire로 온 28이 protocol error로 drop. 수신 경로 `PrepareCanonicalActorJoinAsync`
