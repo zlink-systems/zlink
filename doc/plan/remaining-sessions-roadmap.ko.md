@@ -273,12 +273,22 @@
     12 + 편입 후 10)에서 레이스 재현 0회 — 문서화 이후의 다수 relocation 수정으로 이미 해소된 것으로
     판정. 실제 잔여 문제는 스테이지가 기본 `all`에 호출되지 않던 것 → 명시 편입(10/10 그린, 무음
     아님·근거 run-dir 보존). 러너 diff는 Java 방향 작업과 같은 파일이라 그 커밋에 동승 예정.
-  - [~] TicTacToe 간헐 flake (샘플별) — **STOP 판정 대기**: Node TTT 8회 중 6회 실패(기록된
-    baseline 1/4보다 악화). 실패모드 A(4/8)= target restore 'Relocation authority contains another
-    published root'(service-relocation-host-runtime.ts:3334/:3403)→wire 17, 모드 B(2/8)=
-    staleDescriptor 후 admission 105. **framework relocation 경합이지 샘플 타이밍 아님** — 재시도/
-    대기 조정으로 가리면 안 됨. 오늘 커밋(de17ac7179 ZLJR savedWork 등)의 회귀인지 worktree
-    baseline(659436cc4c) 8회 대조 진행 중 → 판정 후 수정 방향 결정.
+  - [~] TicTacToe 간헐 flake (샘플별) — **판정 완료(2026-08-22, worktree 대조)**: 실패모드 A는
+    **`de17ac7179` 회귀**(baseline 0/8 vs HEAD 4/8). 기전: ① deferred-join journal이 binary ZLAR을
+    쓰게 되면서(F1 fix) relocation host가 **모든 ZLAR을 '기존 relocation root'로 오인**(journal
+    판별 inventory-digest 검사는 journal 내부에만, deferred-join-accepted-journal.ts:573/:589) ②
+    target finalize가 admission을 연 뒤(2617) 이전 publication root를 늦게 지우는(2632) 창에서
+    다음 relocation 예약이 stale root를 읽음(3417). **수정 방향(판정)**: relocation host의 root
+    독해가 journal-root를 구분·무시하도록(표현 판별 — journal 마커/digest를 reader 쪽에서 확인),
+    admission-open-vs-root-clear 순서는 별도 검토. baseline의 3/8 'B-like'(105/errno2, stale 선행
+    없음)는 기존 admission 결함으로 분리 등재. — Node provisional-admission 작업 완료 후 착수
+    (같은 파일 소유권).
+  - **[판정] relocation envelope applicationVersion 정본(2026-08-22)**: spec 21(:443 'Application
+    배포 순번')·28 §4.1(target의 application version 지원 확인) — envelope/Prepare의
+    `applicationVersion`은 **application 배포 순번**이다. **Node가 root envelope에
+    aggregateGeneration을 기입(service-relocation-runtime.ts:143)한 것이 비적합**(node→java 셀
+    red의 원인 — Java는 envelope==Prepare 동등성 검증, 적합). .NET의 미검증은 minor L1 gap(백로그).
+    Node 수정을 TTT 회귀 수정과 같은 태스크로 진행(파일 인접).
   - [~] D1 ST-C4 fault-injection variant (cpp) — 계약 대조·seam 조사 중(opus)
 - [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
 - [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어`
