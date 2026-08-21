@@ -19,7 +19,6 @@
 #include <unistd.h>
 #endif
 
-#include <unordered_set>
 #include <vector>
 
 #include "sockets/common/socket_base.hpp"
@@ -42,6 +41,10 @@ class socket_poller_t
         short events;
     };
 
+    //  Stage 1 (plan 7.1): zlink_poll() builds a poller per call and adds
+    //  every item, so the item vector reallocated repeatedly while growing.
+    //  Callers that know the final size say so up front.
+    void reserve (size_t items_);
     int add (socket_base_t *socket_, void *user_data_, short events_);
     int modify (const socket_base_t *socket_, short events_);
     int modify_user_data (const socket_base_t *socket_, void *user_data_);
@@ -121,11 +124,6 @@ class socket_poller_t
     typedef std::vector<item_t> items_t;
     items_t _items;
 
-    //  Stage 1 (plan 7.1): zlink_poll() builds a poller per call and adds every
-    //  item, so the duplicate check in add() was a linear scan per insertion,
-    //  i.e. O(N^2) registration for an N-socket poll. Keep an O(1) membership
-    //  set alongside the ordered item vector.
-    std::unordered_set<const socket_base_t *> _socket_index;
 
     items_t::iterator find_socket_item (const socket_base_t *socket_);
     items_t::iterator find_fd_item (fd_t fd_);

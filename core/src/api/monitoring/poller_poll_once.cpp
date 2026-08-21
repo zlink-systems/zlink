@@ -25,6 +25,7 @@ int zlink_poll (zlink_pollitem_t *items_,
     }
 
     zlink::socket_poller_t poller;
+    poller.reserve (static_cast<size_t> (nitems_));
     for (int i = 0; i < nitems_; ++i) {
         items_[i].revents = 0;
         void *index_user_data = poller_index_user_data (static_cast<size_t> (i));

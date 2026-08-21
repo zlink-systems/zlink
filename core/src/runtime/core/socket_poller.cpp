@@ -89,9 +89,15 @@ int zlink::socket_poller_t::signaler_fd (fd_t *fd_) const
     return -1;
 }
 
+void zlink::socket_poller_t::reserve (size_t items_)
+{
+    if (items_ > _items.capacity ())
+        _items.reserve (items_);
+}
+
 int zlink::socket_poller_t::add (socket_base_t *socket_, void *user_data_, short events_)
 {
-    if (_socket_index.find (socket_) != _socket_index.end ()) {
+    if (find_socket_item (socket_) != _items.end ()) {
         errno = EINVAL;
         return -1;
     }
@@ -120,8 +126,6 @@ int zlink::socket_poller_t::add_item (socket_base_t *socket_,
     };
     try {
         _items.push_back (item);
-        if (socket_)
-            _socket_index.insert (socket_);
     }
     catch (const std::bad_alloc &) {
         errno = ENOMEM;
@@ -219,8 +223,6 @@ int zlink::socket_poller_t::remove_item (items_t::iterator it_)
           _socket_signaler);
 #endif
 
-    if (it_->socket)
-        _socket_index.erase (it_->socket);
     _items.erase (it_);
     _need_rebuild = true;
 
