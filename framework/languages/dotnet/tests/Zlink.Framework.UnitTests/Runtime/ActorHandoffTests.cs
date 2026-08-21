@@ -16,6 +16,27 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ActorHandoffTests
 {
     [Fact]
+    public void Import_NewerHandoffSupersedesImportingTargetState()
+    {
+        var handoff = new ZLinkActorHandoffState(
+            "actor-superseded-target",
+            TimeProvider.System);
+        var first = CommitRequest("handoff-first", []);
+        var second = CommitRequest("handoff-second", []);
+
+        Assert.True(handoff.Import(first, out var firstPreparation));
+        //  Spec 15 §4.2 makes the later identity the winner before target
+        //  CAS. The target-stage owner has already run its abort cleanup;
+        //  Import must therefore replace the per-Actor importing state rather
+        //  than reject the later Restore as already active.
+        Assert.True(handoff.Import(second, out _));
+
+        var superseded = Assert.Throws<ZLinkFrameworkException>(
+            () => firstPreparation.GetAwaiter().GetResult());
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, superseded.Kind);
+    }
+
+    [Fact]
     public void DeferredJoinCapture_PromotesQueuedFrameIntoCrossNodeJournal()
     {
         var handoff = new ZLinkActorHandoffState(

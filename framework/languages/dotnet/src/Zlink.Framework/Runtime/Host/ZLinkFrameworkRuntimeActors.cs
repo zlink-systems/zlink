@@ -2695,12 +2695,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                             //  dropped as NotFound. JoinEntrySpot has no
                             //  admission round trip and is excluded (spec
                             //  15 §4.2 "이 준비 동승이 없다").
-                            RegisterActorJoinPrewarm(
-                                request.HandoffId,
-                                request.ActorId,
-                                request.ActorGeneration,
-                                DateTimeOffset.FromUnixTimeMilliseconds(
-                                    request.DeadlineUnixTimeMilliseconds));
+                            await RegisterActorJoinPrewarmAsync(
+                                    request.HandoffId,
+                                    request.ActorId,
+                                    request.ActorGeneration,
+                                    DateTimeOffset.FromUnixTimeMilliseconds(
+                                        request.DeadlineUnixTimeMilliseconds),
+                                    ct)
+                                .ConfigureAwait(false);
                         return ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
                             true,
                             result.Reply,
