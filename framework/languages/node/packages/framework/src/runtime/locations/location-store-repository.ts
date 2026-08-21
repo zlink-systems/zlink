@@ -883,7 +883,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const capacityReads = new Map<string, Extract<ZLinkStoreReadResult, { kind: 'found' }>>();
     for (const [value, key] of capacityKeys) {
       const read = await this.provider.read(key, signal);
-      if (read.kind === 'missing') return { kind: 'stale' };
+      if (read.kind === 'missing') {
+        // Capacity rows are provider-private. A foreign source legitimately
+        // has no row under this provider's key encoding; its source runtime
+        // releases that capacity after observing the committed authority.
+        // The target row remains mandatory because this provider reserved it
+        // during prepare and must consume it atomically with commit.
+        if (value === targetCapacityKey.value) return { kind: 'stale' };
+        capacityKeys.delete(value);
+        continue;
+      }
       capacityReads.set(value, read);
     }
     const capacityMutations = [];

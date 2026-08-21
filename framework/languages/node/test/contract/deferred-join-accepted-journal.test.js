@@ -2,8 +2,15 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  isDeferredJoinAcceptedRootPublication,
   ZLinkDeferredJoinAcceptedJournal
 } = require('../../packages/framework/dist/runtime/actors/deferred-join-accepted-journal');
+const {
+  ZLinkFrameworkErrorKind
+} = require('../../packages/framework/dist/contracts/Errors/ZLinkFrameworkException');
+const {
+  encodeAuthorityKey
+} = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const {
   ZLinkActorDispatchMailbox
 } = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
@@ -19,7 +26,7 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 
 const relocationPublication = {
-  reference: 'relocation-root',
+  reference: 'zlink-direct:11111111-1111-4111-8111-111111111111:2',
   checksumCrc32c: 7,
   aggregateId: '11111111-1111-4111-8111-111111111111',
   aggregateGeneration: 2n,
@@ -54,15 +61,19 @@ function harness(options = {}) {
   const storedActorAuthorityPayload = options.actorRelocationEnvelope === true
     ? encodeActorRelocationEnvelope(actorAuthorityPayload)
     : actorAuthorityPayload;
+  let initialAuthorityPayload = options.relocationEnvelope === true
+    ? new ServiceRelocationAuthorityPayloadCodec().publish(
+        storedActorAuthorityPayload,
+        relocationPublication
+      )
+    : storedActorAuthorityPayload;
+  if (options.mutateAuthorityPayload !== undefined) {
+    initialAuthorityPayload = options.mutateAuthorityPayload(initialAuthorityPayload);
+  }
   let authority = {
     kind: 'snapshot',
     storeVersion: { value: String(authorityVersion) },
-    payload: options.relocationEnvelope === true
-      ? new ServiceRelocationAuthorityPayloadCodec().publish(
-          storedActorAuthorityPayload,
-          relocationPublication
-        )
-      : storedActorAuthorityPayload,
+    payload: initialAuthorityPayload,
     objectGeneration: 17n,
     authorityOwnerGeneration: 3n,
     ownerId: 'owner-a',
@@ -132,9 +143,21 @@ function harness(options = {}) {
     events,
     references,
     roots,
-    journal: new ZLinkDeferredJoinAcceptedJournal(authorityStore, relocationStore),
-    restartJournal: () => new ZLinkDeferredJoinAcceptedJournal(authorityStore, relocationStore),
-    authorityPayload: () => Buffer.from(authority.payload)
+    relocationStore,
+    journal: new ZLinkDeferredJoinAcceptedJournal(
+      authorityStore,
+      relocationStore,
+      options.messageSerializers
+    ),
+    restartJournal: () => new ZLinkDeferredJoinAcceptedJournal(
+      authorityStore,
+      relocationStore,
+      options.messageSerializers
+    ),
+    authorityPayload: () => Buffer.from(authority.payload),
+    replaceAuthorityPayload(payload) {
+      authority = { ...authority, payload: Buffer.from(payload) };
+    }
   };
 }
 
@@ -289,7 +312,169 @@ function u64le(value) {
   return result;
 }
 
-test('discarding a prepared Join preserves the relocation authority envelope', async () => {
+function withZeroCanonicalAggregateGeneration(payload) {
+  const bytes = Buffer.from(payload);
+  let offset = 11;
+  offset += 2;
+  offset += 2 + bytes.readUInt16BE(offset);
+  for (const field of ['owner']) {
+    void field;
+    offset += 1 + bytes[offset];
+  }
+  offset += 8;
+  offset += 1 + bytes[offset];
+  offset += 1 + bytes[offset];
+  offset += 8;
+  assert.equal(bytes[offset], 1, 'canonical relocation slot presence');
+  const slotLength = bytes.readUInt32BE(offset + 1);
+  offset += 5;
+  const slotEnd = offset + slotLength;
+  offset += 24;
+  const skipText8 = () => { offset += 1 + bytes[offset]; };
+  skipText8(); offset += 8;
+  skipText8(); offset += 8;
+  skipText8(); offset += 8;
+  skipText8(); offset += 8;
+  skipText8(); offset += 8;
+  skipText8(); offset += 8;
+  offset += 10;
+  assert.equal(bytes[offset], 1, 'canonical relocation extension presence');
+  bytes.writeBigUInt64BE(0n, offset + 1);
+  assert.ok(offset + 9 <= slotEnd);
+  bytes.writeUInt32BE(crc32c(bytes.subarray(0, bytes.byteLength - 4)), bytes.byteLength - 4);
+  return bytes;
+}
+
+test('canonical journal-root classification requires the exact participant and aggregate fence', async () => {
+  const context = harness({ relocationEnvelope: true });
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  const root = await context.journal.prepare(
+    actorRef.actorId,
+    { high: 11n, low: 12n },
+    actorRef,
+    Buffer.from('reply'),
+    undefined,
+    undefined,
+    'b'.repeat(64)
+  );
+  const exact = {
+    authorityKey: encodeAuthorityKey('actor', actorRef.actorId).value,
+    objectKind: 'actor',
+    objectGeneration: actorRef.objectGeneration,
+    aggregateId: relocationPublication.aggregateId,
+    aggregateGeneration: relocationPublication.aggregateGeneration
+  };
+
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    exact
+  ), true);
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    { ...exact, authorityKey: encodeAuthorityKey('actor', 'actor-other').value }
+  ), false, 'another participant must not acquire journal-root replacement authority');
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    { ...exact, objectGeneration: 18n }
+  ), false);
+  assert.equal(await isDeferredJoinAcceptedRootPublication(
+    context.relocationStore,
+    root.reference.value,
+    root.checksumCrc32c,
+    { ...exact, aggregateGeneration: 3n }
+  ), false);
+});
+
+test('canonical ZLJC round-trip preserves a custom reply content type', async () => {
+  const contentType = 'application/x-zlink-custom-reply';
+  const context = harness({
+    relocationEnvelope: true,
+    messageSerializers: new Map([[contentType, {
+      serialize() { throw new Error('not used'); },
+      deserialize(payload) { return Buffer.from(payload.data()).toString('hex'); }
+    }]])
+  });
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  const root = await context.journal.prepare(
+    actorRef.actorId,
+    { high: 21n, low: 22n },
+    actorRef,
+    Buffer.from([0, 1, 2, 3]),
+    contentType,
+    undefined,
+    'c'.repeat(64)
+  );
+  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const current = codec.read(context.authorityPayload());
+  context.replaceAuthorityPayload(codec.publish(
+    codec.clear(context.authorityPayload(), current.reference),
+    {
+      ...current,
+      reference: root.reference.value,
+      checksumCrc32c: root.checksumCrc32c
+    }
+  ));
+
+  const restarted = context.restartJournal();
+  const recovered = await restarted.recover(actorRef.actorId);
+  assert.equal(recovered.replyContentType, contentType);
+  assert.deepEqual(recovered.rawReply, Buffer.from([0, 1, 2, 3]));
+  const committed = await restarted.markCommitted(recovered, actorRef);
+  let decodedReply;
+  await restarted.deliver(
+    committed,
+    {
+      actorId: actorRef.actorId,
+      async onJoinCompleted(completion) {
+        decodedReply = completion.reply.decode();
+      }
+    },
+    actorRef,
+    operation => operation()
+  );
+  assert.equal(decodedReply, '00010203');
+});
+
+test('a zero canonical aggregate generation fails as typed data loss instead of becoming one', async () => {
+  const context = harness({
+    relocationEnvelope: true,
+    mutateAuthorityPayload: withZeroCanonicalAggregateGeneration
+  });
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  await assert.rejects(
+    () => context.journal.prepare(
+      actorRef.actorId,
+      { high: 31n, low: 32n },
+      actorRef,
+      Buffer.alloc(0)
+    ),
+    error => error.kind === ZLinkFrameworkErrorKind.DataLost
+      && /no aggregate generation/.test(error.message)
+  );
+});
+
+test('discarding a prepared Join clears the canonical embedded relocation slot', async () => {
   const { journal, authorityPayload } = harness({ relocationEnvelope: true });
   const codec = new ServiceRelocationAuthorityPayloadCodec();
   const actorRef = {
@@ -307,12 +492,13 @@ test('discarding a prepared Join preserves the relocation authority envelope', a
 
   await journal.discardPrepared(prepared);
 
-  assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+  assert.equal(codec.read(authorityPayload()), undefined);
+  assert.equal(authorityPayload().subarray(0, 4).toString('ascii'), 'ZLAU');
   assert.equal(await journal.recover(actorRef.actorId), undefined);
 });
 
 test('cross-node Accepted root preserves identity, reply and cursor across mailbox retry', async () => {
-  const { events, references, roots, journal } = harness();
+  const { events, references, roots, journal, authorityPayload } = harness();
   const sourceActorRef = {
     nodeRid: 'node-a',
     actorId: 'actor-a',
@@ -334,6 +520,12 @@ test('cross-node Accepted root preserves identity, reply and cursor across mailb
   );
   assert.equal(root.cursor, 'prepared');
   assert.equal(root.reference.value, references[0]);
+  assert.equal(authorityPayload().subarray(0, 4).toString('ascii'), 'ZLAU');
+  assert.equal(
+    new ServiceRelocationAuthorityPayloadCodec().read(authorityPayload()).canonical,
+    true,
+    'Node journal publication must use the embedded canonical relocation slot'
+  );
 
   root = await journal.markCommitted(root, actorRef);
   assert.equal(root.cursor, 'committed');
@@ -378,6 +570,7 @@ test('cross-node Accepted root preserves identity, reply and cursor across mailb
   assert.equal(root.reference.value, references[2]);
   assert.equal(roots.has(references[1]), false);
   assert.equal(roots.has(references[2]), false);
+  assert.equal(new ServiceRelocationAuthorityPayloadCodec().read(authorityPayload()), undefined);
 
   await journal.deliver(
     root,

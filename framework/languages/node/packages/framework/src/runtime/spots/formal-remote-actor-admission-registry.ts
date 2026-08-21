@@ -36,6 +36,7 @@ function objectKey(actorId: string, objectGeneration: bigint): string {
 }
 
 export type ZLinkFormalRemoteActorAdmissionState =
+  | 'provisional'
   | 'admitting'
   | 'admitted'
   | 'rejected'
@@ -56,6 +57,11 @@ export interface ZLinkFormalRemoteActorAdmission {
   readonly sourceSpotId?: RoutingId;
   readonly sourceActorNodeRid?: RoutingId;
 }
+
+export type ZLinkProvisionalRemoteActorAdmission = Omit<
+  ZLinkFormalRemoteActorAdmission,
+  'actorType'
+>;
 
 export interface ZLinkFormalRemoteActorAdmissionOutcome {
   readonly accepted: boolean;
@@ -84,6 +90,7 @@ export interface ZLinkFormalRemoteActorAdmissionRecord {
 interface ZLinkFormalRemoteActorAdmissionEntry extends ZLinkFormalRemoteActorAdmissionRecord {
   readonly timer: ReturnType<typeof setTimeout>;
   readonly resolveResult: (result: ZLinkFormalRemoteActorAdmissionResult) => void;
+  admission: ZLinkFormalRemoteActorAdmission;
   state: ZLinkFormalRemoteActorAdmissionState;
   result?: ZLinkFormalRemoteActorAdmissionResult;
   actor?: ZLinkActor;
@@ -121,6 +128,57 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
       }
       return { record: existing, created: false };
     }
+    return this.create(input, 'admitting');
+  }
+
+  /**
+   * Installs the exact object/handoff identity synchronously before canonical
+   * Store and factory validation yields. The actor type is deliberately not
+   * invented while that validation is pending; {@link finalizeProvisional}
+   * supplies it once the Store result is available.
+   */
+  beginProvisional(input: ZLinkProvisionalRemoteActorAdmission): {
+    readonly record: ZLinkFormalRemoteActorAdmissionEntry;
+    readonly created: boolean;
+  } {
+    const existing = this.admissions.get(input.transferId);
+    if (existing !== undefined) {
+      if (!sameProvisionalAdmission(existing.admission, input)) {
+        throw new Error(`Remote actor admission '${input.transferId}' does not match the original request.`);
+      }
+      return { record: existing, created: false };
+    }
+    return this.create({ ...input, actorType: '' }, 'provisional');
+  }
+
+  /** Completes a synchronous provisional registration after async validation. */
+  finalizeProvisional(
+    transferId: string,
+    input: ZLinkFormalRemoteActorAdmission
+  ): ZLinkFormalRemoteActorAdmissionEntry {
+    const entry = this.admissions.get(transferId);
+    if (entry === undefined) {
+      throw new Error(`Remote actor admission '${transferId}' was evicted during validation.`);
+    }
+    if (!sameProvisionalAdmission(entry.admission, input)) {
+      throw new Error(`Remote actor admission '${transferId}' changed during validation.`);
+    }
+    if (entry.state === 'provisional') {
+      entry.admission = input;
+      entry.state = 'admitting';
+    } else if (!sameAdmission(entry.admission, input)) {
+      throw new Error(`Remote actor admission '${transferId}' resolved a different Actor type.`);
+    }
+    return entry;
+  }
+
+  private create(
+    input: ZLinkFormalRemoteActorAdmission,
+    state: 'provisional' | 'admitting'
+  ): {
+    readonly record: ZLinkFormalRemoteActorAdmissionEntry;
+    readonly created: boolean;
+  } {
     const key = objectKey(input.actorId, input.actorRef.objectGeneration);
     const displacedTransferId = this.byObject.get(key);
     if (displacedTransferId !== undefined && displacedTransferId !== input.transferId) {
@@ -136,7 +194,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     timer.unref();
     const entry = {
       admission: input,
-      state: 'admitting' as const,
+      state,
       resultTask,
       timer,
       resolveResult,
@@ -207,11 +265,14 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     this.delete(transferId);
   }
 
-  private failParked(entry: ZLinkFormalRemoteActorAdmissionEntry): void {
+  private failParked(
+    entry: ZLinkFormalRemoteActorAdmissionEntry,
+    reason?: unknown
+  ): void {
     if (entry.parked.length === 0) return;
     const parked = entry.parked;
     entry.parked = [];
-    const aborted = new Error(
+    const aborted = reason ?? new Error(
       `Actor Join relocation temporary queue for '${entry.admission.actorId}' was aborted.`
     );
     for (const message of parked) {
@@ -252,7 +313,7 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     entry.state = 'failed';
     entry.result = { error };
     entry.resolveResult(entry.result);
-    this.failParked(entry);
+    this.failParked(entry, error);
   }
 
   markCommitted(transferId: string, actor: ZLinkActor): void {
@@ -318,6 +379,23 @@ function sameAdmission(
 ): boolean {
   return left.actorId === right.actorId
     && left.actorType === right.actorType
+    && String(left.spotId) === String(right.spotId)
+    && left.targetSpotGeneration === right.targetSpotGeneration
+    && left.expectedMembershipEpoch === right.expectedMembershipEpoch
+    && left.requestFingerprint === right.requestFingerprint
+    && sameOperationId(left.completionOperationId, right.completionOperationId)
+    && String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '')
+    && String(left.sourceActorNodeRid ?? '') === String(right.sourceActorNodeRid ?? '')
+    && left.actorRef.actorId === right.actorRef.actorId
+    && String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid)
+    && left.actorRef.objectGeneration === right.actorRef.objectGeneration;
+}
+
+function sameProvisionalAdmission(
+  left: ZLinkFormalRemoteActorAdmission,
+  right: ZLinkProvisionalRemoteActorAdmission
+): boolean {
+  return left.actorId === right.actorId
     && String(left.spotId) === String(right.spotId)
     && left.targetSpotGeneration === right.targetSpotGeneration
     && left.expectedMembershipEpoch === right.expectedMembershipEpoch

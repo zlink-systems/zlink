@@ -131,18 +131,19 @@ export class ZLinkRemoteActorJoinReceiver {
 
   /**
    * Canonical command 28 carries no stable type or bound-session coordinates.
-   * The raw-mesh dispatcher invokes this before its normal typed Spot
-   * admission so both transports share the S1 Location Store fence/type
-   * decision without inventing a second admission path.
+   * The raw-mesh dispatcher invokes this before its normal typed Spot admission
+   * so the canonical path resolves the S1 Location Store fence/type and factory
+   * registration without materializing or claiming the Actor. The Spot
+   * admission registry owns the temporary queue until command 40 restores the
+   * hidden Actor.
    */
   async prepareCanonicalActorJoin(
     join: ZLinkCanonicalActorJoinAuthorityFence
   ): Promise<{ readonly actorType: string }> {
     const actorManager = this.requireActorManager();
     const stableType = await this.resolveStableType(join);
-    let actor;
     try {
-      actor = await actorManager.getOrCreateActor(join.actorId, stableType);
+      actorManager.requireRelocationActorFactory(stableType);
     } catch (error) {
       if (isMissingActorFactory(error)) {
         throw createInternalFrameworkException(
@@ -153,18 +154,6 @@ export class ZLinkRemoteActorJoinReceiver {
       }
       throw error;
     }
-    if (actor === undefined) {
-      throw new Error(`Actor '${join.actorId}' factory did not return an Actor.`);
-    }
-    const state = actorManager.getState(join.actorId);
-    if (state === undefined) {
-      throw new Error(`Actor '${join.actorId}' state was not created.`);
-    }
-    state.setNativeActorRef({
-      nodeRid: join.actorNodeRid,
-      actorId: join.actorId,
-      generation: join.actorGeneration
-    } as unknown as ZLinkBackendActorRef);
     return { actorType: stableType };
   }
 

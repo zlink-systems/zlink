@@ -237,7 +237,8 @@ export interface ReceiveRecord {
   replyActorJoin(
     joinResult: number,
     parts: MessageLike | readonly MessageLike[],
-    flags?: number
+    flags?: number,
+    replyContentType?: string
   ): SubmitResult;
   /** Emits a typed command-20 terminal for a lifecycle request before admission. */
   replyFailure?(terminalResult: number, failureCode: number): SubmitResult;

@@ -31,9 +31,11 @@ import {
   type ZLinkActorHandoffDispatch,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkActorTransferRegistry,
+  isDeferredJoinAcceptedRootPublication,
   ZLinkDeferredJoinAcceptedJournal,
   rewriteActorAuthorityRoute,
   type ZLinkDeferredJoinAcceptedRoot,
+  type ZLinkDeferredJoinRootIdentity,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
 import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
@@ -280,15 +282,37 @@ export class ZLinkActorTransferRuntime {
     operationId: ZLinkActorJoinOperationId,
     actorRef: ActorRef,
     rawReply: Uint8Array,
-    signal?: AbortSignal
+    replyContentType?: string,
+    signal?: AbortSignal,
+    canonicalInventoryDigest?: string
   ): Promise<ZLinkDeferredJoinAcceptedRoot> {
     return await this.requireDeferredJoinJournal().prepare(
       actorId,
       operationId,
       actorRef,
       rawReply,
-      signal
+      replyContentType,
+      signal,
+      canonicalInventoryDigest
     );
+  }
+
+  async isDeferredJoinAcceptedRootPublication(
+    reference: string,
+    checksumCrc32c: number,
+    expected: ZLinkDeferredJoinRootIdentity,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const relocation = this.options.relocationStore();
+    return relocation === undefined
+      ? false
+      : await isDeferredJoinAcceptedRootPublication(
+          relocation,
+          reference,
+          checksumCrc32c,
+          expected,
+          signal
+        );
   }
 
   async discardDeferredJoinAccepted(
@@ -360,7 +384,11 @@ export class ZLinkActorTransferRuntime {
     if (authority === undefined || relocation === undefined) {
       throw new Error('Cross-node deferred Actor Join requires Location and Relocation Stores.');
     }
-    return new ZLinkDeferredJoinAcceptedJournal(authority, relocation);
+    return new ZLinkDeferredJoinAcceptedJournal(
+      authority,
+      relocation,
+      this.options.messageSerializers
+    );
   }
 
   private async prepareSourceActorLeave(

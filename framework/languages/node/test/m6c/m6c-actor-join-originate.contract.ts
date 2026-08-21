@@ -51,7 +51,7 @@ function joinMultipartWithTransferId(
   return payload;
 }
 
-test('unbound node-to-node Actor Join originates canonical 28, admits Store state, and returns its reply', async () => {
+test('unbound node-to-node Actor Join originates canonical 28 without target Actor materialization', async () => {
   const canonicalPayload = joinMultipartWithTransferId('application-transfer-id');
   let targetIngress: ((record: RawServiceIngressRecord) => unknown) | undefined;
   let received: { readonly stateful?: ServiceStatefulMailboxData } | undefined;
@@ -84,6 +84,7 @@ test('unbound node-to-node Actor Join originates canonical 28, admits Store stat
   const targetSpot = target.createSpot('room-b', 'user');
 
   let activated = false;
+  let preparedType: string | undefined;
   const receiver = new ZLinkRemoteActorJoinReceiver({
     authorityStore: () => ({
       async readAuthority(key: { readonly value: string }) {
@@ -105,6 +106,9 @@ test('unbound node-to-node Actor Join originates canonical 28, admits Store stat
       }
     }) as never,
     actorManager: () => ({
+      requireRelocationActorFactory(actorType: string) {
+        preparedType = actorType;
+      },
       async getOrCreateActor() {
         activated = true;
         return {};
@@ -174,7 +178,8 @@ test('unbound node-to-node Actor Join originates canonical 28, admits Store stat
         expectedAuthorityOwnerGeneration: canonical.canonicalActorJoin.authorityOwnerGeneration,
         expectedOwnerLeaseGeneration: canonical.canonicalActorJoin.ownerLeaseGeneration
       });
-      assert.equal(activated, true, 'S4b Store admission must activate the Store-resolved type');
+      assert.equal(preparedType, 'Player', 'S4b Store admission must prepare the Store-resolved factory');
+      assert.equal(activated, false, 'canonical command 28 must not materialize the target Actor');
       assert.equal(received?.stateful?.reply?.(
         RequestResult.Ok,
         0,

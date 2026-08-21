@@ -54,7 +54,10 @@ import {
   decodeServiceRelocationEnvelope,
   encodeServiceRelocationEnvelope,
   inventoryDigest,
+  projectServiceRelocationAuthorityTargetReady,
+  replaceServiceRelocationAuthorityApplicationPayload,
   serviceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthoritySlotIdentity,
   type ServiceRelocationEnvelope,
   type ServiceRelocationMembership,
   type ServiceRelocationParticipant,
@@ -102,6 +105,7 @@ import type {
 } from '../spots';
 import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
 import type { DefaultZLinkActorManager } from '../actors';
+import type { ZLinkDeferredJoinAcceptedRoot } from '../actors/deferred-join-accepted-journal';
 import {
   toFrameworkActorRef,
   type ZLinkActorRuntimeState,
@@ -1979,7 +1983,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           coordinator,
           primary
         );
-    const encoded = encodeServiceRelocationEnvelope(transportEnvelope);
+    const encoded = encodeServiceRelocationEnvelope(
+      transportEnvelope,
+      target.applicationVersion
+    );
     const limits = this.relocationLimits();
     // Actor Join threads the target's admission-time advertised cap in;
     // other relocation paths have no such negotiation and fall back to the
@@ -2432,7 +2439,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (this.disposed) throw error;
       throw new ServiceRelocationDataLostError(String((error as Error)?.message ?? error));
     }
-    const envelope = decodeServiceRelocationEnvelope(payload);
+    const envelope = decodeServiceRelocationEnvelope(
+      payload,
+      request.targetAttemptGeneration
+    );
     const inventoryEnvelope = attachPrepareBoundSessions(
       await this.resolveTargetParticipantInventory(
       request,
@@ -2442,30 +2452,51 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       request.nodeInternalBoundSessions
     );
     validatePrepareEnvelope(request, inventoryEnvelope);
-    const reservation = await this.reserveTargetForPrepare(
-      meshName,
-      request,
-      inventoryEnvelope,
-      signal
-    );
-    const offer: TargetRelocationOffer = {
-      prepare: request,
-      prepareFingerprint: fingerprint,
-      authenticatedSourceNodeRid: String(sourceNodeRid),
-      envelope: inventoryEnvelope,
-      restoreDeadlineAtMs: Date.now() + RELOCATION_OPERATION_RETENTION_MS,
-      reservation
-    };
-    let stage: LocalStage | undefined;
+    let materialized:
+      | Pick<LocalStage, 'owner' | 'staging'> & { readonly target: LocalTargetPort }
+      | undefined;
+    let reservation: TargetRelocationReservation | undefined;
     try {
-      stage = await this.materializeTargetOffer(meshName, stagingId, offer, signal);
-      await stage.owner.restoreSavedWork(stage.staging, signal);
+      // Deferred Join completion publishes into the source authority's
+      // canonical relocation slot. Do that while the row is still CAS-able;
+      // the aggregate marker installed by reserveTargetForPrepare deliberately
+      // rejects unrelated authority CAS until commit/abort.
+      materialized = await this.materializeTargetEnvelope(
+        meshName,
+        inventoryEnvelope,
+        signal
+      );
+      await materialized.owner.restoreSavedWork(materialized.staging, signal);
+      reservation = await this.reserveTargetForPrepare(
+        meshName,
+        request,
+        inventoryEnvelope,
+        materialized.target,
+        signal
+      );
+      const offer: TargetRelocationOffer = {
+        prepare: request,
+        prepareFingerprint: fingerprint,
+        authenticatedSourceNodeRid: String(sourceNodeRid),
+        envelope: inventoryEnvelope,
+        restoreDeadlineAtMs: Date.now() + RELOCATION_OPERATION_RETENTION_MS,
+        reservation
+      };
+      const stage: LocalStage = {
+        offer,
+        ...materialized,
+        phase: 'ready',
+        lane: Promise.resolve(),
+        cutoverReceived: false,
+        boundaryRelay: []
+      };
+      this.targetStages.set(stagingId, stage);
     } catch (error) {
-      if (stage === undefined) {
+      if (reservation !== undefined) {
         await this.abortTargetReservation(reservation, signal).catch(() => undefined);
-      } else {
-        this.targetStages.delete(stagingId);
-        await this.abortTargetStage(stage, signal).catch(() => undefined);
+      }
+      if (materialized !== undefined) {
+        await materialized.owner.abort(materialized.staging).catch(() => undefined);
       }
       throw error;
     }
@@ -3335,10 +3366,37 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     prepare: ServiceMaintenanceRelocationPrepare,
     envelope: ServiceRelocationEnvelope,
+    targetPort: LocalTargetPort,
     signal?: AbortSignal
   ): Promise<TargetRelocationReservation> {
     const authorities = await this.readTargetParticipantAuthorities(envelope, signal);
     const publication = relocationPublication(prepare, envelope);
+    const deferredJoinRoots = new Map<string, ZLinkDeferredJoinAcceptedRoot>();
+    const publishedJournalKeys = new Set<string>();
+    for (const participant of envelope.participants) {
+      const staged = targetPort.deferredJoinRoot(participant.key);
+      if (staged !== undefined) {
+        deferredJoinRoots.set(participant.key, staged);
+        continue;
+      }
+      const current = this.codec.read(authorities.get(participant.key)!.payload);
+      if (participant.objectKind === 'actor'
+        && current?.canonical === true
+        && await this.options.actorTransfer.isDeferredJoinAcceptedRootPublication(
+          current.reference,
+          current.checksumCrc32c,
+          {
+            authorityKey: participant.key,
+            objectKind: 'actor',
+            objectGeneration: participant.objectGeneration,
+            aggregateId: current.aggregateId,
+            aggregateGeneration: current.aggregateGeneration
+          },
+          signal
+        )) {
+        publishedJournalKeys.add(participant.key);
+      }
+    }
     const participants = envelope.participants.map(participant => {
       const expected = authorities.get(participant.key)!;
       const membership = actorMembershipTarget(envelope, participant.key);
@@ -3353,19 +3411,28 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       ) {
         throw new Error(`Relocation target RouteMesh '${meshName}' has no Entry Spot.`);
       }
+      const deferredJoinRoot = deferredJoinRoots.get(participant.key);
+      const participantPublication = deferredJoinRoot === undefined
+        ? publication
+        : {
+            ...publication,
+            reference: deferredJoinRoot.reference.value,
+            checksumCrc32c: deferredJoinRoot.checksumCrc32c
+          };
       return {
         key: { value: participant.key } as ZLinkAuthorityKey,
         expected,
         ownerTransition: 'newOwner' as const,
-        authorityPayload: this.authorityPayloadForPublication(expected.payload, publication, {
+        authorityPayload: this.authorityPayloadForPublication(expected.payload, participantPublication, {
           owner: {
             ownerId: prepare.target.ownerId,
             leaseGeneration: prepare.target.ownerLeaseGeneration
           },
           meshName,
           nodeRid: prepare.target.nodeRid,
-          nodeGeneration: prepare.target.nodeGeneration,
-          objectGeneration: expected.objectGeneration,
+            nodeGeneration: prepare.target.nodeGeneration,
+            objectGeneration: expected.objectGeneration,
+            expectedStoreVersion: expected.storeVersion.value,
           ...(membership === undefined
             ? expected.allocation.objectKind === 'actor'
               ? {
@@ -3378,7 +3445,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                 ...membership,
                 actorSpotKind: ZLinkSpotKind.User as const
               })
-        }),
+        }, deferredJoinRoot !== undefined || publishedJournalKeys.has(participant.key)),
         membershipMutation: encodeMembershipMutation(envelope.memberships, participant.key)
       };
     });
@@ -3409,12 +3476,47 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly nodeRid: string;
       readonly nodeGeneration: bigint;
       readonly objectGeneration: bigint;
+      readonly expectedStoreVersion: string;
       readonly actorSpotId?: string;
       readonly actorSpotGeneration?: bigint;
       readonly actorSpotKind?: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
-    }
+    },
+    replacesDeferredJoinRoot = false
   ): Uint8Array {
     const existing = this.codec.read(payload);
+    const canonicalIdentity = serviceRelocationAuthoritySlotIdentity(payload);
+    const replacesCanonicalJournal = replacesDeferredJoinRoot
+      && existing?.canonical === true;
+    if (canonicalIdentity !== undefined
+      && (existing === undefined
+        || existing.canonical === true
+          && (existing.aggregateId === publication.aggregateId
+            || replacesCanonicalJournal))) {
+      const published = existing === undefined
+        ? this.codec.publish(payload, publication)
+        : replacesCanonicalJournal
+          && existing.aggregateId !== publication.aggregateId
+            ? this.codec.publish(
+                this.codec.clear(payload, existing.reference),
+                publication
+              )
+            : payload;
+      if (target === undefined) return published;
+      return projectServiceRelocationAuthorityTargetReady(
+        replaceServiceRelocationAuthorityApplicationPayload(
+          published,
+          rewriteAuthorityApplicationRoute(published, target)
+        ),
+        {
+          targetAttemptGeneration: publication.aggregateGeneration,
+          nodeRid: target.nodeRid,
+          nodeGeneration: target.nodeGeneration,
+          ownerId: target.owner.ownerId,
+          ownerLeaseGeneration: target.owner.leaseGeneration,
+          expectedStoreVersion: target.expectedStoreVersion
+        }
+      );
+    }
     if (existing === undefined) {
       const applicationPayload = target === undefined
         ? Buffer.from(payload)
@@ -3429,7 +3531,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       || existing.targetOwnerId !== publication.targetOwnerId
       || existing.targetOwnerLeaseGeneration
         !== publication.targetOwnerLeaseGeneration) {
-      throw new Error('Relocation authority contains another published root.');
+      throw new Error(
+        'Relocation authority contains another published root '
+        + `(current=${existing.aggregateId}/${existing.aggregateGeneration}`
+        + `/${existing.reference}/canonical=${existing.canonical === true}, `
+        + `requested=${publication.aggregateId}/${publication.aggregateGeneration}`
+        + `/${publication.reference}).`
+      );
     }
     return payload;
   }
@@ -3551,32 +3659,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       : { kind: 'stale' };
   }
 
-  private async materializeTargetOffer(
+  private async materializeTargetEnvelope(
     meshName: string,
-    stagingId: string,
-    offer: TargetRelocationOffer,
+    envelope: ServiceRelocationEnvelope,
     signal?: AbortSignal
-  ): Promise<LocalStage> {
-    const target = new LocalTargetPort(this.options, meshName, offer.envelope);
+  ): Promise<Pick<LocalStage, 'owner' | 'staging'> & { readonly target: LocalTargetPort }> {
+    const target = new LocalTargetPort(this.options, meshName, envelope);
     const owner = new ServiceRelocationObjectRestoreOwner(
       target,
       value => ({ value } as ZLinkAuthorityKey)
     );
-    const staging = await owner.prepare(offer.envelope, signal);
-    if (staging.id !== `${offer.envelope.aggregateId}:${offer.envelope.aggregateGeneration}`) {
+    const staging = await owner.prepare(envelope, signal);
+    if (staging.id !== `${envelope.aggregateId}:${envelope.aggregateGeneration}`) {
       throw new Error('Relocation materialization returned a different staging identity.');
     }
-    const stage: LocalStage = {
-      offer,
-      owner,
-      staging,
-      phase: 'ready',
-      lane: Promise.resolve(),
-      cutoverReceived: false,
-      boundaryRelay: []
-    };
-    this.targetStages.set(stagingId, stage);
-    return stage;
+    return { owner, staging, target };
   }
 
   /** Maps schema ordinals to the authoritative Location Store inventory. */
@@ -3971,6 +4068,8 @@ function relocationDebug(marker: string, detail: Record<string, unknown>): void 
 }
 
 class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> {
+  private readonly deferredJoinRoots = new Map<string, ZLinkDeferredJoinAcceptedRoot>();
+
   constructor(
     private readonly options: ZLinkHostRelocationOptions,
     private readonly meshName: string,
@@ -4176,13 +4275,24 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       if (recovery.request.actorId !== hidden.actor.context.actorId) {
         throw new Error('Canonical Actor Join recovery names a different staged Actor.');
       }
-      await this.requireSpotManager().restoreCanonicalActorJoinRecovery(recovery);
+      const deferred = await this.requireSpotManager().restoreCanonicalActorJoinRecovery(
+        recovery,
+        undefined,
+        inventoryDigest(this.envelope.participants, this.envelope.memberships)
+      );
+      if (deferred !== undefined) {
+        this.deferredJoinRoots.set(hidden.authorityKey, deferred);
+      }
       return;
     }
     const packet = decodeQueuedHandoffPacket(message);
     const state = this.requireActorManager().getState(hidden.actor.context.actorId);
     if (state === undefined) throw new Error('Relocated Actor state is not staged.');
     hidden.replayPackets.push(packet);
+  }
+
+  deferredJoinRoot(authorityKey: string): ZLinkDeferredJoinAcceptedRoot | undefined {
+    return this.deferredJoinRoots.get(authorityKey);
   }
 
   async openAdmission(hidden: LocalHidden): Promise<void> {
@@ -4942,6 +5052,7 @@ function validatePrepareEnvelope(
 ): void {
   if (!sameWireId(request.relocation, relocationWireId(envelope.aggregateId))
     || request.targetAttemptGeneration !== envelope.aggregateGeneration
+    || request.applicationVersion !== envelope.applicationVersion
     || stringifyWire(request.object) !== stringifyWire(relocationObject(envelope))) {
     throw new Error('Relocation Prepare does not match its immutable root identity.');
   }

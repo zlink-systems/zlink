@@ -80,8 +80,10 @@ export {
   type ZLinkRemoteBoundSessionTarget
 } from './actor-runtime-state';
 export {
+  isDeferredJoinAcceptedRootPublication,
   ZLinkDeferredJoinAcceptedJournal,
   type ZLinkDeferredJoinAcceptedRoot,
+  type ZLinkDeferredJoinRootIdentity,
   type ZLinkDeferredJoinDeliveryCursor
 } from './deferred-join-accepted-journal';
 export {
@@ -408,6 +410,12 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     throwIfAborted(signal);
     if (this.relocationStaged.has(actorId)) return undefined;
     return this.states.get(actorId)?.actor;
+  }
+
+  requireRelocationActorFactory(actorType: string): void {
+    if (!this.options.actorFactories.has(actorType)) {
+      throw new ZLinkConfigurationException(`Actor factory '${actorType}' is not registered.`);
+    }
   }
 
   async prepareRelocationActor(

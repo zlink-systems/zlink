@@ -258,23 +258,24 @@ Injectable()(RelocationActorFactory);
 class RelocationActorAdapter {
   async capture(actor, signal) {
     signal.throwIfAborted();
-    const header = new TextEncoder().encode(JSON.stringify({
-      stateVersion: actor.stateVersion,
-      applicationStateBytes: actor.applicationState.byteLength
-    }) + '\n');
-    const payload = new Uint8Array(header.byteLength + actor.applicationState.byteLength);
-    payload.set(header);
-    payload.set(actor.applicationState, header.byteLength);
+    const payload = new Uint8Array(8 + actor.applicationState.byteLength);
+    const view = new DataView(payload.buffer);
+    view.setInt32(0, actor.stateVersion, true);
+    view.setInt32(4, actor.applicationState.byteLength, true);
+    payload.set(actor.applicationState, 8);
     return payload;
   }
 
   async restore(actor, payload, signal) {
     signal.throwIfAborted();
-    const separator = payload.indexOf(10);
-    if (separator < 0) throw new Error('relocation payload header is missing');
-    const header = JSON.parse(new TextDecoder().decode(payload.subarray(0, separator)));
-    actor.stateVersion = header.stateVersion;
-    actor.applicationState = payload.slice(separator + 1);
+    if (payload.byteLength < 8) throw new Error('relocation binary payload header is truncated');
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const applicationStateBytes = view.getInt32(4, true);
+    if (applicationStateBytes < 0 || payload.byteLength !== 8 + applicationStateBytes) {
+      throw new Error('relocation binary application state size is invalid');
+    }
+    actor.stateVersion = view.getInt32(0, true);
+    actor.applicationState = payload.slice(8);
   }
 }
 Injectable()(RelocationActorAdapter);

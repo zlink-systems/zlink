@@ -631,8 +631,8 @@ test('recovery never rolls a published missing or corrupt root back to source', 
 
 test('relocation envelope preserves queued work and logical timers deterministically', () => {
   const envelope = relocationEnvelope();
-  const encoded = encodeServiceRelocationEnvelope(envelope);
-  const decoded = decodeServiceRelocationEnvelope(encoded);
+  const encoded = encodeServiceRelocationEnvelope(envelope, 7n);
+  const decoded = decodeServiceRelocationEnvelope(encoded, envelope.aggregateGeneration);
   assert.deepEqual(
     decoded.participants.map(({ participantId }) => participantId),
     [1n, 2n]
@@ -662,25 +662,44 @@ test('relocation envelope preserves queued work and logical timers deterministic
     aggregateGeneration: 1n,
     participants: [standalone],
     memberships: []
-  });
+  }, 7n);
   assert.notEqual(standaloneEncoded[0], 0x7b, 'standalone Actor must not use the legacy JSON envelope');
-  const standaloneDecoded = decodeServiceRelocationEnvelope(standaloneEncoded);
+  const standaloneDecoded = decodeServiceRelocationEnvelope(
+    standaloneEncoded,
+    1n
+  );
   assert.deepEqual(standaloneDecoded.participants[0]?.participantId, 1n);
   assert.deepEqual(standaloneDecoded.participants[0]?.rootObjectKind, 'actor');
   assert.deepEqual(standaloneDecoded.participants[0]?.rootSpotId, 'a');
   assert.deepEqual(standaloneDecoded.participants[0]?.queuedMessages, standalone.queuedMessages);
+
+  const zeroVersionDecoded = decodeServiceRelocationEnvelope(
+    encodeServiceRelocationEnvelope({
+      aggregateId: '33333333-3333-4333-8333-333333333333',
+      aggregateGeneration: 0n,
+      participants: [standalone],
+      memberships: []
+    }, 0n),
+    9n
+  );
+  assert.equal(
+    zeroVersionDecoded.aggregateGeneration,
+    9n,
+    'local restore attempt generation must not be derived from applicationVersion'
+  );
+  assert.equal(zeroVersionDecoded.applicationVersion, 0n);
 });
 
 test('relocation envelope rejects malformed root and trailing stream bytes', () => {
-  const encoded = encodeServiceRelocationEnvelope(relocationEnvelope());
+  const encoded = encodeServiceRelocationEnvelope(relocationEnvelope(), 1n);
   const malformedRoot = Buffer.from(encoded);
   malformedRoot[16] = 4;
   assert.throws(
-    () => decodeServiceRelocationEnvelope(malformedRoot),
+    () => decodeServiceRelocationEnvelope(malformedRoot, 1n),
     /root object kind is invalid/
   );
   assert.throws(
-    () => decodeServiceRelocationEnvelope(Buffer.concat([encoded, Buffer.of(0)])),
+    () => decodeServiceRelocationEnvelope(Buffer.concat([encoded, Buffer.of(0)]), 1n),
     /Trailing relocation envelope bytes/
   );
 });
@@ -697,7 +716,7 @@ test('relocation envelope rejects duplicate participant queue and timer identiti
     } : value)
   };
   assert.throws(
-    () => encodeServiceRelocationEnvelope(queueEnvelope),
+    () => encodeServiceRelocationEnvelope(queueEnvelope, 1n),
     /queue sequences must be unique per participant/
   );
 
@@ -709,7 +728,7 @@ test('relocation envelope rejects duplicate participant queue and timer identiti
     } : value)
   };
   assert.throws(
-    () => encodeServiceRelocationEnvelope(timerEnvelope),
+    () => encodeServiceRelocationEnvelope(timerEnvelope, 1n),
     /timer ids must be unique per participant/
   );
 });
@@ -745,7 +764,8 @@ test('relocation inventory preserves 10,100 participants without a Spot member c
   };
 
   const decoded = decodeServiceRelocationEnvelope(
-    encodeServiceRelocationEnvelope(envelope)
+    encodeServiceRelocationEnvelope(envelope, 1n),
+    envelope.aggregateGeneration
   );
   assert.equal(decoded.participants.length, 10_100);
   assert.equal(decoded.memberships.length, 0);

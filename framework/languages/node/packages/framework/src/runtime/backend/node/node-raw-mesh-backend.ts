@@ -2120,7 +2120,11 @@ class CompletionClaim implements RawClaim {
           : null,
         terminalResult: this.completion.result.terminalResult,
         failureErrno: this.completion.result.failureCode,
-        parts: payload === undefined ? [] : decodeMultipart(payload.payload),
+        parts: payload === undefined
+          ? []
+          : payload.contentType === MULTIPART_CONTENT_TYPE
+            ? decodeMultipart(payload.payload)
+            : [Message.from(payload.payload)],
         reply: () => SubmitResult.InvalidState,
         replyActorJoin: () => SubmitResult.NotSupported
       }]
@@ -2280,7 +2284,7 @@ function decodeStatefulRecord(
         encodeMultipart(parts)
       ) ? SubmitResult.Ok : SubmitResult.InvalidState;
     },
-    replyActorJoin(joinResult, parts) {
+    replyActorJoin(joinResult, parts, _flags, replyContentType) {
       if (stateful.reply === undefined || stateful.targetSpot === undefined) {
         return SubmitResult.InvalidState;
       }
@@ -2291,10 +2295,25 @@ function decodeStatefulRecord(
         return SubmitResult.InvalidState;
       }
       const replyParts = Array.isArray(parts) ? parts : [parts];
+      if (canonicalActorJoin && replyParts.length > 1) {
+        return SubmitResult.InvalidState;
+      }
+      if (canonicalActorJoin && replyParts.length === 1 && replyContentType === undefined) {
+        return SubmitResult.InvalidState;
+      }
+      const replyPayload = replyParts.length === 0
+        ? undefined
+        : canonicalActorJoin
+          ? {
+              packetName: application!.packetName,
+              contentType: replyContentType!,
+              payload: messageBytesView(replyParts[0]!)
+            }
+          : encodeMultipart(replyParts);
       const accepted = stateful.reply(
         RequestResult.Ok,
         0,
-        replyParts.length === 0 ? undefined : encodeMultipart(replyParts),
+        replyPayload,
         {
           kind: 'actorJoin',
           joinResult: joinResult === 0 ? 0 : 1,

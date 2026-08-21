@@ -44,7 +44,9 @@ export interface ZLinkSpotActorTransferRuntime {
     operationId: ZLinkActorJoinOperationId,
     actorRef: ActorRef,
     rawReply: Uint8Array,
-    signal?: AbortSignal
+    replyContentType?: string,
+    signal?: AbortSignal,
+    canonicalInventoryDigest?: string
   ): Promise<ZLinkDeferredJoinAcceptedRoot>;
   discardDeferredJoinAccepted(
     root: ZLinkDeferredJoinAcceptedRoot,

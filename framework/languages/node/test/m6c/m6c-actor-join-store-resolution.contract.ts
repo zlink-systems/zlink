@@ -34,12 +34,16 @@ test('remote Actor Join resolves its stable type from a matching active Authorit
   assert.equal(resolvedType, 'StoreActor');
 });
 
-test('canonical actorJoin(28) multipart payload and payload-free frames reuse Store admission', async () => {
-  const activated: string[] = [];
+test('canonical actorJoin(28) prepares the Store-resolved factory without materializing an Actor', async () => {
+  const prepared: string[] = [];
+  let activated = false;
   const receiver = receiverFor({
     readAuthority: async () => authoritySnapshot(),
-    getOrCreateActor: async (_actorId, stableType) => {
-      activated.push(stableType);
+    requireRelocationActorFactory: (stableType) => {
+      prepared.push(stableType);
+    },
+    getOrCreateActor: async () => {
+      activated = true;
       return {};
     }
   });
@@ -77,7 +81,8 @@ test('canonical actorJoin(28) multipart payload and payload-free frames reuse St
       expectedOwnerLeaseGeneration: join.actor.expectedOwnerLeaseGeneration
     });
   }
-  assert.deepEqual(activated, ['StoreActor', 'StoreActor']);
+  assert.deepEqual(prepared, ['StoreActor', 'StoreActor']);
+  assert.equal(activated, false);
 });
 
 test('canonical actorJoin(28) malformed body is rejected by the generated decoder', () => {
@@ -175,6 +180,7 @@ test('remote Actor Join rejects an Authority stable type without a local factory
 function receiverFor(options: {
   readonly readAuthority: () => Promise<unknown>;
   readonly getOrCreateActor: (actorId: string, stableType: string) => Promise<unknown>;
+  readonly requireRelocationActorFactory?: (stableType: string) => void;
 }): ZLinkRemoteActorJoinReceiver {
   const state = {
     remoteBoundSessionTarget: undefined,
@@ -188,6 +194,7 @@ function receiverFor(options: {
     authorityStore: () => ({ readAuthority: options.readAuthority } as never),
     actorManager: () => ({
       getOrCreateActor: options.getOrCreateActor,
+      requireRelocationActorFactory: options.requireRelocationActorFactory ?? (() => undefined),
       getState: () => state
     } as never),
     spotManager: () => ({

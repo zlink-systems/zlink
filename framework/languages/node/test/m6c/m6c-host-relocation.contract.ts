@@ -1142,6 +1142,11 @@ test('canonical ActorJoin admission recovery crosses command 28 into command 40 
     assert.notEqual(recovery, undefined);
     assert.equal(recovery!.request.sourceSpotId, 'source-room');
     assert.equal(
+      harness.canonicalAdmissionActorNodeRid(),
+      'source',
+      'command 28 admission must retain the source ActorRef until target CAS'
+    );
+    assert.equal(
       recovery!.request.relocationAggregateId.replaceAll('-', ''),
       recovery!.request.handoffId,
       'canonical HandoffId must own the relocation aggregate'
@@ -1334,7 +1339,16 @@ test('a target-side restore failure delivers Failed(53) end to end and restores 
       Date.now() - started < 5_000,
       'the explicit Failed must resolve the relocation well before the 30s control deadline'
     );
-    assert.equal(harness.location.aborts, 1, 'the source authority must be restored from memory');
+    assert.equal(
+      harness.location.aborts,
+      0,
+      'a restore failure before reservation must not create an aggregate marker to abort'
+    );
+    assert.equal(
+      harness.events.includes('source:rolled-back'),
+      true,
+      'the source in-memory seal must still roll back before the failure returns'
+    );
   } finally {
     console.warn = originalWarn;
     console.error = originalError;
@@ -1661,7 +1675,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     options: {
       entryNodeRid: 'entry-target',
       canonicalActorJoinResolver: async () => ({ actorType: 'Player' }),
-      actorResolver: () => targetActor,
+      actorResolver: () => undefined,
       async dispatchEntryActorJoin() {
         events.push('onJoined');
       },
@@ -1934,6 +1948,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     location,
     targetActorManager,
     canonicalRecoveryIdentity: () => restoredCanonicalRecovery,
+    canonicalAdmissionActorNodeRid: () => {
+      if (canonicalHandoffId === undefined) return undefined;
+      return String(admissions.get(canonicalHandoffId)?.admission.actorRef.nodeRid);
+    },
     relocate,
     releaseAccepted,
     releaseSourceLeave,
