@@ -807,7 +807,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             actorState.Handoff.AbortImport(request.HandoffId);
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
+                // A superseded PREPARE is a transient ownership race, not an
+                // absent Actor. The canonical terminal mapper turns this into
+                // actorLocationStale(21), whose public classification is
+                // Unavailable.
+                ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{request.ActorId}' relocation admission was superseded "
                 + "by a newer identity before PREPARE.");
         }

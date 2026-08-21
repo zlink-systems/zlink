@@ -3091,6 +3091,205 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task RemoteActorCreateUsesNativeRequestReplyTerminal()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "actor-create-source");
+        await using var target = NewNode(context, "actor-create-target");
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://actor-create-source-{suffix}";
+        var targetEndpoint = $"inproc://actor-create-target-{suffix}";
+        source.SetBind(sourceEndpoint);
+        target.SetBind(targetEndpoint);
+        source.ConnectPeer(targetEndpoint, target.RoutingId);
+        var operationTarget = new RecordingActorCreateOperationTarget("mesh");
+        target.SetActorCreateOperationTarget(operationTarget);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
+                                   && target.Status().AdmittedPeerCount == 1);
+
+        var targetGeneration = target.Status().LifecycleGeneration;
+        var reservation = new ObjectReservationFence(
+            "actor-reservation",
+            "actor-store-version",
+            71,
+            73,
+            target.RoutingId,
+            targetGeneration,
+            "target-owner",
+            79,
+            1);
+        var deadline = checked(
+            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CreateActorRemote(
+                target.RoutingId,
+                "remote-actor",
+                "Sample.RemoteActor",
+                reservation,
+                deadline,
+                out var operation,
+                TimeSpan.FromSeconds(3)));
+
+        await WaitUntilAsync(() => operationTarget.CreateCount == 1);
+        var (completion, _) = DrainCompletion(source, operation);
+        Assert.Equal(MeshOperationKind.ActorCreate, completion.OperationKind);
+        Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+        Assert.Equal(
+            new ActorCreateCompletion(
+                ActorCreateResult.Created,
+                new ActorRef(
+                    "remote-actor",
+                    reservation.ObjectGeneration,
+                    "mesh",
+                    target.RoutingId)),
+            completion.ActorCreateCompletion);
+        Assert.Equal(1, operationTarget.CreateCount);
+        Assert.Equal(source.RoutingId, operationTarget.LastOperation.SourceNodeRid);
+        Assert.Equal(reservation, operationTarget.LastOperation.Reservation);
+    }
+
+    [Fact]
+    public async Task RawReplyCannotCompleteNativeInfrastructureRequests()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "raw-reply-source");
+        await using var target = context.CreateRouterSocket();
+        await using var monitor = source.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://raw-reply-source-{suffix}";
+        var targetEndpoint = $"inproc://raw-reply-target-{suffix}";
+        var targetRid = RoutingId.From($"raw-reply-target-{suffix}");
+        target.SetRoutingId(targetRid);
+        target.Bind(targetEndpoint);
+        source.SetBind(sourceEndpoint);
+        source.ConnectPeer(targetEndpoint, targetRid);
+        source.Start();
+
+        using (var sourceHello = await ReceiveRouterEnvelopeAsync(target))
+        {
+            Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                sourceHello.FirstPart().AsReadOnlyMemory().Span,
+                out var command,
+                out _,
+                out _));
+            Assert.Equal(ServiceWireConstants.Command.Hello, command);
+        }
+        using (var targetHello = Message.From(
+                   ZLinkServiceWireCodec.EncodeRouteAdmission(
+                       ServiceWireConstants.Command.Admit,
+                       "mesh",
+                       targetEndpoint,
+                       lifecycleGeneration: 1,
+                       descriptorRevision: 1,
+                       new Dictionary<string, uint>(StringComparer.Ordinal),
+                       objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
+            await target.Send(source.RoutingId)
+                .Message(targetHello)
+                .Async(CancellationToken.None);
+        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1);
+
+        var reservation = new ObjectReservationFence(
+            "raw-reply-reservation",
+            "raw-reply-store",
+            17,
+            19,
+            targetRid,
+            1,
+            "raw-reply-owner",
+            23,
+            1);
+        var deadline = checked(
+            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds());
+
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CreateUserSpot(
+                targetRid,
+                "raw-reply-spot",
+                "Sample.RawReplySpot",
+                reservation,
+                deadline,
+                out var createOperation,
+                TimeSpan.FromSeconds(3)));
+        var create = await RejectRawReplyThenReceiveNativeTerminalAsync(
+            source,
+            target,
+            monitor,
+            createOperation,
+            ZLinkServiceWireCodec.EncodeUserSpotCreateReply(
+                createOperation.Low,
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new UserSpotCreateCompletion(
+                    UserSpotCreateResult.Created,
+                    "raw-reply-spot",
+                    reservation.ObjectGeneration)));
+        Assert.Equal(MeshOperationKind.UserSpotCreate, create.OperationKind);
+        Assert.Equal((int)RequestResult.Ok, create.TerminalResult);
+
+        var closeFence = new UserSpotCloseFence(
+            "raw-reply-spot",
+            reservation.ObjectGeneration,
+            targetRid,
+            1,
+            reservation.AuthorityOwnerGeneration,
+            "raw-reply-close-store");
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CloseUserSpot(
+                targetRid,
+                closeFence,
+                deadline,
+                out var closeOperation,
+                TimeSpan.FromSeconds(3)));
+        var close = await RejectRawReplyThenReceiveNativeTerminalAsync(
+            source,
+            target,
+            monitor,
+            closeOperation,
+            ZLinkServiceWireCodec.EncodeUserSpotCloseReply(
+                closeOperation.Low,
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new UserSpotCloseCompletion(true)));
+        Assert.Equal(MeshOperationKind.UserSpotClose, close.OperationKind);
+        Assert.Equal((int)RequestResult.Ok, close.TerminalResult);
+
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CreateActorRemote(
+                targetRid,
+                "raw-reply-actor",
+                "Sample.RawReplyActor",
+                reservation,
+                deadline,
+                out var actorCreateOperation,
+                TimeSpan.FromSeconds(3)));
+        var actorCreate = await RejectRawReplyThenReceiveNativeTerminalAsync(
+            source,
+            target,
+            monitor,
+            actorCreateOperation,
+            ZLinkServiceWireCodec.EncodeActorCreateReply(
+                actorCreateOperation.Low,
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new ActorCreateCompletion(
+                    ActorCreateResult.Created,
+                    new ActorRef(
+                        "raw-reply-actor",
+                        reservation.ObjectGeneration,
+                        "mesh",
+                        targetRid))));
+        Assert.Equal(MeshOperationKind.ActorCreate, actorCreate.OperationKind);
+        Assert.Equal((int)RequestResult.Ok, actorCreate.TerminalResult);
+    }
+
+    [Fact]
     public async Task RelocationReplyRelayUsesRawCommandsAndRetriesAfterAckLoss()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -3807,6 +4006,71 @@ public sealed class StatefulServiceRuntimeTests
         }
     }
 
+    private static async Task<MeshReceiveRecord>
+        RejectRawReplyThenReceiveNativeTerminalAsync(
+            ZLinkManagedMeshNode source,
+            IRouterSocket target,
+            IMeshNodeMonitor monitor,
+            MeshOperationId operationId,
+            byte[] nativeTerminal)
+    {
+        using var request = await ReceiveRouterRequestAsync(target);
+        var sourceRid = Assert.IsType<RoutingId>(request.RoutingId);
+        var requestSeq = Assert.IsType<ulong>(request.RequestSeq);
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        using (var rawReply = Message.From(ZLinkServiceWireCodec.EncodeReply(
+                   operationId.Low,
+                   (int)RequestResult.ProtocolError,
+                   (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError)))
+            await target.Send(sourceRid)
+                .Message(rawReply)
+                .Async(CancellationToken.None);
+
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.DoesNotContain(
+            DrainRecords(source),
+            record => record.Kind == MeshRecordKind.Completion
+                      && record.OperationId == operationId);
+
+        using var reply = Message.From(nativeTerminal);
+        target.Reply(sourceRid, requestSeq).Message(reply).Submit();
+        return DrainCompletion(source, operationId).Record;
+    }
+
+    private static async Task<Received> ReceiveRouterEnvelopeAsync(IRouterSocket target)
+    {
+        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var received = Received.Create();
+            if (target.Recv(received, RecvFlags.DontWait))
+                return received;
+            received.Dispose();
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("The raw reply target did not receive a frame.");
+    }
+
+    private static async Task<Received> ReceiveRouterRequestAsync(IRouterSocket target)
+    {
+        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var received = Received.Create();
+            if (!target.Recv(received, RecvFlags.DontWait))
+            {
+                received.Dispose();
+                await Task.Delay(10);
+                continue;
+            }
+            if (received.MessageType == ReceivedMessageType.Request
+                && received.RequestSeq.HasValue)
+                return received;
+            received.Dispose();
+        }
+        throw new TimeoutException("The raw reply target did not receive a request.");
+    }
+
     private static List<MeshReceiveRecord> DrainRecords(ZLinkManagedMeshNode node)
     {
         var records = new List<MeshReceiveRecord>();
@@ -3928,6 +4192,34 @@ public sealed class StatefulServiceRuntimeTests
                 RequestResult.Ok,
                 ServiceWireConstants.FrameworkErrorCode.None,
                 new UserSpotCloseCompletion(true)));
+        }
+    }
+
+    private sealed class RecordingActorCreateOperationTarget(string meshName)
+        : IActorCreateOperationTarget
+    {
+        private int _createCount;
+
+        internal int CreateCount => Volatile.Read(ref _createCount);
+        internal ActorCreateOperation LastOperation { get; private set; }
+
+        public ValueTask<ActorCreateOperationTerminal> CreateAsync(
+            ActorCreateOperation operation,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastOperation = operation;
+            Interlocked.Increment(ref _createCount);
+            return ValueTask.FromResult(new ActorCreateOperationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new ActorCreateCompletion(
+                    ActorCreateResult.Created,
+                    new ActorRef(
+                        operation.ActorId,
+                        operation.Reservation.ObjectGeneration,
+                        meshName,
+                        operation.Reservation.TargetNodeRid))));
         }
     }
 

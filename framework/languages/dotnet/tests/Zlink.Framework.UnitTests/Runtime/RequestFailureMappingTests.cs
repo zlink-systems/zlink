@@ -224,6 +224,9 @@ public sealed class RequestFailureMappingTests
     //  NOT CapacityExceeded (which is reserved for placement/admission capacity).
     [InlineData(RequestResult.Busy, 18, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData(RequestResult.Busy, 19, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    //  actorLocationStale(21) is a remote ownership race and therefore public
+    //  Unavailable, including a superseded canonical Actor-join PREPARE.
+    [InlineData(RequestResult.Conflict, 21, ZLinkFrameworkErrorKind.Unavailable)]
     [InlineData(RequestResult.Busy, 33, ZLinkFrameworkErrorKind.InvalidOperation)]
     [InlineData(RequestResult.Busy, 35, ZLinkFrameworkErrorKind.DataLost)]
     public void Completion_FineFailureCode_Refines_Terminal(
