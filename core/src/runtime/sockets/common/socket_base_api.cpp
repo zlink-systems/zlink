@@ -573,7 +573,14 @@ int zlink::socket_base_t::socket_type () const
 
 bool zlink::socket_base_t::has_in ()
 {
-    scoped_lock_t lock (receive_runtime ().sync);
+    //  Stage 1 (plan 7.1): poll readiness asks this once per socket per
+    //  zlink_poll(), so a 100-socket poll took 100 shared-receive-mutex round
+    //  trips against the mutex the I/O side also uses. The mutex only orders
+    //  this against a concurrent async command executor; without one, command
+    //  dispatch and the receive path both run on this thread, which is what
+    //  the pre-3ef4d09a37 lock-free implementation relied on.
+    scoped_optional_lock_t lock (
+      async_mailbox_owns_commands () ? &receive_runtime ().sync : NULL);
     return xhas_in ();
 }
 
