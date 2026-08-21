@@ -3,7 +3,6 @@ using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Spots;
 using Systems.Zlink.Framework.Runtime.Protocol;
-using System.Text.Json;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
@@ -40,15 +39,13 @@ internal static class ZLinkMeshRecordAdapters
         IReadOnlyList<Message> parts,
         string meshName)
     {
-        if (parts.Count is < 1 or > 2 || HasLegacyActorJoinTransfer(parts))
+        if (parts.Count is < 1 or > 2)
             return null;
 
         try
         {
-            // Command 28 is shared with the pre-canonical relocation
-            // transport.  Only the generated multipart decoder may recognize
-            // canonical traffic; a failed decode is intentionally a legacy
-            // fallback, never a dropped control record.
+            // Only the generated multipart decoder recognizes canonical
+            // command 28 traffic.
             var decoded = ServiceWirePilotCodec.DecodeActorJoin28(
                 parts.Select(static part => part.AsReadOnlyMemory().ToArray()).ToArray());
             var request = new ZLinkServiceWireCodec.ActorJoinRequestRecord(
@@ -83,22 +80,6 @@ internal static class ZLinkMeshRecordAdapters
                                       or OverflowException)
         {
             return null;
-        }
-    }
-
-    private static bool HasLegacyActorJoinTransfer(IReadOnlyList<Message> parts)
-    {
-        try
-        {
-            return ZLinkRemoteActorJoinPackets.DecodeJoinRequest(parts).HandoffId
-                is { Length: > 0 };
-        }
-        catch (Exception error) when (error is InvalidDataException
-                                      or ArgumentException
-                                      or InvalidOperationException
-                                      or JsonException)
-        {
-            return false;
         }
     }
 
@@ -228,4 +209,7 @@ internal sealed class ZLinkMeshActorJoinRequest(
             : ActorJoinResult.Rejected;
         return _record.ReplyJoin(result, parts);
     }
+
+    public SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
+        _record.ReplyTerminal(result, failureCode);
 }

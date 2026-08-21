@@ -107,6 +107,13 @@ internal readonly record struct ActorJoinRequest(
     ulong TargetAuthorityOwnerGeneration,
     ulong TargetOwnerLeaseGeneration);
 
+// Canonical command 28 has no private ActorType or handoff identifier.  This
+// context lets the established target admission derive those values from the
+// Authority row without making the service-wire receiver a second admission
+// owner.
+internal sealed record ZLinkCanonicalActorJoinAdmission(
+    ActorJoinRequest Request);
+
 internal sealed record ActorJoinReplyCompletion(
     ActorJoinResult JoinResult,
     ActorJoinReplySpot? Spot,
@@ -550,6 +557,7 @@ internal sealed class MeshClaim : IDisposable
 internal struct MeshReceiveRecord
 {
     private readonly Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? _reply;
+    private readonly Func<RequestResult, uint, SubmitResult>? _terminalReply;
     private readonly Func<ActorJoinResult, IReadOnlyList<Message>, SendFlags, SubmitResult>?
         _joinReply;
     internal MeshReceiveRecord(
@@ -567,7 +575,8 @@ internal struct MeshReceiveRecord
         ulong ownerLeaseGeneration = 0,
         byte messageFollowHopCount = 0,
         ulong replyRouteId = 0,
-        ulong deadlineUnixMs = 0)
+        ulong deadlineUnixMs = 0,
+        Func<RequestResult, uint, SubmitResult>? terminalReply = null)
     {
         Kind = kind; Domain = domain; SourceNodeRid = sourceNodeRid;
         SourceSpotId = sourceSpotId; SourceBindingGeneration = sourceBindingGeneration;
@@ -575,6 +584,7 @@ internal struct MeshReceiveRecord
         ChannelName = channelName; Topic = topic; ApplicationMetadata = applicationMetadata;
         PartOffset = partOffset; PartCount = partCount; TerminalResult = terminalResult;
         FailureErrno = failureErrno; KindData = kindData; _reply = reply;
+        _terminalReply = terminalReply;
         _joinReply = joinReply;
         TargetNodeGeneration = targetNodeGeneration;
         AuthorityOwnerGeneration = authorityOwnerGeneration;
@@ -624,6 +634,8 @@ internal struct MeshReceiveRecord
         CaptureReplyRoute() => _reply;
     public SubmitResult Reply(IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None) =>
         _reply?.Invoke(parts, flags) ?? SubmitResult.Terminated;
+    public SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
+        _terminalReply?.Invoke(result, failureCode) ?? SubmitResult.Terminated;
     public SubmitResult ReplyJoin(
         ActorJoinResult result,
         IReadOnlyList<Message> parts,

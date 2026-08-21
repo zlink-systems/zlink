@@ -52,6 +52,45 @@ public sealed class ServiceWireActorJoinReplyCodecTests
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, error);
     }
 
+    [Theory]
+    [InlineData((byte)' ')]
+    [InlineData((byte)0)]
+    public void Request_rejects_non_boundary_actor_id(byte actorIdByte)
+    {
+        var encoded = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+            new ActorJoinRequest(
+                1,
+                new ActorRef("x", 1, "mesh", RoutingId.From(new byte[] { 1 })),
+                1, 1, 1, false, "spot", 1,
+                RoutingId.From(new byte[] { 2 }), 1, 1, 1));
+        // Prefix (5), correlation (8), then text8 length (1).
+        encoded[14] = actorIdByte;
+
+        Assert.False(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
+            encoded, "mesh", out _, out var error));
+        Assert.NotEqual(ZLinkServiceWireCodec.DecodeError.None, error);
+    }
+
+    [Theory]
+    [InlineData((byte)' ')]
+    [InlineData((byte)0)]
+    public void Request_rejects_non_boundary_target_spot_id(byte targetSpotIdByte)
+    {
+        var encoded = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+            new ActorJoinRequest(
+                1,
+                new ActorRef("actor", 1, "mesh", RoutingId.From(new byte[] { 1 })),
+                1, 1, 1, false, "target", 1,
+                RoutingId.From(new byte[] { 2 }), 1, 1, 1));
+        var targetOffset = encoded.AsSpan().IndexOf("target"u8);
+        Assert.True(targetOffset >= 0);
+        encoded.AsSpan(targetOffset, "target"u8.Length).Fill(targetSpotIdByte);
+
+        Assert.False(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
+            encoded, "mesh", out _, out var error));
+        Assert.NotEqual(ZLinkServiceWireCodec.DecodeError.None, error);
+    }
+
     [Fact]
     public void Accepted_canonical_vectors_round_trip_field_for_field()
     {

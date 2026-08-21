@@ -760,6 +760,12 @@ internal static partial class ZLinkServiceWireCodec
                 : reader.Remaining != 0 ? DecodeError.TrailingByte : DecodeError.InvalidField;
             return false;
         }
+        if (string.IsNullOrWhiteSpace(actorId) || actorId.IndexOf('\0') >= 0
+            || string.IsNullOrWhiteSpace(targetSpotId) || targetSpotId.IndexOf('\0') >= 0)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
         if (entryByte > 1)
         {
             error = DecodeError.InvalidField;

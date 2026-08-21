@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -39,16 +41,19 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         {
             try
             {
-                await runtime.PrepareCanonicalActorJoinAsync(
+                var canonicalAdmission = await runtime.AdmitCanonicalActorJoinAsync(
+                        joinRequest.TargetSpotId,
                         canonical.Request.Request,
+                        canonical.Payload,
                         cancellationToken)
                     .ConfigureAwait(false);
+                ReplyCanonicalAdmission(joinRequest, canonicalAdmission);
             }
             catch (Exception ex)
             {
-                ReplyRejected(joinRequest, payload.MessageName, "canonical-store-admission", ex);
-                return;
+                ReplyCanonicalTerminal(joinRequest, ex);
             }
+            return;
         }
         var hasHandler = actorJoins.TryResolve(out var descriptor)
                          && descriptor is not null;
@@ -317,6 +322,70 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 Exception: exception));
         using var emptyReply = Message.From(ReadOnlySpan<byte>.Empty);
         nativeSpot.ReplyActorJoin(joinRequest, 1, emptyReply);
+    }
+
+    private void ReplyCanonicalAdmission(
+        ZLinkBackendActorJoinRequest joinRequest,
+        ZLinkRemoteActorAdmissionReply admission)
+    {
+        if (admission.Reply.Length == 0)
+        {
+            nativeSpot.ReplyActorJoin(
+                joinRequest,
+                admission.Accepted ? 0 : 1,
+                Array.Empty<Message>());
+            return;
+        }
+
+        using var reply = Message.From(
+            ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                typeof(ZLinkMessage).Name,
+                admission.ReplyContentType,
+                admission.Reply));
+        nativeSpot.ReplyActorJoin(
+            joinRequest,
+            admission.Accepted ? 0 : 1,
+            reply);
+    }
+
+    private static void ReplyCanonicalTerminal(
+        ZLinkBackendActorJoinRequest joinRequest,
+        Exception exception)
+    {
+        if (joinRequest is not ZLinkMeshActorJoinRequest meshRequest)
+            return;
+        var terminal = exception is ZLinkFrameworkException framework
+            ? framework.Kind switch
+            {
+                ZLinkFrameworkErrorKind.TypeMismatch => (
+                    RequestResult.Conflict,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch),
+                ZLinkFrameworkErrorKind.CapacityExceeded => (
+                    RequestResult.Backpressured,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.None),
+                ZLinkFrameworkErrorKind.ProtocolError => (
+                    RequestResult.ProtocolError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),
+                ZLinkFrameworkErrorKind.InvalidOperation => (
+                    RequestResult.Conflict,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale),
+                ZLinkFrameworkErrorKind.NotFound => (
+                    RequestResult.NotFound,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound),
+                ZLinkFrameworkErrorKind.Unavailable => (
+                    RequestResult.InternalError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed),
+                ZLinkFrameworkErrorKind.Rejected => (
+                    RequestResult.Rejected,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestRejected),
+                _ => (
+                    RequestResult.InternalError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed)
+            }
+            : (
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed);
+        meshRequest.ReplyTerminal(terminal.Item1, terminal.Item2);
     }
 
     private readonly record struct JoinPayload(

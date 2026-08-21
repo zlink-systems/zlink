@@ -623,7 +623,9 @@ internal sealed record ZLinkRemoteActorAdmissionRequest(
     ulong ActorAuthorityOwnerGeneration = 0,
     long PredictedPayloadBytes = 0,
     ulong TargetSpotGeneration = 0,
-    ulong TargetSpotAuthorityOwnerGeneration = 0);
+    ulong TargetSpotAuthorityOwnerGeneration = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore]
+    ZLinkCanonicalActorJoinAdmission? Canonical = null);
 
 internal sealed record ZLinkRemoteActorAdmissionReply(
     bool Accepted,

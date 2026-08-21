@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
@@ -5148,6 +5149,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 stateful,
                 ownership);
         }
+        if (IsCanonicalActorJoinHeader(head))
+        {
+            if (!ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
+                    head,
+                    _meshName,
+                    out var actorJoin,
+                    out _))
+            {
+                if (TryReadCanonicalActorJoinCorrelation(head, out var correlation))
+                    ScheduleCanonicalActorJoinTerminal(
+                        sourceRid,
+                        correlation,
+                        RequestResult.ProtocolError,
+                        (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
+                return false;
+            }
+
+            // The generated multipart decoder is the canonical recognizer.
+            var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
+                received.Parts,
+                _meshName);
+            if (canonical is null)
+            {
+                ScheduleCanonicalActorJoinTerminal(
+                    sourceRid,
+                    actorJoin.Request.Correlation,
+                    RequestResult.ProtocolError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
+                return false;
+            }
+            return ProcessCanonicalActorJoin(
+                sourceRid,
+                actorJoin,
+                ownership);
+        }
         if (ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
                 head,
                 out var instanceActivation,
@@ -5361,6 +5397,192 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             parts,
             true,
             ownership.TakeApplicationOwner());
+    }
+
+    private bool ProcessCanonicalActorJoin(
+        RoutingId sourceRid,
+        ZLinkServiceWireCodec.ActorJoinRequestRecord actorJoin,
+        RawIngressOwnership ownership)
+    {
+        ZLinkSpotId targetSpotId;
+        try
+        {
+            _ = ZLinkActorId.FromBoundary(
+                actorJoin.Request.Actor.ActorId,
+                nameof(actorJoin));
+            targetSpotId = ZLinkSpotId.FromBoundary(
+                actorJoin.Request.TargetSpotId,
+                nameof(actorJoin));
+        }
+        catch (ArgumentException)
+        {
+            ScheduleCanonicalActorJoinTerminal(
+                sourceRid,
+                actorJoin.Request.Correlation,
+                RequestResult.ProtocolError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
+            return false;
+        }
+
+        Peer? peer;
+        ZLinkManagedSpot? targetSpot;
+        lock (_gate)
+        {
+            _peersByRid.TryGetValue(sourceRid, out peer);
+            targetSpot = actorJoin.Request.Entry
+                ? _entrySpot
+                : _spots.TryGetValue(targetSpotId, out var userSpot)
+                    ? userSpot
+                    : null;
+        }
+
+        // Transport owns only authenticated-peer and node-execution checks.
+        // Actor/Spot/owner fences intentionally remain in target admission.
+        if (peer is null
+            || !peer.Admitted
+            || actorJoin.Request.ActorNodeGeneration != peer.LifecycleGeneration
+            || actorJoin.Request.TargetNodeRid != _routingId
+            || actorJoin.Request.TargetNodeGeneration != _lifecycleGeneration
+            || targetSpot is null)
+        {
+            ScheduleCanonicalActorJoinTerminal(
+                sourceRid,
+                actorJoin.Request.Correlation,
+                RequestResult.ProtocolError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
+            return false;
+        }
+
+        SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
+            ScheduleCanonicalActorJoinTerminal(
+                sourceRid,
+                actorJoin.Request.Correlation,
+                result,
+                failureCode);
+
+        SubmitResult ReplyJoin(
+            ActorJoinResult result,
+            IReadOnlyList<Message> reply,
+            SendFlags _)
+        {
+            var completion = result == ActorJoinResult.Accepted
+                ? new ActorJoinReplyCompletion(
+                    result,
+                    new ActorJoinReplySpot(
+                        actorJoin.Request.TargetSpotId,
+                        actorJoin.Request.TargetSpotGeneration),
+                    1,
+                    checked((uint)ZLinkRemoteActorJoinPackets
+                        .ConservativeReceiveChunkLimitBytes))
+                : new ActorJoinReplyCompletion(result, null, 0, 0);
+            var wire = new List<ReadOnlyMemory<byte>>(reply.Count == 0 ? 1 : 2)
+            {
+                ZLinkServiceWireCodec.EncodeActorJoinReply(
+                    actorJoin.Request.Correlation,
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    completion)
+            };
+            if (reply.Count != 0)
+                wire.Add(ZLinkApplicationPayloadEnvelopeCodec
+                    .EncodeFrameworkMultipart(reply));
+            return ScheduleCanonicalActorJoinReply(sourceRid, wire);
+        }
+
+        var parts = CloneParts(ownership.Receipt.Parts);
+        var record = new MeshReceiveRecord(
+            MeshRecordKind.SpotControl,
+            MeshReadyDomains.Application,
+            sourceRid,
+            actorJoin.Request.TargetSpotId,
+            peer.LifecycleGeneration,
+            actorJoin.Request.Actor,
+            new MeshOperationId(0, actorJoin.Request.Correlation),
+            MeshOperationKind.ActorJoin,
+            null,
+            null,
+            null,
+            0,
+            parts.Count,
+            0,
+            0,
+            new ActorControlRecord(
+                ActorLifecycleKind.Joined,
+                actorJoin.Request.Actor,
+                actorJoin.Request.Actor,
+                string.Empty,
+                actorJoin.Request.TargetSpotId,
+                0,
+                actorJoin.Request.TargetSpotGeneration,
+                0,
+                0,
+                0),
+            joinReply: ReplyJoin,
+            terminalReply: ReplyTerminal);
+        if (EnqueueOwned(
+                MailboxKey.ForSpot(targetSpot, MeshReadyDomains.Application),
+                record,
+                parts,
+                true,
+                ownership.TakeApplicationOwner()))
+            return true;
+
+        // A full target mailbox is an observable request terminal, never a
+        // silent drop.  Admission is not entered in this case.
+        ReplyTerminal(RequestResult.Backpressured,
+            (uint)ServiceWireConstants.FrameworkErrorCode.None);
+        return false;
+    }
+
+    private static bool IsCanonicalActorJoinHeader(ReadOnlySpan<byte> head) =>
+        head.Length >= 5
+        && head[0] == ServiceWireConstants.Magic0
+        && head[1] == ServiceWireConstants.Magic1
+        && head[2] == ServiceWireConstants.WireMajor
+        && head[3] == (byte)ServiceWireConstants.Command.ActorJoin;
+
+    private static bool TryReadCanonicalActorJoinCorrelation(
+        ReadOnlySpan<byte> head,
+        out ulong correlation)
+    {
+        correlation = 0;
+        if (head.Length < 13)
+            return false;
+        correlation = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
+            head.Slice(5, sizeof(ulong)));
+        return correlation != 0;
+    }
+
+    private SubmitResult ScheduleCanonicalActorJoinTerminal(
+        RoutingId sourceRid,
+        ulong correlation,
+        RequestResult result,
+        uint failureCode) =>
+        ScheduleCanonicalActorJoinReply(
+            sourceRid,
+            [ZLinkServiceWireCodec.EncodeReply(
+                correlation,
+                (int)result,
+                failureCode)]);
+
+    private SubmitResult ScheduleCanonicalActorJoinReply(
+        RoutingId sourceRid,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire)
+    {
+        if (TryScheduleRoutedSend(sourceRid, wire))
+            return SubmitResult.Ok;
+
+        // The regular routed-send queue rejected this terminal. Keep its exact
+        // frame alive on the service-terminal path, which waits for capacity
+        // until its bounded deadline rather than dropping the caller's reply.
+        if (!RunInboundOperation(async () =>
+            {
+                if (!await SendServiceTerminalAsync(sourceRid, wire)
+                        .ConfigureAwait(false))
+                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            }))
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+        return SubmitResult.Backpressured;
     }
 
     private void ProcessRelocationPrepare(RoutingId sourceNodeRid,
