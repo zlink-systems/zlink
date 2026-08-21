@@ -261,3 +261,21 @@ failure_reuses_staging(격리 통과 → 전체-실행 flake, 기존 클래스 �
 **판정: 랜딩 보류(diff 미커밋 유지).** land/fix-forward는 #1 §9 tension 해소 후 결정. #1 핵심질문:
 canonical 28 수신이 membership commit해야 하나(plain join은 정답) vs relocation-28은 40까지 defer해야
 하나 — 수신자가 둘을 구분하는가.
+
+
+---
+
+## 단계 1(A1) fix-forward: #2-#6 적용, #1에서 정직 STOP (2026-08-21)
+
+sol 7건 중 **#2·#3·#4·#5·#6 적용 완료**(focused 40/40):
+- #3 malformed Actor ID: 공백/NUL을 canonical decode에서 거부 + 경계에서 ProtocolError terminal.
+- #2 mailbox-full: enqueue 실패 시 Backpressured command-20 terminal.
+- #4 existing Actor: Store stableType vs 기존 ActorType 불일치를 TypeMismatch 거절.
+- #5 TypeMismatch → Conflict/actorTypeMismatch wire 매핑.
+- #6 typed Store terminal backpressure: application rejection 대신 원 terminal 재시도.
+
+**#1에서 STOP(정직) — 제 §9 명확화의 허점을 노출**: command 28엔 relocation-여부/identity가 없고
+28↔40 결합 금지 → target이 plain vs relocation을 구분 불가. "모두 moving admit + plain 즉시 해제"는
+순환(해제가 plain 식별을 전제). 게다가 node 1차 증거와 충돌: node canonical 28은 beginMove 미호출,
+moving은 40-track(actor-transfer-runtime:403/702)이 설정. → 제 "28에서 moving" 명확화 재검토 필요.
+**#1·#7(real-dispatcher 테스트)는 이 discriminator 스펙 판정 후 진행.** diff 미커밋 유지.
