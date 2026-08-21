@@ -6,6 +6,52 @@
 이 문서가 앞으로의 활성 트래커다. 각 단계 카드는 목표·문제·구체 단계·완료조건(DoD)·선행조건·
 근거 스펙을 담는다. (본문의 "체크리스트 line/항목 …" 참조는 아카이브된 그 문서를 가리킨다.)
 
+## ⭐ 세션 핸드오프 (2026-08-21 마감 — 새 세션 여기부터)
+
+**이번 세션 완료·push(main)**
+- `dd234c3110` **A6: cpp canonical actorJoin app-reply 양방향 parity**(수신 wrap + 발신 unwrap + serializer 가드) —
+  sol 2R 구현+2R 리뷰+Claude 독립검증(ctest 5/5·TicTacToe/Bingo). **완료.**
+- `42ed2d0cc1`·`68bce060d4` **A5 검증**: Property 2(bound-Session seal 순서)=canonical parity PASS(공유 파이프라인·회귀
+  없음; 크로스랭 2:2 seal-순서 불일치는 기존 이슈로 기록). Property 1(multi-attempt)=3언어 static PASS, **Node는 열린
+  설계 질문**(eager-materialize와 얽힘 — 시도 fix revert, sol 2Critical+1High). §3a·[[canonical-multiattempt-design-trap]].
+- `e96334f07e`+`7c7a67727b` 등 **3b 첫 스테이지 신설**(`user-spot-join-node-dotnet`, `all` 미포함): Node source
+  `joinSpot`→.NET User-Spot canonical 28. canonical-only observable(Flow) 작동(양성/음성 검증됨). **아직 그린 아님.**
+
+**⚠ 이번 세션의 판단 오류(반복 금지)**: 3b 실패를 "authority row 포맷 gap"으로 부풀렸다 정정했다 다시 뒤집는 등
+플립플롭했다. 최종 grounded 결론은 아래. 3b 실패를 다룰 때 **§0(포맷-온리·로직/검증 추가 금지)**를 먼저 읽을 것.
+
+**3b 첫 스테이지 blocker — grounded 진단(diag 에이전트, run-dir 증거)**
+- 실패 지점 = `AdmitCanonicalActorJoinAsync`의 source-authority fence 중 **`TryDecodeRelocating == false`**
+  (ZLinkFrameworkRuntimeActors.cs:2397-2405, ZLinkActorAuthorityPayloadCodec.cs:298/320). row는 **Found**,
+  objectGeneration/actorNodeRid/ownerNodeGeneration **일치**, decoder만 실패.
+- 원인: **Node가 actor Authority row payload를 JSON**(`{"version":1,"actorType":...}`,
+  actor-authority-publication.ts:31/113 `encodeActorAuthorityIdentity`)으로 publish. .NET `TryDecodeRelocating`은
+  relocation envelope를 벗긴 뒤 **direct codec이 첫 4바이트 `ZLAU`**를 요구 → false.
+- **retraction의 전제가 틀렸음 주의**: "통과하는 whole-node relocation이 authority interop을 증명한다"는 **틀림** —
+  그 경로는 `relocate()`+commit 시 authority rewrite라 **`AdmitCanonicalActorJoinAsync`/`TryDecodeRelocating`을 안 거침**
+  (별도 경로, node_peer_host.js:493, actor-transfer-runtime.ts:1233). 즉 canonical 28 source-admission의 authority-read는
+  이 스테이지가 **처음** 크로스랭으로 실행.
+- private baseline 무효: force-private로도 admission 미도달 — .NET target이 noncanonical multipart를 admission **전에**
+  ProtocolError로 거부(ZLinkManagedMeshNode.cs:5263).
+
+**다음 세션 착수점(§0 포맷-온리 틀에서만; 로직/검증 추가 금지)**
+1. **정본 판정 먼저(Claude 단독, 스펙 근거)**: canonical actor-authority **payload 표현**의 정본 포맷이 무엇인지 스펙/스키마로
+   확정 — spec 21(21-location-runtime §2.4: record는 JSON, `payload`는 opaque base64)·22(Redis provider)·
+   service-wire schema(`authority-payload-v1`)를 읽고, 언어별 실제 표현 대조: **Node=JSON, .NET/Java=binary `ZLAU`,
+   C++=`zlink:actor-authority:v1`**. (주의: record 껍데기 JSON은 정상. 문제는 그 안의 actor-authority `payload` 계층.)
+   정본이 binary라면 Node·(C++ 정렬 여부)만 전환, JSON이라면 .NET/Java 디코더가 이미 왜 binary를 요구하는지 재확인.
+2. **최소 포맷 정렬**: 정본에 맞춰 Node의 actor Authority publication이 canonical representation을 쓰도록(같은
+   generation/RID/lifecycle 값 유지). `joinSpot` 자체는 packet-format 선택 경로로 그대로 둔다. **admission 로직 무변경.**
+   하니스로 row를 수동 덮어쓰는 우회는 금지(실제 Node-created actor를 검증 못 함).
+3. 그 후 stage-1 재실행 그린 → §3a multi-attempt 실증(test-only 겹침 송신) → Java·C++ 방향 → 12방향 → `all` 편입.
+4. 관련 메모리: [[actor-authority-row-format-gap]](정정판)·[[canonical-multiattempt-design-trap]]·
+   [[canonical-actor-join-app-reply-contract]]. 하니스 스테이지는 보존됨(selector `user-spot-join-node-dotnet`).
+
+**그 외 남은 단계**: 3c(A7 dialect 제거), 4(C1 코덱 스왑), 5(B0 안정화), 6(D2 6샘플), 7(Z1 ZoneWorld),
+8(D3/D4 게이트), 9(모든 e2e — 맨 마지막), 10(D5 sign-off). 상세는 아래 각 카드.
+
+---
+
 ## 0. 현재 진실 (착수 전 반드시 읽기)
 
 - **제품은 동작한다(JSON/legacy 경로).** 4언어 유닛·6샘플·harness가 green인 것은 사설
