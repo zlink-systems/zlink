@@ -24,6 +24,8 @@ import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -1330,6 +1332,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             parked.reply(),
                             parked.failure()),
                         () -> {
+                            if (actorStages.putIfAbsent(
+                                    request.fence(), target) != null) {
+                                throw new IllegalStateException(
+                                    "standalone Actor target stage already "
+                                        + "exists");
+                            }
+                        },
+                        () -> {
                             //  Newer exact identity evicted this attempt
                             //  before publish committed: tear the
                             //  installed (not yet published) stage down.
@@ -1347,17 +1357,21 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                     });
                             }
                         });
-                } catch (IllegalStateException evicted) {
+                } catch (ZLinkActorJoinPrewarmRegistry.SupersededAttemptException
+                    superseded) {
+                    actorJoin.releasePrewarm(relocationId);
                     return actorStaging.discard(staged).thenCompose(ignored ->
-                        CompletableFuture.<Void>failedFuture(evicted));
+                        CompletableFuture.<Void>failedFuture(
+                            new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "canonical Actor Join PREPARE was superseded "
+                                    + "by a newer relocation identity",
+                                superseded,
+                                Map.of(
+                                    "zlink.origin", "framework",
+                                    "zlink.actorJoin.superseded", "true"))));
                 }
-                if (actorStages.putIfAbsent(request.fence(), target) == null) {
-                    return CompletableFuture.<Void>completedFuture(null);
-                }
-                return actorStaging.discard(staged).thenCompose(ignored ->
-                    CompletableFuture.<Void>failedFuture(
-                        new IllegalStateException(
-                            "standalone Actor target stage already exists")));
+                return CompletableFuture.completedFuture(null);
             });
     }
 

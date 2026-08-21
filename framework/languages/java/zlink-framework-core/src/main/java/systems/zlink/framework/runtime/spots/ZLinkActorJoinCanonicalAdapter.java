@@ -286,6 +286,14 @@ final class ZLinkActorJoinCanonicalAdapter
         prewarm.completeMigration(relocationId, deliver, liveAbort);
     }
 
+    void completeMigration(
+        UUID relocationId,
+        Consumer<ZLinkActorJoinPrewarmRegistry.ParkedMessage> deliver,
+        Runnable installed,
+        Runnable liveAbort) {
+        prewarm.completeMigration(relocationId, deliver, installed, liveAbort);
+    }
+
     /**
      * Releases the attempt reserved at admission time. Callers use this
      * once it has been consumed into the real staged Actor (normal

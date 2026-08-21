@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -14,13 +15,15 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
     @Test
-    void unboundJavaToJavaActorJoinUsesCanonical28AndReturnsTargetAdmissionReply()
+    void actorJoin28UsesStructuralFlavorSelectionAndReturnsTypedReplies()
         throws Exception {
         String endpoint = "inproc://jvm-canonical-actor-join-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-canonical-source");
@@ -59,7 +62,8 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                 targetRid, target.lifecycleGeneration(), "target-room", 5L,
                 9L, 11L, false,
                 "ZLinkFrameworkActorJoinRequest", "application/json",
-                "{\"join\":true}".getBytes(StandardCharsets.UTF_8));
+                "{\"transferId\":\"canonical-text\"}"
+                    .getBytes(StandardCharsets.UTF_8));
 
             assertTrue(source.canRequestCanonicalActorJoin(request));
             var reply = source.requestCanonicalActorJoin(
@@ -77,9 +81,37 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
             assertEquals("target-room", join.targetSpot().id());
             assertEquals(target.lifecycleGeneration(),
                 join.targetSpot().targetNodeGeneration());
-            assertEquals("{\"join\":true}", new String(
+            assertEquals("{\"transferId\":\"canonical-text\"}", new String(
                 join.payload().payload(), StandardCharsets.UTF_8));
+
+            // Java's fallback uses its route packet rather than command 28.
+            // Keep accepting flag 0x01 for a Node private command-28 sender,
+            // but do not create a Java-only sender solely for this test.
+            assertTrue(ZLinkJavaRawMeshNode.supportedActorJoinFlags(0));
+            assertTrue(ZLinkJavaRawMeshNode.supportedActorJoinFlags(0x01));
         }
+    }
+
+    @Test
+    void supersededActorJoinAloneMapsToActorLocationStale() {
+        assertArrayEquals(new int[] {107, 21},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "attempt was superseded",
+                    null,
+                    java.util.Map.of(
+                        "zlink.actorJoin.superseded", "true"))));
+        assertArrayEquals(new int[] {105, 17},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "route or store is unavailable")));
+        assertArrayEquals(new int[] {105, 17},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "an unmarked invalid operation")));
     }
 
     private static void awaitAdmitted(ZLinkJavaRawMeshNode node)

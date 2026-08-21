@@ -76,6 +76,14 @@ final class ZLinkActorJoinPrewarmRegistry {
         NOT_FOUND
     }
 
+    /** A late PREPARE reached a relocation identity displaced by a newer one. */
+    static final class SupersededAttemptException extends IllegalStateException {
+        SupersededAttemptException(UUID relocationId) {
+            super("Actor Join relocation attempt was superseded before PREPARE "
+                + "installed its stage: " + relocationId);
+        }
+    }
+
     /**
      * One in-flight relocation attempt for an object, from admission
      * through PREPARE to publish (or abort/eviction). Application handler
@@ -246,13 +254,26 @@ final class ZLinkActorJoinPrewarmRegistry {
         UUID relocationId,
         Consumer<ParkedMessage> deliver,
         Runnable liveAbort) {
+        completeMigration(relocationId, deliver, () -> { }, liveAbort);
+    }
+
+    /**
+     * Variant used by the production target stage. {@code installed} publishes
+     * the real stage only after every parked arrival has moved, while this
+     * monitor is still held. A newer attempt therefore cannot run liveAbort
+     * between a failed remove and the later actorStages insertion.
+     */
+    synchronized void completeMigration(
+        UUID relocationId,
+        Consumer<ParkedMessage> deliver,
+        Runnable installed,
+        Runnable liveAbort) {
         Objects.requireNonNull(deliver, "deliver");
+        Objects.requireNonNull(installed, "installed");
         Objects.requireNonNull(liveAbort, "liveAbort");
         Attempt attempt = byRelocation.get(relocationId);
         if (attempt == null) {
-            throw new IllegalStateException(
-                "Actor Join relocation attempt was evicted before PREPARE "
-                    + "installed its stage: " + relocationId);
+            throw new SupersededAttemptException(relocationId);
         }
         attempt.installedSink = deliver;
         attempt.liveAbort = liveAbort;
@@ -260,6 +281,7 @@ final class ZLinkActorJoinPrewarmRegistry {
         while ((message = attempt.parked.poll()) != null) {
             deliver.accept(message);
         }
+        installed.run();
     }
 
     /**

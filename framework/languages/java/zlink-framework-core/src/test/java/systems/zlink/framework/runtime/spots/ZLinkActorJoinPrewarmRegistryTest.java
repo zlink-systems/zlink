@@ -227,13 +227,17 @@ final class ZLinkActorJoinPrewarmRegistryTest {
             new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
                 new byte[] {2}, null, null));
 
-        List<Byte> deliveredInOrder = new ArrayList<>();
+        List<String> transitions = new ArrayList<>();
         registry.completeMigration(
             relocationId,
-            parked -> deliveredInOrder.add(parked.record()[0]),
+            parked -> transitions.add("deliver:" + parked.record()[0]),
+            () -> transitions.add("actorStages:insert"),
             () -> { });
 
-        assertEquals(List.of((byte) 1, (byte) 2), deliveredInOrder);
+        assertEquals(List.of(
+            "deliver:1", "deliver:2", "actorStages:insert"), transitions,
+            "the real stage is published only after every parked arrival is "
+                + "migrated while the registry monitor remains held");
 
         //  Once installed, a further arrival for the same object is
         //  delivered straight through the installed sink — not re-parked.

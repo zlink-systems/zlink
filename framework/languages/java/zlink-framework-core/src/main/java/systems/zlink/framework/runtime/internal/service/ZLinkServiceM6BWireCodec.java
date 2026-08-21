@@ -19,6 +19,8 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
  */
 public final class ZLinkServiceM6BWireCodec {
     private static final int PREFIX_BYTES = 5;
+    /** Private Java/Node actorJoin(28) dialect discriminator. */
+    public static final int PRIVATE_ACTOR_JOIN_FLAG = 0x01;
 
     public byte[] encodeSpotHeader(
         boolean request,
@@ -268,6 +270,62 @@ public final class ZLinkServiceM6BWireCodec {
             sourceActor,
             target,
             boundSession);
+    }
+
+    /**
+     * Encodes the pre-canonical actorJoin(28) header.  The private dialect is
+     * structurally distinguished from canonical actorJoin by flag 0x01; it
+     * must never be inferred from application payload text.
+     */
+    public byte[] encodeActorJoinHeader(
+        long correlation,
+        ActorRouteFence actor,
+        boolean entry,
+        SpotRouteFence target) {
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(target, "target");
+        Writer writer = prefix(
+            ServiceWireConstants.COMMAND_ACTOR_JOIN,
+            PRIVATE_ACTOR_JOIN_FLAG);
+        writer.opaqueNonzero(correlation, "correlation");
+        writeActorRoute(writer, actor);
+        writer.u8(entry ? 1 : 0);
+        writer.text8(target.spotId(), "targetSpotId");
+        writer.nonzero(target.spotGeneration(), "targetSpotGeneration");
+        writer.rid(target.targetNodeRid(), "targetNodeRid");
+        writer.opaqueNonzero(
+            target.targetNodeGeneration(), "targetNodeGeneration");
+        writer.nonzero(
+            target.authorityOwnerGeneration(),
+            "expectedAuthorityOwnerGeneration");
+        writer.nonzero(
+            target.ownerLeaseGeneration(), "expectedOwnerLeaseGeneration");
+        return writer.toByteArray();
+    }
+
+    /** Decodes the pre-canonical actorJoin(28) header selected by flag 0x01. */
+    public ActorJoin decodeActorJoinHeader(byte[] frame) {
+        Reader reader = new Reader(frame);
+        Header header = reader.prefix();
+        if (header.command() != ServiceWireConstants.COMMAND_ACTOR_JOIN
+            || header.flags() != PRIVATE_ACTOR_JOIN_FLAG) {
+            throw protocol("command is not private actorJoin");
+        }
+        long correlation = reader.nonzeroU64("correlation");
+        ActorRouteFence actor = readActorRoute(reader);
+        int entry = reader.u8("entry");
+        if (entry > 1) {
+            throw protocol("invalid actorJoin entry flag");
+        }
+        SpotRouteFence target = new SpotRouteFence(
+            reader.text8("targetSpotId"),
+            reader.nonzeroU64("targetSpotGeneration"),
+            reader.rid("targetNodeRid"),
+            reader.nonzeroU64("targetNodeGeneration"),
+            reader.nonzeroU64("expectedAuthorityOwnerGeneration"),
+            reader.nonzeroU64("expectedOwnerLeaseGeneration"));
+        reader.end();
+        return new ActorJoin(correlation, actor, entry == 1, target);
     }
 
     public byte[] encodeBoundSessionSendHeader(
@@ -1445,6 +1503,21 @@ public final class ZLinkServiceM6BWireCodec {
                 sourceActor,
                 target,
                 boundSession);
+        }
+    }
+
+    /** Private Java/Node actorJoin(28) request header. */
+    public record ActorJoin(
+        long correlation,
+        ActorRouteFence actor,
+        boolean entry,
+        SpotRouteFence target) {
+        public ActorJoin {
+            if (correlation == 0) {
+                throw protocol("actorJoin correlation must be nonzero");
+            }
+            Objects.requireNonNull(actor, "actor");
+            Objects.requireNonNull(target, "target");
         }
     }
 

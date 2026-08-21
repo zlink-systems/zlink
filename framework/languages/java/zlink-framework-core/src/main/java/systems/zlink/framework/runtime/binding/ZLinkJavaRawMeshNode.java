@@ -4438,7 +4438,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return;
         }
         if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
-            dispatchCanonicalActorJoin(inbound);
+            dispatchCanonicalActorJoin(inbound, flags);
             return;
         }
         if (command == ServiceWireConstants.COMMAND_INSTANCE_SPOT) {
@@ -5785,25 +5785,37 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void dispatchCanonicalActorJoin(
-        ZLinkJavaRawServicePort.Inbound inbound) {
+        ZLinkJavaRawServicePort.Inbound inbound,
+        int flags) {
         List<byte[]> frames = inbound.frames();
-        if (inbound.requestSequence() == null || frames.isEmpty()
-            || frames.size() > 2) {
+        if (inbound.requestSequence() == null || frames.isEmpty()) {
             return;
         }
-        // Command 28 also carries the pre-canonical Java relocation record.
-        // Its transfer id is language-internal (spec 51 §9), so preserve the
-        // legacy path before asking the generated canonical decoder to
-        // recognise a record.
-        if (hasLegacyActorJoinTransfer(frames)) {
+        if (frames.size() > 2) {
+            replyCanonicalActorJoinProtocolFailure(inbound, frames);
+            return;
+        }
+        if (!supportedActorJoinFlags(flags)) {
+            replyCanonicalActorJoinProtocolFailure(inbound, frames);
             return;
         }
         final ServiceWirePilotCodec.ActorJoin28 join;
-        try {
-            join = ServiceWirePilotCodec.decodeActorJoin28(frames);
-        } catch (Exception notCanonical) {
-            // Recognition failure retains the default private command-28 path.
-            return;
+        if (flags == 0) {
+            try {
+                join = ServiceWirePilotCodec.decodeActorJoin28(frames);
+            } catch (Exception invalidCanonical) {
+                replyCanonicalActorJoinProtocolFailure(inbound, frames);
+                return;
+            }
+        } else if (flags == ZLinkServiceM6BWireCodec.PRIVATE_ACTOR_JOIN_FLAG) {
+            try {
+                join = decodePrivateActorJoin(frames);
+            } catch (RuntimeException invalidPrivate) {
+                replyCanonicalActorJoinProtocolFailure(inbound, frames);
+                return;
+            }
+        } else {
+            throw new AssertionError("unsupported actorJoin flags were accepted");
         }
         RoutingId targetNode = RoutingId.from(new String(
             join.targetSpot().targetNodeRid(), StandardCharsets.UTF_8));
@@ -5867,14 +5879,48 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private static boolean hasLegacyActorJoinTransfer(List<byte[]> frames) {
-        for (byte[] frame : frames) {
-            String text = new String(frame, StandardCharsets.ISO_8859_1);
-            if (text.contains("transferId") || text.contains("transfer-id")) {
-                return true;
-            }
+    static boolean supportedActorJoinFlags(int flags) {
+        return flags == 0
+            || flags == ZLinkServiceM6BWireCodec.PRIVATE_ACTOR_JOIN_FLAG;
+    }
+
+    private ServiceWirePilotCodec.ActorJoin28 decodePrivateActorJoin(
+        List<byte[]> frames) {
+        ZLinkServiceM6BWireCodec.ActorJoin privateJoin =
+            statefulWire.decodeActorJoinHeader(frames.getFirst());
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload = frames.size() == 2
+            ? wire.decodeApplicationPayload(frames.get(1))
+            : null;
+        ZLinkServiceM6BWireCodec.ActorRouteFence actor = privateJoin.actor();
+        ZLinkServiceM6BWireCodec.SpotRouteFence target = privateJoin.target();
+        return new ServiceWirePilotCodec.ActorJoin28(
+            privateJoin.correlation(),
+            new ServiceWirePilotCodec.Fence(
+                actor.actor().actorId(), actor.actor().generation(),
+                actor.actor().nodeRid().toBytes(), actor.targetNodeGeneration(),
+                actor.authorityOwnerGeneration(), actor.ownerLeaseGeneration()),
+            privateJoin.entry(),
+            new ServiceWirePilotCodec.Fence(
+                target.spotId(), target.spotGeneration(),
+                target.targetNodeRid().toBytes(), target.targetNodeGeneration(),
+                target.authorityOwnerGeneration(), target.ownerLeaseGeneration()),
+            payload == null ? null
+                : new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
+                    payload.packetName(), payload.contentType(), payload.payload()));
+    }
+
+    private void replyCanonicalActorJoinProtocolFailure(
+        ZLinkJavaRawServicePort.Inbound inbound,
+        List<byte[]> frames) {
+        if (inbound.requestSequence() == null || frames.isEmpty()
+            || frames.getFirst().length < PREFIX_BYTES + Long.BYTES) {
+            return;
         }
-        return false;
+        long correlation = ByteBuffer.wrap(frames.getFirst())
+            .getLong(PREFIX_BYTES);
+        if (correlation != 0) {
+            replyCanonicalActorJoinFailure(inbound, correlation, 104, 16);
+        }
     }
 
     /**
@@ -5885,6 +5931,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
      */
     static int[] canonicalActorJoinFailurePair(Throwable failure) {
         if (failure instanceof ZLinkFrameworkException framework) {
+            if (isSupersededCanonicalActorJoin(framework)) {
+                return new int[] {107, 21};
+            }
             return switch (framework.kind()) {
                 case NOT_FOUND -> new int[] {102, 14};
                 case PROTOCOL_ERROR -> new int[] {104, 16};
@@ -5894,6 +5943,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             };
         }
         return relayedFailurePair(failure);
+    }
+
+    private static boolean isSupersededCanonicalActorJoin(
+        ZLinkFrameworkException failure) {
+        return "true".equals(failure.metadata().get(
+            "zlink.actorJoin.superseded"));
     }
 
     private void replyCanonicalActorJoinFailure(
