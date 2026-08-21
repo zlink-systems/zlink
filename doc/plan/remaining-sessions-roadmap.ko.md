@@ -177,7 +177,7 @@
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
-  - [~] 2c [A4] C++ 발신(S4c-cpp) `cpp단일` (agent 진행 중, 2a 동형 포맷-only)
+  - [ ] 2c [A4] C++ 발신 `cpp단일` — **집중 진단 필요(format-only 불가)**: canonical send 활성화 시 join이 rejected로 끝나 target completion 미시작(`actor cutover production ownership regression`, test_cpp_framework_execution). 고치려면 receiver admission/relocation 의미 변경 요 = format-only 범위 밖. 2b 수신자와 발신 fence 정합/completion 경로 진단 선행. (agent 정직 STOP, diff revert됨)
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
   - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
