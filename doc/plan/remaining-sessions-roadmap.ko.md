@@ -185,7 +185,7 @@
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
     - [x] **serializer 가드 축소**: `canonical_actor_join_application_reply` → `result_t<optional>`; reply 없으면 serializers 없이도 admit, reply 있는데 serializers null이면 typed protocol_error. 기존 동작 회귀 없음.
     - 이월(3b서 자연 해소): ① full source-path end-to-end 커버(Java→cpp/.NET→cpp pairwise가 정확히 구동) ② throwing reply serializer 시 pending-admission unwind(pathological) ③ **.NET source(ZLinkActorRemoteJoiner:1044) non-unwrap 의심 → pairwise서 확인**.
-  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **스코핑 완료(대형 트랙)**. canonical User Spot JoinSpot 스테이지 현재 0개(기존 3개는 JoinEntrySpot·`all` 미포함). 필요: ① **12 pairwise 방향**(Node↔.NET↔Java↔C++ 양방향) 신규 스테이지 ② **4언어 cross-language host에 User Spot actor-join mode 신설**(현 entry-spot mode만; C++ host는 relocation mode 자체 없음) ③ **cpp receiver app-reply 6단계 수정**(actor_join_operation_result_t에 application_reply 필드 + adapter/callback/reply_actor_join threading + 2번째 frame, terminal_result==0만 허용; node/java/.NET은 이미 전송) ④ .NET app-reply는 이미 보존됨 → failure-first 검증만 ⑤ 통과 스테이지 `all` 편입(무음 금지). 진행: 항목별 4언어 lockstep + spec-gap. 하니스: framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 근거: a6-scope 진단.
+  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **스코핑 완료(대형 트랙)**. canonical User Spot JoinSpot 스테이지 현재 0개(기존 3개는 JoinEntrySpot·`all` 미포함). 남은 필요: ① **12 pairwise 방향**(Node↔.NET↔Java↔C++ 양방향) 신규 스테이지 ② **4언어 cross-language host에 User Spot actor-join mode 신설**(현 entry-spot mode만; C++ host는 relocation mode 자체 없음) ⑤ 통과 스테이지 `all` 편입(무음 금지). **완료: ③ cpp receiver/source app-reply 양방향(`dd234c3110`) ④ .NET app-reply 보존**. 진행: 항목별 4언어 lockstep + spec-gap. 하니스: framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 근거: a6-scope 진단.
   - [ ] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어`
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합`
@@ -268,9 +268,43 @@
 - **성격**: attempt-lifecycle·bound Session은 **기존 relocation 로직이 이미 처리**한다. canonical은
   포맷만 바꾸므로 새 바인딩·supersession 로직을 만들 필요가 없다. 이 카드는 **기존 동작이 canonical
   28 포맷에서도 그대로 성립하는지 검증**하는 것이다.
-- **단계**: (a) 기존 multi-attempt(later-attempt-wins 재park)·bound Session(28 전 42/43 seal + commit
-  후 44 route, 28 sideband 금지) 동작을 canonical 28 경로에서 재확인, (b) 발산 발견 시에만 최소 수정
-  (로직 재작성 아님). 실 gap이면 STOP·판정.
+- **단계**: (a) 기존 multi-attempt(later-attempt-wins 재park)·bound Session 동작을 canonical 28
+  경로에서 재확인, (b) 발산 발견 시에만 최소 수정(로직 재작성 아님). 실 gap이면 STOP·판정.
+- **bound Session 스펙 순서(28 §4.1, 51 §9)**: ① target 준비 확인(=28 admission)이 **먼저**,
+  ② bound면 **source dispatch 중단(capture 시작) 전에** 42로 seal(43은 결과 통지), ③ 44 route는
+  **commit 후**, ④ 28 frame에 bound-session sideband 금지(seal/route는 42/43/44로만 이동).
+  즉 순서는 **28 → 42/43 seal → dispatch 중단 → … → commit → 44**이다. (주의: "42/43 seal이 28보다
+  먼저"가 **아니다** — seal의 기준점은 command 28이 아니라 source dispatch 중단이다.)
+- **판정 기록 1 (.NET Property 2 = PASS)**: 에이전트가 "28이 seal보다 먼저 = 발산"으로 STOP했으나
+  **오독**. `ZLinkActorRemoteJoiner.cs`에서 28 admission(:475) → `SealBoundSessionRouteAsync`(:651) →
+  `BeginHandoffCaptureAsync`/`markSourceCaptureStarted`(:674/:676) 순서. .NET의 실제 ingress-hold는
+  `BeginHandoffCaptureAsync`→`Handoff.BeginCapture()`(ZLinkActorRuntimeState.cs:1650, dispatch mailbox
+  lock 안)로 seal **후**. → **seal-before-hold, 스펙 준수**.
+- **판정 기록 2 (canonical parity = A5 DoD 충족)**: bound-Session seal/hold 순서는 JSON·canonical
+  **공유 파이프라인**(Node `prepareMaintenanceSession`, .NET `SealBoundSessionRouteAsync`+`BeginHandoffCapture`)에
+  있어 두 경로가 구조적으로 동일 → **canonical이 기존 동작 유지(parity) = A5 핵심 DoD 충족**. 순서 스펙 논쟁과
+  무관하게 canonical은 회귀 없음.
+- **별도 기존 이슈 A (Property 2 seal-순서 크로스랭 불일치 · 수정 금지 · 유저 판정)**: 4언어가 **2:2 분포** —
+  **Node·Java = hold-before-seal**(Node `actorHandoff.begin` actor-transfer-runtime.ts:403→seal:713; Java
+  `queue.trySealRelocation` ZLinkStandaloneActorRelocationSourceBuilder.java:326→seal:644),
+  **.NET·C++ = seal-before-hold**(.NET seal:651→`BeginHandoffCaptureAsync`:674; C++ `seal_bound_sessions`
+  mesh_node_runtime.cpp:2907→`try_begin_source_remote` spot_runtime.cpp:6172). 51 §9:507/28 §4.1:87은
+  "seal은 dispatch 중단 전"을 요구 → hold-before-seal 두 언어는 문자적으로 어긋나나 **source backlog로 메시지
+  손실 없음**. **모두 JSON·canonical 공유 파이프라인 = canonical 회귀 아님·A5 비차단**. relocation 동결 원칙상
+  여기서 수정 안 함(유저 판정용 기존 이슈).
+- **[ ] A5-node-canonical-multiattempt-wiring (확정 결함 · canonical-특화 · 최소 수정 대상)**: Node canonical 28
+  수신자가 later-attempt-wins prewarm registry(`formalRemoteActorAdmissions`)에 **등록하지 않음**. `begin()`이
+  `isRemoteAdmission && transferRequest !== undefined`(spots/index.ts:1942)로 **사설 transferRequest** 게이트라
+  순수 canonical(transferRequest=undefined)에선 미호출. 그런데 canonical 신호 `control.canonicalActorJoin`은 같은
+  함수 :1850에 **존재하나 게이트에서 미사용**. production ingress park(`routeIngress`, index.ts:428)는 registry
+  항목에 의존하므로 canonical-admitted actor의 두 번째 시도가 첫 시도를 supersede/re-park 못함(spec 15 §4.2 위반).
+  **참조 구현(최소 수정)**: Java가 `canonical:<correlation>` identity로 registry 등록(ZLinkSpotRuntime.java:3604,
+  ZLinkActorJoinCanonicalAdapter.java:200) — Node도 `control.canonicalActorJoin !== undefined`면 canonical
+  correlation 파생 identity로 **기존** `formalRemoteActorAdmissions.begin()` 경로로 라우팅(새 검증지 추가 아님,
+  spec 28 §2 단일 메커니즘). .NET/Java/C++는 PASS. **sol 위임 예정.**
+- **Property 1 검증(4언어)**: .NET/Java/C++ = PASS(canonical identity로 registry 교체; C++는 직접 테스트
+  test_cpp_framework_execution.cpp:2532/2771/2786). Node = 위 결함. (Node/.NET/Java는 canonical-28 직접
+  multi-attempt 통합테스트 부재 = UNCOVERED, 공용 registry 테스트로 replacement 커버.)
 - **DoD**: canonical 28 경로에서 multi-attempt·bound Session 기존 동작 유지 확인, sol CLEAN.
 - **선행**: 단계 1·2a.
 
