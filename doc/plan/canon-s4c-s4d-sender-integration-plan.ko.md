@@ -215,3 +215,20 @@ advisor가 지적한 hole 2건 해소 (remote-actor-join-receiver.ts 전체 read
 - 즉 node는 **option 1** 형상: 28은 타입+actor 보장만, relocation 예약은 40이 소유. abandonment시 정리할 28-예약 자체가 없음(source seal만 정리).
 
 **잠정 ruling(advisor 확인 대상): option 1.** .NET의 :2678이 admission과 relocation-reservation을 융합한 것이 .NET 특정 불일치. 수정 = canonical 28 수신은 타입 resolution + actor 보장만, relocation 예약은 40 트랙 소유로 분리. 이러면 pre-commit invariant는 "source seal만 정리"로 축소, 28→40 바인딩 불요, branch A와 일관. (단 이번 세션 node 내부 2회 오판 이력 → 단정 전 검증 필요.)
+
+
+---
+
+## .NET 발신 v2 검증: 독립 재현 PASS + sol 리뷰 NOT-CLEAN 6건 (2026-08-21)
+
+**내 독립 재현**: focused seam+relocation 39/39 PASS(agent 보고 일치). agent 전체 게이트 1782/3(3 sanctioned), Bingo·relocation-dotnet-java 통과 보고 — 단 이 통과들은 동작하는 하위경로만 커버(아래 sol이 미커버 경로 노출).
+
+**codex sol(gpt-5.6-sol) 판정: NOT-CLEAN.** 바인딩 제거·seam abort 단순화는 clean 확인. 그러나:
+1. **CRITICAL — canonical 28 수신 dispatch 부재.** ManagedMeshNode 수신 whitelist(IsAllowedInfrastructureControlCommand)가 ActorJoin 제외 → source가 28 보내도 target이 protocol error로 drop(:5326). PrepareCanonicalActorJoinAsync(:2678)는 ZLinkSpotActorJoinDispatcher:42에서만 호출돼 wire ingress 미연결. **내가 직접 확인함(whitelist에 ActorJoin 없음).** .NET→Java 하니스 통과는 Java 수신자라 이 갭 미노출.
+2. **HIGH — 28 수용 시 즉시 app delivery + membership commit.** provisional secure 후 ordinary dispatcher(ZLinkSpotActorJoinDispatcher:85 app handler, :108 accepted commit)로 재진입 → membership publication + Location lifecycle(:530). ruling("타입 resolution + provisional secure만")과 충돌. **단 node도 유사할 가능성(ruling 과엄격 여부) — advisor 판정 필요.**
+3. **HIGH — public Join completion identity/callback 유실.** canonical 분기가 empty recovery(:899) → generic maintenance completion(:1166) 선택 → nonzero public completion ID의 target OnJoinCompletedAsync 미전달.
+4. **HIGH — entry 하드코딩 false**(TryJoinCanonicalActor:3223). JoinEntrySpot canonical join이 non-entry로 오인코딩.
+5. **MEDIUM — bound-session을 admission 제외로 처리**(:535). ruling은 bound Session이 seal/route leg만 추가, admission 배제 아님.
+6. **MEDIUM — production invariant 미테스트**(수신 dispatch/accept-time commit 부재/bound gating/entry bit/public completion).
+
+**판정: 커밋 보류.** decouple(:2678)+바인딩 제거+seam abort는 clean이나 origination(발신+gate+수신 dispatch+completion)에 6건 집중. 다음: #2 ruling 충돌을 node 대조로 해소 후 advisor 우선순위 상담(fix-forward 전체 vs clean-subset 랜딩).
