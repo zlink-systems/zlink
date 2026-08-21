@@ -1414,6 +1414,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_async_task BEFORE PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp/include)
   add_zlink_framework_test(
+    test_cpp_framework_actor_join_handoff_id
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp
+    "framework-unit;framework-regression;actor-join")
+  target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
     "framework-unit;framework-regression;execution;spot;yield")

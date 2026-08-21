@@ -730,23 +730,33 @@ class actor_context_t
     static task_t<void> run_deferred_spot_join (std::shared_ptr<actor_context_t> context,
                                                 spot_id_t spot_id,
                                                 zlink::message_t request,
+                                                std::string packet_name,
+                                                std::string content_type,
                                                 std::chrono::milliseconds timeout)
     {
-        (void) co_await context->join_spot_erased (std::move (spot_id), request, timeout);
+        (void) co_await context->join_spot_erased (
+          std::move (spot_id), request, std::move (packet_name),
+          std::move (content_type), timeout);
         co_return;
     }
 
-    actor_join_call_t join_spot_payload (spot_id_t spot_id, const zlink::message_t &request)
+    actor_join_call_t join_spot_payload (spot_id_t spot_id,
+                                         const zlink::message_t &request,
+                                         std::string packet_name = {},
+                                         std::string content_type = {})
     {
         auto context = std::shared_ptr<actor_context_t> (
           new actor_context_t (_state, *_actor_ref, _source_binding_generation, _mesh_name));
         context->_actor_ref = _actor_ref;
         return actor_join_call_t (
           actor_join_call_t::async_deferred_fn_t{
-          [context, spot_id = std::move (spot_id),
-           request] (std::chrono::milliseconds timeout) mutable -> task_t<void> {
+          [context, spot_id = std::move (spot_id), request,
+           packet_name = std::move (packet_name),
+           content_type = std::move (content_type)] (
+            std::chrono::milliseconds timeout) mutable -> task_t<void> {
               return run_deferred_spot_join (
-                std::move (context), std::move (spot_id), std::move (request), timeout);
+                std::move (context), std::move (spot_id), std::move (request),
+                std::move (packet_name), std::move (content_type), timeout);
           }},
           [context] { return context->reserve_join_barrier (); });
     }
@@ -759,7 +769,12 @@ class actor_context_t
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "actor join spot requires a serializer registry");
         }
-        return join_spot_payload (std::move (spot_id), request.to_raw (*serializers));
+        const auto content_type = request._packet_name.empty ()
+                                    ? std::string{}
+                                    : serializers->content_type (request._type);
+        return join_spot_payload (
+          std::move (spot_id), request.to_raw (*serializers),
+          request._packet_name, content_type);
     }
 
     template <typename TRequest>
@@ -771,9 +786,11 @@ class actor_context_t
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "actor join spot requires a serializer registry");
         }
+        const auto serializer = serializers->get<TRequest> ();
         return join_spot_payload (
           std::move (spot_id),
-          detail::encoded_payload_to_raw (serializers->get<TRequest> ().serialize (request)));
+          detail::encoded_payload_to_raw (serializer.serialize (request)),
+          detail::message_name<TRequest> (), serializer.content_type ());
     }
 
     actor_join_call_t join_spot (spot_id_t spot_id)
@@ -826,6 +843,8 @@ class actor_context_t
 
     task_t<detail::actor_join_reply_t> join_spot_erased (spot_id_t spot_id,
                                                          const zlink::message_t &request,
+                                                         std::string packet_name,
+                                                         std::string content_type,
                                                          std::chrono::milliseconds timeout);
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_join_barrier () const;
     serializer_registry_t *serializer_registry () const noexcept;

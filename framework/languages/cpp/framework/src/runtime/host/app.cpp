@@ -2157,6 +2157,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
            spot_locations = &_state->services.build_provider ()
                                .get_required<runtime::spot_address_resolver_t> ()] (
             const actor_ref_t &actor, spot_id_t target_spot, const zlink::message_t &request,
+            std::string packet_name, std::string content_type,
             std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
               auto located = co_await spot_locations->resolve_spot_address ({}, target_spot);
               if (!located) {
@@ -2169,11 +2170,18 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     framework_error_kind_t::not_found,
                     "target Spot lifecycle generation was not published");
               }
+              if (target.owner.lease_generation > 0) {
+                  application_mesh->observe_spot_authority (
+                    target.node_rid, target.spot_id, target.object_generation,
+                    target.node_generation, target.authority_owner_generation,
+                    static_cast<std::uint64_t> (target.owner.lease_generation));
+              }
               const auto bound_session = actor_gateway_runtime.bound_session_route (actor);
               co_return co_await application_mesh->join_application_actor_to_spot (
                 actor, target, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
-                bound_session ? bound_session->session_rid : std::nullopt);
+                bound_session ? bound_session->session_rid : std::nullopt,
+                std::move (packet_name), std::move (content_type));
           });
         actor_gateway_runtime.on_join_barrier ([application_mesh] (const actor_ref_t &actor) {
             return application_mesh->reserve_application_actor_join_barrier (actor);

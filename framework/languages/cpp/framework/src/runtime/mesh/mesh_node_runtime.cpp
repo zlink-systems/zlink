@@ -113,6 +113,51 @@ struct mesh_node_runtime_t::message_follow_subscription_state_t
 thread_local mesh_node_runtime_t::message_follow_subscription_state_t::dispatch_frame_t *
   mesh_node_runtime_t::message_follow_subscription_state_t::current_dispatch = nullptr;
 
+std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &source_actor_node_rid,
+                                             std::string_view actor_id,
+                                             std::uint64_t actor_generation,
+                                             std::uint64_t source_actor_node_generation,
+                                             std::uint64_t correlation)
+{
+    std::vector<std::byte> material;
+    material.reserve (source_actor_node_rid.size () + sizeof (std::uint16_t) + actor_id.size ()
+                      + sizeof (std::uint64_t) * 3);
+    for (const auto byte : source_actor_node_rid)
+        material.push_back (static_cast<std::byte> (byte));
+    material.push_back (static_cast<std::byte> ((actor_id.size () >> 8u) & 0xffu));
+    material.push_back (static_cast<std::byte> (actor_id.size () & 0xffu));
+    for (const auto byte : actor_id)
+        material.push_back (static_cast<std::byte> (static_cast<unsigned char> (byte)));
+    const auto append_u64 = [&material] (std::uint64_t value) {
+        for (int shift = 56; shift >= 0; shift -= 8)
+            material.push_back (static_cast<std::byte> ((value >> shift) & 0xffu));
+    };
+    append_u64 (actor_generation);
+    append_u64 (source_actor_node_generation);
+    append_u64 (correlation);
+
+    const auto hash = runtime::sha256 (material);
+    static constexpr std::array<std::size_t, 16> guid_text_order{3, 2, 1,  0,  5,  4,  7,  6,
+                                                                 8, 9, 10, 11, 12, 13, 14, 15};
+    static constexpr char hex_digits[] = "0123456789abcdef";
+    std::string handoff_id;
+    handoff_id.reserve (32);
+    for (const auto index : guid_text_order) {
+        const auto byte = std::to_integer<std::uint8_t> (hash[index]);
+        handoff_id += hex_digits[(byte >> 4u) & 0x0fu];
+        handoff_id += hex_digits[byte & 0x0fu];
+    }
+    return handoff_id;
+}
+
+std::optional<runtime::protocol::application_payload_t> canonical_actor_join_application_payload (
+  const std::string &packet_name, const std::string &content_type, const zlink::message_t &payload)
+{
+    if (packet_name.empty () || content_type.empty ())
+        return std::nullopt;
+    return runtime::protocol::application_payload_t{packet_name, content_type, payload.to_bytes ()};
+}
+
 namespace
 {
 
@@ -497,27 +542,20 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
             // temporary queue (identity-keyed pending admission) with the
             // prepared factory — nothing else. Spec 51 §9: a transfer id
             // never travels on this wire body; the runtime derives one
-            // locally from the exact attempt identity (source node
-            // RID/generation + correlation), so a duplicate resend of the
-            // same attempt parks against the existing preparation while a
-            // NEWER attempt (fresh correlation) gets a distinct id and
-            // evicts the parked older attempt (later-attempt-wins,
-            // try_add_admission).
-            std::string transfer_id = "wire-actor-join:";
-            static constexpr char hex_digits[] = "0123456789abcdef";
-            for (const auto byte : request.actor.target_node_routing_id) {
-                transfer_id += hex_digits[(byte >> 4) & 0x0f];
-                transfer_id += hex_digits[byte & 0x0f];
-            }
-            transfer_id += ':';
-            transfer_id += std::to_string (request.actor.target_node_generation);
-            transfer_id += ':';
-            transfer_id += std::to_string (request.correlation);
+            // locally from the exact attempt identity (source node RID,
+            // Actor ID/generation, source node generation, and correlation),
+            // so a duplicate resend of the same attempt parks against the
+            // existing preparation while a NEWER attempt (fresh correlation)
+            // gets a distinct id and evicts the parked older attempt
+            // (later-attempt-wins, try_add_admission).
+            auto transfer_id = canonical_actor_join_handoff_id (
+              request.actor.target_node_routing_id, request.actor.actor_id,
+              request.actor.object_generation, request.actor.target_node_generation,
+              request.correlation);
             const auto admitted = spot.admit_remote_actor_to_spot (
-              std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id,
-              payload_message, request.actor.target_node_generation,
-              request.correlation, request.actor.authority_owner_generation,
-              request.actor.target_node_generation,
+              std::move (transfer_id), actor_ref, spot_id_t{}, target_spot_id, payload_message,
+              request.actor.target_node_generation, request.correlation,
+              request.actor.authority_owner_generation, request.actor.target_node_generation,
               request.actor.owner_lease_generation, true);
             if (!admitted)
                 return typed_terminal (admitted.error_kind ());
@@ -2207,6 +2245,19 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::chrono::milliseconds timeout;
     std::optional<zlink::routing_id_t> bound_session_node_rid;
     std::optional<zlink::routing_id_t> bound_session_rid;
+    std::string application_packet_name;
+    std::string application_content_type;
+
+    bool has_typed_application_payload () const noexcept
+    {
+        return !application_packet_name.empty () && !application_content_type.empty ();
+    }
+
+    bool has_incomplete_typed_application_payload () const noexcept
+    {
+        return application_packet_name.empty () != application_content_type.empty ();
+    }
+
     std::optional<spot_id_t> source_spot;
     std::uint64_t source_spot_generation = 0;
     runtime::stateful::object_ref_t source_actor;
@@ -2236,7 +2287,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
   const zlink::message_t &request,
   std::chrono::milliseconds timeout,
   std::optional<zlink::routing_id_t> bound_session_node_rid,
-  std::optional<zlink::routing_id_t> bound_session_rid)
+  std::optional<zlink::routing_id_t> bound_session_rid,
+  std::string application_packet_name,
+  std::string application_content_type)
 {
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
@@ -2290,23 +2343,26 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
     auto state = std::make_shared<remote_actor_join_state_t> (
       remote_actor_join_state_t{std::move (actor), target, request, timeout,
                                 std::move (bound_session_node_rid),
-                                std::move (bound_session_rid)});
+                                std::move (bound_session_rid),
+                                std::move (application_packet_name),
+                                std::move (application_content_type)});
     state->source_spot = completion_source_spot;
     // actorJoin(28) fence-gate: wire only when this node has explicitly
     // observed the target Spot's authority fence AND the target peer is
-    // admitted at exactly that observed lifecycle generation. Defaults (and
-    // today, always resolves) to the existing JSON admission path below --
-    // C++ does not originate a live cross-node actorJoin(28) (spec 51 §9:
-    // "C++ and .NET ... do not originate a cross-node actorJoin operation").
-    // Activating this via observe_spot_authority here (reverted from
-    // 1b3b21b2e3) took an incomplete canonical receiver path -- it requires a
-    // Session-owner lease resolver even for unbound actors and cannot resolve
-    // the actor stable type from the canonical body alone (51 §9 forbids
-    // extra wire fields), breaking ST-B1. Completing the canonical receiver
-    // is tracked as H-12/H-15/H-4a; until then the JSON path is authoritative.
-    if (const auto observed = observed_spot_authority (
-          target.node_rid, target.spot_id, target.object_generation);
-        observed && has_admitted_peer (target.node_rid, observed->target_node_generation)) {
+    // admitted at exactly that observed lifecycle generation. A non-empty
+    // application request also needs its real packet name and content type;
+    // otherwise the unchanged JSON path remains the safe fallback.
+    if (const auto observed =
+          observed_spot_authority (target.node_rid, target.spot_id, target.object_generation);
+        observed && observed->target_node_generation == target.node_generation
+        && observed->authority_owner_generation == target.authority_owner_generation
+        && observed->owner_lease_generation
+             == static_cast<std::uint64_t> (target.owner.lease_generation)
+        // Typed metadata, not byte count, owns payload presence. The raw-byte
+        // check only keeps an untyped non-empty request on the JSON fallback.
+        && !state->has_incomplete_typed_application_payload ()
+        && (state->has_typed_application_payload () || request.is_empty ())
+        && has_admitted_peer (target.node_rid, observed->target_node_generation)) {
         co_return co_await admit_remote_application_actor_join_via_wire (
           std::move (state), *observed);
     }
@@ -2541,9 +2597,8 @@ std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
 
 // actorJoin(28) originate fence-gate: only taken when (a) this node has
 // explicitly observed the target Spot's authority fence via
-// observe_spot_authority -- nothing calls that yet, so this is closed by
-// construction on every current production path -- and (b) the target peer
-// is admitted at exactly that observed lifecycle generation. request.
+// observe_spot_authority -- and (b) the target peer
+// is admitted at exactly that observed lifecycle generation. The request
 // correlation is minted from the same monotonic counter the JSON path's
 // completion_operation_id_low already uses, forced odd/nonzero the same
 // way completion_operation_id_high is (encode_actor_join_request throws on
@@ -2551,6 +2606,13 @@ std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
 task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_join_via_wire (
   std::shared_ptr<remote_actor_join_state_t> s, observed_spot_authority_t observed)
 {
+    if (!_serializers || !s->source_spot) {
+        co_return result_t<actor_join_reply_t>::failure (
+          !_serializers ? framework_error_kind_t::protocol_error
+                        : framework_error_kind_t::not_found,
+          !_serializers ? "MeshNode serializers are not configured"
+                        : "source Actor is not joined to a local Spot");
+    }
     const auto source = _node->resolve_actor (s->actor);
     if (!source || source->authority_owner_generation == 0) {
         co_return fail_remote_actor_join (
@@ -2585,6 +2647,24 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->completion_operation_id_high =
       static_cast<std::uint64_t> (std::hash<std::string>{} (_state->mesh_name)) | 1ULL;
     const auto correlation = (s->completion_operation_id_low << 1) | 1ULL;
+    spot_node_runtime_t spot (_state->spot_state);
+    const auto source_spot_generation = spot.resolve_spot_generation (
+      local.routing_id (), *s->source_spot);
+    if (!source_spot_generation) {
+        co_return fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (
+            framework_error_kind_t::not_found,
+            "source Spot generation is unavailable"),
+          "source Spot generation is unavailable");
+    }
+    s->source_spot_generation = *source_spot_generation;
+    s->source_actor = *source;
+    s->actor_authority_owner_generation = source->authority_owner_generation;
+    s->deadline = std::chrono::steady_clock::now () + s->timeout;
+    s->transfer_id = canonical_actor_join_handoff_id (
+      local.routing_id ().to_bytes (), s->actor.actor_id ().value (), s->actor.object_generation (),
+      local.lifecycle_generation (), correlation);
     const runtime::protocol::actor_join_request_t wire_request{
       correlation,
       runtime::protocol::actor_route_fence_t{
@@ -2597,9 +2677,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
         s->target.spot_id, s->target.object_generation, s->target.node_rid.to_bytes (),
         observed.target_node_generation, observed.authority_owner_generation,
         observed.owner_lease_generation}};
-    std::optional<runtime::protocol::application_payload_t> payload;
-    if (!s->request.is_empty ())
-        payload = runtime::protocol::application_payload_t{"", "", s->request.to_bytes ()};
+    const auto payload = canonical_actor_join_application_payload (
+      s->application_packet_name, s->application_content_type, s->request);
     auto outcome = co_await _node->transport ().request_actor_join (
       s->target.node_rid.to_bytes (), wire_request, payload, s->timeout);
     if (!outcome.reply) {
@@ -2633,6 +2712,27 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
         }
     }
     const auto &tail = *outcome.reply;
+    if (tail.header.terminal_result != 0) {
+        const runtime::messaging::request_failure_mapper_t failure_mapper;
+        const auto failure = failure_mapper.reply_header_exception (
+          tail.header.terminal_result, tail.header.failure_code,
+          "wire Actor join admission");
+        co_return fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (
+            failure.kind (), failure.what ()),
+          "wire Actor join admission failed");
+    }
+    if (tail.join_result == runtime::protocol::actor_join_result_t::accepted
+        && (!tail.spot
+            || tail.spot->object_generation != s->target.object_generation)) {
+        co_return fail_remote_actor_join (
+          *s,
+          result_t<actor_join_reply_t>::failure (
+            framework_error_kind_t::protocol_error,
+            "wire Actor join reply target Spot generation does not match the resolved authority"),
+          "wire Actor join reply target Spot generation does not match the resolved authority");
+    }
     if (tail.join_result == runtime::protocol::actor_join_result_t::accepted
         && tail.receive_chunk_limit_bytes != 0) {
         // The relocation callers consume this per-actor value when they plan
@@ -2646,16 +2746,17 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
       outcome.application_reply
         ? zlink::message_t::from (outcome.application_reply->payload)
         : zlink::message_t{};
-    const auto mapped =
-      tail.join_result == runtime::protocol::actor_join_result_t::accepted
-        ? result_t<actor_join_reply_t>::success (
-            actor_join_reply_t{0, s->actor, application_reply})
-        : result_t<actor_join_reply_t>::success (
-            actor_join_reply_t{1, s->actor, application_reply});
-    const auto delivered = deliver_remote_actor_join (*s, mapped);
-    co_return delivered ? mapped
-                        : detail::propagate_failure<actor_join_reply_t> (
-                            delivered, "remote Actor Join completion callback failed");
+    if (tail.join_result == runtime::protocol::actor_join_result_t::rejected) {
+        const auto rejected = result_t<actor_join_reply_t>::success (
+          actor_join_reply_t{1, s->actor, application_reply});
+        const auto delivered = deliver_remote_actor_join (*s, rejected);
+        co_return delivered ? rejected
+                            : detail::propagate_failure<actor_join_reply_t> (
+                                delivered, "remote Actor Join completion callback failed");
+    }
+    if (outcome.application_reply)
+        s->admission_payload = outcome.application_reply->payload;
+    co_return co_await seal_remote_application_actor_join (std::move (s));
 }
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_join (

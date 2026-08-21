@@ -2625,15 +2625,8 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
                                                 22}};
     };
     const auto transfer_id_for = [&] (std::uint64_t correlation) {
-        std::string transfer_id = "wire-actor-join:";
-        static constexpr char hex_digits[] = "0123456789abcdef";
-        for (const auto byte : source_rid.to_bytes ()) {
-            transfer_id += hex_digits[(byte >> 4) & 0x0f];
-            transfer_id += hex_digits[byte & 0x0f];
-        }
-        transfer_id += ":3:";
-        transfer_id += std::to_string (correlation);
-        return transfer_id;
+        return canonical_actor_join_handoff_id (
+          source_rid.to_bytes (), "actor-1", 7, 3, correlation);
     };
 
     const auto first = admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt);
@@ -2673,13 +2666,30 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       && node->actor_transfer_coordinator.is_current ("player:actor-1", transfer_id_for (4213))
       && node->actor_instances.empty () && node->actor_spot_ids.empty ();
 
-    // An identity this node has never created/known is rejected cleanly.
+    // A missing Authority row is a typed NotFound terminal, not an
+    // application-level Rejected result.
+    const auto actor_snapshot = store->snapshot;
+    store->snapshot.reset ();
     auto unknown_request = make_request (4215);
     unknown_request.actor.actor_id = "actor-unknown";
     const auto unknown =
       admit_wire_actor_join (node, local_rid, unknown_request, std::nullopt);
-    const bool unknown_rejected =
-      unknown.join_result == runtime::protocol::actor_join_result_t::rejected && !unknown.spot;
+    const bool unknown_not_found =
+      unknown.terminal_result == 102
+      && unknown.failure_code == static_cast<std::uint32_t> (
+        runtime::protocol::framework_error_code::requestTargetNotFound)
+      && !unknown.spot;
+    store->snapshot = actor_snapshot;
+
+    auto stale_request = make_request (4216);
+    ++stale_request.actor.authority_owner_generation;
+    const auto stale =
+      admit_wire_actor_join (node, local_rid, stale_request, std::nullopt);
+    const bool stale_protocol_error =
+      stale.terminal_result == 104
+      && stale.failure_code == static_cast<std::uint32_t> (
+        runtime::protocol::framework_error_code::requestProtocolError)
+      && !stale.spot;
 
     const auto malformed_terminal = [&] (std::string actor_id, std::string spot_id) {
         auto malformed = make_request (4217);
@@ -2700,7 +2710,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return first_approved && approval_only && duplicate_parked && later_attempt_wins
-           && unknown_rejected && malformed_typed;
+           && unknown_not_found && stale_protocol_error && malformed_typed;
 }
 
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
@@ -4364,7 +4374,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       source_native_spot.spot_id (),
       spot_route_fixture_t{
         source.status ().routing_id (),
-        source_native_spot.status ().lifecycle_generation (),
+        source_spot_reserved->fence.object_generation,
         {source_spot_reserved->fence.authority_owner_generation,
          static_cast<std::uint64_t> (
            source_owner.lease_generation)}});
@@ -4403,7 +4413,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       target_native_spot.spot_id (),
       spot_route_fixture_t{
         target.status ().routing_id (),
-        target_native_spot.status ().lifecycle_generation (),
+        target_spot_reserved->fence.object_generation,
         {target_spot_reserved->fence.authority_owner_generation,
          static_cast<std::uint64_t> (
            target_owner.lease_generation)}});
@@ -4563,17 +4573,23 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     };
     std::thread source_dispatch (dispatch_source);
     std::thread target_dispatch (dispatch_target);
+    const auto source_lifecycle_generation =
+      source.status ().lifecycle_generation ();
     const runtime::spot_address_t target_address{
       .mesh_name = "actor-cutover-mesh",
       .node_rid = target.status ().routing_id (),
       .spot_id = target_native_spot.spot_id (),
-      .spot_generation =
-        target_native_spot.status ().lifecycle_generation (),
-      .object_generation =
-        target_native_spot.status ().lifecycle_generation (),
-      .authority_owner_generation = 1,
+      .spot_generation = target_spot_reserved->fence.object_generation,
+      .object_generation = target_spot_reserved->fence.object_generation,
+      .authority_owner_generation =
+        target_spot_reserved->fence.authority_owner_generation,
       .owner = target_owner,
       .node_generation = target.status ().lifecycle_generation ()};
+    source.observe_spot_authority (
+      target_address.node_rid, target_address.spot_id,
+      target_address.object_generation, target_address.node_generation,
+      target_address.authority_owner_generation,
+      static_cast<std::uint64_t> (target_address.owner.lease_generation));
     auto joined = std::async (std::launch::async, [&] {
         return std::move (source.join_application_actor_to_spot (
           actor, target_address, zlink::message_t{}, 5s)).result ();
@@ -4660,6 +4676,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       && actor_cutover_probe_t::failed_completions.load (
            std::memory_order_acquire) == 0
       && target_operation_high != 0 && target_operation_low != 0
+      && target_operation_high == source_lifecycle_generation
       && actor_cutover_probe_t::source_operation_high.load (
            std::memory_order_acquire) == 0
       && actor_cutover_probe_t::source_operation_low.load (
@@ -5769,7 +5786,7 @@ int main ()
             zlink::framework::node_rid_t::from_string ("barrier-node"),
             "player", "barrier-actor", 1);
         actor_gateway.on_join_spot (
-          [&] (const auto &actor, auto, const auto &, auto)
+          [&] (const auto &actor, auto, const auto &, auto, auto, auto)
             -> zlink::framework::task_t<
               zlink::framework::detail::actor_join_reply_t> {
               record_barrier_event ("production-join");

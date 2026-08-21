@@ -183,7 +183,8 @@ class actor_gateway_state_t
     using create_dispatcher_t = std::function<result_t<actor_ref_t> (
       std::string, std::string, const std::optional<zlink::message_t> &)>;
     using join_spot_dispatcher_t = std::function<task_t<actor_join_reply_t> (
-      const actor_ref_t &, spot_id_t, const zlink::message_t &, std::chrono::milliseconds)>;
+      const actor_ref_t &, spot_id_t, const zlink::message_t &,
+      std::string, std::string, std::chrono::milliseconds)>;
     using join_entry_spot_dispatcher_t = std::function<result_t<actor_join_reply_t> (
       const actor_ref_t &, const zlink::message_t &, std::chrono::milliseconds)>;
     using relay_dispatcher_t = std::function<task_t<std::optional<zlink::message_t>> (

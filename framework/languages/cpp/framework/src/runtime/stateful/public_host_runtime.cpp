@@ -4675,6 +4675,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     && wire.kind
                          != protocol::command::userSpotClose
                     && wire.kind != protocol::command::actorCreate
+                    && wire.kind != protocol::command::actorJoin
                     && wire.kind
                          != protocol::command::instanceSpot)
                     throw protocol::service_wire_error_t (
