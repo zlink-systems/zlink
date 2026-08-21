@@ -165,7 +165,6 @@ spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &
                 || command.actor_type.empty () || command.actor_id.empty ()
                 || command.actor_generation == 0
                 || command.source_spot_id.empty ()
-                || command.source_spot_generation == 0
                 || command.target_spot_id.empty ()
                 || command.target_node_rid.empty ()
                 || received.source_node_rid.to_string ()
@@ -1062,9 +1061,7 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
           request.spot_id.empty ()
             ? runtime.join_actor_to_entry_spot_erased (
                 entry_actor_ref, runtime.node_rid (), zlink::message_t::from (request.payload),
-                request.actor_snapshot_present
-                  ? std::make_optional (zlink::message_t::from (request.actor_snapshot))
-                  : std::nullopt,
+                std::nullopt,
                 actor_gateway.actor_context (entry_actor_ref))
             : runtime.join_remote_actor_to_spot_erased (
                 actor_ref, spot_id_t (request.spot_id),

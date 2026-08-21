@@ -398,7 +398,8 @@ class stateful_object_runtime_t
       frozen_object_state_t frozen,
       object_ref_t target,
       relocation_restore_identity_t identity,
-      std::stop_token cancellation = {});
+      std::stop_token cancellation = {},
+      std::optional<object_ref_t> target_spot = std::nullopt);
     stateful_error_t restore_relocation_aggregate (
       std::vector<frozen_object_state_t> frozen,
       std::vector<object_ref_t> targets,

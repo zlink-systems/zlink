@@ -575,11 +575,9 @@ class public_authority_store_adapter_t final :
                     return std::nullopt;
             }
             const auto version = read_byte ();
-            return version == static_cast<std::uint8_t> ('2')
-                     ? std::optional<std::uint8_t>{2}
-                     : (version == static_cast<std::uint8_t> ('3')
-                          ? std::optional<std::uint8_t>{3}
-                          : std::nullopt);
+            return version == static_cast<std::uint8_t> ('3')
+                     ? std::optional<std::uint8_t>{3}
+                     : std::nullopt;
         }
 
         std::optional<std::uint8_t> byte ()

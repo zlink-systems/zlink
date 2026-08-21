@@ -45,6 +45,15 @@ std::string hex (std::span<const std::byte> value)
     return result;
 }
 
+template <typename T>
+bool equals_text (const T &value, std::string_view expected)
+{
+    if constexpr (requires { value.value (); })
+        return value.value () == expected;
+    else
+        return value == expected;
+}
+
 void append_u16le (std::vector<std::byte> &bytes, std::uint16_t value)
 {
     actor_authority_detail::append_u8 (bytes, static_cast<std::uint8_t> (value));
@@ -143,7 +152,7 @@ int main ()
     const auto decoded = decode_actor_authority_payload (actor, 17);
     assert (decoded && decoded->actor.object_generation () == 17
             && decoded->actor.actor_id ().value () == "B"
-            && decoded->spot_id.value () == "C"
+            && equals_text (decoded->spot_id, "C")
             && decoded->spot_generation == 2
             && decoded->spot_kind == actor_authority_spot_kind_t::entry
             && decoded->owner_id == "D" && decoded->owner_lease_generation == 3

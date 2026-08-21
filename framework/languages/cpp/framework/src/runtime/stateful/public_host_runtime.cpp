@@ -3,6 +3,7 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
@@ -1202,11 +1203,32 @@ void public_host_runtime_t::configure_message_follow_handler (
     _message_follow_handler = std::move (handler);
 }
 
+void public_host_runtime_t::configure_actor_join_relocation (
+  actor_join_relocation_prepare_validator_t prepare_validator,
+  actor_join_recovery_consumer_t recovery_consumer,
+  actor_join_authority_spot_resolver_t authority_spot_resolver)
+{
+    if (!prepare_validator || !recovery_consumer
+        || !authority_spot_resolver)
+        throw std::invalid_argument (
+          "Actor Join relocation callbacks must not be empty");
+    std::lock_guard lock (_mutex);
+    if (_started)
+        throw std::logic_error (
+          "Actor Join relocation must be configured before start");
+    _actor_join_relocation_prepare_validator =
+      std::move (prepare_validator);
+    _actor_join_recovery_consumer = std::move (recovery_consumer);
+    _actor_join_authority_spot_resolver =
+      std::move (authority_spot_resolver);
+}
+
 void public_host_runtime_t::configure_bound_session_operations (
   bound_session_operations_t operations)
 {
     if (!operations.bind || !operations.send || !operations.replaced
-        || !operations.commit_relocation_route)
+        || !operations.commit_relocation_route
+        || !operations.prepare_relocation_target_route)
         throw std::invalid_argument (
           "bound Session operations must all be configured");
     std::lock_guard lock (_mutex);
@@ -3280,7 +3302,8 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (
         std::lock_guard lock (_mutex);
         const auto found = _relocation_target_attempts.find (key);
         if (found == _relocation_target_attempts.end ()
-            || !found->second.target_finalized)
+            || found->second.authority_committed_at
+                 == std::chrono::steady_clock::time_point{})
             co_return;
         for (std::size_t index = 0;
              index != found->second.session_routes.size (); ++index) {
@@ -3417,11 +3440,41 @@ bool public_host_runtime_t::commit_relocation_target_authority (
               node_rid_t::from_string (attempt.targets.front ().node_id),
               attempt.prepare.target.target_node_generation,
               target_owner};
+            std::vector<std::byte> target_application_payload;
+            if (attempt.targets.front ().kind
+                  == stateful::object_kind_t::actor
+                && _actor_join_authority_spot_resolver) {
+                const auto spot = _actor_join_authority_spot_resolver (
+                  attempt.targets.front ());
+                if (spot) {
+                    target_application_payload =
+                      runtime::encode_actor_authority_payload (
+                        runtime::actor_authority_payload_t{
+                          .state = runtime::actor_authority_state_t::ready,
+                          .stable_type = std::get<0> (*spot),
+                          .actor_id = attempt.targets.front ().key,
+                          .current_spot_id = std::get<1> (*spot),
+                          .current_spot_generation = std::get<2> (*spot),
+                          .current_spot_kind =
+                            runtime::actor_authority_spot_kind_t::user,
+                          .owner_id = target_owner.owner_id,
+                          .owner_lease_generation =
+                            static_cast<std::uint64_t> (
+                              target_owner.lease_generation),
+                          .mesh_name =
+                            attempt.targets.front ().mesh_name,
+                          .node_rid = node_rid_t::from_string (
+                            attempt.targets.front ().node_id),
+                          .node_generation = attempt.prepare.target
+                                               .target_node_generation});
+                }
+            }
             const auto published = _relocation_authority->publish (
               attempt.sources.front (), attempt.targets.front (),
               target_owner, target_placement, attempt.restore_identity.reference,
               attempt.restore_identity.checksum_crc32c,
-              attempt.restore_identity.inventory_digest);
+              attempt.restore_identity.inventory_digest,
+              std::move (target_application_payload));
             return published.status
                      == stateful::authority_publish_status_t::published
                    || relocation_target_authority_committed_strict (attempt);
@@ -3506,6 +3559,32 @@ bool public_host_runtime_t::try_finalize_relocation_target (
         attempt.authority_committed_at = found->second.authority_committed_at;
     }
 
+    // ZLJR-backed User-Spot Join owns a bound-Session prewarm at the
+    // target. A recovery-free maintenance/whole-node import has no joined
+    // Actor runtime to prewarm; it still submits its one-way Session route
+    // below, but must retain the generic import path.
+    const auto join_prepare = _actor_join_relocation_prepare_validator
+                                ? _actor_join_relocation_prepare_validator (
+                                  attempt.prepare)
+                                : std::optional<bool>{};
+    const auto canonical_user_spot_join = join_prepare && *join_prepare;
+    if (canonical_user_spot_join) {
+        for (const auto &route_state : attempt.session_routes) {
+            const auto &route = route_state.route;
+            if (!_bound_session_operations.prepare_relocation_target_route
+                || !_bound_session_operations.prepare_relocation_target_route (
+                  route,
+                  attempt.prepare.target.target_owner_lease_generation))
+                return false;
+        }
+    }
+
+    /* The target Actor route is now installed and S2 authority is durable.
+     * Submit command 44 before opening the restored Actor lifecycle: an
+     * OnJoined callback may immediately push to its bound Session, and that
+     * push must be ordered behind the Session owner's route commit. */
+    submit_relocation_session_routes (key);
+
     const auto committed =
       attempt.targets.size () == 1
         ? _objects.commit_relocation_restore (
@@ -3516,6 +3595,25 @@ bool public_host_runtime_t::try_finalize_relocation_target (
         && committed
              != stateful::stateful_error_t::already_exists)
         return false;
+
+    {
+        std::lock_guard lock (_mutex);
+        for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
+            const auto &target = attempt.targets[index];
+            if (target.kind != stateful::object_kind_t::actor)
+                continue;
+            const auto &wire = attempt.wire_objects[index];
+            const auto current = _actors.find (target.key);
+            if (current != _actors.end ()
+                && (current->second.second.object_generation
+                      > target.object_generation
+                    || current->second.second.authority_owner_generation
+                         > target.authority_owner_generation))
+                return false;
+            _actors.insert_or_assign (
+              target.key, std::make_pair (wire.stable_type, target));
+        }
+    }
 
     for (const auto &object : attempt.wire_objects)
         (void) _relocation_wire->unregister_target (
@@ -3656,10 +3754,26 @@ bool public_host_runtime_t::restore_relocation_assembly (
 {
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
     try {
+        std::optional<stateful::object_ref_t> actor_join_target_spot;
+        if (staging.targets.size () == 1
+            && staging.targets.front ().kind
+                 == stateful::object_kind_t::actor
+            && _actor_join_authority_spot_resolver) {
+            const auto spot = _actor_join_authority_spot_resolver (
+              staging.targets.front ());
+            if (spot) {
+                actor_join_target_spot = stateful::object_ref_t{
+                  stateful::object_kind_t::user_spot,
+                  std::get<1> (*spot), std::get<2> (*spot), 0,
+                  staging.targets.front ().mesh_name,
+                  staging.targets.front ().node_id};
+            }
+        }
         restored = staging.targets.size () == 1
                      ? _objects.restore_relocation (
                          staging.frozen.front (), staging.targets.front (),
-                         staging.restore_identity, {})
+                         staging.restore_identity, {},
+                         std::move (actor_join_target_spot))
                      : _objects.restore_relocation_aggregate (
                          staging.frozen, staging.targets,
                          staging.restore_identity, {});
@@ -3781,13 +3895,15 @@ void public_host_runtime_t::complete_relocation_assembly (
         || envelope->object.object_id != pending.prepare.object.object_id
         || envelope->object.object_generation
              != pending.prepare.object.object_generation
+        || envelope->application_version
+             != pending.prepare.application_version
         || (envelope->object.kind
               != protocol::relocation_object_kind_t::instance_spot
             && envelope->object.expected_authority_owner_generation
                  != pending.prepare.object
                       .expected_authority_owner_generation)) {
         trace_mesh_host ("relocation-assembly-failed",
-                         "stage=principal-identity");
+                         "stage=principal-identity-or-application-version");
         reply_failure ();
         return;
     }
@@ -4056,6 +4172,23 @@ void public_host_runtime_t::complete_relocation_assembly (
         // payload integrity failure.
         reply_failure (protocol::framework_error_code::requestFailed);
         return;
+    }
+    if (_actor_join_recovery_consumer) {
+        for (std::size_t index = 0; index != frozen.size (); ++index) {
+            if (frozen[index].owner.kind
+                  != stateful::object_kind_t::actor)
+                continue;
+            if (!_actor_join_recovery_consumer (
+                  frozen[index], targets[index], pending.prepare)) {
+                unregister_relocation_wire_targets (
+                  pending.prepare.relocation,
+                  pending.prepare.target_attempt_generation,
+                  wire_objects);
+                reply_failure (
+                  protocol::framework_error_code::requestProtocolError);
+                return;
+            }
+        }
     }
     // Factory/restore failures are staging failures, not payload-integrity
     // failures; the helper tears down every queue it registered first.
@@ -4421,6 +4554,25 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || prepare->source_node_generation
                              != mailbox_record.source_node_generation)
                         continue;
+
+                    if (_actor_join_relocation_prepare_validator) {
+                        const auto join_prepare =
+                          _actor_join_relocation_prepare_validator (*prepare);
+                        if (join_prepare && !*join_prepare) {
+                            (void) _transport->reply_relocation_failed (
+                              mailbox_record,
+                              protocol::relocation_failed_t{
+                                prepare->relocation,
+                                prepare->target_attempt_generation,
+                                prepare->coordinator, prepare->target,
+                                prepare->object,
+                                protocol::relocation_role_t::target,
+                                static_cast<std::uint32_t> (
+                                  protocol::framework_error_code::
+                                    requestProtocolError)});
+                            continue;
+                        }
+                    }
 
                     const relocation_attempt_key_t key{
                       prepare->relocation.high,

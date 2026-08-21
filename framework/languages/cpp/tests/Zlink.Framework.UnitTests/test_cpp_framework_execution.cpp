@@ -4404,6 +4404,50 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       });
     source.start ();
     target.start ();
+    const auto configure_materialization = [] (
+      mesh_node_runtime_t &node,
+      const std::shared_ptr<mesh_node_builder_state_t> &state) {
+        auto &objects = node.native_node ().objects ();
+        objects.configure_relocation_state (
+          [spot_state = state->spot_state] (
+            const stateful::object_ref_t &object,
+            const std::string &stable_type,
+            std::stop_token cancellation) {
+              return spot_node_runtime_t (spot_state)
+                .capture_spot_relocation_state (
+                  object, stable_type, cancellation);
+          },
+          [spot_state = state->spot_state] (
+            const stateful::frozen_object_state_t &frozen,
+            const stateful::object_ref_t &object,
+            std::stop_token cancellation) {
+              return spot_node_runtime_t (spot_state)
+                .restore_spot_relocation_state (
+                  frozen, object, cancellation);
+          });
+        objects.configure_relocation_materialization (
+          [spot_state = state->spot_state] (
+            const stateful::frozen_object_state_t &frozen,
+            const stateful::object_ref_t &object,
+            const std::optional<stateful::object_ref_t> &spot,
+            std::stop_token cancellation) {
+              return spot_node_runtime_t (spot_state)
+                .materialize_relocation_state (
+                  frozen, object, spot, cancellation);
+          },
+          [spot_state = state->spot_state] (
+            const std::vector<stateful::object_ref_t> &objects) {
+              return spot_node_runtime_t (spot_state)
+                .commit_relocation_materialization (objects);
+          },
+          [spot_state = state->spot_state] (
+            const std::vector<stateful::object_ref_t> &objects) {
+              spot_node_runtime_t (spot_state)
+                .abort_relocation_materialization (objects);
+          });
+    };
+    configure_materialization (source, source_state);
+    configure_materialization (target, target_state);
 
     const auto register_node = [&] (
       mesh_node_runtime_t &node,
@@ -4456,6 +4500,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
           return std::make_unique<runtime::live_location_reader_t> (*locations);
       },
       service_lifetime_t::singleton);
+    location_services.add_singleton<actor_gateway_runtime_t> ();
     auto location_provider = location_services.build_provider ();
     source_spots.bind_service_provider (location_provider);
     target_spots.bind_service_provider (location_provider);
@@ -4673,12 +4718,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
                 std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
           co_return co_await target.send_to_node (node_rid, parts);
       });
-    service_collection_t source_services;
-    source_services.add_singleton<actor_gateway_runtime_t> ();
-    auto source_provider = source_services.build_provider ();
-    service_collection_t target_services;
-    target_services.add_singleton<actor_gateway_runtime_t> ();
-    auto target_provider = target_services.build_provider ();
+    auto source_provider = location_provider;
+    auto target_provider = location_provider;
     const auto dispatch_source = [&] {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
             (void) source.dispatch_ready (

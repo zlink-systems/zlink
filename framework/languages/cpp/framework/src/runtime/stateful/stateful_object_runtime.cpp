@@ -1488,7 +1488,8 @@ stateful_error_t stateful_object_runtime_t::restore_relocation (
   frozen_object_state_t frozen,
   object_ref_t target,
   relocation_restore_identity_t identity,
-  std::stop_token cancellation)
+  std::stop_token cancellation,
+  std::optional<object_ref_t> target_spot)
 try
 {
     if (!valid_text (frozen.stable_type)
@@ -1506,6 +1507,14 @@ try
         || frozen.timers.size () > max_restored_timers) {
         return stateful_error_t::invalid;
     }
+    if (target_spot
+        && (target.kind != object_kind_t::actor
+            || target_spot->kind != object_kind_t::user_spot
+            || target_spot->key.empty ()
+            || target_spot->object_generation == 0
+            || target_spot->mesh_name != target.mesh_name
+            || target_spot->node_id != target.node_id))
+        return stateful_error_t::invalid;
     std::uint64_t previous_sequence = 0;
     for (const auto &pending : frozen.pending_application) {
         if (pending.sequence == 0 || pending.sequence <= previous_sequence)
@@ -1536,7 +1545,8 @@ try
                      != std::optional<relocation_restore_identity_t>{
                        identity}
                 || record.stable_type != frozen.stable_type
-                || !record.membership.empty ()
+                || record.membership
+                     != (target_spot ? target_spot->key : std::string{})
                 || record.queue.application.size ()
                      != frozen.pending_application.size ()
                 || record.timers.size () != frozen.timers.size ()) {
@@ -1572,6 +1582,8 @@ try
         record.stable_type = frozen.stable_type;
         record.state = object_state_t::recovering;
         record.restore_identity = identity;
+        if (target_spot)
+            record.membership = target_spot->key;
         for (const auto &pending : frozen.pending_application) {
             record.queue.application_bytes += retained_bytes (pending);
             record.queue.application.push_back (pending);
@@ -1593,7 +1605,7 @@ try
     if (_relocation_state_materialize) {
         try {
             restored = _relocation_state_materialize (
-              frozen, target, std::nullopt, cancellation);
+              frozen, target, target_spot, cancellation);
         }
         catch (...) {
             restored = false;

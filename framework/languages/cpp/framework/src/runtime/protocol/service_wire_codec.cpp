@@ -2301,11 +2301,13 @@ frozen_body_validation_t read_frozen_body (
     frozen_body_validation_t validation;
     const auto wire_kind = static_cast<std::uint8_t> (kind);
     if (wire_kind == 1 || wire_kind == 2) {
-        read_application_payload_envelope (bytes, offset, capture_flow);
+        validation.application =
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 3 || wire_kind == 4) {
         (void) read_text8 (bytes, offset, "channel name");
-        read_application_payload_envelope (bytes, offset, capture_flow);
+        validation.application =
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 5 || wire_kind == 6) {
         validation.target = read_spot_route (bytes, offset);
@@ -2315,7 +2317,8 @@ frozen_body_validation_t read_frozen_body (
     else if (wire_kind == 7) {
         (void) read_text8 (bytes, offset, "channel name");
         (void) read_text8 (bytes, offset, "topic");
-        read_application_payload_envelope (bytes, offset, capture_flow);
+        validation.application =
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 8) {
         read_actor_control (bytes, offset);

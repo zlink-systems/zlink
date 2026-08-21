@@ -128,8 +128,6 @@ struct spot_actor_join_route_request_t
     std::uint64_t actor_generation = 0;
     std::string spot_id;
     std::vector<std::uint8_t> payload;
-    bool actor_snapshot_present = false;
-    std::vector<std::uint8_t> actor_snapshot;
 };
 
 /* Advertised inbound chunk-size cap (bytes) this node offers for
@@ -264,12 +262,6 @@ result_t<zlink::message_t> encode_actor_bound_session_frame (
   stream_codec_t codec,
   std::string packet_name,
   const zlink::message_t &payload);
-
-spot_actor_join_route_request_t make_spot_actor_join_route_request (
-  const actor_ref_t &actor_ref,
-  spot_id_t spot_id,
-  const zlink::message_t &payload,
-  const std::optional<zlink::message_t> &actor_snapshot = std::nullopt);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_admission_route_request_t &request);
 actor_ref_t actor_ref_from_spot_route (const spot_actor_commit_route_request_t &request);

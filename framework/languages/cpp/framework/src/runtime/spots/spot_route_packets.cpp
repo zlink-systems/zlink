@@ -400,9 +400,7 @@ void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value
                           {"actorId", value.actor_id},
                           {"actorGeneration", value.actor_generation},
                           {"spotId", value.spot_id},
-                          {"payload", encode_base64 (value.payload)},
-                          {"actorSnapshotPresent", value.actor_snapshot_present},
-                          {"actorSnapshot", encode_base64 (value.actor_snapshot)}};
+                          {"payload", encode_base64 (value.payload)}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value)
@@ -413,10 +411,6 @@ void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &val
     value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
     value.spot_id = json.at ("spotId").get<std::string> ();
     value.payload = decode_base64_field (json, "payload");
-    value.actor_snapshot_present = json.value ("actorSnapshotPresent", false);
-    value.actor_snapshot = json.contains ("actorSnapshot")
-                             ? decode_base64_field (json, "actorSnapshot")
-                             : std::vector<std::uint8_t>{};
 }
 
 void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value)
@@ -604,23 +598,6 @@ void from_json (const nlohmann::json &json, actor_bound_session_route_reply_t &v
 zlink::message_t message_from_bytes (const std::vector<std::uint8_t> &bytes)
 {
     return zlink::message_t::from (bytes);
-}
-
-spot_actor_join_route_request_t
-make_spot_actor_join_route_request (const actor_ref_t &actor_ref,
-                                    spot_id_t spot_id,
-                                    const zlink::message_t &payload,
-                                    const std::optional<zlink::message_t> &actor_snapshot)
-{
-    return spot_actor_join_route_request_t{
-      .actor_node_rid = std::string (actor_ref.node_rid ().value ()),
-      .actor_type = std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-      .actor_id = std::string (actor_ref.actor_id ().value ()),
-      .actor_generation = actor_ref.object_generation (),
-      .spot_id = std::string (spot_id),
-      .payload = payload.to_bytes (),
-      .actor_snapshot_present = actor_snapshot.has_value (),
-      .actor_snapshot = actor_snapshot ? actor_snapshot->to_bytes () : std::vector<std::uint8_t>{}};
 }
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_join_route_request_t &request)

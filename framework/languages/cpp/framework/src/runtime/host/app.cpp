@@ -2601,6 +2601,30 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 return actor_gateway_runtime.commit_session_relocation_route (
                   route, previous, target);
             },
+            [actor_gateway_runtime] (
+              const runtime::protocol::session_relocation_route_t &route,
+              std::uint64_t target_owner_lease_generation) mutable {
+                const auto actor = detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (
+                    zlink::routing_id_t::from (
+                      route.route.target_node_routing_id).to_string ()),
+                  {}, route.actor.actor_id,
+                  route.actor.object_generation);
+                const auto staged =
+                  actor_gateway_runtime.record_bound_session_route (
+                    actor,
+                    zlink::routing_id_t::from (
+                      route.session_owner_node_routing_id),
+                    zlink::routing_id_t::from (
+                      route.session_routing_id),
+                    route.session_owner_node_generation,
+                    route.route.target_authority_owner_generation,
+                    target_owner_lease_generation,
+                    route.binding_generation, 0,
+                    /*session_sequence=*/0,
+                    /*session_sequence_baseline_unknown=*/true);
+                return static_cast<bool> (staged);
+            },
             [actor_gateway_runtime, stream_runtime] (
               const runtime::protocol::bound_session_send_t &send) mutable
               -> std::optional<runtime::host::bound_session_operations_t::

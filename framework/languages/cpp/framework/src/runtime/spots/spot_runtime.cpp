@@ -5717,6 +5717,196 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
     return false;
 }
 
+std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare (
+  const runtime::protocol::relocation_prepare_t &prepare) const
+{
+    if (prepare.object.kind
+        != runtime::protocol::relocation_object_kind_t::actor)
+        return std::nullopt;
+    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto handoff_id =
+      runtime::protocol::actor_join_handoff_id (prepare.relocation);
+    const auto admission =
+      _state->actor_transfer_coordinator.admission (handoff_id);
+    if (!admission || !admission->canonical_user_spot_join)
+        return std::nullopt;
+    const auto target_context =
+      _state->spot_contexts_by_id.find (std::string (admission->target_spot_id));
+    if (target_context == _state->spot_contexts_by_id.end ()
+        || !target_context->second._state)
+        return false;
+    const auto &target = *target_context->second._state;
+    const auto source_node = zlink::routing_id_t::from (
+      std::string (admission->source_actor.node_rid ().value ())).to_bytes ();
+    const auto local_node = _state->snapshot.routing_id
+                              ? _state->snapshot.routing_id->to_bytes ()
+                              : std::vector<std::uint8_t>{};
+    return !local_node.empty ()
+           && !target.is_entry_spot ()
+           && !target.is_instance_spot ()
+           && target.object_generation == admission->target_spot_generation
+           && target.authority_owner_generation
+                == admission->target_spot_authority_owner_generation
+           && prepare.object.object_id
+                == admission->source_actor.actor_id ().value ()
+           && prepare.object.object_generation
+                == admission->source_actor.object_generation ()
+           && prepare.object.expected_authority_owner_generation
+                == admission->source_actor_authority_owner_generation
+           && prepare.source_node_routing_id == source_node
+           && prepare.source_node_generation
+                == admission->source_node_generation
+           && prepare.coordinator.node_routing_id == source_node
+           && prepare.coordinator.node_generation
+                == admission->source_node_generation
+           && prepare.coordinator.lease_generation
+                == admission->source_owner_lease_generation
+           && prepare.target.target_node_routing_id == local_node
+           && prepare.target.target_node_generation
+                == owner_node_generation (*target_context->second._state)
+           && prepare.target_attempt_generation
+                == prepare.target.target_node_generation;
+}
+
+bool spot_node_runtime_t::consume_actor_join_recovery (
+  runtime::stateful::frozen_object_state_t &frozen,
+  const runtime::stateful::object_ref_t &target,
+  const runtime::protocol::relocation_prepare_t &prepare)
+{
+    std::optional<runtime::protocol::actor_join_recovery_t> recovery;
+    auto recovery_record = frozen.pending_application.end ();
+    try {
+        for (auto current = frozen.pending_application.begin ();
+             current != frozen.pending_application.end (); ++current) {
+            std::optional<runtime::protocol::frozen_record_t> canonical;
+            if (current->frozen_record)
+                canonical = *current->frozen_record;
+            else if (!current->payload.empty ())
+                canonical = runtime::protocol::decode_frozen_record (
+                  current->payload);
+            if (!canonical)
+                continue;
+            auto decoded =
+              runtime::protocol::decode_actor_join_recovery_saved_work (
+                *canonical);
+            if (!decoded)
+                continue;
+            if (recovery)
+                return false;
+            recovery = std::move (*decoded);
+            recovery_record = current;
+        }
+    }
+    catch (...) {
+        return false;
+    }
+    if (!recovery) {
+        /* A matching command-40 admission is the canonical Join path.  It
+         * cannot fall through to ordinary Actor relocation (and ultimately
+         * the Entry Spot) without its durable ZLJR completion record.  A
+         * non-Join/legacy relocation has no matching admission, so preserve
+         * that path unchanged. */
+        const auto join_prepare = validate_actor_join_relocation_prepare (prepare);
+        return !join_prepare || !*join_prepare;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    const auto admission = _state->actor_transfer_coordinator.admission (
+      recovery->handoff_id);
+    const auto local_node = _state->snapshot.routing_id
+                              ? _state->snapshot.routing_id->to_bytes ()
+                              : std::vector<std::uint8_t>{};
+    const auto valid = admission && !local_node.empty ()
+        && recovery->relocation == prepare.relocation
+        && recovery->coordinator == prepare.coordinator
+        && recovery->handoff_id
+             == runtime::protocol::actor_join_handoff_id (prepare.relocation)
+        && recovery->actor_id == frozen.owner.key
+        && recovery->actor_type == frozen.stable_type
+        && recovery->actor_generation == frozen.owner.object_generation
+        && recovery->actor_authority_owner_generation
+             == frozen.owner.authority_owner_generation
+        && recovery->actor_authority_owner_generation
+               != std::numeric_limits<std::uint64_t>::max ()
+        && recovery->target_authority_owner_generation
+             == recovery->actor_authority_owner_generation + 1
+        && target.key == recovery->actor_id
+        && target.object_generation == recovery->actor_generation
+        && target.authority_owner_generation
+             == recovery->target_authority_owner_generation
+        && recovery->target_node_routing_id == local_node
+        && recovery->target_node_generation
+             == prepare.target_attempt_generation
+        && recovery->target_spot_id
+             == std::string (admission->target_spot_id)
+        && recovery->target_spot_generation
+             == admission->target_spot_generation
+        && recovery->target_spot_authority_owner_generation
+             == admission->target_spot_authority_owner_generation
+        && recovery->reservation_token == admission->reservation_token
+        && recovery->reserved_payload_bytes
+             == admission->reserved_payload_bytes
+        && recovery->actor_node_generation
+             == admission->source_node_generation
+        && recovery->expected_owner_lease_generation
+             == admission->source_owner_lease_generation
+        && recovery->operation.high
+             == admission->completion_operation_id_high
+        && recovery->operation.low
+             == admission->completion_operation_id_low;
+    if (!valid)
+        return false;
+    const auto key = actor_key (
+      ::zlink::framework::detail::actor_ref_access_t::make (
+        node_rid_t::from_string (target.node_id), frozen.stable_type,
+        target.key, target.object_generation));
+    if (!_state->actor_join_relocation_recoveries.emplace (
+          key,
+          detail::spot_node_builder_state_t::actor_join_relocation_recovery_t{
+            recovery->handoff_id, spot_id_t (recovery->source_spot_id),
+            admission->target_spot_id, recovery->target_node_generation,
+            recovery->target_spot_generation,
+            admission->source_actor, recovery->operation.high,
+            recovery->operation.low, recovery->reply}).second)
+        return false;
+    frozen.pending_application.erase (recovery_record);
+    return true;
+}
+
+std::optional<std::tuple<std::string, std::string, std::uint64_t>>
+spot_node_runtime_t::actor_join_relocation_authority_spot (
+  const runtime::stateful::object_ref_t &target) const
+{
+    if (target.kind != runtime::stateful::object_kind_t::actor)
+        return std::nullopt;
+    std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+    auto recovery = _state->actor_join_relocation_recoveries.end ();
+    const auto type = _state->actor_types_by_id.find (target.key);
+    if (type != _state->actor_types_by_id.end ()) {
+        recovery = _state->actor_join_relocation_recoveries.find (
+          type->second + ":" + target.key);
+    }
+    if (recovery == _state->actor_join_relocation_recoveries.end ()) {
+        recovery = std::find_if (
+          _state->actor_join_relocation_recoveries.begin (),
+          _state->actor_join_relocation_recoveries.end (),
+          [&target] (const auto &candidate) {
+              return candidate.second.source_actor.actor_id ().value ()
+                       == target.key
+                     && candidate.second.source_actor.object_generation ()
+                          == target.object_generation;
+          });
+    }
+    if (recovery == _state->actor_join_relocation_recoveries.end ())
+        return std::nullopt;
+    return std::tuple{
+      std::string (
+        ::zlink::framework::detail::actor_ref_access_t::actor_type (
+          recovery->second.source_actor)),
+      std::string (recovery->second.target_spot_id),
+      recovery->second.target_spot_generation};
+}
+
 bool spot_node_runtime_t::materialize_relocation_state (
   const runtime::stateful::frozen_object_state_t &frozen,
   const runtime::stateful::object_ref_t &target,
@@ -5729,6 +5919,8 @@ bool spot_node_runtime_t::materialize_relocation_state (
     detail::spot_node_builder_state_t::actor_factory_registration_t factory;
     std::shared_ptr<spot_context_state_t> context;
     actor_gateway_runtime_t *actor_gateway = nullptr;
+    detail::spot_actor_admission_callbacks_t admission;
+    bool deferred_join_completion = false;
     runtime::stateful::object_ref_t resolved_target_spot;
     {
         std::lock_guard<std::recursive_mutex> lock (_state->mutex);
@@ -5737,13 +5929,38 @@ bool spot_node_runtime_t::materialize_relocation_state (
         // is already present on the target node). Resolve this node's own
         // local Entry Spot as the target Spot in that case, the same way
         // the join path does.
+        const auto actor_key_value = frozen.stable_type + ":" + target.key;
+        const auto join_recovery =
+          _state->actor_join_relocation_recoveries.find (actor_key_value);
+        deferred_join_completion =
+          join_recovery != _state->actor_join_relocation_recoveries.end ();
         if (target_spot) {
             if (target_spot->kind != runtime::stateful::object_kind_t::user_spot)
                 return false;
             resolved_target_spot = *target_spot;
-        } else {
-            if (!_state->snapshot.entry_spot_name)
+        } else if (join_recovery
+                   != _state->actor_join_relocation_recoveries.end ()) {
+            const auto recovered_context = _state->spot_contexts_by_id.find (
+              std::string (join_recovery->second.target_spot_id));
+            if (recovered_context == _state->spot_contexts_by_id.end ()
+                || !recovered_context->second._state)
                 return false;
+            const auto &spot = *recovered_context->second._state;
+            resolved_target_spot = runtime::stateful::object_ref_t{
+              runtime::stateful::object_kind_t::user_spot,
+              std::string (spot.spot_id), spot.object_generation,
+              spot.authority_owner_generation, spot.mesh_name,
+              std::string (spot.node_rid.value ())};
+        } else {
+            if (!_state->snapshot.entry_spot_name) {
+                // A maintenance/whole-node Actor import has no User-Spot
+                // Join admission and no local Entry Spot ownership to
+                // materialize. The stateful runtime already installed the
+                // generic Actor record; leave that import on its established
+                // path. A canonical routed Join may never take this branch.
+                return !deferred_join_completion
+                       && !_state->actor_factories.contains (frozen.stable_type);
+            }
             const auto entry_id = _state->spot_ids_by_name.find (
               *_state->snapshot.entry_spot_name);
             if (entry_id == _state->spot_ids_by_name.end ())
@@ -5764,6 +5981,17 @@ bool spot_node_runtime_t::materialize_relocation_state (
               std::string (entry_state.node_rid.value ())};
             if (resolved_target_spot.kind
                 != runtime::stateful::object_kind_t::user_spot)
+                return false;
+        }
+        if (deferred_join_completion) {
+            if (resolved_target_spot.key
+                  != std::string (join_recovery->second.target_spot_id)
+                || resolved_target_spot.object_generation
+                     != join_recovery->second.target_spot_generation
+                || !_state->actor_transfer_coordinator.begin_commit (
+                     join_recovery->second.handoff_id,
+                     join_recovery->second.source_actor,
+                     join_recovery->second.target_spot_id))
                 return false;
         }
         const auto configured = _state->actor_factories.find (frozen.stable_type);
@@ -5827,7 +6055,6 @@ bool spot_node_runtime_t::materialize_relocation_state (
         return false;
     }
 
-    detail::spot_actor_admission_callbacks_t admission;
     std::function<result_t<void> (const actor_ref_t &)> update_registry;
     const auto key = actor_key (committed);
     {
@@ -5847,6 +6074,8 @@ bool spot_node_runtime_t::materialize_relocation_state (
         detail::record_actor_instance_index_unlocked (
           *_state, committed, actor.get ());
         _state->actor_instances.emplace (key, actor);
+        _state->actor_types_by_id.insert_or_assign (
+          target.key, frozen.stable_type);
         _state->destroyed_actor_keys.erase (key);
         detail::record_actor_context_route_unlocked (
           *_state, key, target.node_id, *context,
@@ -5878,22 +6107,27 @@ bool spot_node_runtime_t::materialize_relocation_state (
                                             ? updated.error ()->what ()
                                             : "relocated Actor registry update failed");
         }
-        if (admission.on_actor_joined) {
-            const auto joined = context->run_serial_task (
-              "spot-relocation-actor-joined", [&] {
-                  return admission.on_actor_joined (
-                    context->spot_instance.get (), actor.get ());
-              });
-            if (!joined)
-                throw framework_exception_t (
-                  joined.error_kind (), joined.error () != nullptr
-                                           ? joined.error ()->what ()
-                                           : "relocated Actor joined callback failed");
-        }
     }
     catch (...) {
         abort_relocation_materialization ({target});
         return false;
+    }
+    // A normal maintenance/standalone import has no routed-Join recovery.
+    // It retains the ordinary relocation lifecycle: membership is visible as
+    // soon as materialization publishes the Actor, then OnActorJoined runs
+    // before the target-only authority commit. Canonical User-Spot Join is
+    // the sole deferred case because its ZLJR completion is fenced and
+    // delivered by commit_relocation_materialization.
+    if (!deferred_join_completion && admission.on_actor_joined) {
+        const auto joined = context->run_serial_task (
+          "spot-relocation-actor-joined", [&] {
+              return admission.on_actor_joined (
+                context->spot_instance.get (), actor.get ());
+          });
+        if (!joined) {
+            abort_relocation_materialization ({target});
+            return false;
+        }
     }
     return true;
 }
@@ -5904,8 +6138,27 @@ bool spot_node_runtime_t::commit_relocation_materialization (
     std::vector<std::shared_ptr<spot_context_state_t>> ready;
     std::vector<std::pair<std::string, runtime::stateful::object_ref_t>>
       actor_fences;
+    struct actor_join_completion_record_t
+    {
+        std::string handoff_id;
+        actor_ref_t source_actor;
+        actor_ref_t actor;
+        spot_id_t source_spot_id;
+        spot_id_t target_spot_id;
+        std::uint64_t target_node_generation = 0;
+        std::uint64_t target_authority_owner_generation = 0;
+        std::uint64_t target_owner_lease_generation = 0;
+        std::uint64_t operation_high = 0;
+        std::uint64_t operation_low = 0;
+        std::vector<std::uint8_t> reply;
+        std::shared_ptr<spot_context_state_t> target_context;
+        std::shared_ptr<void> actor_instance;
+        detail::spot_actor_admission_callbacks_t admission;
+    };
+    std::vector<actor_join_completion_record_t> actor_join_completions;
     std::shared_ptr<runtime::stateful::authority_relocation_port_t>
       authority_store;
+    std::vector<std::string> actor_join_handoffs;
     {
         std::lock_guard<std::recursive_mutex> lock (_state->mutex);
         authority_store = _state->relocation_authority;
@@ -5919,6 +6172,46 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                 if (fence == _state->actor_authority_fences.end ())
                     return false;
                 actor_fences.emplace_back (key, target);
+                const auto recovery =
+                  _state->actor_join_relocation_recoveries.find (key);
+                if (recovery
+                    != _state->actor_join_relocation_recoveries.end ()) {
+                    const auto context = _state->spot_contexts_by_id.find (
+                      std::string (recovery->second.target_spot_id));
+                    const auto instance = _state->actor_instances.find (key);
+                    const auto factory = _state->actor_factories.find (
+                      type->second);
+                    if (context == _state->spot_contexts_by_id.end ()
+                        || !context->second._state
+                        || instance == _state->actor_instances.end ()
+                        || factory == _state->actor_factories.end ())
+                        return false;
+                    const auto admission =
+                      context->second._state->actor_admissions.find (
+                        factory->second.actor_type);
+                    if (admission
+                        == context->second._state->actor_admissions.end ())
+                        return false;
+                    actor_join_handoffs.push_back (
+                      recovery->second.handoff_id);
+                    actor_join_completions.push_back ({
+                      recovery->second.handoff_id,
+                      recovery->second.source_actor,
+                      ::zlink::framework::detail::actor_ref_access_t::make (
+                        node_rid_t::from_string (target.node_id), type->second,
+                        target.key, target.object_generation),
+                      recovery->second.source_spot_id,
+                      recovery->second.target_spot_id,
+                      recovery->second.target_node_generation,
+                      target.authority_owner_generation,
+                      0,
+                      recovery->second.completion_operation_id_high,
+                      recovery->second.completion_operation_id_low,
+                      recovery->second.admission_reply,
+                      context->second._state,
+                      instance->second,
+                      admission->second});
+                }
                 continue;
             }
             if (target.kind != runtime::stateful::object_kind_t::user_spot)
@@ -5944,6 +6237,15 @@ bool spot_node_runtime_t::commit_relocation_materialization (
           target.authority_owner_generation;
         fence->second.owner_lease_generation =
           authority->target_owner.lease_generation;
+        for (auto &completion : actor_join_completions) {
+            if (completion.actor.actor_id ().value () == target.key
+                && completion.actor.object_generation ()
+                     == target.object_generation) {
+                completion.target_owner_lease_generation =
+                  authority->target_owner.lease_generation;
+                break;
+            }
+        }
     }
     for (const auto &state : ready) {
         {
@@ -5952,6 +6254,114 @@ bool spot_node_runtime_t::commit_relocation_materialization (
         }
         state->complete_relocation_ready (
           spot_relocation_ready_outcome_t::relocated);
+    }
+    for (auto &completion : actor_join_completions) {
+        if (actor_transfer_marker_enabled ()) {
+            emit_actor_transfer_marker (
+              "location_committed", completion.actor,
+              completion.handoff_id, completion.target_spot_id);
+        }
+        if (completion.admission.on_actor_joined) {
+            const auto joined = completion.target_context->run_serial_task (
+              "spot-relocation-actor-joined", [&] {
+                  return completion.admission.on_actor_joined (
+                    completion.target_context->spot_instance.get (),
+                    completion.actor_instance.get ());
+              });
+            if (!joined)
+                return false;
+        }
+    }
+    {
+        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        for (const auto &handoff : actor_join_handoffs)
+            _state->actor_transfer_coordinator.complete_commit (handoff);
+        for (const auto &target : targets) {
+            if (target.kind != runtime::stateful::object_kind_t::actor)
+                continue;
+            const auto type = _state->actor_types_by_id.find (target.key);
+            if (type != _state->actor_types_by_id.end ())
+                _state->actor_join_relocation_recoveries.erase (
+                  type->second + ":" + target.key);
+        }
+    }
+    for (auto &completion : actor_join_completions) {
+        try {
+            serializer_registry_t *serializers = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+                if (_state->channel_runtime)
+                    serializers = _state->channel_runtime->serializers;
+            }
+            if (serializers == nullptr)
+                return false;
+            runtime::messaging::envelope_header_t leave_header;
+            leave_header.kind = runtime::messaging::message_kind_t::command;
+            leave_header.channel_name = "node";
+            leave_header.message_name =
+              detail::spot_actor_leave_route_command_t::packet_name;
+            auto leave_parts = runtime::messaging::envelope_codec_t{}.encode_parts (
+              leave_header,
+              detail::spot_actor_leave_route_command_t{
+                .transfer_id = completion.handoff_id,
+                .actor_node_rid =
+                  std::string (completion.source_actor.node_rid ().value ()),
+                .actor_type = std::string (
+                  ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                    completion.source_actor)),
+                .actor_id =
+                  std::string (completion.source_actor.actor_id ().value ()),
+                .actor_generation =
+                  completion.source_actor.object_generation (),
+                .source_spot_id = std::string (completion.source_spot_id),
+                // ZLJR intentionally carries SourceSpotId but no source Spot
+                // generation. The source validates this command against the
+                // exact generation retained in pending_remote_source_cleanup.
+                .source_spot_generation = 0,
+                .target_spot_id = std::string (completion.target_spot_id),
+                .target_node_rid =
+                  std::string (completion.actor.node_rid ().value ()),
+                .target_node_generation =
+                  completion.target_node_generation,
+                .target_authority_owner_generation =
+                  completion.target_authority_owner_generation,
+                .target_owner_lease_generation =
+                  completion.target_owner_lease_generation},
+              *serializers);
+            auto notification = std::make_shared<task_t<zlink::submit_result_t>> (
+              send_actor_leave_notification (
+                zlink::routing_id_t::from (
+                  std::string (completion.source_actor.node_rid ().value ())),
+                std::move (leave_parts)));
+            detail::observe_task_completion (
+              *notification,
+              [notification] (const result_t<zlink::submit_result_t> &) {});
+        }
+        catch (...) {
+            // Source OnLeave is post-commit, one-way housekeeping. A lost
+            // notification cannot roll back the committed target authority;
+            // the source's bounded cleanup deadline remains the fallback.
+        }
+        std::optional<message_t> reply;
+        if (!completion.reply.empty ()) {
+            serializer_registry_t *serializers = nullptr;
+            {
+                std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+                if (_state->channel_runtime)
+                    serializers = _state->channel_runtime->serializers;
+            }
+            if (serializers == nullptr)
+                return false;
+            reply = message_t::from_raw (
+              zlink::message_t::from (std::move (completion.reply)),
+              serializers);
+        }
+        deliver_actor_join_completion_async (
+          completion.actor,
+          actor_join_accepted_t{
+            completion.operation_high, completion.operation_low,
+            completion.actor, std::move (reply)},
+          completion.target_spot_id, [] (result_t<void>) {});
     }
     return true;
 }
@@ -5969,6 +6379,14 @@ void spot_node_runtime_t::abort_relocation_materialization (
             if (type == _state->actor_types_by_id.end ())
                 continue;
             const auto key = type->second + ":" + target.key;
+            const auto recovery =
+              _state->actor_join_relocation_recoveries.find (key);
+            if (recovery
+                != _state->actor_join_relocation_recoveries.end ()) {
+                _state->actor_transfer_coordinator.fail_commit (
+                  recovery->second.handoff_id, false);
+                _state->actor_join_relocation_recoveries.erase (recovery);
+            }
             if (const auto spot = _state->actor_spot_ids.find (key);
                 spot != _state->actor_spot_ids.end ()) {
                 const auto context =
@@ -6019,7 +6437,9 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
                                                  std::uint64_t actor_authority_owner_generation,
                                                  std::uint64_t actor_node_generation,
                                                  std::uint64_t expected_owner_lease_generation,
-                                                 bool actor_type_from_authority_only)
+                                                 bool actor_type_from_authority_only,
+                                                 std::uint64_t target_spot_generation,
+                                                 std::uint64_t target_spot_authority_owner_generation)
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
@@ -6118,9 +6538,29 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
                                  .source_actor = store_actor,
                                  .source_spot_id = source_spot_id,
                                  .target_spot_id = target_spot_id,
+                                 .canonical_user_spot_join =
+                                   actor_type_from_authority_only
+                                   && !target.is_entry_spot ()
+                                   && !target.is_instance_spot (),
                                  .deadline = std::chrono::steady_clock::now () + admission_timeout,
                                  .completion_operation_id_high = completion_operation_id_high,
                                  .completion_operation_id_low = completion_operation_id_low,
+                                 .reservation_token = transfer_id,
+                                 .reserved_payload_bytes =
+                                   runtime::protocol::actor_join_reserved_payload_bytes (
+                                     request.size (),
+                                     actor_factory.value ().get ().relocation.kind
+                                           == detail::factory_relocation_kind_t::preserve_state
+                                         ? runtime::protocol::actor_join_snapshot_content_type
+                                         : runtime::protocol::actor_join_recreate_content_type),
+                                 .target_spot_generation = target_spot_generation,
+                                 .target_spot_authority_owner_generation =
+                                   target_spot_authority_owner_generation,
+                                 .source_actor_authority_owner_generation =
+                                   actor_authority_owner_generation,
+                                 .source_node_generation = actor_node_generation,
+                                 .source_owner_lease_generation =
+                                   expected_owner_lease_generation,
                                  .admission_reply = response.reply})) {
                 admission_conflict = true;
             }
@@ -6147,7 +6587,9 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
 }
 
 result_t<spot_node_runtime_t::remote_actor_transfer_t>
-spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref, std::string transfer_id)
+spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
+                                         std::string transfer_id,
+                                         bool capture_state)
 {
     std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
     const auto key = actor_key (actor_ref);
@@ -6195,9 +6637,21 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref, std::stri
                                static_cast<double> (pending));
         }
     }
-    if (factory->second.relocation.kind != detail::factory_relocation_kind_t::preserve_state) {
+    if (!capture_state) {
         return result_t<remote_actor_transfer_t>::success (
-          remote_actor_transfer_t{source_spot->second, zlink::message_t{}});
+          remote_actor_transfer_t{
+            source_spot->second, zlink::message_t{},
+            factory->second.relocation.kind
+                == detail::factory_relocation_kind_t::preserve_state
+              ? std::string (runtime::protocol::actor_join_snapshot_content_type)
+              : std::string (runtime::protocol::actor_join_recreate_content_type)});
+    }
+    if (factory->second.relocation.kind
+        != detail::factory_relocation_kind_t::preserve_state) {
+        return result_t<remote_actor_transfer_t>::success (
+          remote_actor_transfer_t{
+            source_spot->second, zlink::message_t{},
+            std::string (runtime::protocol::actor_join_recreate_content_type)});
     }
     try {
         auto state = factory->second.capture (actor->second.get (), {}).result ();
@@ -6211,7 +6665,9 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref, std::stri
         std::transform (state.value ().begin (), state.value ().end (), payload.begin (),
                         [] (std::byte value) { return static_cast<char> (value); });
         return result_t<remote_actor_transfer_t>::success (
-          remote_actor_transfer_t{source_spot->second, zlink::message_t::from (payload)});
+          remote_actor_transfer_t{
+            source_spot->second, zlink::message_t::from (payload),
+            std::string (runtime::protocol::actor_join_snapshot_content_type)});
     }
     catch (const framework_exception_t &error) {
         replay_actor_handoff_until_move_closed (actor_ref, transfer_id);
@@ -6575,7 +7031,7 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
   const runtime::protocol::actor_route_fence_t &target_fence)
 {
     if (transfer_id.empty () || source_spot_id.empty ()
-        || source_spot_generation == 0 || target_spot_id.empty ()
+        || target_spot_id.empty ()
         || target_fence.actor_id != source_actor.actor_id ().value ()
         || target_fence.object_generation != source_actor.object_generation ()
         || target_fence.target_node_routing_id.empty ()
@@ -6629,6 +7085,35 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
     const auto key = actor_key (source_actor);
     {
         std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
+        auto cleanup = std::find_if (
+          _state->pending_remote_source_cleanups.begin (),
+          _state->pending_remote_source_cleanups.end (),
+          [&] (const auto &candidate) {
+              return candidate.transfer_id == transfer_id
+                     && candidate.source_actor.actor_id ()
+                          == source_actor.actor_id ()
+                     && ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                          candidate.source_actor)
+                          == ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                            source_actor)
+                     && candidate.source_actor.object_generation ()
+                          == source_actor.object_generation ()
+                     && candidate.source_actor.node_rid ().value ()
+                          == source_actor.node_rid ().value ()
+                     && candidate.target_spot_id == target_spot_id;
+          });
+        if (cleanup != _state->pending_remote_source_cleanups.end ()) {
+            if (cleanup->source_spot_id != source_spot_id
+                || cleanup->source_spot_generation == 0
+                || (source_spot_generation != 0
+                    && source_spot_generation
+                         != cleanup->source_spot_generation)) {
+                return result_t<void>::success ();
+            }
+            source_spot_generation = cleanup->source_spot_generation;
+        } else if (source_spot_generation == 0) {
+            return result_t<void>::success ();
+        }
         const auto context = _state->spot_contexts_by_id.find (
           std::string (source_spot_id));
         const auto actor = _state->actor_instances.find (key);
@@ -6654,23 +7139,6 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
         if (admission != source_state->actor_admissions.end ())
             leave_callback = admission->second.on_leave_actor;
 
-        auto cleanup = std::find_if (
-          _state->pending_remote_source_cleanups.begin (),
-          _state->pending_remote_source_cleanups.end (),
-          [&] (const auto &candidate) {
-              return candidate.transfer_id == transfer_id
-                     && candidate.source_actor.actor_id ()
-                          == source_actor.actor_id ()
-                     && ::zlink::framework::detail::actor_ref_access_t::actor_type (
-                          candidate.source_actor)
-                          == ::zlink::framework::detail::actor_ref_access_t::actor_type (
-                            source_actor)
-                     && candidate.source_actor.object_generation ()
-                          == source_actor.object_generation ()
-                     && candidate.source_actor.node_rid ().value ()
-                          == source_actor.node_rid ().value ()
-                     && candidate.target_spot_id == target_spot_id;
-          });
         if (cleanup != _state->pending_remote_source_cleanups.end ()) {
             const auto target = _state->actor_transfer_coordinator
                                   .message_follow_target (
@@ -6801,6 +7269,21 @@ spot_node_runtime_t::complete_remote_actor_transfer (
     }
     const auto late_transfer_id = transfer_id;
     const auto target_spot_id = target_route.spot_id;
+    spot_id_t source_spot_id;
+    std::uint64_t source_spot_generation = 0;
+    if (const auto spot = _state->actor_spot_ids.find (key);
+        spot != _state->actor_spot_ids.end ()) {
+        source_spot_id = spot->second;
+        const auto context = _state->spot_contexts_by_id.find (
+          std::string (source_spot_id));
+        if (context != _state->spot_contexts_by_id.end ()
+            && context->second._state) {
+            const auto native = context->second._state->native_spot.lock ();
+            if (native)
+                source_spot_generation =
+                  native->status ().lifecycle_generation ();
+        }
+    }
     // Keep the old-generation Message Follow route independent from the actor's
     // A later relocation can return the same Actor incarnation to this node.
     // Retain the committed source fence; the authority owner generation, node
@@ -6827,6 +7310,8 @@ spot_node_runtime_t::complete_remote_actor_transfer (
         .source_actor = source_actor,
         .source_fence = std::move (source_fence),
         .transfer_id = std::move (transfer_id),
+        .source_spot_id = std::move (source_spot_id),
+        .source_spot_generation = source_spot_generation,
         .target_spot_id = target_spot_id,
         .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (1),
         .leave_submitted = source_leave_submitted,

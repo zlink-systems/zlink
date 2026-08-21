@@ -2862,6 +2862,8 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
         .source_actor = actor,
         .source_fence = source_fence,
         .transfer_id = "transfer-leave-notify",
+        .source_spot_id = spot_id_t ("actor-a-entry"),
+        .source_spot_generation = 7,
         .target_spot_id = spot_id_t ("spot-b-target"),
         .not_before = std::chrono::steady_clock::now (),
         .leave_submitted = false,

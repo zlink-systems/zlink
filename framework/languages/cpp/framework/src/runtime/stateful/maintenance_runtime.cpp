@@ -878,8 +878,20 @@ bool maintenance_runtime_t::relocate_encode (
      * the wire and retained through the retransmission window. Nothing is
      * written to the Relocation Store on this path. */
     try {
+        if (state->context.augment_frozen
+            && !state->context.augment_frozen (
+              state->seal_attempt.seal.participants)) {
+            (void) _objects.abort_relocation (
+              state->seal_attempt.seal.token);
+            state->result.emplace (finish (
+              {relocation_terminal_t::blocked,
+               relocation_reason_t::restore_failed,
+               std::nullopt}));
+            return false;
+        }
         state->payload = encode_envelope (
-          state->seal_attempt.seal.participants, state->context.relocation);
+          state->seal_attempt.seal.participants, state->context.relocation,
+          state->context.application_version);
         if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
             (void) _objects.abort_relocation (state->seal_attempt.seal.token);
             state->result.emplace (finish (
@@ -1186,8 +1198,19 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->sealed_at = std::chrono::steady_clock::now ();
     state->pending_unit_token = begin_pending_relocation_unit ();
     try {
+        if (persisted_context.augment_frozen
+            && !persisted_context.augment_frozen (
+              state->seal_attempt.seal.participants)) {
+            (void) _objects.abort_relocation_before_cutover (
+              seal.token);
+            co_return aggregate_relocation_result_t{
+              relocation_terminal_t::blocked,
+              relocation_reason_t::restore_failed, {}};
+        }
         state->payload = encode_envelope (
-          seal.participants, persisted_context.relocation);
+          state->seal_attempt.seal.participants,
+          persisted_context.relocation,
+          persisted_context.application_version);
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
     }
@@ -1362,7 +1385,8 @@ constexpr std::string_view bare_timer_handler_type = "LogicalTimer";
 
 std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
   const std::vector<frozen_object_state_t> &participants,
-  const protocol::relocation_id_t &relocation)
+  const protocol::relocation_id_t &relocation,
+  std::uint64_t application_version)
 {
     if (participants.empty ()
         || (relocation.high == 0 && relocation.low == 0))
@@ -1404,7 +1428,12 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                        root.stable_type, root.owner.key,
                        root.owner.object_generation,
                        root.owner.authority_owner_generation};
-    envelope.application_version = 1;
+    if (application_version
+             > static_cast<std::uint64_t> (
+                 std::numeric_limits<std::int64_t>::max ()))
+        return {};
+    envelope.application_version =
+      static_cast<std::int64_t> (application_version);
 
     try {
         for (std::size_t index = 0; index != ordered.size (); ++index) {
