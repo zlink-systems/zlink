@@ -696,6 +696,16 @@ void zlink::socket_base_t::read_activated (pipe_t *pipe_)
         if (it == _transport_pairs.end () || !it->second.ready)
             return;
     }
+    //  Stage 1 (plan 7.1): read_activated is a per-message event. It only
+    //  needs the shared receive mutex when the async mailbox executor owns
+    //  command dispatch, because only then can it run concurrently with a
+    //  public receive. Without an async owner the command is dispatched on
+    //  the receiving thread itself, exactly as before 3ef4d09a37, so the
+    //  lock and the progress-epoch bump are pure overhead there.
+    if (!async_mailbox_owns_commands ()) {
+        xread_activated (pipe_);
+        return;
+    }
     receive_runtime_t &receive = receive_runtime ();
     scoped_lock_t receive_lock (receive.sync);
     xread_activated (pipe_);
