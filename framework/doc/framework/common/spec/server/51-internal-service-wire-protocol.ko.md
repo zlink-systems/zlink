@@ -464,11 +464,15 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ### Actor join 요청 envelope
 
-`actorJoin`(28)의 요청 body — correlation, actor route fence, `entry` flag와 target spot
+`actorJoin`(28)은 `[request]`로 보내며, 그 결과는 command 20 reply — 이 request의 `[reply]`
+leg — 로만 돌아온다. `actorJoin`(28)의 요청 body — correlation, actor route fence, `entry` flag와 target spot
 route fence — 는 이 operation의 완전한 cross-language 계약이다. 이 body 외에 wire로 전달되는
 필드는 없다. 특히 runtime이 진행 중인 이동을 내부에서 추적하기 위해 사용하는 transfer 단위
 bookkeeping identifier(예: transfer id)는 language-internal일 뿐 이 body에 나타나지 않는다.
-이런 id가 필요한 runtime은 local에서 생성하고 유지하며 wire에 싣지 않는다.
+이런 id가 필요한 runtime은 local에서 생성하고 유지하며 wire에 싣지 않는다. Command 28을
+request/reply pair가 아니라 one-way record로 보내거나 받는 것은 이 operation의 계약 밖이며,
+수신자는 [2. Record framing과 decode](#2-record-framing과-decode)의 규칙대로 application
+dispatch 전에 protocol error로 거부한다.
 [15. Spot과 Actor 모델 §4.2](15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)에
 설명한 기존 준비 뒤에서 대기하는 동작과 later-attempt-wins 규칙을 포함한 수신 측 admission
 semantics는 language-internal id가 아니라 이 body에 실린 actor identity를 key로 삼는다.
@@ -575,7 +579,8 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
   dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** target의 canonical
   capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
-  `actorJoin`(28)을 originate하고 admission reply에 `receiveChunkLimitBytes`를 실어 보낸다.
+  `actorJoin`(28)을 `[request]`로 originate하고, command 20 reply — 이 request의 `[reply]`
+  leg — 에 `receiveChunkLimitBytes`를 실어 보낸다.
   capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다(과도기 폴백).
   수신측은 stable type을 wire가 아니라 §9대로 Store Actor Authority row에서 해석한다.
   (이전 개정에서 C++·.NET은 originate하지 않는다고 명시했으나, 네 runtime의 Store-backed

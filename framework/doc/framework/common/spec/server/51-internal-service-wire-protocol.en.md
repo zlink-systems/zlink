@@ -509,12 +509,17 @@ Both operations return their results in the command 20 reply envelope.
 
 ### Actor Join Request Envelope
 
-`actorJoin`(28)'s request body — correlation, the actor route fence, the `entry` flag,
+`actorJoin`(28) is sent as `[request]`, and its result returns only on the command 20
+reply — this request's `[reply]` leg. `actorJoin`(28)'s request body — correlation, the actor route fence, the `entry` flag,
 and the target spot route fence — is the complete cross-language contract for this
 operation. No other field travels on the wire for it. In particular, per-transfer
 bookkeeping identifiers a runtime uses internally to track an in-flight move (for
 example, a transfer id) are language-internal only and never appear in this body; a
 runtime that needs such an id generates and keeps it locally, not on the wire.
+Sending or receiving command 28 as a one-way record instead of a request/reply pair is
+outside this operation's contract; the receiver rejects it as a protocol error before
+application dispatch, per the rules in
+[2. Record Framing and Decode](#2-record-framing-and-decode).
 Receiver-side admission semantics — parking behind an existing preparation and the
 later-attempt-wins rule described in
 [15. Spot And Actor Model §4.2](15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
@@ -637,7 +642,8 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   the `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`), which all four runtimes
   (cpp, dotnet, java, node) decode identically. **All four runtimes** originate a canonical
-  `actorJoin`(28) — wiring `receiveChunkLimitBytes` into the admission reply — once the
+  `actorJoin`(28) as `[request]` — wiring `receiveChunkLimitBytes` into the command 20
+  reply, this request's `[reply]` leg — once the
   target's canonical capability is observed (an authority fence plus a peer admitted at
   that generation); when it is not, each runtime keeps its language-internal admission path
   (a transitional fallback). The receiver resolves the stable type from the Store Actor
