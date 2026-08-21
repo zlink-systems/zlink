@@ -7,17 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
-import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkServiceAuthorityPayloadCodecTest {
-    private static final Pattern ENCODED_HEX = Pattern.compile(
-        "\\\"encodedHex\\\"\\s*:\\s*\\\"([0-9a-f]+)\\\"");
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @Test
     void durableAuthorityGoldenPreservesActivationRecoveryByteExactly()
@@ -92,6 +91,90 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
             decoded.state());
         assertEquals("room-17", decoded.spotId());
+    }
+
+    @Test
+    void recoveryBearingReadyInstanceDropsRecoveryWhenRewrittenClosing() {
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        var recovery = new ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState(
+            "activation-17",
+            HexFormat.of().parseHex(
+                "d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e"),
+            175,
+            1);
+        var ready = codec.decode(codec.encodeInstance(
+            ZLinkServiceAuthorityPayloadCodec.State.READY,
+            "game.room",
+            "room-17",
+            "owner-b",
+            31,
+            "game",
+            RoutingId.from("node-b"),
+            17,
+            java.util.Optional.of(recovery))).orElseThrow();
+
+        byte[] closing = codec.encodeInstance(
+            ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
+            ready.stableType(),
+            ready.spotId(),
+            ready.ownerId(),
+            ready.ownerLeaseGeneration(),
+            ready.meshName(),
+            ready.nodeRid(),
+            ready.nodeGeneration());
+
+        var rewritten = codec.decode(closing).orElseThrow();
+        assertEquals(ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
+            rewritten.state());
+        assertTrue(rewritten.activationRecoveryState().isEmpty());
+    }
+
+    @Test
+    void recoveryBearingClosingInstanceIsRejected() {
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        var recovery = new ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState(
+            "activation-17",
+            HexFormat.of().parseHex(
+                "d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e"),
+            175,
+            1);
+
+        assertThrows(IllegalArgumentException.class, () -> codec.encodeInstance(
+            ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
+            "game.room",
+            "room-17",
+            "owner-b",
+            31,
+            "game",
+            RoutingId.from("node-b"),
+            17,
+            java.util.Optional.of(recovery)));
+
+        byte[] closingWithRecovery = codec.encodeInstance(
+            ZLinkServiceAuthorityPayloadCodec.State.READY,
+            "game.room",
+            "room-17",
+            "owner-b",
+            31,
+            "game",
+            RoutingId.from("node-b"),
+            17,
+            java.util.Optional.of(recovery));
+        closingWithRecovery[11] = 3;
+        closingWithRecovery[18] = 3;
+        updateChecksum(closingWithRecovery);
+
+        assertTrue(codec.decode(closingWithRecovery).isEmpty());
+    }
+
+    private static void updateChecksum(byte[] payload) {
+        var checksum = new java.util.zip.CRC32C();
+        int checksumOffset = payload.length - Integer.BYTES;
+        checksum.update(payload, 0, checksumOffset);
+        long value = checksum.getValue();
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            payload[checksumOffset++] = (byte) (value >>> shift);
+        }
     }
 
     @Test
@@ -187,14 +270,26 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
                 throw new IllegalStateException(
                     "durable authority golden fixture was not found");
             }
-            String json = new String(resource.readAllBytes(),
-                StandardCharsets.UTF_8);
-            var match = ENCODED_HEX.matcher(json);
-            if (!match.find()) {
+            JsonNode fixture = JSON.readTree(resource);
+            assertEquals("authority-payload-v1", fixture.path("format").asText(),
+                "durable authority golden format");
+            assertTrue(fixture.path("consumers").isArray(),
+                "durable authority golden consumers must be an array");
+            boolean hasJvmConsumer = false;
+            for (JsonNode consumer : fixture.path("consumers")) {
+                if ("jvm".equals(consumer.asText())) {
+                    hasJvmConsumer = true;
+                    break;
+                }
+            }
+            assertTrue(hasJvmConsumer,
+                "durable authority golden must include the jvm consumer");
+            JsonNode encodedHex = fixture.path("encodedHex");
+            if (!encodedHex.isTextual()) {
                 throw new IllegalStateException(
                     "durable authority golden encodedHex is missing");
             }
-            return match.group(1);
+            return encodedHex.textValue();
         }
     }
 }
