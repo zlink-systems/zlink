@@ -252,7 +252,16 @@
     §3b 사다리 기록 참조) ② multi-attempt 실증 스테이지 `327c2b86c1` ③ cpp app-reply 양방향
     (`dd234c3110`) ④ .NET app-reply 보존 ⑤ 4언어 durable-authority conformance 대칭
     (`077aa29987`·`7dd0813b96`·`ea7805d54b`·`387ee43361` — cpp는 ZLAU 정렬 포함, drift 오라클 확보).
-    **진행 중**: 역방향 .NET→Node 스테이지(`user-spot-join-dotnet-node`) 구현. **남은 것**:
+    **진행 중**: 역방향 .NET→Node 스테이지(`user-spot-join-dotnet-node`) — 구현 완료(양 host mode+
+    selector), 첫 실행서 2건 발견·수정 중: ⓐ 하니스 gap(Node target에 RouteMesh Entry Spot 미등록 →
+    'authority requires its RouteMesh Entry Spot' 거부) ⓑ **[판정] canonical 28 전송 계약 ruling**
+    (2026-08-22, Claude 단독, spec 51 근거 — 20='request terminal result'(:180), 28='요청 body'(:467),
+    admission reply tail(:571)): **28은 Core request로 발신, 20은 그 reply leg** 가 정본. Node 발신자·
+    .NET 수신자는 적합, **.NET 발신자가 비적합**(one-way routed 28 + 독립 20 수신,
+    ZLinkActorRemoteJoiner.cs:453) → request 채널로 정렬(sol). Node 수신자는 unsequenced 28에서
+    replyService 예외로 terminal 유실 → .NET 동형 ProtocolError-drop 방어 추가(terra). 참고:
+    .NET↔.NET canonical은 하니스 스테이지가 없어 이 비대칭이 지금까지 미검출 — 정렬 후 in-process
+    왕복 테스트로 보강. **남은 것**:
     Java 방향(host User-Spot mode 신설) → C++ 방향(host actor-join mode 완전 신설, 최대) →
     12방향 완성 → 통과 스테이지 `all` 편입(무음 금지). 하니스:
     framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 진행: 항목별 lockstep + spec-gap.
