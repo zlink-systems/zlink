@@ -2148,6 +2148,12 @@ export class ServiceStatefulRuntime {
       case 'actorDestroy':
         return this.replyDestroy(ingress, record);
       case 'actorJoin':
+        // Canonical command-28 is a request/reply control.  A one-way ingress
+        // cannot carry its typed terminal, so report it as a protocol error
+        // through RawServiceMeshRuntime rather than attempting replyWire().
+        if (canonicalActorJoin !== undefined && ingress.requestSequence === undefined) {
+          return 'protocolError';
+        }
         this.validateSpotFence(record.target);
         return this.enqueueActorJoin(
           ingress,

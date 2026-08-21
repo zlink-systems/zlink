@@ -51,6 +51,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-node-dotnet" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet-multiattempt" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-node" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -1107,6 +1108,50 @@ stage_node_source_dotnet_target_user_spot_join() {
   RESULTS+=("User-Spot Join: Node source -> .NET target (canonical actorJoin(28), admission, joined lifecycle, target-owner probe)")
 }
 
+# --- User-Spot JoinSpot: .NET source -> Node target, canonical actorJoin(28) --
+stage_dotnet_source_node_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/dotnet-user-spot-join-source.events"
+  target_events="${RUN_DIR}/node-user-spot-target.events"
+
+  start_redis user-spot-join-redis-dotnet-node "${redis_port}"
+  start_node_user_spot_join node-user-spot-target user-spot-target \
+    --mesh-name cross.user-spot-join \
+    --node-rid node-user-spot-join-target \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/node-user-spot-target.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+
+  start_dotnet dotnet-user-spot-join-source user-spot-source \
+    --mesh-name cross.user-spot-join \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${source_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-user-spot-join-source.ready" 180
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_canonical_actor_join "${target_events}.flow"
+  wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
+  wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
+  stop_all
+  RESULTS+=("User-Spot Join: .NET source -> Node target (canonical actorJoin(28), admission, joined lifecycle)")
+}
+
 # --- entry-spot relocation: Java source -> .NET target ------------------------
 # Same scenario as stage_node_source_dotnet_target_relocation, but both sides
 # now use pure automatic (Location-Store-only) discovery -- confirmed by
@@ -1287,6 +1332,14 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=user-spot-join-node-dotnet-multiattempt result=observed"
+    exit 0
+    ;;
+  user-spot-join-dotnet-node)
+    stage_dotnet_source_node_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-dotnet-node result=passed"
     exit 0
     ;;
   all)

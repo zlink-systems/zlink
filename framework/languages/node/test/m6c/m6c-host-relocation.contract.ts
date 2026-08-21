@@ -1696,6 +1696,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     readonly command: number;
     readonly flags: number;
     readonly sourceRoutingId: string;
+    readonly requestSequence: bigint;
     readonly parts: readonly Buffer[];
     readonly applicationJobOwner: ReturnType<typeof actorJoinApplicationJobOwner>;
   }) => Promise<unknown>) | undefined;
@@ -1781,6 +1782,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           command: 28,
           flags: 0,
           sourceRoutingId: 'source',
+          requestSequence: 1n,
           parts,
           applicationJobOwner
         });

@@ -148,6 +148,7 @@ test('unbound node-to-node Actor Join originates canonical 28, admits Store stat
         command: 28,
         flags: 0,
         sourceRoutingId: 'node-a',
+        requestSequence: 1n,
         parts,
         applicationJobOwner: applicationJobOwner() as never
       });

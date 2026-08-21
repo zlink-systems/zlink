@@ -170,8 +170,31 @@ function installCanonicalWireProbe(app, meshName) {
   };
 }
 
+function installCanonicalReceiverProbe(app) {
+  const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  const receiver = runtime.boundSessionRelay?.actorJoins;
+  if (receiver === undefined || typeof receiver.prepareCanonicalActorJoin !== 'function') {
+    throw new Error('canonical Actor Join receiver probe could not find the active Node service runtime');
+  }
+
+  const originalPrepare = receiver.prepareCanonicalActorJoin;
+  receiver.prepareCanonicalActorJoin = async function prepareCanonicalActorJoinWithProbe(join) {
+    const prepared = await originalPrepare.call(this, join);
+    appendFlow(
+      `canonical actorJoin: wire_command=28 canonical=true packet=${CANONICAL_ACTOR_JOIN_PACKET}`
+      + ` receiver=prepareCanonicalActorJoin actor=${join.actorId}`
+      + ` actor_node=${join.actorNodeRid} target_authority=${join.expectedAuthorityOwnerGeneration}`
+    );
+    return prepared;
+  };
+}
+
 class UserSpotActorCreateReq {
   constructor(stateVersion) { this.stateVersion = stateVersion; }
+}
+
+class UserSpotCreateReq {
+  constructor(marker) { this.marker = marker; }
 }
 
 class BeginUserSpotJoinReq {
@@ -257,6 +280,28 @@ class RelocationEntrySpot {
   async onDisconnectActor() {}
 }
 Injectable()(RelocationEntrySpot);
+
+class RelocationUserSpot {
+  async onCreate() {
+    return { accepted: true };
+  }
+
+  async onActorJoin(actorId, _request) {
+    appendEvent(`user-spot-admission|accepted=true|actor=${actorId}|spot=${this.context.spotId}`);
+    return { accepted: true };
+  }
+
+  async onJoinedActor(actor) {
+    appendEvent(
+      `user-spot-joined|actor=${actor.actorId}|spot=${this.context.spotId}`
+      + `|nodeRid=${this.context.nodeRid}`
+    );
+  }
+
+  async onLeaveActor() {}
+  async onDisconnectActor() {}
+}
+Injectable()(RelocationUserSpot);
 
 class BeginUserSpotJoinHandler {
   async handle(_spot, actor, _context, request) {
@@ -391,9 +436,80 @@ async function userSpotJoinSource() {
   await flowProvider?.shutdown();
 }
 
+async function userSpotJoinTarget() {
+  const meshName = require_('mesh-name');
+  const spotId = require_('spot-id');
+  const keyPrefix = args['redis-key-prefix'] ?? 'zlink-cross-user-spot-join';
+  const flowProvider = installMessageFlowCapture();
+
+  class UserSpotJoinTargetModule {}
+  Module({
+    imports: [nestjs.ZLinkModule.forRootFactory({
+      useFactory: () => {
+        const builder = nestjs.zlinkFramework();
+        builder.configureDispatch().messageFlow('normal');
+        builder.addLocationStore(new locations.ZLinkRedisLocationStore({
+          url: `redis://${require_('redis-endpoint')}`,
+          keyPrefix: `${keyPrefix}:location`
+        }));
+        builder.addRelocationStore(new locations.ZLinkRedisRelocationStore({
+          url: `redis://${require_('redis-endpoint')}`,
+          keyPrefix: `${keyPrefix}:relocation`
+        }));
+        const mesh = builder.addRouteMesh(meshName)
+          .listen(require_('bind-endpoint'))
+          .routingId(require_('node-rid'))
+          .setPlacementWeight(100);
+        mesh.channel(meshName).server();
+        const objects = mesh.objects().server();
+        objects.addEntrySpot(RelocationEntrySpot);
+        objects.addSpotFactory(
+          'cross-lang-relocation-user-spot-type',
+          RelocationUserSpot,
+          factory => factory.disableRelocation()
+        );
+        objects.addActorFactory(
+          'cross-lang-relocation-actor-type',
+          RelocationActorFactory,
+          factory => factory.preserveStateWith(RelocationActorAdapter)
+        );
+        return builder.build();
+      }
+    })],
+    providers: [RelocationActorFactory, RelocationActorAdapter, RelocationUserSpot]
+  })(UserSpotJoinTargetModule);
+
+  const app = await NestFactory.createApplicationContext(
+    UserSpotJoinTargetModule,
+    { logger: false, abortOnError: false }
+  );
+  installCanonicalReceiverProbe(app);
+  const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
+  const created = await spots
+    .getOrCreate(spotId, 'cross-lang-relocation-user-spot-type')
+    .inMesh(meshName)
+    .request(new UserSpotCreateReq('cross-language-user-spot'))
+    .timeout(15_000)
+    .submit();
+  appendEvent(
+    `user-spot-created|spot=${created.spot.spotId}|nodeRid=${created.spot.nodeRid}|state=${created.state}`
+  );
+  writeReady();
+
+  await new Promise(() => {});
+  await app.close();
+  await flowProvider?.shutdown();
+}
+
 async function main() {
-  if (mode !== 'user-spot-join-source' && mode !== 'user-spot-join-source-multiattempt') {
+  if (mode !== 'user-spot-join-source'
+    && mode !== 'user-spot-join-source-multiattempt'
+    && mode !== 'user-spot-target') {
     throw new Error(`unsupported mode '${mode}'`);
+  }
+  if (mode === 'user-spot-target') {
+    await userSpotJoinTarget();
+    return;
   }
   await userSpotJoinSource();
 }

@@ -13,6 +13,9 @@ import {
   type RawServiceMeshRuntimeOptions
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
 import {
+  ServiceStatefulRuntime
+} from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+import {
   ZLinkNodeRawBindingPort
 } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import {
@@ -52,6 +55,9 @@ import {
   encodeReplyHeader,
   encodeRouteMeshAdmission
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
+import {
+  encodeActorJoin28
+} from '../../../../runtime/protocol/generated/node/service_wire_pilot_codec.generated';
 
 function descriptor(
   nodeRoutingId: string,
@@ -1310,6 +1316,79 @@ test('raw protocol errors reply when correlation is recoverable and always repor
     },
     { sourceRoutingId: 'peer-send', request: false, replied: false }
   ]);
+  runtime.close();
+});
+
+test('unsequenced canonical actorJoin(28) drops with ProtocolError observation and no reply', async () => {
+  type UnsequencedReceived = {
+    readonly sourceRid: string;
+    readonly parts: readonly Buffer[];
+    reply(parts: readonly Uint8Array[]): void;
+  };
+  const observed: Array<{
+    sourceRoutingId: string;
+    request: boolean;
+    replied: boolean;
+    command?: number;
+  }> = [];
+  const runtime = rawServiceRuntime({
+    descriptor: descriptor('local'),
+    onProtocolError: record => observed.push(record)
+  });
+  runtime.topology.admit({ ...descriptor('peer'), state: 'serving' }, 'peer-connection');
+  const stateful = new ServiceStatefulRuntime(runtime, 'local', 1n);
+  const frames = encodeActorJoin28({
+    correlation: 17n,
+    actor: {
+      id: 'actor-a',
+      generation: 3n,
+      targetNodeRid: Buffer.from('peer'),
+      targetNodeGeneration: 1n,
+      expectedAuthorityOwnerGeneration: 5n,
+      expectedOwnerLeaseGeneration: 7n
+    },
+    entry: false,
+    targetSpot: {
+      id: 'missing-spot',
+      generation: 11n,
+      targetNodeRid: Buffer.from('local'),
+      targetNodeGeneration: 1n,
+      expectedAuthorityOwnerGeneration: 13n,
+      expectedOwnerLeaseGeneration: 17n
+    }
+  }).map(Buffer.from);
+  let replyAttempts = 0;
+  const received: UnsequencedReceived = {
+    sourceRid: 'peer',
+    parts: frames,
+    reply(_parts) { replyAttempts++; }
+  };
+  const internals = runtime as unknown as {
+    processReceived(
+      received: UnsequencedReceived,
+      nowMs: number,
+      applicationJobOwner: Awaited<ReturnType<RawServiceMeshRuntime['reserveLocalIngress']>>
+    ): Promise<string>;
+    reportProtocolError(received: UnsequencedReceived): void;
+  };
+  const applicationJobOwner = await runtime.reserveLocalIngress();
+  try {
+    await assert.doesNotReject(async () => {
+      assert.equal(await internals.processReceived(received, 0, applicationJobOwner), 'protocolError');
+    });
+  } finally {
+    applicationJobOwner.close();
+  }
+  internals.reportProtocolError(received);
+
+  assert.equal(replyAttempts, 0);
+  assert.deepEqual(observed, [{
+    sourceRoutingId: 'peer',
+    request: false,
+    replied: false,
+    command: ServiceWireCommand.actorJoin
+  }]);
+  stateful.close();
   runtime.close();
 });
 
