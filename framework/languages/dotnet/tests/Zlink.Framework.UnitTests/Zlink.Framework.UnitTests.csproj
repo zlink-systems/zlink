@@ -60,6 +60,7 @@
         <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
         <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>
         <Compile Include="Runtime/AuthorityKeyCodecTests.cs"/>
+        <Compile Include="Runtime/ActorAuthorityPayloadFixedVectorTests.cs"/>
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
         <Compile Include="Runtime/CanonicalActorJoinAttemptTests.cs"/>
         <Compile Include="Runtime/CanonicalActorJoinIngressReplyTests.cs"/>
@@ -82,6 +83,7 @@
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
         <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
+        <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
