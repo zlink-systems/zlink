@@ -258,7 +258,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
     - [x] **serializer 가드 축소**: `canonical_actor_join_application_reply` → `result_t<optional>`; reply 없으면 serializers 없이도 admit, reply 있는데 serializers null이면 typed protocol_error. 기존 동작 회귀 없음.
     - 이월(3b서 자연 해소): ① full source-path end-to-end 커버(Java→cpp/.NET→cpp pairwise가 정확히 구동) ② throwing reply serializer 시 pending-admission unwind(pathological) ③ **.NET source(ZLinkActorRemoteJoiner:1044) non-unwrap 의심 → pairwise서 확인**.
-  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **진행 중(1/12 방향 그린)**.
+  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **진행 중(2/12 방향 그린 + 감사-배치 페이즈
+    완료 2026-08-22)**. **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
+    canonical slot 모델 — TTT 회귀 모드 A 0/8 소거 동반). **4언어 배치 랜딩**: Java
+    `6bb05dce85`(flags 판별·eviction race·typed 21), .NET `63e551c2b4`(47/48/49 request/reply·
+    raw-20 차단·typed 21), C++ `2032cb6ba5`(**원격 Join을 인라인에서 ZLJR+40/52 canonical chunk로
+    전환** — 3b C++ 방향의 핵심 전제 완성, ZLJR metadata ordered-json으로 Node 고정 벡터 byte-핀).
+    Java 2셀은 admission accepted까지 전진(이전 rung들 해소), join 완주 rung 진단 중(유력: Java의
+    ZLJR 생산/소비). 이하 이전 기록:
     **완료(2026-08-22)**: ① **stage-1 Node→.NET 결정적 그린** `de17ac7179`(6단 사다리 — ⭐핸드오프·
     §3b 사다리 기록 참조) ② multi-attempt 실증 스테이지 `327c2b86c1` ③ cpp app-reply 양방향
     (`dd234c3110`) ④ .NET app-reply 보존 ⑤ 4언어 durable-authority conformance 대칭
