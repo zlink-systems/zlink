@@ -393,7 +393,11 @@
   newest-wins 미준수 — 15 §4.2 "기존 prep을 언제나 먼저 abort" 위반(ZLinkActorHandoffState.cs:438
   "already active" 거부). (C) Node target의 admission-전 eager-materialize(claimLocation=true)가
   버려진 attempt의 actor state/factory 자원을 expiry에서 미정리 — "Accepted 전 factory 준비,
-  CAS 전 공개 금지" 계약과 발산(.NET과 비대칭). 참고: "재-park"는 스펙상 receiver admission
+  CAS 전 공개 금지" 계약과 발산(.NET과 비대칭). **[승격 2026-08-22] C는 역방향 스테이지 blocker로
+  실증**: .NET→Node에서 canonical prepare의 eager getOrCreateActor가 Entry Spot authority claim을
+  요구해 예외(opaque 105), 우회 시 restore(40)가 existing-actor 거부 — 자기모순. 해소 = §0 프레임
+  (Node 사설 경로의 admission registry+hidden-actor restore 기계로 canonical prepare 배선 교체,
+  신규 로직 금지) — sol 진행 중. 참고: "재-park"는 스펙상 receiver admission
   직렬화 의미로, source 재배치 개념은 침묵/비적용(§3a의 이전 표현 정정).
 - **[구판 기록] A5-canonical-multiattempt (열린 설계 질문이던 시기의 기록)**:
   정정 — 이전 "Node 확정 결함·최소 수정" 판단은 **틀렸다**. 사실관계:
