@@ -232,3 +232,32 @@ advisor가 지적한 hole 2건 해소 (remote-actor-join-receiver.ts 전체 read
 6. **MEDIUM — production invariant 미테스트**(수신 dispatch/accept-time commit 부재/bound gating/entry bit/public completion).
 
 **판정: 커밋 보류.** decouple(:2678)+바인딩 제거+seam abort는 clean이나 origination(발신+gate+수신 dispatch+completion)에 6건 집중. 다음: #2 ruling 충돌을 node 대조로 해소 후 advisor 우선순위 상담(fix-forward 전체 vs clean-subset 랜딩).
+
+
+---
+
+## 단계 1(A1) 검증 결과: sol NOT-CLEAN 7건 — 랜딩 보류 (2026-08-21)
+
+**독립 검증**: 제 diff 정독(라우팅·fence·entry·u64는 정합)·빌드 0/0·focused 40/40 통과. 전체
+게이트 1803/4 = sanctioned 3 + RelocationBehaviorConformanceTests.ActorJoin_target_ready_submit_
+failure_reuses_staging(격리 통과 → 전체-실행 flake, 기존 클래스 잠복위험). **그러나 sol NOT-CLEAN.**
+
+**sol 7건**:
+1. [HIGH] 28이 40 전에 membership commit(ZLinkSpotActorJoinDispatcher.cs:115→ZLinkSpotActivationActors.cs:530
+   NotifyActorJoinedSpotAsync) — §9 provisional-secure-only 경계 위반(relocation-28의 경우).
+   **재발 tension**(sender review #2와 동일) — 내 §9 ruling과 충돌, advisor 판정 필요.
+2. [HIGH] mailbox full시 28 silent drop(ZLinkManagedMeshNode.cs:5474 EnqueueOwned bool 무시 →:9313
+   dispose+local backpressure event만, typed terminal 없음 → source timeout).
+3. [HIGH] whitespace Actor ID가 canonical로 claim(ZLinkServiceWireCodec.cs:739 empty만 거부)→
+   FromBoundary throw→broad catch가 node를 Error 상태로(:4625), source에 ProtocolError 미전달.
+4. [HIGH] 기존 local Actor가 stable-type 검증 우회(ZLinkFrameworkRuntimeActors.cs:2699 state.Actor
+   존재 시 즉시 return, state.ActorType==stableType 미검증) → type A/B 혼동.
+5. [MED] TypeMismatch를 ProtocolError로 인코딩(dispatcher:345) — schema는 conflict+actorTypeMismatch 제공.
+6. [MED] terminal-send backpressure가 Store 실패를 application rejection으로 변환(dispatcher:52→56).
+7. [MED] 신규 테스트가 §9 Store admission 우회(ReplyJoin 수동 호출, StatefulServiceRuntimeTests:1694)
+   → #1/#4/#5/#6 미탐지. **내 "진짜 wire 테스트" 평가가 이 점에서 오류**(wire 전송은 타나 Store
+   admission 경로는 short-circuit).
+
+**판정: 랜딩 보류(diff 미커밋 유지).** land/fix-forward는 #1 §9 tension 해소 후 결정. #1 핵심질문:
+canonical 28 수신이 membership commit해야 하나(plain join은 정답) vs relocation-28은 40까지 defer해야
+하나 — 수신자가 둘을 구분하는가.

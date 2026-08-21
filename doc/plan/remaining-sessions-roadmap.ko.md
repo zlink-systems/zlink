@@ -150,7 +150,7 @@
 동시) · **`혼합`**. (kotlin은 java 프레임워크 공유 — 샘플만 kotlin.) 단일언어 단계도 종료 시
 **L1 parity(다른 3언어 대조)** 필수.
 
-- [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (agent 완료, Claude 검증+sol 대기)
+- [~] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` (sol NOT-CLEAN 7건 — 랜딩 보류, #1 §9 membership tension advisor 판정 대기)
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [ ] 2a [A3] .NET 발신 재작업(sol 6건 반영) `dotnet단일`
   - [ ] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일`
