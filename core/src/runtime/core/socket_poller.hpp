@@ -107,7 +107,9 @@ class socket_poller_t
     // Socket readiness has its own wakeup channel. The mailbox's primary
     // signaler remains owned by the command executor when async dispatch is
     // active, so a poller must never compete for that descriptor.
-    signaler_t _socket_signaler;
+    //  Created on first use only. The descriptor pollset path never needs it,
+    //  so an ordinary poll over sockets allocates no eventfd at all.
+    signaler_t *_socket_signaler;
     bool _socket_signaler_active;
 #if defined ZLINK_POLL_BASED_ON_POLL
     int _socket_signaler_pollfd_index;
@@ -126,6 +128,7 @@ class socket_poller_t
     int remove_item (items_t::iterator it_);
     static int collect_socket_event (item_t &item_, event_t *event_);
 #if !defined ZLINK_HAVE_WINDOWS
+    signaler_t *ensure_socket_signaler ();
     void unregister_socket_signaler ();
     void drain_socket_signaler ();
 #endif
