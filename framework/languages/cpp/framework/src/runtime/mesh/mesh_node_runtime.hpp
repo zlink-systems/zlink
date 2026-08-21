@@ -462,12 +462,7 @@ class mesh_node_runtime_t
       const std::string &target_spot_id,
       std::uint64_t object_generation) const;
     // Negotiated receive chunk limit from an accepted actorJoin(28)
-    // admission reply (spec 51 §9), keyed by actor identity. The relocation
-    // direct-transfer capture (maintenance_runtime's
-    // advertised_receive_chunk_limit_bytes consumer) reads it when it
-    // begins the transfer that admission approved; threading it into that
-    // consumer's call site is still deferred, but the negotiated value is
-    // no longer dropped at decode.
+    // admission reply (spec 51 §9), keyed by actor identity.
     std::optional<std::uint32_t> negotiated_receive_chunk_limit_bytes (
       const actor_ref_t &actor) const;
     std::string mesh_name () const;
@@ -618,6 +613,8 @@ class mesh_node_runtime_t
     std::map<std::string, observed_spot_authority_t> _observed_spot_authorities;
     void record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
                                                 std::uint32_t limit_bytes);
+    std::uint64_t negotiated_receive_chunk_limit_bytes (
+      const std::vector<runtime::stateful::object_ref_t> &sources) const;
     mutable std::mutex _negotiated_receive_chunk_limit_mutex;
     std::map<std::string, std::uint32_t> _negotiated_receive_chunk_limits;
     host::instance_spot_activation_materializer_t _instance_spot_materializer;

@@ -673,7 +673,8 @@ struct actor_join_authority_fence_t
 result_t<std::string> actor_type_from_authority (
   runtime::live_location_reader_t &store,
   const actor_ref_t &wire_actor,
-  const actor_join_authority_fence_t &fence)
+  const actor_join_authority_fence_t &fence,
+  bool actor_type_from_authority_only)
 {
     const auto actor_id = wire_actor.actor_id ().value ();
     // Object/authority-owner/owner-lease generations are bounded counters;
@@ -719,8 +720,14 @@ result_t<std::string> actor_type_from_authority (
               "remote Actor Join Actor Authority row is incomplete");
         }
         const auto stable_type = snapshot->allocation.stable_type;
-        if (::zlink::framework::detail::actor_ref_access_t::actor_type (wire_actor)
-            != stable_type) {
+        // Canonical actorJoin(28) intentionally has no wire stable type.
+        // The legacy/JSON path still supplies one and remains protected by
+        // this forgery cross-check; the canonical path obtains its type only
+        // from the Authority row above.
+        const auto wire_type =
+          ::zlink::framework::detail::actor_ref_access_t::actor_type (wire_actor);
+        if ((!actor_type_from_authority_only || !wire_type.empty ())
+            && wire_type != stable_type) {
             return result_t<std::string>::failure (
               framework_error_kind_t::type_mismatch,
               "remote Actor Join wire type does not match its Authority row");
@@ -6009,7 +6016,8 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
                                                  std::uint64_t completion_operation_id_low,
                                                  std::uint64_t actor_authority_owner_generation,
                                                  std::uint64_t actor_node_generation,
-                                                 std::uint64_t expected_owner_lease_generation)
+                                                 std::uint64_t expected_owner_lease_generation,
+                                                 bool actor_type_from_authority_only)
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
@@ -6045,7 +6053,8 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
       *store, actor_ref,
       actor_join_authority_fence_t{actor_ref.object_generation (), actor_node_generation,
                                    actor_authority_owner_generation,
-                                   expected_owner_lease_generation});
+                                   expected_owner_lease_generation},
+      actor_type_from_authority_only);
     if (!stable_type) {
         return detail::propagate_failure<spot_actor_join_result_t> (
           stable_type, "remote Actor Join authority resolution failed");
@@ -10041,6 +10050,83 @@ spot_node_runtime_t::resolve_spot_generation (const zlink::routing_id_t &target_
                                               const spot_id_t &target_spot_id) const
 {
     return resolve_target_spot_generation (_state, target_node_rid, target_spot_id);
+}
+
+result_t<std::uint64_t>
+spot_node_runtime_t::resolve_wire_actor_join_target (
+  const runtime::protocol::spot_route_fence_t &fence) const
+{
+    if (fence.spot_id.empty () || fence.object_generation == 0
+        || fence.target_node_routing_id.empty () || fence.target_node_generation == 0
+        || fence.authority_owner_generation == 0 || fence.owner_lease_generation == 0) {
+        return result_t<std::uint64_t>::failure (
+          framework_error_kind_t::protocol_error,
+          "remote Actor Join target Spot fence is incomplete");
+    }
+
+    runtime::live_location_reader_t *store = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        if (!_state->root_services) {
+            return result_t<std::uint64_t>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor Join target Spot Authority Store is unavailable");
+        }
+        try {
+            store = &_state->root_services->get_required<runtime::live_location_reader_t> ();
+        }
+        catch (const std::exception &) {
+            return result_t<std::uint64_t>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor Join target Spot Authority Store is unavailable");
+        }
+    }
+
+    try {
+        // Admission fences must read the Authority row at this boundary.
+        // store_location_resolvers_t may return a valid-but-stale cache
+        // projection, which is suitable for routing but cannot authorize a
+        // canonical actorJoin target.
+        const auto read = store->read_authority (
+          runtime::spot_authority_key (fence.spot_id)).result ();
+        if (!read) {
+            return result_t<std::uint64_t>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor Join target Spot Authority row could not be read");
+        }
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
+        if (snapshot == nullptr) {
+            return result_t<std::uint64_t>::failure (
+              framework_error_kind_t::not_found,
+              "remote Actor Join target Spot Authority row is missing");
+        }
+        if (snapshot->allocation.state != placement_allocation_state_t::active
+            || snapshot->allocation.object_kind != placement_object_kind_t::user_spot
+            || snapshot->object_generation != fence.object_generation
+            || snapshot->allocation.target.node_rid.value ()
+                 != zlink::routing_id_t::from (fence.target_node_routing_id).to_string ()
+            || snapshot->allocation.target.node_lifecycle_generation
+                 != fence.target_node_generation
+            || snapshot->authority_owner_generation != fence.authority_owner_generation
+            || snapshot->owner.lease_generation <= 0
+            || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
+                 != fence.owner_lease_generation) {
+            return result_t<std::uint64_t>::failure (
+              framework_error_kind_t::protocol_error,
+              "remote Actor Join target Spot Authority row does not exactly match its route fence");
+        }
+        return result_t<std::uint64_t>::success (snapshot->object_generation);
+    }
+    catch (const std::exception &) {
+        return result_t<std::uint64_t>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join target Spot Authority row could not be read");
+    }
+    catch (...) {
+        return result_t<std::uint64_t>::failure (
+          framework_error_kind_t::unavailable,
+          "remote Actor Join target Spot Authority row could not be read");
+    }
 }
 
 void spot_node_runtime_t::set_route_client (route_client_t route_client)

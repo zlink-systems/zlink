@@ -162,15 +162,17 @@ class wire_actor_join_authority_store_t final :
 {
   public:
     std::optional<zlink::framework::authority_snapshot_t> snapshot;
+    std::optional<zlink::framework::authority_snapshot_t> spot_snapshot;
 
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t,
+    read_authority (zlink::framework::authority_key_t key,
                     std::stop_token) override
     {
-        if (snapshot) {
+        const auto &selected = key.value.starts_with ("zla1:s:") ? spot_snapshot : snapshot;
+        if (selected) {
             return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
               zlink::framework::result_t<zlink::framework::authority_read_result_t>::success (
-                zlink::framework::authority_read_result_t{*snapshot}));
+                zlink::framework::authority_read_result_t{*selected}));
         }
         return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
           zlink::framework::result_t<zlink::framework::authority_read_result_t>::success (
@@ -2581,6 +2583,19 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
                                 .node_rid = node_rid_t::from_string ("wire-join-source"),
                                 .node_lifecycle_generation = 3,
                                 .owner = location_owner_token_t{"source-owner", 5}}}};
+    store->spot_snapshot = authority_snapshot_t{
+      .store_version = "wire-join-target-v1",
+      .object_generation = 9,
+      .authority_owner_generation = 21,
+      .owner = location_owner_token_t{"target-owner", 22},
+      .store_now = std::chrono::system_clock::now (),
+      .allocation = {.state = placement_allocation_state_t::active,
+                     .object_kind = placement_object_kind_t::user_spot,
+                     .stable_type = "target",
+                     .target = {.mesh_name = "wire-join",
+                                .node_rid = node_rid_t::from_string ("wire-join-node"),
+                                .node_lifecycle_generation = 1,
+                                .owner = location_owner_token_t{"target-owner", 22}}}};
     service_collection_t services;
     services.add_factory<runtime::live_location_reader_t> (
       [store] (service_provider_t &) {
@@ -2592,7 +2607,12 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     wire_join_spot_resolver_t resolver;
     resolver.address.node_rid = local_rid;
     resolver.address.spot_id = "target-spot";
-    resolver.address.spot_generation = 9;
+    // Deliberately stale: canonical target admission must ignore this
+    // cacheable routing projection and read store->spot_snapshot instead.
+    resolver.address.spot_generation = 8;
+    resolver.address.node_generation = 2;
+    resolver.address.authority_owner_generation = 20;
+    resolver.address.owner = location_owner_token_t{"stale-owner", 23};
     owner.bind_spot_location_resolver (resolver);
 
     const auto make_request = [&] (std::uint64_t correlation) {
@@ -2661,11 +2681,26 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     const bool unknown_rejected =
       unknown.join_result == runtime::protocol::actor_join_result_t::rejected && !unknown.spot;
 
+    const auto malformed_terminal = [&] (std::string actor_id, std::string spot_id) {
+        auto malformed = make_request (4217);
+        malformed.actor.actor_id = std::move (actor_id);
+        malformed.target_spot.spot_id = std::move (spot_id);
+        const auto result = admit_wire_actor_join (node, local_rid, malformed, std::nullopt);
+        return result.terminal_result == 104
+               && result.failure_code == static_cast<std::uint32_t> (
+                 runtime::protocol::framework_error_code::requestProtocolError);
+    };
+    const bool malformed_typed =
+      malformed_terminal (" \t", "target-spot")
+      && malformed_terminal (std::string ("actor\0bad", 9), "target-spot")
+      && malformed_terminal ("actor-1", " \n")
+      && malformed_terminal ("actor-1", std::string ("spot\0bad", 8));
+
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return first_approved && approval_only && duplicate_parked && later_attempt_wins
-           && unknown_rejected;
+           && unknown_rejected && malformed_typed;
 }
 
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()

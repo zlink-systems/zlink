@@ -959,6 +959,13 @@ class spot_node_runtime_t
     std::optional<std::uint64_t> resolve_spot_generation (
       const zlink::routing_id_t &target_node_rid,
       const spot_id_t &target_spot_id) const;
+    // Canonical actorJoin(28) reaches this boundary without a stable type.
+    // Read the target's Store Authority row here (not a cacheable routing
+    // projection), alongside the Actor Authority fence/type resolution in
+    // admit_remote_actor_to_spot. The transport deliberately does not own
+    // these authority decisions.
+    result_t<std::uint64_t> resolve_wire_actor_join_target (
+      const runtime::protocol::spot_route_fence_t &fence) const;
     std::vector<spot_context_t> active_contexts () const;
     result_t<void> dispatch_subscription (const spot_context_t &context,
                                           std::string topic,
@@ -1053,7 +1060,8 @@ class spot_node_runtime_t
                                 std::uint64_t completion_operation_id_low = 0,
                                 std::uint64_t actor_authority_owner_generation = 0,
                                 std::uint64_t actor_node_generation = 0,
-                                std::uint64_t expected_owner_lease_generation = 0);
+                                std::uint64_t expected_owner_lease_generation = 0,
+                                bool actor_type_from_authority_only = false);
     // handoff_backlog holds the in-flight packets the source preserved while the
     // actor was moving (§10.2-2). They are enqueued on the target actor's
     // dispatch queue before the committed location is published (§10.2-3), and

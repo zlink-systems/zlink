@@ -21,6 +21,8 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/system_executor.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cstdlib>
 #include <iomanip>
@@ -124,6 +126,51 @@ std::size_t raw_received_bytes (
         total += part.size ();
     }
     return total;
+}
+
+bool has_legacy_actor_join_transfer (
+  const std::vector<std::vector<std::uint8_t>> &parts)
+{
+    if (parts.size () < 2)
+        return false;
+    try {
+        const auto envelope = protocol::decode_application_payload (parts[1], false);
+        const auto &encoded = envelope.payload;
+        std::size_t offset = 0;
+        const auto read_u32 = [&] {
+            if (offset + 4 > encoded.size ())
+                throw protocol::service_wire_error_t (
+                  "legacy Actor join multipart payload is truncated");
+            const auto value = (static_cast<std::uint32_t> (encoded[offset]) << 24u)
+                               | (static_cast<std::uint32_t> (encoded[offset + 1]) << 16u)
+                               | (static_cast<std::uint32_t> (encoded[offset + 2]) << 8u)
+                               | static_cast<std::uint32_t> (encoded[offset + 3]);
+            offset += 4;
+            return value;
+        };
+        const auto count = read_u32 ();
+        if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t))
+            return false;
+        std::optional<nlohmann::json> metadata;
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto size = read_u32 ();
+            if (size > encoded.size () - offset)
+                return false;
+            if (index == 0) {
+                metadata = nlohmann::json::parse (
+                  encoded.begin () + static_cast<std::ptrdiff_t> (offset),
+                  encoded.begin () + static_cast<std::ptrdiff_t> (offset + size), nullptr,
+                  false);
+            }
+            offset += size;
+        }
+        return offset == encoded.size () && metadata && !metadata->is_discarded ()
+               && metadata->is_object () && metadata->contains ("transferId")
+               && metadata->at ("transferId").is_string ();
+    }
+    catch (const std::exception &) {
+        return false;
+    }
 }
 
 std::vector<std::uint8_t> pack_infrastructure_reply (
@@ -3089,30 +3136,37 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             protocol::actor_join_request_t request;
-            try {
-                // The generated schema decoder owns canonical command 28,
-                // including its optional application-payload-envelope-v1.
-                // Pre-canonical C++ relocation uses the same command with
-                // the older payload envelope (which carries transferId), so
-                // preserve that established route only when canonical
-                // recognition fails.
-                const auto canonical = protocol::decode_actor_join_28 (
-                  received->parts);
-                request = {
-                  canonical.correlation,
-                  {canonical.actor.id, canonical.actor.generation,
-                   canonical.actor.target_node_rid,
-                   canonical.actor.target_node_generation,
-                   canonical.actor.expected_authority_owner_generation,
-                   canonical.actor.expected_owner_lease_generation},
-                  canonical.entry,
-                  {canonical.target_spot.id, canonical.target_spot.generation,
-                   canonical.target_spot.target_node_rid,
-                   canonical.target_spot.target_node_generation,
-                   canonical.target_spot.expected_authority_owner_generation,
-                   canonical.target_spot.expected_owner_lease_generation}};
+            bool canonical = false;
+            // A private v1 transfer is intentionally recognized before the
+            // generated decoder: its first frame can be structurally valid
+            // canonical command-28 bytes, but it still owns the established
+            // local-target transport and JSON admission semantics.
+            const bool legacy = has_legacy_actor_join_transfer (received->parts);
+            if (!legacy) {
+                try {
+                    // The generated schema decoder owns canonical command 28,
+                    // including its optional application-payload-envelope-v1.
+                    const auto decoded_canonical = protocol::decode_actor_join_28 (
+                      received->parts);
+                    request = {
+                      decoded_canonical.correlation,
+                      {decoded_canonical.actor.id, decoded_canonical.actor.generation,
+                       decoded_canonical.actor.target_node_rid,
+                       decoded_canonical.actor.target_node_generation,
+                       decoded_canonical.actor.expected_authority_owner_generation,
+                       decoded_canonical.actor.expected_owner_lease_generation},
+                      decoded_canonical.entry,
+                      {decoded_canonical.target_spot.id, decoded_canonical.target_spot.generation,
+                       decoded_canonical.target_spot.target_node_rid,
+                       decoded_canonical.target_spot.target_node_generation,
+                       decoded_canonical.target_spot.expected_authority_owner_generation,
+                       decoded_canonical.target_spot.expected_owner_lease_generation}};
+                    canonical = true;
+                }
+                catch (const std::exception &) {
+                }
             }
-            catch (const std::exception &) {
+            if (!canonical) {
                 request = protocol::decode_actor_join_request (
                   received->parts.front ());
                 if (received->parts.size () == 2)
@@ -3120,22 +3174,22 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                       received->parts.back (), false);
             }
             const auto local = _topology.local_descriptor ();
-            // request.actor's node fence identifies the sending (source)
-            // node's own identity — the same "actor route fence targets the
-            // node currently reachable at this identity" convention used by
-            // actorSend/actorRequest/actorDestroy — while request.target_spot
-            // must resolve to this node, since that is who is being asked to
-            // admit the actor.
+            // Transport owns only the authenticated peer and its exact node
+            // execution generation. The canonical target Spot/Authority
+            // fences deliberately travel untouched to the target admission;
+            // that Store-backed boundary is their single owner. Preserve the
+            // legacy record's established local-target gate unchanged.
             if (request.actor.target_node_routing_id
                   != received->source_routing_id
                 || request.actor.target_node_routing_id
                      != admitted->descriptor.node_routing_id
                 || request.actor.target_node_generation
                      != admitted->descriptor.lifecycle_generation
-                || request.target_spot.target_node_routing_id
-                     != local.node_routing_id
-                || request.target_spot.target_node_generation
-                     != local.lifecycle_generation) {
+                || (!canonical
+                    && (request.target_spot.target_node_routing_id
+                          != local.node_routing_id
+                        || request.target_spot.target_node_generation
+                             != local.lifecycle_generation))) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             co_return enqueue_received_or_retain (

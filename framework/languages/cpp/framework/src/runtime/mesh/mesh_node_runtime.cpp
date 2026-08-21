@@ -450,55 +450,34 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
     };
     try {
         spot_node_runtime_t spot (spot_state);
-        // The wire body carries no stable type (unlike actorCreate's
-        // stableType) — spec 15's admission semantics key on actor
-        // identity, and this node must already know that identity (via a
-        // prior actorCreate or join) to admit it here.
-        auto actor_type = spot.resolve_actor_type (request.actor.actor_id);
-        if (!actor_type) {
-            // A cold target has no local actor-type cache.  Recover only the
-            // stable type needed to construct actor_ref from the canonical
-            // Authority row; admit_remote_actor_to_spot then performs the S3
-            // complete fence/type validation before it can mutate admission.
-            runtime::live_location_reader_t *store = nullptr;
-            {
-                std::lock_guard<std::recursive_mutex> lock (spot_state->mutex);
-                if (!spot_state->root_services)
-                    return typed_terminal (framework_error_kind_t::unavailable);
-                try {
-                    store = &spot_state->root_services
-                               ->get_required<runtime::live_location_reader_t> ();
-                }
-                catch (const std::exception &) {
-                    return typed_terminal (framework_error_kind_t::unavailable);
-                }
-            }
-            const auto read = store->read_authority (
-              runtime::actor_authority_key (request.actor.actor_id)).result ();
-            if (!read)
-                return typed_terminal (framework_error_kind_t::unavailable);
-            const auto *authority = std::get_if<authority_snapshot_t> (&read.value ());
-            if (authority == nullptr)
-                return typed_terminal (framework_error_kind_t::not_found);
-            if (authority->allocation.state != placement_allocation_state_t::active
-                || authority->allocation.object_kind != placement_object_kind_t::actor
-                || authority->allocation.stable_type.empty ()) {
-                return typed_terminal (framework_error_kind_t::protocol_error);
-            }
-            const auto projection = runtime::decode_actor_authority_payload (
-              authority->payload);
-            if (!projection
-                || projection->actor.actor_id ().value () != request.actor.actor_id) {
-                return typed_terminal (framework_error_kind_t::protocol_error);
-            }
-            actor_type = authority->allocation.stable_type;
+        const auto valid_identifier = [] (std::string_view value) {
+            return !value.empty () && value.find ('\0') == std::string_view::npos
+                   && std::any_of (value.begin (), value.end (), [] (unsigned char ch) {
+                          return !std::isspace (ch);
+                      });
+        };
+        // Keep malformed canonical records out of the Store and return a
+        // command-20 typed terminal. actor_id_t additionally verifies UTF-8.
+        if (!detail::is_valid_actor_id (request.actor.actor_id)
+            || !valid_identifier (request.actor.actor_id)
+            || !valid_identifier (request.target_spot.spot_id)) {
+            return typed_terminal (framework_error_kind_t::protocol_error);
         }
+        const auto target = spot.resolve_wire_actor_join_target (request.target_spot);
+        if (!target)
+            return typed_terminal (target.error_kind ());
+        if (request.target_spot.target_node_routing_id != local_node_rid.to_bytes ())
+            return typed_terminal (framework_error_kind_t::protocol_error);
         // The actor fence's node coordinates name the CURRENT owner — the
         // source node originating this proposal.
+        // actorJoin(28) supplies no type; the empty marker is intentional.
+        // admit_remote_actor_to_spot performs the one authoritative Store
+        // fence/type resolution and rebuilds this ActorRef with the stable
+        // type from the Authority row before it can mutate admission state.
         const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
           node_rid_t::from_string (
             zlink::routing_id_t::from (request.actor.target_node_routing_id).to_string ()),
-          *actor_type, request.actor.actor_id, request.actor.object_generation);
+          {}, request.actor.actor_id, request.actor.object_generation);
         const auto payload_message =
           payload ? zlink::message_t::from (payload->payload) : zlink::message_t{};
         spot_id_t target_spot_id;
@@ -510,10 +489,8 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         } else {
             target_spot_id = spot_id_t (request.target_spot.spot_id);
         }
-        const auto spot_generation =
-          spot.resolve_spot_generation (local_node_rid, target_spot_id);
-        if (!spot_generation || *spot_generation == 0)
-            return typed_terminal (framework_error_kind_t::not_found);
+        if (target_spot_id != request.target_spot.spot_id)
+            return typed_terminal (framework_error_kind_t::protocol_error);
         if (!request.entry) {
             // Approval-only admission (spec 15 §478-527): run the
             // application admission callback and register the relocation
@@ -541,7 +518,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
               payload_message, request.actor.target_node_generation,
               request.correlation, request.actor.authority_owner_generation,
               request.actor.target_node_generation,
-              request.actor.owner_lease_generation);
+              request.actor.owner_lease_generation, true);
             if (!admitted)
                 return typed_terminal (admitted.error_kind ());
             if (!admitted.value ().accepted)
@@ -554,7 +531,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         host::actor_join_operation_result_t result;
         result.join_result = runtime::protocol::actor_join_result_t::accepted;
         result.spot =
-          runtime::protocol::actor_join_reply_spot_ref_t{target_spot_id, *spot_generation};
+          runtime::protocol::actor_join_reply_spot_ref_t{target_spot_id, target.value ()};
         // Approval-only: membership has not moved yet, so the accepted
         // reply carries the PROPOSED membership epoch (current + 1 — the
         // analog of java's admission-reply coreMembershipEpoch + 1). The
@@ -701,13 +678,10 @@ void mesh_node_runtime_t::start ()
     // approval; actor construction/installation, target location claim,
     // membership CAS, and application dispatch belong to the later
     // transfer/commit stages (prepare/finalize on the actor transfer
-    // coordinator). Known deferred items: route binding of wire-admitted
-    // actors (an admitted actor is not yet routable by a subsequent
-    // actorSend/actorRequest until the transfer commit installs the route)
-    // and threading the negotiated chunk limit into the direct-transfer
-    // capture. Both are acceptable only because nothing yet selects this
-    // wire path in production (the originate fence-gate is a separate,
-    // later increment).
+    // coordinator). Route binding of wire-admitted actors remains deferred:
+    // an admitted actor is not routable by a subsequent actorSend/actorRequest
+    // until the transfer commit installs the route. The negotiated receive
+    // chunk limit is carried into direct-transfer capture below.
     node->configure_actor_join_operations (
       [state = _state] (const runtime::protocol::actor_join_request_t &request,
                         const std::optional<runtime::protocol::application_payload_t> &payload,
@@ -1280,9 +1254,11 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
     for (std::size_t index = 0; index != inventory_digest.size (); ++index)
         inventory_digest[index] = std::to_integer<std::uint8_t> (public_digest[index]);
 
+    const auto receive_chunk_limit_bytes =
+      negotiated_receive_chunk_limit_bytes (actor).value_or (0);
     auto result = co_await maintenance->relocate (
       *source, target.rid.to_string (), {target.owner_id, target.lease_generation},
-      256u * 1024u * 1024u, inventory_digest, wire);
+      256u * 1024u * 1024u, inventory_digest, wire, {}, receive_chunk_limit_bytes);
     if (*session_checkpoint_attempted && !session_seal->completed) {
         result.terminal = session_seal->recovery_required
                             ? runtime::stateful::relocation_terminal_t::
@@ -1525,10 +1501,12 @@ mesh_node_runtime_t::relocate_application_unit (
     runtime::stateful::inventory_digest_t digest{};
     for (std::size_t index = 0; index != digest.size (); ++index)
         digest[index] = std::to_integer<std::uint8_t> (public_digest[index]);
+    const auto receive_chunk_limit_bytes =
+      negotiated_receive_chunk_limit_bytes (sources);
     if (sources.size () == 1) {
         auto result = co_await maintenance->relocate (
           sources.front (), target.rid.to_string (), {target.owner_id, target.lease_generation},
-          256u * 1024u * 1024u, digest, wire);
+          256u * 1024u * 1024u, digest, wire, {}, receive_chunk_limit_bytes);
         if (*session_checkpoint_attempted && !session_seal->completed) {
             result.terminal = session_seal->recovery_required
                                 ? relocation_terminal_t::recovery_required
@@ -1551,7 +1529,7 @@ mesh_node_runtime_t::relocate_application_unit (
     }
     auto result = co_await maintenance->relocate_aggregate (
       sources, target.rid.to_string (), {target.owner_id, target.lease_generation},
-      256u * 1024u * 1024u, digest, wire);
+      256u * 1024u * 1024u, digest, wire, {}, receive_chunk_limit_bytes);
     if (*session_checkpoint_attempted && !session_seal->completed) {
         result.terminal = session_seal->recovery_required
                             ? relocation_terminal_t::recovery_required
@@ -2543,6 +2521,24 @@ mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (const actor_ref_t &ac
     return found->second;
 }
 
+std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
+  const std::vector<runtime::stateful::object_ref_t> &sources) const
+{
+    std::lock_guard lock (_negotiated_receive_chunk_limit_mutex);
+    std::uint64_t negotiated = 0;
+    for (const auto &source : sources) {
+        if (source.kind != runtime::stateful::object_kind_t::actor)
+            continue;
+        const auto found = _negotiated_receive_chunk_limits.find (
+          source.key + ":" + std::to_string (source.object_generation));
+        if (found != _negotiated_receive_chunk_limits.end () && found->second != 0) {
+            negotiated = negotiated == 0 ? found->second
+                                         : std::min<std::uint64_t> (negotiated, found->second);
+        }
+    }
+    return negotiated;
+}
+
 // actorJoin(28) originate fence-gate: only taken when (a) this node has
 // explicitly observed the target Spot's authority fence via
 // observe_spot_authority -- nothing calls that yet, so this is closed by
@@ -2639,13 +2635,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     const auto &tail = *outcome.reply;
     if (tail.join_result == runtime::protocol::actor_join_result_t::accepted
         && tail.receive_chunk_limit_bytes != 0) {
-        //  The negotiated receive limit is recorded per actor identity so
-        //  the relocation direct-transfer capture (maintenance_runtime's
-        //  advertised_receive_chunk_limit_bytes consumer,
-        //  runtime/stateful/maintenance_runtime.cpp) can read it when it
-        //  begins the transfer this admission approved. Threading the value
-        //  into that consumer's call site stays deferred; recording it here
-        //  keeps the negotiated value from being dropped at decode.
+        // The relocation callers consume this per-actor value when they plan
+        // direct-transfer chunks for the admission this reply approved.
         record_negotiated_receive_chunk_limit (s->actor,
                                                tail.receive_chunk_limit_bytes);
     }
