@@ -46,6 +46,9 @@ std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &so
 std::optional<runtime::protocol::application_payload_t> canonical_actor_join_application_payload (
   const std::string &packet_name, const std::string &content_type, const zlink::message_t &payload);
 
+std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply (
+  const runtime::protocol::application_payload_t &payload);
+
 enum class application_actor_session_bind_outcome_t : std::uint8_t
 {
     bound,
@@ -709,10 +712,11 @@ class mesh_node_runtime_t
 // attempt (later-attempt-wins, spec 15 §4.2). JoinEntrySpot has no
 // approval preparation: entry admission approves without registering a
 // temporary queue; its preparation rides the later Restore request.
-host::actor_join_operation_result_t admit_wire_actor_join (
-  const std::shared_ptr<spot_node_builder_state_t> &spot_state,
-  const zlink::routing_id_t &local_node_rid,
-  const runtime::protocol::actor_join_request_t &request,
-  const std::optional<runtime::protocol::application_payload_t> &payload);
+host::actor_join_operation_result_t
+admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_state,
+                       const zlink::routing_id_t &local_node_rid,
+                       const runtime::protocol::actor_join_request_t &request,
+                       const std::optional<runtime::protocol::application_payload_t> &payload,
+                       serializer_registry_t *serializers);
 
 } // namespace zlink::framework::detail

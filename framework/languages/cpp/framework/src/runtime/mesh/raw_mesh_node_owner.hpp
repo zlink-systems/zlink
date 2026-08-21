@@ -401,7 +401,8 @@ class raw_mesh_node_owner_t
       std::uint64_t membership_epoch,
       std::uint32_t receive_chunk_limit_bytes,
       std::uint32_t terminal_result = 0,
-      std::uint32_t failure_code = 0);
+      std::uint32_t failure_code = 0,
+      std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     task_t<raw_mesh_pump_result_t>
     pump_one (service_liveness_registry_t::clock_t::time_point now,
               bool accept_application_receive = true);

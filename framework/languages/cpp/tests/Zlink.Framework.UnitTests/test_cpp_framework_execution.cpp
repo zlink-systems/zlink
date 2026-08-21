@@ -17,6 +17,7 @@
 #include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -2555,11 +2556,15 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     factory.actor_type = std::type_index (typeid (int));
     node->actor_factories.emplace ("player", std::move (factory));
     int admission_calls = 0;
+    bool return_application_reply = true;
     spot_actor_admission_callbacks_t callbacks;
     callbacks.join = [&] (void *, std::string_view, const zlink::message_t &,
                           serializer_registry_t &) {
         ++admission_calls;
-        return spot_actor_join_result_t::accept (message_t::from (std::string ("approved")));
+        return return_application_reply
+                 ? spot_actor_join_result_t::accept (
+                     message_t::from (std::string ("approved")))
+                 : spot_actor_join_result_t::accept ();
     };
     target->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
 
@@ -2629,7 +2634,122 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
           source_rid.to_bytes (), "actor-1", 7, 3, correlation);
     };
 
-    const auto first = admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt);
+    runtime::host::actor_join_operation_result_t first;
+    runtime::mesh::actor_join_wire_outcome_t wire_outcome;
+    const auto reply_round_trip = [&] {
+        using namespace std::chrono_literals;
+        const auto descriptor = [] (std::string rid, std::uint64_t generation) {
+            return runtime::mesh::service_node_descriptor_t{
+              "wire-join",
+              zlink::routing_id_t::from (std::move (rid)).to_bytes (),
+              generation,
+              1,
+              "tcp://127.0.0.1:0",
+              {{"actor-join", 100}},
+              runtime::mesh::service_node_state_t::preparing};
+        };
+        runtime::mesh::raw_mesh_node_owner_t source (
+          runtime::mesh::raw_mesh_node_options_t{descriptor ("wire-join-source", 3)});
+        runtime::mesh::raw_mesh_node_owner_t target_owner (
+          runtime::mesh::raw_mesh_node_options_t{descriptor ("wire-join-node", 1)});
+        source.start ();
+        target_owner.start ();
+        const auto target_descriptor = target_owner.topology ().local_descriptor ();
+        source.expect_peer (target_descriptor);
+        const bool connected = source.connect_peer (target_owner.endpoint (), target_descriptor);
+        const auto connect_deadline = std::chrono::steady_clock::now () + 2s;
+        while (connected && !source.topology ().peer (target_descriptor.node_routing_id)
+               && std::chrono::steady_clock::now () < connect_deadline) {
+            const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
+            (void) source.drain_monitor_events (now);
+            (void) target_owner.drain_monitor_events (now);
+            (void) source.pump_one (now).result ();
+            (void) target_owner.pump_one (now).result ();
+            std::this_thread::sleep_for (1ms);
+        }
+        if (!connected || !source.topology ().peer (target_descriptor.node_routing_id)) {
+            source.close ();
+            target_owner.close ();
+            return false;
+        }
+
+        const auto request = make_request (4211);
+        std::atomic_bool settled{false};
+        std::thread request_thread ([&] {
+            const auto result =
+              source
+                .request_actor_join (target_descriptor.node_routing_id, request, std::nullopt, 2s)
+                .result ();
+            if (result)
+                wire_outcome = result.value ();
+            settled.store (true, std::memory_order_release);
+        });
+
+        std::optional<runtime::mesh::service_mailbox_claim_t> claim;
+        const auto claim_deadline = std::chrono::steady_clock::now () + 2s;
+        while (!claim && std::chrono::steady_clock::now () < claim_deadline) {
+            claim = target_owner.mailbox ().try_claim (
+              runtime::mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+            if (!claim) {
+                (void) target_owner
+                  .pump_one (runtime::mesh::service_liveness_registry_t::clock_t::now ())
+                  .result ();
+            }
+        }
+        bool replied = false;
+        if (claim && claim->records.size () == 1) {
+            const auto &record = claim->records.front ();
+            first = admit_wire_actor_join (node, local_rid, request, std::nullopt, &serializers);
+            replied = target_owner.reply_actor_join (
+              record, first.join_result, first.spot, first.membership_epoch,
+              first.receive_chunk_limit_bytes, first.terminal_result, first.failure_code,
+              first.application_reply);
+            replied = target_owner.mailbox ().release (*claim) && replied;
+        }
+
+        const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+        while (!settled.load (std::memory_order_acquire)
+               && std::chrono::steady_clock::now () < settle_deadline) {
+            (void) source.pump_one (runtime::mesh::service_liveness_registry_t::clock_t::now ())
+              .result ();
+            std::this_thread::sleep_for (1ms);
+        }
+        request_thread.join ();
+        source.close ();
+        target_owner.close ();
+
+        const auto encoded_reply =
+          detail::message_to_raw (message_t::from (std::string ("approved")), serializers)
+            .to_bytes ();
+        std::vector<std::uint8_t> expected_payload{
+          0,
+          0,
+          0,
+          1,
+          static_cast<std::uint8_t> ((encoded_reply.size () >> 24u) & 0xffu),
+          static_cast<std::uint8_t> ((encoded_reply.size () >> 16u) & 0xffu),
+          static_cast<std::uint8_t> ((encoded_reply.size () >> 8u) & 0xffu),
+          static_cast<std::uint8_t> (encoded_reply.size () & 0xffu)};
+        expected_payload.insert (expected_payload.end (), encoded_reply.begin (),
+                                 encoded_reply.end ());
+        const auto unwrapped_reply = first.application_reply
+                                       ? unwrap_canonical_actor_join_application_reply (
+                                           *first.application_reply)
+                                       : std::vector<std::uint8_t>{};
+        const auto reconstructed_reply = zlink::message_t::from (unwrapped_reply);
+        return replied && settled.load (std::memory_order_acquire) && first.application_reply
+               && wire_outcome.application_reply
+               && first.application_reply == wire_outcome.application_reply
+               && wire_outcome.application_reply->packet_name
+                    == runtime::protocol::framework_multipart_packet_name
+               && wire_outcome.application_reply->content_type
+                    == runtime::protocol::framework_multipart_content_type
+               && wire_outcome.application_reply->payload == expected_payload
+               && unwrapped_reply == encoded_reply
+               && serializers.get<std::string> ().deserialize (
+                    detail::encoded_payload_from_raw (reconstructed_reply))
+                    == "approved";
+    }();
     const bool first_approved =
       first.join_result == runtime::protocol::actor_join_result_t::accepted && first.spot
       && first.spot->spot_id == "target-spot" && first.spot->object_generation == 9
@@ -2651,16 +2771,26 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     // A duplicate resend of the same attempt parks against the existing
     // preparation without re-running the application admission callback.
     const auto repeated =
-      admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt);
+      admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt, &serializers);
     const bool duplicate_parked =
       repeated.join_result == runtime::protocol::actor_join_result_t::accepted
       && admission_calls == 1;
 
+    const auto reply_without_serializers =
+      admit_wire_actor_join (node, local_rid, make_request (4211), std::nullopt, nullptr);
+    const bool reply_requires_serializers =
+      reply_without_serializers.terminal_result == 104
+      && reply_without_serializers.failure_code == static_cast<std::uint32_t> (
+        runtime::protocol::framework_error_code::requestProtocolError);
+
     // Later-attempt-wins: a NEWER attempt (fresh correlation → distinct
     // derived transfer identity) evicts the parked older attempt.
-    const auto newer = admit_wire_actor_join (node, local_rid, make_request (4213), std::nullopt);
+    return_application_reply = false;
+    const auto newer =
+      admit_wire_actor_join (node, local_rid, make_request (4213), std::nullopt, nullptr);
     const bool later_attempt_wins =
       newer.join_result == runtime::protocol::actor_join_result_t::accepted
+      && newer.terminal_result == 0 && !newer.application_reply
       && !node->actor_transfer_coordinator.admission (transfer_id_for (4211)).has_value ()
       && node->actor_transfer_coordinator.admission (transfer_id_for (4213)).has_value ()
       && node->actor_transfer_coordinator.is_current ("player:actor-1", transfer_id_for (4213))
@@ -2673,7 +2803,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     auto unknown_request = make_request (4215);
     unknown_request.actor.actor_id = "actor-unknown";
     const auto unknown =
-      admit_wire_actor_join (node, local_rid, unknown_request, std::nullopt);
+      admit_wire_actor_join (node, local_rid, unknown_request, std::nullopt, &serializers);
     const bool unknown_not_found =
       unknown.terminal_result == 102
       && unknown.failure_code == static_cast<std::uint32_t> (
@@ -2684,7 +2814,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     auto stale_request = make_request (4216);
     ++stale_request.actor.authority_owner_generation;
     const auto stale =
-      admit_wire_actor_join (node, local_rid, stale_request, std::nullopt);
+      admit_wire_actor_join (node, local_rid, stale_request, std::nullopt, &serializers);
     const bool stale_protocol_error =
       stale.terminal_result == 104
       && stale.failure_code == static_cast<std::uint32_t> (
@@ -2695,7 +2825,8 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         auto malformed = make_request (4217);
         malformed.actor.actor_id = std::move (actor_id);
         malformed.target_spot.spot_id = std::move (spot_id);
-        const auto result = admit_wire_actor_join (node, local_rid, malformed, std::nullopt);
+        const auto result =
+          admit_wire_actor_join (node, local_rid, malformed, std::nullopt, &serializers);
         return result.terminal_result == 104
                && result.failure_code == static_cast<std::uint32_t> (
                  runtime::protocol::framework_error_code::requestProtocolError);
@@ -2709,8 +2840,9 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
-    return first_approved && approval_only && duplicate_parked && later_attempt_wins
-           && unknown_not_found && stale_protocol_error && malformed_typed;
+    return reply_round_trip && first_approved && approval_only && duplicate_parked
+           && reply_requires_serializers && later_attempt_wins && unknown_not_found
+           && stale_protocol_error && malformed_typed;
 }
 
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()

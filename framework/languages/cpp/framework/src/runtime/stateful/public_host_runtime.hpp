@@ -462,6 +462,7 @@ struct actor_join_operation_result_t
     std::optional<protocol::actor_join_reply_spot_ref_t> spot;
     std::uint64_t membership_epoch = 0;
     std::uint32_t receive_chunk_limit_bytes = 0;
+    std::optional<protocol::application_payload_t> application_reply;
 };
 
 using actor_join_operation_target_completion_t = std::function<void (

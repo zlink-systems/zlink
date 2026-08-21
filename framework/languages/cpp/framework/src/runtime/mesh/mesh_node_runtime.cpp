@@ -161,6 +161,82 @@ std::optional<runtime::protocol::application_payload_t> canonical_actor_join_app
 namespace
 {
 
+result_t<std::optional<runtime::protocol::application_payload_t>>
+canonical_actor_join_application_reply (const std::optional<message_t> &reply,
+                                        serializer_registry_t *serializers)
+{
+    if (!reply)
+        return result_t<std::optional<runtime::protocol::application_payload_t>>::success (
+          std::nullopt);
+    if (serializers == nullptr) {
+        return result_t<std::optional<runtime::protocol::application_payload_t>>::failure (
+          framework_error_kind_t::protocol_error, "MeshNode serializers are not configured");
+    }
+    const auto raw = detail::message_to_raw (*reply, *serializers);
+    const auto bytes = raw.to_bytes ();
+    if (bytes.size () > std::numeric_limits<std::uint32_t>::max () - sizeof (std::uint32_t) * 2)
+        throw std::length_error ("Actor join application reply is too large");
+    std::vector<std::uint8_t> multipart;
+    multipart.reserve (sizeof (std::uint32_t) * 2 + bytes.size ());
+    const auto append_u32 = [&multipart] (std::uint32_t value) {
+        multipart.push_back (static_cast<std::uint8_t> ((value >> 24u) & 0xffu));
+        multipart.push_back (static_cast<std::uint8_t> ((value >> 16u) & 0xffu));
+        multipart.push_back (static_cast<std::uint8_t> ((value >> 8u) & 0xffu));
+        multipart.push_back (static_cast<std::uint8_t> (value & 0xffu));
+    };
+    append_u32 (1);
+    append_u32 (static_cast<std::uint32_t> (bytes.size ()));
+    multipart.insert (multipart.end (), bytes.begin (), bytes.end ());
+    return result_t<std::optional<runtime::protocol::application_payload_t>>::success (
+      runtime::protocol::application_payload_t{
+        std::string (runtime::protocol::framework_multipart_packet_name),
+        std::string (runtime::protocol::framework_multipart_content_type),
+        std::move (multipart)});
+}
+
+std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply_impl (
+  const runtime::protocol::application_payload_t &payload)
+{
+    if (payload.packet_name != runtime::protocol::framework_multipart_packet_name
+        || payload.content_type != runtime::protocol::framework_multipart_content_type)
+        return payload.payload;
+
+    const auto &encoded = payload.payload;
+    std::size_t offset = 0;
+    const auto read_u32 = [&] {
+        if (encoded.size () - offset < sizeof (std::uint32_t))
+            throw runtime::protocol::service_wire_error_t (
+              "Actor join application reply multipart payload is truncated");
+        const auto value = (static_cast<std::uint32_t> (encoded[offset]) << 24u)
+                           | (static_cast<std::uint32_t> (encoded[offset + 1]) << 16u)
+                           | (static_cast<std::uint32_t> (encoded[offset + 2]) << 8u)
+                           | static_cast<std::uint32_t> (encoded[offset + 3]);
+        offset += sizeof (std::uint32_t);
+        return value;
+    };
+    const auto count = read_u32 ();
+    if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t))
+        throw runtime::protocol::service_wire_error_t (
+          "Actor join application reply multipart part count is invalid");
+
+    std::vector<std::uint8_t> first;
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const auto size = read_u32 ();
+        if (size > encoded.size () - offset)
+            throw runtime::protocol::service_wire_error_t (
+              "Actor join application reply multipart part is truncated");
+        if (index == 0) {
+            first.assign (encoded.begin () + static_cast<std::ptrdiff_t> (offset),
+                          encoded.begin () + static_cast<std::ptrdiff_t> (offset + size));
+        }
+        offset += size;
+    }
+    if (offset != encoded.size ())
+        throw runtime::protocol::service_wire_error_t (
+          "Actor join application reply multipart payload has trailing bytes");
+    return first;
+}
+
 std::chrono::milliseconds one_way_send_timeout (const mesh_node_builder_state_t &state)
 {
     return state.socket.send_timeout.value_or (std::chrono::seconds (1));
@@ -368,6 +444,12 @@ std::string send_ready_target (const host::send_ready_data_t &ready)
 
 } // namespace
 
+std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply (
+  const runtime::protocol::application_payload_t &payload)
+{
+    return unwrap_canonical_actor_join_application_reply_impl (payload);
+}
+
 namespace
 {
 
@@ -458,7 +540,8 @@ host::actor_join_operation_result_t
 admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_state,
                        const zlink::routing_id_t &local_node_rid,
                        const runtime::protocol::actor_join_request_t &request,
-                       const std::optional<runtime::protocol::application_payload_t> &payload)
+                       const std::optional<runtime::protocol::application_payload_t> &payload,
+                       serializer_registry_t *serializers)
 {
     host::actor_join_operation_result_t rejected;
     const auto typed_terminal = [] (framework_error_kind_t kind) {
@@ -536,6 +619,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         }
         if (target_spot_id != request.target_spot.spot_id)
             return typed_terminal (framework_error_kind_t::protocol_error);
+        std::optional<runtime::protocol::application_payload_t> result_application_reply;
         if (!request.entry) {
             // Approval-only admission (spec 15 §478-527): run the
             // application admission callback and register the relocation
@@ -559,8 +643,15 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
               request.actor.owner_lease_generation, true);
             if (!admitted)
                 return typed_terminal (admitted.error_kind ());
-            if (!admitted.value ().accepted)
+            auto application_reply =
+              canonical_actor_join_application_reply (admitted.value ().reply, serializers);
+            if (!application_reply)
+                return typed_terminal (application_reply.error_kind ());
+            if (!admitted.value ().accepted) {
+                rejected.application_reply = std::move (application_reply.value ());
                 return rejected;
+            }
+            result_application_reply = std::move (application_reply.value ());
         }
         // JoinEntrySpot has no approval round trip in the store path and
         // registers no preparation at admission (spec 15 §4.2) — the entry
@@ -579,6 +670,7 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
           spot.resolve_actor_membership_epoch (request.actor.actor_id).value_or (0) + 1;
         result.receive_chunk_limit_bytes = static_cast<std::uint32_t> (
           detail::spot_actor_join_advertised_receive_chunk_limit_bytes);
+        result.application_reply = std::move (result_application_reply);
         return result;
     }
     catch (...) {
@@ -721,11 +813,12 @@ void mesh_node_runtime_t::start ()
     // until the transfer commit installs the route. The negotiated receive
     // chunk limit is carried into direct-transfer capture below.
     node->configure_actor_join_operations (
-      [state = _state] (const runtime::protocol::actor_join_request_t &request,
-                        const std::optional<runtime::protocol::application_payload_t> &payload,
-                        host::actor_join_operation_target_completion_t completion) {
-          completion (admit_wire_actor_join (state->spot_state, *state->routing_id,
-                                             request, payload));
+      [state = _state, serializers = _serializers] (
+        const runtime::protocol::actor_join_request_t &request,
+        const std::optional<runtime::protocol::application_payload_t> &payload,
+        host::actor_join_operation_target_completion_t completion) {
+          completion (admit_wire_actor_join (state->spot_state, *state->routing_id, request,
+                                             payload, serializers));
       });
     if (_instance_spot_materializer) {
         node->configure_instance_spot_operations (_user_spot_store, _instance_spot_relocations,
@@ -2733,6 +2826,23 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
             "wire Actor join reply target Spot generation does not match the resolved authority"),
           "wire Actor join reply target Spot generation does not match the resolved authority");
     }
+    // Validate and unwrap the optional application reply before recording any
+    // negotiated state: a malformed reply frame must fail the admission without
+    // leaving a stale per-actor chunk-limit entry behind.
+    std::vector<std::uint8_t> application_reply_payload;
+    if (outcome.application_reply) {
+        try {
+            application_reply_payload =
+              unwrap_canonical_actor_join_application_reply (*outcome.application_reply);
+        }
+        catch (const runtime::protocol::service_wire_error_t &error) {
+            co_return fail_remote_actor_join (
+              *s,
+              result_t<actor_join_reply_t>::failure (
+                framework_error_kind_t::protocol_error, error.what ()),
+              "wire Actor join application reply was malformed");
+        }
+    }
     if (tail.join_result == runtime::protocol::actor_join_result_t::accepted
         && tail.receive_chunk_limit_bytes != 0) {
         // The relocation callers consume this per-actor value when they plan
@@ -2740,12 +2850,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
         record_negotiated_receive_chunk_limit (s->actor,
                                                tail.receive_chunk_limit_bytes);
     }
-    //  The decoded application reply frame (if any) is the target's
-    //  admission reply payload — surface it instead of discarding it.
-    auto application_reply =
-      outcome.application_reply
-        ? zlink::message_t::from (outcome.application_reply->payload)
-        : zlink::message_t{};
+    auto application_reply = outcome.application_reply
+                               ? zlink::message_t::from (application_reply_payload)
+                               : zlink::message_t{};
     if (tail.join_result == runtime::protocol::actor_join_result_t::rejected) {
         const auto rejected = result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, s->actor, application_reply});
@@ -2755,7 +2862,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
                                 delivered, "remote Actor Join completion callback failed");
     }
     if (outcome.application_reply)
-        s->admission_payload = outcome.application_reply->payload;
+        s->admission_payload = std::move (application_reply_payload);
     co_return co_await seal_remote_application_actor_join (std::move (s));
 }
 

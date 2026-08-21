@@ -5034,10 +5034,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             return;
                         try {
                             (void) host->_transport->reply_actor_join (
-                              mailbox_record, result.join_result,
-                              result.spot, result.membership_epoch,
-                              result.receive_chunk_limit_bytes,
-                              result.terminal_result, result.failure_code);
+                              mailbox_record, result.join_result, result.spot,
+                              result.membership_epoch, result.receive_chunk_limit_bytes,
+                              result.terminal_result, result.failure_code,
+                              std::move (result.application_reply));
                         }
                         catch (...) {
                         }

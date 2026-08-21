@@ -2399,11 +2399,15 @@ bool raw_mesh_node_owner_t::reply_actor_join (
   std::uint64_t membership_epoch,
   std::uint32_t receive_chunk_limit_bytes,
   std::uint32_t terminal_result,
-  std::uint32_t failure_code)
+  std::uint32_t failure_code,
+  std::optional<protocol::application_payload_t> application_reply)
 {
     if (!request.correlation || request.source_routing_id.empty ()
         || !request.request_sequence)
         return false;
+    if (terminal_result != 0 && application_reply) {
+        throw std::invalid_argument ("failed Actor join reply cannot carry a payload");
+    }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2415,6 +2419,9 @@ bool raw_mesh_node_owner_t::reply_actor_join (
       protocol::encode_actor_join_reply (
         *request.correlation, terminal_result, failure_code, join_result, spot, membership_epoch,
         receive_chunk_limit_bytes)};
+    if (application_reply) {
+        parts.push_back (protocol::encode_application_payload (*application_reply));
+    }
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.request_sequence, {},

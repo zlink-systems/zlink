@@ -2553,8 +2553,19 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
     const auto claim = claim_actor_join (target);
     assert (claim && claim->records.size () == 1);
     const auto &record = claim->records.front ();
-    assert (target.reply_actor_join (
-      record, protocol::actor_join_result_t::rejected, std::nullopt, 0, 0));
+    const protocol::application_payload_t application_reply{
+      "actor-join-rejected", "application/octet-stream", bytes ("not-approved")};
+    bool terminal_payload_rejected = false;
+    try {
+        (void) target.reply_actor_join (record, protocol::actor_join_result_t::rejected,
+                                        std::nullopt, 0, 0, 105, 17, application_reply);
+    }
+    catch (const std::invalid_argument &) {
+        terminal_payload_rejected = true;
+    }
+    assert (terminal_payload_rejected);
+    assert (target.reply_actor_join (record, protocol::actor_join_result_t::rejected, std::nullopt,
+                                     0, 0, 0, 0, application_reply));
     assert (target.mailbox ().release (*claim));
 
     const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
@@ -2571,6 +2582,7 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
     assert (response);
     assert (response->join_result == protocol::actor_join_result_t::rejected);
     assert (!response->spot);
+    assert (outcome.application_reply == application_reply);
 
     source.close ();
     target.close ();
