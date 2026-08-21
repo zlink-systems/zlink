@@ -177,7 +177,7 @@
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
-  - [ ] 2c [A4] C++ 발신 `cpp단일` — **집중 진단 필요(format-only 불가)**: canonical send 활성화 시 join이 rejected로 끝나 target completion 미시작(`actor cutover production ownership regression`, test_cpp_framework_execution). 고치려면 receiver admission/relocation 의미 변경 요 = format-only 범위 밖. 2b 수신자와 발신 fence 정합/completion 경로 진단 선행. (agent 정직 STOP, diff revert됨)
+  - [~] 2c [A4] C++ 발신 `cpp단일` — **진단 완료: FORMAT-ONLY 가능**(구현 agent의 'semantic 필요'를 독립진단으로 반박). 근본원인: cpp canonical 발신이 28 후 즉시 `deliver_remote_actor_join`하고 return, `seal→PREPARE→FINALIZE→ownership CAS`를 안 부름 → target completion 미시작(mesh_node_runtime.cpp:2649). 해법=.NET 모델: off-wire handoff id 양측 공유 + 수신자가 source Spot을 Store Authority row서 재구성(empty 저장 아님, :516) + reply tail→기존 admission 매핑 + 발신측이 기존 seal→PREPARE→FINALIZE→CAS 계속. 28 wire·admission 의미·CAS 무변경.
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
   - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
