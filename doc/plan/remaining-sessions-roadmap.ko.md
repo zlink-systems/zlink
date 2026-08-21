@@ -350,7 +350,22 @@
   "seal은 dispatch 중단 전"을 요구 → hold-before-seal 두 언어는 문자적으로 어긋나나 **source backlog로 메시지
   손실 없음**. **모두 JSON·canonical 공유 파이프라인 = canonical 회귀 아님·A5 비차단**. relocation 동결 원칙상
   여기서 수정 안 함(유저 판정용 기존 이슈).
-- **[ ] A5-canonical-multiattempt (열린 설계 질문 · 확정 결함 아님 · 3b서 실증 해소 · A5 비차단)**:
+- **[x] A5-canonical-multiattempt — 실증·판정 완료(2026-08-22)**: 실제 ingress 실증(스테이지
+  `user-spot-join-node-dotnet-multiattempt`, `327c2b86c1`) + sol 정합 분석 결과, **later-attempt-wins는
+  admission registry 계층에서 동작하며 Node/.NET 대칭**((ActorId,ObjectGeneration) 단일 슬롯,
+  새 transfer가 이전 entry abort+delete; .NET ZLinkActorJoinPrewarmRegistry / Node
+  formal-remote-actor-admission-registry.ts:100). eager-materialize가 supersession을 깨지 않음 —
+  열린 질문 해소, 3b 비차단. .NET의 버려진 attempt는 deadline expiry로 잔여물 없이 정리(준수).
+  **판정된 스펙-gap 3건(semantic — 포맷-온리 아님, 별도 수정 카드, 매트릭스와 병행)**:
+  (A) superseded attempt의 terminal이 opaque RequestFailed(17)→InternalFailure — spec 15 실패표상
+  public `Unavailable`이어야 하고, wire 코드는 스펙 침묵 → **판정: `ActorLocationStale(21)`을
+  정본 wire 코드로 채택, 4언어 전파**(양 target 대칭 발산). (B) .NET은 PREPARE 이후 단계에서
+  newest-wins 미준수 — 15 §4.2 "기존 prep을 언제나 먼저 abort" 위반(ZLinkActorHandoffState.cs:438
+  "already active" 거부). (C) Node target의 admission-전 eager-materialize(claimLocation=true)가
+  버려진 attempt의 actor state/factory 자원을 expiry에서 미정리 — "Accepted 전 factory 준비,
+  CAS 전 공개 금지" 계약과 발산(.NET과 비대칭). 참고: "재-park"는 스펙상 receiver admission
+  직렬화 의미로, source 재배치 개념은 침묵/비적용(§3a의 이전 표현 정정).
+- **[구판 기록] A5-canonical-multiattempt (열린 설계 질문이던 시기의 기록)**:
   정정 — 이전 "Node 확정 결함·최소 수정" 판단은 **틀렸다**. 사실관계:
   - Node canonical 수신자는 later-attempt-wins prewarm registry(`formalRemoteActorAdmissions`)에 등록 안 함
     (`begin()` 게이트가 사설 transferRequest 의존, spots/index.ts:1942). **그러나** canonical admission은 actor를
