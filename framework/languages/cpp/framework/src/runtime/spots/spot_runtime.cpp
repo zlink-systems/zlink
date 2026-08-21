@@ -6602,11 +6602,13 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
       std::string (source_actor.actor_id ().value ()));
     const auto target_node = zlink::routing_id_t::from (
       target_fence.target_node_routing_id).to_string ();
+    // The canonical post-retarget actor row describes its current target,
+    // not the historical source node.  The actor key/generation plus the
+    // target fence below are the durable one-way leave authorization.
     if (!committed
         || committed->source.key != source_actor.actor_id ().value ()
         || committed->source.object_generation
              != source_actor.object_generation ()
-        || committed->source.node_id != source_actor.node_rid ().value ()
         || committed->target.key != source_actor.actor_id ().value ()
         || committed->target.object_generation
              != source_actor.object_generation ()

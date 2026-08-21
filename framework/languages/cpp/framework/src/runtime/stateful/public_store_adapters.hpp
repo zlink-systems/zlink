@@ -169,18 +169,40 @@ class public_authority_store_adapter_t final :
                 ? snapshot->payload
                 : std::move (application_payload)};
             reference.target = target;
+            if (source.kind == object_kind_t::actor) {
+                const auto projection =
+                  runtime::decode_actor_authority_payload (
+                    reference.application_payload,
+                    snapshot->object_generation);
+                if (!projection
+                    || projection->actor.actor_id ().value () != source.key
+                    || projection->actor.node_rid ().value () != target.node_id
+                    || projection->actor.mesh_name () != target.mesh_name
+                    || projection->actor.object_generation ()
+                         != target.object_generation)
+                    return {authority_publish_status_t::failed, std::nullopt};
+            }
             const auto exchanged =
               _store
                 ->compare_exchange_authority (
                   key,
                   snapshot->store_version,
                   authority_retarget_t{
-                    encode (reference),
+                    source.kind == object_kind_t::actor
+                      ? reference.application_payload
+                      : encode (reference),
                     target_placement})
                 .result ()
                 .value ();
             if (const auto *stored =
                   std::get_if<authority_stored_t> (&exchanged)) {
+                if (source.kind == object_kind_t::actor) {
+                    reference.application_payload = stored->snapshot.payload;
+                    if (!same_owner (stored->snapshot.owner, target_owner))
+                        return {authority_publish_status_t::failed, std::nullopt};
+                    return {authority_publish_status_t::published,
+                            std::move (reference)};
+                }
                 auto current = decode (stored->snapshot);
                 if (!current
                     || !same_owner (
@@ -623,6 +645,22 @@ class public_authority_store_adapter_t final :
     static std::optional<authority_relocation_reference_t>
     decode (const authority_snapshot_t &snapshot)
     {
+        if (const auto projection = runtime::decode_actor_authority_payload (
+              snapshot.payload, snapshot.object_generation)) {
+            object_ref_t target{
+              object_kind_t::actor,
+              std::string (projection->actor.actor_id ().value ()),
+              snapshot.object_generation,
+              snapshot.authority_owner_generation,
+              std::string (projection->actor.mesh_name ()),
+              std::string (projection->actor.node_rid ().value ())};
+            auto source = target;
+            if (source.authority_owner_generation != 0)
+                --source.authority_owner_generation;
+            return authority_relocation_reference_t{
+              std::move (source), std::move (target), {}, 0, {}, snapshot.owner,
+              snapshot.payload};
+        }
         reader_t reader (snapshot.payload);
         const auto version = reader.consume_version ();
         if (!version)

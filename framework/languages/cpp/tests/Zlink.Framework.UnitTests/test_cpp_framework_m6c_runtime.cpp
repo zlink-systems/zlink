@@ -6,6 +6,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -2654,10 +2655,23 @@ void test_public_relocation_store_adapter (test_context_t &test)
 void test_public_authority_store_adapter (test_context_t &test)
 {
     public_memory_authority_store_t store;
+    const auto source_application_payload =
+      zlink::framework::runtime::encode_actor_authority_payload ({
+        .state = zlink::framework::runtime::actor_authority_state_t::ready,
+        .stable_type = "player",
+        .actor_id = "actor-public",
+        .current_spot_id = "source-spot",
+        .current_spot_generation = 11,
+        .current_spot_kind = zlink::framework::runtime::actor_authority_spot_kind_t::user,
+        .owner_id = "owner-a",
+        .owner_lease_generation = 3,
+        .mesh_name = "mesh",
+        .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
+        .node_generation = 16});
     store.snapshot =
       zlink::framework::authority_snapshot_t{
         "1",
-        {std::byte{0x01}},
+        source_application_payload,
         7,
         11,
         {"owner-a", 3},
@@ -2681,8 +2695,19 @@ void test_public_authority_store_adapter (test_context_t &test)
     target.mesh_name = "mesh-b";
     target.node_id = "node-b";
     ++target.authority_owner_generation;
-    const std::vector<std::byte> relocated_application_payload{
-      std::byte{0x21}, std::byte{0x22}};
+    const auto relocated_application_payload =
+      zlink::framework::runtime::encode_actor_authority_payload ({
+        .state = zlink::framework::runtime::actor_authority_state_t::ready,
+        .stable_type = "player",
+        .actor_id = "actor-public",
+        .current_spot_id = "target-spot",
+        .current_spot_generation = 12,
+        .current_spot_kind = zlink::framework::runtime::actor_authority_spot_kind_t::user,
+        .owner_id = "owner-b",
+        .owner_lease_generation = 5,
+        .mesh_name = "mesh-b",
+        .node_rid = zlink::framework::node_rid_t::from_string ("node-b"),
+        .node_generation = 17});
     const auto published = adapter.publish (
       source, target, target_owner, target_placement,
       "root-public", 42,
@@ -2697,6 +2722,26 @@ void test_public_authority_store_adapter (test_context_t &test)
         && published.current->application_payload
              == relocated_application_payload,
       "public authority adapter must publish exact NewOwner generation");
+    const auto stored_projection = store.snapshot
+      ? zlink::framework::runtime::decode_actor_authority_payload (
+          store.snapshot->payload, store.snapshot->object_generation)
+      : std::nullopt;
+    const auto begins_with_zlra3 = [] (const std::vector<std::byte> &bytes) {
+        constexpr std::string_view magic{"ZLRA3"};
+        return bytes.size () >= magic.size ()
+          && std::equal (magic.begin (), magic.end (), bytes.begin (),
+                         [] (char expected, std::byte actual) {
+                             return static_cast<unsigned char> (expected)
+                                    == std::to_integer<unsigned char> (actual);
+                         });
+    };
+    test.require (
+      store.snapshot && !begins_with_zlra3 (store.snapshot->payload)
+        && stored_projection
+        && stored_projection->actor.object_generation () == 7
+        && stored_projection->actor.actor_id ().value () == "actor-public"
+        && stored_projection->actor.node_rid ().value () == "node-b",
+      "remote actor commit must store a canonical authority row resolvable by actor_directory_t::find");
     test.require (
       store.observed_target_owner
         && store.observed_target_owner->owner_id == "owner-b"
@@ -2716,11 +2761,11 @@ void test_public_authority_store_adapter (test_context_t &test)
     const auto read =
       adapter.read (object_kind_t::actor, "actor-public");
     test.require (
-      read && read->relocation_reference == "root-public"
-        && read->checksum_crc32c == 42
-        && read->inventory_digest == digest_with (9)
+      read && read->target.key == "actor-public"
+        && read->target.object_generation == 7
+        && read->target.node_id == "node-b"
         && read->target_owner.lease_generation == 5,
-      "public authority adapter must decode only its Framework-owned payload");
+      "public authority adapter must decode its canonical actor authority row");
 
     const std::vector<std::byte> application_payload{
       std::byte{0x31}, std::byte{0x32}};
