@@ -380,11 +380,22 @@
     per-Actor 단일 진실 원천)를 **반드시 읽어** `allocation.stableType`·fence 검증하라 명시. "읽을 수 없는 row는
     Unavailable". 즉 **payload 포맷은 크로스랭 canonical이어야 함** → 스펙 버그 아니라 **구현 gap**(Node가 canonical
     포맷 미기록). 기존 whole-node relocate 스테이지는 이 크로스랭 row-read를 안 해서 **잠복**, canonical 28이 노출.
-  - **규모/판정**: 4언어 authority-payload 포맷 통일 = 대규모·민감(authority/relocation) 영역. **canonical 포맷이
-    무엇인지(ZLAU/ZLAP가 정본인가, Java/C++도 binary인가) 확인 → Node를 canonical 포맷으로 read/write 전환 →
-    4언어 Store authority row interop 검증**. 즉석 자율 수정 금지, [[canonical-multiattempt-design-trap]] 원칙.
-  - **다음**: (a) Java/C++의 authority-row 포맷 확인(binary ZLAU/ZLAP 정본 여부), (b) Node authority publish/read를
-    canonical 포맷으로 전환(고난도 sol), (c) stage-1 재실행 그린 → 12방향 확장. **이 gap 해소가 3b·3c 선행.**
+  - **규모/판정 — 실제로 3가지 포맷으로 갈림(더 근본적)**: authority-row payload codec이 언어별로 상이:
+    · **Node = JSON**(`actor-authority-publication.ts:113` `encodeActorAuthorityIdentity`)
+    · **.NET = binary "ZLAU"**(`ZLinkActorAuthorityPayloadCodec.cs:225` magic, relocation은 `ZLAP` 0x50414c5a)
+    · **Java = binary "ZLAU"**(`ZLinkActorAuthorityPayloadCodec.java:16` MAGIC {0x5a,0x4c,0x41,0x55} = .NET과 일치)
+    · **C++ = 커스텀 길이접두**(`actor_authority_payload.hpp:28`, 헤더 문자열 `"zlink:actor-authority:v1"` — ZLAU도
+      JSON도 아닌 제3형식).
+    → **.NET·Java는 ZLAU 합의, Node·C++는 각자 다른 형식**. 4언어 authority row interop이 성립 안 함.
+  - **⚠ 확인 필요(fix 세션 선행)**: 위 codec들이 **모두 동일한 공유 Store authority row payload**인지, 아니면 서로
+    다른 authority 표현(예: C++ 것은 특정 projection)인지 **먼저 확정**할 것. 기존 Node↔.NET relocation 스테이지가
+    통과했다면 그 경로가 이 row를 크로스랭으로 안 읽었기 때문(§9 canonical 28만 신규로 크로스랭 row-read 요구).
+  - **판정·규모**: 대규모·민감(authority/relocation) 영역. canonical 정본 포맷 결정(ZLAU가 2언어 합의 = 유력 정본?)
+    → Node·C++를 정본으로 전환 → 4언어 Store row interop 검증. **즉석 자율 수정 금지**(고난도 sol, 검증 다중화 금지
+    [[canonical-multiattempt-design-trap]]). 스펙 §9는 명확(스펙 버그 아님) → **구현 통일** 과제.
+  - **다음(선행 = 3b·3c 진행 전)**: (a) 4언어 codec이 동일 공유 row인지 확정, (b) 정본 포맷 결정(유저 판정 권장 —
+    ZLAU 채택 시 Node·C++ 전환 범위 큼), (c) Node·C++ authority publish/read 전환(고난도 sol), (d) stage-1 재실행
+    그린 → multi-attempt 실증(§3a) → 12방향.
 
 ## 3c. [A7] 사설 dialect 제거 (H-15 / S5)
 
