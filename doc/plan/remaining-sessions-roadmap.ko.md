@@ -267,10 +267,16 @@
     framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 진행: 항목별 lockstep + spec-gap.
   - [ ] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어`
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
-- [ ] **단계 5 — [B0] 하니스 안정화** `혼합`
-  - [ ] H-10 dotnet→java relocation 레이스 (dotnet+java)
-  - [ ] TicTacToe 간헐 flake (샘플별)
-  - [ ] D1 ST-C4 fault-injection variant (cpp)
+- [ ] **단계 5 — [B0] 하니스 안정화** `혼합` — 3건 병렬 착수(2026-08-22, canonical과 독립이므로
+  단계 6 최단경로로 선행 투입)
+  - [~] H-10 dotnet→java relocation 레이스 (dotnet+java) — 재현·원인 조사 중
+  - [~] TicTacToe 간헐 flake (샘플별) — **STOP 판정 대기**: Node TTT 8회 중 6회 실패(기록된
+    baseline 1/4보다 악화). 실패모드 A(4/8)= target restore 'Relocation authority contains another
+    published root'(service-relocation-host-runtime.ts:3334/:3403)→wire 17, 모드 B(2/8)=
+    staleDescriptor 후 admission 105. **framework relocation 경합이지 샘플 타이밍 아님** — 재시도/
+    대기 조정으로 가리면 안 됨. 오늘 커밋(de17ac7179 ZLJR savedWork 등)의 회귀인지 worktree
+    baseline(659436cc4c) 8회 대조 진행 중 → 판정 후 수정 방향 결정.
+  - [~] D1 ST-C4 fault-injection variant (cpp) — 계약 대조·seam 조사 중(opus)
 - [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
 - [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어`
 - [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합`(집계=주로 JVM, 보고=전체)
