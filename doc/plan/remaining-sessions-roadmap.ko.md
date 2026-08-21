@@ -165,12 +165,47 @@ Admission Lifecycle And Abandonment Cleanup), 15 §4.2, 28 §4.2.
 
 ---
 
-# Track B — Config / F e2e authoring (A와 독립)
+# Track B — 모든 e2e 테스트 추가·구현·실행 (config/F + 하니스 안정화)
+
+이 트랙은 **"모든 e2e 테스트를 추가하고 실행"**하는 단계다. 성격상 순수 문서 작업이 아니라
+**① 시나리오 드라이버 코드 작성 → ② dispatch/aggregate runner 연결(wiring) → ③ 실행·green
+확보**이며, authoring 중 문서화된 동작이 실제 미구현이면 그건 결함으로 드러나 framework 수정으로
+번질 수 있다(coverage 중심이나 correctness 예외 존재).
+
+**⚠️ 선행조건 — 대상 하니스 안정성**: 현재 e2e는 "일부만 동작"한다. 두 종류로 나뉜다:
+- **(a) 미authoring** = config6 14건·config10 Track E/G/H/I ~28건(헤딩만·코드 부재) → **이 트랙의
+  작업 대상**(방해물 아님).
+- **(b) authoring됐으나 불안정** = 아래 **B0 하니스 안정화**로 별도 선행/병행. 새 시나리오가
+  불안정 스테이지(relocation 레이스 등)에 의존하지 않는 영역부터 authoring하되, **최종 게이트
+  (Track D)는 전부 green이어야** 하므로 B0는 반드시 해소된다.
 
 **핵심 스펙**: 15(spot-actor) · 18(object-routing) · 28(relocation-flow) · 30(host-relocation) ·
 31(failover). **세션 근거 plan**: `doc/plan/config-6-10-authoring-plan.ko.md`(B1/B2),
 `doc/plan/f-e2e-inventory-plan.ko.md`(B3). **시나리오 소스**: 각 언어 sample/e2e 하니스 +
 `feature-map.ko.md`(구현/blocked 표기).
+
+## B0. 하니스 안정화 (불안정 e2e 해소 — Track B/D 선행)
+
+- **H-10**: dotnet→java relocation 스테이지 저빈도 레이스 → 기본 게이트 미편입 상태. 결정적
+  수정 후 harness 기본 `all`에 편입(무음 편입 금지).
+- **TicTacToe 간헐 flake**: baseline에서도 4회 중 1회 실패(node G-2 결정적 6/6 아님) → 안정화.
+- **ST-C4**(= D1): 계약 fault point variant 재작성.
+- **DoD**: 세 항목 결정적 green, harness 기본 매트릭스 편입.
+
+## 실행 방식 (필수) — 항목별 4언어 lockstep + spec-gap 게이트
+
+전체 e2e를 언어별로 몰아서 끝내지 않는다. **e2e 항목(시나리오) 단위로, 다음을 반복**한다:
+
+1. **한 e2e 항목**을 고른다.
+2. 그 **동일 항목을 4언어(node · dotnet · java/kotlin · cpp)에서 순차적으로 동작 확인** — 같은
+   시나리오가 모든 언어에서 동일하게 통과하는지.
+3. **spec-gap 미발생 확인** — 4언어 동작이 단일 스펙과 일치하고, 언어 간 발산(사설 방언·동작
+   차이)이 새로 생기지 않았는지. (발산 발견 시 = 스펙 오류/구현 결함 → Claude가 판정·전파,
+   agent 임의 스펙 수정 금지.)
+4. 그 항목이 **4언어 전부 green + spec-gap clean**이면 **다음 e2e 항목으로** 넘어간다.
+
+이유: 언어별로 몰아서 하면 상호운용 발산이 뒤늦게 무더기로 드러난다(캠페인 내내 반복된 실패
+양상). 항목 단위 lockstep은 발산을 즉시 잡아 캠페인 근간(4언어 동일 프로토콜)을 보존한다.
 
 ## B1. H-7 config-6 e2e authoring (14 시나리오)
 
@@ -243,12 +278,44 @@ Admission Lifecycle And Abandonment Cleanup), 15 §4.2, 28 §4.2.
 
 ---
 
-# 권장 세션 순서 (의존성 기반)
+# Track Z — ZoneWorld 구현 (7번째 샘플 완성)
 
-1. **A1**(진행 중) → **A3** → **A2** → **A4** — canonical 4언어 수신·발신 활성화
-2. **A5** → **A6** → **A7** — attempt-lifecycle·매트릭스·dialect 제거
-3. **B1/B2/B3**, **C1** — A와 병렬 착수 가능(독립 세션)
-4. **D1~D5** — A·B·C 수용 후 최종
+**핵심 스펙**: 15(spot-actor) · 17(stage-wrapper) · 28(relocation-flow) · 30(host-relocation).
+**현 상태**: ZoneWorld는 4언어에 샘플 디렉토리·빌드 타깃·일부 contract/regression 테스트가
+존재하나(node/dotnet/cpp `samples/ZoneWorld`, `shared_sample/zoneworld`), **G-2 6샘플 게이트에서
+제외**돼 있다(topology·relocation 복합 샘플이라 미완성).
 
-병렬 가능 조합: (A 트랙 1세션) + (B 트랙 1세션) + (C 트랙 1세션)을 서로 다른 세션에서 동시 진행.
-각 세션은 위 카드의 선행조건만 만족하면 독립 착수 가능.
+## Z1. ZoneWorld 4언어 구현 완성 + 게이트 편입
+
+- **범위**: ZoneWorld 도메인·topology·maintenance 동작을 4언어에서 완성해 다른 6샘플과 동일하게
+  결정적 실행. 항목별 4언어 lockstep(Track B 실행 방식과 동일)으로 진행.
+- **선행**: 6샘플(Bingo/DeliveryDispatch/GameQuest/ShoppingMall/SupportChat/TicTacToe) 전부
+  결정적 green(= D2 완료).
+- **DoD**: ZoneWorld 4언어 결정적 green + 샘플 게이트에 편입(더 이상 "zoneworld 제외" 아님).
+
+---
+
+# 실행 순서 (세션 시퀀스) — 각 단계 = 독립 세션, 순차 실행
+
+아래는 **독립 세션에서 순차적으로 집어 실행**하는 마스터 순서다. 각 단계는 앞 단계 DoD가
+충족돼야 착수한다. (A·C는 canonical 전송 마이그레이션 스트림으로, 초반에 진행하거나 별도
+세션 스트림으로 병행 가능하나, **아래 6·7·8단계 제품-완성 tail 순서는 고정**이다.)
+
+1. **A1**(진행 중) — .NET canonical 28 수신자 wire-연결.
+2. **A3 → A2 → A4** — .NET 발신 재작업 → cpp 수신자 → cpp 발신 (canonical 4언어 수신·발신 활성화).
+3. **A5 → A6 → A7** — attempt-lifecycle/bound Session → 크로스랭 매트릭스 → 사설 dialect 제거.
+4. **C1** — W-3 4언어 생성 코덱 스왑(canonical 안정화 후, 또는 A와 병행 스트림).
+5. **B0** — 하니스 안정화(H-10 relocation 레이스 · TicTacToe flake · ST-C4/D1). 6·8단계 선행.
+6. **D2 — 6샘플×4언어 결정적 green**(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·
+   TicTacToe). ← 여기까지 완료돼야 다음.
+7. **Z1 — ZoneWorld 구현**(7번째 샘플 완성 + 게이트 편입).
+8. **B1 → B2 → B3 — 모든 e2e 테스트 추가·구현·실행**. **항목별 4언어 lockstep + spec-gap 게이트**
+   (Track B "실행 방식" 필수 준수): 한 e2e 항목을 4언어 동시 확인 → spec-gap 없음 확인 → 다음 항목.
+9. **D3 → D4 → D5 — 최종 게이트·보고**(java/kotlin 집계·doc 게이트·harness `all` → 매트릭스 보고
+   → 완료 조건 판정: 전 테스트 green + 6샘플+ZoneWorld×언어 + sol spec-gap 리뷰).
+
+**tail 고정 순서(사용자 확정)**: … → **6단계 6샘플 완료** → **7단계 ZoneWorld 구현** →
+**8단계 모든 e2e 추가·실행** → **9단계 최종**.
+
+병행 허용: A 스트림(1~3) · C(4) · B0(5)는 서로 다른 세션에서 동시 진행 가능(파일 소유권 분리).
+단 6→7→8→9 tail은 순차.
