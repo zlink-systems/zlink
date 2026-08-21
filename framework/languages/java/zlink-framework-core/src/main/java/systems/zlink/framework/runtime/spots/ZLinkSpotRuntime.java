@@ -56,6 +56,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 
 import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.InvocationTargetException;
@@ -3544,8 +3545,7 @@ public final class ZLinkSpotRuntime
         RoutingId sourcePeerRid) {
         Objects.requireNonNull(join, "join");
         ServiceWirePilotCodec.Fence target = join.targetSpot();
-        RoutingId targetNode = RoutingId.from(
-            new String(target.targetNodeRid(), StandardCharsets.UTF_8));
+        RoutingId targetNode = RoutingId.from(target.targetNodeRid());
         if (!targetNode.equals(primaryNode.routingId())) {
             return CompletableFuture.failedFuture(new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
@@ -3573,7 +3573,14 @@ public final class ZLinkSpotRuntime
             ? new byte[0]
             : join.payload().payload());
         try {
-            return spot.admitCanonicalActorJoin(request, sourcePeerRid, payload)
+            return spot.admitCanonicalActorJoin(
+                    request,
+                    sourcePeerRid,
+                    payload,
+                    join,
+                    join.payload() == null
+                        ? "application/octet-stream"
+                        : join.payload().contentType())
                 .whenComplete((ignored, error) -> payload.close());
         } catch (RuntimeException error) {
             payload.close();
@@ -3606,11 +3613,16 @@ public final class ZLinkSpotRuntime
             ServiceWirePilotCodec.ActorJoin28 join,
             RoutingId sourcePeerRid) {
         ServiceWirePilotCodec.Fence actor = join.actor();
-        RoutingId actorNode = RoutingId.from(
-            new String(actor.targetNodeRid(), StandardCharsets.UTF_8));
+        RoutingId actorNode = RoutingId.from(actor.targetNodeRid());
+        UUID handoffId = ZLinkActorJoinRecoveryCodec.canonicalHandoffId(
+            actor.targetNodeRid(),
+            actor.id(),
+            actor.generation(),
+            actor.targetNodeGeneration(),
+            join.correlation());
         return new ZLinkActorSpotRoutePackets.TransferRequest(
             ZLinkActorSpotRoutePackets.ADMISSION_PHASE,
-            "canonical:" + Long.toUnsignedString(join.correlation()),
+            handoffId.toString(),
             1_000L,
             actor.id(),
             "",

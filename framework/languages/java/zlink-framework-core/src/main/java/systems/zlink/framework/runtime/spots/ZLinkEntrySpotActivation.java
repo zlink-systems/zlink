@@ -424,6 +424,9 @@ final class EntrySpotActivation
             sourcePeerRid,
             backendSpot.spotId(),
             entrySpot,
+            null,
+            "application/octet-stream",
+            new byte[0],
             actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
                 entrySpot, actor, backendSpot.spotId(), true),
             actorId -> CompletableFuture.completedFuture(

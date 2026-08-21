@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.Objects;
 import java.util.UUID;
@@ -22,6 +23,8 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -29,6 +32,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 
 /** Direct-Join goal/profile adapter owned by the canonical relocation host. */
 final class ZLinkActorJoinCanonicalAdapter
@@ -41,6 +45,8 @@ final class ZLinkActorJoinCanonicalAdapter
     private final ConcurrentMap<RoutingId, Lane> lanes =
         new ConcurrentHashMap<>();
     private final ConcurrentMap<UUID, Admission> admissions =
+        new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, CanonicalAdmission> canonicalAdmissions =
         new ConcurrentHashMap<>();
     private final ConcurrentMap<String, SourceAttempt> sources =
         new ConcurrentHashMap<>();
@@ -244,6 +250,187 @@ final class ZLinkActorJoinCanonicalAdapter
         }
     }
 
+    @Override
+    public void admitCanonical(CanonicalAdmission admission) {
+        Objects.requireNonNull(admission, "admission");
+        CanonicalAdmission previous = canonicalAdmissions.putIfAbsent(
+            admission.relocationId(), admission);
+        if (previous != null) {
+            if (!sameCanonicalAdmission(previous, admission)) {
+                throw new IllegalStateException(
+                    "canonical Actor Join recovery admission fence conflicts");
+            }
+            return;
+        }
+        prewarm.register(
+            admission.relocationId(),
+            admission.actorId(),
+            admission.objectGeneration(),
+            admission.actorType(),
+            actors.resolveActorFactoryType(admission.actorType()),
+            evicted -> {
+                canonicalAdmissions.remove(evicted.relocationId());
+                admissions.remove(evicted.relocationId());
+            });
+        spots.scheduleRelocationCleanup(
+            Instant.now().plus(admission.timeout()),
+            () -> {
+                canonicalAdmissions.remove(
+                    admission.relocationId(), admission);
+                admissions.remove(admission.relocationId());
+                prewarm.release(admission.relocationId());
+            });
+    }
+
+    /**
+     * Claims the approval-only command-28 admission with the durable ZLJR
+     * identity carried by command 40. Returns false only for ordinary Actor
+     * relocation, where neither side of that identity exists.
+     */
+    boolean claimRecovery(ZLinkSpotRetireControl.StageRequest request) {
+        UUID relocationId = request.fence().aggregateId();
+        CanonicalAdmission candidate = canonicalAdmissions.get(relocationId);
+        Optional<ZLinkActorJoinRecoveryCodec.Recovery> decoded;
+        try {
+            decoded = ZLinkActorJoinRecoveryCodec.decodeFromEnvelope(
+                request.relocationPayload());
+        } catch (RuntimeException malformed) {
+            throw recoveryRejected(
+                "canonical Actor Join recovery payload is malformed", malformed);
+        }
+        if (decoded.isEmpty()) {
+            if (candidate != null) {
+                throw recoveryRejected(
+                    "canonical Actor Join relocation is missing ZLJR saved work",
+                    null);
+            }
+            return false;
+        }
+        if (candidate == null) {
+            throw recoveryRejected(
+                "canonical Actor Join recovery has no matching command-28 admission",
+                null);
+        }
+        ZLinkActorJoinRecoveryCodec.Recovery recovery = decoded.orElseThrow();
+        var participant = request.participants().getFirst();
+        byte[] expectedReply = candidate.reply().toEncodedPayload(
+            spots.serializerForSpot()).bytes();
+        requireRecoveryFence(
+            recovery.relocationId().equals(relocationId), "handoff id");
+        requireRecoveryFence(
+            recovery.actorId().equals(candidate.actorId()), "actor id");
+        requireRecoveryFence(
+            recovery.actorType().equals(candidate.actorType()), "actor type");
+        requireRecoveryFence(
+            recovery.actorGeneration() == candidate.objectGeneration(),
+            "actor generation");
+        requireRecoveryFence(
+            recovery.sourceNodeRid().equals(candidate.sourceNodeRid()),
+            "source node routing id");
+        requireRecoveryFence(
+            recovery.actorNodeGeneration() == candidate.sourceNodeGeneration(),
+            "source node generation");
+        requireRecoveryFence(
+            recovery.actorAuthorityOwnerGeneration()
+                == candidate.sourceAuthorityOwnerGeneration(),
+            "source authority owner generation");
+        requireRecoveryFence(
+            recovery.expectedOwnerLeaseGeneration()
+                == candidate.sourceOwnerLeaseGeneration(),
+            "source owner lease generation");
+        requireRecoveryFence(
+            recovery.targetSpotId().equals(candidate.targetSpotId()),
+            "target Spot id");
+        requireRecoveryFence(
+            recovery.targetSpotGeneration() == candidate.targetSpotGeneration(),
+            "target Spot generation");
+        requireRecoveryFence(
+            recovery.targetNodeRid().equals(candidate.targetNodeRid()),
+            "target node routing id");
+        requireRecoveryFence(
+            recovery.targetNodeGeneration() == candidate.targetNodeGeneration(),
+            "target node generation");
+        requireRecoveryFence(
+            recovery.targetSpotAuthorityOwnerGeneration()
+                == candidate.targetSpotAuthorityOwnerGeneration(),
+            "target Spot authority owner generation");
+        requireRecoveryFence(
+            recovery.requestContentType().equals(candidate.requestContentType()),
+            "request content type");
+        requireRecoveryFence(
+            Arrays.equals(recovery.request(), candidate.rawRequest()),
+            "request body");
+        requireRecoveryFence(
+            "application/x-zlink-multipart".equals(
+                recovery.replyContentType()),
+            "reply content type");
+        requireRecoveryFence(
+            Arrays.equals(recovery.reply(), expectedReply), "reply body");
+        requireRecoveryFence(
+            recovery.sourceNodeRid().equals(request.sourceNodeRid()),
+            "stage source node routing id");
+        requireRecoveryFence(
+            recovery.actorNodeGeneration() == request.sourceNodeGeneration(),
+            "stage source node generation");
+        requireRecoveryFence(
+            recovery.expectedOwnerLeaseGeneration()
+                == request.sourceOwnerLeaseGeneration(),
+            "stage source owner lease generation");
+        requireRecoveryFence(
+            recovery.coordinator().ownerId().equals(request.sourceOwnerId()),
+            "stage source owner id");
+        requireRecoveryFence(
+            recovery.targetNodeRid().equals(request.targetNodeRid()),
+            "stage target node routing id");
+        requireRecoveryFence(
+            recovery.targetNodeGeneration() == request.targetNodeGeneration(),
+            "stage target node generation");
+        requireRecoveryFence(
+            candidate.targetOwnerLeaseGeneration()
+                == request.targetOwnerLeaseGeneration(),
+            "stage target owner lease generation");
+        requireRecoveryFence(
+            participant.objectId().equals(recovery.actorId()),
+            "participant actor id");
+        requireRecoveryFence(
+            participant.objectGeneration() == recovery.actorGeneration(),
+            "participant actor generation");
+        requireRecoveryFence(
+            participant.sourceAuthorityOwnerGeneration()
+                == recovery.actorAuthorityOwnerGeneration(),
+            "participant authority owner generation");
+        requireRecoveryFence(
+            recovery.targetAuthorityOwnerGeneration()
+                == Math.addExact(
+                    participant.sourceAuthorityOwnerGeneration(), 1L),
+            "target authority owner generation");
+        ZLinkMessage reply = recovery.reply().length == 0
+            ? ZLinkMessage.empty()
+            : ZLinkMessage.fromEncoded(
+                ZLinkEncodedPayload.from(recovery.reply()),
+                spots.serializerForSpot());
+        Admission claimed = new Admission(
+            relocationId,
+            recovery.operationId(),
+            candidate.actorId(),
+            candidate.actorType(),
+            candidate.objectGeneration(),
+            candidate.targetSpotId(),
+            candidate.targetSpot(),
+            candidate.joined(),
+            reply,
+            candidate.timeout());
+        Admission previous = admissions.putIfAbsent(relocationId, claimed);
+        if (previous != null
+            && (!previous.operationId().equals(claimed.operationId())
+                || !previous.actorId().equals(claimed.actorId())
+                || !previous.targetSpotId().equals(claimed.targetSpotId()))) {
+            throw recoveryRejected(
+                "canonical Actor Join recovery claim conflicts", null);
+        }
+        return true;
+    }
+
     /**
      * Looks up the attempt registered at admission time so PREPARE
      * (Restore) can verify the object identity
@@ -426,7 +613,53 @@ final class ZLinkActorJoinCanonicalAdapter
 
     void completeTarget(Admission admission) {
         admissions.remove(admission.relocationId(), admission);
+        canonicalAdmissions.remove(admission.relocationId());
         prewarm.release(admission.relocationId());
+    }
+
+    private static boolean sameCanonicalAdmission(
+        CanonicalAdmission left,
+        CanonicalAdmission right) {
+        return left.relocationId().equals(right.relocationId())
+            && left.actorId().equals(right.actorId())
+            && left.actorType().equals(right.actorType())
+            && left.objectGeneration() == right.objectGeneration()
+            && left.sourceNodeRid().equals(right.sourceNodeRid())
+            && left.sourceNodeGeneration() == right.sourceNodeGeneration()
+            && left.sourceAuthorityOwnerGeneration()
+                == right.sourceAuthorityOwnerGeneration()
+            && left.sourceOwnerLeaseGeneration()
+                == right.sourceOwnerLeaseGeneration()
+            && left.targetSpotId().equals(right.targetSpotId())
+            && left.targetSpotGeneration() == right.targetSpotGeneration()
+            && left.targetNodeRid().equals(right.targetNodeRid())
+            && left.targetNodeGeneration() == right.targetNodeGeneration()
+            && left.targetSpotAuthorityOwnerGeneration()
+                == right.targetSpotAuthorityOwnerGeneration()
+            && left.targetOwnerLeaseGeneration()
+                == right.targetOwnerLeaseGeneration()
+            && left.requestContentType().equals(right.requestContentType())
+            && Arrays.equals(left.rawRequest(), right.rawRequest());
+    }
+
+    private static ZLinkFrameworkException recoveryRejected(
+        String message,
+        Throwable failure) {
+        return failure == null
+            ? new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DATA_LOST, message)
+            : new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DATA_LOST, message, failure);
+    }
+
+    private static void requireRecoveryFence(
+        boolean condition,
+        String field) {
+        if (!condition) {
+            throw recoveryRejected(
+                "canonical Actor Join recovery " + field + " conflicts",
+                null);
+        }
     }
 
     private CompletionStage<Void> handleActorLeft(

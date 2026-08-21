@@ -418,6 +418,31 @@ final class ZLinkActorSpotAdmission {
         Object targetSpot,
         Function<ZLinkActor, CompletionStage<Void>> joinedCallback,
         Function<String, CompletionStage<ZLinkSpotActorJoinResult>> callback) {
+        return prepareCanonicalRoutedActor(
+            request,
+            routeChannelName,
+            sourcePeerRid,
+            targetSpotId,
+            targetSpot,
+            null,
+            "",
+            new byte[0],
+            joinedCallback,
+            callback);
+    }
+
+    CompletionStage<ZLinkSpotActorJoinResult> prepareCanonicalRoutedActor(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        String routeChannelName,
+        RoutingId sourcePeerRid,
+        String targetSpotId,
+        Object targetSpot,
+        systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec.ActorJoin28
+            canonicalJoin,
+        String requestContentType,
+        byte[] rawRequest,
+        Function<ZLinkActor, CompletionStage<Void>> joinedCallback,
+        Function<String, CompletionStage<ZLinkSpotActorJoinResult>> callback) {
         if (!request.admission()) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "canonical actor Join request has the wrong phase"));
@@ -438,7 +463,40 @@ final class ZLinkActorSpotAdmission {
                         ZLinkSpotActorJoinResult.reject());
                 }
                 return invokeAdmissionCallback(callback, request.actorId())
-                    .thenApply(ZLinkActorSpotAdmission::effectiveResponse);
+                    .thenApply(ZLinkActorSpotAdmission::effectiveResponse)
+                    .thenApply(response -> {
+                        if (response.accepted() && canonicalJoin != null) {
+                            var actor = canonicalJoin.actor();
+                            var target = canonicalJoin.targetSpot();
+                            requireActors().admitCanonicalActorJoin(
+                                new ZLinkActorJoinRelocationPort
+                                    .CanonicalAdmission(
+                                    UUID.fromString(request.transferId()),
+                                    request.actorId(),
+                                    storeResolved.actorType(),
+                                    request.actorGeneration(),
+                                    RoutingId.from(actor.targetNodeRid()),
+                                    actor.targetNodeGeneration(),
+                                    actor.expectedAuthorityOwnerGeneration(),
+                                    actor.expectedOwnerLeaseGeneration(),
+                                    targetSpotId,
+                                    target.generation(),
+                                    RoutingId.from(target.targetNodeRid()),
+                                    target.targetNodeGeneration(),
+                                    target.expectedAuthorityOwnerGeneration(),
+                                    target.expectedOwnerLeaseGeneration(),
+                                    targetSpot,
+                                    joinedCallback,
+                                    response.reply() == null
+                                        ? ZLinkMessage.empty()
+                                        : response.reply(),
+                                    requestContentType,
+                                    rawRequest,
+                                    Duration.ofMillis(Math.max(
+                                        1L, request.timeoutMillis()))));
+                        }
+                        return response;
+                    });
             });
     }
 

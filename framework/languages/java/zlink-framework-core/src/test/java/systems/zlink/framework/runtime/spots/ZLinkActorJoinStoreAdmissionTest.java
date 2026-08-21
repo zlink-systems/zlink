@@ -12,8 +12,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -31,6 +33,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescripto
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -109,7 +112,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
     }
 
     @Test
-    void canonicalMultipartWithAndWithoutPayloadUsesGeneratedDecodeAndStoreAdmission()
+    void canonicalCommand28IngressUsesStoreResolvedTypeForCanonicalAdmission()
         throws Exception {
         ServiceWirePilotCodec.Fence actor = new ServiceWirePilotCodec.Fence(
             ACTOR_ID, 7L, NODE.toString().getBytes(StandardCharsets.UTF_8),
@@ -136,10 +139,20 @@ final class ZLinkActorJoinStoreAdmissionTest {
                     decoded.payload().payload());
             }
             AtomicInteger callbacks = new AtomicInteger();
-            var result = admission(Map.of("canonical-type", Factory.class))
+            AtomicReference<ZLinkActorJoinRelocationPort.CanonicalAdmission>
+                admitted = new AtomicReference<>();
+            var result = admission(
+                    Map.of("canonical-type", Factory.class), admitted::set)
                 .prepareCanonicalRoutedActor(
                     ZLinkSpotRuntime.canonicalActorJoinRequest(decoded, NODE),
                     null, NODE, "spot", new Object(),
+                    decoded,
+                    decoded.payload() == null
+                        ? "application/octet-stream"
+                        : decoded.payload().contentType(),
+                    decoded.payload() == null
+                        ? new byte[0]
+                        : decoded.payload().payload(),
                     ignored -> CompletableFuture.completedFuture(null),
                     ignored -> {
                         callbacks.incrementAndGet();
@@ -149,6 +162,8 @@ final class ZLinkActorJoinStoreAdmissionTest {
                 .toCompletableFuture().join();
             assertEquals(true, result.accepted());
             assertEquals(1, callbacks.get());
+            assertEquals("canonical-type", admitted.get().actorType(),
+                "command-28 omits actorType; canonical admission must use the Store row");
         }
     }
 
@@ -179,6 +194,13 @@ final class ZLinkActorJoinStoreAdmissionTest {
 
     private static ZLinkActorSpotAdmission admission(
         Map<String, Class<? extends ZLinkActorFactory>> factories) {
+        return admission(factories, ignored -> { });
+    }
+
+    private static ZLinkActorSpotAdmission admission(
+        Map<String, Class<? extends ZLinkActorFactory>> factories,
+        java.util.function.Consumer<ZLinkActorJoinRelocationPort.CanonicalAdmission>
+            canonicalAdmission) {
         ZLinkInternalSpotNode node = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
             ZLinkInternalSpotNode.class.getClassLoader(),
             new Class<?>[] {ZLinkInternalSpotNode.class},
@@ -187,6 +209,22 @@ final class ZLinkActorJoinStoreAdmissionTest {
         ZLinkActorRuntime runtime = new ZLinkActorRuntime(
             node, factories, Duration.ofSeconds(1), new ZLinkJsonMessageSerializer());
         runtime.setDirectJoinRelocationStores(store());
+        runtime.setActorJoinRelocationPort(new ZLinkActorJoinRelocationPort() {
+            @Override public CompletionStage<Submission> relocate(
+                Goal goal,
+                Duration timeout) {
+                return CompletableFuture.failedFuture(
+                    new AssertionError("relocation is outside admission coverage"));
+            }
+
+            @Override public void admit(Admission admission) {
+                throw new AssertionError("legacy admission is outside canonical coverage");
+            }
+
+            @Override public void admitCanonical(CanonicalAdmission admission) {
+                canonicalAdmission.accept(admission);
+            }
+        });
         ZLinkActorSpotAdmission admission = new ZLinkActorSpotAdmission();
         admission.attach(runtime, () -> false, null);
         return admission;

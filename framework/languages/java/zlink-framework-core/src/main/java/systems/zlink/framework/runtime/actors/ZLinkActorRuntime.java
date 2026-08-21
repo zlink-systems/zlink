@@ -417,6 +417,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         port.admit(admission);
     }
 
+    public void admitCanonicalActorJoin(
+        ZLinkActorJoinRelocationPort.CanonicalAdmission admission) {
+        ZLinkActorJoinRelocationPort port = actorJoinRelocationPort;
+        if (port == null) {
+            throw new ZLinkConfigurationException(
+                "canonical Actor Join relocation is not installed");
+        }
+        port.admitCanonical(admission);
+    }
+
     CompletionStage<ZLinkDirectJoinRelocation.Manifest>
         prepareDeferredJoinRelocation(
             UUID relocationId,

@@ -602,10 +602,25 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     record CanonicalActorJoinReply(
         boolean accepted,
         long receiveChunkLimitBytes,
-        List<Message> applicationReply) {
+        List<Message> applicationReply,
+        java.util.UUID handoffId,
+        String replyContentType) {
+        public CanonicalActorJoinReply(
+            boolean accepted,
+            long receiveChunkLimitBytes,
+            List<Message> applicationReply) {
+            this(
+                accepted,
+                receiveChunkLimitBytes,
+                applicationReply,
+                null,
+                "application/json");
+        }
+
         public CanonicalActorJoinReply {
             applicationReply = List.copyOf(Objects.requireNonNull(
                 applicationReply, "applicationReply"));
+            Objects.requireNonNull(replyContentType, "replyContentType");
         }
     }
 

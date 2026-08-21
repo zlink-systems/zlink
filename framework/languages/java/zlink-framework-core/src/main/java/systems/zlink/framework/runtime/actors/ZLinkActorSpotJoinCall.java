@@ -693,6 +693,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                     currentActorRef,
                                     admission.reply(),
                                     admission.receiveChunkLimitBytes(),
+                                    "application/json",
                                     operationId,
                                     deadlineNanos);
                             } finally {
@@ -758,11 +759,14 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 }
                 return submitCanonicalRelocation(
                     target,
-                    transferId,
+                    reply.handoffId() == null
+                        ? transferId
+                        : reply.handoffId().toString(),
                     actorType,
                     sourceActor,
                     applicationReply,
                     reply.receiveChunkLimitBytes(),
+                    reply.replyContentType(),
                     operationId,
                     deadlineNanos);
             });
@@ -800,6 +804,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             ZLinkBackendActorRef sourceActor,
             Message admissionReply,
             long advertisedReceiveChunkLimitBytes,
+            String replyContentType,
             ZLinkActorJoinOperationId operationId,
             long deadlineNanos) {
         Duration remaining = remainingTimeout(deadlineNanos);
@@ -828,7 +833,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 address.ownerLeaseGeneration(),
                 rawReply,
                 deferredActiveTurnSeal,
-                Math.max(0L, advertisedReceiveChunkLimitBytes));
+                Math.max(0L, advertisedReceiveChunkLimitBytes),
+                CANONICAL_ACTOR_JOIN_CONTENT_TYPE,
+                request.toByteArray(),
+                replyContentType);
         return services.actors().relocateActorJoin(goal, remaining)
             .thenApply(submission -> {
                 acceptedCallbackDeliveredOnTarget.set(true);

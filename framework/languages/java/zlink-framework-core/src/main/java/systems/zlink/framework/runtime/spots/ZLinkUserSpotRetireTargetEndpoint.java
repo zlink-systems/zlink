@@ -208,6 +208,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
     public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
         ZLinkSpotRetireControl.StageRequest request,
         long defaultActorSpotGeneration) {
+        if (actorJoin != null && isStandaloneActor(request)) {
+            actorJoin.claimRecovery(request);
+        }
         return actorJoin == null
             ? ZLinkSpotRetireControl.TargetEndpoint.super.applyTargetProfile(
                 request, defaultActorSpotGeneration)
@@ -975,6 +978,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 "standalone Actor relocation target is unavailable"));
         }
         var participant = request.participants().getFirst();
+        if (actorJoin != null) {
+            actorJoin.claimRecovery(request);
+        }
         var targetRequest =
             new ZLinkStandaloneActorRelocationStagingOwner.Request(
                 request.fence().aggregateId(),

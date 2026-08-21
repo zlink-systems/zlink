@@ -88,6 +88,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -1351,8 +1352,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     new ServiceWirePilotCodec.Fence(
                         request.actor().actorId(),
                         request.actor().generation(),
-                        request.actor().nodeRid().toString()
-                            .getBytes(StandardCharsets.UTF_8),
+                        request.actor().nodeRid().toBytes(),
                         request.actorNodeGeneration(),
                         request.actorAuthorityOwnerGeneration(),
                         request.actorOwnerLeaseGeneration()),
@@ -1360,8 +1360,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     new ServiceWirePilotCodec.Fence(
                         request.targetSpotId(),
                         request.targetSpotGeneration(),
-                        request.targetNodeRid().toString()
-                            .getBytes(StandardCharsets.UTF_8),
+                        request.targetNodeRid().toBytes(),
                         request.targetNodeGeneration(),
                         request.targetAuthorityOwnerGeneration(),
                         request.targetOwnerLeaseGeneration()),
@@ -1374,7 +1373,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 "canonical actorJoin request is invalid", invalid));
         }
         return requestApplication(request.targetNodeRid(), frames, timeout)
-            .thenApply(reply -> decodeCanonicalActorJoinReply(correlation, reply));
+            .thenApply(reply -> decodeCanonicalActorJoinReply(
+                correlation,
+                request,
+                reply));
     }
 
     private static boolean hasCompleteCanonicalActorJoinFence(
@@ -1392,7 +1394,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private ZLinkInternalMeshNode.CanonicalActorJoinReply
-        decodeCanonicalActorJoinReply(long correlation, List<byte[]> frames) {
+        decodeCanonicalActorJoinReply(
+            long correlation,
+            ZLinkInternalMeshNode.CanonicalActorJoinRequest request,
+            List<byte[]> frames) {
         if (frames.isEmpty() || frames.size() > 2) {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
@@ -1432,15 +1437,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                 "canonical actorJoin reply correlation does not match");
         }
-        List<Message> applicationReply = frames.size() == 2
-            ? decodeApplicationMessages(frames.get(1))
-            : List.of();
+        ZLinkServiceM6AWireCodec.ApplicationPayload application =
+            frames.size() == 2
+                ? wire.decodeApplicationPayload(frames.get(1))
+                : null;
+        List<Message> applicationReply = application == null
+            ? List.of()
+            : decodeApplicationMessages(application);
         return new ZLinkInternalMeshNode.CanonicalActorJoinReply(
             reply.accepted(),
             reply.receiveChunkLimitBytes() == null
                 ? 0L
                 : reply.receiveChunkLimitBytes(),
-            applicationReply);
+            applicationReply,
+            ZLinkActorJoinRecoveryCodec.canonicalHandoffId(
+                request.actor().nodeRid().toBytes(),
+                request.actor().actorId(),
+                request.actor().generation(),
+                request.actorNodeGeneration(),
+                correlation),
+            application == null
+                ? "application/json"
+                : application.contentType());
     }
 
     private boolean hasSelectedApplicationTransportPair(
@@ -5817,8 +5835,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } else {
             throw new AssertionError("unsupported actorJoin flags were accepted");
         }
-        RoutingId targetNode = RoutingId.from(new String(
-            join.targetSpot().targetNodeRid(), StandardCharsets.UTF_8));
+        RoutingId targetNode = RoutingId.from(
+            join.targetSpot().targetNodeRid());
         if (localDescriptor == null || !targetNode.equals(routingId)
             || join.targetSpot().targetNodeGeneration()
                 != localDescriptor.lifecycleGeneration()) {

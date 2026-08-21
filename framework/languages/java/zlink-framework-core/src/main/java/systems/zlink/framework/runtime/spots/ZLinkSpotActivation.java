@@ -695,13 +695,19 @@ final class SpotActivation
     CompletionStage<ZLinkSpotActorJoinResult> admitCanonicalActorJoin(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         RoutingId sourcePeerRid,
-        Message payload) {
+        Message payload,
+        systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec.ActorJoin28
+            canonicalJoin,
+        String requestContentType) {
         return host.actorAdmissions().prepareCanonicalRoutedActor(
             request,
             null,
             sourcePeerRid,
             backendSpot.spotId(),
             host.spotFor(backendSpot.spotId()),
+            canonicalJoin,
+            requestContentType,
+            payload.toByteArray(),
             actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
                 spot, actor, backendSpot.spotId(), true),
             actorId -> host.runWithOutbound(context.dispatchOutbound(), () ->
