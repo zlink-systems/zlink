@@ -177,7 +177,7 @@
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
-  - [~] 2c [A4] C++ 발신 `cpp단일` — **진단 완료: FORMAT-ONLY 가능**(구현 agent의 'semantic 필요'를 독립진단으로 반박). 근본원인: cpp canonical 발신이 28 후 즉시 `deliver_remote_actor_join`하고 return, `seal→PREPARE→FINALIZE→ownership CAS`를 안 부름 → target completion 미시작(mesh_node_runtime.cpp:2649). 해법=.NET 모델: off-wire handoff id 양측 공유 + 수신자가 source Spot을 Store Authority row서 재구성(empty 저장 아님, :516) + reply tail→기존 admission 매핑 + 발신측이 기존 seal→PREPARE→FINALIZE→CAS 계속. 28 wire·admission 의미·CAS 무변경.
+  - [ ] 2c [A4] C++ 발신 `cpp단일` — **부분 format-only + 진짜 semantic 경계(집중 설계 필요)**. seal→PREPARE→FINALIZE bridge·off-wire handoff id·source Spot 재구성은 format-only로 동작(cutover 테스트 통과 실증). **그러나 finding #3(reply generation 검증)이 CAS 경계에 걸림**: `request_actor_join_spot_route()`가 기존 `target.object_generation`으로 route submission하는데(mesh_node_runtime.cpp:2245), Store snapshot generation을 적용하면 prepare 미제출, 분리하면 cutover 전 성공 반환 → CAS/continuation ownership 의미 변경 필요. **설계 결정 지점**(route-submission generation vs Store fence generation 재조정). sol 잔여: #1 production observe 배선(미활성)·#2 app payload 실제 packet name(빈값 encode throw)·#4 terminal NotFound/ProtocolError 보존·#5 app reply(3b). 근거: agent 2회 STOP + sol-2c 4 HIGH + 진단 로그.
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
   - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
   - [ ] 3b [A6] 크로스랭 canonical 매트릭스(S4e) `4언어`
