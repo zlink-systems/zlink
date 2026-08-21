@@ -179,7 +179,7 @@
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
   - [x] 2c [A4] C++ 발신 — `cpp단일` `7ca95170ac` (production canonical 활성화; continuation bridge·off-wire handoff id .NET byte-parity·app payload·generation equality·terminal 보존·allow-list; sol 구현+리뷰, 6/6 검증·샘플 통과·CAS 무변경. deferred: 수신자 app-reply 전달=3b)
 - [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
-  - [ ] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합`(node/java 검증→4언어 전파)
+  - [~] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합` — **검증 완료**: canonical 회귀 없음(Property 2 parity PASS, Property 1 3언어 static PASS). Node multi-attempt는 열린 설계 질문으로 3b 이월(시도 fix revert). 상세 아래 §3a.
   - [x] **A6-cpp-app-reply-parity (양방향 완료)** — `dd234c3110` (`cpp단일`, 포맷만): cpp canonical actorJoin app-reply를 node/java/.NET과 양방향 parity로 정렬. sol 2라운드 구현 + sol 2라운드 리뷰 + Claude 독립 검증(diff·클린 재빌드·ctest 5/5·TicTacToe/Bingo).
     - [x] **수신자(send)**: `actor_join_operation_result_t.application_reply` 추가 + `admit_wire_actor_join`가 handler reply를 framework-multipart(`[u32BE count=1][u32BE size][bytes]`) application_payload로 감싸 command-20 tail 뒤 2번째 frame으로 전송; `terminal_result!=0`이면 payload 거부. **.NET `EncodeFrameworkMultipart`/Java `encodeFrameworkMultipart`와 바이트 단위 일치**(BE count+per-part len).
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
@@ -292,20 +292,29 @@
   "seal은 dispatch 중단 전"을 요구 → hold-before-seal 두 언어는 문자적으로 어긋나나 **source backlog로 메시지
   손실 없음**. **모두 JSON·canonical 공유 파이프라인 = canonical 회귀 아님·A5 비차단**. relocation 동결 원칙상
   여기서 수정 안 함(유저 판정용 기존 이슈).
-- **[ ] A5-node-canonical-multiattempt-wiring (확정 결함 · canonical-특화 · 최소 수정 대상)**: Node canonical 28
-  수신자가 later-attempt-wins prewarm registry(`formalRemoteActorAdmissions`)에 **등록하지 않음**. `begin()`이
-  `isRemoteAdmission && transferRequest !== undefined`(spots/index.ts:1942)로 **사설 transferRequest** 게이트라
-  순수 canonical(transferRequest=undefined)에선 미호출. 그런데 canonical 신호 `control.canonicalActorJoin`은 같은
-  함수 :1850에 **존재하나 게이트에서 미사용**. production ingress park(`routeIngress`, index.ts:428)는 registry
-  항목에 의존하므로 canonical-admitted actor의 두 번째 시도가 첫 시도를 supersede/re-park 못함(spec 15 §4.2 위반).
-  **참조 구현(최소 수정)**: Java가 `canonical:<correlation>` identity로 registry 등록(ZLinkSpotRuntime.java:3604,
-  ZLinkActorJoinCanonicalAdapter.java:200) — Node도 `control.canonicalActorJoin !== undefined`면 canonical
-  correlation 파생 identity로 **기존** `formalRemoteActorAdmissions.begin()` 경로로 라우팅(새 검증지 추가 아님,
-  spec 28 §2 단일 메커니즘). .NET/Java/C++는 PASS. **sol 위임 예정.**
-- **Property 1 검증(4언어)**: .NET/Java/C++ = PASS(canonical identity로 registry 교체; C++는 직접 테스트
-  test_cpp_framework_execution.cpp:2532/2771/2786). Node = 위 결함. (Node/.NET/Java는 canonical-28 직접
-  multi-attempt 통합테스트 부재 = UNCOVERED, 공용 registry 테스트로 replacement 커버.)
-- **DoD**: canonical 28 경로에서 multi-attempt·bound Session 기존 동작 유지 확인, sol CLEAN.
+- **[ ] A5-canonical-multiattempt (열린 설계 질문 · 확정 결함 아님 · 3b서 실증 해소 · A5 비차단)**:
+  정정 — 이전 "Node 확정 결함·최소 수정" 판단은 **틀렸다**. 사실관계:
+  - Node canonical 수신자는 later-attempt-wins prewarm registry(`formalRemoteActorAdmissions`)에 등록 안 함
+    (`begin()` 게이트가 사설 transferRequest 의존, spots/index.ts:1942). **그러나** canonical admission은 actor를
+    **즉시 materialize**(`prepareCanonicalActorJoin`→`getOrCreateActor`+`setNativeActorRef`,
+    remote-actor-join-receiver.ts:145/163, **기존 코드**). production ingress park(`routeIngress`)는
+    actor 해소 **실패 후에만**(handleMissingActor) 도달하므로, actor가 이미 가시화된 canonical 경로에선
+    parking-registry 모델이 **구조상 도달 불가**일 수 있다. → later-attempt-wins가 실제 깨졌는지, 아니면
+    eager-materialize+authority CAS로 처리되는지는 **미해결 설계 질문**(grep이 아닌 설계 분석 필요).
+  - **시도한 fix(canonical을 prewarm registry로 라우팅, lifecycleAliases)를 revert함**: sol 리뷰가 전제
+    무효(actor 가시화로 parking 미도달) + alias exact-attempt identity 결함 + `canonical:<operationId.low>`
+    attempt간 미유일(process-local 카운터, source RID/generation 무시)의 2 Critical + 1 High를 발견.
+  - **test-shape 경고**: 추가 테스트가 resolver를 stub하고 registry를 직접 구동해 94/94 통과했으나 두 Critical을
+    **놓침**. 향후 테스트는 **실제 ingress 경로**를 통과해야 한다.
+  - **크로스랭 baseline caveat**: .NET/Java/C++의 "PASS"는 **static-read**일 뿐 canonical-28 multi-attempt
+    통합테스트가 4언어 모두 부재. 게다가 **.NET도 canonical prepare에서 state를 eager 생성**
+    (ZLinkFrameworkRuntimeActors.cs:2869 `GetOrCreateActorState`) → "Node만 outlier"는 확정 아님. 3언어의
+    prewarm 등록이 vestigial인지 실제 동작인지도 미검증.
+  - **해소 위치 = 3b**: pairwise 스테이지(Java→Node, .NET→Node 등)가 실제 두 번째 attempt를 **실제 ingress로**
+    구동 → static read가 못 주는 실증 증거 확보. 이 항목을 3b에서 열어 판정(수정은 설계 확정 후).
+- **DoD 결과**: bound Session(Property 2) = canonical parity 확인(공유 파이프라인, 회귀 없음) **PASS**.
+  multi-attempt(Property 1) = .NET/Java/C++ static PASS, **Node는 열린 설계 질문**(위, 3b서 실증 해소).
+  canonical이 기존 동작을 **회귀시키지 않음**은 확인됨(핵심 DoD 충족). multi-attempt 정확성 설계 판정만 3b로 이월.
 - **선행**: 단계 1·2a.
 
 ## 3b. [A6] 크로스랭 harness canonical 매트릭스 (S4e)
