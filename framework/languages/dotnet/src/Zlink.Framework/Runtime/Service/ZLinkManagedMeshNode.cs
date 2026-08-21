@@ -2218,16 +2218,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             request.PacketName,
             request.ContentType,
             request.ApplicationPayload.Span);
-        if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, [head, payload]))
-        {
+        var submit = SubmitNativeActorJoinRequest(
+            peer,
+            operation,
+            [head, payload]);
+        if (submit != SubmitResult.Ok)
             CompleteManagedOperation(
                 operation,
-                RequestResult.Backpressured,
+                ToRequestResult(submit),
                 0,
                 Array.Empty<Message>());
-        }
-        else
-            Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: request.TargetNodeRid);
         return SubmitResult.Ok;
     }
 
@@ -3232,11 +3232,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var wire = new List<ReadOnlyMemory<byte>> { head };
             if (requestParts is { Count: > 0 })
                 wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(requestParts));
-            if (!TryScheduleRoutedSend(peer.PhysicalRoutingId, wire))
-                CompleteManagedOperation(operation, RequestResult.Backpressured, 0,
+            var submit = SubmitNativeActorJoinRequest(peer, operation, wire);
+            if (submit != SubmitResult.Ok)
+                CompleteManagedOperation(
+                    operation,
+                    ToRequestResult(submit),
+                    0,
                     Array.Empty<Message>());
-            else
-                Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetNodeRid);
             return operation.OperationId;
         }
 
@@ -4130,6 +4132,56 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return SubmitResult.Terminated;
         }
     }
+
+    private SubmitResult SubmitNativeActorJoinRequest(
+        Peer peer,
+        PendingOperation pending,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire)
+    {
+        var remainingMilliseconds = pending.DeadlineUnixMs
+            - Math.Min(
+                pending.DeadlineUnixMs,
+                checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        var remaining = TimeSpan.FromMilliseconds(
+            Math.Max(1, Math.Min(remainingMilliseconds, (ulong)int.MaxValue)));
+        try
+        {
+            if (!RunInboundOperation(() => CompleteNativeActorJoinRequestAsync(
+                    peer.PhysicalRoutingId,
+                    pending,
+                    wire,
+                    remaining,
+                    _stop?.Token ?? CancellationToken.None)))
+                return SubmitResult.Terminated;
+
+            Publish(
+                MeshMonitorEventKind.MessageSubmitted,
+                peerRid: peer.RoutingId);
+            return SubmitResult.Ok;
+        }
+        catch (ObjectDisposedException)
+        {
+            return SubmitResult.Terminated;
+        }
+        catch (ZlinkSubmitException exception)
+        {
+            return exception.Result == ZlinkSubmitException.ErrorCode.Backpressured
+                ? SubmitResult.Backpressured
+                : SubmitResult.Terminated;
+        }
+        catch (ZlinkException)
+        {
+            return SubmitResult.Terminated;
+        }
+    }
+
+    private static RequestResult ToRequestResult(SubmitResult result) =>
+        result switch
+        {
+            SubmitResult.Backpressured => RequestResult.Backpressured,
+            SubmitResult.NotConnected => RequestResult.NotConnected,
+            _ => RequestResult.Terminated
+        };
 
     private async ValueTask<InstanceSpotActivationTerminal>
         SubmitForwardedInstanceSpotRequestAsync(
@@ -8742,6 +8794,79 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
+    private async Task CompleteNativeActorJoinRequestAsync(
+        RoutingId target,
+        PendingOperation pending,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var messages = new Message[wire.Count];
+        var created = 0;
+        var ownershipTransferred = false;
+        try
+        {
+            for (; created < messages.Length; created++)
+                messages[created] = Message.From(wire[created]);
+            Task<IReadOnlyList<Message>> request;
+            lock (_socketGate)
+            {
+                var socket = _socket;
+                if (socket is null
+                    || _activeSocketGeneration != _lifecycleGeneration)
+                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
+                request = socket.Request(target)
+                    .Messages(messages)
+                    .Timeout(timeout)
+                    .Async(cancellationToken);
+                ownershipTransferred = true;
+            }
+
+            var replies = await request.ConfigureAwait(false);
+            CompleteNativeActorJoinRequest(pending, RequestResult.Ok, replies);
+        }
+        catch (ZlinkRequestException exception)
+        {
+            CompleteNativeActorJoinRequest(
+                pending,
+                NormalizeNativeRequestFailure(
+                    exception.Result,
+                    AcceptsApplicationOperations),
+                Array.Empty<Message>());
+        }
+        catch (OperationCanceledException)
+        {
+            CompleteNativeActorJoinRequest(
+                pending,
+                RequestResult.Terminated,
+                Array.Empty<Message>());
+        }
+        catch (ObjectDisposedException)
+        {
+            CompleteNativeActorJoinRequest(
+                pending,
+                NormalizeNativeRequestFailure(
+                    ZlinkRequestException.ErrorCode.Terminated,
+                    AcceptsApplicationOperations),
+                Array.Empty<Message>());
+        }
+        catch (ZlinkException)
+        {
+            CompleteNativeActorJoinRequest(
+                pending,
+                NormalizeNativeRequestFailure(
+                    ZlinkRequestException.ErrorCode.Terminated,
+                    AcceptsApplicationOperations),
+                Array.Empty<Message>());
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+                for (var index = 0; index < created; index++)
+                    messages[index].Dispose();
+        }
+    }
+
     internal static SubmitResult NormalizeNativeSubmitFailure(
         ZlinkSubmitException.ErrorCode result,
         bool sourceAcceptsApplicationOperations)
@@ -8845,6 +8970,116 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 (RequestResult)reply.TerminalResult,
                 checked((int)reply.FailureCode),
                 Array.Empty<Message>());
+        }
+        finally
+        {
+            DisposeParts(replyParts);
+        }
+    }
+
+    private void CompleteNativeActorJoinRequest(
+        PendingOperation pending,
+        RequestResult result,
+        IReadOnlyList<Message> replyParts)
+    {
+        try
+        {
+            if (result != RequestResult.Ok)
+            {
+                CompleteManagedOperation(
+                    pending,
+                    result,
+                    0,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            if (replyParts.Count == 0
+                || !ZLinkServiceWireCodec.TryDecodeReply(
+                    replyParts[0].ToArray(),
+                    out var reply,
+                    out _)
+                || reply.Correlation != pending.OperationId.Low
+                || !ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                    reply,
+                    out var actorJoinCompletion,
+                    out _))
+            {
+                CompleteManagedOperation(
+                    pending,
+                    RequestResult.ProtocolError,
+                    (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            if (reply.TerminalResult != (int)RequestResult.Ok)
+            {
+                if (replyParts.Count != 1)
+                {
+                    CompleteManagedOperation(
+                        pending,
+                        RequestResult.ProtocolError,
+                        (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                        Array.Empty<Message>());
+                    return;
+                }
+
+                CompleteManagedOperation(
+                    pending,
+                    (RequestResult)reply.TerminalResult,
+                    checked((int)reply.FailureCode),
+                    Array.Empty<Message>());
+                return;
+            }
+
+            if (actorJoinCompletion is null
+                || pending.ActorJoinOrigin is not { } origin
+                || replyParts.Count > 2)
+            {
+                CompleteManagedOperation(
+                    pending,
+                    RequestResult.ProtocolError,
+                    (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            Message[] applicationParts = [];
+            if (replyParts.Count == 2
+                && !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                    replyParts[1].AsReadOnlyMemory(),
+                    out applicationParts))
+            {
+                CompleteManagedOperation(
+                    pending,
+                    RequestResult.ProtocolError,
+                    (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            var spot = actorJoinCompletion.Spot;
+            var remoteActor = new ActorRef(
+                origin.Actor.ActorId,
+                origin.Actor.ObjectGeneration,
+                _meshName,
+                origin.TargetNodeRid);
+            var completion = new ActorJoinCompletion(
+                actorJoinCompletion.JoinResult,
+                remoteActor,
+                new ActorLocation(
+                    remoteActor,
+                    spot?.SpotId ?? origin.TargetSpotId,
+                    spot?.SpotGeneration ?? origin.TargetSpotGeneration,
+                    actorJoinCompletion.MembershipEpoch),
+                actorJoinCompletion.ReceiveChunkLimitBytes);
+            CompleteManagedOperation(
+                pending,
+                RequestResult.Ok,
+                checked((int)reply.FailureCode),
+                applicationParts,
+                completion);
         }
         finally
         {
@@ -9291,37 +9526,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         else if (pending.Kind == MeshOperationKind.ActorJoin)
         {
-            //  service-wire-v1.schema.json actor-join-reply-tail: without
-            //  this branch a conformant reply(20)+actorJoin tail from a peer
-            //  falls through to TryDecodeUserSpotReply, which requires an
-            //  empty tail for any kind other than UserSpotCreate/Close and
-            //  would reject the frame as InvalidField.
-            decoded = ZLinkServiceWireCodec.TryDecodeActorJoinReply(
-                reply,
-                out var actorJoinCompletion,
-                out _);
-            if (decoded
-                && actorJoinCompletion is not null
-                && pending.ActorJoinOrigin is { } origin)
-            {
-                var spot = actorJoinCompletion.Spot;
-                var remoteActor = new ActorRef(
-                    origin.Actor.ActorId,
-                    origin.Actor.ObjectGeneration,
-                    _meshName,
-                    origin.TargetNodeRid);
-                completion = new ActorJoinCompletion(
-                    actorJoinCompletion.JoinResult,
-                    remoteActor,
-                    new ActorLocation(
-                        remoteActor,
-                        spot?.SpotId ?? origin.TargetSpotId,
-                        spot?.SpotGeneration ?? origin.TargetSpotGeneration,
-                        actorJoinCompletion.MembershipEpoch),
-                    actorJoinCompletion.ReceiveChunkLimitBytes);
-            }
-            else
-                completion = actorJoinCompletion;
+            // Canonical command 28 owns a Core request window. Its command-20
+            // terminal is consumed only by that native request's reply leg,
+            // never as an independently routed service-wire message.
+            decoded = false;
         }
         else
         {

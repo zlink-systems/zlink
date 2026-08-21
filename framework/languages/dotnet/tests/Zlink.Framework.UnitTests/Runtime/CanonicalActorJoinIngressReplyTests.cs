@@ -1,11 +1,127 @@
 using Systems.Zlink.Framework.Runtime.Protocol;
 using System.Net;
 using System.Net.Sockets;
+using Zlink.Framework.Runtime.Backend.Contracts;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinIngressReplyTests
 {
+    [Fact]
+    public async Task ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "mesh");
+        await using var target = new ZLinkManagedMeshNode(context, "mesh");
+        await using var targetMonitor = target.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
+        var targetRid = RoutingId.From($"actor-join-target-{suffix}");
+        var sourceEndpoint = $"inproc://actor-join-source-{suffix}";
+        var targetEndpoint = $"inproc://actor-join-target-{suffix}";
+        const string targetSpotId = "target-spot";
+
+        source.SetRoutingId(sourceRid);
+        source.SetBind(sourceEndpoint);
+        source.ConnectPeer(targetEndpoint, targetRid);
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
+            targetSpotId,
+            out var created);
+        Assert.True(created);
+        source.ObserveSpotAuthority(
+            targetRid,
+            targetSpotId,
+            targetSpot.LifecycleGeneration,
+            target.Status().LifecycleGeneration,
+            targetSpot.AuthorityOwnerGeneration,
+            ownerLeaseGeneration: 7);
+        target.Start();
+        source.Start();
+
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1);
+
+        var operationId = source.AllocateOperationId();
+        var request = new ZLinkBackendCanonicalActorJoinRequest(
+            new ZLinkBackendActorRef(sourceRid, "actor-1", 11),
+            source.Status().LifecycleGeneration,
+            ActorAuthorityOwnerGeneration: 3,
+            ActorOwnerLeaseGeneration: 5,
+            Entry: false,
+            targetRid,
+            targetSpotId,
+            targetSpot.LifecycleGeneration,
+            target.Status().LifecycleGeneration,
+            targetSpot.AuthorityOwnerGeneration,
+            TargetOwnerLeaseGeneration: 7,
+            "ZLinkFrameworkActorJoinRequest",
+            "application/json",
+            "{\"request\":true}"u8.ToArray());
+
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.TryRequestCanonicalActorJoin(
+                request,
+                operationId,
+                TimeSpan.FromSeconds(2)));
+
+        // The target queues command 28 only when Core delivered a Request with
+        // a request sequence. A one-way command 28 is rejected before this
+        // record can be observed.
+        var ingress = await ReceiveActorJoinAsync(target);
+        using var applicationReply = Message.From(
+            ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                "ActorJoinReply",
+                "application/json",
+                "{\"accepted\":true}"u8));
+        Assert.Equal(
+            SubmitResult.Ok,
+            ingress.ReplyJoin(
+                ActorJoinResult.Accepted,
+                [applicationReply]));
+
+        var (completion, replyParts) = await ReceiveCompletionAsync(
+            source,
+            operationId);
+        try
+        {
+            Assert.Equal(MeshRecordKind.Completion, completion.Kind);
+            Assert.Equal(MeshOperationKind.ActorJoin, completion.OperationKind);
+            Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+            Assert.Equal(0, completion.FailureErrno);
+            var join = Assert.IsType<ActorJoinCompletion>(
+                completion.JoinCompletion);
+            Assert.Equal(ActorJoinResult.Accepted, join.JoinResult);
+            Assert.Equal(targetRid, join.Actor.NodeRid);
+            Assert.Equal(targetSpotId, join.Location.SpotId);
+            Assert.Equal(
+                targetSpot.LifecycleGeneration,
+                join.Location.SpotGeneration);
+            Assert.Equal(
+                checked((uint)ZLinkRemoteActorJoinPackets
+                    .ConservativeReceiveChunkLimitBytes),
+                join.ReceiveChunkLimitBytes);
+
+            var applicationFrame = Assert.Single(replyParts);
+            Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecode(
+                applicationFrame.AsReadOnlyMemory(),
+                out var application));
+            Assert.Equal("ActorJoinReply", application.PacketName);
+            Assert.Equal("application/json", application.ContentType);
+            Assert.Equal(
+                "{\"accepted\":true}"u8.ToArray(),
+                application.Payload.ToArray());
+            Assert.Equal(0UL, targetMonitor.Status().ProtocolErrors);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(replyParts);
+        }
+    }
+
     [Fact]
     public async Task CanonicalActorJoinRequest_TerminatesOnNativeReplyChannelExactlyOnce()
     {
@@ -553,6 +669,43 @@ public sealed class CanonicalActorJoinIngressReplyTests
             await Task.Delay(10);
         }
         throw new TimeoutException("Canonical actorJoin ingress was not queued.");
+    }
+
+    private static async Task<(
+        MeshReceiveRecord Record,
+        IReadOnlyList<Message> Parts)> ReceiveCompletionAsync(
+            ZLinkManagedMeshNode source,
+            MeshOperationId operationId)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            using var ready = new MeshReadyBatch();
+            source.DrainReady(
+                MeshReadyDomains.Infrastructure,
+                ready,
+                RecvFlags.DontWait);
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                while (claim.Receive(received, RecvFlags.DontWait))
+                {
+                    for (var recordIndex = 0;
+                         recordIndex < received.Count;
+                         recordIndex++)
+                    {
+                        var record = received[recordIndex];
+                        if (record.Kind == MeshRecordKind.Completion
+                            && record.OperationId == operationId)
+                            return (record, received.RetainMessage(recordIndex));
+                    }
+                    received.Reset();
+                }
+            }
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("Canonical actorJoin completion was not queued.");
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
