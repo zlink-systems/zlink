@@ -15,6 +15,7 @@ BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-${CPP_ROOT}/build-redis-vcpkg}"
 CPP_HOST="${BUILD_DIR}/zlink_cpp_cross_language_host"
 DOTNET_TEST_HOST="${REPO_ROOT}/framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj"
 NODE_PEER_HOST="${SCRIPT_DIR}/node_peer_host.js"
+NODE_USER_SPOT_JOIN_HOST="${REPO_ROOT}/framework/languages/node/cross-language/user_spot_join_host.js"
 JAVA_CROSS_LANGUAGE_ROOT="${REPO_ROOT}/framework/languages/java/cross-language"
 JAVA_HOST="${JAVA_CROSS_LANGUAGE_ROOT}/Host/build/install/zlink-cross-language-host/bin/zlink-cross-language-host"
 
@@ -48,6 +49,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-java-dotnet" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-node-dotnet" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-dotnet" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -121,6 +123,15 @@ start_node() {
   PIDS+=("$!")
 }
 
+start_node_user_spot_join() {
+  local name="$1"
+  shift
+  node "${NODE_USER_SPOT_JOIN_HOST}" "$@" \
+    --ready-file "${RUN_DIR}/${name}.ready" \
+    >"${RUN_DIR}/${name}.log" 2>&1 &
+  PIDS+=("$!")
+}
+
 start_java() {
   local name="$1"
   shift
@@ -157,6 +168,27 @@ wait_for_line() {
     sleep 0.2
   done
   echo "timed out waiting for '${needle}' in ${file}" >&2
+  [[ -f "${file}" ]] && tail -40 "${file}" >&2 || true
+  return 1
+}
+
+wait_for_canonical_actor_join() {
+  local file="$1"
+  local deadline=$((SECONDS + 60))
+  local canonical_signal="canonical actorJoin: wire_command=28 canonical=true packet=ZLinkFrameworkActorJoinRequest"
+  while ((SECONDS < deadline)); do
+    if [[ -f "${file}" ]] && grep -qF -- "${canonical_signal}" "${file}"; then
+      return 0
+    fi
+    if [[ -f "${file}" ]] \
+      && grep -qF -- "canonical actorJoin: wire_command=28 canonical=false" "${file}"; then
+      echo "User-Spot Join stage: command 28 used the private fallback" >&2
+      tail -40 "${file}" >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+  echo "timed out waiting for canonical actorJoin(28) in ${file}" >&2
   [[ -f "${file}" ]] && tail -40 "${file}" >&2 || true
   return 1
 }
@@ -993,6 +1025,69 @@ stage_node_source_dotnet_target_relocation() {
   RESULTS+=("relocation: Node source -> .NET target (JoinEntrySpot create, multi-chunk relocate, owner transition + liveness probe)")
 }
 
+# --- User-Spot JoinSpot: Node source -> .NET target, canonical actorJoin(28) --
+stage_node_source_dotnet_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events start_file force_private_args
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/node-user-spot-join-source.events"
+  target_events="${RUN_DIR}/dotnet-user-spot-target.events"
+  start_file="${RUN_DIR}/user-spot-join.start"
+  force_private_args=()
+  if [[ "${ZLINK_NODE_CROSS_FORCE_PRIVATE_ACTOR_JOIN:-0}" == "1" ]]; then
+    force_private_args+=(--force-private-join 1)
+  fi
+
+  start_redis user-spot-join-redis "${redis_port}"
+  start_dotnet dotnet-user-spot-target user-spot-target \
+    --mesh-name cross.user-spot-join \
+    --peer-rid node-user-spot-join-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-user-spot-target.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+
+  start_node_user_spot_join node-user-spot-join-source user-spot-join-source \
+    --mesh-name cross.user-spot-join \
+    --node-rid node-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor \
+    --event-file "${source_events}" \
+    --start-file "${start_file}" \
+    "${force_private_args[@]}"
+
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 60
+  touch "${start_file}"
+
+  # This line is emitted only after the generated command-28 decoder has read
+  # the actual frames handed to the Node service transport and found the
+  # canonical application packet. The private JSON fallback uses a different
+  # packet name, so lifecycle success alone cannot satisfy this assertion.
+  wait_for_canonical_actor_join "${source_events}.flow"
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
+  wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
+  wait_for_line "${target_events}" "user-spot-probe|nodeRid=" 90
+  if grep -qF "user-spot-probe-timeout" "${target_events}"; then
+    echo "User-Spot Join stage: target-side Actor probe did not reach the target RID" >&2
+    exit 1
+  fi
+  stop_all
+  RESULTS+=("User-Spot Join: Node source -> .NET target (canonical actorJoin(28), admission, joined lifecycle, target-owner probe)")
+}
+
 # --- entry-spot relocation: Java source -> .NET target ------------------------
 # Same scenario as stage_node_source_dotnet_target_relocation, but both sides
 # now use pure automatic (Location-Store-only) discovery -- confirmed by
@@ -1157,6 +1252,14 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=relocation-node-dotnet result=passed"
+    exit 0
+    ;;
+  user-spot-join-node-dotnet)
+    stage_node_source_dotnet_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-node-dotnet result=passed"
     exit 0
     ;;
   all)
