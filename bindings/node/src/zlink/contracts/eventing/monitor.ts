@@ -118,6 +118,12 @@ export interface MonitorStatus {
   readonly flowPauseDurationMs: bigint;
   /** Whether the monitored socket is in the ready state. */
   isReady(): boolean;
+  /**
+   * Whether `flowPausedConnections` and the other `flow*` fields are
+   * populated (ABI 4+, paired DEALER/ROUTER sockets only). Mirrors
+   * `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` in `zlink_enum.h`.
+   */
+  isFlowStateDetailPopulated(): boolean;
 }
 
 /** A single socket connection-lifecycle event reported by a monitor. */

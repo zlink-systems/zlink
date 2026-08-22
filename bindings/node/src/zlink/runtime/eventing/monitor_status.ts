@@ -7,6 +7,7 @@ import {
 import type { MonitorStatusRaw } from './monitor_raw';
 
 const MONITOR_STATE_READY = 1 << 0;
+const MONITOR_STATUS_DETAIL_FLOW_STATE = 1 << 5;
 
 export function materializeMonitorStatus(raw: MonitorStatusRaw): MonitorStatus {
   return {
@@ -48,6 +49,9 @@ export function materializeMonitorStatus(raw: MonitorStatusRaw): MonitorStatus {
     flowPauseDurationMs: raw.flowPauseDurationMs,
     isReady(): boolean {
       return (this.stateFlags & MONITOR_STATE_READY) !== 0;
+    },
+    isFlowStateDetailPopulated(): boolean {
+      return (this.detailFlags & MONITOR_STATUS_DETAIL_FLOW_STATE) !== 0;
     }
   };
 }
