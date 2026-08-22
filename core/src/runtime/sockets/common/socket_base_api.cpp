@@ -843,9 +843,10 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
                 pair_it->second.application = NULL;
             //  A pair that is torn down while paused never sees a RESUMED, so
             //  its +1 on the gauge would never be matched. Release it here,
-            //  once, on the lane that owns the accepted state.
-            if (!completion && pair_it->second.remote_flow_paused) {
-                pair_it->second.remote_flow_paused = false;
+            //  once, on the lane that owns the accepted state - and only if
+            //  the pause was actually accounted, never merely received.
+            if (!completion && pair_it->second.remote_flow_pause_accounted) {
+                pair_it->second.remote_flow_pause_accounted = false;
                 release_paused_pair_accounting = true;
             }
             if (!pair_it->second.application && !pair_it->second.completion)

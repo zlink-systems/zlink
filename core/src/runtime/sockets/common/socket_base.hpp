@@ -87,6 +87,7 @@ struct transport_pair_pipes_t
         draining (false),
         remote_flow_seen (false),
         remote_flow_paused (false),
+        remote_flow_pause_accounted (false),
         remote_flow_epoch (0)
     {
     }
@@ -108,6 +109,15 @@ struct transport_pair_pipes_t
     //  reach this record.
     bool remote_flow_seen;
     bool remote_flow_paused;
+    //  Whether a pause is currently counted for this pair in the flow gauge
+    //  and has an open duration measurement. This is the applied and accounted
+    //  state, which is not the same thing as the received state above: a frame
+    //  is recorded when it is accepted but only becomes accounted when the pipe
+    //  actually flips. Termination must release from this marker, or a pair
+    //  that terminates in the gap either takes a count it never added - the
+    //  gauge is socket-wide, so it would steal another pair's - or leaves its
+    //  own count behind for good.
+    bool remote_flow_pause_accounted;
     uint64_t remote_flow_epoch;
 };
 
@@ -235,6 +245,12 @@ class socket_base_t : public own_t,
     //  Test-only observation and injection for the completion-lane flow state.
     //  These compile out of the shipped runtime, so nothing here is reachable
     //  from a hot path.
+    //  Writes the pair's received state without applying it to the pipe, which
+    //  is the state a frame leaves behind between acceptance and application.
+    //  That gap is a cross-thread race in production; this makes it reachable.
+    bool test_set_pair_received_flow_state (uint64_t transport_pair_id_,
+                                            uint64_t transport_pair_generation_,
+                                            bool paused_);
     zlink::pipe_t *test_pair_pipe (uint64_t transport_pair_id_,
                                    uint64_t transport_pair_generation_,
                                    bool completion_lane_) const;

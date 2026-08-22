@@ -47,13 +47,17 @@ std::chrono::steady_clock::time_point deadline_in_ms (int ms_)
 struct flow_metrics_t
 {
     flow_metrics_t () :
-        paused_connections (0), pause_applied (0), resume_applied (0)
+        paused_connections (0),
+        pause_applied (0),
+        resume_applied (0),
+        last_pause_duration_ms (0)
     {
     }
 
     uint64_t paused_connections;
     uint64_t pause_applied;
     uint64_t resume_applied;
+    uint64_t last_pause_duration_ms;
 };
 
 flow_metrics_t read_flow_metrics (void *socket_)
@@ -61,7 +65,8 @@ flow_metrics_t read_flow_metrics (void *socket_)
     flow_metrics_t out;
     as_socket (socket_)->flow_state_metrics (&out.paused_connections,
                                              &out.pause_applied,
-                                             &out.resume_applied, NULL, NULL);
+                                             &out.resume_applied, NULL,
+                                             &out.last_pause_duration_ms);
     return out;
 }
 
@@ -577,6 +582,161 @@ void test_pause_applied_by_pair_admission_is_booked ()
     fixture.teardown ();
 }
 
+//  The gauge is socket-wide, so releasing it on termination has to be decided
+//  by whether this pair actually holds a counted pause - not by the last state
+//  it received. A frame is recorded when it is accepted and only becomes
+//  accounted when the pipe flips, and a pair can terminate inside that gap.
+
+//  (a) Terminating a pair whose pause was received but never applied must not
+//  touch the gauge. With a second pair genuinely paused, releasing from the
+//  received state would take that pair's count instead.
+void test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone ()
+{
+    const int zero = 0;
+    char endpoint_a[MAX_SOCKET_STRING];
+    char endpoint_b[MAX_SOCKET_STRING];
+
+    void *router_a = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router_a, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router_a, endpoint_a, sizeof endpoint_a);
+
+    void *router_b = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router_b, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router_b, endpoint_b, sizeof endpoint_b);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint_a));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint_b));
+
+    //  Learn both routes. The DEALER load-balances, so keep sending until each
+    //  ROUTER has seen one rather than assuming a fixed number of sends lands
+    //  on both.
+    char rid[256];
+    bool seen_a = false;
+    bool seen_b = false;
+    const std::chrono::steady_clock::time_point learn_deadline =
+      deadline_in_ms (6000);
+    while ((!seen_a || !seen_b) && !deadline_expired (learn_deadline)) {
+        (void) zlink_send (dealer, "hello", 5, ZLINK_DONTWAIT);
+        if (zlink_recv (router_a, rid, sizeof (rid), ZLINK_DONTWAIT) > 0) {
+            (void) zlink_recv (router_a, rid, sizeof (rid), ZLINK_DONTWAIT);
+            seen_a = true;
+        }
+        if (zlink_recv (router_b, rid, sizeof (rid), ZLINK_DONTWAIT) > 0) {
+            (void) zlink_recv (router_b, rid, sizeof (rid), ZLINK_DONTWAIT);
+            seen_b = true;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (seen_a);
+    TEST_ASSERT_TRUE (seen_b);
+
+    //  Pair A is genuinely paused: applied, accounted, on the gauge.
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_socket_set_receive_flow_state (router_a, ZLINK_RECEIVE_FLOW_PAUSED));
+    bool paused = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (6000);
+    while (!deadline_expired (deadline)) {
+        (void) as_socket (dealer)->process_submit_commands ();
+        (void) as_socket (router_a)->process_submit_commands ();
+        if (read_flow_metrics (dealer).paused_connections == 1) {
+            paused = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (paused);
+
+    //  Pair B only received a pause: nothing applied, nothing accounted.
+    zlink_routed_submit_target_t target_b;
+    memset (&target_b, 0, sizeof (target_b));
+    bool found_b = false;
+    for (int attempt = 0; attempt < 200 && !found_b; ++attempt) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target_b) == 0
+            && target_b.transport_pair_id != 0
+            && as_socket (dealer)->test_set_pair_received_flow_state (
+                 target_b.transport_pair_id, target_b.transport_pair_generation,
+                 true)
+            && !as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target_b.transport_pair_id, target_b.transport_pair_generation))
+            found_b = true;
+        else
+            msleep (1);
+    }
+    TEST_ASSERT_TRUE (found_b);
+    TEST_ASSERT_EQUAL_UINT64 (1, read_flow_metrics (dealer).paused_connections);
+
+    //  Tearing that pair down must not consume pair A's count.
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (dealer, endpoint_b));
+    for (int i = 0; i < 200; ++i) {
+        (void) as_socket (dealer)->process_submit_commands ();
+        (void) as_socket (router_b)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_EQUAL_UINT64 (1, read_flow_metrics (dealer).paused_connections);
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router_b);
+    test_context_socket_close_zero_linger (router_a);
+}
+
+//  (b) The mirror case: an accounted pause whose RUNNING was received but not
+//  applied must still be released on termination, and the pause duration it
+//  opened must be closed.
+void test_terminating_an_accounted_pause_releases_it_and_closes_the_duration ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_socket_set_receive_flow_state (fixture.router,
+                                           ZLINK_RECEIVE_FLOW_PAUSED));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+    TEST_ASSERT_EQUAL_UINT64 (
+      1, read_flow_metrics (fixture.dealer).paused_connections);
+
+    //  Let the pause last long enough for a closed measurement to be visible.
+    msleep (25);
+
+    //  A RUNNING arrives and is recorded, but never reaches the pipe: the
+    //  accounted pause is still outstanding.
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)->test_set_pair_received_flow_state (
+      fixture.pair_id, fixture.pair_generation, false));
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->application_pipe_remote_flow_paused (
+                          fixture.pair_id, fixture.pair_generation));
+
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_disconnect (fixture.dealer, fixture.endpoint));
+    bool released = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (6000);
+    while (!deadline_expired (deadline)) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        (void) as_socket (fixture.router)->process_submit_commands ();
+        if (read_flow_metrics (fixture.dealer).paused_connections == 0) {
+            released = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (released);
+
+    const flow_metrics_t metrics = read_flow_metrics (fixture.dealer);
+    TEST_ASSERT_EQUAL_UINT64 (0, metrics.paused_connections);
+    //  Releasing on termination closes the measurement the pause opened.
+    TEST_ASSERT_TRUE (metrics.last_pause_duration_ms > 0);
+    //  It is a lifecycle release, not a resume.
+    TEST_ASSERT_EQUAL_UINT64 (0, metrics.resume_applied);
+
+    fixture.teardown ();
+}
+
 //  M2. Two bookkeeping holes on the same lifecycle, covered together.
 //
 //  (b) A pair torn down while paused never reaches a RESUMED, so nothing else
@@ -762,6 +922,8 @@ int main ()
     RUN_TEST (test_stale_generation_event_reports_the_received_generation);
     RUN_TEST (test_data_traffic_emits_no_flow_events);
     RUN_TEST (test_pause_applied_by_pair_admission_is_booked);
+    RUN_TEST (test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone);
+    RUN_TEST (test_terminating_an_accounted_pause_releases_it_and_closes_the_duration);
     RUN_TEST (test_paused_pair_lifecycle_keeps_gauge_and_events_matched);
     RUN_TEST (test_flow_state_metrics_snapshot_and_reset);
     return UNITY_END ();

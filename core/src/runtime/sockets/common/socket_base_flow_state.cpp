@@ -279,6 +279,18 @@ void zlink::socket_base_t::flow_state_applied (
     if (!pipe_)
         return;
 
+    //  The accounted marker moves with the gauge, in the same call, so the two
+    //  can never disagree about whether this pair holds a counted pause.
+    {
+        scoped_lock_t lock (_transport_pairs_sync);
+        const transport_pairs_t::iterator it =
+          _transport_pairs.find (transport_pair_key_t (
+            pipe_->get_transport_pair_id (),
+            pipe_->get_transport_pair_generation ()));
+        if (it != _transport_pairs.end ())
+            it->second.remote_flow_pause_accounted = paused_;
+    }
+
     if (paused_) {
         _flow_paused_connections.fetch_add (1, std::memory_order_relaxed);
         _flow_pause_applied_total.fetch_add (1, std::memory_order_relaxed);
@@ -469,5 +481,21 @@ bool zlink::socket_base_t::test_pair_is_ready (
     const transport_pairs_t::const_iterator it = _transport_pairs.find (
       transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
     return it != _transport_pairs.end () && it->second.ready;
+}
+#endif
+
+#ifdef ZLINK_BUILD_TESTS
+bool zlink::socket_base_t::test_set_pair_received_flow_state (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  bool paused_)
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::iterator it = _transport_pairs.find (
+      transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
+    if (it == _transport_pairs.end ())
+        return false;
+    it->second.remote_flow_seen = true;
+    it->second.remote_flow_paused = paused_;
+    return true;
 }
 #endif
