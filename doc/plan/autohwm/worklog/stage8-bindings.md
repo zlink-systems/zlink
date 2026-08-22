@@ -785,3 +785,201 @@ Framework work started: no
 
 Commit: `python: expose receive-flow-state parity` (this repository, branch
 `codex/bindings-0.11.1-performance`).
+
+## dotnet
+
+Base commit: `e819fdad35` (this section's own commit; branch
+`codex/bindings-0.11.1-performance`, no separate worktree). Changed only
+under `bindings/dotnet/`; no `core/` edit was needed — the
+`core/src/libzlink.vers` export defect (see the cpp section's "Shared C-layer
+defect found") and the `libzlink.so` rebuild were already in place before
+this section's build/test pass (`nm -D core/build/lib/libzlink.so.0.11.1 |
+grep receive_flow_state` showed the exported symbol).
+
+### Surface added
+
+`bindings/dotnet/src/Zlink/Contracts/Sockets/SocketEnums.cs`:
+
+```csharp
+public enum ReceiveFlowState
+{
+    Running = 0,
+    Paused = 1
+}
+```
+
+`bindings/dotnet/src/Zlink/Contracts/Sockets/ISocket.cs` (on the common
+`ISocket` interface, same placement as `SetTlsServer`/`SetTlsClient`, so
+every socket type gets a runtime not-supported mapping instead of a
+compile-time-restricted facade):
+
+```csharp
+void SetReceiveFlowState(ReceiveFlowState state);
+```
+
+Implementation in `bindings/dotnet/src/Zlink/Runtime/Sockets/SocketBase.cs`
+follows the existing direct-`zlink_config_result_t` pattern used by
+`SetTlsServer`/`SetTlsClient` (`ZlinkException.ThrowConfigIfError(rc)` around
+the raw P/Invoke call) rather than the errno-mapped
+`CreateConfigException(NativeMethods.zlink_errno())` pattern those two
+methods use for `zlink_set_tls_server`/`zlink_set_tls_client` — those two C
+functions return a plain `int` and require a follow-up `zlink_errno()` call,
+while `zlink_socket_set_receive_flow_state` already returns
+`zlink_config_result_t` directly, matching `ThrowConfigIfError`'s existing
+contract (`rc != 0 => throw CreateConfigException((ConfigResult)rc)`):
+
+```csharp
+public void SetReceiveFlowState(ReceiveFlowState state)
+{
+    var rc = NativeMethods.zlink_socket_set_receive_flow_state(Handle,
+        (int)state);
+    ZlinkException.ThrowConfigIfError(rc);
+}
+```
+
+`internal enum ConfigResult` (`bindings/dotnet/src/Zlink/Runtime/Errors/ErrorCodes.cs`)
+and the public `ZlinkConfigException.ErrorCode` nested enum
+(`bindings/dotnet/src/Zlink/Contracts/Errors/TypedExceptions.cs`) already
+match `zlink_config_result_t` 1:1 (`InvalidHandle=701`,
+`InvalidArgument=702`, `NotSupported=703`, `InvalidState=705`), so the
+`(ConfigResult)rc` cast inside `ThrowConfigIfError` is a direct, lossless
+mapping — no new binding-specific error-code table was needed.
+
+The raw P/Invoke entry point (`bindings/dotnet/src/Zlink/Runtime/Native/NativeMethods.Socket.cs`)
+and its `RequiredExportNames` allowlist entry
+(`bindings/dotnet/src/Zlink/Runtime/Native/NativeMethods.Core.cs`, checked by
+`NativeLibraryLoader.ValidateRequiredExports()`) were both added.
+
+### Not exposed (plan §5.1 forbidden list)
+
+No flow-frame encode/decode/receive API and no PAUSE-bypass send variant
+were added anywhere in the public surface. Verified by
+`public_surface_has_no_flow_frame_or_pause_bypass_api` in the new test file
+(reflection over every socket interface's method set, asserting the only
+method whose name contains "Flow" is `SetReceiveFlowState`, plus an
+assembly-wide scan for any exported type named `*FlowFrame*`/`*PauseBypass*`).
+
+### Monitor-status ABI 3→4 (stage7 change, not new functionality)
+
+Stage7 bumped `ZLINK_MONITOR_STATUS_ABI_VERSION` 3→4 and appended 5
+`flow_*` fields plus `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` to
+`zlink_monitor_status_t`. dotnet P/Invokes `zlink_monitor_status(monitor,
+out ZlinkMonitorStatus snapshot)` with a `[StructLayout(LayoutKind.Sequential)]`
+struct sized to the exact native ABI — the native function writes the full
+current-ABI struct into that buffer, so leaving the struct at its old size
+would have caused the native write to overrun the marshaled buffer, not just
+fail an assertion. Fixed by mirroring the growth exactly, appended in the
+same field order as `core/include/zlink/eventing/api.h`:
+
+- `bindings/dotnet/src/Zlink/Runtime/Native/NativeMonitorModels.cs`:
+  `CurrentAbiVersion` 3→4; appended `FlowPausedConnections`,
+  `FlowPauseAppliedTotal`, `FlowResumeAppliedTotal`, `FlowStateStaleTotal`,
+  `FlowPauseDurationMs` (all `ulong`) after `OversizeMessageAdmissionMaxBytes`.
+- `bindings/dotnet/src/Zlink/Runtime/Eventing/MonitorStatus.State.cs`: the
+  five fields copied into the public `MonitorStatus` in the constructor.
+- `bindings/dotnet/src/Zlink/Contracts/Eventing/Monitor.cs`: five matching
+  public `get`-only properties, documented from the C header comments.
+- `bindings/dotnet/src/Zlink/Contracts/Eventing/EventEnums.cs`: added
+  `MonitorStatusDetailFlags.FlowState = 1u << 5` alongside the existing
+  `AutoHwmBudget`/`AutoHwmBuffers` bits, matching
+  `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`.
+
+`MonitorConverters.FromNative()` already asserts
+`native.StructSize == Marshal.SizeOf<ZlinkMonitorStatus>()` and throws
+`NotSupportedException` on mismatch — with the fields appended, `SizeOf`
+matches the native `struct_size` again and this gate passes as before.
+
+### Stale ABI-3 test expectation fixed (already-shipped stage7 change, not new functionality)
+
+`bindings/dotnet/tests/Zlink.Tests/test_monitor_contract.cs`'s
+`socket_monitor_attach_handler_snapshot_and_close_contract` hardcoded
+`Assert.Equal(3U, snapshot.AbiVersion)`. Updated to `4U` — this is the same
+kind of stale-ABI fix the go worker made to its `TestMonitorRecv` (see the go
+section above), not new functionality. No SocketEvent bitmask assertion was
+found in the dotnet test suite (dotnet's `SocketEvent.All = 0xFFFF` is a
+fixed 16-bit convenience constant covering only the pre-stage7 lifecycle
+events; it was not extended to cover the 3 new
+`ZLINK_SOCKET_MONITOR_EVENT_*` flow bits, mirroring how go left its own
+`MonitorEventAll` semantics of "all bits this binding names" — only go's
+worklog note about an ABI-mask-equality test applied here, and only the
+`AbiVersion` assertion matched that description in dotnet).
+
+### Test: `bindings/dotnet/tests/Zlink.Tests/test_flow_state.cs`
+
+New file; discovered automatically by the test project's default glob (no
+explicit registration needed). Checklist §8.1.1 coverage:
+
+| §8.1.1 item | Test |
+|---|---|
+| enum value parity with C ABI | `receive_flow_state_enum_matches_c_abi_values` |
+| DEALER/ROUTER success + idempotent repeat | `dealer_and_router_accept_receive_flow_state_and_are_idempotent` |
+| PAIR/PUB/SUB/XPUB/XSUB/STREAM → not-supported | `unsupported_socket_types_report_not_supported` |
+| unsupported-socket send/recv unaffected | `unsupported_socket_send_recv_is_unchanged_after_flow_state_calls` |
+| invalid argument mapping | `out_of_range_state_is_invalid_argument` (values `2`, `-1`, `999`, cast through the enum's underlying `int`, the same technique `test_socket_options.cs` already uses for `SubmitRetryMode`) |
+| invalid handle / closed-socket mapping | `closed_socket_reports_object_disposed` — dotnet's existing closed-handle policy for `SocketBase` config calls throws `ObjectDisposedException` from the managed `SafeHandle`-style gate (`SocketHandle.DangerousGetHandle()`) before any native call is made, the same behavior `test_monitor_contract.cs`/`test_pair_tcp.cs` already assert for `ISocketMonitor.Status()` after `Close()` |
+| close race → one observable outcome | `set_receive_flow_state_racing_close_observes_only_bounded_outcomes` (20 iterations of a genuinely concurrent `SetReceiveFlowState`/`Close` via `Task.Run` + `Barrier`; asserts the outcome is success, `ObjectDisposedException` (managed gate won), or a `ZlinkConfigException` with `ErrorCode` in `{InvalidState, InvalidHandle}` — mirrors the two observable close-race shapes documented in `worklog/stage7-c-api.md` §1.2) |
+| no flow-frame/PAUSE-bypass API on the public surface | `public_surface_has_no_flow_frame_or_pause_bypass_api` (reflection, see "Not exposed" above) |
+| existing HWM/EAGAIN-equivalent behavior unchanged | covered by `unsupported_socket_send_recv_is_unchanged_after_flow_state_calls` (PAIR send/recv round trip after a rejected flow-state call) plus the full existing `test_socket_options.cs`/`test_pair_tcp.cs` suite passing unmodified in the same run |
+
+### Build + test evidence
+
+```bash
+ZLINK_CORE_SOURCE=local bash bindings/dotnet/tests/run_tests.sh
+```
+
+`core/build/lib/libzlink.so.0.11.1` resolved (local, not the pinned release
+that predates this API); `nm -D` confirmed `zlink_socket_set_receive_flow_state`
+exported. Result: 175/176 passed. The 8 new `test_flow_state` tests all
+passed (isolated re-run: `8 Passed, 0 Failed`).
+
+### Pre-existing failure (unrelated to this change)
+
+`test_router_multiple_dealers.router_multiple_dealers` (`ZlinkSubmitException:
+zlink error code 2`, `RoutedAdmissionScheduler.SelectTarget`) failed once in
+the full run. This binding change touches neither
+`RoutedAdmissionScheduler` nor any routed-admission source. Confirmed
+pre-existing and flaky, not a regression: run 5× in isolation (both `tcp` and
+`ipc` transport parameters) with the exact same local runtime, it failed 2/5
+times and passed 3/5 times, with no relation to the flow-state test filter
+(`FullyQualifiedName!~router_multiple_dealers` gave a clean 171/171 pass in
+the same session). Excluding this known-flaky case, all other tests
+(including the 8 new ones and the updated `AbiVersion` assertion) are green.
+
+### Files changed
+
+- `bindings/dotnet/src/Zlink/Contracts/Sockets/SocketEnums.cs` — new `ReceiveFlowState` enum
+- `bindings/dotnet/src/Zlink/Contracts/Sockets/ISocket.cs` — new `SetReceiveFlowState` member
+- `bindings/dotnet/src/Zlink/Runtime/Sockets/SocketBase.cs` — implementation
+- `bindings/dotnet/src/Zlink/Runtime/Native/NativeMethods.Socket.cs` — new P/Invoke declaration
+- `bindings/dotnet/src/Zlink/Runtime/Native/NativeMethods.Core.cs` — new required-export allowlist entry
+- `bindings/dotnet/src/Zlink/Runtime/Native/NativeMonitorModels.cs` — ABI 4, 5 new native fields
+- `bindings/dotnet/src/Zlink/Runtime/Eventing/MonitorStatus.State.cs` — 5 new fields copied into public model
+- `bindings/dotnet/src/Zlink/Contracts/Eventing/Monitor.cs` — 5 new public properties
+- `bindings/dotnet/src/Zlink/Contracts/Eventing/EventEnums.cs` — `MonitorStatusDetailFlags.FlowState`
+- `bindings/dotnet/tests/Zlink.Tests/test_monitor_contract.cs` — stale ABI-3 assertion → 4
+- `bindings/dotnet/tests/Zlink.Tests/test_flow_state.cs` — new focused contract test
+
+### Result
+
+```text
+Result: dotnet flow-state binding parity implemented and tested; 175/176
+  pass, the 1 remaining failure is a pre-existing flaky test unrelated to
+  flow-state (see above).
+Changed source: see "Files changed" above.
+Changed public contract: bindings/dotnet public surface only (no
+  core/doc/spec or bindings/doc/spec changes); no core/ edit made in this
+  section (the required core/src/libzlink.vers export fix and rebuild were
+  already applied by another concurrent worker before this section's
+  build/test pass).
+Focused tests: ZLINK_CORE_SOURCE=local bash bindings/dotnet/tests/run_tests.sh
+  — see "Build + test evidence" above.
+Paired perf reports: none (out of scope per plan §8.1.1 — binding perf is
+  not this stage's gate; no hot-path source was touched — the new call is a
+  plain P/Invoke wrapper, not on any send/recv hot path).
+First remaining failure: test_router_multiple_dealers.router_multiple_dealers,
+  pre-existing and flaky (confirmed independent of this change, see above).
+Framework work started: no
+```
+
+Commit: `dotnet: expose receive-flow-state parity` (this repository, branch
+`codex/bindings-0.11.1-performance`).
