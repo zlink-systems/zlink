@@ -525,7 +525,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     같은 clean-break 개정에 relocation reference+checksum 정규 승격 동반(소비자 root 적재 필수),
     expectedStoreVersion은 소비자 분석 후 별도 판정. 필수: relocation-present golden 12케이스 +
     validator 음성 mutation + 4언어 production encoder golden 실증 + 전환 후 12셀 재검증.
-    실행: 공유 프로토콜 배치(schema+validator+golden) 선행 → 4언어 코덱 배치(B1 랜딩 후 트리별). ② **[x] EntrySpot timeout red — 해소 `a859029b51`**: stale 테스트 seam(지연 주입 substring이
+    실행: 공유 프로토콜 배치(schema+validator+golden) 선행 → 4언어 코덱 배치(B1 랜딩 후 트리별).
+    **후속 판정 2건(2026-08-23)**: ⓐ 공유 배치 1차 랜딩 `00f1f10b8c`(20필드) 후 STOP 분석(R3)으로
+    **coordinatorExpectedStoreVersion 21번째 필드 승격 확정** — ordinary standalone 복구의 V0가
+    slot 외 어디에도 durable하지 않음(root ZLRP=V1·canonical root는 ZLRP 미포함·ZLJR은 routed
+    전용, report-storeversion-analysis.md). 값은 optional(빈값=부재), exact-equality opaque.
+    공유 배치 개정 진행 중. ⓑ **[신규 관찰 카드] standalone coordinator-fence 복구 4언어 행동
+    발산**: .NET=slot에서 fence 재조립 / cpp=data_lost 반환 / Java=route 좌표 rebind만 / Node=
+    미소비 — 복구 계약의 스펙 침묵. 별도 판정 대상(비차단). ② **[x] EntrySpot timeout red — 해소 `a859029b51`**: stale 테스트 seam(지연 주입 substring이
     35a39022b98의 정본 key 포맷 전환과 미매치) — 제품은 spec 32 §5 적합(location read는 총예산
     포함). 스위트 hang 재귀속: ManagedNode_RejectsAdmission… native dispose flake(격리 3/3 통과,
     별도 관찰 항목).
