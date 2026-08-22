@@ -17,6 +17,8 @@
 #include <Runtime/Messaging/publish_admission_state.hpp>
 #include <Runtime/Native/subscription_reader.hpp>
 
+#include <zlink.h>
+
 #include <cerrno>
 
 namespace zlink
@@ -216,6 +218,13 @@ void socket_t::set_tls_client (const std::string &ca_cert_,
       zlink_set_tls_client (detail::native_handle (*this), ca, hostname, trust_system_ ? 1 : 0);
     if (rc != 0)
         throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+}
+
+void socket_t::set_receive_flow_state (receive_flow_state_t state_)
+{
+    detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (
+      zlink_socket_set_receive_flow_state (detail::native_handle (*this),
+                                           static_cast<zlink_receive_flow_state_t> (state_))));
 }
 
 socket_t::socket_t () noexcept :

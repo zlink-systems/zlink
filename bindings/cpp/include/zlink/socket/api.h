@@ -285,6 +285,26 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_sub_option (void *handle_,
                                                          size_t *optvallen_);
 
 /**
+ * @brief Set this socket's local receive-flow state and synchronise it to
+ * the paired DEALER/ROUTER completion lane (core-byte-hwm-flow-control-plan.ko.md §5).
+ *
+ * RUNNING/PAUSED is an absolute state, not a counter: repeating the current
+ * state succeeds and resynchronises nothing new. Completion is the point
+ * where the socket-owning runtime thread stores the local state; it does not
+ * mean the remote peer has already observed it.
+ *
+ * @return ZLINK_CONFIG_OK on success (including a repeat of the current
+ *   state). ZLINK_CONFIG_INVALID_HANDLE for a NULL or invalid handle.
+ *   ZLINK_CONFIG_INVALID_ARGUMENT for a state outside
+ *   zlink_receive_flow_state_t. ZLINK_CONFIG_NOT_SUPPORTED for a socket type
+ *   other than DEALER/ROUTER, which has no completion lane and keeps its
+ *   existing byte HWM and transport backpressure unchanged.
+ *   ZLINK_CONFIG_INVALID_STATE when a concurrent close is admitted first.
+ */
+ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
+  void *handle_, zlink_receive_flow_state_t state_);
+
+/**
  * @brief Bind a socket to an address.
  * @param addr_  Endpoint (e.g. @c tcp://host:5555, @c inproc://name).
  */

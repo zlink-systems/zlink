@@ -35,6 +35,17 @@ enum class submit_retry_mode_t : int
     local_failure = 1 ///< Retry when the submit fails locally (e.g. back-pressure).
 };
 
+/// @brief This socket's local receive-flow state for the paired DEALER/ROUTER
+/// completion lane. Values mirror @c zlink_receive_flow_state_t exactly.
+/// RUNNING/PAUSED is an absolute state, not a counter: repeating the current
+/// state is a successful no-op. PAIR, PUB/SUB family and STREAM sockets have
+/// no completion lane and reject this state with @c not_supported.
+enum class receive_flow_state_t : int
+{
+    running = 0,
+    paused = 1
+};
+
 /// @brief The typed facade over socket options shared by every socket type.
 class common_socket_options_t
 {

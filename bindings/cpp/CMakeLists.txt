@@ -483,6 +483,7 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_source_layout.cpp
     test_cpp_contract_behavior.cpp
     test_cpp_contract_optimization_guard.cpp
+    test_cpp_contract_flow_state.cpp
   )
   foreach(test_source IN LISTS ZLINK_CPP_CONTRACT_TEST_SOURCES)
     get_filename_component(test_name "${test_source}" NAME_WE)

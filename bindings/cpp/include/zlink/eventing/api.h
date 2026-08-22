@@ -44,7 +44,7 @@ typedef void (*zlink_monitor_handler_fn) (const zlink_monitor_event_t *event_, v
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 
-#define ZLINK_MONITOR_STATUS_ABI_VERSION 3u
+#define ZLINK_MONITOR_STATUS_ABI_VERSION 4u
 
 typedef struct zlink_socket_monitor_open_options_t
 {
@@ -156,6 +156,25 @@ typedef struct zlink_monitor_status_t
 
     /* Largest accounted message admitted by the empty-pipe oversize rule. */
     uint64_t oversize_message_admission_max_bytes;
+
+    /* Paired DEALER/ROUTER completion-lane receive-flow observation
+     * (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4. */
+
+    /* Current count of application pipes this socket sees as remote-PAUSED. */
+    uint64_t flow_paused_connections;
+
+    /* Total PAUSED transitions actually applied (never a stale/duplicate). */
+    uint64_t flow_pause_applied_total;
+
+    /* Total RUNNING transitions actually applied (never a stale/duplicate). */
+    uint64_t flow_resume_applied_total;
+
+    /* Total stale or duplicate flow-state frames ignored. */
+    uint64_t flow_state_stale_total;
+
+    /* Duration of the most recently completed PAUSED interval, in
+     * milliseconds. 0 if no PAUSED interval has completed yet. */
+    uint64_t flow_pause_duration_ms;
 } zlink_monitor_status_t;
 
 /**
