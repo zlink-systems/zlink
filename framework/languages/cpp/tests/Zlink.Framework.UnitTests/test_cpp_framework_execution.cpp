@@ -2821,6 +2821,18 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         runtime::protocol::framework_error_code::requestProtocolError)
       && !stale.spot;
 
+    // Command-28 admission must continue to reject a route fence that does
+    // not exactly match the committed target Spot Authority row.
+    auto stale_target_store_fence_request = make_request (4218);
+    ++stale_target_store_fence_request.target_spot.authority_owner_generation;
+    const auto stale_target_store_fence = admit_wire_actor_join (
+      node, local_rid, stale_target_store_fence_request, std::nullopt, &serializers);
+    const bool stale_target_store_fence_protocol_error =
+      stale_target_store_fence.terminal_result == 104
+      && stale_target_store_fence.failure_code == static_cast<std::uint32_t> (
+        runtime::protocol::framework_error_code::requestProtocolError)
+      && !stale_target_store_fence.spot;
+
     const auto malformed_terminal = [&] (std::string actor_id, std::string spot_id) {
         auto malformed = make_request (4217);
         malformed.actor.actor_id = std::move (actor_id);
@@ -2841,8 +2853,9 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return reply_round_trip && first_approved && approval_only && duplicate_parked
-           && reply_requires_serializers && later_attempt_wins && unknown_not_found
-           && stale_protocol_error && malformed_typed;
+      && reply_requires_serializers && later_attempt_wins && unknown_not_found
+           && stale_protocol_error && stale_target_store_fence_protocol_error
+           && malformed_typed;
 }
 
 bool verify_target_commit_stages_source_prefix_before_live_dispatch ()
@@ -4510,12 +4523,9 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     target_spots.bind_relocation_authority (authority);
     const auto source_spot =
       source_spots.create_spot ("actor.cutover.spot");
-    const auto target_spot =
-      target_spots.create_spot ("actor.cutover.spot");
+    const auto target_spot_id = new_user_spot_id ();
     auto source_native_spot = source.get_or_create_spot (
       std::string (source_spot.spot_id));
-    auto target_native_spot = target.get_or_create_spot (
-      std::string (target_spot.spot_id));
 
     const object_reserve_request_t source_spot_reserve{
       .key = {placement_object_kind_t::user_spot,
@@ -4558,7 +4568,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
 
     const object_reserve_request_t target_spot_reserve{
       .key = {placement_object_kind_t::user_spot,
-              target_native_spot.spot_id ()},
+              std::string (target_spot_id)},
       .intent = {.stable_type = "actor.cutover.spot"},
       .target = {
         .mesh_name = "actor-cutover-mesh",
@@ -4586,6 +4596,17 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         target.stop ();
         return false;
     }
+    const auto local_target_spot_authority_generation =
+      target_spot_reserved->fence.authority_owner_generation == 1 ? 2 : 1;
+    const auto target_spot = target_spots.get_or_create_spot (
+      "actor.cutover.spot", target_spot_id, zlink::message_t{},
+      target_spot_reserved->fence.object_generation, {},
+      local_target_spot_authority_generation);
+    auto target_native_spot = target.get_or_create_spot (
+      std::string (target_spot.spot_id));
+    const auto target_context_authority_differs_from_committed_store =
+      local_target_spot_authority_generation
+      != target_spot_reserved->fence.authority_owner_generation;
     spot_routes.insert_or_assign (
       target_native_spot.spot_id (),
       spot_route_fixture_t{
@@ -4833,7 +4854,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     const auto target_operation_low =
       actor_cutover_probe_t::target_operation_low.load (
         std::memory_order_acquire);
-    const auto passed = joined_result && joined_result.value ().result_code == 0
+    const auto passed = target_context_authority_differs_from_committed_store
+      && joined_result && joined_result.value ().result_code == 0
       && source_leave_started && returned_while_source_leave_blocked
       && target_completion_started_while_source_leave_blocked
       && !actor_cutover_probe_t::source_leave_before_target_joined.load (

@@ -5745,8 +5745,6 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
            && !target.is_entry_spot ()
            && !target.is_instance_spot ()
            && target.object_generation == admission->target_spot_generation
-           && target.authority_owner_generation
-                == admission->target_spot_authority_owner_generation
            && prepare.object.object_id
                 == admission->source_actor.actor_id ().value ()
            && prepare.object.object_generation
