@@ -802,6 +802,114 @@ Test 상태(항상 `core/build-tests`, 현재 source로 재빌드):
 `test_router_mandatory_hwm`은 batch에서 1회 실패했으나 단독 10/10 통과(부하
 flake). `unittest_poller`, `test_timer_poller` 모두 통과. **새 실패 없음.**
 
+## 8.17 완전한 loss ledger와 누적 revert (측정 방법 교정 포함)
+
+### 8.17.1 측정 방법 교정 두 가지
+
+**(a) 순차 median은 못 쓴다.** 이 host는 벤치를 돌릴수록 단조 감소한다(한 세션
+안에서 190 K → 133 K). §8.13/§8.16의 "median of 3 sequential"은 뒤에 실행된
+쪽에 불리하게 편향됐다. 이번 round부터 **ABBA block**(A,B,B,A 순서로 실행하고
+각 평균을 비교)으로 선형 drift를 상쇄했다.
+
+**(b) 이전 round의 파일별 revert 수치는 무효였다.** `.text` md5를 비교한 결과
+`lib_c4_nomailbox`, `lib_c4_nosignaler`, `lib_c4_nofdpair`가 **모두 동일 binary**
+였고(`e1f94620b1a3`), `lib_c4_notcp`는 `lib_c4`와 **동일**했다. variant build
+script가 이전 revert를 정리하지 않아 누적 적용됐고 일부는 재컴파일되지 않았다.
+따라서 §8.16.3의 "+8.4% / +6.3% / +6.1% / 변화 없음"은 같은 binary를 세 번,
+그리고 원본을 한 번 측정한 것이다. 이번 round는 각 variant를
+`git checkout --force` 뒤에 만들고 `.text` md5로 서로 다름을 확인했다.
+
+**Noise floor.** `v_tcp`(= `tcp_transport.cpp`를 되돌렸으나 Linux `.text`가
+`c4`와 **byte-identical**)를 대조군으로 쓰면 동일 binary끼리의 측정 오차를
+직접 잴 수 있다. 2 block에서 100.5%, 4 block에서 96.6%였다. 즉
+**ABBA 4 block에서도 오차는 약 ±3.5%**다. 이보다 작은 차이는 판정하지 않는다.
+
+### 8.17.2 완전한 loss ledger (인접 ABBA, 1 block씩)
+
+`core/v0.10.1`에서 현재 HEAD까지 `core/src`를 건드리는 모든 지점을 빠짐없이
+인접 비교했다.
+
+| # | 단계 | commit | 비율 | 판정 |
+|---|---|---|---|---|
+| 1 | c0 → c1 | `425b9c2a82` feat: align framework contracts and JVM runtime | 100.2% | 무손실 |
+| 2 | c1 → c2 | `81e98c1c0e` fix(core): preserve paired handover standby | 101.6% | 무손실 |
+| 3 | c2 → c3 | `408f1d4a9d` coalesce request completion notifications | 100.4% | 무손실 |
+| 4 | **c3 → c4** | **`e13e561ba9` fix Windows multi benchmark performance** | **89.3% / 90.1%** (2회) | **손실 -10%** |
+| 5 | c4 → c5 | `7bee681ec5` optimize Windows STREAM TCP writes | 99.3% | 무손실 |
+| 6 | c5 → c6 | `ad5e936bed` Merge branch 'main' | 100.3% | 무손실 |
+| 7 | c6 → cc | `cc122eaa40` (perf branch head) | 100.0% | 무손실 |
+| 8 | **cc → c9** | **`f159a51a99` merge: update performance branch from main** | **97.0%** | noise 경계 (-3%) |
+| 9 | c9 → par | `2728d70d44` | 100.8% | 무손실 |
+| 10 | **par → HEAD** | `3ef4d09a37` + `a28c553f4d` + 이번 stage 작업 전체 | **95.5%** | noise 경계 (-4.5%) |
+
+곱: 1.002 × 1.016 × 1.004 × 0.893 × 0.993 × 1.003 × 1.000 × 0.970 × 1.008 ×
+0.955 = **0.849**. 독립 측정한 end-to-end 값(§8.13 86.1%, §8.14 gate 89.5%)과
+일치하므로 ledger에 빠진 구간은 없다.
+
+**손실의 거의 전부가 4번 한 지점에 있다.** 8번과 10번은 noise floor(±3.5%)와
+겹쳐 단독으로는 유의하지 않다.
+
+### 8.17.3 `e13e561ba9` 안에서의 귀속 (재측정)
+
+각 variant를 독립적으로 build하고 `.text` md5로 구분을 확인한 뒤 ABBA로 측정했다.
+
+| Variant (`e13e561ba9`에서 해당 파일만 `408f1d4a9d`로) | `.text` | 2 block | 4 block | 판정 |
+|---|---|---|---|---|
+| `mailbox.{cpp,hpp}` | `845ab123` | 107.5% | **109.3%** | **회복. noise의 약 2.7배** |
+| `signaler.{cpp,hpp}` | `710248e5` | 99.2% | — | 무효과 |
+| `ip_fdpair.cpp` | `65adfa4a` | 103.1% | — | noise 내 |
+| `tcp_transport.cpp` | `fe8ce7e7` (= `c4`와 동일) | 100.5% | 96.6% | **Linux code가 바뀌지 않음.** 이 commit의 writev 재작성은 Windows 전용이었고 POSIX hand-rolled 경로는 이후 commit에서 들어왔다 |
+| 위 3개 동시 | `e1f94620` | 103.7% | — | mailbox 단독과 구분 불가 |
+
+`signaler.cpp`의 추가분은 `_event_only`/`_event`로 전부 Windows 전용이고,
+`ip_fdpair.cpp`의 `make_fdpair_unix_dgram`은
+`#if defined ZLINK_HAVE_WINDOWS_AF_UNIX` 안이라 Linux에서 실효가 없다. 즉
+**최소 원인 집합 = `mailbox.{cpp,hpp}` 하나**다.
+
+그 내용은 §8.16.3에 적은 대로 command 1건마다 mailbox mutex를 syscall(primary
+signaler eventfd write) 너머로 잡게 만든 변경이다.
+
+### 8.17.4 (B) 오늘 tree에서의 누적 revert — 결정적 음성
+
+Coordinator 지시대로, 식별된 **모든** 손실 shape를 오늘 tree에 **한꺼번에**
+되돌려 측정했다. 실험은 main worktree를 건드리지 않기 위해 전용
+worktree(`wt_headexp`, HEAD)에서 build·측정했다.
+
+되돌린 shape(오늘 tree에서 Linux 실효가 있는 전부):
+
+- `mailbox`: `_has_signalers` 원자 mirror로 secondary signaler가 없을 때
+  `_signalers`·`_primary_signaler_required`를 아예 만지지 않고, primary
+  `_signaler.send()`를 `_sync` 밖에서 하며, `recv()`의 추가 `_sync` 왕복을
+  건너뛰고, `get_fd()`를 write-once로. secondary가 없는 경우
+  (= descriptor pollset의 모든 socket) `408f1d4a9d`와 의미상 동일하다.
+- `tcp_transport`: `ZLINK_ASIO_WRITEV_USE_ASIO=1`로 asio gather write 복원.
+- `signaler`, `ip_fdpair`, `socket_poller`: 오늘 tree에서도 Linux 실효분이 없어
+  되돌릴 것이 없다.
+
+ABBA 3 block 결과:
+
+| Block | HEAD 평균 | COMBO 평균 | 비율 |
+|---|---|---|---|
+| 1 | 163,531 | 163,153 | 99.8% |
+| 2 | 154,923 | 157,308 | 101.5% |
+| 3 | 134,232 | 134,219 | 100.0% |
+
+**정확히 중립이다.** `e13e561ba9`에서 9% 이상을 되찾는 바로 그 shape를 오늘
+tree에 전부 되돌려도 회복이 없다.
+
+### 8.17.5 결론
+
+- 잔여 손실의 위치는 point별로 완전히 열거됐다(§8.17.2). 사실상 전부
+  `e13e561ba9` 한 commit이고, 그 안에서는 `mailbox.{cpp,hpp}` 하나다.
+- 그 shape는 **오늘 코드에서는 더 이상 비용이 아니다**(§8.17.4, 3 block 중립).
+  그 사이 `3ef4d09a37`가 receive/dispatch를 다시 썼고 이번 stage가 poller를
+  고쳐, mailbox command 경로가 더는 임계 경로가 아니다.
+- 따라서 "그때 추가된 것을 지우면 되찾는다"는 접근은 이 지점에서 끝난다.
+  오늘 tree에서 같은 10%를 되찾으려면 과거 commit을 되돌리는 것이 아니라
+  현재 command/dispatch 경로를 새로 설계해야 한다.
+- 이번 round는 실험 worktree에서만 작업했고 main tree에 코드 변경을 넣지
+  않았다. 따라서 gate 수치는 §8.14의 `final4`가 그대로 유효하다.
+
 ## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
