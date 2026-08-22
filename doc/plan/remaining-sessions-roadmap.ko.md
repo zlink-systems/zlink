@@ -503,6 +503,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     3/5). ② Bingo — detached FIFO `pending.dispatch()` 사후 실패 시 `target_closed`
     (actor_gateway_runtime.cpp:119, baseline 재현). 모두 Join-chunk 전환과 무관한 기존 결함으로
     5회×2(현/base) 대조 판정.
+  - **[ ] [신규 등재 2026-08-23] dotnet HEAD 기존 red 3건(stash-baseline 확정, capacity 정렬 diff
+    무관)**: ① `CanonicalAuthorityAggregateGenerationTests.Legacy_{standalone_actor,user_spot}_*` 2건 —
+    legacy(aggregateGeneration extension 제거형) payload decode 실패. 최근 authority-state 인코더
+    변경 계열 회귀 또는 3c legacy-recovery 제거의 의도 결과인지 판정 필요(durable 마이그레이션
+    판정 카드와 연계). ② `EntrySpotActorDispatchTests.Actor_Request_Subtracts_Location_Read_From_
+    Total_Timeout` — 격리에서도 결정적 실패. 별도 진단 필요.
   - **[ ] [신규 등재 2026-08-22, 3c 재개 중 발견] cpp HEAD 기존 red 4건(전부 stash-baseline 재현으로
     3c diff 무관 확정 — stale 테스트 바이너리가 가리다 재빌드로 노출)**:
     ① **test_cpp_framework_execution — "canonical Actor Join relocation did not complete(terminal=1,
