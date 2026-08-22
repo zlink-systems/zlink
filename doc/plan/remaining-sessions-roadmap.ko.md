@@ -342,8 +342,9 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     통과 후 silent로 전진(잔존 용의 = cpp 감사 #19 스펙 외 등식 — 제거 terra 진행 중). dotnet→java V0 회귀는 **sol 스펙 인용 판정
     수렴**: coordinator expectedStoreVersion = exact identity(V0), target CAS는 live V2 별도
     (21:1073/:1140, schema:4425) — Java StateMachine:1341-1345의 live==V0 동일시가 스펙 외(Java
-    자신도 :1165 CAS는 live 사용). 제거 terra 진행 중. cpp #19 등식 제거 랜딩 `170ff4cf4e` —
-    java→cpp는 여전히 silent(별도 잔존, Java fix 후 재진단 예정). 이월
+    자신도 :1165 CAS는 live 사용). 제거 랜딩 `ff44291a18` → **dotnet→java 그린 복구,
+    11/12 확정**. cpp #19 등식 제거 랜딩 `170ff4cf4e`. 마지막 셀 java→cpp만 silent 잔존 — sol
+    계측 진단 중(스펙 인용 판정 포함). 이월
     카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
     strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
     test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
