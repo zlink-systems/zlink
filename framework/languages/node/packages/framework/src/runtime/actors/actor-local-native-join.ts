@@ -393,44 +393,49 @@ export class ZLinkLocalNativeActorJoin {
           },
           local: { phase: REMOTE_ACTOR_JOIN_ADMISSION, transferId: relocationId } as const
         };
+    let admissionOperationId: ZLinkActorJoinOperationId | undefined;
     const admission = await this.waitForJoinCompletion(
-      () => entrySpot
-        ? canonicalAdmission !== undefined && node.joinActorEntrySpotCanonical !== undefined
-          ? node.joinActorEntrySpotCanonical(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              canonicalAdmission.request,
-              admissionPayload,
-              canonicalAdmission.actorFence,
-              canonicalAdmission.local,
-              timeoutMs
-            )
-          : node.joinActorEntrySpot(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              admissionPayload,
-              timeoutMs
-            )
-        : canonicalAdmission !== undefined && node.joinActorSpotCanonical !== undefined
-          ? node.joinActorSpotCanonical(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              toBackendRoutingId(target.spotId),
-              target.targetSpotGeneration!,
-              canonicalAdmission.request,
-              admissionPayload,
-              canonicalAdmission.actorFence,
-              canonicalAdmission.local,
-              timeoutMs
-            )
-          : node.joinActorSpot(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              toBackendRoutingId(target.spotId),
-              target.targetSpotGeneration!,
-              admissionPayload,
-              timeoutMs
-            ),
+      () => {
+        const operationId = entrySpot
+          ? canonicalAdmission !== undefined && node.joinActorEntrySpotCanonical !== undefined
+            ? node.joinActorEntrySpotCanonical(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                canonicalAdmission.request,
+                admissionPayload,
+                canonicalAdmission.actorFence,
+                canonicalAdmission.local,
+                timeoutMs
+              )
+            : node.joinActorEntrySpot(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                admissionPayload,
+                timeoutMs
+              )
+          : canonicalAdmission !== undefined && node.joinActorSpotCanonical !== undefined
+            ? node.joinActorSpotCanonical(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                toBackendRoutingId(target.spotId),
+                target.targetSpotGeneration!,
+                canonicalAdmission.request,
+                admissionPayload,
+                canonicalAdmission.actorFence,
+                canonicalAdmission.local,
+                timeoutMs
+              )
+            : node.joinActorSpot(
+                actorRef,
+                toBackendRoutingId(target.targetNodeRid),
+                toBackendRoutingId(target.spotId),
+                target.targetSpotGeneration!,
+                admissionPayload,
+                timeoutMs
+              );
+        admissionOperationId = operationId;
+        return operationId;
+      },
       completions,
       timeoutMs,
       signal
@@ -521,6 +526,12 @@ export class ZLinkLocalNativeActorJoin {
           : {
               canonicalRecovery: {
                 handoffId: control.canonicalHandoffId,
+                admissionOperationId: {
+                  // Command 28 authenticates its operation as
+                  // (source node generation, Core request sequence).
+                  high: actorAuthorityFence!.nodeGeneration,
+                  low: admissionOperationId!.low
+                },
                 requestContentType: canonicalAdmission.request.contentType,
                 request: Buffer.from(canonicalAdmission.request.payload),
                 ...(completionOperationId === undefined

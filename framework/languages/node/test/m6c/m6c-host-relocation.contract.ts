@@ -12,7 +12,8 @@ import {
 import {
   decodeServiceRelocationControlRequest,
   decodeServiceRelocationControlResponse,
-  encodeServiceRelocationControlRequest
+  encodeServiceRelocationControlRequest,
+  encodeServiceRelocationControlResponse
 } from '../../packages/framework/src/runtime/host/service-relocation-control';
 import {
   decodeSessionRelocationRoute,
@@ -474,14 +475,7 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   let prepareCalls = 0;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  const runtime = new ZLinkHostServiceRelocationRuntime({
-    meshNode: () => ({
-      sendInfrastructureControl: (_targetRid: string, bytes: Uint8Array) => {
-        sent.push(Buffer.from(bytes));
-        return SubmitResult.Ok;
-      }
-    })
-  } as never);
+  const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
   const internals = runtime as unknown as {
     handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
     handleOneWayControl: (
@@ -501,8 +495,13 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     const part = Message.from(encodeServiceRelocationControlRequest(request));
     try {
       return await runtime.tryHandleControl('mesh-a', {
+        kind: request.kind === 'prepare' ? ReceiveKind.NodeRequest : ReceiveKind.NodeSend,
         sourceNodeRid: 'source',
-        parts: [part]
+        parts: [part],
+        reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+          sent.push(Buffer.from(Array.isArray(reply) ? reply[0]! : reply));
+          return SubmitResult.Ok;
+        }
       } as never);
     } finally {
       part.close();
@@ -570,8 +569,7 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   }
 });
 
-test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its classified failure, ' +
-  'and never resolves a different relocation identity\'s ACK', async () => {
+test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its classified failure', async () => {
   // Spec 28 §9: an explicit Failed reply restores source memory promptly —
   // the source must not learn the outcome only from its own resend-loop
   // deadline. Node's wire failureCode vocabulary distinguishes DataLost(35)
@@ -592,29 +590,27 @@ test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its c
     payloadChecksumCrc32c: 123,
     applicationVersion: 4n
   });
-  const deliverFailed = async (
-    runtime: ZLinkHostServiceRelocationRuntime,
-    failed: ServiceMaintenanceRelocationFailed
-  ) => {
-    const part = Message.from(encodeServiceRelocationControlRequest(failed));
-    try {
-      await runtime.tryHandleControl('mesh-a', {
-        sourceNodeRid: 'target',
-        parts: [part]
-      } as never);
-    } finally {
-      part.close();
-    }
-  };
-  const pendingCount = (runtime: ZLinkHostServiceRelocationRuntime) =>
-    (runtime as unknown as { pendingControls: Map<string, unknown> }).pendingControls.size;
-
   for (const [failureCode, expectedKind] of [
     [35, ZLinkFrameworkErrorKind.DataLost],
     [17, ZLinkFrameworkErrorKind.InternalFailure]
   ] as const) {
+    const prepare = buildPrepare({ high: 71n, low: BigInt(failureCode) });
+    const failed: ServiceMaintenanceRelocationFailed = {
+      kind: 'failed',
+      relocation: prepare.relocation,
+      targetAttemptGeneration: prepare.targetAttemptGeneration,
+      coordinator,
+      target,
+      object,
+      senderRole: 'target',
+      failureCode
+    };
     const runtime = new ZLinkHostServiceRelocationRuntime({
-      meshNode: () => ({ sendInfrastructureControl: () => SubmitResult.Ok })
+      meshNode: () => ({
+        async requestInfrastructureControlFrames() {
+          return [encodeServiceRelocationControlResponse(failed)];
+        }
+      })
     } as never);
     const internals = runtime as unknown as {
       sendControl: (
@@ -625,51 +621,20 @@ test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its c
         deadlineAtMs: number
       ) => Promise<unknown>;
     };
-    const prepare = buildPrepare({ high: 71n, low: BigInt(failureCode) });
     try {
-      // A one-minute deadline: a prompt rejection proves it came from the
-      // Failed reply, not the resend-loop timeout.
-      const ack = internals.sendControl('mesh-a', 'target', prepare, undefined, Date.now() + 60_000);
-      ack.catch(() => undefined);
-      assert.equal(pendingCount(runtime), 1, 'the Prepare ACK must be pending');
-
-      // A Failed for an unrelated relocation identity must never resolve it.
-      await deliverFailed(runtime, {
-        kind: 'failed',
-        relocation: { high: 999n, low: 999n },
-        targetAttemptGeneration: 1n,
-        coordinator,
-        target,
-        object,
-        senderRole: 'target',
-        failureCode
-      });
-      assert.equal(
-        pendingCount(runtime), 1,
-        'a Failed for a different relocation identity must not resolve the pending ACK'
-      );
-
       const started = Date.now();
-      await deliverFailed(runtime, {
-        kind: 'failed',
-        relocation: prepare.relocation,
-        targetAttemptGeneration: prepare.targetAttemptGeneration,
-        coordinator,
-        target,
-        object,
-        senderRole: 'target',
-        failureCode
-      });
-      await assert.rejects(ack, (error: unknown) => {
-        assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
-        assert.equal(error.kind, expectedKind, `failureCode ${failureCode} must classify as ${expectedKind}`);
-        return true;
-      });
+      await assert.rejects(
+        internals.sendControl('mesh-a', 'target', prepare, undefined, Date.now() + 60_000),
+        (error: unknown) => {
+          assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
+          assert.equal(error.kind, expectedKind, `failureCode ${failureCode} must classify as ${expectedKind}`);
+          return true;
+        }
+      );
       assert.ok(
         Date.now() - started < 1_000,
         'the explicit Failed must resolve the ACK promptly, not via the 60s deadline'
       );
-      assert.equal(pendingCount(runtime), 0, 'the resolved ACK must be removed from the pending map');
     } finally {
       await runtime.dispose();
     }
@@ -1524,6 +1489,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   let canonicalHandoffId: string | undefined;
   const actorId = 'actor-host-profile';
   const completionOperationId = { high: 61n, low: 67n };
+  let canonicalAdmissionOperationId = completionOperationId;
   const sourceActor = { context: { actorId, meshName: 'mesh-a' } };
   const sourceActorRef = {
     actorId,
@@ -1715,25 +1681,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }).finally(() => part.close());
     deliveries.push(delivery);
   };
-  const deliverFrames = (
-    runtime: ZLinkHostServiceRelocationRuntime,
-    sourceNodeRid: string,
-    frames: readonly Uint8Array[],
-    deliveries: Promise<void>[]
-  ) => {
-    const parts = frames.map(frame => Message.from(frame));
-    const delivery = runtime.tryHandleControl('mesh-a', {
-      kind: ReceiveKind.NodeSend,
-      sourceNodeRid,
-      parts
-    } as never).then(() => undefined).catch(error => {
-      deliveryErrors.push(error);
-      if (runtime === targetRuntime && options.readyResults === undefined) {
-        sourceSignal.abort(error);
-      }
-    }).finally(() => parts.forEach(part => part.close()));
-    deliveries.push(delivery);
-  };
   const sourceNode = {
     status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
     peers: () => [{ routingId: 'target', lifecycleGeneration: 6n, state: 3 }],
@@ -1751,7 +1698,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       queueMicrotask(() => deliver(targetRuntime, 'source', Buffer.from(bytes), targetDeliveries));
       return SubmitResult.Ok;
     },
-    sendInfrastructureControlFrames(_targetRid: string, frames: readonly Uint8Array[]) {
+    requestInfrastructureControlFrames(
+      _targetRid: string,
+      frames: readonly Uint8Array[],
+      requestOptions?: { readonly timeoutMs?: number }
+    ): Promise<readonly Uint8Array[]> {
       const bytes = frames[0]!;
       const control = decodeServiceRelocationControlRequest(bytes);
       if (control !== undefined) {
@@ -1760,24 +1711,50 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           prepareFingerprints.push(Buffer.from(bytes).toString('base64'));
         }
       }
-      queueMicrotask(() => deliverFrames(targetRuntime, 'source', frames, targetDeliveries));
-      return SubmitResult.Ok;
+      return new Promise<readonly Uint8Array[]>((resolve, reject) => {
+        const parts = frames.map(frame => Message.from(frame));
+        let settled = false;
+        const finish = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          action();
+        };
+        const timer = setTimeout(
+          () => finish(() => reject(new Error('in-memory infrastructure request timed out'))),
+          requestOptions?.timeoutMs ?? 30_000
+        );
+        const delivery = targetRuntime.tryHandleControl('mesh-a', {
+          kind: ReceiveKind.NodeRequest,
+          sourceNodeRid: 'source',
+          parts,
+          reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+            events.push('ready:submit');
+            const queuedResult = options.readyResults?.shift();
+            const result = queuedResult
+              ?? options.readyResult
+              ?? SubmitResult.Ok;
+            if (result === SubmitResult.Ok) {
+              const replyParts = Array.isArray(reply) ? reply : [reply];
+              finish(() => resolve(replyParts.map(part => Buffer.from(part))));
+            }
+            return result;
+          }
+        } as never).then(() => undefined).catch(error => {
+          deliveryErrors.push(error);
+          if (options.readyResults === undefined) sourceSignal.abort(error);
+          finish(() => reject(error));
+        }).finally(() => parts.forEach(part => part.close()));
+        targetDeliveries.push(delivery);
+      });
     }
   };
   const targetNode = {
     status: () => ({ routingId: 'target', lifecycleGeneration: 6n }),
     peers: () => [{ routingId: 'source', lifecycleGeneration: 2n, state: 3 }],
     sendInfrastructureControl(_sourceRid: string, bytes: Uint8Array) {
-      const control = decodeServiceRelocationControlRequest(bytes);
-      if (control?.kind === 'ready') {
-        events.push('ready:submit');
-        const queuedResult = options.readyResults?.shift();
-        if (queuedResult !== undefined) return queuedResult;
-        if (options.readyResult !== undefined) return options.readyResult;
-      } else {
-        events.push('sourceLeave:submit');
-        if (options.sourceLeaveResult !== undefined) return options.sourceLeaveResult;
-      }
+      events.push('sourceLeave:submit');
+      if (options.sourceLeaveResult !== undefined) return options.sourceLeaveResult;
       queueMicrotask(() => deliver(sourceRuntime, 'target', Buffer.from(bytes), sourceDeliveries));
       return SubmitResult.Ok;
     },
@@ -2012,6 +1989,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         5_000
       );
       const admissionResult = await admission.promise;
+      canonicalAdmissionOperationId = { high: 2n, low: admission.id };
       assert.equal(admissionResult.terminalResult, RequestResult.Ok);
       assert.equal(admissionResult.kindData?.kind, 'actorJoinCompletion');
       canonicalHandoffId = admissionResult.kindData?.kind === 'actorJoinCompletion'
@@ -2043,6 +2021,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         : {
             canonicalRecovery: {
               handoffId: canonicalHandoffId!,
+              admissionOperationId: canonicalAdmissionOperationId,
               requestContentType: 'application/json',
               request: Buffer.from('canonical-request'),
               replyContentType: 'application/octet-stream',
@@ -2097,7 +2076,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       const wire = {
         kind: 'cutover',
         relocation: { high: 0n, low: 145n },
-        targetAttemptGeneration: 1n,
+        targetAttemptGeneration: 6n,
         coordinator,
         senderRole: 'source',
         object: {

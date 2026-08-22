@@ -198,6 +198,16 @@ export interface ZLinkBackendMeshNode {
     targetRid: unknown,
     frames: readonly Uint8Array[]
   ): Promise<SubmitResult>;
+  /**
+   * Sends a service-wire infrastructure request directly through Core and
+   * returns the raw reply frames. Relocation Prepare uses this leg so Ready
+   * remains the reply to the same native request sequence.
+   */
+  requestInfrastructureControlFrames?(
+    targetRid: unknown,
+    frames: readonly Uint8Array[],
+    options?: { readonly timeoutMs?: number }
+  ): Promise<readonly Uint8Array[]>;
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],

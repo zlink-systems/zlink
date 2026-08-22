@@ -613,6 +613,18 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
+  async requestInfrastructureControlFrames(
+    targetRid: unknown,
+    frames: readonly Uint8Array[],
+    options?: { readonly timeoutMs?: number }
+  ): Promise<readonly Uint8Array[]> {
+    return await this.requireRuntime().requestService(
+      String(targetRid),
+      frames.map(frame => Buffer.from(frame)),
+      options?.timeoutMs ?? 30_000
+    );
+  }
+
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
@@ -2155,15 +2167,17 @@ function decodeMultipartRecord(
   // multi-frame infrastructure control (Prepare + sideband) from being
   // misread as a 2-frame application envelope and dropped as invalid_frame.
   if (record.parts.length === 1 || record.domain === 'infrastructure') {
+    const request = record.requestSequence !== undefined
+      && record.sourceRoutingId !== undefined;
     return {
-      kind: ReceiveKind.NodeSend,
+      kind: request ? ReceiveKind.NodeRequest : ReceiveKind.NodeSend,
       domain: readyDomain(record.domain),
       sourceNodeRid: record.sourceRoutingId as RoutingId | undefined ?? null,
       sourceSpotId: null,
       sourceBindingGeneration: 0n,
       sourceActor: null,
-      operationId: { high: 0n, low: 0n },
-      operationKind: 0,
+      operationId: { high: 0n, low: record.requestSequence ?? 0n },
+      operationKind: request ? OperationKind.NodeRequest : 0,
       channelName: null,
       topic: null,
       applicationMetadata: null,
@@ -2174,7 +2188,18 @@ function decodeMultipartRecord(
       failureErrno: 0,
       ...receiveIngressLifecycle(record),
       parts: record.parts.map(part => Message.from(part)),
-      reply: () => SubmitResult.InvalidState,
+      reply(parts) {
+        if (!request) return SubmitResult.InvalidState;
+        const values = Array.isArray(parts) ? parts : [parts];
+        if (values.length === 0) return SubmitResult.InvalidState;
+        runtime.replyService({
+          sourceRoutingId: record.sourceRoutingId!,
+          ...(record.sourceRoute === undefined ? {} : { sourceRoute: record.sourceRoute }),
+          requestSequence: record.requestSequence!,
+          ...(record.reply === undefined ? {} : { reply: record.reply })
+        }, values.map(value => Buffer.from(messageBytesView(value))));
+        return SubmitResult.Ok;
+      },
       replyActorJoin: () => SubmitResult.NotSupported
     };
   }

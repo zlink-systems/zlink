@@ -314,14 +314,6 @@ interface SourceActorJoinProfile {
   readonly resolveReady: () => void;
 }
 
-interface PendingRelocationControl {
-  readonly targetNodeRid: string;
-  readonly request: ZLinkServiceRelocationControlRequest;
-  readonly resolve: (response: ZLinkServiceRelocationControlResponse) => void;
-  readonly reject: (error: unknown) => void;
-  timer?: ReturnType<typeof setTimeout>;
-}
-
 interface PendingRelocationReplyRelay {
   readonly ackTargetNodeRid: string;
   readonly identityKey: string;
@@ -357,7 +349,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     RELOCATION_TARGET_TOMBSTONE_LIMIT
   );
   private readonly relocationAuthorityKeys = new Map<string, string>();
-  private readonly pendingControls = new Map<string, PendingRelocationControl>();
   private readonly targetPrepareOperations = new Map<string, TargetPrepareOperation>();
   private readonly pendingReplyRelays = new Map<string, PendingRelocationReplyRelay>();
   private readonly pendingSessionRelocations = new Map<string, PendingSessionRelocation>();
@@ -516,11 +507,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.sourceCutoverWindows.clear();
     const stopped = new Error('Relocation runtime stopped.');
     stopped.name = 'AbortError';
-    for (const pending of this.pendingControls.values()) {
-      if (pending.timer !== undefined) clearTimeout(pending.timer);
-      pending.reject(stopped);
-    }
-    this.pendingControls.clear();
     this.targetPrepareOperations.clear();
     for (const pending of this.pendingReplyRelays.values()) {
       if (pending.timer !== undefined) clearTimeout(pending.timer);
@@ -748,10 +734,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (request.kind !== 'prepare') return false;
       request = { ...request, nodeInternalBoundSessions: sideband };
     }
-    if (request.kind === 'ready' || request.kind === 'failed') {
-      this.acceptControlResponse(request, record.sourceNodeRid);
-      return true;
-    }
+    // Ready(30) and Failed(53) are replies to Prepare(40), never independent
+    // inbound controls. The source consumes them on Core's request reply leg.
+    if (request.kind === 'ready' || request.kind === 'failed') return false;
     if (request.kind === 'state') {
       this.acceptRelocationStateChunk(request, record.sourceNodeRid);
       return true;
@@ -759,6 +744,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (request.kind === 'prepare') {
       if (record.sourceNodeRid === null) {
         throw new Error('Relocation prepare has no authenticated source node.');
+      }
+      if (record.kind !== ReceiveKind.NodeRequest) {
+        throw new ServiceWireProtocolError('Relocation prepare requires a Core request leg.');
       }
       const operationKey = relocationStagingId(request);
       const fingerprint = stringifyWire(request);
@@ -770,10 +758,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const readyFailure = this.targetReadyFailures.get(operationKey);
       if (readyFailure !== undefined) {
         if (readyFailure.fingerprint === fingerprint) {
-          await this.sendInfrastructureControl(meshName,
-            record.sourceNodeRid,
-            encodeServiceRelocationControlResponse(readyFailure.response)
-          ).catch(() => SubmitResult.NotConnected);
+          this.replyPrepare(record, readyFailure.response);
           return true;
         }
         this.targetReadyFailures.delete(operationKey);
@@ -786,9 +771,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         if (readyPending.fingerprint !== fingerprint) {
           throw new Error(`Relocation '${operationKey}' repeated Prepare with different bytes.`);
         }
-        await this.submitTargetReady(
-          meshName, operationKey, record.sourceNodeRid, readyPending.response
-        );
+        this.submitTargetReady(meshName, operationKey, record, readyPending.response);
         return true;
       }
       let operation = this.targetPrepareOperations.get(operationKey);
@@ -820,7 +803,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         meshName,
         operationKey,
         request,
-        record.sourceNodeRid,
+        record,
         operation.promise
       );
       return true;
@@ -834,7 +817,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     operationKey: string,
     request: ServiceMaintenanceRelocationPrepare,
-    sourceNodeRid: RoutingId,
+    ingress: ReceiveRecord,
     operation: Promise<ServiceMaintenanceRelocationReady>
   ): Promise<void> {
     let response: ServiceMaintenanceRelocationReady;
@@ -860,10 +843,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }, RELOCATION_OPERATION_RETENTION_MS);
       failureExpiry.unref?.();
       console.error('[zlink.runtime.relocation.restore_failed]', operationKey, error);
-      const submitted = await this.sendInfrastructureControl(meshName,
-        sourceNodeRid,
-        encodeServiceRelocationControlResponse(failed)
-      ).catch(() => SubmitResult.NotConnected);
+      const submitted = this.replyPrepare(ingress, failed);
       if (submitted !== SubmitResult.Ok) {
         console.error('[zlink.runtime.relocation.failure_reply_failed]', operationKey, error);
       }
@@ -886,7 +866,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.expireTargetReadyResponse(operationKey);
     }, RELOCATION_OPERATION_RETENTION_MS);
     readyExpiry.unref?.();
-    await this.submitTargetReady(meshName, operationKey, sourceNodeRid, response);
+    this.submitTargetReady(meshName, operationKey, ingress, response);
   }
 
   /** Cleans up a Ready reply that never delivered within the Restore validity window. */
@@ -905,22 +885,30 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * Prepare resend to retry against the retained staging (spec 28) — it is
    * not rolled back here and does not arm the cutover fallback.
    */
-  private async submitTargetReady(
+  private submitTargetReady(
     meshName: string,
     operationKey: string,
-    sourceNodeRid: RoutingId,
+    ingress: ReceiveRecord,
     response: ServiceMaintenanceRelocationReady
-  ): Promise<void> {
-    const submitted = await this.sendInfrastructureControl(meshName,
-      sourceNodeRid,
-      encodeServiceRelocationControlResponse(response)
-    ).catch(() => SubmitResult.NotConnected);
+  ): void {
+    const submitted = this.replyPrepare(ingress, response);
     if (submitted !== SubmitResult.Ok) {
       console.warn('[zlink.runtime.relocation.ready_submit_pending_resend]', operationKey);
       return;
     }
     this.targetReadyResponses.delete(operationKey);
     this.armTargetCutoverFallback(meshName, operationKey);
+  }
+
+  private replyPrepare(
+    ingress: ReceiveRecord,
+    response: ServiceMaintenanceRelocationReady | ServiceMaintenanceRelocationFailed
+  ): SubmitResult {
+    try {
+      return ingress.reply(encodeServiceRelocationControlResponse(response));
+    } catch {
+      return SubmitResult.NotConnected;
+    }
   }
 
   /** Copies one exact-identity payload chunk into its registered assembly. */
@@ -1961,6 +1949,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     } satisfies ServiceWireRelocationTarget;
     const relocation = relocationWireId(captured.envelope.aggregateId);
     const object = relocationObject(captured.envelope);
+    // The selected target lifecycle is the attempt fence used by the
+    // reference C++ relocation path. Keep the envelope and every control leg
+    // on that one exact identity; a process replacement is a different
+    // attempt even when it reuses the same routing id.
+    const targetAttemptGeneration = target.lifecycleGeneration;
     const relayAuthorityId = wireIdText(relocationWireId(captured.envelope.aggregateId));
     const relayAuthorityKey = primaryKey(captured.envelope);
     if (this.relocationAuthorityKeys.has(relayAuthorityId)) {
@@ -1971,7 +1964,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // handoff original until the cutover submit terminal and the
     // retransmission window end (spec 28 §4.2).
     const canonicalEnvelope = canonicalizeCapturedHandoffBacklog(
-      captured.envelope,
+      { ...captured.envelope, aggregateGeneration: targetAttemptGeneration },
       coordinator,
       targetFence
     );
@@ -2006,7 +1999,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const prepare = {
         kind: 'prepare',
         relocation,
-        targetAttemptGeneration: 1n,
+        targetAttemptGeneration,
         coordinator,
         target: targetFence,
         initiatorRole: 'source',
@@ -2076,7 +2069,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           const data = {
             kind: 'data',
             relocation,
-            targetAttemptGeneration: 1n,
+            targetAttemptGeneration,
             coordinator,
             senderRole: 'source',
             object: relocationObjectForParticipant(participant),
@@ -2091,7 +2084,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const cutoverFrame = encodeServiceRelocationControlRequest({
         kind: 'cutover',
         relocation,
-        targetAttemptGeneration: 1n,
+        targetAttemptGeneration,
         coordinator,
         senderRole: 'source',
         object,
@@ -3218,98 +3211,62 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     sideband: readonly Uint8Array[] = []
   ): Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> {
     const key = controlAckKey(request);
-    if (this.pendingControls.has(key)) {
-      throw new Error(`Relocation control ACK '${key}' is already pending.`);
-    }
-    return await new Promise<ZLinkServiceRelocationControlResponse>((resolve, reject) => {
-      let pending!: PendingRelocationControl;
-      const send = async (): Promise<void> => {
-        if (signal?.aborted === true) {
-          finish(() => reject(signal.reason));
-          return;
-        }
-        if (Date.now() >= deadlineAtMs) {
-          // Spec 15 §"Failed.Kind" — a Prepare that never reaches a Ready or
-          // an explicit Failed within the control deadline is DeadlineExceeded,
-          // the same classification the session-seal control path uses for
-          // its own resend-loop deadline.
-          finish(() => reject(createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            `Relocation control ACK '${key}' timed out.`,
-            true
-          )));
-          return;
-        }
-        try {
-          const submitted = await this.sendInfrastructureControl(meshName,
-            targetNodeRid,
-            sideband.length === 0
-              ? encodeServiceRelocationControlRequest(request)
-              : [encodeServiceRelocationControlRequest(request), ...sideband]
-          );
-          relocationDebug('control.submit', {
-            key,
-            kind: request.kind,
-            targetRid: String(targetNodeRid),
-            submitted
-          });
-          if (submitted !== SubmitResult.Ok) {
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
-              `Relocation control '${key}' was not accepted by RouteMesh.`,
-              true
-            );
-          }
-          if (this.pendingControls.get(key) === pending) {
-            pending.timer = setTimeout(() => void send(), 250);
-          }
-        } catch (error) {
-          pending.reject(error);
-        }
-      };
-      const finish = (action: () => void) => {
-        if (pending.timer !== undefined) clearTimeout(pending.timer);
-        this.pendingControls.delete(key);
-        action();
-      };
-      pending = {
-        targetNodeRid: String(targetNodeRid), request,
-        resolve: response => finish(() => resolve(response)),
-        reject: error => finish(() => reject(error))
-      };
-      this.pendingControls.set(key, pending);
-      void send();
-    });
-  }
-
-  private acceptControlResponse(
-    packet: ZLinkServiceRelocationControlRequest,
-    sourceNodeRid: RoutingId | null
-  ): boolean {
-    const key = controlResponseKey(packet);
-    if (key === undefined) return false;
-    const pending = this.pendingControls.get(key);
-    if (pending === undefined) return false;
-    if (sourceNodeRid === null || String(sourceNodeRid) !== pending.targetNodeRid) {
-      pending.reject(new Error('Relocation control ACK source node changed.'));
-      return true;
-    }
-    try {
-      const response = packet as ZLinkServiceRelocationControlResponse;
-      if (response.kind === 'failed') {
-        // An explicit Failed(53) answers the pending Prepare ACK immediately
-        // with the target's classified failure — the caller no longer waits
-        // out its own deadline to learn the outcome (spec 28 §9).
-        validateControlFailureResponse(pending.request, response);
-        pending.reject(relocationFailureException(response));
-        return true;
+    const frames = sideband.length === 0
+      ? [encodeServiceRelocationControlRequest(request)]
+      : [encodeServiceRelocationControlRequest(request), ...sideband];
+    let lastRequestError: unknown;
+    for (;;) {
+      signal?.throwIfAborted();
+      const remainingMs = deadlineAtMs - Date.now();
+      if (remainingMs <= 0) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          `Relocation control ACK '${key}' timed out.`,
+          true,
+          lastRequestError
+        );
       }
-      validateControlResponse(pending.request, response);
-      pending.resolve(response);
-    } catch (error) {
-      pending.reject(error);
+      const attemptTimeoutMs = Math.max(1, Math.min(250, remainingMs));
+      const startedAtMs = Date.now();
+      try {
+        const replyFrames = await this.requestInfrastructureControl(
+          meshName,
+          targetNodeRid,
+          frames,
+          attemptTimeoutMs
+        );
+        if (replyFrames.length !== 1) {
+          throw new ServiceWireProtocolError(
+            `Relocation control '${key}' reply must contain exactly one frame.`
+          );
+        }
+        const response = decodeServiceRelocationControlResponse(Buffer.from(replyFrames[0]!));
+        if (response.kind === 'failed') {
+          validateControlFailureResponse(request, response);
+          throw relocationFailureException(response);
+        }
+        validateControlResponse(request, response);
+        return response;
+      } catch (error) {
+        if (error instanceof ServiceWireProtocolError
+          || error instanceof ZLinkFrameworkException) {
+          throw error;
+        }
+        lastRequestError = error;
+        relocationDebug('control.request_retry', {
+          key,
+          kind: request.kind,
+          targetRid: String(targetNodeRid)
+        });
+        const retryDelayMs = Math.min(
+          Math.max(0, attemptTimeoutMs - (Date.now() - startedAtMs)),
+          Math.max(0, deadlineAtMs - Date.now())
+        );
+        if (retryDelayMs > 0) {
+          await waitForRelocationRetry(retryDelayMs, signal);
+        }
+      }
     }
-    return true;
   }
 
   private async selectTarget(
@@ -4027,6 +3984,20 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     return await send.call(node, targetNodeRid, record);
   }
+
+  private async requestInfrastructureControl(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    frames: readonly Uint8Array[],
+    timeoutMs: number
+  ): Promise<readonly Uint8Array[]> {
+    const node = this.requireMeshNode(meshName);
+    const request = node.requestInfrastructureControlFrames;
+    if (request === undefined) {
+      throw new Error('RouteMesh backend cannot submit bare infrastructure requests.');
+    }
+    return await request.call(node, targetNodeRid, frames, { timeoutMs });
+  }
 }
 
 function canonicalActorJoinRecovery(
@@ -4664,7 +4635,7 @@ function appendCanonicalActorJoinRecovery(
         nodeGeneration: coordinator.nodeGeneration,
         expectedAuthorityStoreVersion: coordinator.expectedAuthorityStoreVersion
       },
-      operationId: profile.completionOperationId,
+      operationId: recovery.admissionOperationId,
       ...(recovery.replyContentType === undefined
         ? {}
         : { replyContentType: recovery.replyContentType }),
@@ -4818,6 +4789,26 @@ async function waitForLocationRetry(
       resolve();
     }, Math.min(25, Math.max(1, deadlineAtMs - Date.now())));
     timer.unref();
+  });
+}
+
+async function waitForRelocationRetry(
+  delayMs: number,
+  signal?: AbortSignal
+): Promise<void> {
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const aborted = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', aborted, { once: true });
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', aborted);
+      resolve();
+    }, delayMs);
+    timer.unref?.();
   });
 }
 
@@ -5304,16 +5295,6 @@ function controlAckKey(request: ZLinkServiceRelocationControlRequest): string {
   }
   return `relocation:${request.relocation.high}:${request.relocation.low}:`
     + `${request.targetAttemptGeneration}:ready`;
-}
-
-function controlResponseKey(packet: ZLinkServiceRelocationControlRequest): string | undefined {
-  // Both a Ready and an explicit Failed(53) answer the same pending Prepare
-  // ACK (spec 28 §9): a target that sent a classified failure must resolve
-  // (reject) it promptly, not leave it to the caller's own timeout.
-  if ((packet.kind === 'ready' || packet.kind === 'failed') && packet.senderRole === 'target') {
-    return `relocation:${packet.relocation.high}:${packet.relocation.low}:${packet.targetAttemptGeneration}:ready`;
-  }
-  return undefined;
 }
 
 function sessionRelocationPendingKey(request: ServiceSessionRelocationSeal): string {
