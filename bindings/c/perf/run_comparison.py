@@ -770,6 +770,31 @@ def get_env_for_lib(_lib_name):
     return env
 
 
+def apply_perf_runtime_override(env, role):
+    """Diagnostic only: let one benchmark process load a different Core runtime.
+
+    Set ZLINK_PERF_SERVER_RUNTIME_DIR or ZLINK_PERF_CLIENT_RUNTIME_DIR to a
+    directory that contains libzlink.so.0 to pin that one process to it. The
+    benchmark binaries carry DT_RUNPATH, which LD_LIBRARY_PATH takes
+    precedence over, so prepending the directory is enough. Both variables are
+    unset by default and then this function leaves the environment untouched,
+    so ordinary runs behave exactly as before.
+    """
+    var = (
+        "ZLINK_PERF_SERVER_RUNTIME_DIR"
+        if role == "server"
+        else "ZLINK_PERF_CLIENT_RUNTIME_DIR"
+    )
+    override = os.environ.get(var, "").strip()
+    if not override:
+        return
+    if IS_WINDOWS:
+        env["PATH"] = f"{override};{env.get('PATH', '')}"
+    else:
+        env["LD_LIBRARY_PATH"] = f"{override}:{env.get('LD_LIBRARY_PATH', '')}"
+    env["ZLINK_PERF_RUNTIME_OVERRIDE"] = override
+
+
 def collect_missing_patterns(comparisons, requested):
     missing_current = []
     for current_bin, p_name in comparisons:
@@ -1522,6 +1547,8 @@ def run_sizes_test_stream_shared(
     client_env["PERF_MULTI_COMPONENT"] = "client"
     server_env["PERF_MULTI_TRANSPORT"] = transport
     client_env["PERF_MULTI_TRANSPORT"] = transport
+    apply_perf_runtime_override(server_env, "server")
+    apply_perf_runtime_override(client_env, "client")
     set_env_pair(server_env, "PERF_IO_THREADS", server_io_threads_int)
     set_env_pair(client_env, "PERF_IO_THREADS", client_io_threads_int)
     if pattern_name == "PUBSUB":
@@ -2083,6 +2110,8 @@ def run_sizes_test_split(
     client_env["PERF_MULTI_COMPONENT"] = "client"
     server_env["PERF_MULTI_TRANSPORT"] = transport
     client_env["PERF_MULTI_TRANSPORT"] = transport
+    apply_perf_runtime_override(server_env, "server")
+    apply_perf_runtime_override(client_env, "client")
     if extra_env:
         for key, value in extra_env.items():
             server_env[str(key)] = str(value)
