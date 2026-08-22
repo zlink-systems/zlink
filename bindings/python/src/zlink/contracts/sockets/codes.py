@@ -87,6 +87,13 @@ class RidDuplicatePolicy(IntEnum):
     REJECT = 0
     HANDOVER = 1
 
+class ReceiveFlowState(IntEnum):
+    """A socket's local receive-flow state, synchronised to the paired
+    DEALER/ROUTER completion lane. Values match
+    ``zlink_receive_flow_state_t``."""
+    RUNNING = 0
+    PAUSED = 1
+
 class SubmitRetryMode(IntEnum):
     """Whether a failed submit is retried (``OFF`` or ``LOCAL_FAILURE``)."""
     OFF = 0
@@ -102,4 +109,5 @@ __all__ = [
     "HandlerResult",
     "RidDuplicatePolicy",
     "SubmitRetryMode",
+    "ReceiveFlowState",
 ]

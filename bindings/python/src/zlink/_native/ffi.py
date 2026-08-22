@@ -235,6 +235,7 @@ class _Lib:
             ("zlink_msg_refcnt", [p_msg, p_int], ctypes.c_int),
             ("zlink_multipart_close", [p_msg, ctypes.c_size_t], None),
             ("zlink_socket", [ctypes.c_void_p, ctypes.c_int], ctypes.c_void_p),
+            ("zlink_socket_set_receive_flow_state", [ctypes.c_void_p, ctypes.c_int], ctypes.c_int),
             ("zlink_recv_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_stream_packet_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_send_ready_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),

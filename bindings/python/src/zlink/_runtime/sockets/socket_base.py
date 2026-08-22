@@ -16,6 +16,7 @@ from ...contracts.errors.codes import (
 from ...contracts.eventing.codes import MonitorEventMask
 from ...contracts.sockets.codes import (
     HandlerResult,
+    ReceiveFlowState,
     RecvResult,
     SocketType,
     SubmitResult,
@@ -616,6 +617,21 @@ class _Socket(_BaseSocket):
         if rc != 0:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
+    def set_receive_flow_state(self, state: ReceiveFlowState):
+        """Set this socket's local receive-flow state and synchronise it to
+        the paired DEALER/ROUTER completion lane.
+
+        RUNNING/PAUSED is an absolute state, not a counter: repeating the
+        current state succeeds and resynchronises nothing new. Only
+        DEALER/ROUTER sockets have a completion lane to synchronise this
+        state over; every other socket type (PAIR, the PUB/SUB family, and
+        STREAM) raises :class:`ConfigError` with
+        :attr:`ConfigResult.NOT_SUPPORTED` and keeps its existing byte HWM
+        and transport backpressure unchanged.
+        """
+        rc = lib().zlink_socket_set_receive_flow_state(self._handle, int(state))
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
 
 class _SendReadySocket:

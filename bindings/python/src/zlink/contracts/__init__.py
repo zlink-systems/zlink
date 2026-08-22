@@ -30,6 +30,7 @@ from .sockets.codes import (
     HandlerResult,
     RidDuplicatePolicy,
     SubmitRetryMode,
+    ReceiveFlowState,
 )
 from .errors.codes import (
     CloseResult,
@@ -113,6 +114,7 @@ __all__ = [
     "ConfigResult",
     "RidDuplicatePolicy",
     "SubmitRetryMode",
+    "ReceiveFlowState",
     "ErrorCode",
     "ProtocolError",
     "MonitorEventMask",

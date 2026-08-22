@@ -14,6 +14,7 @@ from ..sockets.codes import (
     RecvResult,
     HandlerResult,
     RidDuplicatePolicy,
+    ReceiveFlowState,
 )
 from ..errors.codes import (
     CloseResult,
@@ -41,6 +42,7 @@ __all__ = [
     "RecvResult",
     "HandlerResult",
     "RidDuplicatePolicy",
+    "ReceiveFlowState",
     "CloseResult",
     "BindResult",
     "ConnectResult",

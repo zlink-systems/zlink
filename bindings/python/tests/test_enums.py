@@ -66,6 +66,15 @@ class EnumValueTests(unittest.TestCase):
         self.assertEqual(int(zlink.ErrorCode.EFSM), 156384763)
         self.assertEqual(int(zlink.ErrorCode.EMTHREAD), 156384766)
 
+    def test_receive_flow_state_values(self):
+        # Values mirror zlink_receive_flow_state_t exactly (core-byte-hwm-flow-
+        # control-plan.ko.md §5.1).
+        self.assertEqual(int(zlink.ReceiveFlowState.RUNNING), 0)
+        self.assertEqual(int(zlink.ReceiveFlowState.PAUSED), 1)
+        self.assertEqual(
+            {int(value) for value in zlink.ReceiveFlowState}, {0, 1}
+        )
+
 class EnumTypeTests(unittest.TestCase):
     def test_int_enum_is_int(self):
         self.assertIsInstance(zlink.SocketType.PAIR, int)
