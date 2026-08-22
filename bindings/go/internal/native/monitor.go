@@ -16,6 +16,7 @@ static inline int zlink_socket_monitor_handler_go_local(void *m, uintptr_t userd
 import "C"
 
 import (
+	"errors"
 	"runtime/cgo"
 	"sync"
 	"sync/atomic"
@@ -343,16 +344,28 @@ func (m *SocketMonitor) raw() unsafe.Pointer {
 // Recv returns the next monitor event. Returns (nil, *RecvError{Result:RecvNoData})
 // when DONTWAIT finds nothing. Value-return form is allowed for monitor/timer
 // control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape.
+//
+// A blocking recv interrupted by a signal (RecvInternalError with an EINTR
+// errno) is a spurious wakeup, not a caller-visible failure: Poller.Wait
+// treats the same core signal identically (see poller_timer.go), so Recv
+// retries internally instead of surfacing EINTR to the caller.
 func (m *SocketMonitor) Recv(flags RecvFlags) (*MonitorEvent, error) {
 	handle := m.raw()
 	if handle == nil {
 		return nil, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	var raw C.zlink_socket_monitor_event_t
-	if err := recvErrorFromResult(C.zlink_socket_monitor_recv(handle, &raw, C.zlink_recv_flags_t(flags))); err != nil {
+	for {
+		err := recvErrorFromResult(C.zlink_socket_monitor_recv(handle, &raw, C.zlink_recv_flags_t(flags)))
+		if err == nil {
+			return monitorEventFromC(raw), nil
+		}
+		var recvErr *RecvError
+		if errors.As(err, &recvErr) && recvErr.Result == RecvInternalError && recvErr.internalErrno() == int(C.EINTR) {
+			continue
+		}
 		return nil, err
 	}
-	return monitorEventFromC(raw), nil
 }
 
 func (m *SocketMonitor) Status() (*MonitorStatus, error) {
