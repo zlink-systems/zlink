@@ -261,7 +261,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
   - [x] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **✅ 완료(2026-08-22 19:47): 12/12 전 그린,
     `all` 편입 `fe352b9e87`, 결정성 실증(11셀 2연속 + dotnet→java flake 해소 후 6연속 그린
     `bf8ee1850f` — .NET full-width 난수 발급이 schema nonzero-u64 bounded 위반이던 것, 스펙
-    명문화 `5df53feae2`)**. 단계-마감 sol 리뷰 진행 중. **3c 병렬 착수(2026-08-22
+    명문화 `5df53feae2`)**. **단계-마감 sol 리뷰 완료**: 커밋 정합·스펙 근거·V0/live 비모순
+    승인. 실질 지적 1건 = **capacity row key/shape 무규정 발산 잔존** — .NET 독자 key(lifecycle
+    포함, Authority.cs:5015), cpp는 .NET형 우선+Node형 fallback(:3311), Java는 Node형 전환(이번
+    clean-break) → .NET↔Java 회계가 서로 다른 row로 갈라질 수 있음(셀은 그린이나 회계 정합성
+    미보증). **후속 ruling 카드: capacity row 정본 = Node/Java형 확정 + .NET 정렬 + cpp .NET형
+    fallback 제거**(3c .NET 다음 배치). 부수: 동일 relocation 내 재준비 시 attempt=1 재사용
+    금지(재시도 카운터 카드에 병합). **3c 병렬 착수(2026-08-22
     19:5x)**: 28 reply 프레이밍 정본 스펙 명문화 `c56714a52c`(multipart+sole raw part — 감사의
     4자 발산 해소 경로) → Java 3c(terra: legacy route packet 제거·cmd33 attempt 슬롯 수정·死코드
     B1/B9)·.NET 3c(sonnet: target 중첩 envelope→raw, source 호환분기 제거, one-way 40 분기·legacy
