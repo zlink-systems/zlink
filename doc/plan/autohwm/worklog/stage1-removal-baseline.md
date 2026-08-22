@@ -910,6 +910,78 @@ tree에 전부 되돌려도 회복이 없다.
 - 이번 round는 실험 worktree에서만 작업했고 main tree에 코드 변경을 넣지
   않았다. 따라서 gate 수치는 §8.14의 `final4`가 그대로 유효하다.
 
+## 8.18 Poll 경로 재설계: 상한 측정으로 종결
+
+§8.6 profile은 client에서 poll 경로에 약 0.57~0.96 us/msg가 몰려 있다고 보였고,
+이것이 남은 ~10%와 크기가 맞아 재설계 대상으로 지목됐다. 구현 전에 **각 target의
+상한(upper bound)** 을 먼저 쟀다. 구현이 아무리 완벽해도 그 이상은 못 얻는다.
+
+측정은 §8.17.1의 교정된 방법(ABBA block, `.text` md5로 binary 구분 확인,
+noise floor ±3.5%)을 그대로 쓴다.
+
+### 8.18.1 Target 1+2 상한: per-call poller 제거
+
+`zlink_poll()`이 호출마다 만들던 poller를 **thread-local로 캐시**해, item set이
+직전 호출과 동일하면 `wait()`만 부르도록 진단 patch를 넣었다. 이 하나로 다음이
+전부 사라진다.
+
+- `socket_poller_t` 생성·소멸 (호출당 1회)
+- `add_item` N회, `find_socket_item` 선형 탐색 N회 (= O(N^2) 등록)
+- `rebuild()`와 `_pollfds` malloc/free
+- item vector 채우기
+
+| 비교 | 결과 |
+|---|---|
+| HEAD → thread-local poller 재사용 (ABBA 3 block) | **101.4%** |
+
+**+1.4%. noise floor(±3.5%) 안이다.**
+
+### 8.18.2 Target 1+2+3 상한: 위 + per-socket admission 제거
+
+여기에 `get_events_for_poller()`의 `socket_public_api_scope_t` admission
+(= socket당 `enter_public_api`/`leave_public_api`, profile 0.227 us/msg)까지
+통째로 걷어낸 진단 build를 만들었다.
+
+| 비교 | 결과 |
+|---|---|
+| HEAD → poller 재사용 + admission 제거 (ABBA 3 block) | **100.4%** |
+
+**+0.4%.** 두 target을 합쳐도 noise 안이다.
+
+두 진단 patch는 모두 되돌렸다(측정 목적, 계약 위반).
+
+### 8.18.3 결론: profile의 us/msg는 처리량 상한이 아니다
+
+client의 poll 경로에서 CPU를 30% 가까이 걷어내도 처리량은 0.4~1.4%밖에 움직이지
+않는다. 즉 **client의 app thread는 이 workload의 병목이 아니다.** §8.6의
+per-message us/msg 귀속은 "그 함수가 CPU를 쓴다"는 사실일 뿐, 그것을 없애면
+처리량이 그만큼 오른다는 뜻이 아니었다. 같은 착각이 §8.13.3(c9의 client CPU가
+더 낮은데도 느림)과 §7.2에서 이미 관측됐다.
+
+따라서 target 1~4(poller 영속화, O(N^2) 등록, admission batch, `has_in` 잔여)는
+**구현 가치가 없다**. 남은 ~10%는 poll 경로에 없다.
+
+### 8.18.4 현재 상태
+
+Test(항상 `core/build-tests`, 현재 source로 재빌드): focused 8 +
+`unittest_poller` + `test_timer_poller` = **10/10 통과**.
+`b54c9802a9`가 고친 `test_retained_hwm_credit`(:280)도 통과하고,
+`test_socket_poller_wakes_after_async_owner_applies_input`도 단독 통과했다.
+
+Paired signal(2 pair): local 166.5 / 157.5 vs `0.10.1` 194.0 / 182.3
+→ 약 **86%**. gate 실행 기준(local ~175)에 못 미쳐 `final5` gate는 돌리지
+않았다. 코드 변경이 없으므로 §8.14의 `final4`가 여전히 최신 gate 결과다.
+
+### 8.18.5 남은 선택지
+
+`e13e561ba9`(과거 원인, 오늘은 비활성), poll 경로(상한 1.4%), mailbox command
+경로(§8.17.4 중립)가 모두 배제됐다. 남은 후보는 **server 측과 transport/engine
+경로**다. 다음 작업자가 이어간다면 먼저 확인할 것은 "client와 server 중 어느
+쪽이 gap을 소유하는가"이며, 이는 두 process에 서로 다른 Core runtime을 물려
+(local server + 0.10.1 client, 그 반대) 측정하면 한 번에 갈린다. 이번 round의
+harness는 두 process에 같은 runtime을 강제하므로 그 실험에는 runner 변경이
+필요하다.
+
 ## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
