@@ -2727,7 +2727,7 @@ std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
 // is admitted at exactly that observed lifecycle generation. The request
 // correlation is minted from the same monotonic counter the JSON path's
 // completion_operation_id_low already uses, forced odd/nonzero the same
-// way completion_operation_id_high is (encode_actor_join_request throws on
+// way completion_operation_id_high is (the generated actorJoin codec throws on
 // correlation == 0).
 task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_join_via_wire (
   std::shared_ptr<remote_actor_join_state_t> s, observed_spot_authority_t observed)

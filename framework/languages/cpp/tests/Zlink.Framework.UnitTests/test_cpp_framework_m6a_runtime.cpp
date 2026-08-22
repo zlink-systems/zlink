@@ -13,6 +13,8 @@
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <service_wire_pilot_codec.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -2493,9 +2495,31 @@ void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
     const auto claim = claim_actor_join (target);
     assert (claim && claim->records.size () == 1);
     const auto &record = claim->records.front ();
-    const auto decoded =
-      protocol::decode_actor_join_request (record.parts.front ());
-    assert (decoded == request);
+    const auto decoded = protocol::decode_actor_join_28 (record.parts);
+    assert (decoded.correlation == request.correlation);
+    assert (decoded.actor.id == request.actor.actor_id);
+    assert (decoded.actor.generation == request.actor.object_generation);
+    assert (decoded.actor.target_node_rid
+            == request.actor.target_node_routing_id);
+    assert (decoded.actor.target_node_generation
+            == request.actor.target_node_generation);
+    assert (decoded.actor.expected_authority_owner_generation
+            == request.actor.authority_owner_generation);
+    assert (decoded.actor.expected_owner_lease_generation
+            == request.actor.owner_lease_generation);
+    assert (decoded.entry == request.entry);
+    assert (decoded.target_spot.id == request.target_spot.spot_id);
+    assert (decoded.target_spot.generation
+            == request.target_spot.object_generation);
+    assert (decoded.target_spot.target_node_rid
+            == request.target_spot.target_node_routing_id);
+    assert (decoded.target_spot.target_node_generation
+            == request.target_spot.target_node_generation);
+    assert (decoded.target_spot.expected_authority_owner_generation
+            == request.target_spot.authority_owner_generation);
+    assert (decoded.target_spot.expected_owner_lease_generation
+            == request.target_spot.owner_lease_generation);
+    assert (!decoded.payload);
     assert (record.correlation && *record.correlation == request.correlation);
 
     assert (target.reply_actor_join (

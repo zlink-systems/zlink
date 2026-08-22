@@ -949,6 +949,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
     ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/bound-session-replaced-v1.json"
     ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/session-relocation-barrier-v1.json"
+    ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-request-v1.json"
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp

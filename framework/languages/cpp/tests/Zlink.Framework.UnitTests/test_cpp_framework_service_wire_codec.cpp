@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -1810,71 +1811,89 @@ int main ()
         }
     }
 
-    // actorJoin(28) request frames deliberately have no golden fixture yet.
-    // This layout is derived from service-wire-v1.schema.json and the Node
-    // encodeActorJoinHeader reference: correlation, actor route fence, bool8
-    // entry, then spot route fence.
+    // actorJoin(28) is generated code's sole encode/decode responsibility.
+    // The shared fixture pins the generated multipart output to the legacy
+    // wire bytes and keeps malformed input rejection typed at this boundary.
     {
-        const protocol::actor_join_request_t request{
-          73,
-          {"actor-7", 11, {'a', 'c', 't', 'o', 'r', '-', 'o', 'w', 'n', 'e', 'r'}, 12, 13, 14},
-          true,
-          {"spot-8", 21, {'s', 'p', 'o', 't', '-', 'o', 'w', 'n', 'e', 'r'}, 22, 23, 24}};
-        const auto encoded = protocol::encode_actor_join_request (request);
-        assert (encoded.at (3)
-                == static_cast<std::uint8_t> (protocol::command::actorJoin));
-        assert (protocol::decode_actor_join_request (encoded) == request);
-        auto malformed = encoded;
-        malformed.erase (malformed.begin () + 5 + 8 + 1 + 8 + 1 + 8 + 1 + 8 + 1 + 8);
-        bool rejected = false;
-        try {
-            static_cast<void> (protocol::decode_actor_join_request (malformed));
-        } catch (const protocol::service_wire_error_t &) {
-            rejected = true;
+        std::ifstream fixture (ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH);
+        assert (fixture.good ());
+        const auto vectors = nlohmann::json::parse (fixture);
+        const auto parse_fence = [] (const nlohmann::json &value) {
+            return protocol::service_wire_pilot_fence{
+              value.at ("id").get<std::string> (),
+              std::stoull (value.at ("generation").get<std::string> ()),
+              from_hex (value.at ("targetNodeRidHex").get<std::string> ()),
+              std::stoull (
+                value.at ("targetNodeGeneration").get<std::string> ()),
+              std::stoull (value.at ("expectedAuthorityOwnerGeneration")
+                             .get<std::string> ()),
+              std::stoull (value.at ("expectedOwnerLeaseGeneration")
+                             .get<std::string> ())};
+        };
+        for (const auto &vector : vectors.at ("valid")) {
+            const auto &input = vector.at ("input");
+            protocol::service_wire_pilot_actor_join_28 request{
+              std::stoull (input.at ("correlation").get<std::string> ()),
+              parse_fence (input.at ("actor")), input.at ("entry").get<bool> (),
+              parse_fence (input.at ("targetSpot")), std::nullopt};
+            if (input.contains ("payload")) {
+                const auto &payload = input.at ("payload");
+                request.payload =
+                  protocol::service_wire_pilot_application_payload_envelope_v1{
+                    payload.at ("packetName").get<std::string> (),
+                    payload.at ("contentType").get<std::string> (),
+                    from_hex (payload.at ("payloadHex").get<std::string> ())};
+            }
+            std::vector<std::vector<std::uint8_t>> expected;
+            for (const auto &frame : vector.at ("framesHex"))
+                expected.push_back (from_hex (frame.get<std::string> ()));
+            const auto encoded = protocol::encode_actor_join_28 (request);
+            assert (encoded == expected);
+            const auto decoded = protocol::decode_actor_join_28 (encoded);
+            assert (decoded.correlation == request.correlation);
+            assert (decoded.actor.id == request.actor.id);
+            assert (decoded.actor.generation == request.actor.generation);
+            assert (decoded.actor.target_node_rid == request.actor.target_node_rid);
+            assert (decoded.actor.target_node_generation
+                    == request.actor.target_node_generation);
+            assert (decoded.actor.expected_authority_owner_generation
+                    == request.actor.expected_authority_owner_generation);
+            assert (decoded.actor.expected_owner_lease_generation
+                    == request.actor.expected_owner_lease_generation);
+            assert (decoded.entry == request.entry);
+            assert (decoded.target_spot.id == request.target_spot.id);
+            assert (decoded.target_spot.generation == request.target_spot.generation);
+            assert (decoded.target_spot.target_node_rid
+                    == request.target_spot.target_node_rid);
+            assert (decoded.target_spot.target_node_generation
+                    == request.target_spot.target_node_generation);
+            assert (decoded.target_spot.expected_authority_owner_generation
+                    == request.target_spot.expected_authority_owner_generation);
+            assert (decoded.target_spot.expected_owner_lease_generation
+                    == request.target_spot.expected_owner_lease_generation);
+            assert (decoded.payload.has_value () == request.payload.has_value ());
+            if (request.payload) {
+                assert (decoded.payload->packet_name == request.payload->packet_name);
+                assert (decoded.payload->content_type == request.payload->content_type);
+                assert (decoded.payload->payload == request.payload->payload);
+            }
         }
-        assert (rejected);
-    }
-
-    // S4b receiver recognition uses the generated canonical multipart
-    // decoder, including its optional application-payload-envelope-v1 frame.
-    // Pin both legal frame counts and a malformed payload rejection here so a
-    // manual header decoder cannot silently become the canonical authority.
-    {
-        const protocol::service_wire_pilot_actor_join_28 request{
-          73,
-          {"actor-7", 11, {'a', 'c', 't', 'o', 'r', '-', 'o', 'w', 'n', 'e', 'r'},
-           12, 13, 14},
-          true,
-          {"spot-8", 21, {'s', 'p', 'o', 't', '-', 'o', 'w', 'n', 'e', 'r'},
-           22, 23, 24},
-          std::nullopt};
-        const auto header_only = protocol::encode_actor_join_28 (request);
-        const auto decoded_header_only = protocol::decode_actor_join_28 (header_only);
-        if (decoded_header_only.correlation != request.correlation
-            || decoded_header_only.payload)
-            return 61;
-
-        auto with_payload = request;
-        with_payload.payload = protocol::service_wire_pilot_application_payload_envelope_v1{
-          "ActorJoin", "application/json", {1, 2, 3}};
-        const auto frames = protocol::encode_actor_join_28 (with_payload);
-        const auto decoded = protocol::decode_actor_join_28 (frames);
-        if (!decoded.payload || decoded.payload->packet_name != "ActorJoin"
-            || decoded.payload->content_type != "application/json"
-            || decoded.payload->payload != std::vector<std::uint8_t>{1, 2, 3})
-            return 62;
-
-        auto malformed = frames;
-        malformed.back ().pop_back ();
-        bool rejected = false;
-        try {
-            static_cast<void> (protocol::decode_actor_join_28 (malformed));
+        for (const auto &malformed : vectors.at ("invalid")) {
+            std::vector<std::vector<std::uint8_t>> frames;
+            for (const auto &frame : malformed.at ("framesHex"))
+                frames.push_back (from_hex (frame.get<std::string> ()));
+            bool rejected = false;
+            try {
+                static_cast<void> (protocol::decode_actor_join_28 (frames));
+            }
+            catch (const std::invalid_argument &error) {
+                rejected = true;
+                assert (std::string_view (error.what ()).find (
+                          malformed.at ("error").get<std::string> ())
+                        != std::string_view::npos);
+            }
+            assert (rejected);
         }
-        catch (const std::invalid_argument &) {
-            rejected = true;
-        }
-        if (!rejected)
-            return 63;
     }
     return 0;
 }

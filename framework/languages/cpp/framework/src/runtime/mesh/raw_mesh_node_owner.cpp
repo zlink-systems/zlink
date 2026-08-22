@@ -1931,15 +1931,35 @@ raw_mesh_node_owner_t::request_actor_join (
         co_return outcome;
     }
     if (request.correlation == 0) {
-        //  encode_actor_join_request would reject this anyway: a request
-        //  this call cannot fence is a wire-contract violation.
+        // The generated actorJoin codec rejects an unfenced request as a
+        // wire-contract violation.
         outcome.failure = actor_join_wire_failure_t::protocol_error;
         co_return outcome;
     }
-    detail::backend::raw_message_t parts{
-      protocol::encode_actor_join_request (request)};
-    if (payload)
-        parts.push_back (protocol::encode_application_payload (*payload));
+    detail::backend::raw_message_t parts;
+    try {
+        parts = protocol::encode_actor_join_28 ({
+          request.correlation,
+          {request.actor.actor_id, request.actor.object_generation,
+           request.actor.target_node_routing_id,
+           request.actor.target_node_generation,
+           request.actor.authority_owner_generation,
+           request.actor.owner_lease_generation},
+          request.entry,
+          {request.target_spot.spot_id, request.target_spot.object_generation,
+           request.target_spot.target_node_routing_id,
+           request.target_spot.target_node_generation,
+           request.target_spot.authority_owner_generation,
+           request.target_spot.owner_lease_generation},
+          payload
+            ? std::optional<
+                protocol::service_wire_pilot_application_payload_envelope_v1>{
+                {payload->packet_name, payload->content_type, payload->payload}}
+            : std::nullopt});
+    }
+    catch (const std::invalid_argument &) {
+        throw protocol::service_wire_error_t ("invalid Actor join request");
+    }
     auto pending = port->request (target_routing_id, parts, timeout);
     const auto completed = co_await pending;
     if (completed.result != detail::backend::raw_request_result_t::ok) {
@@ -3097,7 +3117,15 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 || !received->request_sequence) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto decoded_canonical = protocol::decode_actor_join_28 (received->parts);
+            const auto decoded_canonical = [&] {
+                try {
+                    return protocol::decode_actor_join_28 (received->parts);
+                }
+                catch (const std::invalid_argument &) {
+                    throw protocol::service_wire_error_t (
+                      "invalid Actor join request");
+                }
+            } ();
             const protocol::actor_join_request_t request{
               decoded_canonical.correlation,
               {decoded_canonical.actor.id, decoded_canonical.actor.generation,
