@@ -1219,3 +1219,262 @@ Framework work started: no
 
 Commit: `node: expose receive-flow-state parity` (this repository, branch
 `codex/bindings-0.11.1-performance`).
+
+## java
+
+Base commit: `f1ec634656` plus the already-landed shared `core/src/libzlink.vers`
+export fix and every concurrently-appended language section above (cpp, rust,
+go, python, dotnet, node). Changed only under `bindings/java/`. No `core/`
+edit made in this section.
+
+### Surface added
+
+`bindings/java/src/main/java/systems/zlink/contracts/sockets/SocketEnums/ReceiveFlowState.java`
+(package `systems.zlink.contracts.sockets`, matching every other flat
+socket-facing enum in this binding regardless of its source directory, e.g.
+`RidDuplicatePolicy`, `AutoHwmProfile`):
+
+```java
+public enum ReceiveFlowState {
+    RUNNING(0),
+    PAUSED(1);
+}
+```
+
+`bindings/java/src/main/java/systems/zlink/contracts/sockets/SocketOptionFacades/CommonSocketOptions.java`
+(same placement as `sendHwm`/`ridDuplicatePolicy` — every socket type gets it
+through the shared common-options facade, so PAIR/PUB/SUB-family/STREAM
+observe Core's runtime not-supported mapping instead of a compile-time
+restriction):
+
+```java
+public void receiveFlowState(ReceiveFlowState value) {
+    Objects.requireNonNull(value, "value");
+    ContractAccess.socketSetReceiveFlowState(socket, value.value());
+}
+```
+
+The call is routed through the same `internal.ContractAccess` /
+`SocketOptionsAccess` indirection every other socket option already uses
+(`NativeSocketBase`'s registered `ContractAccess.SocketOptionsAccess`
+anonymous implementation gained one new `setReceiveFlowState` method,
+delegating to `NativeSocketRuntime.setReceiveFlowState(int)` ->
+`SocketOptionSupport.setReceiveFlowState(int)`).
+
+`bindings/java/src/main/java/systems/zlink/runtime/nativeapi/Native.java`
+declares the raw FFM downcall next to `zlink_set_routing_id` (both return
+`zlink_config_result_t` directly, not an errno-style 0/-1):
+
+```java
+private static final MethodHandle MH_SOCKET_SET_RECEIVE_FLOW_STATE =
+        downcall("zlink_socket_set_receive_flow_state",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+
+public static int setReceiveFlowState(MemorySegment handle, int state) { ... }
+```
+
+`SocketOptionSupport.setReceiveFlowState(int)` follows the same
+direct-`zlink_config_result_t`-mapping pattern already used by
+`NativeContext.recalculateAutoHwm()` / `NativeIntOptions.get/set` (i.e.
+`ConfigResult.fromValue(rc)`, not the errno-remapping pattern used by the
+generic `zlink_set_option` path):
+
+```java
+void setReceiveFlowState(int state) {
+    int rc = Native.setReceiveFlowState(socket.handle(), state);
+    if (rc != 0) {
+        throw new ZlinkConfigException(ConfigResult.fromValue(rc));
+    }
+}
+```
+
+`ConfigResult` already carried every value `zlink_config_result_t` needed for
+this call (`OK=0`, `INVALID_HANDLE=701`, `INVALID_ARGUMENT=702`,
+`NOT_SUPPORTED=703`, `INVALID_STATE=705`) — no new binding-specific
+error-code table was needed, matching this binding's single-`ConfigResult`
+policy for direct-return native config calls.
+
+### Not exposed (plan §5.1 forbidden list)
+
+No flow-frame encode/decode/receive API and no PAUSE-bypass send variant were
+added anywhere in the public surface. `ReceiveFlowStateContractTest
+.publicSurfaceHasNoFlowFrameOrPauseBypassApi` checks this by reflecting over
+every public method of `Socket` and `CommonSocketOptions` and asserting none
+matches `flowframe`/`flow_frame`/`bypasspause`/`pausebypass`.
+
+### Stage7 ABI/mask drift found and fixed (java-side mirror maintenance)
+
+Stage 7 bumped `ZLINK_MONITOR_STATUS_ABI_VERSION` 3→4 (`zlink_monitor_status_t`
+grew 5 new `uint64_t` flow-metric fields:
+`flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`) and widened `ZLINK_SOCKET_MONITOR_EVENT_ALL` from
+`0xFFFF` to `0x7FFFF` (3 new event bits:
+`ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED/RESUMED`,
+`..._FLOW_STATE_STALE`). Unlike the other bindings, java hand-maintains a
+byte-exact `MemoryLayout` mirror of `zlink_monitor_status_t`
+(`NativeLayouts.MONITOR_SNAPSHOT_LAYOUT`) plus a hardcoded ABI-version
+constant (`NativeMonitorStatuses.MONITOR_STATUS_ABI_VERSION`), both of which
+strictly `==`-check against the live struct on every `monitor.status()` call
+— so this drift was not cosmetic for java: left unfixed, it would throw
+`UnsupportedOperationException` on *every* monitor status read against a
+rebuilt Core (ABI 4), including existing pre-flow-state HWM/monitor tests,
+not just new flow-state ones. Fixed by:
+
+- `NativeMonitorStatuses.MONITOR_STATUS_ABI_VERSION`: `3` → `4`.
+- `NativeLayouts.MONITOR_SNAPSHOT_LAYOUT`: appended the 5 new
+  `JAVA_LONG_UNALIGNED` fields (with matching offset constants) at the end,
+  matching the C struct's append-only growth.
+- `MonitorStatus` record: added the 5 new fields (`flowPausedConnections`,
+  `flowPauseAppliedTotal`, `flowResumeAppliedTotal`, `flowStateStaleTotal`,
+  `flowPauseDurationMs`) and `NativeMonitorStatuses.fromNative` now decodes
+  them — matching this binding's existing convention of 1:1 field parity
+  with the C struct (no reserved/opaque padding fields exist anywhere else
+  in this struct's Java mirror).
+- `MonitorEventType.ALL`: `0xFFFF` → `0x7FFFF`; added
+  `SEND_FLOW_PAUSED`/`SEND_FLOW_RESUMED`/`FLOW_STATE_STALE` entries (plus
+  `EnumCodecs` encode/decode cases) so a monitor subscribed with `ALL` on a
+  paired DEALER/ROUTER socket does not hit `EnumCodecs`'s "invalid enum
+  value" branch if a real flow transition event arrives — this is the same
+  named-event-enum surface already used for every other connection-lifecycle
+  event, not a new bespoke flow API.
+- `MonitorStatusDetailFlags`: added `FLOW_STATE(1 << 5)` alongside the
+  existing detail bits.
+- `MonitorContractTest.monitorStatusUsesCanonicalMonitorSurface`: updated the
+  hardcoded `abiVersion()`/`structSize()` assertions from `3`/`192` to
+  `4`/`232` (192 + 5×8 bytes) and added assertions on the 5 new fields.
+
+None of this is new binding *surface scope* beyond what stage7 already
+published in `core/include`; it is the java mirror catching up to an ABI
+change that had already landed and been exported before this section's work
+started (per `core/src/libzlink.vers` already carrying the export, done by
+the cpp worker).
+
+### Test: `bindings/java/src/test/java/systems/zlink/contract/ReceiveFlowStateContractTest.java` (new)
+
+Registered implicitly (JUnit 5 auto-discovery via the existing `:test` task,
+same convention as every other file under `src/test/java/systems/zlink/contract`).
+Checklist §8.1.1 coverage:
+
+| §8.1.1 item | Test |
+|---|---|
+| enum value parity with C ABI | `enumValuesMatchCAbi` |
+| DEALER/ROUTER success + idempotent repeat | `dealerAndRouterAcceptTheSettingAndRepeatIsIdempotent` |
+| PAIR/PUB/SUB family/XPUB/XSUB/STREAM → not-supported | `unsupportedSocketTypesReportNotSupported` |
+| unsupported-socket send/recv unaffected | `unsupportedSocketSendRecvIsUnaffected` (PAIR send/recv still works after the rejected call) |
+| invalid argument mapping | `invalidArgumentOutsideEnumRangeIsRejected` — `ReceiveFlowState` only has two variants, so (mirroring the rust binding's documented approach for the same case) the java type system itself is this binding's mapping of `ZLINK_CONFIG_INVALID_ARGUMENT`: there is no public-API path that can pass a third state to `receiveFlowState(...)` at all |
+| invalid handle mapping | `closedHandleReportsInvalidHandleOrLocalClosedState` — accepts either the native `ZlinkConfigException(INVALID_HANDLE)` or the binding's own pre-native `IllegalStateException("socket is closed")` (this binding's `ensureOpen()`-style local-handle check used elsewhere in the option surface), both being observable "socket already closed" shapes |
+| close race → one observable outcome | `closeRaceObservesOnlyOneOutcome` (20 iterations of a threaded setter racing a `close()`; asserts the outcome is always success, `IllegalStateException`, or `ZlinkConfigException` with `INVALID_STATE`/`INVALID_HANDLE` — the close-race shapes documented in `worklog/stage7-c-api.md` §1.2) |
+| no flow-frame/PAUSE-bypass API on the public surface | `publicSurfaceHasNoFlowFrameOrPauseBypassApi` (reflection scan) |
+| existing HWM/send-timeout behavior unchanged | `existingHwmAndSendTimeoutBehaviorIsUnchanged` |
+
+`bindings/java/kotlin-contract-test/src/test/kotlin/systems/zlink/contract/ReceiveFlowStateContractTest.kt`
+(new) mirrors the existing `UnsignedByteHwmContractTest.kt` compile-time
+contract-alignment convention for this suite: an enum-value parity check plus
+a compile-time reference to `CommonSocketOptions.receiveFlowState(...)` to
+confirm the kotlin-visible surface matches.
+
+### Build + test evidence
+
+This environment has no system JDK 22 on `PATH` (`build.gradle` requires
+`JavaLanguageVersion.of(22)`) and no toolchain auto-download configured;
+resolved locally via an already-cached
+`~/.cache/jdks/jdk-22.0.2+9` (Temurin 22.0.2+9), added to
+`org.gradle.java.installations.paths` in `~/.gradle/gradle.properties` for
+Gradle's toolchain resolution, and put first on `PATH`/`JAVA_HOME` for the
+`kotlin-samples` `JavaExec` sample-runner tasks, which invoke the system
+`java` directly rather than through the Gradle toolchain (a pre-existing,
+environment-only gap, unrelated to this change).
+
+Built Core locally in a private, non-shared build directory (to avoid the
+same shared-`core/build` race the rust worker hit) and packaged it exactly
+like `scripts/local-package/java/build-wsl.sh` expects (versioned prefix +
+`core-package-provenance.json`), then ran the java binding's own
+`tests/run_tests.sh` against that prefix:
+
+```bash
+bash scripts/local-package/core/build-wsl.sh \
+  --build-dir /tmp/.../core-build --output-root /tmp/.../artifacts \
+  --evidence /tmp/.../artifacts/core-package-evidence.json
+nm -D /tmp/.../artifacts/install/zlink-core/0.11.1/lib/libzlink.so.0.11.1 \
+  | grep receive_flow_state   # zlink_socket_set_receive_flow_state: T (exported)
+
+cd bindings/java
+JAVA_HOME=~/.cache/jdks/jdk-22.0.2+9 PATH="~/.cache/jdks/jdk-22.0.2+9/bin:$PATH" \
+ZLINK_CORE_PACKAGE_PREFIX=/tmp/.../artifacts/install/zlink-core/0.11.1 \
+ZLINK_CORE_SOURCE=local \
+bash tests/run_tests.sh
+```
+
+Result: `Test summary: all tasks and sample smoke passed`.
+
+- `:test` — 115/115 (0 failures, 0 errors), including 9/9 in the new
+  `ReceiveFlowStateContractTest` and the updated `MonitorContractTest`.
+- `:integrationTest` — 3/3.
+- `:zlink-ext-netty:test` — 3/3.
+- `:kotlin-samples:runAllKotlinSamples` — 7/7 sample tasks.
+- `samples/run_samples.sh` — 7/7 sample smoke tasks.
+- `:kotlin-contract-test:test` — 3/3 (1 pre-existing + 2 new).
+
+### Pre-existing failures verified without this change
+
+None found in this run. `ZLINK_CORE_SOURCE=local bash tests/run_tests.sh`
+was fully green end-to-end against the freshly rebuilt local Core (ABI 4,
+`zlink_socket_set_receive_flow_state` exported); no test needed to be
+excluded or worked around. The only anomaly encountered
+(`kotlin-samples:runDealerRouterRecvSample` failing with
+`UnsupportedClassVersionError` when the default `java` on `PATH` was JDK 21)
+is a pure local-environment toolchain-selection gap in this sandbox (the
+`JavaExec` sample tasks invoke the system `java` rather than the Gradle
+toolchain) — unrelated to any source change in this diff (confirmed by `git
+status --short` showing zero changes under `samples/`, `kotlin-samples`, or
+any Gradle build script) — and disappears once `JAVA_HOME`/`PATH` point at
+the already-cached JDK 22.
+
+### Files changed
+
+- `bindings/java/src/main/java/systems/zlink/contracts/sockets/SocketEnums/ReceiveFlowState.java` — new enum
+- `bindings/java/src/main/java/systems/zlink/contracts/sockets/SocketOptionFacades/CommonSocketOptions.java` — new `receiveFlowState(ReceiveFlowState)`
+- `bindings/java/src/main/java/systems/zlink/internal/ContractAccess.java` — new `SocketOptionsAccess.setReceiveFlowState` + static wrapper
+- `bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketBase.java` — wires the new `ContractAccess.SocketOptionsAccess` method
+- `bindings/java/src/main/java/systems/zlink/runtime/sockets/NativeSocketRuntime.java` — new package-private `setReceiveFlowState(int)`
+- `bindings/java/src/main/java/systems/zlink/runtime/sockets/SocketOptionSupport.java` — new `setReceiveFlowState(int)` (direct `ConfigResult.fromValue(rc)` mapping)
+- `bindings/java/src/main/java/systems/zlink/runtime/nativeapi/Native.java` — new `zlink_socket_set_receive_flow_state` FFM downcall + wrapper
+- `bindings/java/src/main/java/systems/zlink/runtime/nativeapi/NativeLayouts.java` — ABI-4 monitor snapshot layout (+5 fields, +5 offset constants)
+- `bindings/java/src/main/java/systems/zlink/runtime/nativeapi/NativeMonitorStatuses.java` — ABI version 3→4, decodes the 5 new fields
+- `bindings/java/src/main/java/systems/zlink/contracts/eventing/EventEnums/MonitorStatus.java` — +5 record fields
+- `bindings/java/src/main/java/systems/zlink/contracts/eventing/EventEnums/MonitorEventType.java` — +3 flow event constants, `ALL` 0xFFFF→0x7FFFF
+- `bindings/java/src/main/java/systems/zlink/contracts/eventing/EventEnums/MonitorStatusDetailFlags.java` — +`FLOW_STATE` detail bit
+- `bindings/java/src/main/java/systems/zlink/runtime/nativeapi/EnumCodecs.java` — encode/decode cases for the 3 new event constants and the widened `ALL` mask
+- `bindings/java/src/test/java/systems/zlink/contract/MonitorContractTest.java` — ABI/struct-size assertions updated to 4/232, new field assertions
+- `bindings/java/src/test/java/systems/zlink/contract/ReceiveFlowStateContractTest.java` — new, §8.1.1 focused test
+- `bindings/java/kotlin-contract-test/src/test/kotlin/systems/zlink/contract/ReceiveFlowStateContractTest.kt` — new, kotlin-contract alignment
+
+### Result
+
+```text
+Result: java flow-state binding parity implemented and tested; full
+  ZLINK_CORE_SOURCE=local tests/run_tests.sh is green end-to-end (115/115
+  :test, 3/3 :integrationTest, 3/3 :zlink-ext-netty:test, 7/7 kotlin
+  samples, 7/7 sample smoke), plus 3/3 :kotlin-contract-test:test.
+Changed source: see "Files changed" above. No core/ files are part of this
+  commit (the shared core/src/libzlink.vers export fix was already present
+  and pushed by another concurrent worker).
+Changed public contract: bindings/java public Java/Kotlin surface only (no
+  core/doc/spec or bindings/doc/spec changes); also fixes this binding's own
+  stale ABI-3/0xFFFF monitor mirror to match Core's already-published ABI 4
+  (see "Stage7 ABI/mask drift found and fixed" above).
+Focused tests: ZLINK_CORE_SOURCE=local bash bindings/java/tests/run_tests.sh
+  against a privately-built local Core package — see "Build + test evidence"
+  above.
+Paired perf reports: none (out of scope per plan §8.1.1 — binding perf is
+  not this stage's gate; no hot-path source was touched — the new call is a
+  single dedicated FFM downcall, not on any send/recv hot path).
+First remaining failure: none found in this stage's own suite or in the
+  pre-existing suite; see "Pre-existing failures verified without this
+  change" above.
+Framework work started: no
+```
+
+Commit: `java: expose receive-flow-state parity` (this repository, branch
+`codex/bindings-0.11.1-performance`).
