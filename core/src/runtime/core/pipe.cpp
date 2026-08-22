@@ -1092,13 +1092,13 @@ bool zlink::pipe_t::remote_flow_blocked_unlocked () const
     //  bytes reached the pipe, and also once the pipe's owner accepted a part
     //  it has not written yet - the classic ROUTER routing-ID part.
     return _remote_flow_paused && _out_incomplete_bytes == 0
-           && !_out_multipart_started_empty && !_out_owner_message_started;
+           && !_out_multipart_started_empty
+           && !_out_owner_message_started.load (std::memory_order_relaxed);
 }
 
 void zlink::pipe_t::mark_out_message_started ()
 {
-    scoped_fast_lock_t lock (_out_sync);
-    _out_owner_message_started = true;
+    _out_owner_message_started.store (true, std::memory_order_relaxed);
 }
 
 bool zlink::pipe_t::remote_flow_blocks_next_message () const
@@ -1558,7 +1558,7 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         _out_multipart_started_empty = false;
         //  A hiccup discards the outbound queue, including whatever the owner
         //  had accepted for the message in progress.
-        _out_owner_message_started = false;
+        _out_owner_message_started.store (false, std::memory_order_relaxed);
         _decoder_multipart_started_empty = false;
         if (incomplete_bytes > 0 && _registry_accounting)
             get_ctx ()->_physical_queue_registry.rollback_provisional (
@@ -2371,7 +2371,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         _out_multipart_started_empty = false;
         //  The message the owner started is now committed, so the next one
         //  faces the remote flow state again.
-        _out_owner_message_started = false;
+        _out_owner_message_started.store (false, std::memory_order_relaxed);
     }
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
@@ -2433,7 +2433,7 @@ void zlink::pipe_t::rollback_unlocked ()
     _decoder_multipart_started_empty = false;
     //  The owner's accepted-but-unwritten part is gone with the rest of the
     //  message, so the in-progress exception ends here.
-    _out_owner_message_started = false;
+    _out_owner_message_started.store (false, std::memory_order_relaxed);
 }
 
 void zlink::pipe_t::flush_unlocked ()

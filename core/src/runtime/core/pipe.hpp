@@ -436,8 +436,12 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  _out_sync, exactly like _transport_pair_write_held.
     bool _remote_flow_paused;
     //  Set while the pipe's owner holds an accepted message that has not been
-    //  written yet. Guarded by _out_sync like the other outbound state.
-    bool _out_owner_message_started;
+    //  written yet. Atomic rather than _out_sync-guarded so declaring it costs
+    //  no lock on the per-message ROUTER send path; the frames of that message
+    //  take _out_sync straight afterwards, so the send side always observes its
+    //  own store, and a concurrent flow-state application can at worst shift
+    //  the pause by one message - a transient the design already tolerates.
+    std::atomic<bool> _out_owner_message_started;
     //  Epoch of the last applied remote state. A command that does not advance
     //  it is a stale replay: the attach-time replay and a freshly accepted
     //  frame can be queued in either order.
