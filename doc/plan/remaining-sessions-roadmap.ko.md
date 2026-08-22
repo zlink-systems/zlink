@@ -438,7 +438,8 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     capacity spotTypes ordinal 정렬; harness 7/7 그린). 잔여(마감 전): ① .NET revert-target 재검토
     (nested-envelope 호환 분기·RecoveryReplyContentType 단순화) ② legacy JSON recovery 이중 표현
     durable 마이그레이션 판정(dotnet Legacy_* red 2건과 동일 판정) ③ 28 reply content-type 보존
-    조항 충족성 4언어 교차 검증 ④ 결정성 스윕(12셀 반복) 후 단계-마감 sol 리뷰.
+    조항 충족성 4언어 교차 검증 ④ **[x] 결정성 스윕 — 12셀 2연속 전 그린(2026-08-23, fresh host
+    재빌드 포함, run-log 보존)** → 단계-마감 sol 리뷰만 잔여.
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합` — 3건 병렬 착수(2026-08-22, canonical과 독립이므로
   단계 6 최단경로로 선행 투입)
