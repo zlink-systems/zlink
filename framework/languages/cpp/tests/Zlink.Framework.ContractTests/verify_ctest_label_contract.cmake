@@ -101,6 +101,7 @@ set(known_labels
   DERR-009
   DI
   actor
+  actor-join
   admission
   async
   backpressure
