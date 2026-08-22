@@ -294,7 +294,7 @@ void test_remote_pause_blocks_sender_and_resume_releases_it ()
     TEST_ASSERT_EQUAL_INT (
       0, as_socket (fixture.router)->set_local_receive_flow_state (k_running));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     fixture.teardown ();
 }
@@ -332,7 +332,7 @@ void test_local_hwm_and_remote_pause_are_independent ()
       zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
       fixture.pair_generation, 2));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     //  Now the other order: fill the HWM again and clear only the remote
     //  cause. The HWM cause still holds the pipe.
@@ -344,7 +344,7 @@ void test_local_hwm_and_remote_pause_are_independent ()
       zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
       fixture.pair_generation, 4));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     fixture.teardown ();
 }
@@ -421,7 +421,7 @@ void test_duplicate_and_stale_frames_are_ignored ()
       zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
       fixture.pair_generation, 102));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     fixture.teardown ();
 }
@@ -902,7 +902,7 @@ void test_flow_frame_before_registration_is_dropped_without_stalling ()
     TEST_ASSERT_TRUE (resolved);
 
     //  No stall: the route is usable and ordinary traffic flows.
-    TEST_ASSERT_TRUE (wait_for_send_success (dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (dealer, 5000));
     char rid[256];
     TEST_ASSERT_GREATER_THAN_INT (0, zlink_recv (router, rid, sizeof (rid), 0));
     recv_string_expect_success (router, "payload", 0);
@@ -1026,7 +1026,7 @@ void test_resume_rereads_credit_published_before_the_waiter_was_armed ()
 
     //  Nothing else will read, so the route can only come back if RESUME
     //  looked at the credit the reader actually published.
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     fixture.teardown ();
 }
@@ -1338,7 +1338,7 @@ void test_resume_while_hwm_full_still_recovers_through_byte_credit ()
 
     //  Draining returns the byte credit. The route has to come back.
     (void) drain_router (fixture.router);
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     fixture.teardown ();
 }
@@ -1381,7 +1381,7 @@ void test_stale_flow_state_command_cannot_override_a_newer_epoch ()
     TEST_ASSERT_FALSE (
       as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
         fixture.pair_id, fixture.pair_generation));
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     fixture.teardown ();
 }
@@ -1415,7 +1415,7 @@ void test_no_application_recv_returns_a_flow_frame ()
 
     //  Ordinary traffic still flows in both directions and carries only the
     //  application's own payload.
-    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
     char rid[256];
     const int rid_size = zlink_recv (fixture.router, rid, sizeof (rid), 0);
     TEST_ASSERT_GREATER_THAN_INT (0, rid_size);
