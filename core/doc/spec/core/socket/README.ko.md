@@ -251,6 +251,24 @@ typedef enum zlink_part_flag_t
 `ZLINK_PART_MORE`는 같은 멀티파트 메시지에 다음 파트가 있음을 나타내고,
 `ZLINK_PART_FINAL`은 현재 파트가 마지막임을 나타냅니다.
 
+### 수신 flow state
+
+```c
+typedef enum zlink_receive_flow_state_t
+{
+    ZLINK_RECEIVE_FLOW_RUNNING = 0,
+    ZLINK_RECEIVE_FLOW_PAUSED = 1
+} zlink_receive_flow_state_t;
+```
+
+DEALER와 ROUTER socket이 paired completion lane으로 자신에게 보내는 peer에게
+알리는 receive-flow 상태입니다. `ZLINK_RECEIVE_FLOW_RUNNING`은 계속 보내라는
+뜻이고 `ZLINK_RECEIVE_FLOW_PAUSED`는 이 socket으로 새 message를 보내지 말라는
+뜻입니다. 이 값은 counter가 아니라 socket 전체에 적용되는 절대 상태이므로, 이미
+유지하는 상태를 다시 설정하면 아무것도 바꾸지 않고 성공합니다. 이 lane은 DEALER와
+ROUTER에만 있으며 결과 동작은 [DEALER](06-dealer.ko.md)와
+[ROUTER](07-router.ko.md)가 소유합니다.
+
 ### 송신 결과
 
 ```c
@@ -461,11 +479,25 @@ complete message 한 건, 즉 single-part 또는 total-known message에만 이 �
 frame이 제한 없이 누적되지 않습니다. 이 예외를 위해 known-total metadata나 transaction 전체
 reservation을 추가하지 않습니다.
 
-Core는 보통 `ceil(hwm_bytes / 2)`에서 credit을 묶어서 반환합니다. Sender가 실제 HWM에
+Admission은 frame 단위로 charge합니다. 일반 frame의 charge는 payload byte 수에
+`sizeof(zlink_msg_t)`를 더한 값이므로 빈 frame도 비용이 0이 아니고, 작은 frame을 많이
+보관한 pipe는 payload 합계보다 먼저 HWM에 도달합니다. Delimiter, join과 leave frame은
+application payload가 없으므로 `sizeof(zlink_msg_t)` metadata 비용만 charge합니다.
+Frame이 pipe에서 빠질 때 같은 charge를 되돌려 줍니다.
+
+Low water mark는 pipe가 대기 중인 writer에게 read credit을 돌려주는 byte 수준입니다.
+기본값은 해당 방향에 적용된 HWM의 `ceil(hwm_bytes / 2)`입니다. Pipe는 low water mark
+hint를 가질 수도 있습니다. Hint는 그 기본값보다 낮을 때만 사용하며, 기본값 이상인 hint는
+기본값을 그대로 둡니다. HWM 이상인 hint는 `hwm_bytes - 1`로 clamp하고, clamp한 값이 `1`
+미만이면 `1`로 만들므로 결과는 항상 `1 .. hwm_bytes - 1` 범위 안에 있습니다. Hint `0`은
+hint가 없다는 뜻입니다. 무제한 HWM에는 low water mark가 없습니다.
+
+Core는 보통 이 low water mark에서 credit을 묶어서 반환합니다. Sender가 실제 HWM에
 도달한 경우에는 이미 읽힌 누적 byte를 직접 확인하고, 그 뒤 receiver가 현재 보이는 입력을
-모두 읽으면 LWM 전에도 한 번 credit을 반환할 수 있습니다. 이 복구는 HWM에 도달한 sender에만
-적용하므로 낮은 queue depth의 정상 message마다 cross-thread command를 만들지 않습니다. 이
-pipe 기준은 Framework의 receive 재개 기준과 별개입니다.
+모두 읽으면 LWM 전에도 한 번 credit을 반환하고 대기 중인 writer를 깨울 수 있습니다. 이
+복구는 HWM에 도달한 sender에만 적용하므로 낮은 queue depth의 정상 message마다
+cross-thread command를 만들지 않습니다. 기다리는 writer가 없는 pipe를 receiver가 비워도
+wakeup을 보내지 않습니다. 이 pipe 기준은 Framework의 receive 재개 기준과 별개입니다.
 
 ##### Timing
 
@@ -710,6 +742,29 @@ byte-count option에는 `uint64_t` output buffer가 필요하고, 호출할 때
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지합니다.
 
 **참고:** `zlink_set_option`
+
+---
+
+### zlink_socket_set_receive_flow_state
+
+이 socket의 receive-flow 상태를 설정하고 paired completion lane으로 동기화합니다.
+
+```c
+ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
+  void *handle_, zlink_receive_flow_state_t state_);
+```
+
+`state_`를 socket 전체의 receive-flow 상태로 저장하고, paired DEALER/ROUTER
+completion lane으로 연결된 모든 peer에게 보냅니다. 이 호출은 socket을 소유한
+runtime thread가 local 상태를 저장한 시점에 완료되며 peer가 관측할 때까지
+기다리지 않습니다. 현재 상태를 다시 설정하면 성공하고 새로 보내는 것은 없습니다.
+
+**반환값:** 성공 시 `ZLINK_CONFIG_OK`이며 현재 상태를 다시 설정한 경우도
+포함합니다. Completion lane이 없는 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를
+반환하고 기존 byte HWM과 transport backpressure를 그대로 유지합니다. 전체 결과
+표는 [Errors](../03-errors.ko.md)가 소유합니다.
+
+**참고:** `zlink_monitor_status`
 
 ---
 

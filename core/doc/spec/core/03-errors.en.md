@@ -178,6 +178,32 @@ typedef enum zlink_config_result_t {
 
 `CONFLICT` covers duplicate names, duplicate bindings, and process-local identity collisions. `BUFFER_TOO_SMALL` means that query or retain output capacity is insufficient and no partial caller-owned output was written. `BUSY` means that the same mutable batch or configuration object was used concurrently.
 
+### 6.1 Receive flow state
+
+`zlink_socket_set_receive_flow_state()` returns the following rows. The
+[Socket overview](socket/README.en.md) owns the function declaration and the
+state enum; [DEALER](socket/06-dealer.en.md) and [ROUTER](socket/07-router.en.md)
+own the resulting behavior.
+
+| Condition | Result | errno |
+|---|---|---|
+| A DEALER or ROUTER handle and a state inside `zlink_receive_flow_state_t`, including a repeat of the state the socket already holds | `ZLINK_CONFIG_OK` | unspecified |
+| A null handle, a handle that is not a socket, or a handle whose close already finished its teardown | `ZLINK_CONFIG_INVALID_HANDLE` | unspecified |
+| A state value outside `zlink_receive_flow_state_t` | `ZLINK_CONFIG_INVALID_ARGUMENT` | `EINVAL` |
+| A socket type with no completion lane: PAIR, PUB, SUB, XPUB, XSUB, or STREAM | `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` |
+| A concurrent close won admission for this socket before the call | `ZLINK_CONFIG_INVALID_STATE` | `ESHUTDOWN` |
+| The owning context is terminating | `ZLINK_CONFIG_INTERNAL_ERROR` | `ETERM` |
+
+Repeating the current state is a successful no-op, not an error: the state is
+absolute, not a counter.
+
+A concurrent close and this call compete for the same socket admission, and
+only the one that is admitted first is observed. Both outcomes of that race are
+defined. `INVALID_STATE` means that close was admitted first while the handle
+was still registered. `INVALID_HANDLE` means that close had already completed
+its teardown, so the handle no longer resolves to a socket. Neither outcome
+applies the state partially.
+
 ## 7. Version
 
 ```c

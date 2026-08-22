@@ -190,6 +190,29 @@ typedef enum zlink_config_result_t {
 retain output capacity가 작으며 caller-owned output을 일부 기록하지 않았음을 뜻한다. `BUSY`는 같은 mutable
 batch나 configuration object를 동시에 사용한 경우다.
 
+### 6.1 Receive flow state
+
+`zlink_socket_set_receive_flow_state()`의 결과는 다음과 같다. 함수 선언과 state enum은
+[Socket 공통](socket/README.ko.md)이 소유하고, 결과로 나타나는 동작은
+[DEALER](socket/06-dealer.ko.md)와 [ROUTER](socket/07-router.ko.md)가 소유한다.
+
+| 조건 | 결과 | errno |
+|---|---|---|
+| DEALER 또는 ROUTER handle과 `zlink_receive_flow_state_t` 범위 안의 state. Socket이 이미 유지하는 state를 다시 설정한 경우를 포함한다 | `ZLINK_CONFIG_OK` | 정의하지 않음 |
+| Handle이 NULL이거나 socket이 아니거나, close의 teardown이 이미 끝난 handle | `ZLINK_CONFIG_INVALID_HANDLE` | 정의하지 않음 |
+| `zlink_receive_flow_state_t` 범위 밖의 state 값 | `ZLINK_CONFIG_INVALID_ARGUMENT` | `EINVAL` |
+| Completion lane이 없는 socket 유형: PAIR, PUB, SUB, XPUB, XSUB, STREAM | `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` |
+| 동시에 진행한 close가 이 호출보다 먼저 socket admission을 얻음 | `ZLINK_CONFIG_INVALID_STATE` | `ESHUTDOWN` |
+| 소유 context가 종료 중 | `ZLINK_CONFIG_INTERNAL_ERROR` | `ETERM` |
+
+현재 상태를 다시 설정하는 호출은 오류가 아니라 성공하는 no-op다. 이 state는 counter가 아니라
+절대값이다.
+
+동시에 진행하는 close와 이 호출은 같은 socket admission을 두고 경합하며, 먼저 수락된 쪽만
+관측된다. 경합의 두 결과가 모두 정의되어 있다. `INVALID_STATE`는 handle이 아직 등록된 상태에서
+close가 먼저 수락된 경우다. `INVALID_HANDLE`은 close의 teardown이 이미 끝나 handle이 더 이상
+socket으로 확인되지 않는 경우다. 어느 쪽도 state를 일부만 적용하지 않는다.
+
 ## 7. Version
 
 ```c

@@ -249,6 +249,25 @@ typedef enum zlink_part_flag_t
 `ZLINK_PART_MORE` indicates that another part follows in the same multipart
 message. `ZLINK_PART_FINAL` indicates that the current part is the last one.
 
+### Receive Flow State
+
+```c
+typedef enum zlink_receive_flow_state_t
+{
+    ZLINK_RECEIVE_FLOW_RUNNING = 0,
+    ZLINK_RECEIVE_FLOW_PAUSED = 1
+} zlink_receive_flow_state_t;
+```
+
+This is the receive-flow state a DEALER or ROUTER socket publishes to the peers
+that send to it over the paired completion lane. `ZLINK_RECEIVE_FLOW_RUNNING`
+asks those peers to keep sending; `ZLINK_RECEIVE_FLOW_PAUSED` asks them to stop
+sending new messages to this socket. The value is an absolute socket-wide
+state, not a counter, so setting the state a socket already holds changes
+nothing and succeeds. Only DEALER and ROUTER have this lane;
+[DEALER](06-dealer.en.md) and [ROUTER](07-router.en.md) own the resulting
+behavior.
+
 ### Send Result
 
 ```c
@@ -463,13 +482,30 @@ HWM from its first `MORE` frame, so frames cannot accumulate without a bound.
 Core adds neither known-total metadata nor a whole-transaction reservation for
 this exception.
 
-Core normally batches credit at `ceil(hwm_bytes / 2)`. If a sender actually
+Admission charges one frame at a time. An ordinary frame is charged its
+payload byte count plus `sizeof(zlink_msg_t)`, so an empty frame is not free
+and a pipe holding many small frames reaches its HWM before its payload sum
+does. A delimiter, join, or leave frame carries no application payload and is
+charged the `sizeof(zlink_msg_t)` metadata cost only. The same charge is
+returned when the frame leaves the pipe.
+
+The low water mark is the byte level at which a pipe returns read credit to a
+blocked writer. Its default is `ceil(hwm_bytes / 2)` for the applied HWM of
+that direction. A pipe may also carry a low-water-mark hint. A hint is used
+only when it is below that default; a hint at or above the default leaves the
+default in place. A hint greater than or equal to the HWM is clamped to
+`hwm_bytes - 1`, and a clamped value below `1` becomes `1`, so the resulting
+mark is always inside `1 .. hwm_bytes - 1`. A hint of `0` means no hint. An
+unlimited HWM has no low water mark.
+
+Core normally batches credit at that low water mark. If a sender actually
 reaches its HWM, it first checks the monotonic bytes already read by its peer.
 If the receiver later drains all currently visible input, it may return one
-credit update before the LWM. This recovery applies only to an HWM-blocked
-sender and therefore does not create a cross-thread command for every normal
-low-depth message. This pipe threshold is independent of a Framework
-receive-resume threshold.
+credit update before the LWM and wake the blocked writer then. This recovery
+applies only to an HWM-blocked sender and therefore does not create a
+cross-thread command for every normal low-depth message. A receiver that
+drains a pipe no writer is waiting on sends no wakeup. This pipe threshold is
+independent of a Framework receive-resume threshold.
 
 ##### Timing
 
@@ -718,6 +754,31 @@ partially filling the value. On success `*optvallen_` stays `sizeof(uint64_t)`.
 **Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
 **See also:** `zlink_set_option`
+
+---
+
+### zlink_socket_set_receive_flow_state
+
+Set this socket's receive-flow state and synchronise it to the paired
+completion lane.
+
+```c
+ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
+  void *handle_, zlink_receive_flow_state_t state_);
+```
+
+Stores `state_` as the socket-wide receive-flow state and sends it to every
+peer connected over the paired DEALER/ROUTER completion lane. The call
+completes when the socket-owning runtime thread has stored the local state; it
+does not wait for any peer to observe it. Repeating the current state succeeds
+and sends nothing new.
+
+**Returns:** `ZLINK_CONFIG_OK` on success, including a repeat of the current
+state. A socket type without a completion lane returns
+`ZLINK_CONFIG_NOT_SUPPORTED` and keeps its byte HWM and transport backpressure
+unchanged. [Errors](../03-errors.en.md) owns the full result table.
+
+**See also:** `zlink_monitor_status`
 
 ---
 
