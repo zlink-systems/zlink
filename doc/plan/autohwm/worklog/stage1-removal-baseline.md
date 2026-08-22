@@ -703,6 +703,105 @@ byte-HWM과 무관한 **main merge `f159a51a99`**로 좁혀졌다. 그 안에서
 `f159a51a99`가 merge한 main 쪽 이력을 다시 bisect해야 하며 이는 byte-HWM 계획의
 범위 밖이다. 사용자 판단이 필요하다.
 
+## 8.16 Merge 내부 bisect: 소유 commit은 `e13e561ba9`
+
+### 8.16.1 앞선 §8.13.1의 topology 오류 정정
+
+`f159a51a99`는 `cc122eaa40`(perf branch)와 `35a39022b9`(main)를 합치는 merge다.
+§8.13.1은 `git log --reverse` 출력을 **선형 순서로 착각**했다. 실제 소속은 다음과
+같다.
+
+| 분기 | `core/v0.10.1` 이후 `core/src` commit |
+|---|---|
+| 공통 | `425b9c2a82`, `81e98c1c0e` |
+| perf side → `cc122eaa40` | `408f1d4a9d`, **`e13e561ba9`**, `7bee681ec5`, `ad5e936bed` |
+| main side → `35a39022b9` | `1452b14905`, `dc9fb69735` |
+
+즉 §8.13.1에서 "직전 commit"이라고 본 `dc9fb69735`는 main 쪽이라 perf branch
+작업을 하나도 포함하지 않는다. 그래서 ~100%로 측정됐고, "merge가 원인"이라는
+결론은 잘못이었다. 실제로는 **merge가 perf branch 쪽 누적 손실을 처음 합류시킨
+것**이다.
+
+### 8.16.2 소유 commit
+
+perf branch를 따라 인접 paired로 측정하면 `408f1d4a9d`(c3) → `e13e561ba9`(c4)
+에서 떨어진다. 4 pair 전부 같은 방향이다.
+
+```text
+c3 190.7 / 175.5 / 173.4 / 170.6   median 175.5
+c4 176.4 / 159.6 / 164.1 / 162.2   median 163.9   -> 93.4%
+```
+
+`e13e561ba9` "fix Windows multi benchmark performance"가 소유자다. 이 commit이
+바꾼 14개 파일 중 Linux에서 실효가 있는 것은 4개뿐이다(`socket_poller.cpp`
+추가분은 전부 `#if defined ZLINK_HAVE_WINDOWS`, `ip.cpp`는 preprocessor 조건만
+바뀜, `asio_tcp_tuning.hpp`는 Windows 전용).
+
+### 8.16.3 파일 단위 귀속
+
+`e13e561ba9`에서 파일별로만 `408f1d4a9d`로 되돌린 build를 만들어 인접 측정했다.
+
+| Variant | median | c4 대비 |
+|---|---|---|
+| `c4` (그대로) | 159.4 | — |
+| `c4` − `tcp_transport.cpp` (writev 재작성 되돌림) | 159.9 | 변화 없음 |
+| `c4` − `mailbox.{cpp,hpp}` | 172.7 | **+8.4% (3/3 round)** |
+| `c4` − `signaler.{cpp,hpp}` | 169.4 | 혼재 |
+| `c4` − `ip_fdpair.cpp` | 169.1 | 혼재 |
+
+`mailbox` 되돌림을 5 pair 추가 검증했고 **8/8 전부 같은 방향**이다.
+
+```text
+c4   180.9 / 170.2 / 163.5 / 162.4 / 161.4   median 163.5
+nomb 190.9 / 179.3 / 175.9 / 172.7 / 172.9   median 175.9   -> +7.6%
+```
+
+`e13e561ba9`의 `mailbox` 변경 내용은 다음과 같다.
+
+- `get_fd()`가 호출마다 `_primary_signaler_required`에 release store를 한다.
+- `send()`가 primary `_signaler.send()`(eventfd write **syscall**)를 `_sync`
+  **안쪽**으로 옮겼다. 이전에는 unlock 뒤 `signal()`에서 했다.
+- `signal()`도 같은 방식으로 lock 안에서 syscall을 한다.
+- `recv()`가 `_signalers` 확인용 `_sync` 왕복을 하나 더 한다.
+- `add/remove/clear_signaler`가 `_sync`를 잡는다.
+
+command 1건마다 mailbox mutex를 syscall 너머로 잡으므로 producer(io thread)들과
+consumer(`recv()`의 `_cpipe` 읽기)가 직렬화된다. CPU는 늘지 않고 처리량만
+떨어지는 §8.13.3의 성질과 일치한다.
+
+### 8.16.4 현재 tree로의 이식은 재현되지 않는다 (3회 시도, 전부 폐기)
+
+같은 수정을 현재 worktree에 이식했으나 어느 것도 이득이 없어 전부 되돌렸다.
+
+| # | 시도 | 결과 |
+|---|---|---|
+| 1 | `send()`/`signal()`의 primary `_signaler.send()`를 `_sync` 밖으로 hoist | 4 pair 중 3 pair 열세. median 158.1 → 155.7 |
+| 2 | `get_fd()`를 write-once로 (sticky flag를 이미 true면 쓰지 않음) | 4 pair 중 3 pair 열세 |
+| 3 | pre-`e13e561ba9` command path 전체 복원(`_has_signalers` 원자 mirror로 secondary가 없을 때 `_signalers`·`_primary_signaler_required`를 아예 만지지 않음 + get_fd write-once + recv fast path + primary signal을 lock 밖에서) | 5 pair 중 3 pair 열세. median 153.4 → 152.4 |
+
+시도 3은 secondary signaler가 없을 때 `c4_nomailbox`와 의미상 동일한 경로다.
+그런데도 이득이 없다는 것은, **`e13e561ba9` 당시의 mailbox 비용이 현재 tree에는
+더 이상 존재하지 않는다**는 뜻이다. 그 사이 `3ef4d09a37`이 receive/dispatch
+경로를 다시 썼고 이번 stage가 poller를 고쳤기 때문에, mailbox 명령 경로는 이제
+병목이 아니다. `c4` 시점의 귀속은 사실이지만 오늘 코드에서는 실행 가능한
+수정으로 이어지지 않는다.
+
+### 8.16.5 결론
+
+잔여 ~10%는 `e13e561ba9`가 처음 만든 것이 맞지만, 그 commit의 mailbox 형태를
+그대로 되돌려도 현재 코드에서는 회복되지 않는다. 남은 손실은 이제
+`e13e561ba9`~현재 사이에 재배치된 구조 전체에 분산되어 있고, 단일 commit
+되돌리기로는 접근할 수 없다.
+
+이번 round는 코드 변경 없이 종료한다(3회 시도 전부 폐기). 따라서 §8.14의
+`final5` gate는 실행하지 않았고 §8.14의 `final4` 수치가 현재 코드의 최신
+gate 결과다.
+
+Test 상태(항상 `core/build-tests`, 현재 source로 재빌드):
+9/10 통과, 알려진 기존 실패 `test_retained_hwm_credit`(:280 lease NULL) 1건.
+`test_router_mandatory_hwm`은 batch에서 1회 실패했으나 단독 10/10 통과(부하
+flake). `unittest_poller`, `test_timer_poller` 모두 통과. **새 실패 없음.**
+
 ## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
