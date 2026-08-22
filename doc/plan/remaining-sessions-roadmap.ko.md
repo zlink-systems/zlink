@@ -302,8 +302,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     기록(schema `ordinal-or-zero` 적합, PrecommitCoordinator:70) — Java decoder가 0 거부
     (RelocationAuthorityStateCodec:128→PayloadCodec:120 slot-비어야함 실패), cpp도 동일
     (actor_authority_payload.hpp:618). **40/52/ZLJR 무결 — Java/C++ decoder의 schema 비준수.**
-    Ruling: 두 언어가 frozen authority-relocation-state대로 source-phase slot 수용 — Java(sonnet)·
-    C++(terra) 병렬 수정 중(unit만, 스테이지 코디네이터 직렬). 스펙 구체화는
+    Ruling: 두 언어가 frozen authority-relocation-state대로 source-phase slot 수용 — **랜딩
+    `6a772686d8` → dotnet→java 그린(10/12,** stale Java host 재빌드 후 — installDist도 freshness
+    함정 목록에 추가). dotnet→cpp는 잔존 red(무로그, /tmp/tmp.lMl9XR2K9m) — sol 진단 중. 이월
+    카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
+    strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
+    test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
+    라인 대조 확인 — f29a4c69d8 이후 encoder/literal 불일치, 재핀 또는 encoder 결함 분석 필요). 스펙 구체화는
     sol 리뷰 승인(앵커 보완 `4a39e14dca`). ⓑ
     dotnet→cpp = .NET TargetAttemptGeneration=1(:967) vs cpp validator lifecycle 동일성 요구
     (spot_runtime.cpp:5764). **설계 판정 완료(opus 분석→Claude ruling, 후보 A)**:
