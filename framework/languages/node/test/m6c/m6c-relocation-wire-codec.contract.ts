@@ -12,6 +12,7 @@ import {
   encodeSessionRelocationSeal,
   encodeSessionRelocationSealed,
   encodeStatefulReply,
+  serviceSessionRelocationIdentityKey,
   type ServiceMaintenanceRelocationControl,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
@@ -307,6 +308,49 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     ...seal,
     senderRole: 'target'
   } as never), /sender role/);
+});
+
+test('Session relocation retain identity includes every coordinator fence field', () => {
+  const base: ServiceSessionRelocationSeal = {
+    relocation: { high: 7n, low: 9n },
+    coordinator: {
+      ownerId: 'coordinator',
+      leaseGeneration: 3n,
+      nodeRid: 'source',
+      nodeGeneration: 2n,
+      expectedAuthorityStoreVersion: 'store-v17'
+    },
+    senderRole: 'source',
+    actor: {
+      actor: { nodeRid: 'source', actorId: 'actor-1', generation: 5n },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 13n
+    },
+    session: {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
+      sessionRid: 'session',
+      bindingGeneration: 6n
+    }
+  };
+  const key = serviceSessionRelocationIdentityKey(base);
+  const changed = [
+    { ...base.coordinator, ownerId: 'other-owner' },
+    { ...base.coordinator, leaseGeneration: 4n },
+    { ...base.coordinator, nodeRid: 'other-source' },
+    { ...base.coordinator, nodeGeneration: 3n },
+    { ...base.coordinator, expectedAuthorityStoreVersion: 'store-v18' }
+  ];
+
+  for (const coordinatorFence of changed) {
+    assert.notEqual(
+      serviceSessionRelocationIdentityKey({ ...base, coordinator: coordinatorFence }),
+      key
+    );
+  }
 });
 
 test('actorJoin reply tail (command 20, actor-join-reply-tail) matches the shared golden vectors', () => {

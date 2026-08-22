@@ -65,6 +65,11 @@ import type {
   ServiceSessionRelocationSealed,
   ServiceWireOperationId
 } from '../foundation/service-stateful-wire-codec';
+import { serviceSessionRelocationIdentityKey } from '../foundation/service-stateful-wire-codec';
+import { operationIdentityKey } from '../foundation/operation-identity';
+import { BoundedReplayMap } from './bounded-replay-map';
+
+const DEFERRED_JOIN_TERMINAL_CAPACITY = 4096;
 
 interface ZLinkSessionRelocationWirePort {
   requestSessionRelocationSeal(
@@ -213,6 +218,12 @@ export class ZLinkActorTransferRuntime {
     readonly rejectSubmitted: (error: unknown) => void;
     notifySubmitted?: () => Promise<void>;
   }>();
+  private readonly activeDeferredJoinTerminals =
+    new Map<string, Promise<ZLinkDeferredJoinAcceptedRoot>>();
+  private readonly deferredJoinTerminals =
+    new BoundedReplayMap<string, ZLinkDeferredJoinAcceptedRoot>(
+      DEFERRED_JOIN_TERMINAL_CAPACITY
+    );
 
   constructor(private readonly options: ZLinkActorTransferRuntimeOptions) {}
 
@@ -337,6 +348,43 @@ export class ZLinkActorTransferRuntime {
     submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
     signal?: AbortSignal
   ): Promise<ZLinkDeferredJoinAcceptedRoot> {
+    const terminalKey = deferredJoinTerminalKey(root);
+    const terminal = this.deferredJoinTerminals.get(terminalKey);
+    if (terminal !== undefined) {
+      this.deferredJoinTerminals.touch(terminalKey);
+      return terminal;
+    }
+    const active = this.activeDeferredJoinTerminals.get(terminalKey);
+    if (active !== undefined) return await waitForOperation(active, signal);
+    const completion = this.commitAndDeliverDeferredJoinAcceptedCore(
+      root,
+      actor,
+      actorRef,
+      submitMailbox
+    );
+    this.activeDeferredJoinTerminals.set(terminalKey, completion);
+    void completion.then(
+      completed => {
+        this.deferredJoinTerminals.remember(terminalKey, completed);
+        if (this.activeDeferredJoinTerminals.get(terminalKey) === completion) {
+          this.activeDeferredJoinTerminals.delete(terminalKey);
+        }
+      },
+      () => {
+        if (this.activeDeferredJoinTerminals.get(terminalKey) === completion) {
+          this.activeDeferredJoinTerminals.delete(terminalKey);
+        }
+      }
+    );
+    return await waitForOperation(completion, signal);
+  }
+
+  private async commitAndDeliverDeferredJoinAcceptedCore(
+    root: ZLinkDeferredJoinAcceptedRoot,
+    actor: ZLinkActor,
+    actorRef: ActorRef,
+    submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>
+  ): Promise<ZLinkDeferredJoinAcceptedRoot> {
     const targetActorRef = this.options.actorManager()
       ?.getState(actor.context.actorId)
       ?.nativeActorRef;
@@ -344,8 +392,9 @@ export class ZLinkActorTransferRuntime {
       ? actorRef
       : toFrameworkActorRef(targetActorRef, actor.context.meshName);
     let current = root.cursor === 'prepared'
-      ? await this.requireDeferredJoinJournal().markCommitted(root, currentActorRef, signal)
+      ? await this.requireDeferredJoinJournal().markCommitted(root, currentActorRef)
       : root;
+    if (current.cursor === 'delivered') return current;
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -353,24 +402,18 @@ export class ZLinkActorTransferRuntime {
           current,
           actor,
           currentActorRef,
-          submitMailbox,
-          signal
+          submitMailbox
         );
         return current;
       } catch (error) {
         lastError = error;
         if (attempt < 2) {
-          await new Promise<void>((resolve, reject) => {
+          await new Promise<void>(resolve => {
             const timer = setTimeout(resolve, 10 << attempt);
             timer.unref();
-            signal?.addEventListener('abort', () => {
-              clearTimeout(timer);
-              reject(signal.reason);
-            }, { once: true });
           });
           current = await this.requireDeferredJoinJournal().recover(
-            currentActorRef.actorId,
-            signal
+            currentActorRef.actorId
           ) ?? current;
         }
       }
@@ -551,7 +594,6 @@ export class ZLinkActorTransferRuntime {
         const sealedTarget = await this.sealBoundSessionRoute(
           actor,
           state,
-          sealId,
           signal,
           relocation
         );
@@ -684,7 +726,7 @@ export class ZLinkActorTransferRuntime {
           await this.cancelSourceActorMove(actor, state, deferredOperationId);
           await this.restoreSourceActor(actor, sourceSpotId);
           if (sealId !== undefined) {
-            this.beginBoundSessionSealAbort(actor, state, sealId);
+            this.beginBoundSessionSealAbort(actor, state);
           }
         }
       };
@@ -694,7 +736,7 @@ export class ZLinkActorTransferRuntime {
         await this.cancelSourceActorMove(actor, state, deferredOperationId);
         if (sourceLeaveStarted) await this.restoreSourceActor(actor, sourceSpotId);
         if (sealId !== undefined) {
-          this.beginBoundSessionSealAbort(actor, state, sealId);
+          this.beginBoundSessionSealAbort(actor, state);
         }
       } catch (rollbackError) {
         throw new AggregateError([error, rollbackError], 'Actor source leave and rollback both failed.');
@@ -742,7 +784,7 @@ export class ZLinkActorTransferRuntime {
       if (state.remoteBoundSessionTarget !== undefined) {
         sealId = randomUUID();
         state.setRemoteBoundSessionTarget(
-          await this.sealBoundSessionRoute(actor, state, sealId, signal, relocation)
+          await this.sealBoundSessionRoute(actor, state, signal, relocation)
         );
         this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
@@ -788,7 +830,7 @@ export class ZLinkActorTransferRuntime {
             }
           }
           if (sealId !== undefined) {
-            this.beginBoundSessionSealAbort(actor, state, sealId);
+            this.beginBoundSessionSealAbort(actor, state);
           }
         }
       };
@@ -811,7 +853,7 @@ export class ZLinkActorTransferRuntime {
         }
       }
       if (sourceRestored && sealId !== undefined) {
-        this.beginBoundSessionSealAbort(actor, state, sealId);
+        this.beginBoundSessionSealAbort(actor, state);
       }
       throw error;
     }
@@ -894,7 +936,6 @@ export class ZLinkActorTransferRuntime {
   private async sealBoundSessionRoute(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    sealId: string,
     signal?: AbortSignal,
     relocation?: ServiceWireOperationId
   ): Promise<ZLinkRemoteBoundSessionTarget> {
@@ -990,28 +1031,26 @@ export class ZLinkActorTransferRuntime {
       ...target,
       previousAuthorityOwnerGeneration: authority.authorityOwnerGeneration,
       previousOwnerLeaseGeneration: authority.ownerLeaseGeneration,
-      relocationSealId: sealId,
+      relocationSealId: serviceSessionRelocationIdentityKey(request),
       serviceWireRelocation: { relocation, coordinator, session }
     };
   }
 
   private beginBoundSessionSealAbort(
     actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    sealId: string
+    state: ZLinkActorRuntimeState
   ): void {
     const target = preferredRemoteBoundSessionTarget(
       state.remoteBoundSessionTarget,
       state.boundSessionTransferTarget
     );
-    void this.abortBoundSessionRouteSeal(actor, state, sealId, target)
+    void this.abortBoundSessionRouteSeal(actor, state, target)
       .catch(error => this.options.reportPostCommitError?.(error));
   }
 
   private async abortBoundSessionRouteSeal(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    sealId: string,
     targetOverride?: ZLinkRemoteBoundSessionTarget
   ): Promise<void> {
     const target = targetOverride ?? preferredRemoteBoundSessionTarget(
@@ -1030,7 +1069,22 @@ export class ZLinkActorTransferRuntime {
         `Actor '${actor.context.actorId}' Session route service-wire release is unavailable.`
       );
     }
-    if (target.relocationSealId !== sealId) {
+    const route: ServiceSessionRelocationRoute = {
+      relocation: serviceFence.relocation,
+      coordinator: serviceFence.coordinator,
+      senderRole: 'source',
+      actor: {
+        actorId: actor.context.actorId,
+        generation: actorRef.generation,
+        nodeRid: String(actorRef.nodeRid)
+      },
+      session: serviceFence.session,
+      route: {
+        action: 'abort',
+        currentAuthorityOwnerGeneration: target.previousAuthorityOwnerGeneration
+      }
+    };
+    if (target.relocationSealId !== serviceSessionRelocationIdentityKey(route)) {
       throw new Error(
         `Actor '${actor.context.actorId}' Session route seal release changed its seal identity.`
       );
@@ -1038,21 +1092,7 @@ export class ZLinkActorTransferRuntime {
     await serviceWire.sendSessionRelocationRoute(
         target.routerChannelId,
         target.targetNodeRid,
-        {
-          relocation: serviceFence.relocation,
-          coordinator: serviceFence.coordinator,
-          senderRole: 'source',
-          actor: {
-            actorId: actor.context.actorId,
-            generation: actorRef.generation,
-            nodeRid: String(actorRef.nodeRid)
-          },
-          session: serviceFence.session,
-          route: {
-            action: 'abort',
-            currentAuthorityOwnerGeneration: target.previousAuthorityOwnerGeneration
-          }
-        },
+        route,
         this.options.shutdownSignal?.()
     );
   }
@@ -1743,6 +1783,30 @@ export class ZLinkActorTransferRuntime {
 function relocationDebug(marker: string, detail: Record<string, unknown>): void {
   if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
   console.error('[zlink.runtime.relocation]', marker, detail);
+}
+
+function deferredJoinTerminalKey(root: ZLinkDeferredJoinAcceptedRoot): string {
+  return `${root.actor.actorId}:${root.actor.objectGeneration.toString()}:` +
+    operationIdentityKey(root.operationId);
+}
+
+function waitForOperation<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return operation;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    operation.then(
+      value => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      }
+    );
+  });
 }
 
 function sameSourceActorAuthority(

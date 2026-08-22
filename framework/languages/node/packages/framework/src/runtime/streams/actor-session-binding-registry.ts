@@ -568,8 +568,25 @@ export class ZLinkActorSessionBindingRegistry<
 
   retainRelocationOutbound(
     actorId: string,
-    operation: ZLinkActorSessionRetainedOutbound
+    operation: ZLinkActorSessionRetainedOutbound,
+    sealId?: string
   ): ServiceSessionBindingAdmissionResult {
+    if (sealId !== undefined) {
+      const queue = this.relocations.get(actorId);
+      const state = queue?.seals.get(sealId);
+      if (
+        queue === undefined
+        || state === undefined
+        || (queue.activeSealId !== sealId
+          && !(queue.activeSealId === undefined && state.phase === 'terminal'))
+      ) {
+        failRetainedOutbound(
+          operation,
+          new Error(`Actor '${actorId}' Session outbound did not match its exact relocation seal.`)
+        );
+        return 'rejected';
+      }
+    }
     return this.retainRelocationOutboundCore(actorId, operation, 'legacy');
   }
 

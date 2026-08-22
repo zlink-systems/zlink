@@ -64,7 +64,10 @@ export function mergeRemoteBoundSessionTarget(
     fallback === undefined
     || fallback.routerChannelId !== target.routerChannelId
     || !routingIdsEqual(fallback.targetNodeRid, target.targetNodeRid)
-    || !routingIdsEqual(fallback.spotId, target.spotId)
+    || (
+      !routingIdsEqual(fallback.spotId, target.spotId)
+      && !sameRemoteSessionOwner(fallback, target)
+    )
   ) {
     return target;
   }
@@ -83,6 +86,18 @@ export function mergeRemoteBoundSessionTarget(
       target.serviceWireRelocation ?? fallback.serviceWireRelocation
   };
   return merged;
+}
+
+function sameRemoteSessionOwner(
+  left: ZLinkRemoteBoundSessionTarget,
+  right: ZLinkRemoteBoundSessionTarget
+): boolean {
+  return left.sessionNodeRid !== undefined
+    && right.sessionNodeRid !== undefined
+    && left.sessionRid !== undefined
+    && right.sessionRid !== undefined
+    && routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid)
+    && routingIdsEqual(left.sessionRid, right.sessionRid);
 }
 
 /**
@@ -472,16 +487,19 @@ export class ZLinkActorRuntimeState {
   }
 
   setBoundSessionTransferTarget(target: ZLinkRemoteBoundSessionTarget | undefined): void {
+    const merged = target === undefined
+      ? undefined
+      : mergeRemoteBoundSessionTarget(target, this.boundSessionTransferTargetValue);
     const bindingGeneration = maxBindingGeneration(
-      target?.bindingGeneration,
+      merged?.bindingGeneration,
       this.boundSessionTransferTargetValue?.bindingGeneration,
       this.boundSessionBindingGenerationValue
     );
-    this.boundSessionTransferTargetValue = target === undefined
+    this.boundSessionTransferTargetValue = merged === undefined
       ? undefined
       : bindingGeneration === undefined
-        ? target
-        : { ...target, bindingGeneration };
+        ? merged
+        : { ...merged, bindingGeneration };
   }
 
   setRemoteActorPacketTarget(target: ZLinkRemoteActorPacketTarget | undefined): void {
@@ -540,6 +558,10 @@ export class ZLinkActorRuntimeState {
 
   prepareForRemoteReentry(): void {
     if (this.remoteActorPacketTargetValue === undefined) return;
+    const relocationTransferTarget = this.boundSessionTransferTargetValue !== undefined
+      && hasRelocationFence(this.boundSessionTransferTargetValue)
+      ? this.boundSessionTransferTargetValue
+      : undefined;
     this.creationTask = undefined;
     this.configured = false;
     this.context = undefined;
@@ -548,9 +570,9 @@ export class ZLinkActorRuntimeState {
     this.spotValue = undefined;
     this.spotIdValue = undefined;
     this.nativeActorRefValue = undefined;
-    this.boundSessionBindingGenerationValue = 0n;
+    this.boundSessionBindingGenerationValue = relocationTransferTarget?.bindingGeneration ?? 0n;
     this.remoteBoundSessionTargetValue = undefined;
-    this.boundSessionTransferTargetValue = undefined;
+    this.boundSessionTransferTargetValue = relocationTransferTarget;
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
     this.ownsLocationValue = false;

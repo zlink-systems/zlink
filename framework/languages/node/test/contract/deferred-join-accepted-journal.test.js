@@ -24,6 +24,9 @@ const {
   ServiceRelocationAuthorityPayloadCodec,
   serviceRelocationAuthorityApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
+const {
+  ZLinkActorTransferRuntime
+} = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
 
 const relocationPublication = {
   reference: 'zlink-direct:11111111-1111-4111-8111-111111111111:2',
@@ -140,6 +143,7 @@ function harness(options = {}) {
     }
   };
   return {
+    authorityStore,
     events,
     references,
     roots,
@@ -160,6 +164,296 @@ function harness(options = {}) {
     }
   };
 }
+
+test('formal Join and relocation finalization share one idempotent Accepted terminal owner', async () => {
+  const { authorityStore, relocationStore } = harness();
+  const actorRef = {
+    nodeRid: 'node-b',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  const actor = {
+    context: { actorId: actorRef.actorId, meshName: actorRef.meshName },
+    async onJoinCompleted() {
+      callbacks++;
+      await callbackGate;
+    }
+  };
+  let callbacks = 0;
+  let releaseCallback;
+  const callbackGate = new Promise(resolve => { releaseCallback = resolve; });
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => ({
+        nativeActorRef: {
+          nodeRid: actorRef.nodeRid,
+          actorId: actorRef.actorId,
+          generation: actorRef.objectGeneration
+        }
+      })
+    }),
+    authorityStore: () => authorityStore,
+    relocationStore: () => relocationStore
+  });
+  const prepared = await runtime.prepareDeferredJoinAccepted(
+    actorRef.actorId,
+    { high: 301n, low: 302n },
+    { ...actorRef, nodeRid: 'node-a' },
+    Buffer.from('"accepted"')
+  );
+  let mailboxEntries = 0;
+  const submitMailbox = operation => {
+    mailboxEntries++;
+    return operation();
+  };
+
+  const formalCommit = runtime.commitAndDeliverDeferredJoinAccepted(
+    prepared,
+    actor,
+    actorRef,
+    submitMailbox
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  const relocationFinalize = runtime.commitAndDeliverDeferredJoinAccepted(
+    prepared,
+    actor,
+    actorRef,
+    submitMailbox
+  );
+  releaseCallback();
+  const [formalTerminal, relocationTerminal] = await Promise.all([
+    formalCommit,
+    relocationFinalize
+  ]);
+
+  assert.equal(formalTerminal.cursor, 'delivered');
+  assert.deepEqual(relocationTerminal, formalTerminal);
+  assert.equal(callbacks, 1);
+  assert.equal(mailboxEntries, 1);
+  assert.deepEqual(
+    await runtime.commitAndDeliverDeferredJoinAccepted(
+      prepared,
+      actor,
+      actorRef,
+      submitMailbox
+    ),
+    formalTerminal,
+    'an already committed replay resumes the retained terminal instead of failing'
+  );
+  assert.equal(callbacks, 1);
+  assert.equal(mailboxEntries, 1);
+});
+
+test('a single-flight caller abort cancels only its wait while the formal Join terminal completes', async () => {
+  const context = harness();
+  const abortAwareAuthorityStore = {
+    ...context.authorityStore,
+    async readAuthority(key, signal) {
+      signal?.throwIfAborted();
+      return await context.authorityStore.readAuthority(key, signal);
+    },
+    async compareExchangeAuthority(key, expected, mutation, signal) {
+      signal?.throwIfAborted();
+      return await context.authorityStore.compareExchangeAuthority(key, expected, mutation, signal);
+    }
+  };
+  const abortAwareRelocationStore = {
+    ...context.relocationStore,
+    async put(reference, payload, retentionMs, signal) {
+      signal?.throwIfAborted();
+      return await context.relocationStore.put(reference, payload, retentionMs, signal);
+    },
+    async read(reference, signal) {
+      signal?.throwIfAborted();
+      return await context.relocationStore.read(reference, signal);
+    },
+    async delete(reference, signal) {
+      signal?.throwIfAborted();
+      return await context.relocationStore.delete(reference, signal);
+    }
+  };
+  const actorRef = {
+    nodeRid: 'node-b',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  let releaseCallback;
+  const callbackGate = new Promise(resolve => { releaseCallback = resolve; });
+  let callbacks = 0;
+  const actor = {
+    context: { actorId: actorRef.actorId, meshName: actorRef.meshName },
+    async onJoinCompleted() {
+      callbacks++;
+      await callbackGate;
+    }
+  };
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => ({
+        nativeActorRef: {
+          nodeRid: actorRef.nodeRid,
+          actorId: actorRef.actorId,
+          generation: actorRef.objectGeneration
+        }
+      })
+    }),
+    authorityStore: () => abortAwareAuthorityStore,
+    relocationStore: () => abortAwareRelocationStore
+  });
+  const prepared = await runtime.prepareDeferredJoinAccepted(
+    actorRef.actorId,
+    { high: 351n, low: 352n },
+    { ...actorRef, nodeRid: 'node-a' },
+    Buffer.from('"accepted"')
+  );
+  let mailboxEntries = 0;
+  const submitMailbox = operation => {
+    mailboxEntries++;
+    return operation();
+  };
+  const cancelled = new AbortController();
+  const first = runtime.commitAndDeliverDeferredJoinAccepted(
+    prepared,
+    actor,
+    actorRef,
+    submitMailbox,
+    cancelled.signal
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  const formal = runtime.commitAndDeliverDeferredJoinAccepted(
+    prepared,
+    actor,
+    actorRef,
+    submitMailbox
+  );
+  const cancellation = new Error('obsolete relocation waiter');
+  cancelled.abort(cancellation);
+  await assert.rejects(first, error => error === cancellation);
+  releaseCallback();
+
+  assert.equal((await formal).cursor, 'delivered');
+  assert.equal(callbacks, 1);
+  assert.equal(mailboxEntries, 1);
+});
+
+test('a released terminal without matching durable operation evidence is typed indeterminate', async () => {
+  const { authorityStore, relocationStore, authorityPayload } = harness({
+    relocationEnvelope: true,
+    actorRelocationEnvelope: true
+  });
+  const actorRef = {
+    nodeRid: 'node-b',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  let callbacks = 0;
+  const actor = {
+    context: { actorId: actorRef.actorId, meshName: actorRef.meshName },
+    async onJoinCompleted() {
+      callbacks++;
+    }
+  };
+  const createRuntime = () => new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => ({
+        nativeActorRef: {
+          nodeRid: actorRef.nodeRid,
+          actorId: actorRef.actorId,
+          generation: actorRef.objectGeneration
+        }
+      })
+    }),
+    authorityStore: () => authorityStore,
+    relocationStore: () => relocationStore
+  });
+  const formalRuntime = createRuntime();
+  const relocationRuntime = createRuntime();
+  const prepared = await formalRuntime.prepareDeferredJoinAccepted(
+    actorRef.actorId,
+    { high: 401n, low: 402n },
+    { ...actorRef, nodeRid: 'node-a' },
+    Buffer.from('"accepted"')
+  );
+  let mailboxEntries = 0;
+  const submitMailbox = operation => {
+    mailboxEntries++;
+    return operation();
+  };
+
+  const formalTerminal = await formalRuntime.commitAndDeliverDeferredJoinAccepted(
+    prepared,
+    actor,
+    actorRef,
+    submitMailbox
+  );
+  assert.equal(
+    decodeRelocatingActorAuthorityIdentity(
+      serviceRelocationAuthorityApplicationPayload(authorityPayload()),
+      actorRef.objectGeneration
+    ).actor.nodeRid,
+    actorRef.nodeRid,
+    'the released journal retains the exact committed target ActorRef in authority'
+  );
+  await assert.rejects(
+    relocationRuntime.commitAndDeliverDeferredJoinAccepted(
+      prepared,
+      actor,
+      actorRef,
+      submitMailbox
+    ),
+    error => error.kind === ZLinkFrameworkErrorKind.Unavailable
+      && /delivery is indeterminate/.test(error.message)
+  );
+
+  assert.equal(formalTerminal.cursor, 'delivered');
+  assert.equal(callbacks, 1);
+  assert.equal(mailboxEntries, 1);
+});
+
+test('a matching retained operation root is durable evidence for delivered convergence', async () => {
+  const { authorityStore, relocationStore, journal } = harness();
+  const sourceActorRef = {
+    nodeRid: 'node-a', actorId: 'actor-a', objectGeneration: 17n, meshName: 'game'
+  };
+  const targetActorRef = { ...sourceActorRef, nodeRid: 'node-b' };
+  const prepared = await journal.prepare(
+    sourceActorRef.actorId,
+    { high: 451n, low: 452n },
+    sourceActorRef,
+    Buffer.from('"accepted"')
+  );
+  const committed = await journal.markCommitted(prepared, targetActorRef);
+  const delivered = await journal.markDelivered(committed);
+  let callbacks = 0;
+  const runtime = new ZLinkActorTransferRuntime({
+    actorManager: () => ({
+      getState: () => ({
+        nativeActorRef: {
+          nodeRid: targetActorRef.nodeRid,
+          actorId: targetActorRef.actorId,
+          generation: targetActorRef.objectGeneration
+        }
+      })
+    }),
+    authorityStore: () => authorityStore,
+    relocationStore: () => relocationStore
+  });
+
+  const converged = await runtime.commitAndDeliverDeferredJoinAccepted(
+    prepared,
+    { context: { actorId: targetActorRef.actorId }, async onJoinCompleted() { callbacks++; } },
+    targetActorRef,
+    operation => operation()
+  );
+
+  assert.deepEqual(converged.operationId, delivered.operationId);
+  assert.equal(converged.checksumCrc32c, delivered.checksumCrc32c);
+  assert.equal(converged.cursor, 'delivered');
+  assert.equal(callbacks, 0);
+});
 
 test('deferred Join cursor and release writes preserve the relocation authority envelope', async () => {
   const { journal, authorityPayload } = harness({

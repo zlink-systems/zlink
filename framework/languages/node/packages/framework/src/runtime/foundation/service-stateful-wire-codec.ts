@@ -309,6 +309,27 @@ export type ServiceSessionRelocationRoute =
       };
     };
 
+export function serviceSessionRelocationIdentityKey(
+  value: ServiceSessionRelocationSeal | ServiceSessionRelocationSealed | ServiceSessionRelocationRoute
+): string {
+  const actor = 'targetNodeGeneration' in value.actor
+    ? value.actor.actor
+    : value.actor;
+  return JSON.stringify([
+    value.relocation.high.toString(),
+    value.relocation.low.toString(),
+    value.coordinator.ownerId,
+    value.coordinator.leaseGeneration.toString(),
+    value.coordinator.nodeRid,
+    value.coordinator.nodeGeneration.toString(),
+    value.coordinator.expectedAuthorityStoreVersion,
+    actor.actorId,
+    actor.generation.toString(),
+    value.session.sessionRid,
+    value.session.bindingGeneration.toString()
+  ]);
+}
+
 export interface ServiceRetiredBoundSessionRouteFence {
   readonly sessionOwnerNodeRid: string;
   readonly sessionOwnerNodeGeneration: bigint;

@@ -2748,7 +2748,11 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
   });
   assert.equal(remoteTarget.previousAuthorityOwnerGeneration, 3n);
   assert.equal(remoteTarget.previousOwnerLeaseGeneration, 5n);
-  assert.equal(typeof remoteTarget.relocationSealId, 'string');
+  assert.equal(
+    remoteTarget.relocationSealId,
+    '7:9:actor-seal:9:session-rid:11',
+    'remote sends retain against the exact command 42/44 Session identity'
+  );
   assert.equal(moving, true);
 
   await prepared.rollback();

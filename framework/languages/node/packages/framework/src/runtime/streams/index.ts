@@ -404,8 +404,8 @@ export class ZLinkStreamBindingRuntime {
         this.routes.sealRelocation(claim, expected, signal),
       relocationSnapshot: (actorId, sealId) =>
         this.routes.relocationSnapshot(actorId, sealId),
-      retainRelocationOutbound: (actorId, operation) =>
-        this.routes.retainRelocationOutbound(actorId, operation),
+      retainRelocationOutbound: (actorId, operation, sealId) =>
+        this.routes.retainRelocationOutbound(actorId, operation, sealId),
       admitRelocationOutbound: (claim, operation) =>
         this.routes.admitRelocationOutbound(claim, operation),
       discardRelocationOutbound: (actorId, sealId, error) =>

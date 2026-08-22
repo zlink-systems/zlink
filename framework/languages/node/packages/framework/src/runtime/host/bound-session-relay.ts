@@ -90,6 +90,5 @@ export class ZLinkBoundSessionRelay {
 
   clearRemoteActorPacketTarget(actorId: string): void {
     this.actorPackets.clearRemoteActorPacketTarget(actorId);
-    this.boundSessions.clearOwnership(actorId);
   }
 }

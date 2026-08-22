@@ -439,9 +439,47 @@ export class ZLinkDeferredJoinAcceptedJournal {
     if (read.kind !== 'snapshot') {
       throw new Error(`Actor '${root.actor.actorId}' authority disappeared during Join completion.`);
     }
-    const current = await this.readPublished(read, signal);
+    let current = await this.readPublished(read, signal);
     if (current === undefined) {
-      throw new Error(`Actor '${root.actor.actorId}' no longer references its Join completion root.`);
+      const retainedRoot = await this.relocation.read(root.reference, signal);
+      if (
+        retainedRoot.kind === 'found'
+        && crc32c(retainedRoot.bytes) === root.checksumCrc32c
+      ) {
+        const retained = hasJournalRootMagic(retainedRoot.bytes)
+          ? decodeRoot(retainedRoot.bytes)
+          : (await readCanonicalDeferredJoinRoot(
+              this.relocation,
+              retainedRoot.bytes,
+              signal
+            ))?.completion;
+        if (retained?.cursor === 'delivered' && isSameOperation(
+          { ...root, ...retained },
+          root.operationId,
+          root.actor
+        )) {
+          current = {
+            authority: read,
+            reference: root.reference,
+            checksumCrc32c: root.checksumCrc32c,
+            ...retained
+          };
+        }
+      }
+      if (current === undefined &&
+        next === 'committed'
+          && actor !== undefined
+          && authorityMatchesActor(read.payload, actor)
+      ) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          `Actor '${root.actor.actorId}' Join completion delivery is indeterminate: `
+            + 'the authority no longer references the operation and no matching retained root exists.'
+        );
+      }
+      if (current === undefined) {
+        throw new Error(`Actor '${root.actor.actorId}' no longer references its Join completion root.`);
+      }
     }
     requireSameOperation(current, root.operationId, root.actor);
     if (cursorIndex(current.cursor) >= nextIndex) return current;
@@ -646,20 +684,29 @@ export class ZLinkDeferredJoinAcceptedJournal {
 }
 
 function requireAuthorityActor(payload: Uint8Array, actor: ActorRef): void {
-  const publication = decodeAuthorityPublication(payload);
-  const identity = decodeRelocatingActorAuthorityIdentity(
-    publication?.applicationPayload
-      ?? serviceRelocationAuthorityApplicationPayload(payload),
-    actor.objectGeneration
-  );
-  if (
-    identity === undefined
-    || identity.actor.actorId !== actor.actorId
-    || identity.actor.objectGeneration !== actor.objectGeneration
-    || String(identity.actor.nodeRid) !== String(actor.nodeRid)
-  ) {
+  if (!authorityMatchesActor(payload, actor)) {
     throw new Error(`Actor '${actor.actorId}' authority fence does not match its ActorRef.`);
   }
+}
+
+function authorityMatchesActor(payload: Uint8Array, actor: ActorRef): boolean {
+  const publication = decodeAuthorityPublication(payload);
+  const applications = publication === undefined
+    ? [serviceRelocationAuthorityApplicationPayload(payload)]
+    : [
+        publication.applicationPayload,
+        serviceRelocationAuthorityApplicationPayload(payload)
+      ];
+  return applications.some(application => {
+    const identity = decodeRelocatingActorAuthorityIdentity(
+      application,
+      actor.objectGeneration
+    );
+    return identity !== undefined
+      && identity.actor.actorId === actor.actorId
+      && identity.actor.objectGeneration === actor.objectGeneration
+      && routingIdWireHex(identity.actor.nodeRid) === routingIdWireHex(actor.nodeRid);
+  });
 }
 
 function encodeRoot(

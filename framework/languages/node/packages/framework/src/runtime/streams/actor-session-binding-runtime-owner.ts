@@ -24,7 +24,8 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
   ): ZLinkActorSessionRelocationSnapshot | undefined;
   retainRelocationOutbound(
     actorId: string,
-    operation: ZLinkActorSessionRetainedOutbound
+    operation: ZLinkActorSessionRetainedOutbound,
+    sealId?: string
   ): ServiceSessionBindingAdmissionResult;
   admitRelocationOutbound(
     claim: ServiceSessionBindingAdmissionClaim,

@@ -47,6 +47,7 @@ export function encodeRemoteBoundSessionSendPayload(input: {
   readonly actorNodeRidHex?: string;
   readonly actorGeneration?: string;
   readonly actorOwnershipGeneration?: string;
+  readonly relocationSealId?: string;
   readonly message: unknown;
   readonly boundPacketName?: string;
   readonly metadata: ReadonlyMap<string, string>;
@@ -121,6 +122,7 @@ export function decodeRemoteBoundSessionSendPayload(payload: unknown): {
   readonly actorNodeRidHex?: string;
   readonly actorGeneration?: string;
   readonly actorOwnershipGeneration?: string;
+  readonly relocationSealId?: string;
   readonly message: unknown;
   readonly boundPacketName?: string;
   readonly metadata?: Record<string, string>;
@@ -143,6 +145,7 @@ export function decodeRemoteBoundSessionSendPayload(payload: unknown): {
     actorNodeRidHex: optionalString(payload, 'actorNodeRidHex'),
     actorGeneration: optionalString(payload, 'actorGeneration'),
     actorOwnershipGeneration: optionalString(payload, 'actorOwnershipGeneration'),
+    relocationSealId: optionalString(payload, 'relocationSealId'),
     message: (payload as { message?: unknown }).message,
     boundPacketName: optionalString(payload, 'boundPacketName'),
     metadata: metadataRecordOf((payload as { metadata?: unknown }).metadata),

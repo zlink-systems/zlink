@@ -146,6 +146,7 @@ import {
   encodeSessionRelocationRoute,
   encodeSessionRelocationSeal,
   encodeSessionRelocationSealed,
+  serviceSessionRelocationIdentityKey,
   decodeServiceWireFrozenRecord,
   encodeServiceWireFrozenActorApplicationRecord,
   M6bServiceWireCommand,
@@ -5316,18 +5317,18 @@ function controlResponseKey(packet: ZLinkServiceRelocationControlRequest): strin
 }
 
 function sessionRelocationPendingKey(request: ServiceSessionRelocationSeal): string {
-  return sessionRelocationIdentityKey(request, request.actor.actor);
+  return sessionRelocationIdentityKey(request);
 }
 
 function sessionRelocationRouteSubmitKey(
   request: ServiceSessionRelocationRoute,
   targetNodeRid: RoutingId
 ): string {
-  return `${sessionRelocationIdentityKey(request, request.actor)}:${String(targetNodeRid)}`;
+  return `${sessionRelocationIdentityKey(request)}:${String(targetNodeRid)}`;
 }
 
 function sessionRelocationResponseKey(response: ServiceSessionRelocationSealed): string {
-  return sessionRelocationIdentityKey(response, response.actor.actor);
+  return sessionRelocationIdentityKey(response);
 }
 
 function sessionRelocationResponseFingerprint(response: ServiceSessionRelocationSealed): string {
@@ -5335,22 +5336,9 @@ function sessionRelocationResponseFingerprint(response: ServiceSessionRelocation
 }
 
 function sessionRelocationIdentityKey(
-  value: {
-    readonly relocation: ServiceWireOperationId;
-    readonly session: { readonly sessionRid: string; readonly bindingGeneration: bigint };
-  },
-  actor: { readonly actorId: string; readonly generation: bigint }
+  value: ServiceSessionRelocationSeal | ServiceSessionRelocationSealed | ServiceSessionRelocationRoute
 ): string {
-  return [
-    'session-relocation',
-    value.relocation.high.toString(),
-    value.relocation.low.toString(),
-    actor.actorId,
-    actor.generation.toString(),
-    value.session.sessionRid,
-    value.session.bindingGeneration.toString(),
-    'sealed'
-  ].join(':');
+  return `session-relocation:${serviceSessionRelocationIdentityKey(value)}:sealed`;
 }
 
 function validateSessionRelocationResponse(
