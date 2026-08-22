@@ -52,6 +52,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -497,6 +498,22 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 return;
             }
             assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+            var savedWork = ZLinkServiceRelocationEnvelopeCodec.decode(
+                link.targetRequest.get().relocationPayload()).savedWork();
+            assertEquals(List.of(3L, 4L), savedWork.stream()
+                .map(value -> value.sequence())
+                .toList(),
+                "captured journal sequence must remain unshifted before ZLJR");
+            assertTrue(ZLinkActorJoinRecoveryCodec.isRecoverySavedWork(
+                savedWork.getLast().frozenRecord()),
+                "ZLJR must append after the captured journal");
+            assertEquals(List.of(3L),
+                ZLinkCanonicalActorRelocationEnvelope.decode(
+                    link.targetRequest.get().relocationPayload(), relocationId,
+                    ACTOR_ID, true).journal().stream()
+                    .map(ZLinkAsyncSerialQueue.QueuedRecord::sequence)
+                    .toList(),
+                "envelope decode must return the unshifted journal sequence");
             var recovery = ZLinkActorJoinRecoveryCodec.decodeFromEnvelope(
                     link.targetRequest.get().relocationPayload())
                 .orElseThrow();

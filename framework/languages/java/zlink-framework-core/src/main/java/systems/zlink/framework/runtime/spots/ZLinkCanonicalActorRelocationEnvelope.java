@@ -126,8 +126,10 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         }
         long acceptedBoundary = records.isEmpty()
             ? 0 : records.getLast().sequence();
+        long actorJoinRecoverySequence = 0;
         if (hasActorJoinRecovery) {
-            acceptedBoundary = Math.incrementExact(acceptedBoundary);
+            actorJoinRecoverySequence = Math.incrementExact(acceptedBoundary);
+            acceptedBoundary = actorJoinRecoverySequence;
         }
         List<PendingTimer> pendingTimers = new ArrayList<>();
         for (var timer : timers) {
@@ -174,17 +176,15 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
                         record.payload()))
                 .toList();
         writer.u32(encodedRecords.size() + (hasActorJoinRecovery ? 1 : 0));
-        if (hasActorJoinRecovery) {
-            writer.u64(1);
-            writer.u64(1);
-            writer.raw(recovery);
-        }
         for (var record : encodedRecords) {
             writer.u64(1);
-            writer.u64(hasActorJoinRecovery
-                ? Math.incrementExact(record.sequence())
-                : record.sequence());
+            writer.u64(record.sequence());
             writer.raw(record.payload());
+        }
+        if (hasActorJoinRecovery) {
+            writer.u64(1);
+            writer.u64(actorJoinRecoverySequence);
+            writer.raw(recovery);
         }
         writer.u32(timers.size());
         for (var timer : timers) {
