@@ -499,7 +499,7 @@ class socket_public_send_scope_t
 
     bool acquired () const { return _entered; }
     bool sync_locked () const { return _sync_locked; }
-    bool should_hold_sync_during_retry (bool send_ready_handler_active_) const;
+    bool should_hold_sync_during_retry (bool retry_progress_owner_active_) const;
     void release_sync_for_retry ();
     void reacquire_sync_after_retry ();
     void unlock_sync ();

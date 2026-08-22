@@ -155,3 +155,36 @@ lineage the task assumes (see "Finding" above); whoever maintains that
 branch should confirm whether its current tip still exhibits the
 `_registry_accounting` defect described here, since the baseline commit named
 in the task does.
+
+## Correction for `f40de1c767`: application-pipe registry visibility restored
+
+The preceding conclusion does not apply to the current
+`fix/registry-ledger` worktree at `f40de1c767`.  Before this fix, all three
+reported failures reproduced standalone five times: application-class
+`pipepair()` directions retained their normal pipe-local counters because
+`_registry_accounting` was false, while registry snapshots and decoder
+admission consulted a separate, empty ledger.
+
+The fix keeps the pipe-local counters on the application frame path.  Each
+application physical direction now records its writer/reader pair with the
+registry; snapshots and Auto-HWM replanning retain the pipes briefly and
+sample the local outbound ledger outside the registry mutex.  Multipart read
+progress is published with the existing local credit counters, so a snapshot
+accounts for consumed prefixes correctly.  Deferred HWM shrink is refreshed
+only when a local LWM or blocked-writer credit boundary is published.  This
+restores the registry's view of the same origin-local queue without a
+per-frame registry atomic or mutex.  The blocking send retry also yields its
+socket sync lock when an async mailbox owns the command path that publishes
+the credit.
+
+Evidence after the fix:
+
+- `test_router_multiple_dealers`, `test_zmp_metadata`, and
+  `test_xpub_nodrop`: 10/10 standalone passes each.
+- The requested ten-test CTest selection passed 10/10, and the full CTest
+  sweep passed 89/89 (166.38 s).
+- Release `core/build` was rebuilt before the signal run.  At load below
+  1.5, `MULTI_ROUTER_ROUTER_SENDSEND` over TCP at 256 B measured 165.400
+  Kops/s for local Core and 190.073 Kops/s for Core 0.10.1 (87.0%); the
+  approximately 2.0 percentage-point (2.2% relative) difference from the
+  89% reference is within the 3.5% noise guard.

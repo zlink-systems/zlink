@@ -374,8 +374,14 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
 
     int timeout = options.sndtimeo;
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
+    // A mailbox-owned command path re-enters this socket to release byte
+    // credit. It needs the same retry handoff as a send-ready callback;
+    // otherwise a blocking public send can prevent the command that makes it
+    // writable from running.
+    const bool retry_progress_owner_active =
+      send_ready_handler_active () || async_mailbox_owns_commands ();
     const bool hold_sync_during_retry =
-      send_scope.should_hold_sync_during_retry (send_ready_handler_active ());
+      send_scope.should_hold_sync_during_retry (retry_progress_owner_active);
 
     if (!hold_sync_during_retry)
         send_scope.release_sync_for_retry ();

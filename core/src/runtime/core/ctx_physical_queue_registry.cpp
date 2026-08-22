@@ -161,7 +161,9 @@ struct physical_queue_record_t
         active_application_lease_bytes (0),
         application_lease_accounted_bytes (0),
         application_lease_count (0),
-        completion_pending_message_count (0)
+        completion_pending_message_count (0),
+        application_writer (NULL),
+        application_reader (NULL)
     {
     }
 
@@ -181,6 +183,10 @@ struct physical_queue_record_t
     std::atomic<uint64_t> application_lease_accounted_bytes;
     std::atomic<uint64_t> application_lease_count;
     std::atomic<uint64_t> completion_pending_message_count;
+    // Protected by ctx_physical_queue_registry_t::_sync. These are used only
+    // to sample the pipe-local application ledger outside the frame path.
+    pipe_t *application_writer;
+    pipe_t *application_reader;
     std::map<uint64_t, uint64_t> retained_origin_counts_by_generation;
     stored_endpoint_policy_t writer_policy;
     stored_endpoint_policy_t reader_policy;
@@ -621,6 +627,84 @@ void zlink::ctx_physical_queue_registry_t::classify_pipepair_queues (
             }
         }
     }
+}
+
+void zlink::ctx_physical_queue_registry_t::bind_application_pipe_queue (
+  const physical_queue_handle_t &direction_, pipe_t *writer_, pipe_t *reader_)
+{
+    if (!direction_ || !writer_ || !reader_)
+        return;
+
+    scoped_lock_t lock (_sync);
+    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
+      _directions.find (direction_->queue_id);
+    if (known == _directions.end ()
+        || known->second.get () != direction_.get ()
+        || accounting_lane (*direction_) != physical_queue_lane_application)
+        return;
+    zlink_assert (!direction_->application_writer);
+    zlink_assert (!direction_->application_reader);
+    direction_->application_writer = writer_;
+    direction_->application_reader = reader_;
+}
+
+void zlink::ctx_physical_queue_registry_t::unbind_application_pipe_endpoint (
+  const physical_queue_handle_t &direction_, pipe_t *pipe_, bool writer_)
+{
+    if (!direction_ || !pipe_)
+        return;
+
+    scoped_lock_t lock (_sync);
+    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
+      _directions.find (direction_->queue_id);
+    if (known == _directions.end ()
+        || known->second.get () != direction_.get ())
+        return;
+    pipe_t *&endpoint = writer_ ? direction_->application_writer
+                                : direction_->application_reader;
+    if (endpoint == pipe_)
+        endpoint = NULL;
+}
+
+bool zlink::ctx_physical_queue_registry_t::sample_application_pipe_queue (
+  const physical_queue_handle_t &direction_, uint64_t *provisional_out_,
+  uint64_t *committed_out_) const
+{
+    if (provisional_out_)
+        *provisional_out_ = 0;
+    if (committed_out_)
+        *committed_out_ = 0;
+    if (!direction_)
+        return false;
+
+    pipe_t *writer = NULL;
+    pipe_t *reader = NULL;
+    {
+        scoped_lock_t lock (_sync);
+        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
+          _directions.find (direction_->queue_id);
+        if (known == _directions.end ()
+            || known->second.get () != direction_.get ()
+            || direction_->endpoint_refs == 0
+            || accounting_lane (*direction_)
+                 != physical_queue_lane_application)
+            return false;
+
+        writer = direction_->application_writer;
+        reader = direction_->application_reader;
+        if (!writer || !reader || !writer->retain_lifetime_ref ())
+            return false;
+        if (!reader->retain_lifetime_ref ()) {
+            writer->release_lifetime_ref ();
+            return false;
+        }
+    }
+
+    writer->snapshot_outbound_queue_accounting (reader, provisional_out_,
+                                                committed_out_);
+    reader->release_lifetime_ref ();
+    writer->release_lifetime_ref ();
+    return true;
 }
 
 void zlink::ctx_physical_queue_registry_t::account_provisional_frame (
@@ -1266,9 +1350,37 @@ void zlink::ctx_physical_queue_registry_t::update_hwm_target (
     direction_->planned_hwm.store (target_hwm_, std::memory_order_release);
     const bool grows = target_hwm_ == 0
                        || (previous != 0 && target_hwm_ >= previous);
-    if (grows || current_queue_bytes (*direction_) <= target_hwm_)
+    if (grows || current_accounted_bytes (direction_) <= target_hwm_)
         direction_->applied_hwm.store (target_hwm_,
                                        std::memory_order_release);
+}
+
+void zlink::ctx_physical_queue_registry_t::refresh_application_hwm_if_drained (
+  const physical_queue_handle_t &direction_)
+{
+    if (!direction_)
+        return;
+
+    uint64_t planned = 0;
+    uint64_t applied = 0;
+    {
+        scoped_lock_t lock (_sync);
+        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
+          _directions.find (direction_->queue_id);
+        if (known == _directions.end ()
+            || known->second.get () != direction_.get ()
+            || accounting_lane (*direction_)
+                 != physical_queue_lane_application)
+            return;
+        planned = direction_->planned_hwm.load (std::memory_order_acquire);
+        applied = direction_->applied_hwm.load (std::memory_order_acquire);
+    }
+    if (planned == applied)
+        return;
+
+    const uint64_t current = current_accounted_bytes (direction_);
+    if (planned == 0 || current <= planned)
+        direction_->applied_hwm.store (planned, std::memory_order_release);
 }
 
 uint64_t zlink::ctx_physical_queue_registry_t::planned_hwm (
@@ -1291,13 +1403,31 @@ uint64_t zlink::ctx_physical_queue_registry_t::current_accounted_bytes (
     if (!direction_)
         return 0;
 
-    scoped_lock_t lock (_sync);
-    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-      _directions.find (direction_->queue_id);
-    if (known == _directions.end ()
-        || known->second.get () != direction_.get ())
-        return 0;
-    return current_queue_bytes (*direction_);
+    bool application_direction = false;
+    uint64_t fallback = 0;
+    {
+        scoped_lock_t lock (_sync);
+        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
+          _directions.find (direction_->queue_id);
+        if (known == _directions.end ()
+            || known->second.get () != direction_.get ())
+            return 0;
+        application_direction =
+          accounting_lane (*direction_) == physical_queue_lane_application;
+        fallback = current_queue_bytes (*direction_);
+    }
+
+    if (application_direction) {
+        uint64_t provisional = 0;
+        uint64_t committed = 0;
+        if (sample_application_pipe_queue (direction_, &provisional,
+                                           &committed)) {
+            return UINT64_MAX - provisional < committed
+                     ? UINT64_MAX
+                     : provisional + committed;
+        }
+    }
+    return fallback;
 }
 
 uint64_t zlink::ctx_physical_queue_registry_t::generation (
@@ -1430,90 +1560,150 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
     if (!out_)
         return;
 
+    struct application_direction_sample_t
+    {
+        application_direction_sample_t () :
+            direction (), fallback_provisional (0), fallback_committed (0),
+            active_lease_bytes (0)
+        {
+        }
+
+        physical_queue_handle_t direction;
+        uint64_t fallback_provisional;
+        uint64_t fallback_committed;
+        uint64_t active_lease_bytes;
+    };
+
     physical_queue_registry_snapshot_t current;
-    scoped_lock_t lock (_sync);
-    for (std::map<uint64_t, physical_queue_handle_t>::const_iterator it =
-           _directions.begin ();
-         it != _directions.end (); ++it) {
-        const physical_queue_record_t &direction = *it->second;
-        const int lane = direction.lane.load (std::memory_order_acquire);
-        const uint64_t provisional =
-          direction.provisional_accounted_bytes.load (
-            std::memory_order_relaxed);
-        const uint64_t committed = direction.committed_accounted_bytes.load (
-          std::memory_order_relaxed);
-        if (lane == physical_queue_lane_application) {
-            current.application_provisional_accounted_bytes =
-              add_snapshot_value (
-                current.application_provisional_accounted_bytes, provisional,
-                &current.aggregate_overflow);
-            current.application_current_accounted_bytes = add_snapshot_value (
-              current.application_current_accounted_bytes, provisional,
-              &current.aggregate_overflow);
-            current.application_current_accounted_bytes = add_snapshot_value (
-              current.application_current_accounted_bytes, committed,
-              &current.aggregate_overflow);
-            const uint64_t lease =
-              direction.application_lease_accounted_bytes.load (
+    std::vector<application_direction_sample_t> application_directions;
+    {
+        // Do not hold the registry mutex while sampling a pipe. Pipe teardown
+        // takes this mutex, whereas the sampler takes the pipe's local lock.
+        scoped_lock_t lock (_sync);
+        for (std::map<uint64_t, physical_queue_handle_t>::const_iterator it =
+               _directions.begin ();
+             it != _directions.end (); ++it) {
+            const physical_queue_handle_t &handle = it->second;
+            const physical_queue_record_t &direction = *handle;
+            const int lane = direction.lane.load (std::memory_order_acquire);
+            const uint64_t provisional =
+              direction.provisional_accounted_bytes.load (
                 std::memory_order_relaxed);
-            current.application_lease_accounted_bytes = add_snapshot_value (
-              current.application_lease_accounted_bytes, lease,
-              &current.aggregate_overflow);
-            current.outstanding_application_lease_count = add_snapshot_value (
-              current.outstanding_application_lease_count,
-              direction.application_lease_count.load (
-                std::memory_order_relaxed),
-              &current.aggregate_overflow);
-            current.deferred_origin_credit_bytes = add_snapshot_value (
-              current.deferred_origin_credit_bytes,
-              direction.held_dequeued_bytes.load (std::memory_order_relaxed),
-              &current.aggregate_overflow);
-            current.deferred_origin_credit_bytes = add_snapshot_value (
-              current.deferred_origin_credit_bytes, lease,
-              &current.aggregate_overflow);
-        } else if (lane == physical_queue_lane_completion) {
-            current.completion_current_accounted_bytes = add_snapshot_value (
-              current.completion_current_accounted_bytes, provisional,
-              &current.aggregate_overflow);
-            current.completion_current_accounted_bytes = add_snapshot_value (
-              current.completion_current_accounted_bytes, committed,
-              &current.aggregate_overflow);
-            current.completion_pending_message_count = add_snapshot_value (
-              current.completion_pending_message_count,
-              direction.completion_pending_message_count.load (
-                std::memory_order_relaxed),
-              &current.aggregate_overflow);
-        } else if (lane == physical_queue_lane_monitor) {
-            current.monitor_current_accounted_bytes = add_snapshot_value (
-              current.monitor_current_accounted_bytes, provisional,
-              &current.aggregate_overflow);
-            current.monitor_current_accounted_bytes = add_snapshot_value (
-              current.monitor_current_accounted_bytes, committed,
-              &current.aggregate_overflow);
-        }
-        if (direction.endpoint_refs == 0) {
-            current.retired_direction_count +=
-              direction.retained_origin_counts_by_generation.size ();
-        } else if (lane == physical_queue_lane_application) {
-            ++current.active_application_direction_count;
-            for (std::map<uint64_t, uint64_t>::const_iterator generation_it =
-                   direction.retained_origin_counts_by_generation.begin ();
-                 generation_it
-                 != direction.retained_origin_counts_by_generation.end ();
-                 ++generation_it) {
-                if (generation_it->first != direction.generation)
-                    ++current.retired_direction_count;
+            const uint64_t committed =
+              direction.committed_accounted_bytes.load (
+                std::memory_order_relaxed);
+            if (lane == physical_queue_lane_application) {
+                application_direction_sample_t sample;
+                sample.direction = handle;
+                sample.fallback_provisional = provisional;
+                sample.fallback_committed = committed;
+                sample.active_lease_bytes =
+                  direction.active_application_lease_bytes.load (
+                    std::memory_order_relaxed);
+                application_directions.push_back (sample);
+
+                const uint64_t lease =
+                  direction.application_lease_accounted_bytes.load (
+                    std::memory_order_relaxed);
+                current.application_lease_accounted_bytes =
+                  add_snapshot_value (
+                    current.application_lease_accounted_bytes, lease,
+                    &current.aggregate_overflow);
+                current.outstanding_application_lease_count =
+                  add_snapshot_value (
+                    current.outstanding_application_lease_count,
+                    direction.application_lease_count.load (
+                      std::memory_order_relaxed),
+                    &current.aggregate_overflow);
+                current.deferred_origin_credit_bytes = add_snapshot_value (
+                  current.deferred_origin_credit_bytes,
+                  direction.held_dequeued_bytes.load (
+                    std::memory_order_relaxed),
+                  &current.aggregate_overflow);
+                current.deferred_origin_credit_bytes = add_snapshot_value (
+                  current.deferred_origin_credit_bytes, lease,
+                  &current.aggregate_overflow);
+            } else if (lane == physical_queue_lane_completion) {
+                current.completion_current_accounted_bytes =
+                  add_snapshot_value (
+                    current.completion_current_accounted_bytes, provisional,
+                    &current.aggregate_overflow);
+                current.completion_current_accounted_bytes =
+                  add_snapshot_value (
+                    current.completion_current_accounted_bytes, committed,
+                    &current.aggregate_overflow);
+                current.completion_pending_message_count =
+                  add_snapshot_value (
+                    current.completion_pending_message_count,
+                    direction.completion_pending_message_count.load (
+                      std::memory_order_relaxed),
+                    &current.aggregate_overflow);
+            } else if (lane == physical_queue_lane_monitor) {
+                current.monitor_current_accounted_bytes =
+                  add_snapshot_value (
+                    current.monitor_current_accounted_bytes, provisional,
+                    &current.aggregate_overflow);
+                current.monitor_current_accounted_bytes =
+                  add_snapshot_value (
+                    current.monitor_current_accounted_bytes, committed,
+                    &current.aggregate_overflow);
             }
-        } else if (lane == physical_queue_lane_completion) {
-            ++current.active_completion_direction_count;
-        } else if (lane == physical_queue_lane_monitor) {
-            const uint64_t applied = direction.applied_hwm.load (
-              std::memory_order_acquire);
-            zlink_assert (applied > 0);
-            current.monitor_applied_hwm_bytes = add_snapshot_value (
-              current.monitor_applied_hwm_bytes, applied,
-              &current.aggregate_overflow);
+            if (direction.endpoint_refs.load (std::memory_order_relaxed) == 0) {
+                current.retired_direction_count +=
+                  direction.retained_origin_counts_by_generation.size ();
+            } else if (lane == physical_queue_lane_application) {
+                ++current.active_application_direction_count;
+                const uint64_t generation = direction.generation.load (
+                  std::memory_order_relaxed);
+                for (std::map<uint64_t, uint64_t>::const_iterator generation_it =
+                       direction.retained_origin_counts_by_generation.begin ();
+                     generation_it
+                     != direction.retained_origin_counts_by_generation.end ();
+                     ++generation_it) {
+                    if (generation_it->first != generation)
+                        ++current.retired_direction_count;
+                }
+            } else if (lane == physical_queue_lane_completion) {
+                ++current.active_completion_direction_count;
+            } else if (lane == physical_queue_lane_monitor) {
+                const uint64_t applied = direction.applied_hwm.load (
+                  std::memory_order_acquire);
+                zlink_assert (applied > 0);
+                current.monitor_applied_hwm_bytes = add_snapshot_value (
+                  current.monitor_applied_hwm_bytes, applied,
+                  &current.aggregate_overflow);
+            }
         }
+    }
+
+    for (size_t i = 0; i != application_directions.size (); ++i) {
+        const application_direction_sample_t &sample =
+          application_directions[i];
+        uint64_t provisional = 0;
+        uint64_t committed = 0;
+        if (!sample_application_pipe_queue (sample.direction, &provisional,
+                                            &committed)) {
+            provisional = sample.fallback_provisional;
+            committed = sample.fallback_committed;
+        }
+        current.application_provisional_accounted_bytes = add_snapshot_value (
+          current.application_provisional_accounted_bytes, provisional,
+          &current.aggregate_overflow);
+        uint64_t queue_total = add_snapshot_value (
+          provisional, committed, &current.aggregate_overflow);
+        // A pipe-local total retains bytes until a retained receive publishes
+        // credit. Once ownership transfers to an application lease, remove
+        // that active lease from the Core-owned portion before adding the
+        // lease back to the context total below.
+        if (queue_total < sample.active_lease_bytes) {
+            queue_total = 0;
+            current.aggregate_overflow = true;
+        } else {
+            queue_total -= sample.active_lease_bytes;
+        }
+        current.application_current_accounted_bytes = add_snapshot_value (
+          current.application_current_accounted_bytes, queue_total,
+          &current.aggregate_overflow);
     }
     uint64_t sampled_application_total =
       current.application_current_accounted_bytes;
@@ -1546,35 +1736,16 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
 
 void zlink::ctx_physical_queue_registry_t::reset_metrics ()
 {
-    scoped_lock_t lock (_sync);
-    uint64_t application_current = 0;
-    uint64_t completion_current = 0;
+    physical_queue_registry_snapshot_t current;
+    snapshot (&current);
     bool overflow = false;
-    for (std::map<uint64_t, physical_queue_handle_t>::const_iterator it =
-           _directions.begin ();
-         it != _directions.end (); ++it) {
-        const physical_queue_record_t &direction = *it->second;
-        const int lane = direction.lane.load (std::memory_order_acquire);
-        uint64_t direction_current =
-          direction.provisional_accounted_bytes.load (
-            std::memory_order_relaxed);
-        direction_current = add_snapshot_value (
-          direction_current,
-          direction.committed_accounted_bytes.load (std::memory_order_relaxed),
-          &overflow);
-        if (lane == physical_queue_lane_application) {
-            direction_current = add_snapshot_value (
-              direction_current,
-              direction.application_lease_accounted_bytes.load (
-                std::memory_order_relaxed),
-              &overflow);
-            application_current = add_snapshot_value (
-              application_current, direction_current, &overflow);
-        } else if (lane == physical_queue_lane_completion) {
-            completion_current = add_snapshot_value (
-              completion_current, direction_current, &overflow);
-        }
-    }
+    const uint64_t application_current = add_snapshot_value (
+      current.application_current_accounted_bytes,
+      current.application_lease_accounted_bytes, &overflow);
+    const uint64_t completion_current =
+      current.completion_current_accounted_bytes;
+
+    scoped_lock_t lock (_sync);
     _application_peak_accounted_bytes.store (application_current,
                                               std::memory_order_relaxed);
     _completion_peak_accounted_bytes.store (completion_current,
@@ -1584,7 +1755,8 @@ void zlink::ctx_physical_queue_registry_t::reset_metrics ()
     _total_admission_attempts.store (0, std::memory_order_relaxed);
     _first_blocked_admission_attempts.store (0,
                                               std::memory_order_relaxed);
-    _aggregate_overflow.store (overflow, std::memory_order_relaxed);
+    _aggregate_overflow.store (overflow || current.aggregate_overflow,
+                               std::memory_order_relaxed);
 }
 
 void zlink::ctx_physical_queue_registry_t::stop_retained_transfers ()

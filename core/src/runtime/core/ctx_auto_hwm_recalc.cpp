@@ -185,7 +185,6 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     _physical_queue_registry.snapshot (&queues);
     std::vector<socket_base_t *> sockets;
     _socket_registry.collect_sockets (&sockets);
-    uint64_t sampled_application_bytes = 0;
     uint64_t sampled_oversize_count = 0;
     uint64_t sampled_oversize_max = 0;
     uint64_t attempts = 0;
@@ -193,14 +192,11 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     bool sampled_overflow = false;
     for (std::vector<socket_base_t *>::const_iterator it = sockets.begin ();
          it != sockets.end (); ++it) {
-        uint64_t socket_bytes = 0;
         uint64_t socket_oversize_count = 0;
         uint64_t socket_oversize_max = 0;
-        (*it)->auto_hwm_queue_counters (&socket_bytes,
+        (*it)->auto_hwm_queue_counters (NULL,
                                         &socket_oversize_count,
                                         &socket_oversize_max);
-        sampled_application_bytes = add_counter_saturating (
-          sampled_application_bytes, socket_bytes, &sampled_overflow);
         sampled_oversize_count = add_counter_saturating (
           sampled_oversize_count, socket_oversize_count, &sampled_overflow);
         sampled_oversize_max =
@@ -222,19 +218,19 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     out_->application_accounted_bytes =
       queues.application_lease_accounted_bytes;
     out_->core_queue_accounted_bytes =
-      sampled_application_bytes > out_->application_accounted_bytes
-        ? sampled_application_bytes - out_->application_accounted_bytes
-        : 0;
+      queues.application_current_accounted_bytes;
     out_->outstanding_application_lease_count =
       queues.outstanding_application_lease_count;
     out_->deferred_origin_credit_bytes =
       queues.deferred_origin_credit_bytes;
-    const bool application_sum_overflow = false;
-    out_->current_accounted_bytes = sampled_application_bytes;
+    bool application_sum_overflow = false;
+    out_->current_accounted_bytes = add_counter_saturating (
+      out_->core_queue_accounted_bytes, out_->application_accounted_bytes,
+      &application_sum_overflow);
     out_->provisional_accounted_bytes =
       queues.application_provisional_accounted_bytes;
     out_->peak_accounted_bytes = std::max (
-      queues.application_peak_accounted_bytes, sampled_application_bytes);
+      queues.application_peak_accounted_bytes, out_->current_accounted_bytes);
     out_->completion_current_accounted_bytes =
       queues.completion_current_accounted_bytes;
     out_->completion_peak_accounted_bytes =

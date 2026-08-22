@@ -395,6 +395,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool check_hwm_with_peer_snapshot_unlocked ();
     void refresh_peer_credit_snapshot_unlocked ();
     void account_inbound_frame (const msg_t *msg_);
+    void snapshot_outbound_queue_accounting (const pipe_t *reader_,
+                                             uint64_t *provisional_out_,
+                                             uint64_t *committed_out_) const;
     bool read_internal (msg_t *msg_, retained_credit_token_t *token_out_,
                         bool defer_credit_ = false);
     void refresh_inbound_lwm_from_physical_queue ();
@@ -464,6 +467,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t _bytes_written;
     std::atomic<uint64_t> _published_msgs_read;
     std::atomic<uint64_t> _published_bytes_read;
+    // Only multipart reads need this extra publication. Single-part traffic
+    // remains on the existing complete-message credit publication path.
+    std::atomic<uint64_t> _published_incomplete_bytes_read;
     uint64_t _last_credit_bytes_read;
     uint64_t _in_generation;
     uint64_t _out_generation;

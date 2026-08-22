@@ -238,9 +238,9 @@ zlink::socket_public_send_scope_t::~socket_public_send_scope_t ()
 }
 
 bool zlink::socket_public_send_scope_t::should_hold_sync_during_retry (
-  bool send_ready_handler_active_) const
+  bool retry_progress_owner_active_) const
 {
-    return _sync_locked && !send_ready_handler_active_;
+    return _sync_locked && !retry_progress_owner_active_;
 }
 
 void zlink::socket_public_send_scope_t::release_sync_for_retry ()

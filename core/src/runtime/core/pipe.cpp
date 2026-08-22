@@ -107,6 +107,15 @@ int zlink::pipepair (object_t *parents_[2],
 
     pipes_[0]->set_peer (pipes_[1]);
     pipes_[1]->set_peer (pipes_[0]);
+    if (resolved_queue_class == physical_queue_class_application) {
+        // Each physical ypipe has one writer and one reader. Keep that
+        // relationship in the registry for lazy snapshots only; application
+        // writes and reads continue to use their pipe-local byte ledger.
+        ctx->_physical_queue_registry.bind_application_pipe_queue (
+          physical_queues[0], pipes_[1], pipes_[0]);
+        ctx->_physical_queue_registry.bind_application_pipe_queue (
+          physical_queues[1], pipes_[0], pipes_[1]);
+    }
 
     return 0;
 }
@@ -212,6 +221,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _bytes_written (0),
     _published_msgs_read (0),
     _published_bytes_read (0),
+    _published_incomplete_bytes_read (0),
     _last_credit_bytes_read (0),
     _in_generation (1),
     _out_generation (1),
@@ -270,6 +280,12 @@ void zlink::pipe_t::detach_peer_backref ()
 void zlink::pipe_t::retire_physical_queue_endpoints ()
 {
     ctx_t *const ctx = get_ctx ();
+    if (!_registry_accounting) {
+        ctx->_physical_queue_registry.unbind_application_pipe_endpoint (
+          _in_physical_queue, this, false);
+        ctx->_physical_queue_registry.unbind_application_pipe_endpoint (
+          _out_physical_queue, this, true);
+    }
     ctx->_physical_queue_registry.release_endpoint (&_in_physical_queue);
     ctx->_physical_queue_registry.release_endpoint (&_out_physical_queue);
 }
@@ -1503,8 +1519,8 @@ void zlink::pipe_t::process_retained_credit (uint64_t generation_,
         _bytes_read = UINT64_MAX - _bytes_read < bytes_read_
                         ? UINT64_MAX
                         : _bytes_read + bytes_read_;
-        _published_msgs_read.store (_msgs_read, std::memory_order_relaxed);
-        _published_bytes_read.store (_bytes_read, std::memory_order_relaxed);
+        _published_msgs_read.store (_msgs_read, std::memory_order_release);
+        _published_bytes_read.store (_bytes_read, std::memory_order_release);
         _last_credit_bytes_read = _bytes_read;
         published_msgs = _msgs_read;
         published_bytes = _bytes_read;
@@ -1514,6 +1530,9 @@ void zlink::pipe_t::process_retained_credit (uint64_t generation_,
     if (peer)
         send_activate_write (peer, generation_, published_msgs,
                              published_bytes);
+    if (!_registry_accounting)
+        get_ctx ()->_physical_queue_registry.refresh_application_hwm_if_drained (
+          _in_physical_queue);
 }
 
 void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
@@ -1882,8 +1901,9 @@ void zlink::pipe_t::hiccup ()
       _in_physical_queue);
     _msgs_read = 0;
     _bytes_read = 0;
-    _published_msgs_read.store (0, std::memory_order_relaxed);
-    _published_bytes_read.store (0, std::memory_order_relaxed);
+    _published_incomplete_bytes_read.store (0, std::memory_order_release);
+    _published_msgs_read.store (0, std::memory_order_release);
+    _published_bytes_read.store (0, std::memory_order_release);
     _last_credit_bytes_read = 0;
     _in_incomplete_bytes = 0;
 
@@ -1989,9 +2009,9 @@ void zlink::pipe_t::refresh_peer_credit_snapshot_unlocked ()
         return;
 
     const uint64_t peer_msgs_read =
-      _peer->_published_msgs_read.load (std::memory_order_relaxed);
+      _peer->_published_msgs_read.load (std::memory_order_acquire);
     const uint64_t peer_bytes_read =
-      _peer->_published_bytes_read.load (std::memory_order_relaxed);
+      _peer->_published_bytes_read.load (std::memory_order_acquire);
     if (peer_msgs_read > _peers_msgs_read)
         _peers_msgs_read = peer_msgs_read;
     if (peer_bytes_read > _peers_bytes_read)
@@ -2386,8 +2406,14 @@ void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
         ? UINT64_MAX
         : _in_incomplete_bytes + frame_bytes;
 
-    if ((msg_->flags () & msg_t::more) != 0)
+    if ((msg_->flags () & msg_t::more) != 0) {
+        // A snapshot may observe a multipart while its reader has consumed
+        // only its prefix. Publish that prefix locally so the registry can
+        // subtract it lazily without a registry update on this frame.
+        _published_incomplete_bytes_read.store (_in_incomplete_bytes,
+                                                std::memory_order_release);
         return;
+    }
 
     _bytes_read =
       UINT64_MAX - _bytes_read < _in_incomplete_bytes
@@ -2395,9 +2421,12 @@ void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
         : _bytes_read + _in_incomplete_bytes;
     if (!msg_->is_routing_id () && !msg_->is_credential ())
         ++_msgs_read;
-    _published_msgs_read.store (_msgs_read, std::memory_order_relaxed);
-    _published_bytes_read.store (_bytes_read, std::memory_order_relaxed);
     _in_incomplete_bytes = 0;
+    // Publish the reset before the completed total. A sampler that observes
+    // the latter therefore cannot combine it with an old multipart prefix.
+    _published_incomplete_bytes_read.store (0, std::memory_order_release);
+    _published_msgs_read.store (_msgs_read, std::memory_order_release);
+    _published_bytes_read.store (_bytes_read, std::memory_order_release);
 
     const uint64_t credit_delta = _bytes_read - _last_credit_bytes_read;
     const uint64_t lwm = _lwm.load (std::memory_order_relaxed);
@@ -2406,11 +2435,49 @@ void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
     if (!lwm_reached && credit_delta > 0 && _peer
         && _peer->_waiting_for_byte_credit.load (std::memory_order_acquire))
         blocked_writer_drained = _in_pipe && !_in_pipe->check_read ();
-    if (credit_delta > 0 && (lwm_reached || blocked_writer_drained)) {
+    const bool credit_boundary =
+      credit_delta > 0 && (lwm_reached || blocked_writer_drained);
+    if (credit_boundary) {
         _last_credit_bytes_read = _bytes_read;
         send_activate_write (_peer, _in_generation, _msgs_read,
                              _bytes_read);
     }
+    if (!_registry_accounting && credit_boundary)
+        get_ctx ()->_physical_queue_registry.refresh_application_hwm_if_drained (
+          _in_physical_queue);
+}
+
+void zlink::pipe_t::snapshot_outbound_queue_accounting (
+  const pipe_t *reader_, uint64_t *provisional_out_,
+  uint64_t *committed_out_) const
+{
+    if (provisional_out_)
+        *provisional_out_ = 0;
+    if (committed_out_)
+        *committed_out_ = 0;
+
+    // This path is reached only by context snapshots and Auto-HWM replanning.
+    // The normal send path already holds _out_sync and never calls here.
+    scoped_optional_fast_lock_t lock (const_cast<fast_mutex_t *> (&_out_sync));
+    const uint64_t provisional = _out_incomplete_bytes;
+    const uint64_t written = _bytes_written;
+    uint64_t completed_read = 0;
+    uint64_t partial_read = 0;
+    if (reader_) {
+        completed_read = reader_->_published_bytes_read.load (
+          std::memory_order_acquire);
+        partial_read = reader_->_published_incomplete_bytes_read.load (
+          std::memory_order_acquire);
+    }
+    const uint64_t consumed =
+      UINT64_MAX - completed_read < partial_read
+        ? UINT64_MAX
+        : completed_read + partial_read;
+
+    if (provisional_out_)
+        *provisional_out_ = provisional;
+    if (committed_out_)
+        *committed_out_ = written > consumed ? written - consumed : 0;
 }
 
 void zlink::pipe_t::rollback_unlocked ()

@@ -138,6 +138,14 @@ class ctx_physical_queue_registry_t
       const physical_queue_handle_t &first_direction_,
       const physical_queue_handle_t &second_direction_,
       transport_lane_t lane_);
+    // Application directions retain their byte ledger in the owning pipe.
+    // The registry records both endpoints only so snapshots and replanning can
+    // sample that ledger without putting registry work on the frame path.
+    void bind_application_pipe_queue (const physical_queue_handle_t &direction_,
+                                      pipe_t *writer_,
+                                      pipe_t *reader_);
+    void unbind_application_pipe_endpoint (
+      const physical_queue_handle_t &direction_, pipe_t *pipe_, bool writer_);
     void account_provisional_frame (const physical_queue_handle_t &direction_,
                                     uint64_t frame_bytes_);
     void commit_message (const physical_queue_handle_t &direction_,
@@ -173,6 +181,10 @@ class ctx_physical_queue_registry_t
     void record_admission_attempt (bool blocked_by_target_hwm_);
     void update_hwm_target (const physical_queue_handle_t &direction_,
                             uint64_t target_hwm_);
+    // Called only at a pipe-local credit publication boundary. This lets a
+    // deferred application HWM observe the lazily sampled local ledger.
+    void refresh_application_hwm_if_drained (
+      const physical_queue_handle_t &direction_);
     uint64_t planned_hwm (const physical_queue_handle_t &direction_) const;
     uint64_t applied_hwm (const physical_queue_handle_t &direction_) const;
     uint64_t current_accounted_bytes (
@@ -224,6 +236,9 @@ class ctx_physical_queue_registry_t
     void cancel_decoder_reservations_unlocked (
       const physical_queue_handle_t &direction_, uint64_t generation_);
     void force_cancel_decoder_reservations ();
+    bool sample_application_pipe_queue (
+      const physical_queue_handle_t &direction_, uint64_t *provisional_out_,
+      uint64_t *committed_out_) const;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (ctx_physical_queue_registry_t)
 };
