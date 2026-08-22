@@ -279,16 +279,31 @@ void zlink::socket_base_t::flow_state_applied (
     if (!pipe_)
         return;
 
-    //  The accounted marker moves with the gauge, in the same call, so the two
-    //  can never disagree about whether this pair holds a counted pause.
+    //  Flow-state receipt retains this pipe and queues the command after it has
+    //  left the table mutex, so a concurrent termination can clear the pair and
+    //  settle its accounting before the command runs. The retain keeps the pipe
+    //  alive for exactly that long, so a late command would otherwise report
+    //  against a pair that no longer exists: a late RUNNING would release a
+    //  count this pair no longer holds - and the gauge is socket-wide, so it
+    //  would take another pair's - while a late PAUSE would add one that
+    //  nothing will ever release.
+    //
+    //  The reporting pipe must therefore still be this pair's registered
+    //  application pipe. If it is not, the termination path has already settled
+    //  everything and this command has nothing left to do: no gauge, no totals,
+    //  no duration, no marker and no event.
+    //
+    //  The marker moves inside the same critical section as that check, so it
+    //  can never disagree with the gauge about whether a pause is counted.
     {
         scoped_lock_t lock (_transport_pairs_sync);
         const transport_pairs_t::iterator it =
           _transport_pairs.find (transport_pair_key_t (
             pipe_->get_transport_pair_id (),
             pipe_->get_transport_pair_generation ()));
-        if (it != _transport_pairs.end ())
-            it->second.remote_flow_pause_accounted = paused_;
+        if (it == _transport_pairs.end () || it->second.application != pipe_)
+            return;
+        it->second.remote_flow_pause_accounted = paused_;
     }
 
     if (paused_) {
@@ -497,5 +512,34 @@ bool zlink::socket_base_t::test_set_pair_received_flow_state (
     it->second.remote_flow_seen = true;
     it->second.remote_flow_paused = paused_;
     return true;
+}
+#endif
+
+#ifdef ZLINK_BUILD_TESTS
+zlink::pipe_t *zlink::socket_base_t::test_retain_application_pipe (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::const_iterator it = _transport_pairs.find (
+      transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
+    if (it == _transport_pairs.end () || !it->second.application)
+        return NULL;
+    pipe_t *application = it->second.application;
+    return application->retain_lifetime_ref () ? application : NULL;
+}
+
+void zlink::socket_base_t::test_release_pipe (pipe_t *pipe_)
+{
+    if (pipe_)
+        pipe_->release_lifetime_ref ();
+}
+
+void zlink::socket_base_t::test_deliver_late_flow_state (pipe_t *pipe_,
+                                                         bool paused_,
+                                                         uint64_t epoch_)
+{
+    //  The same call pipe_t::process_flow_state () makes once the queued
+    //  command finally runs.
+    flow_state_applied (pipe_, paused_, epoch_, false);
 }
 #endif

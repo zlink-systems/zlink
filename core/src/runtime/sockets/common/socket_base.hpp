@@ -248,6 +248,17 @@ class socket_base_t : public own_t,
     //  Writes the pair's received state without applying it to the pipe, which
     //  is the state a frame leaves behind between acceptance and application.
     //  That gap is a cross-thread race in production; this makes it reachable.
+    //  Retains the pair's application pipe and hands it back, the way flow
+    //  receipt does before it leaves the table mutex. The retain outlives
+    //  termination, which is what lets a command report late.
+    zlink::pipe_t *test_retain_application_pipe (
+      uint64_t transport_pair_id_, uint64_t transport_pair_generation_);
+    void test_release_pipe (zlink::pipe_t *pipe_);
+    //  Reports a flow-state transition exactly as the queued command's handler
+    //  does, so a late report can be delivered on purpose.
+    void test_deliver_late_flow_state (zlink::pipe_t *pipe_,
+                                       bool paused_,
+                                       uint64_t epoch_);
     bool test_set_pair_received_flow_state (uint64_t transport_pair_id_,
                                             uint64_t transport_pair_generation_,
                                             bool paused_);

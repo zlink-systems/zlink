@@ -582,6 +582,171 @@ void test_pause_applied_by_pair_admission_is_booked ()
     fixture.teardown ();
 }
 
+//  Flow-state receipt retains the application pipe and queues the command after
+//  it has left the table mutex, so a concurrent termination can settle the
+//  pair's accounting first. The retain keeps the pipe alive for exactly that
+//  long, so the command can still arrive - and must then do nothing at all.
+//
+//  A second pair is held genuinely paused throughout, so a late release would
+//  have to take its count and be visible.
+void test_late_flow_state_from_a_terminated_pair_changes_nothing ()
+{
+    const int zero = 0;
+    char endpoint_a[MAX_SOCKET_STRING];
+    char endpoint_b[MAX_SOCKET_STRING];
+
+    void *router_a = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router_a, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router_a, endpoint_a, sizeof endpoint_a);
+
+    void *router_b = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router_b, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router_b, endpoint_b, sizeof endpoint_b);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint_a));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint_b));
+
+    char rid[256];
+    bool seen_a = false;
+    bool seen_b = false;
+    const std::chrono::steady_clock::time_point learn_deadline =
+      deadline_in_ms (6000);
+    while ((!seen_a || !seen_b) && !deadline_expired (learn_deadline)) {
+        (void) zlink_send (dealer, "hello", 5, ZLINK_DONTWAIT);
+        if (zlink_recv (router_a, rid, sizeof (rid), ZLINK_DONTWAIT) > 0) {
+            (void) zlink_recv (router_a, rid, sizeof (rid), ZLINK_DONTWAIT);
+            seen_a = true;
+        }
+        if (zlink_recv (router_b, rid, sizeof (rid), ZLINK_DONTWAIT) > 0) {
+            (void) zlink_recv (router_b, rid, sizeof (rid), ZLINK_DONTWAIT);
+            seen_b = true;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (seen_a);
+    TEST_ASSERT_TRUE (seen_b);
+
+    //  Pair A: a real, accounted pause that must survive everything below.
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_socket_set_receive_flow_state (router_a, ZLINK_RECEIVE_FLOW_PAUSED));
+    bool paused = false;
+    const std::chrono::steady_clock::time_point pause_deadline =
+      deadline_in_ms (6000);
+    while (!deadline_expired (pause_deadline)) {
+        (void) as_socket (dealer)->process_submit_commands ();
+        (void) as_socket (router_a)->process_submit_commands ();
+        if (read_flow_metrics (dealer).paused_connections == 1) {
+            paused = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (paused);
+
+    //  Find pair B and hold its application pipe, as receipt would.
+    zlink_routed_submit_target_t target_b;
+    memset (&target_b, 0, sizeof (target_b));
+    zlink::pipe_t *held_b = NULL;
+    for (int attempt = 0; attempt < 400 && !held_b; ++attempt) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target_b) == 0
+            && target_b.transport_pair_id != 0
+            && !as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target_b.transport_pair_id, target_b.transport_pair_generation))
+            held_b = as_socket (dealer)->test_retain_application_pipe (
+              target_b.transport_pair_id, target_b.transport_pair_generation);
+        if (!held_b)
+            msleep (1);
+    }
+    TEST_ASSERT_NOT_NULL (held_b);
+
+    //  Terminate pair B and let its accounting settle.
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (dealer, endpoint_b));
+    bool gone = false;
+    const std::chrono::steady_clock::time_point gone_deadline =
+      deadline_in_ms (6000);
+    while (!deadline_expired (gone_deadline)) {
+        (void) as_socket (dealer)->process_submit_commands ();
+        (void) as_socket (router_b)->process_submit_commands ();
+        if (as_socket (dealer)->test_pair_pipe (target_b.transport_pair_id,
+                                                target_b.transport_pair_generation,
+                                                false)
+            == NULL) {
+            gone = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (gone);
+
+    const flow_metrics_t before = read_flow_metrics (dealer);
+    TEST_ASSERT_EQUAL_UINT64 (1, before.paused_connections);
+
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (dealer, k_flow_events, &probe);
+
+    //  A late RUNNING must not release a count this pair no longer holds.
+    as_socket (dealer)->test_deliver_late_flow_state (held_b, false, 41);
+    //  A late PAUSE must not add one that nothing will ever release.
+    as_socket (dealer)->test_deliver_late_flow_state (held_b, true, 42);
+
+    const flow_metrics_t after = read_flow_metrics (dealer);
+    TEST_ASSERT_EQUAL_UINT64 (before.paused_connections,
+                              after.paused_connections);
+    TEST_ASSERT_EQUAL_UINT64 (before.pause_applied, after.pause_applied);
+    TEST_ASSERT_EQUAL_UINT64 (before.resume_applied, after.resume_applied);
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 0, 200));
+
+    as_socket (dealer)->test_release_pipe (held_b);
+    close_test_monitor_probe (&monitor, &probe);
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router_b);
+    test_context_socket_close_zero_linger (router_a);
+}
+
+//  The same guard, for a pair whose record is still there but whose reporting
+//  pipe is not the registered application pipe.
+void test_late_flow_state_from_a_foreign_pipe_changes_nothing ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_socket_set_receive_flow_state (fixture.router,
+                                           ZLINK_RECEIVE_FLOW_PAUSED));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+
+    const flow_metrics_t before = read_flow_metrics (fixture.dealer);
+    TEST_ASSERT_EQUAL_UINT64 (1, before.paused_connections);
+
+    zlink::pipe_t *completion = as_socket (fixture.dealer)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, true);
+    TEST_ASSERT_NOT_NULL (completion);
+
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (fixture.dealer, k_flow_events, &probe);
+
+    //  The pair is alive and paused, but this is not its application pipe.
+    as_socket (fixture.dealer)->test_deliver_late_flow_state (completion, false, 51);
+    as_socket (fixture.dealer)->test_deliver_late_flow_state (completion, true, 52);
+
+    const flow_metrics_t after = read_flow_metrics (fixture.dealer);
+    TEST_ASSERT_EQUAL_UINT64 (before.paused_connections,
+                              after.paused_connections);
+    TEST_ASSERT_EQUAL_UINT64 (before.pause_applied, after.pause_applied);
+    TEST_ASSERT_EQUAL_UINT64 (before.resume_applied, after.resume_applied);
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 0, 200));
+
+    close_test_monitor_probe (&monitor, &probe);
+    fixture.teardown ();
+}
+
 //  The gauge is socket-wide, so releasing it on termination has to be decided
 //  by whether this pair actually holds a counted pause - not by the last state
 //  it received. A frame is recorded when it is accepted and only becomes
@@ -922,6 +1087,8 @@ int main ()
     RUN_TEST (test_stale_generation_event_reports_the_received_generation);
     RUN_TEST (test_data_traffic_emits_no_flow_events);
     RUN_TEST (test_pause_applied_by_pair_admission_is_booked);
+    RUN_TEST (test_late_flow_state_from_a_terminated_pair_changes_nothing);
+    RUN_TEST (test_late_flow_state_from_a_foreign_pipe_changes_nothing);
     RUN_TEST (test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone);
     RUN_TEST (test_terminating_an_accounted_pause_releases_it_and_closes_the_duration);
     RUN_TEST (test_paused_pair_lifecycle_keeps_gauge_and_events_matched);
