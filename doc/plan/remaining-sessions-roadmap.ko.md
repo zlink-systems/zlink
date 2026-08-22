@@ -264,8 +264,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     재빌드 후 28→40→52→34→authority+capacity 원자 CAS→OnJoined→probe 전 구간 Redis MONITOR로
     완주 실증, 코디네이터 직접 재검증 passed(cpp→dotnet 무회귀). 하니스 개선 이월: host 존재만
     검사하고 freshness 미검사(run_cross_language_smoke.sh:47) — 셀 실행 전 증분 재빌드 강제 권장.
-    잔여 6셀(dotnet→java, java→node, dotnet→cpp, cpp→node, java→cpp, cpp→java) 스테이지 작성+실행
-    진행 중(host mode 4언어 완비 — 러너 조합만). 이하 이전 기록: **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
+    **잔여 6 selector 작성 완료 `ec6b721205`** — cpp→node·cpp→java 즉시 그린 → **8/12**. 실패 4셀
+    (run-dir 보존): ① dotnet→java `/tmp/tmp.slXFHHqITk` ② dotnet→cpp `/tmp/tmp.myoxg6d7L0` — 둘 다
+    admission 후 joined 미관측(.NET source 공통 원인 의심 — ZLinkActorRemoteJoiner:1044 non-unwrap
+    이월 항목 포함, sol 진단 중) ③ java→node `/tmp/tmp.e0S4ZOi4TW`(source peer discovery 전)
+    ④ java→cpp `/tmp/tmp.t09MHQHVhl`(target reciprocal peer 전) — discovery 단계, identity 정규화
+    (plaintext→default) 대칭 누락 1순위 용의(terra 진단 중). 러너 부수 변경: Java/C++ target
+    peer-rid 선택값화(.NET 자동 RID 지원), Node target 실 probe handler. 이하 이전 기록: **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
     canonical slot 모델 — TTT 회귀 모드 A 0/8 소거 동반). **4언어 배치 랜딩**: Java
     `6bb05dce85`(flags 판별·eviction race·typed 21), .NET `63e551c2b4`(47/48/49 request/reply·
     raw-20 차단·typed 21), C++ `2032cb6ba5`(**원격 Join을 인라인에서 ZLJR+40/52 canonical chunk로
