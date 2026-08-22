@@ -538,6 +538,171 @@ median 모두 ≤ 0.10.1 median)으로 5개 metric 모두 여전히 FAIL이다. 
 82.3% → 88.6%, latency 125~126% → 115~119%). **최종 판정: FAIL** — relaxed
 threshold 없이 그대로 기록한다.
 
+## 8.11 Test 증거 무효화: stale test binary
+
+**이 workstream의 모든 "8 focused test 8/8 통과" 기록은 무효다.**
+
+`core/build`는 `ZLINK_BUILD_TESTS=OFF`로 구성되어 있어 test target이 없다.
+`core/build/bin/`의 8개 test 실행 파일은 **2026-08-22 01:05~01:08**에 만들어진
+사용자 세션의 산출물이고, 그 뒤 `cmake --build core/build`는 `libzlink`만 다시
+링크했을 뿐 test 실행 파일은 한 번도 다시 만들지 않았다. 즉 stage 0의 기준점
+측정을 포함해 이번 작업의 모든 ctest 결과는 **어떤 변경도 포함하지 않은 낡은
+binary**를 실행한 것이다.
+
+`core/build-tests`(`ZLINK_BUILD_TESTS=ON`)에서 현재 source로 다시 빌드해 확인한
+실제 결과는 다음과 같다.
+
+| 대상 source | 결과 |
+|---|---|
+| `447f41a9f2` (사용자 원본 worktree) | **7/8**, `test_retained_hwm_credit` 실패 |
+| `56eebe3391` (poller 작업 반영) | 7/8, 같은 test 실패 |
+| 현재 HEAD + review 수정 | 7/8 + poller test 2개 통과, 같은 test 실패 |
+
+`test_retained_hwm_credit`은 **원본 worktree에서 20/20 결정적으로 실패**한다
+(flaky가 아니다).
+
+```text
+core/tests/integration/test_retained_hwm_credit.cpp:280
+test_router_synthetic_frame_is_unleased_and_typed_payloads_are_leased
+FAIL: Expected Non-NULL
+```
+
+280행은 `zlink_router_recv_part_v2_with_hwm_budget_lease()` 뒤의
+`TEST_ASSERT_NOT_NULL (lease)`다. 즉 routed multipart 수신에서 retained-credit
+lease가 반환되지 않는다. **이번 작업이 만든 실패가 아니라 사용자 byte-HWM
+구현의 기존 결함**이며, stale binary 때문에 지금까지 드러나지 않았다.
+§7.3에 기록한 "flaky 14/40"도 stale binary 기준이므로 재해석이 필요하다.
+
+이번 작업의 변경은 baseline 대비 **새로운 test 실패를 만들지 않았다**
+(양쪽 모두 같은 7/8).
+
+## 8.12 Codex review 지적 4건 수정
+
+| # | 지적 | 수정 |
+|---|---|---|
+| 1 [HIGH] | async owner 시작과 lock-free receive의 check/use race. `has_in()`과 `recv_common()`이 "async owner 없음"을 snapshot한 뒤 `_fq`를 unlocked로 다루는데, `start_async_mailbox_processing()`은 `command_owner_sync`로만 동기화한다. | 두 경로의 공유 receive mutex를 무조건 획득하도록 되돌렸다. 새 concurrency protocol을 도입하는 대신 되돌리는 쪽을 택했다(측정 이득이 "noise 내"와 +2.4%로 작았다). |
+| 2 [HIGH] | POSIX descriptor pollset이 mailbox의 **primary** signaler를 감시하는데 async executor가 `mailbox_t::recv()`에서 그것을 소비한다. Poller가 이미 적용된 input을 놓치고 timeout까지 잘 수 있다. | Executor가 drain 후 `mailbox_t::rearm_primary_signaler()`로 primary signaler를 다시 세운다. Async owner가 있을 때만, batch당 eventfd write 1회. Benchmark 경로에는 영향 없다. |
+| 3 [MED] | close가 첫 rebuild와 경쟁하면 `ZLINK_INTERNAL_OPT_FD` 조회가 거부되어 poller 전체가 `-1/ESHUTDOWN`을 반환했다. `core/doc/spec/core/06-polling.en.md:109`는 닫힌 source에 1회 `POLLERR`를 요구한다. | 해당 item을 pollset에서 건너뛰고 실제로 채운 descriptor 수로 `_pollset_size`를 정한다. `check_socket_events()`가 POLLERR를 보고한다. poll()과 select() 경로 모두 수정. |
+| 4 [MED] | `zlink_poll()`의 `reserve()`가 C ABI 밖으로 `bad_alloc`을 던질 수 있었다. | `add_item()`과 같은 방식으로 감싸고 `-1/ENOMEM`을 반환한다. |
+
+검증: 8 focused + `unittest_poller` + `test_timer_poller`. §8.11의 기존 실패
+1건 외 전부 통과. `test_socket_poller_wakes_after_async_owner_applies_input`는
+수정 전에도 12/12 통과했다(경합에서 늘 이겼을 뿐 위험은 실재).
+수정 비용: paired median 159.7 → 157.6 Kops/s (-1.3%).
+
+Commit `2655d6af30`.
+
+## 8.13 잔여 회귀 분해 (reboot 후 조용한 host)
+
+`core/v0.11.0`과 `core/v0.10.1`은 **같은 commit** `09d34089c0`이다. 따라서
+"v0.11.0보다 이전" 구간은 존재하지 않고, 남은 손실은 전부
+`core/v0.10.1..2728d70d44`에 있다.
+
+같은 toolchain(Release + LTO)으로 build해 `c0`(0.10.1 from source)에 인접
+paired로 측정했다(4 round median).
+
+| 대상 | Throughput median | c0 대비 |
+|---|---|---|
+| `c0` = `core/v0.10.1` from source | 174.9 K | 100% |
+| 현재 worktree (review 수정 포함) | 150.6 K | 86.1% |
+| `2728d70d44` (byte-HWM commit의 부모) | 147.3 K | 84.2% |
+
+**현재 worktree ≈ 부모**다. `3ef4d09a37`이 만든 회귀는 사실상 전부 회복됐고,
+잔여 손실은 부모보다 앞선 구간이 소유한다.
+
+### 8.13.1 Bisect: 소유 commit은 merge `f159a51a99`
+
+`core/v0.10.1..2728d70d44`에서 `core/src`를 건드리는 commit은 9개다. 각각을
+build해 `c0`에 인접 paired로 측정했다(3 round median).
+
+| commit | 설명 | c0 대비 |
+|---|---|---|
+| `425b9c2a82` | feat: align framework contracts and JVM runtime | 99.4% |
+| `408f1d4a9d` | coalesce request completion notifications | 98.8% |
+| `7bee681ec5` | optimize Windows STREAM TCP writes | 93.1% |
+| `1452b14905` | fix(core): pin the sibling pipe's lifetime | 104.7% |
+| `f159a51a99` | **merge: update performance branch from main** | **92.7%** |
+
+`f159a51a99`만 3 round 모두 92.7~92.8%로 일관됐다. 직전 commit
+`dc9fb69735`(c8)와 직접 인접 비교하면 결론이 더 분명하다(4 pair 전부 같은 방향).
+
+```text
+c8 189.9 / 174.4 / 174.7 / 172.7   median 174.5
+c9 170.5 / 161.5 / 153.8 / 157.3   median 159.4   -> 91.3%
+```
+
+`f159a51a99`는 main을 merge한 commit이고, 그 main 쪽 기여분(`c8..c9`)의
+`core/src` diff는 15개 파일 542줄이다.
+
+### 8.13.2 이 merge 안에서 배제한 원인
+
+| 후보 | 배제 근거 |
+|---|---|
+| `tcp_transport.cpp` +185: `async_writev`가 asio gather write에서 손수 만든 writev state machine(shared_ptr 2개 + std::function heap 할당/전송)으로 바뀜 | POSIX는 `ZLINK_ASIO_WRITEV_USE_ASIO=1`로 원래 asio 경로를 되살릴 수 있다. 3 pair A/B 결과 손수 만든 쪽이 오히려 근소 우위(166.0/156.9/149.9 vs 163.1/152.4/148.1). 원인 아님 |
+| `signaler.cpp` +101 / `signaler.hpp` +14 | 추가분이 전부 Windows 전용(`_event_only`, `_event`)이다 |
+| `ip_fdpair.cpp` +69 (`make_fdpair_unix_dgram`) | eventfd가 여전히 primary이고 unix-dgram은 eventfd 실패 시 fallback이다 |
+| `asio_tcp_tuning.hpp` +5 | `#ifdef ZLINK_HAVE_WINDOWS` 안이다 |
+| `mailbox.cpp` +54: `recv()`가 `_signalers` 확인용 `_sync` 왕복을 하나 더 함 (`process_commands`가 poll마다 socket당 1회 호출) | `_has_signalers` 원자 mirror로 lock을 건너뛰게 구현해 A/B 했으나 3 pair 모두 근소 악화(159.0/153.1/150.2 vs 162.0/157.6/152.1). 되돌림 |
+| build flag | merge는 `core/CMakeLists.txt`, `core/cmake`, `core/include`를 전혀 바꾸지 않았다 |
+
+### 8.13.3 Sampling profile: 원인은 CPU가 아니다
+
+`c8`/`c9`를 같은 driver로 SIGPROF sampling(전 thread)한 결과, **c9의 client
+per-message CPU가 오히려 더 낮다**.
+
+```text
+CLIENT  c9 2.764 us/msg   c8 2.908 us/msg
+SERVER  c9 2.050 us/msg   c8 1.898 us/msg
+```
+
+최대 단일 delta는 client `mailbox_t::recv` +0.077 us/msg뿐이고(§8.13.2에서
+수정해도 이득 없음), 나머지는 모두 0.02 us/msg 이하다. 처리량이 9% 낮은데 CPU가
+늘지 않았으므로, 이 손실도 §7.2와 같은 **구조적 blocking/wakeup 성격**이며
+sampling profiler로는 더 좁힐 수 없다.
+
+## 8.14 최종 gate (review 수정 반영, plan §8.2.1/§8.2.3)
+
+Tag `autohwm-stage1-final4-local` / `autohwm-stage1-final4-release-0101`,
+local/release 교대 3회, `--runs 1`, host load 0.60.
+
+Report 경로 (실행 순서):
+
+1. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_103052_autohwm-stage1-final4-local.txt`
+2. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_103058_autohwm-stage1-final4-release-0101.txt`
+3. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_103104_autohwm-stage1-final4-local.txt`
+4. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_103109_autohwm-stage1-final4-release-0101.txt`
+5. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_103115_autohwm-stage1-final4-local.txt`
+6. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_103121_autohwm-stage1-final4-release-0101.txt`
+
+| Run | Version | Throughput (Kops/s) | Bandwidth (MB/s) | Mean(ms) | P95(ms) | P99(ms) |
+|---|---|---|---|---|---|---|
+| 1 | local | 164.190 | 84.065 | 0.294 | 0.464 | 0.556 |
+| 2 | 0.10.1 | 188.761 | 96.646 | 0.247 | 0.383 | 0.467 |
+| 3 | local | 158.482 | 81.143 | 0.304 | 0.477 | 0.572 |
+| 4 | 0.10.1 | 177.004 | 90.626 | 0.263 | 0.408 | 0.497 |
+| 5 | local | 151.972 | 77.810 | 0.317 | 0.495 | 0.601 |
+| 6 | 0.10.1 | 170.116 | 87.100 | 0.274 | 0.428 | 0.523 |
+
+| Metric | Local median | 0.10.1 median | Local/0.10.1 | Stage 1 시작 | 판정 |
+|---|---|---|---|---|---|
+| Throughput (Kops/s) | 158.482 | 177.004 | 89.5% | 69.9% | FAIL |
+| Bandwidth (MB/s) | 81.143 | 90.626 | 89.5% | 69.9% | FAIL |
+| Lat.Mean (ms) | 0.304 | 0.263 | 115.6% | 144.2% | FAIL |
+| Lat.P95 (ms) | 0.477 | 0.408 | 116.9% | 146.9% | FAIL |
+| Lat.P99 (ms) | 0.572 | 0.497 | 115.1% | 142.0% | FAIL |
+
+5개 metric 모두 미달이지만 stage 1 시작 대비 격차는 크게 줄었다(처리량 69.9%
+→ 89.5%, latency 142~147% → 115~117%).
+
+## 8.15 중단 (BLOCKED)
+
+이번 round의 profile-guided 수정 3회 중 2회를 사용해(mailbox lock fast path,
+writev 경로 A/B) 모두 이득이 없어 되돌렸고, 남은 잔여 회귀의 소유자는
+byte-HWM과 무관한 **main merge `f159a51a99`**로 좁혀졌다. 그 안에서 코드
+후보를 5개 배제했고, sampling profile은 CPU 증가가 아님을 보였다. 더 좁히려면
+`f159a51a99`가 merge한 main 쪽 이력을 다시 bisect해야 하며 이는 byte-HWM 계획의
+범위 밖이다. 사용자 판단이 필요하다.
+
 ## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
