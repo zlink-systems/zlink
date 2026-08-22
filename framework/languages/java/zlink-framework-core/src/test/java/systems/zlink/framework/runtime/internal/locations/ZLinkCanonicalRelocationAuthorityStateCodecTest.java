@@ -2,12 +2,15 @@ package systems.zlink.framework.runtime.internal.locations;
 import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -122,6 +125,89 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 malformed,
                 request,
                 ZLinkAuthorityGenerationTransition.NEW_OWNER));
+    }
+
+    // STOP (per Ruling): a .NET-shaped source-phase (phase=captured,
+    // targetAttemptGeneration=0, empty target fence) relocation slot per the
+    // frozen wire schema (authority-relocation-state,
+    // service-wire-v1.schema.json:6092) still does not decode through this
+    // codec's own semantic projection: field 12+ diverges from the schema's
+    // coordinatorOwnerId/phase/sourceCleanupState layout (this codec instead
+    // reads a legacy placementReservationToken/capacityOwner* shape).
+    // applicationPayloadOrOriginal (see ZLinkActorAuthorityPayloadCodecTest
+    // .decodeAcceptsASourcePhaseRelocationSlotWithEmptyTargetFence) no
+    // longer depends on this projection succeeding, so this divergence does
+    // not block the Actor authority path — it is recorded here so a reader
+    // does not mistake decode()'s continued rejection for a regression.
+    @Test
+    void decodeStillRejectsADotNetShapedSourcePhaseSlot() {
+        byte[] payload = authorityPayload();
+        int slotOffset = relocationSlotOffset(payload);
+        byte[] slotBody = dotNetSourcePhaseRelocationSlotBody();
+
+        byte[] prefix = Arrays.copyOfRange(payload, 0, slotOffset);
+        byte[] tail = Arrays.copyOfRange(payload, slotOffset + 5, payload.length - 4);
+
+        ByteBuffer body = ByteBuffer.allocate(
+            prefix.length - 11 + 5 + slotBody.length + tail.length);
+        body.put(prefix, 11, prefix.length - 11);
+        body.put((byte) 1);
+        body.order(ByteOrder.BIG_ENDIAN).putInt(slotBody.length);
+        body.put(slotBody);
+        body.put(tail);
+
+        ByteBuffer envelope = ByteBuffer.allocate(11 + body.capacity() + 4);
+        envelope.put(prefix, 0, 7);
+        envelope.order(ByteOrder.BIG_ENDIAN).putInt(body.capacity());
+        envelope.put(body.array());
+        byte[] withoutChecksum = Arrays.copyOfRange(
+            envelope.array(), 0, envelope.position());
+        CRC32C checksum = new CRC32C();
+        checksum.update(withoutChecksum, 0, withoutChecksum.length);
+        envelope.order(ByteOrder.BIG_ENDIAN).putInt((int) checksum.getValue());
+        byte[] withRelocation = envelope.array();
+
+        assertNull(ZLinkCanonicalRelocationAuthorityStateCodec.decode(withRelocation));
+    }
+
+    // .NET-shaped authority-relocation-state slot body (frozen wire schema),
+    // phase=captured(2): a source-phase record with targetAttemptGeneration=0
+    // and an empty target fence, matching
+    // ZLinkStandaloneActorRelocationPrecommitCoordinator.cs's pre-command-40
+    // authority write and ZLinkCanonicalRelocationAuthorityState.cs
+    // EncodeSlot's field order. No trailing runtime-local extension.
+    private static byte[] dotNetSourcePhaseRelocationSlotBody() {
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        writeU64(body, 0L);
+        writeU64(body, 9L);
+        writeU64(body, 0L);
+        writeText8(body, "node-a");
+        writeU64(body, 3L);
+        writeText8(body, "owner-a");
+        writeU64(body, 6L);
+        writeText8(body, "");
+        writeU64(body, 0L);
+        writeText8(body, "");
+        writeU64(body, 0L);
+        writeText8(body, "coordinator-a");
+        writeU64(body, 11L);
+        writeText8(body, "node-c");
+        writeU64(body, 5L);
+        body.write(2);
+        writeU64(body, 1L);
+        body.write(0);
+        return body.toByteArray();
+    }
+
+    private static void writeU64(ByteArrayOutputStream out, long value) {
+        out.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
+            .putLong(value).array());
+    }
+
+    private static void writeText8(ByteArrayOutputStream out, String value) {
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.write(bytes.length);
+        out.writeBytes(bytes);
     }
 
     @Test

@@ -21,11 +21,22 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     private ZLinkCanonicalRelocationAuthorityStateCodec() {
     }
 
+    // Strips the relocation slot by its envelope boundaries only (presence
+    // flag + length), independent of the slot body's internal field shape.
+    // A cross-language source-phase record (.NET direct-transfer contract,
+    // authority-relocation-state: targetAttemptGeneration=0 with an empty
+    // target fence for phase 1/2) is a valid slot whose internal fields this
+    // codec's own Current/Published projection does not fully model (see
+    // decodeStrict). Application-payload extraction must not require that
+    // full semantic parse to succeed — it only needs the slot's byte range.
     public static byte[] applicationPayloadOrOriginal(byte[] payload) {
-        Published publication = decode(payload);
-        return publication == null
-            ? Objects.requireNonNull(payload, "payload").clone()
-            : publication.applicationPayload();
+        Objects.requireNonNull(payload, "payload");
+        try {
+            Slot slot = slot(payload);
+            return slot.present() ? replace(slot, EMPTY) : payload.clone();
+        } catch (RuntimeException invalid) {
+            return payload.clone();
+        }
     }
 
     static byte[] publish(
@@ -128,16 +139,20 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long relocationHigh = body.u64();
         long relocationLow = body.u64();
         if (relocationHigh == 0 && relocationLow == 0) throw invalid();
-        long aggregateGeneration = body.u64();
-        if (aggregateGeneration == 0) throw invalid();
+        // ordinal-or-zero (authority-relocation-state.targetAttemptGeneration
+        // in the frozen wire schema): 0 is the source-phase (1/2) value, not
+        // an invalid record.
+        long aggregateGeneration = body.ordinalOrZero();
         RoutingId sourceNodeRid = RoutingId.from(body.sized8());
         long sourceNodeGeneration = body.nonzeroU64();
         String sourceOwnerId = body.text8();
         long sourceOwnerLeaseGeneration = body.nonzeroU64();
-        RoutingId targetNodeRid = RoutingId.from(body.sized8());
-        long targetNodeGeneration = body.nonzeroU64();
-        String targetOwnerId = body.text8();
-        long targetOwnerLeaseGeneration = body.nonzeroU64();
+        // optional-rid / optional-text8 / ordinal-or-zero: the target fence
+        // is empty for a source-phase (1/2) record.
+        RoutingId targetNodeRid = RoutingId.from(body.optionalSized8());
+        long targetNodeGeneration = body.ordinalOrZero();
+        String targetOwnerId = body.optionalText8();
+        long targetOwnerLeaseGeneration = body.ordinalOrZero();
         long placementReservationToken = body.u64();
         String capacityOwnerId = body.text8();
         long capacityOwnerLeaseGeneration = body.nonzeroU64();
@@ -498,6 +513,9 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         String text8(){ return text(sized8()); }
         String text16(){ int n=u16(); if(n==0) throw invalid(); return text(take(n)); }
         byte[] sized8(){ int n=u8(); if(n==0) throw invalid(); return take(n); }
+        // optional-text8 / optional-rid: zero length means absent.
+        String optionalText8(){ int n=u8(); return n==0 ? "" : text(take(n)); }
+        byte[] optionalSized8(){ int n=u8(); return n==0 ? new byte[0] : take(n); }
         Reader reader(int n){ return new Reader(take(n)); }
         void skip(int n){ take(n); }
         byte[] take(int n){ require(n); byte[] v=Arrays.copyOfRange(bytes,offset,offset+n); offset+=n; return v; }

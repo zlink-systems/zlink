@@ -292,6 +292,94 @@ class reader_t
     std::size_t _offset = 0;
 };
 
+inline bool read_optional_text8 (reader_t &reader, bool *present = nullptr)
+{
+    const auto bytes = reader.take (reader.u8 ());
+    if (present)
+        *present = !bytes.empty ();
+    if (bytes.empty ())
+        return true;
+    std::string value;
+    value.reserve (bytes.size ());
+    for (const auto byte : bytes)
+        value.push_back (static_cast<char> (std::to_integer<std::uint8_t> (byte)));
+    return valid_text8 (value);
+}
+
+/* The durable authority's relocation slot is independent of the steady
+ * application authority.  Read and validate it before projecting the latter;
+ * in particular, a source-only Preparing/Captured slot has no target fence. */
+inline bool read_actor_authority_relocation_state (reader_t &body_reader)
+{
+    const auto has_relocation = body_reader.u8 ();
+    if (has_relocation > 1)
+        return false;
+    const auto state = body_reader.take (body_reader.u32be ());
+    if (has_relocation == 0)
+        return state.empty ();
+
+    reader_t relocation_reader (state);
+    const auto relocation_high = relocation_reader.u64be ();
+    const auto relocation_low = relocation_reader.u64be ();
+    const auto target_attempt_generation = relocation_reader.u64be ();
+    if (relocation_high == 0 && relocation_low == 0)
+        return false;
+    if (relocation_reader.take (relocation_reader.u8 ()).empty ())
+        return false;
+    if (relocation_reader.u64be () == 0)
+        return false;
+    (void) relocation_reader.text8 ();
+    if (relocation_reader.u64be () == 0)
+        return false;
+    const auto target_node_rid = relocation_reader.take (relocation_reader.u8 ());
+    const auto target_node_generation = relocation_reader.u64be ();
+    bool target_owner_present = false;
+    if (!read_optional_text8 (relocation_reader, &target_owner_present))
+        return false;
+    const auto target_owner_lease_generation = relocation_reader.u64be ();
+    (void) relocation_reader.text8 ();
+    if (relocation_reader.u64be () == 0
+        || relocation_reader.take (relocation_reader.u8 ()).empty ()
+        || relocation_reader.u64be () == 0)
+        return false;
+    const auto phase = relocation_reader.u8 ();
+    if (phase == 0 || phase > 9
+        || (relocation_reader.u64be () & (std::uint64_t{1} << 63)) != 0
+        || relocation_reader.u8 () > 2)
+        return false;
+
+    /* .NET's canonical writer appends its versioned, runtime-local progress
+     * extension after the schema-owned source-cleanup byte. */
+    if (!relocation_reader.done ()) {
+        if (relocation_reader.u8 () != 1)
+            return false;
+        (void) relocation_reader.u64be ();
+        if (!relocation_reader.done () && !read_optional_text8 (relocation_reader))
+            return false;
+        if (!relocation_reader.done ()) {
+            const auto has_pointer = relocation_reader.u8 ();
+            if (has_pointer > 1)
+                return false;
+            if (has_pointer == 1) {
+                (void) relocation_reader.text16le ();
+                (void) relocation_reader.u32be ();
+            }
+        }
+        if (!relocation_reader.done ())
+            return false;
+    }
+
+    const auto source_only = phase == 1 || phase == 2;
+    const auto has_target = target_attempt_generation != 0 && !target_node_rid.empty ()
+                            && target_node_generation != 0
+                            && target_owner_present && target_owner_lease_generation != 0;
+    if (source_only)
+        return !has_target && target_attempt_generation == 0 && target_node_rid.empty ()
+               && target_node_generation == 0 && !target_owner_present
+               && target_owner_lease_generation == 0;
+    return phase == 9 || has_target;
+}
+
 struct actor_relocation_envelope_t
 {
     std::span<const std::byte> prefix;
@@ -649,7 +737,7 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
         const auto node_rid_bytes = body_reader.take (node_rid_size);
         const auto node_generation = body_reader.u64be ();
         if (owner_lease_generation == 0 || node_generation == 0
-            || body_reader.u8 () != 0 || body_reader.u32be () != 0
+            || !actor_authority_detail::read_actor_authority_relocation_state (body_reader)
             || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
             return std::nullopt;
         std::string node_rid;

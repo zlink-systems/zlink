@@ -115,6 +115,62 @@ std::vector<std::byte> zlap (
     return result;
 }
 
+void append_rid (std::vector<std::byte> &bytes, std::string_view value)
+{
+    actor_authority_detail::append_u8 (bytes, static_cast<std::uint8_t> (value.size ()));
+    for (const auto byte : value)
+        actor_authority_detail::append_u8 (bytes, static_cast<std::uint8_t> (byte));
+}
+
+std::vector<std::byte> relocation_slot (std::uint8_t phase,
+                                        std::uint64_t target_attempt_generation)
+{
+    std::vector<std::byte> slot;
+    actor_authority_detail::append_u64be (slot, 1);
+    actor_authority_detail::append_u64be (slot, 2);
+    actor_authority_detail::append_u64be (slot, target_attempt_generation);
+    append_rid (slot, "source-node");
+    actor_authority_detail::append_u64be (slot, 3);
+    actor_authority_detail::append_text8 (slot, "source-owner");
+    actor_authority_detail::append_u64be (slot, 4);
+    if (target_attempt_generation == 0) {
+        actor_authority_detail::append_u8 (slot, 0);
+        actor_authority_detail::append_u64be (slot, 0);
+        actor_authority_detail::append_u8 (slot, 0);
+        actor_authority_detail::append_u64be (slot, 0);
+    }
+    else {
+        append_rid (slot, "target-node");
+        actor_authority_detail::append_u64be (slot, 5);
+        actor_authority_detail::append_text8 (slot, "target-owner");
+        actor_authority_detail::append_u64be (slot, 6);
+    }
+    actor_authority_detail::append_text8 (slot, "coordinator-owner");
+    actor_authority_detail::append_u64be (slot, 7);
+    append_rid (slot, "coordinator-node");
+    actor_authority_detail::append_u64be (slot, 8);
+    actor_authority_detail::append_u8 (slot, phase);
+    actor_authority_detail::append_u64be (slot, 0); // applicationVersion i64
+    actor_authority_detail::append_u8 (slot, 0); // sourceCleanupState pending
+    actor_authority_detail::append_u8 (slot, 1); // .NET private extension marker
+    actor_authority_detail::append_u64be (slot, 0); // aggregateGeneration
+    return slot;
+}
+
+std::vector<std::byte> with_relocation_slot (const std::vector<std::byte> &authority,
+                                              const std::vector<std::byte> &slot)
+{
+    const auto canonical = decode_canonical_authority_payload (authority);
+    assert (canonical && canonical->body.size () >= 10);
+    std::vector<std::byte> body (canonical->body.begin (), canonical->body.end () - 10);
+    actor_authority_detail::append_u8 (body, 1);
+    actor_authority_detail::append_u32be (body, static_cast<std::uint32_t> (slot.size ()));
+    actor_authority_detail::append_bytes (body, slot);
+    actor_authority_detail::append_u8 (body, 0); // activation recovery absent
+    actor_authority_detail::append_u32be (body, 0);
+    return encode_canonical_authority_payload ({std::move (body)});
+}
+
 actor_authority_payload_t actor_payload ()
 {
     return {.state = actor_authority_state_t::ready,
@@ -157,6 +213,25 @@ int main ()
             && decoded->spot_kind == actor_authority_spot_kind_t::entry
             && decoded->owner_id == "D" && decoded->owner_lease_generation == 3
             && decoded->node_generation == 4);
+
+    // .NET source phase 2 carries an allocated relocation slot before target
+    // selection: targetAttemptGeneration and every target fence are zero.
+    const auto source_phase_authority =
+      with_relocation_slot (actor, relocation_slot (2, 0));
+    const auto source_phase = decode_actor_authority_payload (source_phase_authority, 17);
+    assert (source_phase && source_phase->actor.actor_id ().value () == "B"
+            && equals_text (source_phase->spot_id, "C")
+            && source_phase->spot_generation == 2
+            && source_phase->owner_id == "D");
+
+    const auto target_phase_authority =
+      with_relocation_slot (actor, relocation_slot (3, 9));
+    const auto target_phase = decode_actor_authority_payload (target_phase_authority, 17);
+    const auto target_phase_canonical =
+      decode_canonical_authority_payload (target_phase_authority);
+    assert (target_phase && target_phase_canonical
+            && encode_canonical_authority_payload (*target_phase_canonical)
+                 == target_phase_authority);
 
     constexpr std::string_view user_spot_hex =
       "5a4c41550100000000002c000200080200050142014101"
