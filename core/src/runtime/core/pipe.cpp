@@ -1251,6 +1251,24 @@ void zlink::pipe_t::test_flow_probe (bool *out_active_,
 }
 #endif
 
+#ifdef ZLINK_BUILD_TESTS
+uint64_t zlink::pipe_t::test_frame_accounted_bytes (const msg_t *msg_)
+{
+    return frame_accounted_bytes (msg_);
+}
+
+uint64_t zlink::pipe_t::test_compute_lwm (uint64_t hwm_)
+{
+    return compute_lwm (hwm_);
+}
+
+uint64_t zlink::pipe_t::test_apply_lwm_hint (uint64_t hwm_, uint64_t lwm_,
+                                             uint64_t lwm_hint_)
+{
+    return apply_lwm_hint (hwm_, lwm_, lwm_hint_);
+}
+#endif
+
 bool zlink::pipe_t::take_flow_resume_recovery ()
 {
     return _waiting_for_flow_resume.exchange (false, std::memory_order_acq_rel);

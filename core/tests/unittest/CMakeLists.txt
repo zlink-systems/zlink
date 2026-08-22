@@ -21,6 +21,7 @@ set(unittests
     unittest_result_enum_mapping
     unittest_auto_hwm_policy
     unittest_flow_state_frame
+    unittest_pipe_byte_charge
     unittest_control_runtime)
 
 # add location of platform.hpp for Windows builds

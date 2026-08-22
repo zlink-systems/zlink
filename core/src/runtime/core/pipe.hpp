@@ -261,6 +261,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  readiness predicates agree with send admission.
     bool remote_flow_blocks_next_message () const;
 #ifdef ZLINK_BUILD_TESTS
+    //  Test-only windows onto the pure byte-charge and LWM arithmetic, so the
+    //  exact contract can be asserted without standing up a transport.
+    static uint64_t test_frame_accounted_bytes (const msg_t *msg_);
+    static uint64_t test_compute_lwm (uint64_t hwm_);
+    static uint64_t test_apply_lwm_hint (uint64_t hwm_,
+                                         uint64_t lwm_,
+                                         uint64_t lwm_hint_);
     //  Test-only: reports the send-blocker causes without evaluating any of
     //  them, so observing the pipe cannot change it.
     void test_flow_probe (bool *out_active_,
