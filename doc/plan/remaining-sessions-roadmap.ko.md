@@ -563,7 +563,16 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
   (.NET만 ZW-A~G 전 판정 AND 게이트; Java/Kotlin은 A2·B7 grep뿐, C++는 7개 체크로 광역 완료
   선언) ② **정본 = .NET** 확정(판정 비위조성·다중 관측면·B6/B7/G3-G4 relocation 증명·browser
   경로 보유), 포팅 순서 Node→Java→Kotlin→C++ ③ golden 추출 계획 9종(위 문서 §5) ④ 언어별
-  effort map(§6). 시나리오 스펙 준수 감사 별도 진행 중(사용자 요청) — 그 판정 반영 후 착수.
+  effort map(§6). **시나리오 스펙 감사 완료(2026-08-23, sol — 위반 6·침묵 12·정합 28)** + Claude
+  판정 8건 확정: ① player wire logical-only(browser nodeId/transferred는 Ops 관측면으로 이동)
+  ② zone→NodeId 하드코드 전면 제거, cross-owner 쌍은 capacity 상한(노드당 2 zone)+Ops probe
+  발견 방식 ③ JoinWorldRes = deferred Join completion에서 발신(Entry precheck terminal 금지)
+  ④ admission = target OnActorJoin 단독·same-zone만(.NET 정렬) ⑤ session continuity는 timeout
+  내 route update 조건부 + timeout 실패경로 스텝 신설 ⑥ Registered = report TTL 상수(30s lease
+  오참조 제거) ⑦ ZW-E는 app admission-only·Spec 30 비대상 명시 ⑧ canonical stable type
+  (`zoneworld.zone`/`zoneworld.player`)·ZW-* 개별 스텝 표·typed failure 매핑 공통 README 신설.
+  실행 순서: 공통 README ko/en 개정(Claude 단독, 파일 잠금 해제 대기) → shared browser/언어
+  fixture 정렬 → .NET 정본 완성 → golden 추출 → 포팅. stale 참조 6건(§c)은 README 개정에 포함.
 - [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합`(집계=주로 JVM, 보고=전체)
 - [ ] **단계 9 — 모든 e2e 추가·구현·실행 (맨 마지막 작업)** `4언어`(항목별 lockstep)
   - [ ] B1 config-6 (14 시나리오)
