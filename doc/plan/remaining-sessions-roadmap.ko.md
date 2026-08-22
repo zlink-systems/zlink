@@ -343,8 +343,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     수렴**: coordinator expectedStoreVersion = exact identity(V0), target CAS는 live V2 별도
     (21:1073/:1140, schema:4425) — Java StateMachine:1341-1345의 live==V0 동일시가 스펙 외(Java
     자신도 :1165 CAS는 live 사용). 제거 랜딩 `ff44291a18` → **dotnet→java 그린 복구,
-    11/12 확정**. cpp #19 등식 제거 랜딩 `170ff4cf4e`. 마지막 셀 java→cpp만 silent 잔존 — sol
-    계측 진단 중(스펙 인용 판정 포함). 이월
+    11/12 확정**. cpp #19 등식 제거 랜딩 `170ff4cf4e`. 마지막 셀 java→cpp blocker 수렴(sol): **capacity
+    row dialect 불일치** — Java 사설 key(`capacity:`+hex)·binary-v1 vs Node/cpp canonical
+    (`zlink:v11:capacity:*`) → cpp가 부재로 읽어 0-1 거부(provider_location_repository.hpp:3371)
+    → authority CAS 미도달. Ruling: **dialect 관용 추가 기각** — Java를 canonical로 정렬(사설
+    형식 제거, 21:939/:1034/:1073 원자성 유지) — terra 수정 중. 이월
     카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
     strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
     test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
