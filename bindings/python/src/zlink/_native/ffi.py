@@ -135,6 +135,13 @@ class ZlinkMonitorStatus(ctypes.Structure):
         ("minimum_core_message_charge_bytes", ctypes.c_uint64),
         ("oversize_message_admission_count", ctypes.c_uint64),
         ("oversize_message_admission_max_bytes", ctypes.c_uint64),
+        # Paired DEALER/ROUTER completion-lane receive-flow observation.
+        # Present since ABI 4 (core-byte-hwm-flow-control-plan.ko.md §6).
+        ("flow_paused_connections", ctypes.c_uint64),
+        ("flow_pause_applied_total", ctypes.c_uint64),
+        ("flow_resume_applied_total", ctypes.c_uint64),
+        ("flow_state_stale_total", ctypes.c_uint64),
+        ("flow_pause_duration_ms", ctypes.c_uint64),
     ]
 
 

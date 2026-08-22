@@ -104,7 +104,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
             self.assertGreaterEqual(message.ref_count(), 1)
         self.assertEqual(message.to_bytes(), b"")
 
-    def test_monitor_status_uses_abi_v3_byte_telemetry(self):
+    def test_monitor_status_uses_abi_v4_byte_telemetry(self):
         with zlink.create_context() as ctx:
             with zlink.create_pair_socket(ctx) as socket:
                 monitor_hwm_bytes = 12345
@@ -112,7 +112,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     monitor_hwm_bytes=monitor_hwm_bytes
                 ) as monitor:
                     status = monitor.status()
-                    self.assertEqual(status.abi_version, 3)
+                    self.assertEqual(status.abi_version, 4)
                     self.assertEqual(status.struct_size, ctypes.sizeof(ZlinkMonitorStatus))
                     self.assertIsInstance(status.snd_pending_bytes, int)
                     self.assertIsInstance(status.rcv_pending_bytes, int)
@@ -120,6 +120,23 @@ class CoreApiAlignmentTests(unittest.TestCase):
                         ctx.core_hwm_budget_snapshot().monitor_queue_applied_hwm_bytes,
                         monitor_hwm_bytes * 2,
                     )
+
+                    # ABI 4 adds paired DEALER/ROUTER receive-flow telemetry
+                    # (core-byte-hwm-flow-control-plan.ko.md §6). A PAIR
+                    # socket has no completion lane to observe, so
+                    # ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE (bit 5) stays
+                    # unset and these fields stay at their zeroed default.
+                    for field in (
+                        "flow_paused_connections",
+                        "flow_pause_applied_total",
+                        "flow_resume_applied_total",
+                        "flow_state_stale_total",
+                        "flow_pause_duration_ms",
+                    ):
+                        value = getattr(status, field)
+                        self.assertIsInstance(value, int, field)
+                        self.assertEqual(value, 0, field)
+                    self.assertEqual(status.detail_flags & (1 << 5), 0)
 
                 for invalid in (-1, 2**64, 1.5):
                     with self.assertRaises((TypeError, OverflowError)):
@@ -332,7 +349,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)),
-            (192, 8),
+            (232, 8),
         )
         self.assertEqual(
             (

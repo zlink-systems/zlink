@@ -15,7 +15,9 @@ class MonitorStatus:
     the queued counts; and
     the ``auto_hwm_*`` fields report the automatic high-water-mark sizing
     decisions (applied marks, effective buffers, last recalculation, and
-    deferred shrinks).
+    deferred shrinks); and (since ABI 4) the ``flow_*`` fields report paired
+    DEALER/ROUTER completion-lane receive-flow telemetry, populated only when
+    ``detail_flags`` has the flow-state detail bit set.
     """
 
     def __init__(
@@ -52,6 +54,11 @@ class MonitorStatus:
         minimum_core_message_charge_bytes=None,
         oversize_message_admission_count=None,
         oversize_message_admission_max_bytes=None,
+        flow_paused_connections=None,
+        flow_pause_applied_total=None,
+        flow_resume_applied_total=None,
+        flow_state_stale_total=None,
+        flow_pause_duration_ms=None,
     ):
         self.abi_version = abi_version
         self.struct_size = struct_size
@@ -84,6 +91,11 @@ class MonitorStatus:
         self.minimum_core_message_charge_bytes = minimum_core_message_charge_bytes
         self.oversize_message_admission_count = oversize_message_admission_count
         self.oversize_message_admission_max_bytes = oversize_message_admission_max_bytes
+        self.flow_paused_connections = flow_paused_connections
+        self.flow_pause_applied_total = flow_pause_applied_total
+        self.flow_resume_applied_total = flow_resume_applied_total
+        self.flow_state_stale_total = flow_state_stale_total
+        self.flow_pause_duration_ms = flow_pause_duration_ms
 
     def is_ready(self):
         """Return whether the monitored socket is in the ready state."""

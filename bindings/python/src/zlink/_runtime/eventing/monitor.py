@@ -66,6 +66,11 @@ def _monitor_status_from_native(snapshot):
         oversize_message_admission_max_bytes=int(
             snapshot.oversize_message_admission_max_bytes
         ),
+        flow_paused_connections=int(snapshot.flow_paused_connections),
+        flow_pause_applied_total=int(snapshot.flow_pause_applied_total),
+        flow_resume_applied_total=int(snapshot.flow_resume_applied_total),
+        flow_state_stale_total=int(snapshot.flow_state_stale_total),
+        flow_pause_duration_ms=int(snapshot.flow_pause_duration_ms),
     )
 
 
