@@ -525,6 +525,16 @@ later-attempt-wins rule described in
 [15. Spot And Actor Model §4.2](15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
 key on the actor identity carried in this body, not on any language-internal id.
 
+When the join-accepted reply carries an application reply, the target wraps it in the
+[Framework multipart application profile](#framework-multipart-application-profile) on the
+reply leg. There is exactly one part, and that part preserves the packet name and content
+type of the application reply message the handler produced. When there is no application
+reply, no multipart envelope is carried at all. The source unwraps this profile and
+delivers the sole part as the application reply, without interpreting the part bytes as
+another envelope. Framing other than this profile — nesting the part in an additional
+envelope, or exposing un-unwrapped inner bytes directly — is outside this operation's
+contract.
+
 #### Receiver Stable-Type Resolution
 
 Because the `actorJoin`(28) body deliberately carries no Actor stable type, the receiver

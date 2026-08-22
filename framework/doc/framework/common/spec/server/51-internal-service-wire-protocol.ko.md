@@ -477,6 +477,15 @@ dispatch 전에 protocol error로 거부한다.
 설명한 기존 준비 뒤에서 대기하는 동작과 later-attempt-wins 규칙을 포함한 수신 측 admission
 semantics는 language-internal id가 아니라 이 body에 실린 actor identity를 key로 삼는다.
 
+Join 수락 reply에 application reply가 있으면 target은 그것을
+[Framework multipart application profile](#framework-multipart-application-profile)로 감싸
+reply leg에 싣는다. Part는 정확히 하나이며, 그 part의 packet name과 content type은 handler가
+만든 application reply message의 것을 그대로 보존한다. Application reply가 없으면 multipart
+envelope 자체를 싣지 않는다. Source는 이 profile을 언랩해 sole part를 application reply로
+전달하며, part bytes를 다시 다른 envelope로 해석하지 않는다. 이 profile 외의 프레이밍 —
+part를 중첩 envelope로 감싸거나, 언랩하지 않은 inner bytes를 그대로 노출하는 것 — 은 이
+operation의 계약 밖이다.
+
 #### 수신자 stable-type 해석
 
 `actorJoin`(28) body는 Actor stable type을 의도적으로 싣지 않으므로, 수신자는 factory type을
