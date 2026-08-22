@@ -320,6 +320,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     admission conjunct(RemoteJoiner:569), 순서 비교 잔존(:581 — 51 §9 위반), one-way 40 legacy
     분기 제거 조건 충족(ManagedMeshNode:6214), 메시 전체 조회(:756 성능); Node Store 재조회
     다수(4180 등)·Relocation Store 과잉 필수(actor-transfer-runtime.ts:424).
+    **[정책] 정본-우선 포팅(2026-08-22 사용자 결정)**: 다언어 기능은 한 언어로 완결(정본) →
+    정본에서 golden byte 벡터/fixture 추출 → 포팅은 golden 통과가 완료 조건 → 정본·스펙 충돌 시
+    스펙 먼저 판정. 4언어 동시 개발 금지(검증식 발산으로 조합 디버깅 비용 O(언어²) — 3b 실증).
+    적용 시점: 단계 7 ZoneWorld부터. 무규정 영역(ZLJR·28 reply 프레이밍·coordinator 시점)의
+    스펙/schema 승격은 3b 마감 후 최우선 후속.
     **[정책] 리뷰·수정 감사(2026-08-22 사용자 지시)**: sol 리뷰는 큰 단계 마감에만, 일상 리뷰는
     코디네이터 직접. 랜딩된 수정이 스펙 외 단계 추가·복잡화·성능 저하를 만들면 보고 후 revert.
     감사 결과: Java attempt=lifecycle(f04506d1ff 절반)은 제거된 cpp 스펙위반 검사에 맞춘 것 —
