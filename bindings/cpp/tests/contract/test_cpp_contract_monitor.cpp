@@ -53,6 +53,10 @@ static_assert (
 static_assert (
   std::is_same<decltype (zlink::monitor_event_t ().connection_id), std::uint64_t>::value,
   "monitor event must expose the physical connection id");
+// core/include/zlink_enum.h: ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE = 1u << 5
+static_assert (static_cast<uint32_t> (zlink::monitor_status_detail::flow_state) == (1u << 5),
+               "monitor_status_detail::flow_state must match "
+               "ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE");
 
 template <typename T> class has_on_event_t
 {

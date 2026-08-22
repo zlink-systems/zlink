@@ -32,7 +32,11 @@ inline monitor_state operator| (monitor_state a, monitor_state b)
 enum class monitor_status_detail : uint32_t
 {
     snd_pending_msgs = 2,
-    rcv_pending_msgs = 4
+    rcv_pending_msgs = 4,
+    /// Set when flow_paused_connections and the other flow_* fields on
+    /// monitor_status_t are populated (ABI 4+, paired DEALER/ROUTER
+    /// sockets only).
+    flow_state = 32
 };
 
 inline monitor_status_detail operator| (monitor_status_detail a, monitor_status_detail b)
