@@ -377,3 +377,206 @@ Framework work started: no
 
 Commit: `rust: expose receive-flow-state parity` (this repository, branch
 `codex/bindings-0.11.1-performance`, commit `c000ca6e74`).
+
+## go
+
+Base commit: `f1ec634656`. Changed only under `bindings/go/`; no `core/` edit
+was needed here since the C-layer link-export defect (see the cpp section's
+"Shared C-layer defect found") was fixed by another concurrent worker before
+this section's build/test pass.
+
+### Surface added
+
+`bindings/go/internal/native/socket_types.go`:
+
+```go
+type ReceiveFlowState int32
+
+const (
+	ReceiveFlowRunning ReceiveFlowState = 0
+	ReceiveFlowPaused  ReceiveFlowState = 1
+)
+```
+
+`bindings/go/internal/native/connection_socket.go` (on `connectionSocket`,
+same placement/pattern as `SetTLSServer`/`SetTLSClient` — every concrete
+socket type embeds `connectionSocket`, so this is promoted onto
+`PairSocket`, `PubSocket`, `SubSocket`, `DealerSocket`, `RouterSocket`,
+`XPubSocket`, `XSubSocket`, and `CommonSocketOptions` automatically):
+
+```go
+func (s *connectionSocket) SetReceiveFlowState(value ReceiveFlowState) error {
+	return setNativeReceiveFlowState(s.raw(), s.socketCore.isClosed(), value)
+}
+```
+
+`StreamSocket` does not embed `connectionSocket` (it forwards each method
+individually through an unexported `core *routedSocket` field, matching its
+existing `SetSendHighWaterMark`/`SetTCPNoDelay`/etc. forwarders), so it gets
+an explicit one-line forwarder in `bindings/go/internal/native/socket_types.go`.
+`bindings/go/internal/native/socket_options.go` adds the matching
+`CommonSocketOptions.SetReceiveFlowState` wrapper, mirroring how
+`SetSendHighWaterMark` etc. exist both directly on `connectionSocket` and
+via the `CommonSocketOptions` facade.
+
+`bindings/go/internal/native/socket_option_support.go` adds the raw call,
+following the existing `setNativeOption`/`setNativePubBoolOption` pattern
+(nil/closed pre-check, then wrap the raw C result with
+`configErrorFromResult`):
+
+```go
+func setNativeReceiveFlowState(raw unsafe.Pointer, closed bool, value ReceiveFlowState) error {
+	if raw == nil || closed {
+		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	return configErrorFromResult(ConfigResult(C.zlink_socket_set_receive_flow_state(raw, C.zlink_receive_flow_state_t(value))))
+}
+```
+
+`ConfigResult`'s existing numeric constants already equal the C
+`zlink_config_result_t` values 1:1 (`ConfigInvalidHandle=701`,
+`ConfigInvalidArgument=702`, `ConfigNotSupported=703`,
+`ConfigInvalidState=705`) — this is the same convention every other
+`configErrorFromResult(...)` call site in the package already relies on
+(e.g. `zlink_set_option`), so no new binding-specific error-code table was
+needed.
+
+`bindings/go/contracts/sockets.go` and `bindings/go/root_projection.go` each
+alias the new type and its two constants, matching the existing two-layer
+projection every other socket type/enum in the package already goes
+through (`impl.X = ...` at both layers).
+
+### Not exposed (plan §5.1 forbidden list)
+
+No flow-frame receive/encode API and no PAUSE-bypass send variant were added
+to any socket type or to `CommonSocketOptions`. Verified by
+`TestPublicSurfaceHasNoFlowFrameAPI` in `flow_state_test.go`, which reflects
+over the exported method sets of every socket type plus
+`CommonSocketOptions` and asserts the only method whose name contains
+"flow" (case-insensitively) is `SetReceiveFlowState`, and that none contain
+`flowframe`, `encodeflow`, `receiveflowframe`, `sendflowframe`, or
+`pausebypass`.
+
+### Test: `bindings/go/flow_state_test.go`
+
+Checklist §8.1.1 coverage:
+
+| §8.1.1 item | Test |
+|---|---|
+| enum value parity with C ABI | `TestReceiveFlowStateEnumMatchesCABI` (`ReceiveFlowRunning==0`, `ReceiveFlowPaused==1`) |
+| DEALER/ROUTER success + idempotent repeat | `TestSetReceiveFlowStateSucceedsOnDealerAndRouterAndIsIdempotent` |
+| PAIR/PUB/SUB/XPUB/XSUB/STREAM → not-supported | `TestSetReceiveFlowStateReportsNotSupportedOnUnsupportedSocketTypes` |
+| invalid handle mapping | `TestSetReceiveFlowStateOnClosedSocketIsInvalidHandle` (`*ConfigError{Result: ConfigInvalidHandle}`) |
+| invalid argument mapping | `TestSetReceiveFlowStateOutOfRangeIsInvalidArgument` (values `2`, `-1`, `999`) |
+| close race → one observable outcome | `TestSetReceiveFlowStateRacingCloseObservesOnlyOkOrCloseRelatedError` (20 iterations of a genuinely concurrent `SetReceiveFlowState`/`Close`; asserts the setter's error is nil or a `*ConfigError` with `Result` in `{ConfigInvalidState, ConfigInvalidHandle}` — mirrors the two observable close-race shapes documented in `worklog/stage7-c-api.md` §1.2 — also run under `-race`, clean) |
+| no flow-frame/PAUSE-bypass API on the public surface | `TestPublicSurfaceHasNoFlowFrameAPI` (reflection over method sets, see above) |
+| existing HWM/EAGAIN-equivalent behavior unchanged | `TestExistingHWMBehaviorUnchangedAfterReceiveFlowStateCalls` (HWM get/set round-trip plus a full DEALER/ROUTER send/recv round trip, interleaved with `SetReceiveFlowState(Running)` calls including a repeat of the default state) |
+
+### Stale ABI-3 test expectations fixed (already-shipped stage7 change, not new functionality)
+
+Syncing the current `core/include` headers into `bindings/go/include` (the
+same mirror mechanism the C binding uses, verified by diffing against
+`core/include` byte-for-byte) surfaced three Go-side tests whose expectations
+were frozen at the pre-stage7 ABI and would fail regardless of the
+flow-state feature itself, once the header mirror is current:
+
+- `bindings/go/monitor_test.go`: `TestMonitorRecv` hardcoded
+  `snapshot.ABIVersion != 3`; `zlink_monitor_status_t`'s ABI bumped to 4 in
+  stage7 (5 new flow-metric fields). Updated the expectation to `4`.
+- `bindings/go/internal/native/spec_alignment_test.go`:
+  `TestCoreEventFlagValuesRemainComplete` hardcoded
+  `MonitorEventAll == 0xFFFF`; stage7 extended
+  `ZLINK_SOCKET_MONITOR_EVENT_ALL` to `0x7FFFF` to cover its 3 new event
+  bits. Updated the expectation to `0x7FFFF`.
+- `bindings/go/tests/raw-core11-allowlist.json`: the checked-in
+  header-hash/raw-symbol allowlist that `TestRawCore11AllowlistMatchesHeadersAndCgo`
+  enforces. Updated the sha256 for the three changed headers
+  (`zlink_enum.h`, `zlink/socket/api.h`, `zlink/eventing/api.h`) and added
+  `zlink_receive_flow_state_t` / `zlink_socket_set_receive_flow_state` to
+  `publicSymbols` (this list is derived mechanically from every `C.zlink_*`
+  identifier actually referenced in the package's Go source, so it must
+  track the two new cgo references this change adds).
+
+None of these three files' actual runtime behavior changed — they encode
+frozen expectations of a header mirror that was already one stage stale;
+this stage's own header sync is what makes them observably wrong, so fixing
+them here is the direct completion of §7.3's "header mirror" step, not
+scope creep.
+
+### Build + test evidence
+
+Core build source used: an isolated build directory
+(`core/build-go-flowstate`, `-DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF
+-DWITH_TLS=ON`), built separately from the shared `core/build` to avoid
+racing concurrent worktree activity from other language workers, then
+synced into `bindings/go/include` and `bindings/go/native/linux-x86_64` via
+`scripts/local-package/native/sync-local-core-libs.sh go` with
+`CORE_LIB_DIR`/`CORE_INCLUDE_DIR` pointed at that isolated build.
+
+Before the shared `core/src/libzlink.vers` fix landed (see cpp section),
+`go build ./...` failed for every `package main` target (samples, perf) with
+`undefined reference to zlink_socket_set_receive_flow_state`; library
+packages (`internal/native`, `contracts`, the root `zlink` package) compiled
+cleanly throughout, confirming the Go-side surface code itself was correct
+and the defect was purely the shared linker export list. After that fix
+landed and the isolated core build was rebuilt, the symbol resolved and the
+same build succeeded end to end.
+
+```bash
+bash bindings/go/tests/run_tests.sh
+```
+
+Result: all green.
+
+```text
+ok  	zlink.systems/zlink	4.191s
+?   	zlink.systems/zlink/contracts	[no test files]
+ok  	zlink.systems/zlink/internal/native	0.046s
+ok  	zlink.systems/zlink/perf/internal/perfcommon	(cached)
+==> go vet all Go packages          (clean)
+==> raw contract and hot-path guards
+ok  	zlink.systems/zlink/internal/native	0.045s
+==> samples/*                        (7/7 pass)
+```
+
+No pre-existing unrelated failures were found in this binding's own suite at
+this commit — the only failures observed during this stage were the
+link-time defect (shared, fixed upstream of this section) and the three
+stale-ABI test expectations above (fixed as part of this section, since they
+live under `bindings/go/`).
+
+### Files changed
+
+- `bindings/go/internal/native/socket_types.go` — new `ReceiveFlowState` type/constants; `StreamSocket.SetReceiveFlowState` forwarder
+- `bindings/go/internal/native/connection_socket.go` — `connectionSocket.SetReceiveFlowState`
+- `bindings/go/internal/native/socket_option_support.go` — `setNativeReceiveFlowState`
+- `bindings/go/internal/native/socket_options.go` — `CommonSocketOptions.SetReceiveFlowState`
+- `bindings/go/contracts/sockets.go`, `bindings/go/root_projection.go` — alias the new type/constants
+- `bindings/go/include/zlink_enum.h`, `bindings/go/include/zlink/socket/api.h`, `bindings/go/include/zlink/eventing/api.h` — synced from `core/include` (stale header mirror)
+- `bindings/go/flow_state_test.go` — new focused contract test (§8.1.1 table above)
+- `bindings/go/monitor_test.go`, `bindings/go/internal/native/spec_alignment_test.go`, `bindings/go/tests/raw-core11-allowlist.json` — stale ABI-3 expectations updated (see above)
+
+### Result
+
+```text
+Result: go flow-state binding parity implemented and tested; full
+  bindings/go/tests/run_tests.sh (go test + go vet + raw-contract/hot-path
+  guards + 7 samples) passes green, including under -race for the
+  close-race test.
+Changed source: see "Files changed" above.
+Changed public contract: bindings/go public Go surface only (no core/doc/spec
+  or bindings/doc/spec changes); no core/ edit required (shared
+  core/src/libzlink.vers export-list fix was already applied by another
+  concurrent worker before this section's build/test pass — see cpp
+  section's "Shared C-layer defect found").
+Focused tests: bindings/go/tests/run_tests.sh — see "Build + test evidence"
+  above.
+Paired perf reports: none (out of scope per plan §8.1.1 — binding perf is not
+  this stage's gate; no hot-path source was touched).
+First remaining failure: none observed in this binding's own suite at this
+  commit.
+Framework work started: no
+```
+
+Commit: `go: expose receive-flow-state parity` (this repository, branch
+`codex/bindings-0.11.1-performance`, commit `f4cefe9e91`).
