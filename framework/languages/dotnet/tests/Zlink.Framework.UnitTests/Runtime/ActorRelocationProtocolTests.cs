@@ -1080,4 +1080,54 @@ public sealed class ActorRelocationProtocolTests
             reply: null);
     }
 
+    [Fact]
+    public void Unbound_source_join_request_carries_a_non_empty_relocation_coordinator_fence()
+    {
+        //  Regression for the unbound-source ZLJR blocker: the target's ZLJR
+        //  decoder requires a durable coordinator fence (owner/lease/node/
+        //  store-version) whether or not a session happens to be bound. An
+        //  unbound source must still populate it from the source authority.
+        var relocationId =
+            Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        var sourceNodeRid = RoutingId.From("source-node");
+        var sessionRelocationContext = ZLinkSessionRelocationContext.Create(
+            relocationId,
+            "source-owner",
+            3,
+            sourceNodeRid,
+            7,
+            "v1");
+
+        var request = ZLinkRemoteActorJoinPackets.CreateJoinRequest(
+            "actor-1",
+            "player",
+            relocationId.ToString("N"),
+            "source-spot",
+            sourceNodeRid,
+            actorGeneration: 7,
+            actorAuthorityOwnerGeneration: 3,
+            boundSessionNodeRid: null,
+            boundSessionRid: default,
+            ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
+            Reference(),
+            ZLinkMessage.From("unbound-payload"),
+            new ZLinkCodecRegistryBuilder(),
+            boundSessionIdentity: null,
+            reservation: null,
+            sessionRelocationContext: sessionRelocationContext);
+
+        Assert.Null(request.BoundSessionNodeRid);
+        Assert.Null(request.BoundSessionRid);
+        Assert.False(
+            string.IsNullOrEmpty(request.RelocationCoordinatorOwnerId));
+        Assert.NotEqual(0UL, request.RelocationCoordinatorLeaseGeneration);
+        Assert.NotNull(request.RelocationCoordinatorNodeRid);
+        Assert.NotEqual(
+            0UL,
+            request.RelocationCoordinatorNodeGeneration);
+        Assert.False(
+            string.IsNullOrEmpty(
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion));
+    }
+
 }

@@ -622,16 +622,20 @@ internal sealed class ZLinkActorRemoteJoiner(
             $"preflight_done actor={actor.Context.ActorId} has_bound_session={hasBoundSession}");
         if (hasBoundSession && boundSession.SessionNodeRid is null)
             boundSession = boundSession with { SessionNodeRid = actorRef.NodeRid };
-        var sessionRelocationContext = default(ZLinkSessionRelocationContext);
+        //  The relocation coordinator fence (owner/lease/node/store-version)
+        //  is required on every ZLJR request, bound session or not: the
+        //  target's ZLJR decoder rejects an empty/zero fence as malformed
+        //  recovery regardless of whether a session happens to be bound.
+        //  Only session seal/binding stays conditional on hasBoundSession.
+        var sessionRelocationContext = ZLinkSessionRelocationContext.Create(
+            Guid.ParseExact(handoffId, "N"),
+            currentAuthority.Snapshot.OwnerId,
+            checked((ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
+            sourceAuthority.NodeRid,
+            sourceAuthority.NodeGeneration,
+            currentAuthority.Snapshot.StoreVersion);
         if (hasBoundSession)
         {
-            sessionRelocationContext = ZLinkSessionRelocationContext.Create(
-                Guid.ParseExact(handoffId, "N"),
-                currentAuthority.Snapshot.OwnerId,
-                checked((ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
-                sourceAuthority.NodeRid,
-                sourceAuthority.NodeGeneration,
-                currentAuthority.Snapshot.StoreVersion);
             actorState.RememberSourceSessionRelocation(
                 handoffId,
                 sessionRelocationContext);
@@ -728,9 +732,7 @@ internal sealed class ZLinkActorRemoteJoiner(
              registration.Codecs,
 	             hasBoundSession ? boundSession : null,
 	             targetReservation,
-                 hasBoundSession
-                     ? sessionRelocationContext
-                     : default,
+                 sessionRelocationContext,
                  actorNodeGeneration:
                      currentAuthority.Snapshot.Allocation
                          .DescriptorLifecycleGeneration,
