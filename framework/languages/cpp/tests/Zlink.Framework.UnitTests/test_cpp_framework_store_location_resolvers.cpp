@@ -2328,7 +2328,21 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
                round_trip (framework_runtime_state_t::error));
     EXPECT_EQ (framework_runtime_state_t::relocating,
                client_server_framework_state (
-                 service_node_state_t::retiring));
+               service_node_state_t::retiring));
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      StoreTransportIdentityMapsToServiceWireAdmissionIdentity)
+{
+    using zlink::framework::runtime::location_auto_connect_detail::
+      to_service_wire_admission_identity;
+
+    EXPECT_EQ ("default",
+               to_service_wire_admission_identity ("plaintext"));
+    EXPECT_EQ ("default",
+               to_service_wire_admission_identity ("default"));
+    EXPECT_EQ ("tls:cluster-a",
+               to_service_wire_admission_identity ("tls:cluster-a"));
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,

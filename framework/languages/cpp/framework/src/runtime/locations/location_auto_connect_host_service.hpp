@@ -33,6 +33,22 @@
 namespace zlink::framework::runtime
 {
 
+namespace location_auto_connect_detail
+{
+
+/* Location Store descriptors describe the transport identity. RouteMesh
+ * service-wire admission uses its own plaintext identity, matching the
+ * cross-language Store -> expected-peer projection. */
+inline std::string to_service_wire_admission_identity (
+  std::string_view descriptor_identity)
+{
+    return descriptor_identity == "plaintext"
+      ? "default"
+      : std::string (descriptor_identity);
+}
+
+} // namespace location_auto_connect_detail
+
 /* Automatic RouteMesh discovery is a projection of the MeshNode descriptor.
  * It deliberately does not publish or consume a second peer-row model. */
 class location_auto_connect_host_service_t final : public hosted_service_t,
@@ -507,7 +523,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             desired.emplace (
               key, target_t{key, descriptor.rid, descriptor.endpoint,
                             descriptor.owner_id, descriptor.lifecycle_generation,
-                            descriptor.security_identity, initiates_connection,
+                            location_auto_connect_detail::
+                              to_service_wire_admission_identity (
+                              descriptor.security_identity),
+                            initiates_connection,
                             descriptor.state
                               != framework_runtime_state_t::draining});
         }
