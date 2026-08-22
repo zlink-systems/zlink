@@ -22,7 +22,7 @@ int main (void)
     CHECK (ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES == 20);
     CHECK (ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES == 21);
     CHECK (ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1 == 1u);
-    CHECK (ZLINK_MONITOR_STATUS_ABI_VERSION == 3u);
+    CHECK (ZLINK_MONITOR_STATUS_ABI_VERSION == 4u);
     CHECK (sizeof (zlink_socket_monitor_open_options_t) == 16u);
 
     zlink_msg_t msg;

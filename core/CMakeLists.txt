@@ -781,6 +781,7 @@ endif()
 set(api-core-sources
     src/api/core/context_api.cpp
     src/api/core/zlink.cpp
+    src/api/core/zlink_flow_state_api.cpp
     src/api/core/zlink_option.cpp
     src/api/core/zlink_option_mapping.cpp
     src/api/core/zlink_option_specialized_api.cpp
