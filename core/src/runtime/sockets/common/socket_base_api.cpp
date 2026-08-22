@@ -855,6 +855,12 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
                 pair_it->second.completion = NULL;
             else
                 pair_it->second.application = NULL;
+            //  Whatever this connection was holding goes away with it, and
+            //  once the completion lane is gone nothing can be validated for
+            //  this pair any more, so nothing may stay held either.
+            discard_pending_flow_state_locked (
+              pair_it->second, pipe_->get_transport_connection_id (),
+              pair_it->second.completion == NULL);
             if (!pair_it->second.application && !pair_it->second.completion)
                 _transport_pairs.erase (pair_it);
         }

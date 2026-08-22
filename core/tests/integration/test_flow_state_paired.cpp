@@ -895,6 +895,95 @@ void attach_window_injects_pause (zlink::socket_base_t *socket_,
     (void) msg.close ();
 }
 
+//  Pass 3, S3. A held state names its candidate by transport connection id,
+//  not by pipe address: a pipe pointer is not an identity across teardown,
+//  because the object can be freed and a later allocation can land on the same
+//  address. The hold is also dropped as soon as the connection that produced it
+//  goes away, instead of lingering until the sibling lane is torn down too.
+void test_held_state_is_dropped_when_its_connection_goes_away ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool ready = false;
+    const std::chrono::steady_clock::time_point ready_deadline =
+      deadline_in_ms (4000);
+    while (!deadline_expired (ready_deadline)) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
+            && target.transport_pair_id != 0
+            && as_socket (dealer)->test_pair_is_ready (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            ready = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (ready);
+
+    zlink::pipe_t *completion = as_socket (dealer)->test_pair_pipe (
+      target.transport_pair_id, target.transport_pair_generation, true);
+    TEST_ASSERT_NOT_NULL (completion);
+    const uint64_t connection_id = completion->get_transport_connection_id ();
+    //  Every network connection is identifiable by the time it can deliver a
+    //  frame, which is what makes the connection id usable as the name.
+    TEST_ASSERT_TRUE (connection_id != 0);
+
+    TEST_ASSERT_TRUE (as_socket (dealer)->test_buffer_flow_frame (
+      target.transport_pair_id, target.transport_pair_generation, connection_id,
+      true, 4242));
+    TEST_ASSERT_TRUE (
+      as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+
+    //  The completion lane goes away. Its hold has to go with it, while the
+    //  pair record itself is still alive because the sibling lane is only
+    //  being asked to terminate.
+    completion->terminate (false);
+    bool observed_record_alive_without_completion = false;
+    const std::chrono::steady_clock::time_point drop_deadline =
+      deadline_in_ms (2000);
+    while (!deadline_expired (drop_deadline)) {
+        (void) as_socket (dealer)->process_submit_commands ();
+        const bool completion_gone =
+          as_socket (dealer)->test_pair_pipe (
+            target.transport_pair_id, target.transport_pair_generation, true)
+          == NULL;
+        const bool record_alive =
+          as_socket (dealer)->test_pair_pipe (
+            target.transport_pair_id, target.transport_pair_generation, false)
+          != NULL;
+        if (completion_gone && record_alive) {
+            observed_record_alive_without_completion = true;
+            //  The hold must already be gone at this point, not merely once
+            //  the record is finally erased.
+            TEST_ASSERT_FALSE (
+              as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+            break;
+        }
+        if (completion_gone && !record_alive)
+            break;
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (observed_record_alive_without_completion);
+    TEST_ASSERT_FALSE (
+      as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 //  Pass 3, S2. The hold for an unvalidated pair must be per candidate source.
 //  With one slot per pair, a candidate that goes on to lose registration can
 //  overwrite the winner's held state with a higher epoch; promotion then drops
@@ -939,17 +1028,12 @@ void test_losing_candidate_cannot_destroy_the_winners_held_state ()
     TEST_ASSERT_TRUE (held_paused);
 
     //  A competing candidate for the same pair key sends a higher-epoch
-    //  RUNNING. Any pipe pointer distinct from the registered completion pipe
-    //  stands in for it here; the point under test is the slot policy, not how
-    //  the second connection was obtained.
-    zlink::pipe_t *other_source =
-      as_socket (dealer)->test_pair_pipe (pair_id, generation, false);
-    TEST_ASSERT_NOT_NULL (other_source);
-    TEST_ASSERT_TRUE (other_source
-                      != as_socket (dealer)->test_pair_pipe (pair_id,
-                                                             generation, true));
+    //  RUNNING. Any connection id other than the winner's stands in for it
+    //  here; the point under test is the slot policy, not how the second
+    //  connection was obtained.
+    const uint64_t foreign_connection_id = 0xdeadbeefdeadbeefULL;
     TEST_ASSERT_TRUE (as_socket (dealer)->test_buffer_flow_frame (
-      pair_id, generation, other_source, false, held_epoch + 8));
+      pair_id, generation, foreign_connection_id, false, held_epoch + 8));
 
     //  The winner's PAUSE must survive and be the state that is promoted.
     zlink_routed_submit_target_t target;
@@ -970,6 +1054,12 @@ void test_losing_candidate_cannot_destroy_the_winners_held_state ()
     TEST_ASSERT_TRUE (paused_seen);
     TEST_ASSERT_FALSE (
       as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+
+    zlink::pipe_t *winner = as_socket (dealer)->test_pair_pipe (
+      target.transport_pair_id, target.transport_pair_generation, true);
+    TEST_ASSERT_NOT_NULL (winner);
+    TEST_ASSERT_TRUE (winner->get_transport_connection_id ()
+                      != foreign_connection_id);
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
@@ -1649,6 +1739,7 @@ int main ()
     RUN_TEST (test_generation_change_resets_the_epoch_sequence);
     RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
+    RUN_TEST (test_held_state_is_dropped_when_its_connection_goes_away);
     RUN_TEST (test_losing_candidate_cannot_destroy_the_winners_held_state);
     RUN_TEST (test_pause_accepted_in_the_publish_window_blocks_the_writable_edge);
     RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);

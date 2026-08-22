@@ -223,8 +223,9 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
             //  identity in its metadata. Hold the frame, latest-only, and
             //  leave the accepted state and its epoch untouched so a
             //  connection that never wins registration cannot burn either.
-            buffer_pending_flow_state_locked (pair, completion_pipe_, paused,
-                                              frame.epoch);
+            buffer_pending_flow_state_locked (
+              pair, completion_pipe_->get_transport_connection_id (), paused,
+              frame.epoch);
             return true;
         }
         //  Duplicate or reversed epoch within one generation.
@@ -347,14 +348,15 @@ bool zlink::socket_base_t::test_pending_flow_buffered (
 
 bool zlink::socket_base_t::test_buffer_flow_frame (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
-  pipe_t *source_, bool paused_, uint64_t epoch_)
+  uint64_t source_connection_id_, bool paused_, uint64_t epoch_)
 {
     scoped_lock_t lock (_transport_pairs_sync);
     const transport_pairs_t::iterator it = _transport_pairs.find (
       transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
     if (it == _transport_pairs.end ())
         return false;
-    buffer_pending_flow_state_locked (it->second, source_, paused_, epoch_);
+    buffer_pending_flow_state_locked (it->second, source_connection_id_,
+                                      paused_, epoch_);
     return true;
 }
 
@@ -394,10 +396,14 @@ void zlink::socket_base_t::test_run_attach_flow_window_hook (
 #endif
 
 void zlink::socket_base_t::buffer_pending_flow_state_locked (
-  transport_pair_pipes_t &pair_, pipe_t *source_, bool paused_,
+  transport_pair_pipes_t &pair_, uint64_t source_connection_id_, bool paused_,
   uint64_t epoch_)
 {
-    if (!source_)
+    //  Without a connection id the candidate cannot be told apart from any
+    //  other, so holding the state would risk applying it on behalf of a
+    //  different connection. Every network connection has one by the time it
+    //  can deliver a frame.
+    if (source_connection_id_ == 0)
         return;
 
     //  One slot per candidate, latest state wins within a slot. A candidate
@@ -406,7 +412,7 @@ void zlink::socket_base_t::buffer_pending_flow_state_locked (
     for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
          ++i) {
         transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
-        if (!slot.valid || slot.source != source_)
+        if (!slot.valid || slot.source_connection_id != source_connection_id_)
             continue;
         if (epoch_ <= slot.epoch)
             return;
@@ -422,7 +428,7 @@ void zlink::socket_base_t::buffer_pending_flow_state_locked (
         slot.valid = true;
         slot.paused = paused_;
         slot.epoch = epoch_;
-        slot.source = source_;
+        slot.source_connection_id = source_connection_id_;
         return;
     }
     //  Every slot belongs to another candidate. Refuse the newcomer rather
@@ -436,13 +442,16 @@ void zlink::socket_base_t::promote_pending_flow_state_locked (
     bool found = false;
     bool paused = false;
     uint64_t epoch = 0;
+    const uint64_t winner_connection_id =
+      pair_.completion ? pair_.completion->get_transport_connection_id () : 0;
     for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
          ++i) {
         transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
         //  Only the candidate that won registration is promoted. Everything
         //  else is dropped outright: it never reaches the accepted state and
         //  never advances the epoch.
-        if (slot.valid && pair_.completion && slot.source == pair_.completion) {
+        if (slot.valid && winner_connection_id != 0
+            && slot.source_connection_id == winner_connection_id) {
             found = true;
             paused = slot.paused;
             epoch = slot.epoch;
@@ -508,3 +517,17 @@ bool zlink::socket_base_t::test_pair_is_ready (
     return it != _transport_pairs.end () && it->second.ready;
 }
 #endif
+
+void zlink::socket_base_t::discard_pending_flow_state_locked (
+  transport_pair_pipes_t &pair_, uint64_t source_connection_id_,
+  bool discard_all_)
+{
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (!slot.valid)
+            continue;
+        if (discard_all_ || slot.source_connection_id == source_connection_id_)
+            slot = transport_pair_pipes_t::pending_flow_slot_t ();
+    }
+}

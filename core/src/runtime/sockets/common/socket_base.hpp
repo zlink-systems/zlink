@@ -124,14 +124,19 @@ struct transport_pair_pipes_t
     struct pending_flow_slot_t
     {
         pending_flow_slot_t () :
-            valid (false), paused (false), epoch (0), source (NULL)
+            valid (false), paused (false), epoch (0), source_connection_id (0)
         {
         }
 
         bool valid;
         bool paused;
         uint64_t epoch;
-        pipe_t *source;
+        //  The candidate is named by its transport connection id, not by its
+        //  pipe address. A pipe pointer is not an identity across teardown:
+        //  the object can be freed and a later allocation can land on the same
+        //  address, which would let a stale hold be promoted as if it came
+        //  from the winner.
+        uint64_t source_connection_id;
     };
     static const size_t pending_flow_slot_count = 2;
     pending_flow_slot_t pending_flow[pending_flow_slot_count];
@@ -263,9 +268,14 @@ class socket_base_t : public own_t,
     void promote_pending_flow_state_locked (transport_pair_pipes_t &pair_);
     //  Holds one candidate's latest state. Caller holds _transport_pairs_sync.
     void buffer_pending_flow_state_locked (transport_pair_pipes_t &pair_,
-                                           pipe_t *source_,
+                                           uint64_t source_connection_id_,
                                            bool paused_,
                                            uint64_t epoch_);
+    //  Drops holds that belong to a connection that is going away. Caller
+    //  holds _transport_pairs_sync.
+    static void discard_pending_flow_state_locked (
+      transport_pair_pipes_t &pair_, uint64_t source_connection_id_,
+      bool discard_all_);
 
   public:
 
@@ -305,7 +315,7 @@ class socket_base_t : public own_t,
     //  simulated without standing up a second hostile connection.
     bool test_buffer_flow_frame (uint64_t transport_pair_id_,
                                  uint64_t transport_pair_generation_,
-                                 zlink::pipe_t *source_,
+                                 uint64_t source_connection_id_,
                                  bool paused_,
                                  uint64_t epoch_);
     //  Whether any pair has accepted a remote state, which is what consumes
