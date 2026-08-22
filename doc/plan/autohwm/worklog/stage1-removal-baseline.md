@@ -982,6 +982,84 @@ Paired signal(2 pair): local 166.5 / 157.5 vs `0.10.1` 194.0 / 182.3
 harness는 두 process에 같은 runtime을 강제하므로 그 실험에는 runner 변경이
 필요하다.
 
+## 8.19 Mixed-runtime split: gap의 소유자는 server 쪽이 더 크다
+
+### 8.19.1 도구
+
+`bindings/c/perf/run_comparison.py`에 진단용 per-process runtime override를
+추가했다(commit `bde05d5b18`). `ZLINK_PERF_SERVER_RUNTIME_DIR` /
+`ZLINK_PERF_CLIENT_RUNTIME_DIR`에 `libzlink.so.0`이 있는 디렉터리를 주면 그
+process만 해당 runtime을 적재한다. bench 실행 파일은 `DT_RUNPATH`를 쓰므로
+`LD_LIBRARY_PATH`가 우선한다. 두 변수를 설정하지 않으면(기본) 환경을 건드리지
+않으므로 기존 실행은 그대로다(기본 실행 재확인: 같은 runtime 보고, 정상 완료).
+
+**ABI/interop 확인**: local(0.11.1)로 빌드한 bench 실행 파일을 0.10.1 runtime에
+링크했을 때 `ldd -r` undefined symbol **0개**. 혼합 조합 4개 모두 handshake와
+측정이 정상 완료됐다. interop 문제는 없다.
+
+네 cell 모두 같은 bench 실행 파일을 쓰고 **Core runtime만** 바꾼다.
+
+### 8.19.2 Per-process provenance (실행 중 `/proc/<pid>/maps` 샘플링)
+
+| Cell | server process | client process |
+|---|---|---|
+| A | `core/build/lib/libzlink.so.0.11.1` | `core/build/lib/libzlink.so.0.11.1` |
+| B | `.cache/…/0.10.1/…/libzlink.so.0.10.1` | `.cache/…/0.10.1/…/libzlink.so.0.10.1` |
+| C | `core/build/lib/libzlink.so.0.11.1` | `.cache/…/0.10.1/…/libzlink.so.0.10.1` |
+| D | `.cache/…/0.10.1/…/libzlink.so.0.10.1` | `core/build/lib/libzlink.so.0.11.1` |
+
+네 cell 모두 의도대로 적재됐음을 확인했다. silent fallback은 없다.
+
+### 8.19.3 Matrix (palindrome 순서 A B C D D C B A, round 2·3 사용)
+
+Round 1은 도중에 host가 급락해(같은 cell A가 161.6 → 125.2) 폐기하고, 안정적인
+round 2·3의 cell당 4개 표본을 평균했다.
+
+| Cell | server / client | 표본 (Kops/s) | 평균 | B 대비 |
+|---|---|---|---|---|
+| **A** | local / local | 120.5, 123.2, 122.3, 120.9 | 121.7 | **89.9%** |
+| **B** | 0.10.1 / 0.10.1 | 134.7, 135.5, 136.4, 135.1 | 135.4 | 100% (기준) |
+| **C** | **local** server / 0.10.1 client | 123.6, 118.4, 123.4, 124.6 | 122.5 | **90.5%** |
+| **D** | 0.10.1 server / **local** client | 124.1, 125.0, 124.2, 128.2 | 125.4 | **92.6%** |
+
+### 8.19.4 해석: 양쪽 다 비용이 있고 server가 더 크다
+
+- **C ≈ A** (90.5% vs 89.9%): client를 0.10.1로 바꿔도 회복이 없다. client는
+  단독 소유자가 아니다.
+- **D = 92.6%**: server를 0.10.1로 바꾸면 조금 오르지만 기준(100%)에는 한참
+  못 미친다. server도 단독 소유자가 아니다.
+- **A ≈ min(C, D)**: 파이프라인이 느린 쪽에 묶이는 형태와 일치한다.
+
+정합적인 모델은 다음과 같다.
+
+```text
+server 쪽 0.11.1 runtime이 처리량을 약 90%로 제한한다
+client 쪽 0.11.1 runtime이 처리량을 약 93%로 제한한다
+둘 다 0.11.1이면 min ≈ 90%  (= 관측된 A)
+```
+
+즉 **분할 소유(split ownership)이며, server 쪽 몫이 더 크다.** 어느 한쪽만
+고쳐도 나머지 쪽 상한에 막힌다.
+
+### 8.19.5 §8.18과의 관계: 모순이 아니라 설명
+
+§8.18에서 client의 poll 경로 CPU를 30% 가까이 걷어내도 처리량이 1.4% 이내로만
+움직인 이유가 여기서 설명된다. **server가 약 90%에서 파이프라인을 제한하고
+있으므로, client 쪽 최적화는 그 상한을 넘길 수 없다.** §8.13.3에서 c9의 client
+CPU가 더 낮은데도 느렸던 것, §7.2에서 CPU 증가 없이 처리량만 떨어졌던 것도 같은
+구조다. 이번 라운드 이전의 client 중심 ablation이 전부 중립이었던 것은 측정
+오류가 아니라 **잘못된 쪽을 고치고 있었기 때문**이다.
+
+### 8.19.6 결론과 다음 방향
+
+- 남은 gap은 client 쪽 poll/mailbox 경로가 아니라 **server 쪽(ROUTER 수신·relay
+  경로와 engine/transport)** 이 더 큰 몫을 갖는다.
+- 다음 작업은 server process를 대상으로 해야 하며, 측정도 server를 고정하고
+  client를 0.10.1로 두는 cell C 구성에서 하면 client 잡음 없이 server 변경의
+  효과만 볼 수 있다.
+- 이번 라운드는 진단 도구 외에 Core 코드를 바꾸지 않았다. gate 수치는 §8.14의
+  `final4`가 그대로 유효하다.
+
 ## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
