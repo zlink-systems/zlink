@@ -27,6 +27,7 @@ from ..errors.codes import (
 )
 from ..eventing.codes import (
     MonitorEventMask,
+    MonitorEventFlag,
     PollEventFlag,
     PollSourceKind,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "ProtocolError",
     "DisconnectReason",
     "MonitorEventMask",
+    "MonitorEventFlag",
     "PollEventFlag",
     "PollSourceKind",
 ]

@@ -100,6 +100,11 @@ class NativeMonitorSocket:
             routing_id=_routing_id_bytes(native.routing_id),
             local_addr=_decode_fixed(native.local_addr),
             remote_addr=_decode_fixed(native.remote_addr),
+            connection_id=int(native.connection_id),
+            transport_pair_id=int(native.transport_pair_id),
+            transport_pair_generation=int(native.transport_pair_generation),
+            transport_lane=int(native.transport_lane),
+            flags=int(native.flags),
         )
 
     def _start_event_dispatch(self, handler):

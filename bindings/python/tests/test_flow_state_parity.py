@@ -5,7 +5,9 @@ The C ABI mirror lives in bindings/c/include; Core owns
 zlink_socket_set_receive_flow_state() and zlink_receive_flow_state_t.
 """
 
+import socket
 import threading
+import time as _time
 import unittest
 
 import zlink
@@ -232,6 +234,70 @@ class ReceiveFlowStatePublicSurfaceTests(unittest.TestCase):
                 self.assertFalse(hasattr(dealer, "receive_flow_state"))
             with zlink.create_router_socket(ctx) as router:
                 self.assertTrue(hasattr(router, "set_receive_flow_state"))
+
+
+class MonitorEventMetadataTests(unittest.TestCase):
+    """Plan §6 event candidates (SEND_FLOW_PAUSED/RESUMED, FLOW_STATE_STALE)
+    are identified by pair id/generation, not just an opaque routing id, so
+    the public MonitorEvent must carry that metadata even though this
+    contract test only exercises the always-available connection-lifecycle
+    events (triggering an actual flow-pause/resume/stale event needs a live
+    DEALER/ROUTER completion lane, out of reach for a fast unit test)."""
+
+    def test_monitor_event_mask_constants_match_c_abi(self):
+        self.assertEqual(int(zlink.MonitorEventMask.SEND_FLOW_PAUSED), 0x10000)
+        self.assertEqual(int(zlink.MonitorEventMask.SEND_FLOW_RESUMED), 0x20000)
+        self.assertEqual(int(zlink.MonitorEventMask.FLOW_STATE_STALE), 0x40000)
+        self.assertEqual(int(zlink.MonitorEventMask.ALL), 0x7FFFF)
+        # ALL covers every named bit, including the 3 new ones.
+        combined = (
+            zlink.MonitorEventMask.SEND_FLOW_PAUSED
+            | zlink.MonitorEventMask.SEND_FLOW_RESUMED
+            | zlink.MonitorEventMask.FLOW_STATE_STALE
+        )
+        self.assertEqual(int(zlink.MonitorEventMask.ALL) & int(combined), int(combined))
+
+    def test_monitor_event_flag_constants_match_c_abi(self):
+        self.assertEqual(int(zlink.MonitorEventFlag.CONNECTION_READY_EDGE), 1)
+        self.assertEqual(int(zlink.MonitorEventFlag.SEND_FLOW_WRITABLE), 2)
+        self.assertEqual(
+            int(zlink.MonitorEventFlag.FLOW_STATE_STALE_GENERATION), 4
+        )
+        self.assertEqual(int(zlink.MonitorEventFlag.FLOW_STATE_STALE_EPOCH), 8)
+
+    def test_monitor_event_surfaces_pair_and_connection_metadata(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        endpoint = f"tcp://127.0.0.1:{port}"
+
+        with zlink.create_context() as ctx:
+            with zlink.create_pair_socket(ctx) as left:
+                with zlink.create_pair_socket(ctx) as right:
+                    with left.monitor_open() as monitor:
+                        left.bind(endpoint)
+                        right.connect(endpoint)
+                        deadline = _time.monotonic() + 3.0
+                        event = None
+                        while _time.monotonic() < deadline:
+                            event = monitor.recv(flags=zlink.RecvFlags.DONT_WAIT)
+                            if event is not None:
+                                break
+                            _time.sleep(0.001)
+                        self.assertIsNotNone(event)
+                    # The full 64-bit value, plus every connection/pair
+                    # identity field the C struct carries, is on the public
+                    # object (plan §6's flow events are identified by this
+                    # same metadata: pair id, pair generation, and value).
+                    self.assertIsInstance(event.value, int)
+                    self.assertIsInstance(event.connection_id, int)
+                    self.assertIsInstance(event.transport_pair_id, int)
+                    self.assertIsInstance(event.transport_pair_generation, int)
+                    self.assertIsInstance(event.transport_lane, int)
+                    self.assertIsInstance(event.flags, int)
+                    # Not every event carries a routing id (e.g. LISTENING).
+                    self.assertIsInstance(event.routing_id, (bytes, type(None)))
 
 
 if __name__ == "__main__":

@@ -105,18 +105,45 @@ class MonitorStatus:
 class MonitorEvent:
     """A single socket connection-lifecycle event reported by a monitor.
 
-    ``event`` is the event kind; ``value`` is an event-specific value such as an
-    error code or reconnect interval; ``routing_id`` is the peer routing id when
-    the event carries one; and ``local_addr``/``remote_addr`` are the endpoint
-    addresses.
+    ``event`` is the event kind; ``value`` is the full 64-bit event-specific
+    value (an error code, a reconnect interval, or — for the paired
+    DEALER/ROUTER receive-flow events since ABI 4 — a flow epoch or
+    generation, per ``MonitorEventFlag``); ``routing_id`` is the peer routing
+    id when the event carries one; ``local_addr``/``remote_addr`` are the
+    endpoint addresses; ``connection_id`` is the process-local identity of
+    the physical transport attempt; ``transport_pair_id`` is non-zero for a
+    paired Application/Completion transport and ``transport_pair_generation``
+    is that pair's generation (zero for an unpaired transport);
+    ``transport_lane`` is one of the application/completion lane values; and
+    ``flags`` carries event-specific bits (``MonitorEventFlag``) such as
+    whether a resumed pipe is actually writable, or which part of a stale
+    flow-state frame (generation or epoch) triggered the rejection.
     """
 
-    def __init__(self, *, event, value, routing_id, local_addr, remote_addr):
+    def __init__(
+        self,
+        *,
+        event,
+        value,
+        routing_id,
+        local_addr,
+        remote_addr,
+        connection_id,
+        transport_pair_id,
+        transport_pair_generation,
+        transport_lane,
+        flags,
+    ):
         self.event = event
         self.value = value
         self.routing_id = routing_id
         self.local_addr = local_addr
         self.remote_addr = remote_addr
+        self.connection_id = connection_id
+        self.transport_pair_id = transport_pair_id
+        self.transport_pair_generation = transport_pair_generation
+        self.transport_lane = transport_lane
+        self.flags = flags
 
 @runtime_checkable
 class MonitorSocket(Protocol):

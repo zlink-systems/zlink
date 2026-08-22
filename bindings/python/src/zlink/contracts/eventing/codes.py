@@ -20,7 +20,18 @@ class MonitorEventMask(IntFlag):
     HANDSHAKE_FAILED_PROTOCOL = 0x2000
     HANDSHAKE_FAILED_AUTH = 0x4000
     PEER_WEIGHT_CHANGED = 0x8000
-    ALL = 0xFFFF
+    SEND_FLOW_PAUSED = 0x10000
+    SEND_FLOW_RESUMED = 0x20000
+    FLOW_STATE_STALE = 0x40000
+    ALL = 0x7FFFF
+
+class MonitorEventFlag(IntFlag):
+    """Event-specific bits carried in a monitor event's ``flags`` field.
+    Mirrors ``ZLINK_MONITOR_EVENT_FLAG_*`` in the C ABI."""
+    CONNECTION_READY_EDGE = 1 << 0
+    SEND_FLOW_WRITABLE = 1 << 1
+    FLOW_STATE_STALE_GENERATION = 1 << 2
+    FLOW_STATE_STALE_EPOCH = 1 << 3
 
 class PollEventFlag(IntFlag):
     """Readiness conditions a poll source can be watched for or report (readable, writable, error)."""
@@ -43,6 +54,7 @@ class PollSourceKind(IntEnum):
 
 __all__ = [
     "MonitorEventMask",
+    "MonitorEventFlag",
     "PollEventFlag",
     "PollSourceKind",
 ]

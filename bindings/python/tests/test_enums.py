@@ -60,7 +60,23 @@ class EnumValueTests(unittest.TestCase):
 
     def test_monitor_event_values(self):
         self.assertEqual(int(zlink.MonitorEventMask.CONNECTED), 0x0001)
-        self.assertEqual(int(zlink.MonitorEventMask.ALL), 0xFFFF)
+        self.assertEqual(int(zlink.MonitorEventMask.PEER_WEIGHT_CHANGED), 0x8000)
+        # Stage7 added 3 paired DEALER/ROUTER receive-flow observation bits
+        # and widened ALL to cover them (core-byte-hwm-flow-control-plan.ko.md
+        # §6; core/include/zlink_enum.h).
+        self.assertEqual(int(zlink.MonitorEventMask.SEND_FLOW_PAUSED), 0x10000)
+        self.assertEqual(int(zlink.MonitorEventMask.SEND_FLOW_RESUMED), 0x20000)
+        self.assertEqual(int(zlink.MonitorEventMask.FLOW_STATE_STALE), 0x40000)
+        self.assertEqual(int(zlink.MonitorEventMask.ALL), 0x7FFFF)
+
+    def test_monitor_event_flag_values(self):
+        # zlink_monitor_event_t.flags bits (core/include/zlink/eventing/api.h).
+        self.assertEqual(int(zlink.MonitorEventFlag.CONNECTION_READY_EDGE), 1 << 0)
+        self.assertEqual(int(zlink.MonitorEventFlag.SEND_FLOW_WRITABLE), 1 << 1)
+        self.assertEqual(
+            int(zlink.MonitorEventFlag.FLOW_STATE_STALE_GENERATION), 1 << 2
+        )
+        self.assertEqual(int(zlink.MonitorEventFlag.FLOW_STATE_STALE_EPOCH), 1 << 3)
 
     def test_error_code_values(self):
         self.assertEqual(int(zlink.ErrorCode.EFSM), 156384763)
