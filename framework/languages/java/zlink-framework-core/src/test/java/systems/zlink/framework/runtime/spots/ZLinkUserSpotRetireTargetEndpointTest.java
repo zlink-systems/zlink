@@ -338,6 +338,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         RoutingId journalRid = RoutingId.from("journal-node");
         RoutingId targetRid = RoutingId.from("target-node");
         long targetNodeGeneration = 17;
+        long targetAttemptGeneration = 41;
         String spotId = "room-a";
         String actorId = "actor-a";
         String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
@@ -390,7 +391,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 new byte[0]));
         var storeRequest = new ZLinkAggregateRelocationCoordinator.Request(
             aggregateId,
-            1,
+            targetAttemptGeneration,
             storeParticipants,
             ZLinkCanonicalUserSpotRelocationEnvelope.encode(
                 finalEnvelope, aggregateId, 5, participants),
@@ -444,7 +445,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             authorityStore,
             null);
         var request = new ZLinkSpotRetireControl.StageRequest(
-            new ZLinkSpotRetireControl.Fence(aggregateId, 1),
+            new ZLinkSpotRetireControl.Fence(
+                aggregateId, targetAttemptGeneration),
             sourceRid,
             11,
             "source-owner",
@@ -473,7 +475,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             journalRid,
             expected.nodeRid(),
             "the expected source keeps the request-source lease fence"));
-        assertEquals(List.of(1L), relayAttempts,
+        assertEquals(List.of(targetAttemptGeneration), relayAttempts,
             "command 33 must echo the PREPARE targetAttemptGeneration");
     }
 
