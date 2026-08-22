@@ -380,20 +380,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     static std::optional<std::string>
     decode_spot_id (const std::vector<std::byte> &payload)
     {
-        std::string text;
-        text.reserve (payload.size ());
-        for (const auto value : payload)
-            text.push_back (static_cast<char> (std::to_integer<unsigned char> (value)));
-        constexpr std::string_view user_prefix = "zlink:user-spot:ready:v1\n";
-        if (text.starts_with (user_prefix)) {
-            const auto type_end = text.find ('\n', user_prefix.size ());
-            if (type_end == std::string::npos)
-                return std::nullopt;
-            const auto id_end = text.find ('\n', type_end + 1);
-            if (id_end == std::string::npos || id_end == type_end + 1)
-                return std::nullopt;
-            return text.substr (type_end + 1, id_end - type_end - 1);
-        }
+        if (const auto user = decode_ready_user_spot_authority_payload (payload))
+            return user->spot_id;
         if (payload.size () < 5
             || std::to_integer<unsigned char> (payload[0]) != 'Z'
             || std::to_integer<unsigned char> (payload[1]) != 'L'

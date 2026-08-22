@@ -60,6 +60,25 @@ struct actor_authority_projection_t
     std::uint64_t node_generation = 0;
 };
 
+enum class user_spot_authority_state_t : std::uint8_t
+{
+    creating = 0,
+    ready = 1,
+    closing = 2
+};
+
+struct user_spot_authority_payload_t
+{
+    user_spot_authority_state_t state = user_spot_authority_state_t::ready;
+    std::string stable_type;
+    std::string spot_id;
+    std::string owner_id;
+    std::uint64_t owner_lease_generation = 0;
+    std::string mesh_name;
+    node_rid_t node_rid;
+    std::uint64_t node_generation = 0;
+};
+
 namespace actor_authority_detail
 {
 
@@ -406,6 +425,124 @@ decode_canonical_authority_payload (std::span<const std::byte> encoded)
     catch (...) {
         return std::nullopt;
     }
+}
+
+inline std::vector<std::byte> encode_user_spot_authority_payload (
+  const user_spot_authority_payload_t &value)
+{
+    if (value.state != user_spot_authority_state_t::creating
+        && value.state != user_spot_authority_state_t::ready
+        && value.state != user_spot_authority_state_t::closing)
+        throw std::invalid_argument ("user Spot authority state is invalid");
+    if (value.owner_lease_generation == 0 || value.node_generation == 0)
+        throw std::invalid_argument ("user Spot authority generation is zero");
+    const auto node_rid = zlink::routing_id_t::from (
+      std::string (value.node_rid.value ())).to_bytes ();
+    if (node_rid.empty () || node_rid.size () > std::numeric_limits<std::uint8_t>::max ())
+        throw std::invalid_argument ("user Spot authority node RID is invalid");
+
+    std::vector<std::byte> spot;
+    actor_authority_detail::append_text8 (spot, value.spot_id);
+    actor_authority_detail::append_text8 (spot, value.stable_type);
+    actor_authority_detail::append_u8 (
+      spot, static_cast<std::uint8_t> (value.state));
+    if (spot.size () > std::numeric_limits<std::uint16_t>::max ())
+        throw std::invalid_argument ("user Spot authority Spot slice is too large");
+
+    std::vector<std::byte> object;
+    actor_authority_detail::append_u8 (object, 2); // user Spot
+    actor_authority_detail::append_u16be (
+      object, static_cast<std::uint16_t> (spot.size ()));
+    actor_authority_detail::append_bytes (object, spot);
+    if (object.size () > std::numeric_limits<std::uint16_t>::max ())
+        throw std::invalid_argument ("user Spot authority object slice is too large");
+
+    std::vector<std::byte> body;
+    actor_authority_detail::append_u8 (
+      body, value.state == user_spot_authority_state_t::creating ? 1
+            : value.state == user_spot_authority_state_t::closing ? 3
+                                                                   : 0);
+    actor_authority_detail::append_u8 (body, 2); // Spot
+    actor_authority_detail::append_u16be (
+      body, static_cast<std::uint16_t> (object.size ()));
+    actor_authority_detail::append_bytes (body, object);
+    actor_authority_detail::append_text8 (body, value.owner_id);
+    actor_authority_detail::append_u64be (body, value.owner_lease_generation);
+    actor_authority_detail::append_text8 (body, value.mesh_name);
+    actor_authority_detail::append_u8 (body, static_cast<std::uint8_t> (node_rid.size ()));
+    for (const auto byte : node_rid)
+        actor_authority_detail::append_u8 (body, byte);
+    actor_authority_detail::append_u64be (body, value.node_generation);
+    actor_authority_detail::append_u8 (body, 0); // relocation absent
+    actor_authority_detail::append_u32be (body, 0);
+    actor_authority_detail::append_u8 (body, 0); // activation recovery absent
+    actor_authority_detail::append_u32be (body, 0);
+
+    return encode_canonical_authority_payload ({std::move (body)});
+}
+
+inline std::optional<user_spot_authority_payload_t>
+decode_direct_user_spot_authority_payload (std::span<const std::byte> encoded)
+{
+    try {
+        const auto canonical = decode_canonical_authority_payload (encoded);
+        if (!canonical)
+            return std::nullopt;
+        actor_authority_detail::reader_t body_reader (canonical->body);
+        const auto operation = body_reader.u8 ();
+        if (body_reader.u8 () != 2)
+            return std::nullopt;
+        actor_authority_detail::reader_t object_reader (
+          body_reader.take (body_reader.u16be ()));
+        if (object_reader.u8 () != 2)
+            return std::nullopt;
+        actor_authority_detail::reader_t spot_reader (
+          object_reader.take (object_reader.u16be ()));
+        if (!object_reader.done ())
+            return std::nullopt;
+        const auto spot_id = spot_reader.text8 ();
+        const auto stable_type = spot_reader.text8 ();
+        const auto state = static_cast<user_spot_authority_state_t> (spot_reader.u8 ());
+        if (!spot_reader.done ()
+            || (state != user_spot_authority_state_t::creating
+                && state != user_spot_authority_state_t::ready
+                && state != user_spot_authority_state_t::closing)
+            || (state == user_spot_authority_state_t::creating && operation != 1)
+            || (state == user_spot_authority_state_t::ready && operation != 0)
+            || (state == user_spot_authority_state_t::closing && operation != 3))
+            return std::nullopt;
+        const auto owner_id = body_reader.text8 ();
+        const auto owner_lease_generation = body_reader.u64be ();
+        const auto mesh_name = body_reader.text8 ();
+        const auto node_rid_size = body_reader.u8 ();
+        if (node_rid_size == 0)
+            return std::nullopt;
+        const auto node_rid_bytes = body_reader.take (node_rid_size);
+        const auto node_generation = body_reader.u64be ();
+        if (owner_lease_generation == 0 || node_generation == 0
+            || body_reader.u8 () != 0 || body_reader.u32be () != 0
+            || body_reader.u8 () != 0 || body_reader.u32be () != 0 || !body_reader.done ())
+            return std::nullopt;
+        std::string node_rid;
+        node_rid.reserve (node_rid_bytes.size ());
+        for (const auto byte : node_rid_bytes)
+            node_rid.push_back (static_cast<char> (std::to_integer<std::uint8_t> (byte)));
+        return user_spot_authority_payload_t{
+          state, stable_type, spot_id, owner_id, owner_lease_generation,
+          mesh_name, node_rid_t::from_string (std::move (node_rid)), node_generation};
+    }
+    catch (...) {
+        return std::nullopt;
+    }
+}
+
+inline std::optional<user_spot_authority_payload_t>
+decode_ready_user_spot_authority_payload (std::span<const std::byte> encoded)
+{
+    const auto value = decode_direct_user_spot_authority_payload (encoded);
+    if (!value || value->state != user_spot_authority_state_t::ready)
+        return std::nullopt;
+    return value;
 }
 
 inline std::vector<std::byte> encode_actor_authority_payload (

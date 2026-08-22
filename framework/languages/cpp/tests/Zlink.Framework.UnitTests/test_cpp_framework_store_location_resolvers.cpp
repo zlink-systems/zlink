@@ -91,15 +91,15 @@ std::vector<std::byte> user_spot_authority_payload (
   std::string_view spot_id,
   std::uint64_t generation)
 {
-    const auto value = "zlink:user-spot:ready:v1\nplay\n"
-                       + std::string (spot_id) + "\n"
-                       + std::to_string (generation) + "\n1";
-    std::vector<std::byte> payload;
-    payload.reserve (value.size ());
-    for (const auto character : value)
-        payload.push_back (static_cast<std::byte> (
-          static_cast<unsigned char> (character)));
-    return payload;
+    return zlink::framework::runtime::encode_user_spot_authority_payload ({
+      .state = zlink::framework::runtime::user_spot_authority_state_t::ready,
+      .stable_type = "play",
+      .spot_id = std::string (spot_id),
+      .owner_id = "owner-a",
+      .owner_lease_generation = 1,
+      .mesh_name = "mesh-a",
+      .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
+      .node_generation = generation});
 }
 
 void seed_mesh_node (

@@ -516,22 +516,22 @@ std::string user_spot_operation_key (
 
 std::vector<std::byte> ready_user_spot_authority_payload (
   const stateful::object_ref_t &object,
-  const std::string &stable_type)
+  const std::string &stable_type,
+  const object_creation_target_t &target)
 {
     // The authority payload is framework-owned. Application creation bytes
     // remain in the reservation projection and are never published as Ready.
-    const std::string value =
-      "zlink:user-spot:ready:v1\n" + stable_type + "\n"
-      + object.key + "\n" + std::to_string (object.object_generation)
-      + "\n"
-      + std::to_string (object.authority_owner_generation);
-    std::vector<std::byte> result;
-    result.reserve (value.size ());
-    for (const auto character : value)
-        result.push_back (
-          static_cast<std::byte> (
-            static_cast<unsigned char> (character)));
-    return result;
+    if (target.owner.lease_generation <= 0)
+        throw std::invalid_argument ("user Spot authority owner lease is invalid");
+    return encode_user_spot_authority_payload ({
+      .state = user_spot_authority_state_t::ready,
+      .stable_type = stable_type,
+      .spot_id = object.key,
+      .owner_id = target.owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (target.owner.lease_generation),
+      .mesh_name = target.mesh_name,
+      .node_rid = target.node_rid,
+      .node_generation = target.node_lifecycle_generation});
 }
 
 struct instance_ready_state_t
@@ -683,19 +683,21 @@ std::optional<instance_ready_state_t> decode_instance_ready_state (
 }
 
 std::vector<std::byte> closing_user_spot_authority_payload (
-  const stateful::object_ref_t &object)
+  const stateful::object_ref_t &object,
+  const std::string &stable_type,
+  const object_creation_target_t &target)
 {
-    const std::string value =
-      "zlink:user-spot:closing:v1\n" + object.key + "\n"
-      + std::to_string (object.object_generation) + "\n"
-      + std::to_string (object.authority_owner_generation);
-    std::vector<std::byte> result;
-    result.reserve (value.size ());
-    for (const auto character : value)
-        result.push_back (
-          static_cast<std::byte> (
-            static_cast<unsigned char> (character)));
-    return result;
+    if (target.owner.lease_generation <= 0)
+        throw std::invalid_argument ("user Spot authority owner lease is invalid");
+    return encode_user_spot_authority_payload ({
+      .state = user_spot_authority_state_t::closing,
+      .stable_type = stable_type,
+      .spot_id = object.key,
+      .owner_id = target.owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (target.owner.lease_generation),
+      .mesh_name = target.mesh_name,
+      .node_rid = target.node_rid,
+      .node_generation = target.node_lifecycle_generation});
 }
 
 struct instance_closing_state_t
@@ -6044,7 +6046,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                            fence,
                            ready_user_spot_authority_payload (
                              exact_ref,
-                             request.stable_type)})
+                             request.stable_type,
+                             fence.target)})
                         .result ()
                         .value ();
                     const auto *ready =
@@ -6296,7 +6299,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     snapshot->allocation.target.node_rid.value ())};
                 if (snapshot->payload
                     != ready_user_spot_authority_payload (
-                      exact_ref, snapshot->allocation.stable_type)) {
+                      exact_ref, snapshot->allocation.stable_type,
+                      snapshot->allocation.target)) {
                     terminal (
                       107, static_cast<std::uint32_t> (
                              protocol::framework_error_code::
@@ -6322,9 +6326,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     ->compare_exchange_authority (
                       authority_key,
                       snapshot->store_version,
-                        authority_put_t{
-                          closing_user_spot_authority_payload (
-                          exact_ref)})
+                      authority_put_t{
+                        closing_user_spot_authority_payload (
+                          exact_ref, snapshot->allocation.stable_type,
+                          snapshot->allocation.target)})
                     .result ()
                     .value ();
                 const auto *closing =

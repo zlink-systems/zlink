@@ -158,6 +158,49 @@ int main ()
             && decoded->owner_id == "D" && decoded->owner_lease_generation == 3
             && decoded->node_generation == 4);
 
+    constexpr std::string_view user_spot_hex =
+      "5a4c41550100000000002c000200080200050142014101"
+      "0144000000000000000301450146000000000000000400"
+      "00000000000000000000034b8d34";
+    const auto user_spot = encode_user_spot_authority_payload ({
+      .state = user_spot_authority_state_t::ready,
+      .stable_type = "A",
+      .spot_id = "B",
+      .owner_id = "D",
+      .owner_lease_generation = 3,
+      .mesh_name = "E",
+      .node_rid = node_rid_t::from_string ("F"),
+      .node_generation = 4});
+    assert (hex (user_spot) == user_spot_hex);
+    const auto decoded_user_spot =
+      decode_ready_user_spot_authority_payload (user_spot);
+    assert (decoded_user_spot
+            && decoded_user_spot->stable_type == "A"
+            && decoded_user_spot->spot_id == "B"
+            && decoded_user_spot->owner_id == "D"
+            && decoded_user_spot->owner_lease_generation == 3
+            && decoded_user_spot->mesh_name == "E"
+            && decoded_user_spot->node_rid.value () == "F"
+            && decoded_user_spot->node_generation == 4);
+    const auto closing_user_spot = encode_user_spot_authority_payload ({
+      .state = user_spot_authority_state_t::closing,
+      .stable_type = "A",
+      .spot_id = "B",
+      .owner_id = "D",
+      .owner_lease_generation = 3,
+      .mesh_name = "E",
+      .node_rid = node_rid_t::from_string ("F"),
+      .node_generation = 4});
+    assert (!decode_ready_user_spot_authority_payload (closing_user_spot));
+    const std::string_view legacy_user_spot =
+      "zlink:user-spot:ready:v1\nA\nB\n1\n1";
+    std::vector<std::byte> legacy_user_spot_bytes;
+    legacy_user_spot_bytes.reserve (legacy_user_spot.size ());
+    for (const auto byte : legacy_user_spot)
+        legacy_user_spot_bytes.push_back (
+          static_cast<std::byte> (static_cast<unsigned char> (byte)));
+    assert (!decode_ready_user_spot_authority_payload (legacy_user_spot_bytes));
+
     const auto v5 = zlap (5, 4, actor);
     const auto v6 = zlap (6, 4, actor, true);
     assert (decode_actor_authority_payload (v5, 17));
