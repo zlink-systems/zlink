@@ -265,9 +265,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     완주 실증, 코디네이터 직접 재검증 passed(cpp→dotnet 무회귀). 하니스 개선 이월: host 존재만
     검사하고 freshness 미검사(run_cross_language_smoke.sh:47) — 셀 실행 전 증분 재빌드 강제 권장.
     **잔여 6 selector 작성 완료 `ec6b721205`** — cpp→node·cpp→java 즉시 그린 → **8/12**. 실패 4셀
-    (run-dir 보존): ① dotnet→java `/tmp/tmp.slXFHHqITk` ② dotnet→cpp `/tmp/tmp.myoxg6d7L0` — 둘 다
-    admission 후 joined 미관측(.NET source 공통 원인 의심 — ZLinkActorRemoteJoiner:1044 non-unwrap
-    이월 항목 포함, sol 진단 중) ③④ java→node·java→cpp — **진단 확정(공통
+    (run-dir 보존): ①② dotnet→java·dotnet→cpp — **진단 확정(공통 단일 원인)**: .NET source **이중
+    decode** — mesh 계층(CompleteNativeActorJoinRequest)이 multipart 언랩 후 sole raw part 전달,
+    ZLinkActorRemoteJoiner:1044이 이를 다시 envelope decode → 계약 준수 raw reply(Java/C++)에서
+    40 전송 전 사망. Node empty-reply는 decode 우회로 그린, .NET target은 envelope 중첩 송신이라
+    우연 통과(중첩 송신 정리는 3c 카드). Ruling: single-decode+호환 분기(envelope면 1회 언랩) +
+    content type 전달 + 3형태 focused test — terra 구현 중(하니스 검증은 코디네이터 직렬) ③④ java→node·java→cpp — **진단 확정(공통
     단일 원인, identity 가설 기각)**: Java decode 불변식 `SERVER ⇔ entrySpotId`
     (ZLinkMeshNodeDescriptor.java:74)가 Node/C++의 정당한 Server+entry없음 Store row를 거부해
     Java startup 자체가 사망("Only an Object Server descriptor must publish entrySpotId"). Ruling:
