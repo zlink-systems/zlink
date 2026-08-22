@@ -348,8 +348,10 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     (`zlink:v11:capacity:*`) → cpp가 부재로 읽어 0-1 거부(provider_location_repository.hpp:3371)
     → authority CAS 미도달. Ruling: dialect 관용 추가 기각 — Java를 canonical
     정렬(clean-break) **랜딩 `dac9a585d0` → java→cpp 그린. 🎉 12/12 매트릭스 완성(2026-08-22
-    18:5x)** + Java 회귀 3셀(java→node·java→dotnet·node→java) 무회귀 그린. 잔여: 12셀 결정성
-    스윕(진행 중) → `all` 편입 → 3b 마감. 이월
+    18:5x)** + Java 회귀 3셀(java→node·java→dotnet·node→java) 무회귀 그린. `all` 편입 완료 `fe352b9e87`. 결정성 스윕:
+    1차 12/12 그린, 2차에서 **dotnet→java 간헐 실패(~1/3, join-not-observed) 발견** — 나머지
+    11셀은 2연속 그린. 실패 run /tmp/tmp.NOaTf8yl2H vs 성공 2건 대조 sol 진단 중. 이 flake
+    해소가 3b 마지막 항목. 이월
     카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
     strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
     test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
