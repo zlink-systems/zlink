@@ -581,6 +581,10 @@ Framework work started: no
 
 중간 조사 이력을 반복하지 않고 report 경로와 현재 첫 실패를 정확히 적는다.
 
+성능 gate(§8.2, §12.2·§12.5의 성능 관련 미완료 행)는
+[server-side 성능 회복 작업 계획](./server-side-performance-recovery-plan.ko.md)으로
+이관됐다. 새 작업자는 그 문서를 시작점으로 사용한다.
+
 ## 11. 완료 조건
 
 - 기존 byte charge, 실제 LWM, drain wakeup, send 결과와 multipart 계약이 유지된다.
