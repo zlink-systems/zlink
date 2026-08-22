@@ -309,7 +309,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     단순화 재검토.
     Ruling: 두 언어가 frozen authority-relocation-state대로 source-phase slot 수용 — **랜딩
     `6a772686d8` → dotnet→java 그린(10/12,** stale Java host 재빌드 후 — installDist도 freshness
-    함정 목록에 추가). dotnet→cpp는 잔존 red(무로그, /tmp/tmp.lMl9XR2K9m) — sol 진단 중. 이월
+    함정 목록에 추가). dotnet→cpp 최종 rung 수렴(sol): ZLJR consume 한
+    지점에 identity 불일치 2건 — ⓐ .NET이 ZLJR coordinator를 precommit 전 스냅샷으로 조립
+    (RemoteJoiner:631)해 40의 Capture-후 snapshot(:853)과 StoreVersion 불일치 → cpp exact
+    equality(:5819) 실패 ⓑ cpp가 28 correlation과 ZLJR public completion operation을 동일 비교
+    (:5851) — 계약상 분리된 identity(스펙 외 동일시). Ruling: .NET 스냅샷 정렬(sonnet) + cpp
+    동일시 제거(terra) 병렬 수정 중. 이월
     카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
     strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
     test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
