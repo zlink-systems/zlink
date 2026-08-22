@@ -42,6 +42,29 @@ std::chrono::steady_clock::time_point deadline_in_ms (int ms_)
     return std::chrono::steady_clock::now () + std::chrono::milliseconds (ms_);
 }
 
+//  Reads the flow metrics without opening a monitor, so a test can hold a
+//  monitor probe open for events and still sample the counters.
+struct flow_metrics_t
+{
+    flow_metrics_t () :
+        paused_connections (0), pause_applied (0), resume_applied (0)
+    {
+    }
+
+    uint64_t paused_connections;
+    uint64_t pause_applied;
+    uint64_t resume_applied;
+};
+
+flow_metrics_t read_flow_metrics (void *socket_)
+{
+    flow_metrics_t out;
+    as_socket (socket_)->flow_state_metrics (&out.paused_connections,
+                                             &out.pause_applied,
+                                             &out.resume_applied, NULL, NULL);
+    return out;
+}
+
 zlink_monitor_status_t read_monitor_status (void *socket_)
 {
     zlink_socket_monitor_open_options_t opts;
@@ -124,7 +147,7 @@ struct paired_fixture_t
     }
 
     bool inject_generation (uint8_t state_, uint64_t epoch_,
-                            uint64_t frame_generation_)
+                            uint64_t frame_generation_, bool drain_ = true)
     {
         zlink::pipe_t *completion = as_socket (dealer)->completion_pipe_for_transport_pair (
           pair_id, pair_generation);
@@ -143,7 +166,8 @@ struct paired_fixture_t
         const bool consumed =
           as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
         TEST_ASSERT_EQUAL_INT (0, msg.close ());
-        (void) as_socket (dealer)->process_submit_commands ();
+        if (drain_)
+            (void) as_socket (dealer)->process_submit_commands ();
         return consumed;
     }
 
@@ -479,6 +503,180 @@ void test_data_traffic_emits_no_flow_events ()
 /*  §6 metrics                                                        */
 /* ------------------------------------------------------------------ */
 
+//  M2(a). When the accepted state reaches the pair record before the pipe has
+//  applied it, pair admission is what performs the PAUSED<->RUNNING flip. That
+//  is the same transition the frame path performs and has to be booked the same
+//  way, or the pause raises no event, moves no gauge and starts no duration -
+//  and the RESUMED that follows looks unmatched.
+//
+//  The record is loaded without draining the socket, so the queued frame
+//  command has not run yet; admission is then invoked directly through the
+//  inproc validation entry, which is a real caller of the same attach path.
+void test_pause_applied_by_pair_admission_is_booked ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (fixture.dealer, k_flow_events, &probe);
+
+    zlink::pipe_t *application = as_socket (fixture.dealer)
+                                   ->test_pair_pipe (fixture.pair_id,
+                                                     fixture.pair_generation,
+                                                     false);
+    TEST_ASSERT_NOT_NULL (application);
+
+    //  Accepted into the record, not yet applied to the pipe.
+    TEST_ASSERT_TRUE (fixture.inject_generation (
+      zlink::flow_state::receive_flow_paused, 11, fixture.pair_generation,
+      false));
+    TEST_ASSERT_FALSE (as_socket (fixture.dealer)
+                         ->application_pipe_remote_flow_paused (
+                           fixture.pair_id, fixture.pair_generation));
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, read_flow_metrics (fixture.dealer).pause_applied);
+
+    //  Admission applies it.
+    as_socket (fixture.dealer)->validate_inproc_connection (application);
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->application_pipe_remote_flow_paused (
+                          fixture.pair_id, fixture.pair_generation));
+
+    const flow_metrics_t metrics = read_flow_metrics (fixture.dealer);
+    TEST_ASSERT_EQUAL_UINT64 (1, metrics.paused_connections);
+    TEST_ASSERT_EQUAL_UINT64 (1, metrics.pause_applied);
+    TEST_ASSERT_EQUAL_UINT64 (0, metrics.resume_applied);
+
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&probe, 1, 2000));
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 1, 200));
+    TEST_ASSERT_EQUAL_UINT64 (
+      static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_PAUSED),
+      test_monitor_probe_event_at (&probe, 0));
+    const zlink_monitor_event_t paused_event =
+      test_monitor_probe_record_at (&probe, 0);
+    TEST_ASSERT_EQUAL_UINT64 (11, paused_event.value);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, paused_event.transport_pair_id);
+
+    //  The queued frame command is a no-op now, so nothing is double counted.
+    for (int i = 0; i < 50; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_EQUAL_UINT64 (
+      1, read_flow_metrics (fixture.dealer).pause_applied);
+    TEST_ASSERT_EQUAL_INT (1, test_monitor_probe_count (&probe));
+
+    //  And the RESUMED that follows is matched, not orphaned.
+    TEST_ASSERT_TRUE (fixture.inject (zlink::flow_state::receive_flow_running, 12));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
+    const flow_metrics_t resumed_metrics = read_flow_metrics (fixture.dealer);
+    TEST_ASSERT_EQUAL_UINT64 (0, resumed_metrics.paused_connections);
+    TEST_ASSERT_EQUAL_UINT64 (1, resumed_metrics.resume_applied);
+
+    close_test_monitor_probe (&monitor, &probe);
+    fixture.teardown ();
+}
+
+//  M2. Two bookkeeping holes on the same lifecycle, covered together.
+//
+//  (b) A pair torn down while paused never reaches a RESUMED, so nothing else
+//  would match its +1 on flow_paused_connections; repeating the cycle drifted
+//  the gauge upwards for good.
+//
+//  (a) A PAUSE that pair admission applies - because the accepted state was
+//  recorded before the application lane was attached - is the same
+//  PAUSED<->RUNNING flip as one applied by the frame path, and has to be booked
+//  the same way. Which of the two paths applies a given cycle depends on the
+//  order the pair's two lanes are admitted in, so the assertion here is the
+//  invariant that holds for both: every pause raises exactly one PAUSED event
+//  and moves the total exactly once.
+void test_paused_pair_lifecycle_keeps_gauge_and_events_matched ()
+{
+    const int zero = 0;
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (dealer, k_flow_events, &probe);
+
+    const int cycles = 4;
+    for (int cycle = 0; cycle < cycles; ++cycle) {
+        //  A fresh receiver each cycle, so a cycle never inherits the previous
+        //  route or the previous stored state.
+        char endpoint[MAX_SOCKET_STRING];
+        void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+        send_string_expect_success (dealer, "hello", 0);
+        char rid[256];
+        TEST_ASSERT_GREATER_THAN_INT (
+          0, zlink_recv (router, rid, sizeof (rid), 0));
+        recv_string_expect_success (router, "hello", 0);
+
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_socket_set_receive_flow_state (router, ZLINK_RECEIVE_FLOW_PAUSED));
+
+        bool paused = false;
+        const std::chrono::steady_clock::time_point deadline =
+          deadline_in_ms (6000);
+        while (!deadline_expired (deadline)) {
+            (void) as_socket (dealer)->process_submit_commands ();
+            (void) as_socket (router)->process_submit_commands ();
+            if (read_flow_metrics (dealer).paused_connections == 1) {
+                paused = true;
+                break;
+            }
+            msleep (1);
+        }
+        TEST_ASSERT_TRUE (paused);
+
+        //  Booked, whichever path applied it.
+        TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (cycle + 1),
+                                  read_flow_metrics (dealer).pause_applied);
+        TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&probe, cycle + 1, 2000));
+        TEST_ASSERT_TRUE (
+          test_monitor_probe_wait_no_additional (&probe, cycle + 1, 100));
+        TEST_ASSERT_EQUAL_UINT64 (
+          static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_PAUSED),
+          test_monitor_probe_event_at (&probe, cycle));
+
+        //  Tear the pair down while it is still paused.
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (dealer, endpoint));
+        bool released = false;
+        const std::chrono::steady_clock::time_point release_deadline =
+          deadline_in_ms (6000);
+        while (!deadline_expired (release_deadline)) {
+            (void) as_socket (dealer)->process_submit_commands ();
+            (void) as_socket (router)->process_submit_commands ();
+            if (read_flow_metrics (dealer).paused_connections == 0) {
+                released = true;
+                break;
+            }
+            msleep (1);
+        }
+        TEST_ASSERT_TRUE (released);
+
+        //  A lifecycle release is not a resume: the peer never resumed.
+        TEST_ASSERT_EQUAL_UINT64 (0, read_flow_metrics (dealer).resume_applied);
+
+        test_context_socket_close_zero_linger (router);
+    }
+
+    const flow_metrics_t final_metrics = read_flow_metrics (dealer);
+    TEST_ASSERT_EQUAL_UINT64 (0, final_metrics.paused_connections);
+    TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (cycles),
+                              final_metrics.pause_applied);
+    TEST_ASSERT_EQUAL_INT (cycles, test_monitor_probe_count (&probe));
+
+    close_test_monitor_probe (&monitor, &probe);
+    test_context_socket_close_zero_linger (dealer);
+}
+
 void test_flow_state_metrics_snapshot_and_reset ()
 {
     paired_fixture_t fixture;
@@ -547,6 +745,8 @@ int main ()
     RUN_TEST (test_duplicate_frame_emits_stale_event);
     RUN_TEST (test_stale_generation_event_reports_the_received_generation);
     RUN_TEST (test_data_traffic_emits_no_flow_events);
+    RUN_TEST (test_pause_applied_by_pair_admission_is_booked);
+    RUN_TEST (test_paused_pair_lifecycle_keeps_gauge_and_events_matched);
     RUN_TEST (test_flow_state_metrics_snapshot_and_reset);
     return UNITY_END ();
 }
