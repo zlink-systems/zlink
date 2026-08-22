@@ -258,8 +258,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
     - [x] **serializer 가드 축소**: `canonical_actor_join_application_reply` → `result_t<optional>`; reply 없으면 serializers 없이도 admit, reply 있는데 serializers null이면 typed protocol_error. 기존 동작 회귀 없음.
     - 이월(3b서 자연 해소): ① full source-path end-to-end 커버(Java→cpp/.NET→cpp pairwise가 정확히 구동) ② throwing reply serializer 시 pending-admission unwind(pathological) ③ **.NET source(ZLinkActorRemoteJoiner:1044) non-unwrap 의심 → pairwise서 확인**.
-  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **진행 중(2/12 방향 그린 + 감사-배치 페이즈
-    완료 2026-08-22)**. **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
+  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **진행 중(6/12 그린: node↔dotnet,
+    node→java, java→dotnet, cpp→dotnet, node→cpp)**. **node→cpp 그린 확정(2026-08-22)**: 최종
+    blocker는 코드가 아닌 **stale C++ host 바이너리**(capacity-row 수정이 host 재빌드 이후 랜딩).
+    재빌드 후 28→40→52→34→authority+capacity 원자 CAS→OnJoined→probe 전 구간 Redis MONITOR로
+    완주 실증, 코디네이터 직접 재검증 passed(cpp→dotnet 무회귀). 하니스 개선 이월: host 존재만
+    검사하고 freshness 미검사(run_cross_language_smoke.sh:47) — 셀 실행 전 증분 재빌드 강제 권장.
+    잔여 6셀(dotnet→java, java→node, dotnet→cpp, cpp→node, java→cpp, cpp→java) 스테이지 작성+실행
+    진행 중(host mode 4언어 완비 — 러너 조합만). 이하 이전 기록: **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
     canonical slot 모델 — TTT 회귀 모드 A 0/8 소거 동반). **4언어 배치 랜딩**: Java
     `6bb05dce85`(flags 판별·eviction race·typed 21), .NET `63e551c2b4`(47/48/49 request/reply·
     raw-20 차단·typed 21), C++ `2032cb6ba5`(**원격 Join을 인라인에서 ZLJR+40/52 canonical chunk로
