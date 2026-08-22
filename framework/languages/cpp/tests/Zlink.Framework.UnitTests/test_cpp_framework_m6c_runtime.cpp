@@ -1334,6 +1334,17 @@ class public_memory_authority_store_t final :
                       : zlink::framework::authority_read_result_t{
                           zlink::framework::authority_missing_t{
                             std::chrono::system_clock::now ()}}}});
+        if (remaining_auxiliary_conflicts != 0) {
+            --remaining_auxiliary_conflicts;
+            snapshot->store_version =
+              std::to_string (
+                std::stoull (snapshot->store_version) + 1);
+            snapshot->store_now = std::chrono::system_clock::now ();
+            return completed (
+              zlink::framework::authority_compare_exchange_result_t{
+                zlink::framework::authority_conflict_t{
+                  zlink::framework::authority_read_result_t{*snapshot}}});
+        }
         if (retarget) {
             observed_target_owner = retarget->target.owner;
             observed_target_placement = retarget->target;
@@ -1372,6 +1383,7 @@ class public_memory_authority_store_t final :
     std::optional<zlink::framework::object_creation_target_t>
       observed_target_placement;
     std::vector<std::string> observed_keys;
+    int remaining_auxiliary_conflicts = 0;
 
   private:
     template <typename T>
@@ -2842,6 +2854,11 @@ void test_public_authority_store_adapter (test_context_t &test)
         .mesh_name = "mesh-b",
         .node_rid = zlink::framework::node_rid_t::from_string ("node-b"),
         .node_generation = 17});
+    /* A foreign source can preserve its relocating envelope between the
+     * target's read and owner-changing CAS.  That advances only storeVersion,
+     * not either logical fence, so the target must refresh through the same
+     * bounded retry window used by the other runtime implementations. */
+    store.remaining_auxiliary_conflicts = 7;
     const auto published = adapter.publish (
       source, target, target_owner, target_placement,
       "root-public", 42,
@@ -2854,8 +2871,9 @@ void test_public_authority_store_adapter (test_context_t &test)
         && published.current->target.node_id == "node-b"
         && published.current->target.authority_owner_generation == 12
         && published.current->application_payload
-             == relocated_application_payload,
-      "public authority adapter must publish exact NewOwner generation");
+             == relocated_application_payload
+        && store.remaining_auxiliary_conflicts == 0,
+      "public authority adapter must refresh through bounded auxiliary store-version conflicts");
     const auto stored_projection = store.snapshot
       ? zlink::framework::runtime::decode_actor_authority_payload (
           store.snapshot->payload, store.snapshot->object_generation)

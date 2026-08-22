@@ -118,7 +118,7 @@ class public_authority_store_adapter_t final :
         // renewal rewrites the same record without changing the fence. A
         // version-only conflict therefore re-reads and retries; only a fence
         // change is a genuine conflict.
-        constexpr int max_attempts = 4;
+        constexpr int max_attempts = 8;
         for (int attempt = 0; attempt != max_attempts; ++attempt) {
             const auto read =
               _store->read_authority (key).result ().value ();
