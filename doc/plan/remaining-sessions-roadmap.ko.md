@@ -511,9 +511,10 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     Total_Timeout` — 격리에서도 결정적 실패. 별도 진단 필요.
   - **[ ] [신규 등재 2026-08-22, 3c 재개 중 발견] cpp HEAD 기존 red 4건(전부 stash-baseline 재현으로
     3c diff 무관 확정 — stale 테스트 바이너리가 가리다 재빌드로 노출)**:
-    ① **test_cpp_framework_execution — "canonical Actor Join relocation did not complete(terminal=1,
-    reason=10), actor cutover production ownership regression"**: 실제 런타임 회귀(지문 아님).
-    최근 canonical 랜딩 계열 회귀 판정 필요 — 우선순위 최상.
+    ① **[x] test_cpp_framework_execution canonical cutover red — 해소 `00e4248a28`**: 원인 = cmd-40
+    validator가 로컬 Spot context authority generation을 28 admission의 Store fence와 재비교(검증
+    다중화, 2032cb6ba5 유래; gdb 실측 1≠2). 판정: conjunct 단독 삭제(28 §2 단일책임), admission측
+    Store fence 정확검사는 음성 테스트로 유지 실증. 회귀 fixture(로컬≠Store generation 완주) 추가.
     ② test_cpp_framework_target_contract 3건(E2E-CP-53 ×2, E2E-CP-33): 소스 지문 게이트가
     canonical 전환 이전 코드 문자열(mesh_node_runtime `.prepare=true`/`.finalize=true` 등, 현재
     0건)에 핀 — 지문을 스펙 15 §4.2 순서의 canonical 경로 심볼로 재핀 필요(행동 회귀 아님).
