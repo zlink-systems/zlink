@@ -528,6 +528,127 @@ bool wait_for_pipe_pause (void *socket_,
     return false;
 }
 
+//  Round 2, R5. Epoch edge cases: the first state a pipe ever sees, equality
+//  and reversal, the top of the range, and the socket-side wraparound.
+void test_flow_state_epoch_edge_cases ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    const uint64_t high_epoch = UINT64_MAX / 2;
+
+    //  A pipe with no epoch yet accepts whatever arrives first, however large.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1,
+                                           high_epoch));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+
+    //  Equal epoch, then a lower one: both ignored.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 0,
+                                           high_epoch));
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 0,
+                                           high_epoch - 1));
+    for (int i = 0; i < 100; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+        fixture.pair_id, fixture.pair_generation));
+
+    //  The top of the range still advances.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 0,
+                                           UINT64_MAX));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
+
+    //  Past the top nothing advances any more within this generation. That is
+    //  the deliberate trade-off: the sequence is monotonic per generation and a
+    //  new generation starts a fresh pipe with a fresh sequence.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 1));
+    for (int i = 0; i < 100; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_FALSE (
+      as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+        fixture.pair_id, fixture.pair_generation));
+
+    //  The socket-wide epoch must never produce 0 on wraparound: 0 is the
+    //  "never set" marker and is refused by the frame contract, so wrapping
+    //  into it would silence the socket's flow state for good.
+    as_socket (fixture.router)->test_set_local_receive_flow_epoch (UINT64_MAX);
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (fixture.router)->set_local_receive_flow_state (k_paused));
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.router)->test_local_receive_flow_epoch () != 0);
+
+    fixture.teardown ();
+}
+
+//  Round 2, R5. A replacement generation starts a fresh epoch sequence, so a
+//  low epoch is accepted again on the new pair.
+void test_generation_change_resets_the_epoch_sequence ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1,
+                                           UINT64_MAX));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+
+    const uint64_t old_pair_id = fixture.pair_id;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (fixture.dealer, fixture.endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (fixture.dealer, fixture.endpoint));
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool replaced = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (fixture.dealer)->select_routed_submit_target (NULL, &target)
+              == 0
+            && target.transport_pair_id != 0
+            && target.transport_pair_id != old_pair_id) {
+            replaced = true;
+            break;
+        }
+        (void) as_socket (fixture.router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (replaced);
+
+    //  Epoch 1 on the replacement pair, far below the previous generation's
+    //  last epoch, is accepted.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (target.transport_pair_id,
+                                           target.transport_pair_generation, 1,
+                                           1));
+    TEST_ASSERT_TRUE (wait_for_pipe_pause (fixture.dealer,
+                                           target.transport_pair_id,
+                                           target.transport_pair_generation,
+                                           true));
+
+    fixture.teardown ();
+}
+
 //  Round 2, R4. A consumed flow frame that terminates a message must not let
 //  the parts it terminated be parsed as a normal reply. parse_envelope only
 //  looks at the four control parts and does not validate more-flags, so a
@@ -1390,6 +1511,8 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_flow_state_epoch_edge_cases);
+    RUN_TEST (test_generation_change_resets_the_epoch_sequence);
     RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
     RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);

@@ -56,7 +56,12 @@ int zlink::socket_base_t::set_local_receive_flow_state (int state_)
             return 0;
         }
         _local_receive_flow_state = state;
-        ++_local_receive_flow_epoch;
+        //  0 is the "never set" marker and the frame contract refuses it, so
+        //  wrapping into it would silence this socket's flow state for good.
+        //  Skip it, exactly like the transport-pair generation does.
+        _local_receive_flow_epoch = _local_receive_flow_epoch == UINT64_MAX
+                                      ? 1
+                                      : _local_receive_flow_epoch + 1;
         epoch = _local_receive_flow_epoch;
         for (transport_pairs_t::iterator it = _transport_pairs.begin (),
                                          end = _transport_pairs.end ();
@@ -392,3 +397,17 @@ void zlink::socket_base_t::promote_pending_flow_state_locked (
     pair_.remote_flow_seen = true;
     pair_.remote_flow_paused = paused;
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void zlink::socket_base_t::test_set_local_receive_flow_epoch (uint64_t epoch_)
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    _local_receive_flow_epoch = epoch_;
+}
+
+uint64_t zlink::socket_base_t::test_local_receive_flow_epoch () const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    return _local_receive_flow_epoch;
+}
+#endif

@@ -286,6 +286,10 @@ class socket_base_t : public own_t,
     //  Whether any pair has accepted a remote state, which is what consumes
     //  the epoch. A buffered frame must not show up here.
     bool test_any_pair_accepted_flow_state () const;
+    //  Seeds and reads the socket-wide epoch, so the wraparound boundary is
+    //  reachable without performing 2^64 state changes.
+    void test_set_local_receive_flow_epoch (uint64_t epoch_);
+    uint64_t test_local_receive_flow_epoch () const;
     //  Runs inside attach_pipe, between the pair admission and the transport
     //  hold release, so a test can make a competing producer win that window
     //  on purpose. Installed globally and only ever set by a test.
