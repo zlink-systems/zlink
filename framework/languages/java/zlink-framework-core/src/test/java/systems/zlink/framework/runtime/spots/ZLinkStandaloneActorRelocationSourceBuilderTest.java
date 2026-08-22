@@ -117,6 +117,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals(
                 prepared.targetRequest().objectGeneration(),
                 decoded.objectGeneration());
+            assertEquals(
+                17,
+                ZLinkServiceRelocationEnvelopeCodec.decode(
+                    prepared.stageRequest().relocationPayload())
+                    .applicationVersion());
+            assertEquals(
+                9,
+                prepared.stageRequest().fence().aggregateGeneration());
 
             prepared.abort().toCompletableFuture().get();
 
@@ -396,7 +404,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             1,
             "inproc://actor-retire-target",
             Map.of(MESH, 100),
-            1,
+            17,
             List.of(new ZLinkObjectCapability(
                 ZLinkPlacementObjectKind.ACTOR,
                 ACTOR_TYPE,
@@ -426,7 +434,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 .ZLinkFrameworkRelocationMode.ROLLING_UPDATE,
             0,
             Optional.empty(),
-            1);
+            17);
     }
 
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {

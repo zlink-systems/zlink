@@ -71,6 +71,30 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
         byte[] timerEnvelope,
         byte[] actorJoinRecovery) {
+        return encode(
+            relocationId,
+            actorId,
+            objectGeneration,
+            expectedAuthorityOwnerGeneration,
+            1,
+            restoreSnapshot,
+            state,
+            journal,
+            timerEnvelope,
+            actorJoinRecovery);
+    }
+
+    static byte[] encode(
+        UUID relocationId,
+        String actorId,
+        long objectGeneration,
+        long expectedAuthorityOwnerGeneration,
+        long applicationVersion,
+        boolean restoreSnapshot,
+        byte[] state,
+        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        byte[] timerEnvelope,
+        byte[] actorJoinRecovery) {
         Objects.requireNonNull(relocationId, "relocationId");
         Objects.requireNonNull(actorId, "actorId");
         byte[] applicationState = Objects.requireNonNull(state, "state").clone();
@@ -123,7 +147,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         object.u64(expectedAuthorityOwnerGeneration);
         writer.u8(1);
         writer.body16(object);
-        writer.u64(1);
+        writer.u64(applicationVersion);
         writer.u32(1);
         writer.u64(1);
         writer.u8(restoreSnapshot ? 1 : 0);

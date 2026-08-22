@@ -329,6 +329,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             admission.owned().snapshot().objectGeneration(),
                             admission.owned().snapshot()
                                 .authorityOwnerGeneration(),
+                            admission.target().applicationVersion(),
                             admission.owned().snapshotPolicy(),
                             applicationState,
                             seal.captured(),
@@ -658,7 +659,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         Owned actor = admission.owned();
         ZLinkMeshNodeDescriptor target = admission.target();
         return new ZLinkSpotRetireControl.StageRequest(
-            new ZLinkSpotRetireControl.Fence(relocationId, 1),
+            new ZLinkSpotRetireControl.Fence(
+                relocationId, target.lifecycleGeneration()),
             localNodeRid,
             localNodeGeneration,
             actor.snapshot().ownerId(),
