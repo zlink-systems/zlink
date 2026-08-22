@@ -70,6 +70,11 @@ impl MonitorStatus {
             minimum_core_message_charge_bytes: raw.minimum_core_message_charge_bytes,
             oversize_message_admission_count: raw.oversize_message_admission_count,
             oversize_message_admission_max_bytes: raw.oversize_message_admission_max_bytes,
+            flow_paused_connections: raw.flow_paused_connections,
+            flow_pause_applied_total: raw.flow_pause_applied_total,
+            flow_resume_applied_total: raw.flow_resume_applied_total,
+            flow_state_stale_total: raw.flow_state_stale_total,
+            flow_pause_duration_ms: raw.flow_pause_duration_ms,
         }
     }
 }

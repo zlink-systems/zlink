@@ -10,6 +10,24 @@ use zlink::{
 };
 
 #[test]
+fn flow_state_event_constants_match_c_abi_and_are_in_all() {
+    // core/include/zlink_enum.h:
+    //   ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED  = 1u << 16
+    //   ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED = 1u << 17
+    //   ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE  = 1u << 18
+    //   ZLINK_SOCKET_MONITOR_EVENT_ALL               = 0x7FFFF
+    assert_eq!(SocketMonitorEventMask::SEND_FLOW_PAUSED.bits(), 1 << 16);
+    assert_eq!(SocketMonitorEventMask::SEND_FLOW_RESUMED.bits(), 1 << 17);
+    assert_eq!(SocketMonitorEventMask::FLOW_STATE_STALE.bits(), 1 << 18);
+    assert_eq!(SocketMonitorEventMask::ALL.bits(), 0x7FFFF);
+
+    let all = SocketMonitorEventMask::ALL.bits();
+    assert_eq!(all & SocketMonitorEventMask::SEND_FLOW_PAUSED.bits(), 1 << 16);
+    assert_eq!(all & SocketMonitorEventMask::SEND_FLOW_RESUMED.bits(), 1 << 17);
+    assert_eq!(all & SocketMonitorEventMask::FLOW_STATE_STALE.bits(), 1 << 18);
+}
+
+#[test]
 fn socket_monitor_recv_surface() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
@@ -107,6 +125,19 @@ fn socket_monitor_status() {
     let _ = snap.auto_hwm_policy_class;
     let _ = snap.snd_pending_bytes;
     let _ = snap.rcv_pending_bytes;
+
+    // ABI 4 (core-byte-hwm-flow-control-plan.ko.md §6): Core now writes a
+    // 232-byte record (see ffi_layout_tests.rs); confirm the live snapshot
+    // reports that ABI version and that the five new flow-state metrics are
+    // reachable through the public surface. PAIR has no completion lane, so
+    // these are expected to read as zero here -- this is a surface/ABI
+    // check, not a behavioral one.
+    assert_eq!(snap.abi_version, 4);
+    assert_eq!(snap.flow_paused_connections, 0);
+    assert_eq!(snap.flow_pause_applied_total, 0);
+    assert_eq!(snap.flow_resume_applied_total, 0);
+    assert_eq!(snap.flow_state_stale_total, 0);
+    assert_eq!(snap.flow_pause_duration_ms, 0);
 }
 
 #[test]

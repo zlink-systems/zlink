@@ -28,9 +28,19 @@ pub struct SocketMonitorEventMask(u32);
 
 impl SocketMonitorEventMask {
     /// Subscribes to every monitor event.
-    pub const ALL: Self = Self(0x7FFF);
+    pub const ALL: Self = Self(0x7FFFF);
     /// Subscribes only to the connection-ready event.
     pub const CONNECTION_READY: Self = Self(0x1000);
+    /// Subscribes to the paired DEALER/ROUTER completion lane applying a
+    /// remote PAUSED state to a connection for the first time
+    /// (core-byte-hwm-flow-control-plan.ko.md §6). No event fires for a
+    /// normal data frame.
+    pub const SEND_FLOW_PAUSED: Self = Self(1 << 16);
+    /// Subscribes to a remote RUNNING transition removing the last
+    /// remote-pause cause for a connection.
+    pub const SEND_FLOW_RESUMED: Self = Self(1 << 17);
+    /// Subscribes to a stale or duplicate flow-state frame being ignored.
+    pub const FLOW_STATE_STALE: Self = Self(1 << 18);
 
     /// Returns the raw mask bits.
     pub const fn bits(self) -> u32 {
@@ -207,6 +217,18 @@ pub struct MonitorStatus {
     pub oversize_message_admission_count: u64,
     /// Largest accounted message admitted by the empty-pipe oversize rule.
     pub oversize_message_admission_max_bytes: u64,
+    /// Current count of application pipes this socket sees as remote-PAUSED
+    /// (paired DEALER/ROUTER completion lane; present since ABI 4).
+    pub flow_paused_connections: u64,
+    /// Total PAUSED transitions actually applied (never a stale/duplicate).
+    pub flow_pause_applied_total: u64,
+    /// Total RUNNING transitions actually applied (never a stale/duplicate).
+    pub flow_resume_applied_total: u64,
+    /// Total stale or duplicate flow-state frames ignored.
+    pub flow_state_stale_total: u64,
+    /// Duration of the most recently completed PAUSED interval, in
+    /// milliseconds. 0 if no PAUSED interval has completed yet.
+    pub flow_pause_duration_ms: u64,
 }
 
 fn ignore_monitor_event(_: &MonitorEvent) {}

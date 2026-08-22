@@ -443,6 +443,17 @@ pub struct zlink_monitor_status_t {
     pub minimum_core_message_charge_bytes: u64,
     pub oversize_message_admission_count: u64,
     pub oversize_message_admission_max_bytes: u64,
+    // Paired DEALER/ROUTER completion-lane receive-flow observation
+    // (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4; see
+    // ZLINK_MONITOR_STATUS_ABI_VERSION and ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE
+    // in core/include/zlink_enum.h. Order matches
+    // core/include/zlink/eventing/api.h exactly -- this struct is written to
+    // directly by Core, so field order and count must match byte-for-byte.
+    pub flow_paused_connections: u64,
+    pub flow_pause_applied_total: u64,
+    pub flow_resume_applied_total: u64,
+    pub flow_state_stale_total: u64,
+    pub flow_pause_duration_ms: u64,
 }
 
 #[repr(C)]

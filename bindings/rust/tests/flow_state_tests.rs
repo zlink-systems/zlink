@@ -203,16 +203,57 @@ fn close_then_set_yields_only_invalid_handle() {
 }
 
 // ---------------------------------------------------------------------------
-// No flow-frame receive/encode API on the public surface.
+// No flow-frame receive/encode API, and no PAUSE-bypass send variant, on the
+// public surface (plan §5.1's forbidden list).
+//
+// Rust has no runtime reflection, so absence can't be queried directly; the
+// idiomatic compile-checked substitute is a blanket fallback trait per
+// forbidden method name. Method resolution always prefers an inherent method
+// over a same-named trait method, so if `DealerSocket`/`RouterSocket` ever
+// grow a real method with one of these names, the call below silently
+// switches from the fallback default (which returns `"absent"`) to the real
+// method -- and since a real flow-frame API's signature is exceedingly
+// unlikely to happen to also take `&self` and return `&'static str`, that
+// switch is expected to fail to compile here rather than pass silently.
 // ---------------------------------------------------------------------------
 
-// There is no `recv_flow_frame`, `encode_flow_frame`, or similar API on any
-// public socket type; the plan (§5.1) explicitly excludes it. This is
-// verified at compile time by its absence: this file only imports
-// `ReceiveFlowState` and `common_options().set_receive_flow_state`, and nothing
-// elsewhere in the crate's public surface exposes a flow-frame type or
-// method (see also `contract_tests.rs`'s equivalent note about the absence
-// of raw option-bag access).
+trait NoRecvFlowFrame {
+    fn recv_flow_frame(&self) -> &'static str {
+        "absent"
+    }
+}
+impl NoRecvFlowFrame for zlink::DealerSocket {}
+impl NoRecvFlowFrame for zlink::RouterSocket {}
+
+trait NoEncodeFlowFrame {
+    fn encode_flow_frame(&self) -> &'static str {
+        "absent"
+    }
+}
+impl NoEncodeFlowFrame for zlink::DealerSocket {}
+impl NoEncodeFlowFrame for zlink::RouterSocket {}
+
+trait NoSendBypassFlowPause {
+    fn send_bypass_flow_pause(&self) -> &'static str {
+        "absent"
+    }
+}
+impl NoSendBypassFlowPause for zlink::DealerSocket {}
+impl NoSendBypassFlowPause for zlink::RouterSocket {}
+
+#[test]
+fn dealer_and_router_have_no_flow_frame_or_pause_bypass_api() {
+    let ctx = Context::new().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.router_socket().unwrap();
+
+    assert_eq!(dealer.recv_flow_frame(), "absent");
+    assert_eq!(router.recv_flow_frame(), "absent");
+    assert_eq!(dealer.encode_flow_frame(), "absent");
+    assert_eq!(router.encode_flow_frame(), "absent");
+    assert_eq!(dealer.send_bypass_flow_pause(), "absent");
+    assert_eq!(router.send_bypass_flow_pause(), "absent");
+}
 
 // ---------------------------------------------------------------------------
 // HWM smoke: existing high-water-mark behavior is unchanged.
