@@ -203,3 +203,75 @@ ctest -R '^(test_zmp_request_reply|unittest_auto_hwm_policy|unittest_zmp_decoder
 - Inproc paired 연결의 flow frame은 completion drain이 도는 시점에 적용된다. Network
   transport(`xpeer_command`)는 이 제약이 없다. 첫 계약 범위가 paired DEALER/ROUTER의 실제
   transport이므로 test도 TCP로 작성했다.
+
+## 8. Codex review 지적 사항 수정 (HIGH 3 + MEDIUM 3 + LOW 1)
+
+각 항목은 **먼저 재현 test를 작성해 red를 확인한 뒤** 수정하고 green을 확인했다. 한 항목이
+한 commit이며 test와 수정이 같은 commit에 들어 있다. 모든 실행은 `core/build-tests`이고,
+판정 전에 항상 재빌드했다. Perf는 실행하지 않았고 `core/build`는 건드리지 않았다.
+
+| # | 심각도 | 지적 | Test | Red 증거 | Commit |
+|---|---|---|---|---|---|
+| 1 | HIGH | Attach replay가 더 새로운 epoch를 stale 상태로 덮어씀 | `test_stale_flow_state_command_cannot_override_a_newer_epoch` | `:539 Expected FALSE Was TRUE` (socket 기록은 RUNNING인데 pipe는 PAUSED) | `a88fb98b28` |
+| 2 | HIGH | HWM full 중 RESUME이 writable wakeup을 영구 상실 | `test_resume_while_hwm_full_still_recovers_through_byte_credit` | `:567 Expected TRUE Was FALSE` (drain 뒤에도 route 복귀 실패) | `1b51426885` |
+| 3 | HIGH | Classic ROUTER routing-ID part의 multipart atomicity 파손 | `test_router_routing_id_part_holds_message_atomicity_across_pause` | `:590 Expected 7 Was -1` (수락된 message의 payload part가 EAGAIN) | `4e16bd78b6` |
+| 4 | MEDIUM | Transport hold 해제 전에 PAUSE가 적용되지 않음 | `test_ready_pair_with_pending_pause_publishes_no_writable_edge` | `:552 Expected 0 Was 1` (writable edge 1건 발생) | `7dbb711d75` |
+| 5 | MEDIUM | Application lane의 FLOWSTATE가 수락됨 | `test_flow_frame_on_the_application_lane_is_rejected` | `:549 Expected FALSE Was TRUE` (data lane frame이 pause 적용) | `318e5e64d4` |
+| 6 | MEDIUM | Inproc에서 잘못 놓인 FLOWSTATE가 reply callback에 도달 | `test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair` | `:567 Expected TRUE Was FALSE` (frame이 reply payload로 흡수됨) | `0689fb01c7` |
+| 7 | LOW | Peer readiness가 remote flow 상태를 무시 | `test_router_peer_state_reports_remote_pause` | `:587 Expected 0 Was 2` (PAUSED인데 POLLOUT 보고) | `8bff19fbef` |
+
+### 8.1 수정 내용
+
+1. **Epoch를 pipe command에 실어 stale replay를 버린다.** `command.hpp`의 `flow_state` 인자에
+   `epoch`를 추가하고 `pipe.cpp:1248`에서 전진하지 않는 epoch를 무시한다. Attach replay와
+   I/O thread의 수락이 어느 쪽이 나중에 queue되든 결과가 같다.
+   (`socket_base_api.cpp:258`가 snapshot한 epoch를 함께 전달한다.)
+2. **RESUME이 남은 HWM 차단을 byte-credit 원인에 넘긴다.** `pipe.cpp:1264` — HWM이 여전히
+   full이면 `_out_active`를 내리고 `_waiting_for_byte_credit`를 세워, credit 복귀 경로가
+   edge를 발행할 수 있게 한다. Credit이 이미 있으면 `_out_active`를 복구하고 edge를 낸다.
+3. **수락했지만 아직 쓰지 않은 part를 message 시작으로 선언한다.** `pipe.cpp:1098`
+   `mark_out_message_started ()`를 `router_send_path.cpp:115`에서 호출하고, marker는 message
+   commit(`pipe.cpp:2344`), rollback(`pipe.cpp:2406`), hiccup(`pipe.cpp:1531`)에서 pipe가
+   스스로 지운다. Router의 어떤 exit 경로도 marker를 흘릴 수 없다.
+4. **보류 상태를 hold 해제 전에 동기 적용한다.** `pipe_t::apply_remote_flow_state ()`
+   (`pipe.cpp:1237`)를 `socket_base_api.cpp:258`에서 직접 호출한다. Queue된 command가 돌
+   thread와 같은 thread이므로 안전하고, 이후 `release_writes_for_transport_pair ()`가 remote
+   원인을 보고 edge를 내지 않는다.
+5. **Lane을 검증한다.** `socket_base_flow_state.cpp:187`에서 수신 pipe가 completion lane이
+   아니면 버리고, `:214`에서 pair가 이미 completion pipe를 알고 있으면 그 pipe만 허용한다.
+   Pair admission을 추월한 frame은 pipe 자신의 lane 속성이 출처를 증명하므로 계속 수락된다.
+6. **위치와 무관하게 분류한다.** `socket_request_reply_dispatch.cpp:112` — 어느 위치의
+   FLOWSTATE도 소비하고, 그 frame이 message를 끝냈다면 쌓인 part를 dispatcher에 넘겨
+   거절·해제시킨다.
+7. **Readiness를 admission과 일치시킨다.** `router_recv_path.cpp:523`에서
+   `remote_flow_blocks_next_message ()`를 함께 본다.
+
+### 8.2 Test 전용 hook
+
+모두 `#ifdef ZLINK_BUILD_TESTS`이며 hot path에 없다(`core/build`는 `ZLINK_BUILD_TESTS=OFF`라
+컴파일되지 않는다).
+
+- `socket_base_t::test_pair_pipe ()` — pair의 한쪽 lane pipe
+- `socket_base_t::test_application_pipe_flow_probe ()` — 어떤 원인도 평가하지 않고 읽기만
+  하므로 관찰이 상태를 바꾸지 않는다
+- `socket_base_t::test_deliver_flow_state_command ()` — epoch를 지정해 상태 command를 queue
+- `socket_base_t::test_transport_write_release_edges ()` — hold 해제로 발행된 writable edge 수
+- `socket_base_t::test_flow_frame_accepted_before_pair_ready ()` — test가 의도한
+  frame-먼저/admission-나중 순서를 실제로 만들었는지 확인하는 precondition
+- `pipe_t::test_flow_probe ()` — 위 probe의 pipe 측 구현
+
+Counter member `_test_transport_write_release_edges`는 class layout이 build 설정에 따라
+달라지지 않도록 모든 build에 존재하고(같은 class의 기존 규칙), 쓰기·읽기만 test build로
+제한했다(`112b12a1f7`).
+
+### 8.3 수정 뒤 실행 결과
+
+- `test_flow_state_paired` 15 tests 단독 10회 → 10/10 통과
+- `unittest_flow_state_frame` 9 tests 단독 10회 → 10/10 통과
+- Focused 8 + `unittest_poller` + `test_timer_poller` + 새 test 2개 →
+  `100% tests passed, 0 tests failed out of 12` (58.96s)
+- 전체 sweep 89개 → 86 passed. 실패 3개는 §6.1과 같은 기존 실패
+  (`test_xpub_nodrop:327`, `test_router_multiple_dealers:714`, `test_zmp_metadata:506`)이며
+  이 작업 범위 밖이다(다른 작업자가 isolated worktree에서 담당).
+- 한 번 batch 실행에서 `test_zmp_request_reply`가 180s timeout으로 실패했으나 단독 3회
+  38.66/38.52/38.85s로 재현되지 않았다. 같은 host에서 perf 측정이 병행 중인 부하 영향이다.
