@@ -271,8 +271,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     19:5x)**: 28 reply 프레이밍 정본 스펙 명문화 `c56714a52c`(multipart+sole raw part — 감사의
     4자 발산 해소 경로) → Java 3c(terra: legacy route packet 제거·cmd33 attempt 슬롯 수정·死코드
     B1/B9)·.NET 3c(sonnet: target 중첩 envelope→raw, source 호환분기 제거, one-way 40 분기·legacy
-    JSON recovery 제거, tautological/순서비교 정리) 병렬 진행. Node 3c(0x01 flag·ZLAJ·프레이밍
-    wrap 추가·ZLJR outer 검증 전환)는 TTT 모드 C 실증 종료 후. cpp 3c는 다음 배치. 이하 진행
+    JSON recovery 제거, tautological/순서비교 정리) 병렬 진행. **Java 3c 랜딩 `aee042f05b`**(-2786줄, 스팟체크
+    3셀 그린), **.NET 3c 랜딩 `9ec9ede6c0`**(target raw 프레이밍·source 호환분기 삭제·one-way 40
+    분기 제거·tautology/순서비교 정리 — 1835/1838, 실패 3건 기존). .NET 스테이지 검증은 TTT 진단
+    종료 후 직렬. **신규 카드 2건**: ① legacy JSON recovery 이중 표현 제거는 durable 마이그레이션
+    판정 필요(에이전트 정당 STOP — 기존 저장 root의 JSON-only 마이그레이션 폐기 여부) ② 28 reply
+    content-type 보존 조항(c56714a52c) 충족성 교차 검증 — multipart profile의 part별 content type
+    운반 여부 4언어 대조(.NET은 현재 request content type 재사용 — 기존 결함). Node 3c(0x01
+    flag·ZLAJ·프레이밍 wrap 추가·ZLJR outer 검증 전환)는 TTT 진단 종료 후. cpp 3c는 다음 배치. 이하 진행
     기록(6/12 시점부터): node↔dotnet,
     node→java, java→dotnet, cpp→dotnet, node→cpp)**. **node→cpp 그린 확정(2026-08-22)**: 최종
     blocker는 코드가 아닌 **stale C++ host 바이너리**(capacity-row 수정이 host 재빌드 이후 랜딩).
