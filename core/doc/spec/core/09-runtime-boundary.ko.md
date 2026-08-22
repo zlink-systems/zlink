@@ -30,6 +30,7 @@ Core는 다음 기능을 공개 C ABI로 제공한다.
 - raw socket monitor, generic event, poll과 poller
 - generic timer, thread, stopwatch, atomic counter와 proxy
 - request, handshake와 reconnect timeout
+- Paired DEALER/ROUTER의 receive-flow 상태
 
 ## 2. Framework가 소유하는 기능
 
@@ -50,6 +51,13 @@ Raw socket에는 ChannelName setter나 getter가 없다. Generic poller는 socke
 Framework runtime은 언어 binding의 공개 raw socket API만 사용해 service 계약을 구현한다. Framework를 위한
 공통 native service runtime, 별도 Core C SPI, private binding 진입점과 language-neutral service C ABI를 두지
 않는다.
+
+Core는 paired DEALER/ROUTER socket의 receive-flow 상태를 completion lane의 frame으로
+운반하고 그 frame을 runtime 내부에서 소비한다. 이 상태의 공개 표면은 설정용
+`zlink_socket_set_receive_flow_state()`, 관측용 receive-flow monitor event 3개, monitor
+status snapshot의 receive-flow field다. Raw flow-state frame을 수신, 송신, encode 또는
+decode하는 공개 API는 없으며 flow-state frame은 application receive 호출로 전달되지 않는다.
+따라서 binding이 이 frame을 직접 만들거나 해석하지 않는다.
 
 ## 3. Transport liveness 경계
 

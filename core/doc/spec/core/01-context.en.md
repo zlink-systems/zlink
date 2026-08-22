@@ -642,6 +642,19 @@ different generations are not mixed. Current counters may change while Core
 constructs the snapshot, but the returned aggregate and component fields are
 mutually consistent at the same snapshot boundary.
 
+Registry-owned fields and sampled fields become visible at different times. The
+registry updates `application_accounted_bytes`,
+`outstanding_application_lease_count`, and `deferred_origin_credit_bytes`
+synchronously with the call that changes them. `current_accounted_bytes`,
+`provisional_accounted_bytes`, and `peak_accounted_bytes` are sampled from
+per-pipe accounting when the snapshot is taken, and a lease release publishes
+its credit to the owning pipe asynchronously. A snapshot taken immediately
+after `zlink_hwm_budget_lease_release` on another thread may therefore still count
+the released bytes. The contract guarantees exactly-once release and internal
+snapshot consistency, not that a release is visible in the very next snapshot.
+Poll the snapshot when a test or an operator needs to observe the settled
+value.
+
 `blocked_ratio_ppm` is calculated as follows:
 
 ```text

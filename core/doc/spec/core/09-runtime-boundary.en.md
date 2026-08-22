@@ -21,6 +21,7 @@ Core provides the following capabilities through its public C ABI:
 - Raw-socket monitoring, generic events, poll, and pollers
 - Generic timers, threads, stopwatches, atomic counters, and proxies
 - Request, handshake, and reconnect timeouts
+- Paired DEALER/ROUTER receive-flow state
 
 ## 2. Framework-owned capabilities
 
@@ -44,6 +45,15 @@ Framework runtimes implement service contracts using only the public raw-socket
 API of each language binding. The design does not add a shared native service
 runtime, a separate Core C SPI, a private binding entry point, or a
 language-neutral service C ABI.
+
+Core carries the receive-flow state of a paired DEALER/ROUTER socket in frames
+on the completion lane and consumes those frames inside the runtime. The public
+surface for that state is `zlink_socket_set_receive_flow_state()` for setting
+it, the three receive-flow monitor events for observing it, and the
+receive-flow fields of the monitor status snapshot. There is no public API that
+receives, sends, encodes, or decodes a raw flow-state frame, and a flow-state
+frame is never delivered to an application receive call. A binding therefore
+never builds or parses one.
 
 ## 3. Transport-liveness boundary
 

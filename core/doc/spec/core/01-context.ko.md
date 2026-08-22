@@ -609,6 +609,16 @@ accounted counter를 서로 다른 generation에서 섞지 않습니다. Current
 만드는 동안 변할 수 있더라도 반환된 합계와 구성 field는 같은 snapshot 경계에서 서로
 일치해야 합니다.
 
+Registry가 소유하는 field와 sampling한 field는 보이는 시점이 다릅니다. Registry는
+`application_accounted_bytes`, `outstanding_application_lease_count`,
+`deferred_origin_credit_bytes`를 값을 바꾼 호출과 동기적으로 갱신합니다.
+`current_accounted_bytes`, `provisional_accounted_bytes`와 `peak_accounted_bytes`는
+snapshot을 만들 때 pipe별 회계에서 sampling한 값이고, lease release는 credit을 소유 pipe에
+비동기로 publish합니다. 따라서 다른 thread에서 `zlink_hwm_budget_lease_release`를 호출한 직후에
+찍은 snapshot에는 아직 그 byte가 남아 있을 수 있습니다. 계약이 보장하는 것은 exactly-once
+release와 snapshot 내부 일관성이며, release가 바로 다음 snapshot에 보인다는 것은 아닙니다.
+정리된 값을 관측해야 하면 snapshot을 polling합니다.
+
 `blocked_ratio_ppm`은 다음 식으로 계산합니다.
 
 ```text
