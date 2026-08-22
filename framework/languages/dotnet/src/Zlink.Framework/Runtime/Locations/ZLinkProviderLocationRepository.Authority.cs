@@ -183,7 +183,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (owner is null) return Conflict(current);
             var target = await ReadCapacityAsync(
                     current.Snapshot.Allocation.Descriptor,
-                    current.Snapshot.Allocation.DescriptorLifecycleGeneration,
                     cancellationToken)
                 .ConfigureAwait(false);
             var capacity = target.Record.Clone();
@@ -262,12 +261,10 @@ internal sealed partial class ZLinkProviderLocationRepository
 
             var sourceCapacity = await ReadCapacityAsync(
                     current.Snapshot.Allocation.Descriptor,
-                    current.Snapshot.Allocation.DescriptorLifecycleGeneration,
                     cancellationToken)
                 .ConfigureAwait(false);
             var targetCapacity = await ReadCapacityAsync(
                     targetAllocation.Descriptor,
-                    targetAllocation.DescriptorLifecycleGeneration,
                     cancellationToken)
                 .ConfigureAwait(false);
             AddCondition(conditions, sourceCapacity.Condition);
@@ -471,7 +468,6 @@ internal sealed partial class ZLinkProviderLocationRepository
 
         var capacity = await ReadCapacityAsync(
                 request.TargetDescriptor,
-                request.TargetNodeLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         if (!HasCapacity(target.Descriptor, capacity.Record, request.Capacity))
@@ -657,7 +653,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
         var capacity = await ReadCapacityAsync(
                 current.Snapshot.Allocation.Descriptor,
-                current.Snapshot.Allocation.DescriptorLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
@@ -817,7 +812,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             return new ZLinkObjectCreationCompleteResult.Stale();
         var capacity = await ReadCapacityAsync(
                 reservation.TargetDescriptor,
-                reservation.TargetNodeLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
@@ -1010,7 +1004,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             return new ZLinkObjectAbortResult.Stale();
         var capacity = await ReadCapacityAsync(
                 reservation.TargetDescriptor,
-                reservation.TargetNodeLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
@@ -1156,7 +1149,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         var capacity = await ReadCapacityAsync(
                 request.TargetDescriptor,
-                request.TargetDescriptorLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         if (!HasCapacity(target.Descriptor, capacity.Record, request.Capacity))
@@ -1513,16 +1505,17 @@ internal sealed partial class ZLinkProviderLocationRepository
             return ZLinkAggregateCommitResult.Stale;
         var capacity = await ReadCapacityAsync(
                 request.TargetDescriptor,
-                request.TargetDescriptorLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         var capacityRecords = new Dictionary<ZLinkStoreKey, StoredCapacity>();
         capacityRecords[capacity.Key] = capacity;
+        // Capacity is keyed purely by mesh descriptor identity (the
+        // canonical capacity row excludes lifecycle generation), so two
+        // allocations against the same descriptor but different lifecycle
+        // generations share one capacity row and need only one read.
         var sourceAllocations = authorities
             .Select(static authority => authority!.Snapshot.Allocation)
-            .DistinctBy(static allocation => (
-                allocation.Descriptor,
-                allocation.DescriptorLifecycleGeneration))
+            .DistinctBy(static allocation => allocation.Descriptor)
             .ToArray();
         var sourceCapacities = new StoredCapacity[sourceAllocations.Length];
         await Parallel.ForEachAsync(
@@ -1537,7 +1530,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var allocation = sourceAllocations[index];
                 sourceCapacities[index] = await ReadCapacityAsync(
                         allocation.Descriptor,
-                        allocation.DescriptorLifecycleGeneration,
                         token)
                     .ConfigureAwait(false);
             }).ConfigureAwait(false);
@@ -1584,9 +1576,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     return ZLinkAggregateCommitResult.Stale;
                 ApplyCapacity(
                     updatedCapacity[CapacityKey(
-                        authority.Snapshot.Allocation.Descriptor,
-                        authority.Snapshot.Allocation
-                            .DescriptorLifecycleGeneration)],
+                        authority.Snapshot.Allocation.Descriptor)],
                     authority.Snapshot.Allocation,
                     activeDelta: -1);
                 var moved = authority.Snapshot.Allocation with
@@ -3950,7 +3940,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         var header = aggregate.Record.Header;
         var capacity = await ReadCapacityAsync(
                 header.TargetDescriptor,
-                header.TargetDescriptorLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
@@ -4027,7 +4016,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (target is null) return new ZLinkObjectCommitResult.Stale();
         var capacity = await ReadCapacityAsync(
                 reservation.TargetDescriptor,
-                reservation.TargetNodeLifecycleGeneration,
                 cancellationToken)
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
@@ -4373,10 +4361,9 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private async ValueTask<StoredCapacity> ReadCapacityAsync(
         ZLinkMeshNodeDescriptorKey descriptor,
-        ulong lifecycleGeneration,
         CancellationToken cancellationToken)
     {
-        var key = CapacityKey(descriptor, lifecycleGeneration);
+        var key = CapacityKey(descriptor);
         var read = await provider.ReadAsync(key, cancellationToken)
             .ConfigureAwait(false);
         return read switch
@@ -4387,7 +4374,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 new ZLinkStoreCondition.Missing(key)),
             ZLinkStoreReadResult.Found found => new StoredCapacity(
                 key,
-                Decode<CapacityRecord>(found.Value.Bytes),
+                DecodeCapacity(found.Value.Bytes),
                 new ZLinkStoreCondition.Version(key, found.Value.Version)),
             _ => throw new InvalidOperationException()
         };
@@ -4844,6 +4831,160 @@ internal sealed partial class ZLinkProviderLocationRepository
             value,
             ZLinkJsonSerializerOptions.Default);
 
+    // Canonical cross-language capacity row JSON shape (capacity-row-
+    // canonical-key-json ruling): a compact UTF-8 JSON object
+    // {"active":{"actors":N,"spots":N,"spotTypes":{...}},
+    //  "pending":{...}} matching Node's encodeJson(CapacityRecord) and
+    // Java's encodeCapacity() (dac9a585d0) byte-for-byte -- property order
+    // active-then-pending, actors/spots/spotTypes order within each usage,
+    // spotTypes keys sorted ordinal, zero-valued spotTypes entries omitted.
+    // This overload wins over the generic Encode<T> above for exact-type
+    // callers (Encode(capacity), Encode(nextCapacity), ...), so none of
+    // those call sites need to change.
+    private static byte[] Encode(CapacityRecord value) => EncodeCapacity(value);
+
+    private static byte[] EncodeCapacity(CapacityRecord value)
+    {
+        using var stream = new MemoryStream();
+        // Node's JSON.stringify and Java's ObjectMapper preserve non-ASCII
+        // spot-type keys as UTF-8. Use the same JSON escaping policy rather
+        // than Utf8JsonWriter's HTML-safe default, which would change the
+        // stored bytes while retaining the same JSON value.
+        using (var writer = new Utf8JsonWriter(
+                   stream,
+                   new JsonWriterOptions
+                   {
+                       Encoder = System.Text.Encodings.Web.JavaScriptEncoder
+                           .UnsafeRelaxedJsonEscaping
+                   }))
+        {
+            writer.WriteStartObject();
+            WriteCapacityUsage(
+                writer,
+                "active",
+                value.ActorsActive,
+                value.SpotsActive,
+                value.SpotTypes,
+                static count => count.Active);
+            WriteCapacityUsage(
+                writer,
+                "pending",
+                value.ActorsPending,
+                value.SpotsPending,
+                value.SpotTypes,
+                static count => count.Pending);
+            writer.WriteEndObject();
+        }
+        return stream.ToArray();
+    }
+
+    private static void WriteCapacityUsage(
+        Utf8JsonWriter writer,
+        string propertyName,
+        int actors,
+        int spots,
+        IReadOnlyDictionary<string, CapacityCount> spotTypes,
+        Func<CapacityCount, int> selector)
+    {
+        writer.WritePropertyName(propertyName);
+        writer.WriteStartObject();
+        writer.WriteNumber("actors", actors);
+        writer.WriteNumber("spots", spots);
+        writer.WritePropertyName("spotTypes");
+        writer.WriteStartObject();
+        foreach (var pair in spotTypes.OrderBy(
+                     static pair => pair.Key,
+                     StringComparer.Ordinal))
+        {
+            var count = selector(pair.Value);
+            if (count != 0)
+                writer.WriteNumber(pair.Key, count);
+        }
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static CapacityRecord DecodeCapacity(ReadOnlyMemory<byte> bytes)
+    {
+        using var document = JsonDocument.Parse(bytes);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException(
+                "The Location Store capacity record must be a JSON object.");
+        var active = DecodeCapacityUsage(root, "active");
+        var pending = DecodeCapacityUsage(root, "pending");
+        var spotTypes = new Dictionary<string, CapacityCount>(
+            StringComparer.Ordinal);
+        foreach (var pair in active.SpotTypes)
+            spotTypes[pair.Key] = new CapacityCount(pair.Value, 0);
+        foreach (var pair in pending.SpotTypes)
+            spotTypes[pair.Key] = spotTypes.GetValueOrDefault(pair.Key)
+                with
+            { Pending = pair.Value };
+        return new CapacityRecord
+        {
+            ActorsActive = active.Actors,
+            ActorsPending = pending.Actors,
+            SpotsActive = active.Spots,
+            SpotsPending = pending.Spots,
+            SpotTypes = spotTypes
+        };
+    }
+
+    private readonly record struct DecodedCapacityUsage(
+        int Actors,
+        int Spots,
+        IReadOnlyDictionary<string, int> SpotTypes);
+
+    private static DecodedCapacityUsage DecodeCapacityUsage(
+        JsonElement root,
+        string name)
+    {
+        if (!root.TryGetProperty(name, out var usage)
+            || usage.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException(
+                $"The Location Store capacity record is missing {name}.");
+        if (!usage.TryGetProperty("spotTypes", out var types)
+            || types.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException(
+                "The Location Store capacity record has invalid "
+                + $"{name}.spotTypes.");
+        var decodedTypes = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var property in types.EnumerateObject())
+            decodedTypes[property.Name] = DecodeCapacityCount(
+                property.Value,
+                $"{name}.spotTypes.{property.Name}");
+        return new DecodedCapacityUsage(
+            DecodeCapacityCount(
+                RequireCapacityProperty(usage, "actors", name),
+                $"{name}.actors"),
+            DecodeCapacityCount(
+                RequireCapacityProperty(usage, "spots", name),
+                $"{name}.spots"),
+            decodedTypes);
+    }
+
+    private static JsonElement RequireCapacityProperty(
+        JsonElement usage,
+        string field,
+        string name)
+    {
+        if (!usage.TryGetProperty(field, out var value))
+            throw new InvalidDataException(
+                $"The Location Store capacity record is missing {name}.{field}.");
+        return value;
+    }
+
+    private static int DecodeCapacityCount(JsonElement value, string field)
+    {
+        if (value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var count)
+            || count < 0)
+            throw new InvalidDataException(
+                $"The Location Store capacity record has invalid {field}.");
+        return count;
+    }
+
     private static byte[] EncodeGenerationCounter(ulong value) =>
         Encoding.UTF8.GetBytes(value.ToString(CultureInfo.InvariantCulture));
 
@@ -5012,17 +5153,58 @@ internal sealed partial class ZLinkProviderLocationRepository
         Key($"{AggregatePrefix}{fence.AggregateId:N}:"
             + $"{fence.AggregateGeneration}:inventory:{level}:{index}");
 
+    // Canonical cross-language capacity row key (capacity-row-canonical-key-
+    // json ruling): zlink:v11:capacity:<percentEncode(meshName)>:
+    // <percentEncode(rid)>, matching Node's capacityKey() and Java's
+    // capacityKey() (dac9a585d0) byte-for-byte. Lifecycle generation is
+    // deliberately excluded -- Node/Java key capacity purely on mesh
+    // identity, not the descriptor's lifecycle generation.
     private static ZLinkStoreKey CapacityKey(
-        ZLinkMeshNodeDescriptorKey descriptor,
-        ulong lifecycleGeneration) =>
-        Key($"{Prefix}capacity:{EncodeSegment(descriptor.MeshName)}"
-            + $"{EncodeSegment(descriptor.Rid.ToHex())}"
-            + lifecycleGeneration);
+        ZLinkMeshNodeDescriptorKey descriptor) =>
+        Key($"{Prefix}capacity:{EncodeUriComponent(descriptor.MeshName)}"
+            + $":{EncodeUriComponent(descriptor.Rid.ToString())}");
 
+    // Percent-encoding matching JavaScript's encodeURIComponent (and Java's
+    // hand-rolled equivalent in dac9a585d0): unreserved set is
+    // A-Z a-z 0-9 - _ . ! ~ * ' ( ) -- notably wider than
+    // Uri.EscapeDataString's RFC 3986 unreserved set, which excludes
+    // ! ~ * ' ( ).
+    private static string EncodeUriComponent(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        var builder = new StringBuilder(bytes.Length);
+        foreach (var b in bytes)
+        {
+            if (b is (>= (byte)'A' and <= (byte)'Z')
+                or (>= (byte)'a' and <= (byte)'z')
+                or (>= (byte)'0' and <= (byte)'9')
+                or (byte)'-' or (byte)'_' or (byte)'.' or (byte)'!'
+                or (byte)'~' or (byte)'*' or (byte)'\'' or (byte)'('
+                or (byte)')')
+                builder.Append((char)b);
+            else
+                builder.Append('%').Append(
+                    b.ToString("X2", CultureInfo.InvariantCulture));
+        }
+        return builder.ToString();
+    }
+
+    // Canonical spotTypes map key, matching Node's capacityTypeKey() and
+    // Java's typeKey() (dac9a585d0): "<actor|user_spot|instance_spot>\0
+    // <stableType>".
     private static string CapacityTypeKey(
         ZLinkPlacementObjectKind kind,
         string stableType) =>
-        $"{(int)kind}:{stableType}";
+        $"{CapacityObjectKindSegment(kind)}\0{stableType}";
+
+    private static string CapacityObjectKindSegment(
+        ZLinkPlacementObjectKind kind) => kind switch
+    {
+        ZLinkPlacementObjectKind.Actor => "actor",
+        ZLinkPlacementObjectKind.UserSpot => "user_spot",
+        ZLinkPlacementObjectKind.InstanceSpot => "instance_spot",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
 
     // Canonical single-row authority envelope (21-location-runtime.md#2.4):
     // Payload is the application-opaque bytes directly -- there is no

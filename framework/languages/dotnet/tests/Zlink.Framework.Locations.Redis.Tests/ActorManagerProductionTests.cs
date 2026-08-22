@@ -91,25 +91,19 @@ public sealed class ActorManagerProductionTests
                 (1L, 0L),
                 await ReadActorCapacityUsageAsync(
                     inner,
-                    new ZLinkMeshNodeDescriptorKey("objects", firstRid),
-                    first.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration));
+                    new ZLinkMeshNodeDescriptorKey("objects", firstRid)));
             Assert.Equal(
                 (0L, 1L),
                 await ReadActorCapacityUsageAsync(
                     inner,
-                    new ZLinkMeshNodeDescriptorKey("objects", secondRid),
-                    second.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration));
+                    new ZLinkMeshNodeDescriptorKey("objects", secondRid)));
 
             Assert.True(await capacityRace.ReleaseCompetingCapacityAsync());
             Assert.Equal(
                 (0L, 0L),
                 await ReadActorCapacityUsageAsync(
                     inner,
-                    new ZLinkMeshNodeDescriptorKey("objects", firstRid),
-                    first.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration));
+                    new ZLinkMeshNodeDescriptorKey("objects", firstRid)));
         }
         finally
         {
@@ -157,9 +151,7 @@ public sealed class ActorManagerProductionTests
                 (0L, 1L),
                 await ReadActorCapacityUsageAsync(
                     inner,
-                    new ZLinkMeshNodeDescriptorKey("objects", rid),
-                    runtime.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration));
+                    new ZLinkMeshNodeDescriptorKey("objects", rid)));
         }
         finally
         {
@@ -217,9 +209,7 @@ public sealed class ActorManagerProductionTests
                 (0L, 0L),
                 await ReadActorCapacityUsageAsync(
                     inner,
-                    new ZLinkMeshNodeDescriptorKey("objects", rid),
-                    runtime.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration));
+                    new ZLinkMeshNodeDescriptorKey("objects", rid)));
         }
         finally
         {
@@ -350,10 +340,9 @@ public sealed class ActorManagerProductionTests
     private static async ValueTask<(long Pending, long Active)>
         ReadActorCapacityUsageAsync(
             IZLinkLocationStore store,
-            ZLinkMeshNodeDescriptorKey descriptor,
-            ulong lifecycleGeneration)
+            ZLinkMeshNodeDescriptorKey descriptor)
     {
-        var key = CapacityKey(descriptor, lifecycleGeneration);
+        var key = CapacityKey(descriptor);
         var read = await store.ReadAsync(key);
         if (read is ZLinkStoreReadResult.Missing)
             return (0L, 0L);
@@ -362,21 +351,38 @@ public sealed class ActorManagerProductionTests
         using var document = JsonDocument.Parse(found.Value.Bytes);
         var root = document.RootElement;
         return (
-            root.GetProperty("actorsPending").GetInt64(),
-            root.GetProperty("actorsActive").GetInt64());
+            root.GetProperty("pending").GetProperty("actors").GetInt64(),
+            root.GetProperty("active").GetProperty("actors").GetInt64());
     }
 
+    // Canonical cross-language capacity row key (capacity-row-canonical-
+    // key-json ruling): zlink:v11:capacity:<percentEncode(meshName)>:
+    // <percentEncode(rid)>, no lifecycle generation.
     private static ZLinkStoreKey CapacityKey(
-        ZLinkMeshNodeDescriptorKey descriptor,
-        ulong lifecycleGeneration) =>
+        ZLinkMeshNodeDescriptorKey descriptor) =>
         new("zlink:v11:capacity:"
-            + EncodeSegment(descriptor.MeshName)
-            + EncodeSegment(descriptor.Rid.ToHex())
-            + lifecycleGeneration.ToString(CultureInfo.InvariantCulture));
+            + EncodeUriComponent(descriptor.MeshName)
+            + ":" + EncodeUriComponent(descriptor.Rid.ToString()));
 
-    private static string EncodeSegment(string value) =>
-        System.Text.Encoding.UTF8.GetByteCount(value).ToString(
-            CultureInfo.InvariantCulture) + ":" + value + ":";
+    private static string EncodeUriComponent(string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var builder = new System.Text.StringBuilder(bytes.Length);
+        foreach (var b in bytes)
+        {
+            if (b is (>= (byte)'A' and <= (byte)'Z')
+                or (>= (byte)'a' and <= (byte)'z')
+                or (>= (byte)'0' and <= (byte)'9')
+                or (byte)'-' or (byte)'_' or (byte)'.' or (byte)'!'
+                or (byte)'~' or (byte)'*' or (byte)'\'' or (byte)'('
+                or (byte)')')
+                builder.Append((char)b);
+            else
+                builder.Append('%').Append(
+                    b.ToString("X2", CultureInfo.InvariantCulture));
+        }
+        return builder.ToString();
+    }
 
     private static bool TryGetActorReservationTransaction(
         ZLinkStoreWriteRequest request,
@@ -404,7 +410,8 @@ public sealed class ActorManagerProductionTests
         using (var capacityDocument = JsonDocument.Parse(capacity.Bytes))
         {
             if (capacityDocument.RootElement
-                    .GetProperty("actorsPending")
+                    .GetProperty("pending")
+                    .GetProperty("actors")
                     .GetInt32() == 0)
                 return false;
         }
