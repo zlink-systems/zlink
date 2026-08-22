@@ -285,7 +285,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     cpp 기대 target lifecycleGeneration(spot_runtime.cpp:5767, 16 conjunct 중 유일 실패). Ruling
     2건 확정 → **수정 랜딩 `f04506d1ff`: java→node 그린(9/12)**, Java 게이트 198 XML 그린.
     java→cpp는 targetAttempt 수정 후에도 PROTOCOL_ERROR 잔존(/tmp/tmp.JAfGly9W8Y — 다음 conjunct
-    계측 필요, 하니스 직렬 대기). 회귀 java→dotnet·node→java 코디네이터 실행 대기. java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
+    계측 필요, 하니스 직렬 대기). 회귀 java→dotnet·node→java 코디네이터 직접 실행 그린(무회귀 확인).
+    **dotnet 셀 다음 불일치 계측 수렴**: coordinator fence는 이제 wire 정상(decode 성공) — 최초
+    불일치는 ZLJR ReplyContentType 의미 혼선(.NET이 inner `application/json` 기록
+    ManagedMeshNode:2262→:9557→RemoteJoiner:741, Java는 outer `application/x-zlink-multipart` 요구
+    Adapter:363 → DATA_LOST). Ruling: .NET completion서 inner/outer 분리, ZLJR엔 outer — sonnet
+    구현+4스테이지 검증 중. java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
     때문(정합 증거 아님). .NET coordinator fence 수정(1264653381)은 dotnet-java 재실행서 여전히
     joined 미관측 — 다음 불일치 여부 sol 연속 계측 진단 중.
     .NET 이중 decode 수정 랜딩 `adfa26824b` 후 새 rung **sol 계측으로 수렴**: unbound join에서
