@@ -612,13 +612,13 @@ Framework work started: no
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | Completion-lane frame의 version, pair ID, generation, epoch와 state를 구현했다. | |
-| [ ] | Paired DEALER/ROUTER만 지원하고 다른 socket의 not-supported fallback을 구현했다. | |
-| [ ] | Socket-wide local state, reconnect와 close 경쟁을 구현했다. | |
-| [ ] | Remote PAUSE를 local HWM과 독립된 send blocker로 합성했다. | |
-| [ ] | Multipart 중간 PAUSE와 모든 blocker가 해제된 뒤의 send-ready를 검증했다. | |
-| [ ] | C API, event와 metric focused test가 통과했다. | |
-| [ ] | Flow state가 계속 RUNNING인 paired perf가 기능 추가 전 수준을 유지한다. | |
+| [x] | Completion-lane frame의 version, pair ID, generation, epoch와 state를 구현했다. | `core/src/runtime/core/flow_state_frame.hpp` (35 B command frame). `unittest_flow_state_frame` 9/9, `test_flow_state_paired::test_duplicate_and_stale_frames_are_ignored`. 상세: `worklog/stage3-flow-state.md` §2 |
+| [x] | Paired DEALER/ROUTER만 지원하고 다른 socket의 not-supported fallback을 구현했다. | `socket_base_t::socket_type_supports_receive_flow_state ()`. `test_flow_state_paired::test_unsupported_socket_types_report_not_supported` (PAIR·PUB·SUB·XPUB·XSUB·STREAM `ENOTSUP` + PAIR 송수신 불변) |
+| [x] | Socket-wide local state, reconnect와 close 경쟁을 구현했다. | `core/src/runtime/sockets/common/socket_base_flow_state.cpp`. Fanout과 새 pair 동기화가 `_transport_pairs_sync` 한 mutex를 공유하고, close 경쟁은 `socket_public_api_scope_t` 승인으로 결정한다. `test_flow_state_paired::test_new_and_reconnected_pairs_receive_the_latest_state`, `::test_invalid_state_is_rejected` |
+| [x] | Remote PAUSE를 local HWM과 독립된 send blocker로 합성했다. | `core/src/runtime/core/pipe.cpp:1071,1086,1116,1175,1200,1374`, `socket_base_api.cpp:723`. Byte HWM counter 미수정. `test_flow_state_paired::test_local_hwm_and_remote_pause_are_independent` (양방향) |
+| [x] | Multipart 중간 PAUSE와 모든 blocker가 해제된 뒤의 send-ready를 검증했다. | `pipe_t::remote_flow_blocked_unlocked ()`의 `_out_incomplete_bytes == 0` 조건. `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`, `::test_remote_pause_blocks_sender_and_resume_releases_it` |
+| [ ] | C API, event와 metric focused test가 통과했다. | 7단계 범위. 이번 단계는 내부 C++ 계층만 구현했고 `core/include`와 `bindings/`에는 변경이 없다. |
+| [ ] | Flow state가 계속 RUNNING인 paired perf가 기능 추가 전 수준을 유지한다. | 이번 단계에서 perf를 실행하지 않았다(다른 작업자가 같은 host에서 측정 중). |
 
 ### 12.4 언어 binding parity
 
