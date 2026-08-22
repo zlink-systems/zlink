@@ -416,10 +416,16 @@ cpp를 먼저 구현해 mapping 패턴을 확정한 뒤 나머지 언어에 같�
 
 최소 build와 기존 focused test 명령은 repository root에서 실행한다.
 
+주의: `core/build`는 `ZLINK_BUILD_TESTS=OFF`라 test target이 없고, 그 안의 오래된 test
+binary는 현재 source를 반영하지 않는다. Test는 반드시 `ZLINK_BUILD_TESTS=ON`으로 구성한
+`core/build-tests`에서 빌드·실행한다. Perf runtime provenance는 계속 `core/build`를 쓴다.
+
 ```bash
 cmake --build core/build --parallel 2
 
-ctest --test-dir core/build --output-on-failure \
+cmake --build core/build-tests --parallel 2
+
+ctest --test-dir core/build-tests --output-on-failure \
   -R '^(test_zmp_request_reply|unittest_auto_hwm_policy|unittest_zmp_decoder|test_ctx_options|test_retained_hwm_credit|test_router_handover|test_connect_rid|test_router_mandatory_hwm)$'
 ```
 
