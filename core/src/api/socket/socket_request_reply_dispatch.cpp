@@ -101,21 +101,28 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 return;
             }
 
+            const bool more = (frame.flags () & zlink::msg_t::more) != 0;
+
             //  Core-internal flow state never reaches the reply dispatcher and
             //  never becomes an application part. On a local (inproc) pair the
             //  frame is queued on the completion pipe instead of being
-            //  intercepted by a session, so it is classified here as well.
-            if (parts.empty () && (frame.flags () & zlink::msg_t::more) == 0
-                && socket_->consume_receive_flow_state_frame (pipe_, frame)) {
+            //  intercepted by a session, so it is classified here as well - at
+            //  any position, because a frame that is not where it belongs must
+            //  still never be delivered.
+            if (socket_->consume_receive_flow_state_frame (pipe_, frame)) {
                 const int close_rc = frame.close ();
                 errno_assert (close_rc == 0);
+                //  If it also terminated a message, whatever was accumulated is
+                //  malformed. Hand that on so the dispatcher rejects and closes
+                //  it; an empty accumulation is simply nothing to dispatch.
+                if (!more)
+                    complete = !parts.empty ();
                 continue;
             }
 
             parts.push_back (zlink_msg_t ());
             zlink_msg_init (&parts.back ());
             zlink::msg_t *stored = reinterpret_cast<zlink::msg_t *> (&parts.back ());
-            const bool more = (frame.flags () & zlink::msg_t::more) != 0;
             const int move_rc = stored->move (frame);
             errno_assert (move_rc == 0);
             complete = !more;

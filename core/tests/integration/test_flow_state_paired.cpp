@@ -509,6 +509,66 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+//  Review finding 6. On a local pair the flow frame is queued on the completion
+//  pipe instead of being intercepted by a session, so the completion drain has
+//  to classify it. Classifying only a standalone first part let a FLOWSTATE
+//  that follows the reply-envelope control parts be stored as reply payload -
+//  which both hides the state and hands the frame to the application.
+void test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair ()
+{
+    paired_fixture_t fixture;
+    fixture.setup (0, "flow_state_misplaced_frame");
+
+    zlink::pipe_t *router_completion =
+      as_socket (fixture.router)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation);
+    TEST_ASSERT_NOT_NULL (router_completion);
+
+    //  Four leading parts, exactly as many as a reply envelope carries, then
+    //  the flow frame as the terminating part.
+    for (int i = 0; i < 4; ++i) {
+        zlink::msg_t part;
+        TEST_ASSERT_EQUAL_INT (0, part.init_size (4));
+        memcpy (part.data (), "ctrl", 4);
+        part.set_flags (zlink::msg_t::more);
+        TEST_ASSERT_TRUE (router_completion->write (&part));
+        TEST_ASSERT_EQUAL_INT (0, part.init ());
+        TEST_ASSERT_EQUAL_INT (0, part.close ());
+    }
+
+    zlink::flow_state::frame_t frame;
+    frame.version = zlink::flow_state::frame_protocol_version;
+    frame.state = k_paused;
+    frame.pair_id = fixture.pair_id;
+    frame.generation = fixture.pair_generation;
+    frame.epoch = 11;
+    zlink::msg_t flow;
+    TEST_ASSERT_EQUAL_INT (0, flow.init ());
+    TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&flow, frame));
+    TEST_ASSERT_TRUE (router_completion->write_and_flush (&flow));
+    TEST_ASSERT_EQUAL_INT (0, flow.init ());
+    TEST_ASSERT_EQUAL_INT (0, flow.close ());
+
+    bool applied = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        uint32_t events = 0;
+        (void) as_socket (fixture.dealer)
+          ->get_events (ZLINK_POLLCOMPLETION, &events);
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        if (as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+              fixture.pair_id, fixture.pair_generation)) {
+            applied = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (applied);
+
+    fixture.teardown ();
+}
+
 //  Review finding 5. Pair id and generation are the same on both lanes of a
 //  pair, so they cannot on their own tell a completion-lane frame from an
 //  application-lane one. A FLOWSTATE that arrives on the application lane must
@@ -871,6 +931,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_ready_pair_with_pending_pause_publishes_no_writable_edge);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
