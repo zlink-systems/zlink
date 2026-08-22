@@ -10,6 +10,7 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 #include "utils/likely.hpp"
+#include "zlink.h"
 
 bool zlink::socket_base_t::socket_type_supports_receive_flow_state (int type_)
 {
@@ -203,12 +204,17 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
     const uint64_t pair_id = completion_pipe_->get_transport_pair_id ();
     const uint64_t generation =
       completion_pipe_->get_transport_pair_generation ();
-    //  A frame that names another pair, or a generation other than the one
-    //  this physical connection carries, is a late frame from a previous
-    //  connection and is ignored.
-    if (pair_id == 0 || generation == 0 || frame.pair_id != pair_id
-        || frame.generation != generation)
+    //  A frame that names another pair is not addressed to this pipe at all,
+    //  not a stale replay of something that was.
+    if (pair_id == 0 || generation == 0 || frame.pair_id != pair_id)
         return true;
+    //  A generation other than the one this physical connection carries is a
+    //  late frame from a previous connection to the same pair and is ignored.
+    if (frame.generation != generation) {
+        note_flow_state_stale (frame.generation, generation, frame.epoch, 0,
+                               pair_id, completion_pipe_->get_endpoint_pair ());
+        return true;
+    }
 
     const bool paused = frame.state == flow_state::receive_flow_paused;
     pipe_t *application = NULL;
@@ -235,8 +241,12 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
             return true;
 
         //  Duplicate or reversed epoch within one generation.
-        if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch)
+        if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch) {
+            note_flow_state_stale (frame.generation, generation, frame.epoch,
+                                   pair.remote_flow_epoch, pair_id,
+                                   completion_pipe_->get_endpoint_pair ());
             return true;
+        }
         pair.remote_flow_epoch = frame.epoch;
         pair.remote_flow_seen = true;
         if (pair.remote_flow_paused == paused)
@@ -255,6 +265,96 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         application->release_lifetime_ref ();
     }
     return true;
+}
+
+void zlink::socket_base_t::flow_state_applied (
+  pipe_t *pipe_, bool paused_, uint64_t epoch_, bool actual_writable_)
+{
+    //  Called synchronously, on this pipe's own (socket-owning) thread, right
+    //  after pipe_t::process_flow_state() commits a real PAUSED<->RUNNING
+    //  flip. Never on a stale, duplicate, or same-state frame, and never on a
+    //  normal data frame - so this never runs on the per-message path.
+    if (!pipe_)
+        return;
+
+    if (paused_) {
+        _flow_paused_connections.fetch_add (1, std::memory_order_relaxed);
+        _flow_pause_applied_total.fetch_add (1, std::memory_order_relaxed);
+        pipe_->set_remote_flow_pause_started_ms (_clock.now_ms ());
+    } else {
+        //  The gauge only ever moves in matched +1/-1 steps from this same
+        //  thread (process_flow_state() is delivered through this socket's
+        //  own command queue), so a plain decrement guarded against underflow
+        //  is enough; no CAS retry loop is needed.
+        uint64_t paused_connections =
+          _flow_paused_connections.load (std::memory_order_relaxed);
+        if (paused_connections > 0)
+            _flow_paused_connections.fetch_sub (1, std::memory_order_relaxed);
+        _flow_resume_applied_total.fetch_add (1, std::memory_order_relaxed);
+        const uint64_t started_ms = pipe_->remote_flow_pause_started_ms ();
+        if (started_ms != 0) {
+            const uint64_t now_ms = _clock.now_ms ();
+            _flow_last_pause_duration_ms.store (
+              now_ms > started_ms ? now_ms - started_ms : 0,
+              std::memory_order_relaxed);
+        }
+    }
+
+    const blob_t &routing_id = pipe_->get_routing_id ();
+    const unsigned char *routing_id_data =
+      routing_id.size () > 0 ? routing_id.data () : NULL;
+    uint64_t values[2] = {epoch_, 0};
+    const uint64_t values_count = paused_ ? 1 : 2;
+    if (!paused_)
+        values[1] = actual_writable_ ? 1u : 0u;
+    event (pipe_->get_endpoint_pair (), routing_id_data, routing_id.size (),
+          values, values_count,
+          paused_ ? ZLINK_EVENT_SEND_FLOW_PAUSED : ZLINK_EVENT_SEND_FLOW_RESUMED,
+          0, pipe_->get_transport_lane (), pipe_->get_transport_pair_id (),
+          pipe_->get_transport_pair_generation ());
+}
+
+void zlink::socket_base_t::note_flow_state_stale (
+  uint64_t received_generation_, uint64_t current_generation_,
+  uint64_t received_epoch_, uint64_t current_epoch_, uint64_t pair_id_,
+  const endpoint_uri_pair_t &endpoint_uri_pair_)
+{
+    _flow_state_stale_total.fetch_add (1, std::memory_order_relaxed);
+    uint64_t values[4] = {received_generation_, current_generation_,
+                          received_epoch_, current_epoch_};
+    event (endpoint_uri_pair_, NULL, 0, values, 4,
+          ZLINK_EVENT_FLOW_STATE_STALE, 0, transport_lane_completion, pair_id_,
+          current_generation_);
+}
+
+void zlink::socket_base_t::flow_state_metrics (
+  uint64_t *paused_connections_, uint64_t *pause_applied_total_,
+  uint64_t *resume_applied_total_, uint64_t *stale_total_,
+  uint64_t *last_pause_duration_ms_) const
+{
+    if (paused_connections_)
+        *paused_connections_ =
+          _flow_paused_connections.load (std::memory_order_relaxed);
+    if (pause_applied_total_)
+        *pause_applied_total_ =
+          _flow_pause_applied_total.load (std::memory_order_relaxed);
+    if (resume_applied_total_)
+        *resume_applied_total_ =
+          _flow_resume_applied_total.load (std::memory_order_relaxed);
+    if (stale_total_)
+        *stale_total_ = _flow_state_stale_total.load (std::memory_order_relaxed);
+    if (last_pause_duration_ms_)
+        *last_pause_duration_ms_ =
+          _flow_last_pause_duration_ms.load (std::memory_order_relaxed);
+}
+
+void zlink::socket_base_t::reset_flow_state_metrics ()
+{
+    _flow_paused_connections.store (0, std::memory_order_relaxed);
+    _flow_pause_applied_total.store (0, std::memory_order_relaxed);
+    _flow_resume_applied_total.store (0, std::memory_order_relaxed);
+    _flow_state_stale_total.store (0, std::memory_order_relaxed);
+    _flow_last_pause_duration_ms.store (0, std::memory_order_relaxed);
 }
 
 #ifdef ZLINK_BUILD_TESTS

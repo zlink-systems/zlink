@@ -132,6 +132,14 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
     out_->snd_pending_bytes = out_->snd_bytes_in_flight;
     out_->rcv_pending_bytes = out_->rcv_bytes_in_flight;
 
+    if (socket_type_supports_receive_flow_state (options.type)) {
+        out_->detail_flags |= ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE;
+        flow_state_metrics (
+          &out_->flow_paused_connections, &out_->flow_pause_applied_total,
+          &out_->flow_resume_applied_total, &out_->flow_state_stale_total,
+          &out_->flow_pause_duration_ms);
+    }
+
     return 0;
 }
 

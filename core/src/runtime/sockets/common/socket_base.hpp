@@ -411,6 +411,8 @@ class socket_base_t : public own_t,
     void hiccuped (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_peer_terminated (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_terminated (pipe_t *pipe_) ZLINK_FINAL;
+    void flow_state_applied (pipe_t *pipe_, bool paused_, uint64_t epoch_,
+                             bool actual_writable_) ZLINK_FINAL;
 
     int monitor (const char *endpoint_,
                  uint64_t events_,
@@ -464,6 +466,22 @@ class socket_base_t : public own_t,
                                   uint64_t *oversize_count_,
                                   uint64_t *oversize_max_bytes_) const;
     void reset_auto_hwm_admission_counters ();
+    //  Remote receive-flow observation counters (plan §6). All transitions
+    //  happen off the per-message hot path: only a PAUSED<->RUNNING flip on
+    //  this pipe's own thread and a rejected stale/duplicate frame on the
+    //  transport I/O thread touch these.
+    void flow_state_metrics (uint64_t *paused_connections_,
+                             uint64_t *pause_applied_total_,
+                             uint64_t *resume_applied_total_,
+                             uint64_t *stale_total_,
+                             uint64_t *last_pause_duration_ms_) const;
+    void reset_flow_state_metrics ();
+    void note_flow_state_stale (uint64_t received_generation_,
+                                uint64_t current_generation_,
+                                uint64_t received_epoch_,
+                                uint64_t current_epoch_,
+                                uint64_t pair_id_,
+                                const endpoint_uri_pair_t &endpoint_uri_pair_);
     auto_hwm_socket_plan_t prepare_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_);
     void collect_auto_hwm_queue_policies (
       std::vector<physical_queue_endpoint_policy_t> *out_);
@@ -888,6 +906,13 @@ class socket_base_t : public own_t,
     uint32_t _auto_hwm_last_recalc_reason;
     alignas (64) std::atomic<uint64_t> _auto_hwm_send_attempts;
     alignas (64) std::atomic<uint64_t> _auto_hwm_send_blocked_attempts;
+    //  Remote receive-flow observation counters (plan §6). Gauge and
+    //  monotonic totals; reset_flow_state_metrics() zeroes all of them.
+    std::atomic<uint64_t> _flow_paused_connections;
+    std::atomic<uint64_t> _flow_pause_applied_total;
+    std::atomic<uint64_t> _flow_resume_applied_total;
+    std::atomic<uint64_t> _flow_state_stale_total;
+    std::atomic<uint64_t> _flow_last_pause_duration_ms;
     uint32_t _local_peer_weight;
     typedef std::pair<uint64_t, uint64_t> transport_pair_key_t;
     typedef std::map<transport_pair_key_t, transport_pair_pipes_t> transport_pairs_t;

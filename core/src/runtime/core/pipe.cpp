@@ -209,6 +209,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _remote_flow_paused (false),
     _out_owner_message_started (false),
     _remote_flow_epoch (0),
+    _remote_flow_pause_started_ms (0),
     _waiting_for_byte_credit (false),
     _waiting_for_flow_resume (false),
     _hwm (outhwm_),
@@ -1257,13 +1258,30 @@ bool zlink::pipe_t::take_flow_resume_recovery ()
 
 void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
 {
-    if (apply_remote_flow_state (state_, epoch_))
+    flow_state_transition_t transition = flow_state_no_transition;
+    bool actual_writable = false;
+    const bool notify =
+      apply_remote_flow_state (state_, epoch_, &transition, &actual_writable);
+    //  Observation never gates the send path: this call happens after the
+    //  transition already committed, off the per-message write/read path, and
+    //  only on an actual PAUSED<->RUNNING flip (never on a stale, duplicate,
+    //  or same-state frame).
+    if (transition != flow_state_no_transition)
+        _sink->flow_state_applied (
+          this, transition == flow_state_transition_paused, epoch_,
+          actual_writable);
+    if (notify)
         _sink->write_activated (this);
 }
 
-bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
-                                             uint64_t epoch_)
+bool zlink::pipe_t::apply_remote_flow_state (
+  unsigned char state_, uint64_t epoch_,
+  flow_state_transition_t *out_transition_, bool *out_actual_writable_)
 {
+    if (out_transition_)
+        *out_transition_ = flow_state_no_transition;
+    if (out_actual_writable_)
+        *out_actual_writable_ = false;
     const bool paused = state_ != 0;
     bool notify = false;
     {
@@ -1282,6 +1300,9 @@ bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
         if (_remote_flow_paused == paused)
             return false;
         _remote_flow_paused = paused;
+        if (out_transition_)
+            *out_transition_ = paused ? flow_state_transition_paused
+                                       : flow_state_transition_resumed;
         //  Resuming removes only the remote-pause cause. Termination and the
         //  transport-pair hold keep their own state, so the send-ready edge is
         //  published only when every cause is clear.
@@ -1312,8 +1333,20 @@ bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
                 notify = true;
             }
         }
+        if (out_actual_writable_)
+            *out_actual_writable_ = write_state_ready_unlocked (NULL);
     }
     return notify;
+}
+
+void zlink::pipe_t::set_remote_flow_pause_started_ms (uint64_t ms_)
+{
+    _remote_flow_pause_started_ms = ms_;
+}
+
+uint64_t zlink::pipe_t::remote_flow_pause_started_ms () const
+{
+    return _remote_flow_pause_started_ms;
 }
 
 bool zlink::pipe_t::write (

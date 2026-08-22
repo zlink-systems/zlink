@@ -19,6 +19,7 @@
 #include "core/msg.hpp"
 #include "core/pipe_stream_packet_state.hpp"
 #include "utils/fast_mutex.hpp"
+#include "utils/macros.hpp"
 
 namespace zlink
 {
@@ -41,6 +42,17 @@ enum pipe_message_admission_t : int
     pipe_message_admission_too_large,
     pipe_message_admission_inactive,
     pipe_message_admission_invalid
+};
+
+//  Reports whether applying a remote receive-flow state actually changed the
+//  pipe's own paused/running record. A stale or duplicate frame that
+//  apply_remote_flow_state() already rejected reports no_transition, so the
+//  observation layer never sees an event for a frame that changed nothing.
+enum flow_state_transition_t
+{
+    flow_state_no_transition = 0,
+    flow_state_transition_paused,
+    flow_state_transition_resumed
 };
 
 struct transport_lifetime_t
@@ -83,6 +95,21 @@ struct i_pipe_events
     virtual void hiccuped (zlink::pipe_t *pipe_) = 0;
     virtual void pipe_peer_terminated (zlink::pipe_t *pipe_) = 0;
     virtual void pipe_terminated (zlink::pipe_t *pipe_) = 0;
+
+    //  Reports a real PAUSED/RUNNING transition applied to this pipe's remote
+    //  receive-flow record (never a stale or duplicate frame, and never a
+    //  repeat of the current state). Called synchronously on this pipe's own
+    //  thread right after the mutation, from pipe_t::process_flow_state().
+    //  Only socket_base_t overrides this; every other sink keeps the default
+    //  no-op because only socket-owned application pipes carry flow state.
+    virtual void flow_state_applied (zlink::pipe_t *pipe_, bool paused_,
+                                     uint64_t epoch_, bool actual_writable_)
+    {
+        LIBZLINK_UNUSED (pipe_);
+        LIBZLINK_UNUSED (paused_);
+        LIBZLINK_UNUSED (epoch_);
+        LIBZLINK_UNUSED (actual_writable_);
+    }
 };
 
 //  Note that pipe can be stored in three different arrays.
@@ -215,8 +242,20 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  whether the caller must publish the write-activated edge. Callers that
     //  already run on that thread use this directly, so the state is in effect
     //  before any admission transition they make next.
-    bool apply_remote_flow_state (unsigned char state_, uint64_t epoch_);
+    //  out_transition_ reports whether this call actually flipped the pipe's
+    //  paused/running record (as opposed to a stale or duplicate epoch, or a
+    //  repeat of the same state). out_actual_writable_ is sampled under the
+    //  same lock right after the mutation, so a PAUSED->RUNNING transition
+    //  reports whether every other send-blocker cause is already clear too.
+    bool apply_remote_flow_state (unsigned char state_, uint64_t epoch_,
+                                  flow_state_transition_t *out_transition_ = NULL,
+                                  bool *out_actual_writable_ = NULL);
     bool remote_flow_paused () const;
+    //  Timestamp (ms) at which this pipe's remote flow state most recently
+    //  became PAUSED. Set and read only from the socket-owning thread that
+    //  processes flow_state commands, so it needs no lock of its own.
+    void set_remote_flow_pause_started_ms (uint64_t ms_);
+    uint64_t remote_flow_pause_started_ms () const;
     //  Whether the remote state blocks the next message on this pipe. Unlike
     //  remote_flow_paused () this honours the in-progress message exception, so
     //  readiness predicates agree with send admission.
@@ -449,6 +488,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  it is a stale replay: the attach-time replay and a freshly accepted
     //  frame can be queued in either order.
     uint64_t _remote_flow_epoch;
+    //  See set_remote_flow_pause_started_ms(); only touched from the
+    //  socket-owning thread, never under _out_sync.
+    uint64_t _remote_flow_pause_started_ms;
     std::atomic<bool> _waiting_for_byte_credit;
     mutable std::atomic<bool> _waiting_for_flow_resume;
 
