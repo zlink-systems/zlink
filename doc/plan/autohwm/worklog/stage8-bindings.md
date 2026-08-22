@@ -983,3 +983,239 @@ Framework work started: no
 
 Commit: `dotnet: expose receive-flow-state parity` (this repository, branch
 `codex/bindings-0.11.1-performance`).
+
+## node
+
+Base commit: `9c5b5078c9` (docs: append python flow-state parity worklog).
+Changed only under `bindings/node/`; no `core/` edit was needed here since the
+shared `core/src/libzlink.vers` export-list defect (see the cpp section's
+"Shared C-layer defect found") was already fixed and pushed before this
+section's build/test pass — `nm -D core/build/lib/libzlink.so | grep
+receive_flow` already showed the exported symbol.
+
+### Surface added
+
+`bindings/node/src/zlink/contracts/sockets/socket_constants.ts`:
+
+```ts
+export const ReceiveFlowState = Object.freeze({
+  RUNNING: 0,
+  PAUSED: 1
+} as const);
+export type ReceiveFlowState = typeof ReceiveFlowState[keyof typeof ReceiveFlowState];
+```
+
+`bindings/node/src/zlink/contracts/sockets/socket.ts` (on the common `Socket`
+interface, same placement as `setTlsServer`/`setTlsClient` — every concrete
+socket type interface extends `Socket` directly or via `ConnectableSocket`,
+so every socket type gets a runtime not-supported mapping instead of a
+compile-time-restricted facade, matching this binding's own convention and
+the cpp/python precedent):
+
+```ts
+setReceiveFlowState(state: ReceiveFlowState): void;
+```
+
+Implementation in `bindings/node/src/zlink/runtime/sockets/socket_base.ts`
+(`SocketBase`, the shared runtime base every socket class extends) follows
+the existing `configCall` + generic-errno pattern used by
+`ctxRecalculateAutoHwm`/poller add calls, not a raw `zlink_config_result_t`
+cast — the native wrapper throws a plain JS error and preserves `zlink_errno()`
+for the JS-side `createError('config', errno)` remap, so no new
+binding-specific error-code table was needed (`ConfigResult`'s existing
+`InvalidHandle=701`/`InvalidArgument=702`/`NotSupported=703`/
+`InvalidState=705` values already come from `mapNativeErrno('config', …)`):
+
+```ts
+setReceiveFlowState(state: ReceiveFlowState): void {
+  configCall('socket receive-flow-state configuration failed', () => {
+    requireNative().socketSetReceiveFlowState(getNativeHandle(this), state | 0);
+  });
+}
+```
+
+Native addon side (`bindings/node/native/src/addon_core.cc`, registered in
+`addon_core_api.h` and `addon_exports.cc` as `socketSetReceiveFlowState`)
+calls `zlink_socket_set_receive_flow_state` directly and throws via the
+existing `throw_last_error()` helper on any non-OK result — the same
+one-native-call-then-throw-on-failure shape as `ctx_recalculate_auto_hwm`.
+
+### Not exposed (plan §5.1 forbidden list)
+
+No flow-frame encode/decode/receive API and no PAUSE-bypass send variant were
+added anywhere in the public surface. `tests/flow_state.test.ts`'s
+"public surface has no flow-frame receive/encode API or PAUSE-bypass send
+variant" test walks the prototype chain of one instance of every concrete
+socket type plus `Object.keys(zlink)` and asserts no member name contains
+`flowframe`/`flow_frame`/`encodeflow`/`decodeflow`/`receiveflowframe`/
+`sendflowframe`/`pausebypass`/`bypasspause`, and that the only member whose
+name contains "flow" (case-insensitively) is `setReceiveFlowState`.
+
+### Test: `bindings/node/tests/flow_state.test.ts` (new)
+
+No separate registration step — `tests/run_tests.sh` iterates every
+`dist-tools/tests/*.test.js`, so this binding's own build (`npm run build`)
+is what wires the new file in. Checklist §8.1.1 coverage:
+
+| §8.1.1 item | Test |
+|---|---|
+| enum value parity with C ABI | `ReceiveFlowState enum values match the C ABI` (`RUNNING===0`, `PAUSED===1`) |
+| DEALER/ROUTER success + idempotent repeat | `setReceiveFlowState succeeds on DEALER/ROUTER and repeat calls are idempotent` |
+| PAIR/PUB/SUB family/STREAM → not-supported | `setReceiveFlowState reports NotSupported on PAIR, PUB/SUB family, and STREAM` |
+| unsupported-socket send/recv unaffected | same test sends/receives one message on a PAIR pair after the rejected call |
+| invalid handle/argument mapping | `setReceiveFlowState maps invalid handle and invalid argument per the config error policy` (closed handle → `ConfigResult.InvalidHandle`; `2`/`-1`/`999` → `ConfigResult.InvalidArgument`) |
+| close race → one observable outcome | `setReceiveFlowState after close observes only a bounded close-related outcome` — see caveat below |
+| no flow-frame API on the public surface | `public surface has no flow-frame receive/encode API or PAUSE-bypass send variant` |
+| existing HWM/send behavior unchanged | `existing HWM options and DEALER/ROUTER traffic are unchanged by receive-flow-state calls` (HWM option round-trip plus a full DEALER/ROUTER send/recv round trip, interleaved with idempotent `RUNNING` no-op calls) |
+
+**Close-race caveat**: unlike the thread-based bindings (cpp, go, java,
+python, rust), Node.js runs all JavaScript on a single thread, so a genuine
+OS-level race between `close()` and `setReceiveFlowState()` cannot be
+constructed from pure JS — there is no way to have both calls actually enter
+the native layer concurrently. The test instead exercises the deterministic
+sequential ordering documented in `worklog/stage7-c-api.md` §1.2 as one of
+the two observable "close already won" shapes: closing a handle with no
+pending linger work completes teardown synchronously, so the subsequent
+`setReceiveFlowState()` call sees an already-unregistered handle and reports
+`ConfigResult.InvalidHandle`. The test asserts the observed outcome is
+always exactly one of `{InvalidHandle, InvalidState}` (never `Ok`, never an
+unrelated error, never a crash) across 20 iterations — this is a real,
+useful regression guard even without true concurrency, but it does not
+exercise the genuine in-flight-admission-race path (`InvalidState`) the way
+the thread-based bindings' tests do.
+
+### Header/library resolution for `ZLINK_CORE_SOURCE=local` (environment note, not a defect)
+
+`bindings/node/binding.gyp` resolves Core headers/library via
+`scripts/resolve_core.js`, which unconditionally requires
+`ZLINK_CORE_INSTALL_PREFIX` to point at an installed Core package (with
+`share/zlink/core-package-provenance.json`) — unlike the other six bindings,
+node has no `bindings/node/include` header mirror and no `ZLINK_CORE_SOURCE`
+branch in its own build scripts, so `ZLINK_CORE_SOURCE=local` alone does not
+let `node-gyp` find a local `core/build` the way `bindings/tools/local_core_runtime.sh`
+does for the other bindings' `run_tests.sh`. To exercise the local Core
+build for this task, `core/build` (already containing the flow-state symbol
+from the fix above) was installed into a private scratch prefix via
+`cmake --install core/build --prefix <scratch>/zlink-core-install`, with a
+minimal `share/zlink/core-package-provenance.json` written by hand (fields
+`package`/`version`/`abiMajor` only — the fields `resolve_core.js` actually
+checks), and `ZLINK_CORE_INSTALL_PREFIX` pointed at it for `npm run build`,
+`npm run typecheck`, and `npm run rebuild-native`. `tests/run_tests.sh`
+itself needed no changes and no extra environment beyond
+`ZLINK_CORE_SOURCE=local` (it only affects the addon's runtime dynamic-link
+target via `native_load_paths.ts`'s `prepareDevelopmentRuntimeLink`, which
+already points at `core/build/lib` in local mode). This is scoped as
+environment setup, not a binding defect — no file under `bindings/node/` was
+changed to make this work, and `resolve_core.js`'s existing behavior (strict
+provenance-checked installed-package resolution) is unchanged.
+
+### Build + test evidence
+
+```bash
+cmake --install core/build --prefix <scratch>/zlink-core-install   # see above
+# hand-written share/zlink/core-package-provenance.json in that prefix
+export ZLINK_CORE_INSTALL_PREFIX=<scratch>/zlink-core-install
+npm run build          # tsc + dist-tools regeneration
+npm run typecheck       # tests/socket_surface.typecheck.ts, clean
+npm run rebuild-native  # node-gyp configure build, clean
+ZLINK_CORE_SOURCE=local bash bindings/node/tests/run_tests.sh
+```
+
+Result: every `dist-tools/tests/*.test.js` file passes, including the 7 new
+`flow_state.test.js` cases (0 failures across all 14 test files, 60+ cases
+total). `samples/run_samples.sh` reports 6/7 sample scripts passing; the one
+failure, `request_reply_sample.js`, is pre-existing and unrelated (see
+below).
+
+Before this stage's change, the same `ZLINK_CORE_SOURCE=local` command
+(rebuilt against the same local Core, with `bindings/node/` at
+`9c5b5078c9`, no flow-state edits) failed at the first
+`hwm_contract.test.js` case that reads `zlink_monitor_status_t`:
+
+```text
+✖ monitor ABI v3 exposes byte telemetry as bigint
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  4 !== 3
+```
+
+This is the stage7 ABI bump (`ZLINK_MONITOR_STATUS_ABI_VERSION` 3→4, 5 new
+flow-metric fields) the task description flagged in advance — the native
+addon already reads the new ABI-4 struct correctly (`status.abiVersion`
+comes back `4`), only the test's hardcoded expectation was stale. Fixed by
+updating `bindings/node/tests/hwm_contract.test.ts` (`3` → `4`, test name
+`ABI v3` → `ABI v4`) and regenerating the compiled
+`bindings/node/dist-tools/tests/hwm_contract.test.js` via `npm run build`.
+No other node test asserted the old `SOCKET_MONITOR_EVENT_ALL` mask value, so
+only this one file needed a stale-expectation fix; `SOCKET_MONITOR_EVENT_ALL`
+itself was still widened from `0xFFFF` to `0x7FFFF` in
+`socket_constants.ts` (plus the matching default-mask fallback in
+`socket_base.ts`'s `monitorOpen`, which now imports the constant instead of
+duplicating the literal) to keep "subscribe to every monitor event" actually
+meaning every event now that stage7 added 3 new event bits — this is a
+straight constant-value correction with no test coverage change, since no
+node monitor test currently asserts on the flow event bits themselves (the
+plan scopes those to "existing monitor/snapshot surfaces", not to new named
+event constants in this binding).
+
+### Pre-existing failure found (confirmed unrelated, not fixed)
+
+`dist-tools/samples/request_reply_sample.js` fails deterministically (5/5
+standalone reruns) with:
+
+```text
+RecvError: routerRecvMessage failed: Resource temporarily unavailable
+  code: 201 (RecvResult.NoData), nativeErrno: 11 (EAGAIN)
+```
+
+This sample does not touch `setReceiveFlowState` or any flow-state surface,
+and no file under `bindings/node/samples/` was changed in this section. The
+failure reproduces identically before and after this section's edits (same
+`core/build`, same node source at `9c5b5078c9` plus only the flow-state diff
+above). Given the deterministic reproduction and the sample's exclusive use
+of a real TCP endpoint plus a monitor-based connection-ready wait ahead of a
+blocking `recv()`, this looks like a pre-existing timing sensitivity in the
+sample under this host's current load (multiple other language bindings'
+builds/tests were running concurrently throughout this section), not a
+regression from this change. Left unfixed as out of scope for a
+receive-flow-state parity task.
+
+### Files changed
+
+- `bindings/node/native/src/addon_core_api.h` — declare `socket_set_receive_flow_state`
+- `bindings/node/native/src/addon_core.cc` — implement it (`zlink_socket_set_receive_flow_state` + `throw_last_error`)
+- `bindings/node/native/src/addon_exports.cc` — register `socketSetReceiveFlowState`
+- `bindings/node/src/zlink/contracts/sockets/socket_constants.ts` — `ReceiveFlowState` enum; `SOCKET_MONITOR_EVENT_ALL` 0xFFFF → 0x7FFFF
+- `bindings/node/src/zlink/contracts/sockets/index.ts` — re-export `ReceiveFlowState`
+- `bindings/node/src/zlink/contracts/sockets/socket.ts` — `Socket.setReceiveFlowState` member
+- `bindings/node/src/zlink/runtime/native/binding_socket.ts` — `socketSetReceiveFlowState` native binding type
+- `bindings/node/src/zlink/runtime/sockets/socket_base.ts` — `SocketBase.setReceiveFlowState`; `monitorOpen` default mask now uses `SOCKET_MONITOR_EVENT_ALL`
+- `bindings/node/tests/flow_state.test.ts` (+ compiled `dist-tools/tests/flow_state.test.js`) — new focused contract test (§8.1.1 table above)
+- `bindings/node/tests/hwm_contract.test.ts` (+ compiled `dist-tools/tests/hwm_contract.test.js`) — stale ABI-3 expectation updated to 4
+- `bindings/node/tests/socket_surface.typecheck.ts` — compile-time smoke calls for `setReceiveFlowState`
+
+### Result
+
+```text
+Result: node flow-state binding parity implemented and tested; all
+  dist-tools test files pass (60+ cases across 14 files, including the 7
+  new flow-state cases); 6/7 samples pass, the 1 remaining failure
+  (request_reply_sample.js) is pre-existing and unrelated (see above).
+Changed source: see "Files changed" above.
+Changed public contract: bindings/node public surface only (no core/doc/spec
+  or bindings/doc/spec changes); no core/ edit made in this section (the
+  required core/src/libzlink.vers export fix and rebuild were already
+  applied and pushed by another concurrent worker before this section's
+  build/test pass).
+Focused tests: ZLINK_CORE_SOURCE=local bash bindings/node/tests/run_tests.sh
+  — see "Build + test evidence" above.
+Paired perf reports: none (out of scope per plan §8.1.1 — binding perf is
+  not this stage's gate; no hot-path source was touched — the new call is a
+  single dedicated native method, not on any send/recv hot path).
+First remaining failure: dist-tools/samples/request_reply_sample.js,
+  pre-existing and unrelated (confirmed independent of this change, see
+  above).
+Framework work started: no
+```
+
+Commit: `node: expose receive-flow-state parity` (this repository, branch
+`codex/bindings-0.11.1-performance`).
