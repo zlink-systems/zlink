@@ -243,6 +243,14 @@ func (s *MonitorStatus) IsReady() bool {
 	return s != nil && s.StateFlags&uint32(C.ZLINK_MONITOR_STATE_READY) != 0
 }
 
+// IsFlowStateDetailPopulated reports whether FlowPausedConnections and the
+// other flow_* fields are populated (ABI 4+, paired DEALER/ROUTER sockets
+// only). Mirrors ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE in
+// core/include/zlink_enum.h.
+func (s *MonitorStatus) IsFlowStateDetailPopulated() bool {
+	return s != nil && s.DetailFlags&uint32(C.ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE) != 0
+}
+
 func monitorStatusFromC(raw C.zlink_monitor_status_t) MonitorStatus {
 	return MonitorStatus{
 		ABIVersion:                       uint32(raw.abi_version),

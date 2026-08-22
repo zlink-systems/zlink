@@ -107,6 +107,21 @@ func TestMonitorStatusExposesFlowMetricFields(t *testing.T) {
 	}
 }
 
+// Spec-round follow-up: ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE
+// (core/include/zlink_enum.h) must be reachable via IsFlowStateDetailPopulated()
+// on the public MonitorStatus surface, agreeing bit-for-bit with DetailFlags.
+func TestMonitorStatusDetailFlowStateBitMatchesCABI(t *testing.T) {
+	var status zlink.MonitorStatus
+	status.DetailFlags = 1 << 5
+	if !status.IsFlowStateDetailPopulated() {
+		t.Fatalf("IsFlowStateDetailPopulated() = false with DetailFlags = 1<<5, want true")
+	}
+	status.DetailFlags = 0
+	if status.IsFlowStateDetailPopulated() {
+		t.Fatalf("IsFlowStateDetailPopulated() = true with DetailFlags = 0, want false")
+	}
+}
+
 // §8.1.1 "DEALER/ROUTER socket에서 설정이 성공하고 같은 state의 반복 호출도 성공한다".
 func TestSetReceiveFlowStateSucceedsOnDealerAndRouterAndIsIdempotent(t *testing.T) {
 	ctx := newContext(t)
