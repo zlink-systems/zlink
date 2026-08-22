@@ -698,6 +698,12 @@ int zlink::socket_base_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)
 
 int zlink::socket_base_t::xpeer_command (msg_t *msg_, pipe_t *pipe_)
 {
+    //  Completion-lane flow state is Core internal. It arrives as a command
+    //  frame, so the session never enqueues it on a pipe an application can
+    //  read from.
+    if (consume_receive_flow_state_frame (pipe_, *msg_))
+        return 1;
+
     uint32_t weight = 100;
     if (!decode_peer_weight_command (*msg_, &weight))
         return 0;

@@ -884,6 +884,7 @@ set(socket-common-sources
     src/runtime/sockets/common/socket_base_request_reply_bridge.cpp
     src/runtime/sockets/common/socket_base_control.cpp
     src/runtime/sockets/common/socket_base_dispatch.cpp
+    src/runtime/sockets/common/socket_base_flow_state.cpp
     src/runtime/sockets/common/socket_dispatch_context.cpp
     src/runtime/sockets/common/socket_dispatch_bridge.cpp
     src/runtime/sockets/common/socket_command_runtime.cpp

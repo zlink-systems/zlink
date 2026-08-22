@@ -84,7 +84,10 @@ struct transport_pair_pipes_t
         application_validated (false),
         completion_validated (false),
         ready (false),
-        draining (false)
+        draining (false),
+        remote_flow_seen (false),
+        remote_flow_paused (false),
+        remote_flow_epoch (0)
     {
     }
 
@@ -98,6 +101,14 @@ struct transport_pair_pipes_t
     //  Set while a thread consumes this pair's Completion pipe. The pipe has a
     //  single-consumer queue, so two owners must not read it at once.
     bool draining;
+    //  Last remote receive-flow state accepted for this pair. The state is
+    //  absolute, so a repeated value is idempotent and a frame whose epoch does
+    //  not advance is ignored. The pair key already carries the connection
+    //  generation, so a late frame from a previous physical connection cannot
+    //  reach this record.
+    bool remote_flow_seen;
+    bool remote_flow_paused;
+    uint64_t remote_flow_epoch;
 };
 
 class socket_recv_source_rid_scope_t
@@ -193,6 +204,32 @@ class socket_base_t : public own_t,
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
     bool transport_pair_application_ready (const zlink::pipe_t *pipe_) const;
+
+    //  Socket-wide local receive-flow state (Core internal; the public API and
+    //  its result mapping are a later step). RUNNING is 0 and PAUSED is 1.
+    //  Returns 0 on success and -1 with errno set:
+    //    EINVAL   state outside the enum
+    //    ENOTSUP  socket type without a completion lane
+    //    ETERM    context already terminated
+    //  The completion boundary is the moment this socket stores the state.
+    //  Fanout to the current pairs and synchronisation of a later pair both
+    //  read that same stored state under one mutex, so they never disagree.
+    int set_local_receive_flow_state (int state_);
+    int get_local_receive_flow_state () const;
+    //  Test/observability accessor: last remote state accepted for one pair.
+    bool remote_receive_flow_paused (uint64_t transport_pair_id_,
+                                     uint64_t transport_pair_generation_) const;
+    //  Whether the pair's application pipe has already applied the remote
+    //  state on its own thread. The socket record above changes when the frame
+    //  is accepted; this one changes when the send blocker actually moves.
+    bool application_pipe_remote_flow_paused (
+      uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const;
+    static bool socket_type_supports_receive_flow_state (int type_);
+    //  Classifies one completion-lane frame. Returns true when the frame was a
+    //  Core-internal flow-state frame and has been consumed, whether or not it
+    //  could be applied; the caller must then not pass it anywhere else.
+    bool consume_receive_flow_state_frame (pipe_t *completion_pipe_,
+                                           const zlink::msg_t &msg_);
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
@@ -538,6 +575,14 @@ class socket_base_t : public own_t,
     void broadcast_local_peer_weight ();
     void send_local_peer_weight (pipe_t *pipe_);
 
+    //  Completion-lane flow state. The frame is Core internal: it is written on
+    //  the completion lane as a command frame and consumed by the peer's Core,
+    //  so no application or Framework receive path can observe it.
+    void write_receive_flow_state_frame (pipe_t *completion_pipe_,
+                                         unsigned char state_,
+                                         uint64_t epoch_);
+    void sync_local_receive_flow_state_to_pair (pipe_t *completion_pipe_);
+
     //  Delay actual destruction of the socket.
     void process_destroy () ZLINK_FINAL;
 
@@ -824,6 +869,12 @@ class socket_base_t : public own_t,
     transport_pairs_t _transport_pairs;
     std::deque<transport_pair_key_t> _ready_completion_pairs;
     std::set<transport_pair_key_t> _ready_completion_pair_set;
+    //  Socket-wide local receive-flow state, guarded by _transport_pairs_sync
+    //  so pair fanout and new-pair synchronisation serialise against the same
+    //  state. The epoch advances only on a real state change; a repeated call
+    //  with the same state succeeds without emitting anything.
+    unsigned char _local_receive_flow_state;
+    uint64_t _local_receive_flow_epoch;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_base_t)
 };

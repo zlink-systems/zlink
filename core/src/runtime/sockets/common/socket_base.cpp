@@ -8,6 +8,7 @@
 #include "sockets/common/socket_base.hpp"
 #include "core/c_api_copy_internal.hpp"
 #include "core/ctx.hpp"
+#include "core/flow_state_frame.hpp"
 #include "core/mailbox.hpp"
 #include "utils/err.hpp"
 #include "utils/random.hpp"
@@ -114,7 +115,9 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _auto_hwm_last_recalc_reason (ZLINK_AUTO_HWM_RECALC_REASON_NONE),
     _auto_hwm_send_attempts (0),
     _auto_hwm_send_blocked_attempts (0),
-    _local_peer_weight (100)
+    _local_peer_weight (100),
+    _local_receive_flow_state (flow_state::receive_flow_running),
+    _local_receive_flow_epoch (0)
 {
     _term_pipe_acks_registered = 0;
     _term_pipe_acks_received = 0;

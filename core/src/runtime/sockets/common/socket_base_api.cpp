@@ -142,6 +142,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *ready_application = NULL;
     pipe_t *ready_completion = NULL;
     pipe_t *pair_application = NULL;
+    bool pending_remote_flow_seen = false;
+    bool pending_remote_flow_paused = false;
     //  A rejected pair is torn down after the table is unlocked: terminate()
     //  reaches other objects and must not run under this mutex.
     pipe_t *reject_pipes[3] = {NULL, NULL, NULL};
@@ -182,6 +184,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 }
             }
             pair_application = pair.application;
+            //  A flow-state frame for this connection can be decoded on the
+            //  transport I/O thread before this admission runs. Apply whatever
+            //  state was accepted for the pair as soon as its application lane
+            //  exists; process_flow_state is idempotent.
+            pending_remote_flow_seen = pair.remote_flow_seen;
+            pending_remote_flow_paused = pair.remote_flow_paused;
         }
         //  reject_pipes[1] and [2] were read out of the table, and the table
         //  slot is the only thing that keeps them alive: the sibling lane's
@@ -231,6 +239,16 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         emit_transport_pair_ready (ready_application);
     if (ready_application && ready_completion)
         cache_completion_pipe_routing_id (ready_application);
+    //  A pair that has just become ready - including a reconnected one - gets
+    //  the socket's latest stored local receive-flow state, so a peer never
+    //  keeps sending into a socket that is still PAUSED.
+    if (ready_completion)
+        sync_local_receive_flow_state_to_pair (ready_completion);
+    if (pending_remote_flow_seen && pair_application)
+        send_flow_state (pair_application,
+                         pending_remote_flow_paused
+                           ? static_cast<unsigned char> (1)
+                           : static_cast<unsigned char> (0));
     const bool transport_write_released =
       ready_application
       && ready_application->release_writes_for_transport_pair ();
@@ -709,7 +727,15 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
       && pipe_->get_transport_lane () == transport_lane_completion;
     if (!completion) {
         xwrite_activated (pipe_);
-        if (pipe_ && pipe_->take_hwm_credit_recovery ())
+        //  Byte credit and a remote RESUME are independent causes; either one
+        //  can be the last cause to clear, and each arms its own wake marker.
+        bool credit_recovery = false;
+        bool flow_recovery = false;
+        if (pipe_) {
+            credit_recovery = pipe_->take_hwm_credit_recovery ();
+            flow_recovery = pipe_->take_flow_resume_recovery ();
+        }
+        if (credit_recovery || flow_recovery)
             (void) enqueue_routed_send_ready (
               pipe_, ZLINK_ROUTED_SEND_WRITABLE, 0);
     }

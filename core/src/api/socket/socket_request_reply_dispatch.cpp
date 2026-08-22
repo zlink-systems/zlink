@@ -101,6 +101,17 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 return;
             }
 
+            //  Core-internal flow state never reaches the reply dispatcher and
+            //  never becomes an application part. On a local (inproc) pair the
+            //  frame is queued on the completion pipe instead of being
+            //  intercepted by a session, so it is classified here as well.
+            if (parts.empty () && (frame.flags () & zlink::msg_t::more) == 0
+                && socket_->consume_receive_flow_state_frame (pipe_, frame)) {
+                const int close_rc = frame.close ();
+                errno_assert (close_rc == 0);
+                continue;
+            }
+
             parts.push_back (zlink_msg_t ());
             zlink_msg_init (&parts.back ());
             zlink::msg_t *stored = reinterpret_cast<zlink::msg_t *> (&parts.back ());
