@@ -3343,12 +3343,18 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<TargetRelocationReservation> {
     const authorities = await this.readTargetParticipantAuthorities(envelope, signal);
     const publication = relocationPublication(prepare, envelope);
-    const deferredJoinRoots = new Map<string, ZLinkDeferredJoinAcceptedRoot>();
-    const publishedJournalKeys = new Set<string>();
+    // Carries the exact reference + CRC of a deferred-Join publication the
+    // target reservation must keep connected through the CAS (spec 28 —
+    // clearing/replacing it here would strand the journal's own
+    // prepared->committed transition with nothing left for it to find).
+    const retainedDeferredJoinRoots = new Map<string, { readonly reference: string; readonly checksumCrc32c: number }>();
     for (const participant of envelope.participants) {
       const staged = targetPort.deferredJoinRoot(participant.key);
       if (staged !== undefined) {
-        deferredJoinRoots.set(participant.key, staged);
+        retainedDeferredJoinRoots.set(participant.key, {
+          reference: staged.reference.value,
+          checksumCrc32c: staged.checksumCrc32c
+        });
         continue;
       }
       const current = this.codec.read(authorities.get(participant.key)!.payload);
@@ -3366,7 +3372,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           },
           signal
         )) {
-        publishedJournalKeys.add(participant.key);
+        retainedDeferredJoinRoots.set(participant.key, {
+          reference: current.reference,
+          checksumCrc32c: current.checksumCrc32c
+        });
       }
     }
     const participants = envelope.participants.map(participant => {
@@ -3383,13 +3392,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       ) {
         throw new Error(`Relocation target RouteMesh '${meshName}' has no Entry Spot.`);
       }
-      const deferredJoinRoot = deferredJoinRoots.get(participant.key);
-      const participantPublication = deferredJoinRoot === undefined
+      const retainedDeferredJoinRoot = retainedDeferredJoinRoots.get(participant.key);
+      const participantPublication = retainedDeferredJoinRoot === undefined
         ? publication
         : {
             ...publication,
-            reference: deferredJoinRoot.reference.value,
-            checksumCrc32c: deferredJoinRoot.checksumCrc32c
+            reference: retainedDeferredJoinRoot.reference,
+            checksumCrc32c: retainedDeferredJoinRoot.checksumCrc32c
           };
       return {
         key: { value: participant.key } as ZLinkAuthorityKey,
@@ -3417,7 +3426,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                 ...membership,
                 actorSpotKind: ZLinkSpotKind.User as const
               })
-        }, deferredJoinRoot !== undefined || publishedJournalKeys.has(participant.key)),
+        }, retainedDeferredJoinRoot !== undefined),
         membershipMutation: encodeMembershipMutation(envelope.memberships, participant.key)
       };
     });
