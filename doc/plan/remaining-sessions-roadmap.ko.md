@@ -325,6 +325,15 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     된 후 재작성**(e2e-only 트리거·계약 완화 기각). 제작된 ZMP chunk-corruption 프록시 seam
     (SpotActorTransfer/Support/relocation_chunk_conflict_proxy.py, 미배선)은 그때 사용. SF-F7 주석
     모순은 1런 판정법 기록됨.
+  - **[ ] [신규 등재] Node TTT 모드 C 정적 진단 완료(2026-08-22, 실증 대기)**: 재접속 세션
+    JoinGameNotify 미전달의 유력 기전 — relocation seal 창에서 push()가 fire-and-forget 보류 경로
+    (bound-actor-relay-sender.ts:79-98)로 들어간 뒤, 브라우저 물리 재접속이
+    `notifyPhysicalDisconnect→unbind→clearRelocation`(actor-session-binding-registry.ts:274-290,
+    :863-872)으로 보류 outbound를 **새 바인딩 생성 전 무조건 파기**하고, `.catch(()=>undefined)`
+    (:97)가 이를 무기록 은폐. 수정 방향: 동일 actor 재바인딩 시 보류 미전달 항목을 새
+    bindingToken으로 re-home(단순 catch 로깅만으로는 관측만 되고 손실은 그대로). 실증 절차: spec 26
+    flow 트레이싱으로 notify terminal이 unbind 전/후인지 + reportOwnershipRefreshError 유무로
+    로컬/크로스노드 경로 판별(하니스 여유 시 실행 — 현재 6셀 실행과 직렬화 대기).
   - **[ ] [신규 등재] cpp 샘플 기존 결함 2건(단계 5 대상, baseline 실증)**: ① TicTacToe —
     `location_committed` marker가 completion 완료 증거가 아님(marker 후 on_actor_joined→source
     leave→completion 순서, spot_runtime.cpp:6216) + 앱 callback의 JoinGameNotify가 bound Session
