@@ -69,7 +69,7 @@ public sealed class test_monitor_contract
         Assert.Equal(MonitorEventType.ConnectionReady, evt.Event);
 
         MonitorStatus snapshot = monitor.Status();
-        Assert.Equal(3U, snapshot.AbiVersion);
+        Assert.Equal(4U, snapshot.AbiVersion);
         Assert.True(snapshot.StructSize > 0U);
         Assert.Equal<MonitorSourceKind>(MonitorSourceKind.Socket, snapshot.SourceKind);
         Assert.True(snapshot.SndPendingMsgs >= 0);

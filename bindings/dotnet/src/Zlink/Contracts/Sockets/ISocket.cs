@@ -71,6 +71,20 @@ public interface ISocket : IZlinkSocket, IDisposable, IAsyncDisposable
         bool trustSystem = false);
 
     /// <summary>
+    ///     Sets this socket's local receive-flow state and synchronises it to
+    ///     the paired DEALER/ROUTER completion lane. RUNNING and PAUSED are
+    ///     an absolute state, not a counter: repeating the current state
+    ///     also succeeds. Only DEALER and ROUTER sockets support this; other
+    ///     socket types throw <see cref="ZlinkConfigException" /> with
+    ///     <see cref="ZlinkConfigException.ErrorCode.NotSupported" /> and
+    ///     keep their existing byte high-water-mark and transport
+    ///     backpressure unchanged. Success means the socket-owning runtime
+    ///     thread stored the local state; it does not mean the remote peer
+    ///     has already observed it.
+    /// </summary>
+    void SetReceiveFlowState(ReceiveFlowState state);
+
+    /// <summary>
     ///     Closes the socket and releases its native resources; further operations
     ///     throw. Unlike <see cref="IDisposable.Dispose" />, this closes the native
     ///     socket immediately. Send and request operations may be admitted from

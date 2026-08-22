@@ -84,6 +84,13 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
             throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
     }
 
+    public void SetReceiveFlowState(ReceiveFlowState state)
+    {
+        var rc = NativeMethods.zlink_socket_set_receive_flow_state(Handle,
+            (int)state);
+        ZlinkException.ThrowConfigIfError(rc);
+    }
+
     public void Close()
     {
         Kernel.Close();

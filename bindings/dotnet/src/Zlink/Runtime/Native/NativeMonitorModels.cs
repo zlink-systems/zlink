@@ -12,7 +12,7 @@ internal struct ZlinkSocketMonitorOpenOptions
 [StructLayout(LayoutKind.Sequential)]
 internal struct ZlinkMonitorStatus
 {
-    internal const uint CurrentAbiVersion = 3;
+    internal const uint CurrentAbiVersion = 4;
 
     public uint AbiVersion;
     public uint StructSize;
@@ -45,4 +45,9 @@ internal struct ZlinkMonitorStatus
     public ulong MinimumCoreMessageChargeBytes;
     public ulong OversizeMessageAdmissionCount;
     public ulong OversizeMessageAdmissionMaxBytes;
+    public ulong FlowPausedConnections;
+    public ulong FlowPauseAppliedTotal;
+    public ulong FlowResumeAppliedTotal;
+    public ulong FlowStateStaleTotal;
+    public ulong FlowPauseDurationMs;
 }

@@ -104,6 +104,7 @@ internal static partial class NativeMethods
         "zlink_socket_monitor_handler",
         "zlink_socket_monitor_open",
         "zlink_socket_monitor_recv",
+        "zlink_socket_set_receive_flow_state",
         "zlink_stopwatch_intermediate",
         "zlink_stopwatch_start",
         "zlink_stopwatch_stop",

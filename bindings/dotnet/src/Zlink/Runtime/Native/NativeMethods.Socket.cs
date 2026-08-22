@@ -170,6 +170,10 @@ internal static partial class NativeMethods
         int trustSystem);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_socket_set_receive_flow_state(
+        IntPtr handle, int state);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_set_router_option(IntPtr handle,
         int option, IntPtr value, nuint length);
 

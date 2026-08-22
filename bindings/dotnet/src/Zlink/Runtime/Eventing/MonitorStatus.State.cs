@@ -49,5 +49,10 @@ public sealed partial class MonitorStatus
         OversizeMessageAdmissionCount = native.OversizeMessageAdmissionCount;
         OversizeMessageAdmissionMaxBytes =
             native.OversizeMessageAdmissionMaxBytes;
+        FlowPausedConnections = native.FlowPausedConnections;
+        FlowPauseAppliedTotal = native.FlowPauseAppliedTotal;
+        FlowResumeAppliedTotal = native.FlowResumeAppliedTotal;
+        FlowStateStaleTotal = native.FlowStateStaleTotal;
+        FlowPauseDurationMs = native.FlowPauseDurationMs;
     }
 }

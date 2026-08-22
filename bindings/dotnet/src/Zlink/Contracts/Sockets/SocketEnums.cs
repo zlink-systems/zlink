@@ -81,6 +81,31 @@ public enum AutoHwmProfile
 }
 
 /// <summary>
+///     The socket-wide receive-flow state synchronised over the paired
+///     DEALER/ROUTER completion lane. RUNNING and PAUSED are an absolute
+///     state, not a counter: repeating the current value is a successful
+///     no-op. Values match the C ABI's <c>zlink_receive_flow_state_t</c>.
+///     Only DEALER and ROUTER sockets support this; other socket types throw
+///     <see cref="ZlinkConfigException" /> with
+///     <see cref="ZlinkConfigException.ErrorCode.NotSupported" /> and keep
+///     their existing byte high-water-mark and transport backpressure
+///     unchanged.
+/// </summary>
+public enum ReceiveFlowState
+{
+    /// <summary>
+    ///     The socket accepts and processes inbound flow normally.
+    /// </summary>
+    Running = 0,
+
+    /// <summary>
+    ///     The socket has asked its paired peer to stop sending until it
+    ///     resumes to <see cref="Running" />.
+    /// </summary>
+    Paused = 1
+}
+
+/// <summary>
 ///     Determines how a socket reacts to a peer that reuses an existing routing id.
 /// </summary>
 public enum RidDuplicatePolicy

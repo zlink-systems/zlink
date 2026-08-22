@@ -213,6 +213,36 @@ public sealed partial class MonitorStatus
     public ulong OversizeMessageAdmissionMaxBytes { get; }
 
     /// <summary>
+    ///     Gets the current count of application pipes this socket sees as
+    ///     remote-PAUSED over the paired DEALER/ROUTER completion lane.
+    /// </summary>
+    public ulong FlowPausedConnections { get; }
+
+    /// <summary>
+    ///     Gets the total number of PAUSED transitions actually applied
+    ///     (never a stale or duplicate frame).
+    /// </summary>
+    public ulong FlowPauseAppliedTotal { get; }
+
+    /// <summary>
+    ///     Gets the total number of RUNNING transitions actually applied
+    ///     (never a stale or duplicate frame).
+    /// </summary>
+    public ulong FlowResumeAppliedTotal { get; }
+
+    /// <summary>
+    ///     Gets the total number of stale or duplicate flow-state frames
+    ///     ignored.
+    /// </summary>
+    public ulong FlowStateStaleTotal { get; }
+
+    /// <summary>
+    ///     Gets the duration of the most recently completed PAUSED interval,
+    ///     in milliseconds. Zero if no PAUSED interval has completed yet.
+    /// </summary>
+    public ulong FlowPauseDurationMs { get; }
+
+    /// <summary>
     ///     Gets whether the monitored socket source is in the ready state.
     /// </summary>
     public bool IsReady => SourceKind == MonitorSourceKind.Socket

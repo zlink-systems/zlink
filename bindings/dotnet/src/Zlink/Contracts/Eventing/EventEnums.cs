@@ -249,7 +249,14 @@ public enum MonitorStatusDetailFlags : uint
     /// <summary>
     ///     Automatic high-water-mark buffer telemetry is populated.
     /// </summary>
-    AutoHwmBuffers = 1u << 4
+    AutoHwmBuffers = 1u << 4,
+
+    /// <summary>
+    ///     <see cref="MonitorStatus.FlowPausedConnections" /> and the other
+    ///     flow-state fields are populated (paired DEALER/ROUTER sockets
+    ///     only).
+    /// </summary>
+    FlowState = 1u << 5
 }
 
 /// <summary>
