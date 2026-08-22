@@ -953,7 +953,7 @@ submit이 실패해도 Source를 다시 owner로 추측하여 되돌리지 않�
 | 값 | 용도 |
 |---|---|
 | `RelocationId` | 이동 하나를 식별하는 0이 아닌 128-bit 난수다. Runtime만 사용한다. |
-| `TargetAttemptGeneration` | 같은 target에 보낸 중복 또는 이전 Restore 요청을 구분하는 0이 아닌 값이다. 다른 target 선택에 사용하지 않는다. |
+| `TargetAttemptGeneration` | 같은 target에 보낸 중복 또는 이전 Restore 요청을 구분하는 0이 아닌 값이다. 다른 target 선택에 사용하지 않는다. 언제나 정확 equality로만 대조하며 숫자 크기 순서로 판정하지 않는다([51 §9](51-internal-service-wire-protocol.ko.md)). Target node의 lifecycle generation에서 유도해서는 안 된다 — 그 값으로는 같은 target node로 보낸 두 번째 시도를 첫 번째와 구분할 수 없다. |
 | [Reservation ID](01-glossary.ko.md#reservation-id) | Target 수용 공간을 확보한 요청을 식별하는 0이 아닌 128-bit 값이다. 생성용 ID와 별개다. |
 
 Location Store의 object별 위치 record는 최대 1 MiB다. 큰 목록은 여러 record로

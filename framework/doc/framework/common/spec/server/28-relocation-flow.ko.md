@@ -70,7 +70,8 @@ spot 주소로 routing되지 않고 node 단위로 전달되며, 수신 node가 
 Relocation은 object를 삭제하고 다시 만드는 작업이 아니므로 `ObjectGeneration`을 유지한다.
 Owner가 바뀐 순서는 `AuthorityOwnerGeneration`으로 구분한다. 여러 control message가 같은
 이동에 속하는지는 runtime이 만든 0이 아닌 relocation identity로 구분한다. 이 identity는
-`RelocationId`, target 시도 순서를 구분하는 `targetAttemptGeneration`과 coordinator fence —
+`RelocationId`, 하나의 `RelocationId` 안에서 target 준비 시도마다 유일한 0이 아닌 값
+`targetAttemptGeneration`과 coordinator fence —
 이동을 시작한 coordinator가 예상하는 현재 owner 값 — 로 구성되며, 같은 값의 조합을 이
 문서에서 exact identity라고 한다. Restore 요청, state chunk(§4.2)와 target의 Location Store CAS는
 같은 exact identity로 한 이동에 결합된다. Application은 이 identity를 만들거나 해석하지

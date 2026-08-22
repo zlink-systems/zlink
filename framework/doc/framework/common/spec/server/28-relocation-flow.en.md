@@ -75,8 +75,9 @@ local Entry Spot by the receiving node, not routed to it as a spot address.
 Relocation isn't object deletion and recreation, so `ObjectGeneration` is preserved.
 `AuthorityOwnerGeneration` distinguishes owner changes. A non-zero relocation identity
 made by the runtime distinguishes control messages belonging to the same move. This
-identity consists of the `RelocationId`, the `targetAttemptGeneration` distinguishing
-target attempts, and the coordinator fence — the current-owner values the coordinator
+identity consists of the `RelocationId`, the `targetAttemptGeneration` — a non-zero
+value unique per target preparation attempt within one `RelocationId` — and the
+coordinator fence — the current-owner values the coordinator
 that started the move expects. This document calls that combination the exact identity.
 The Restore request, state chunks (§4.2), and the target's Location Store CAS are bound
 to one move by the same exact identity. The application neither creates nor interprets
