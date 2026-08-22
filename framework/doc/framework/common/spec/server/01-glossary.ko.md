@@ -1441,7 +1441,7 @@ peer를 남기지만 ready·liveness·health failure 집계에서는 제외한�
 | 형태 | 0이 아닌 opaque equality token. 숫자 크기로 실행 순서를 판단하지 않는다. |
 | .NET 표기 | `ulong LifecycleGeneration` |
 | 공개 구성 | 0이 아닌 generation 값 하나다. Endpoint가 같아도 재시작한 실행은 이전 값과 다른 새 값을 사용한다. |
-| 생성·관리 | Framework가 새 listener·server lifecycle에 사용할 값을 확정한다. |
+| 생성·관리 | Framework가 새 listener·server lifecycle에 사용할 값을 확정한다. 발급 값은 wire의 `nonzero-u64` 범위 `1..long.MaxValue`(2^63-1) 안에서 만든다 — full-width `ulong` 상위 bit를 쓰는 값을 발급해서는 안 된다. 수신측은 exact equality로만 비교한다. |
 | 수명 | 해당 실행이 끝날 때까지 유지된다. Remote는 descriptor와 transport admission의 값을 exact 비교한다. |
 
 <a id="descriptor"></a>
