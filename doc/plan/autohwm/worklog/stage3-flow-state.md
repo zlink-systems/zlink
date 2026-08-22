@@ -434,3 +434,79 @@ test hook들(`test_pending_flow_buffered`, `test_any_pair_accepted_flow_state`,
 
 계약을 주장하던 test는 남긴다. 사라진 장치를 직접 재던 test는 같은 계약을 새 구조에서
 확인하는 형태로 바꾼다.
+
+## 11. 설계상 허용하는 transient
+
+판정 기준은 `00-hwm-backpressure-design-intent.ko.md` §2.3이다. Control state가 늦거나
+유실돼도 finite byte HWM과 TCP backpressure가 memory burst를 결국 제한한다. 즉 flow state는
+hint 계층이고, 늦거나 유실되거나 잠시 어긋난 PAUSE는 설계가 허용한다. 장치를 정당화하는 것은
+아래 다섯 개의 hard contract뿐이다.
+
+(a) 영구 정지 없음(writable은 반드시 결국 회복) (b) flow frame이 application에 절대 보이지
+않음 (c) 시작한 multipart는 완료됨 (d) malformed·truncated reply가 성공으로 보고되지 않음
+(e) 기존 send 의미(EAGAIN·SNDTIMEO)가 변하지 않음.
+
+| 허용하는 transient | 왜 허용되는가 |
+|---|---|
+| `attach_pipe`가 mutex를 놓은 뒤 edge를 발행하는 사이에 새 상태가 수락되면, 그 edge가 잠시 낡은 상태를 반영한다 | 뒤이은 send는 EAGAIN을 받거나 byte HWM 아래에서 처리된다. Queue된 상태가 곧 적용되어 수렴한다. (a)를 깨지 않는다 |
+| Pair의 completion pipe가 등록되기 전에 도착한 frame은 버려진다 | 버려질 수 있는 frame은 아직 RUNNING인 pipe에 대한 PAUSE뿐이다(PAUSE 상태인 pipe는 이미 등록을 마친 pair를 뜻한다). 따라서 throttling이 늦어질 뿐 route가 멈추지 않고, 늦어지는 비용은 byte HWM이 제한한다 |
+| Message-start marker를 relaxed atomic으로 두어, 다른 thread의 상태 적용과 겹치면 PAUSE 적용이 한 message 밀릴 수 있다 | Send 측은 자기 store를 항상 관찰하므로 (c)는 유지된다. 한 message 지연은 hint 계층의 허용 범위다 |
+| Peer가 상태를 바꾸지 않는 한 유실된 PAUSE는 재전송되지 않는다 | §4.2의 resync는 *보내는 쪽* pair가 ready가 될 때 발생하므로 받는 쪽의 뒤늦은 등록을 보상하지 않는다. 이를 보상하려면 새 wire 요청이 필요한데, 유실된 PAUSE는 정지가 아니라 throttling 지연이므로 §2.3이 이미 덮는다 |
+
+이전 회차에서 이 transient들을 막으려고 넣었던 sequence counter, pre-validation hold,
+per-source slot, connection-id 명명, teardown 정리는 모두 제거했다. 그 부재를 단언하던 test도
+제거했고(사유는 위 표), hard contract를 단언하는 test는 전부 남겼다.
+
+## 12. 자체 검토
+
+### 12.1 문서 적합성
+
+| 문서 조항 | 구현 위치 |
+|---|---|
+| 계획 §4.1 기존 completion lane 사용, 새 control socket 없음 | `socket_base_flow_state.cpp:128` `write_receive_flow_state_frame ()`이 pair의 completion pipe에만 쓴다. 새 socket·lane·registry 없음 |
+| 계획 §4.1 첫 계약은 paired DEALER/ROUTER, 나머지는 기존 byte HWM 유지 | `socket_base_flow_state.cpp:14` `socket_type_supports_receive_flow_state ()`; 다른 유형은 `:29`에서 `ENOTSUP` |
+| 계획 §4.2 frame field 5종 | `core/src/runtime/core/flow_state_frame.hpp` (35 B, version·pair id·generation·epoch·state) |
+| 계획 §4.2 절대 상태, 반복 적용은 idempotent | `socket_base_flow_state.cpp:183` `consume_receive_flow_state_frame ()`의 같은 상태 조기 반환; `set_local_receive_flow_state ()`의 같은 상태 무동작 |
+| 계획 §4.2 지원하지 않는 version 거절 | `flow_state_frame.hpp` `decode_frame ()`의 `decode_unsupported_version` |
+| 계획 §4.2 이전 generation·중복 epoch 무시 | `socket_base_flow_state.cpp:183`의 generation 일치 검사와 epoch 전진 검사 |
+| 계획 §4.2 새 pair ready 시 최신 local state 전송 | `socket_base_api.cpp:238` `sync_local_receive_flow_state_to_pair ()` |
+| 계획 §4.3 차단 원인 합성 | `pipe.cpp:1073` `write_state_admission_unlocked ()`, `pipe.cpp:1132` `check_write_status ()` |
+| 계획 §4.3 remote PAUSE가 byte HWM counter를 수정하지 않음 | `pipe.cpp:1088` `remote_flow_blocked_unlocked ()`는 읽기 전용이고 `_out_active`·`_bytes_written`을 건드리지 않는다 |
+| 계획 §4.3 각 전이는 자기 원인만 제거 | `pipe.cpp:1248` `apply_remote_flow_state ()`, `release_writes_for_transport_pair ()`, `process_activate_write ()` |
+| 계획 §4.3 multipart atomicity | `pipe.cpp:1088`의 `_out_incomplete_bytes`·owner marker 조건, `router_send_path.cpp:115` |
+| 계획 §4.3 새 public send status 없음 | 기존 `pipe_message_admission_transport_wait`로 보고 |
+| 설계 의도 §4.2 raw control·selective receive·우회 send 없음 | 추가된 공개 표면 없음. Frame은 command frame이라 `session_base_pipe_io.cpp:165`에서 pipe queue에 들어가지 않는다 |
+| 설계 의도 §5 EAGAIN·SNDTIMEO 불변 | 기존 status로만 보고하므로 호출부 변경 없음 |
+
+문서보다 더 하는 것으로 남은 장치는 두 가지이고, 각각 hard contract가 근거다. (1) pipe
+command에 실은 epoch — attach 재적용이 더 새로운 상태를 덮어 pipe를 영구 PAUSED로 고정하는
+것을 막는다(a). (2) RESUME 시 byte-credit waiter 인계와 재확인 — 그 인계가 없으면 credit
+복귀 경로가 edge를 내지 않아 route가 영구히 비활성으로 남는다(a).
+
+### 12.2 복잡도
+
+`core/src` 기준 기능 전체 순증은 **+919/−12**이고, 이번 회차에서 **−795/+88** 을 되돌렸다.
+남은 구조는 frame codec 1개 파일(157줄), socket 진입점 1개 파일, pipe의 원인 flag 하나와
+marker 하나, 그리고 세 곳의 통합점(`xpeer_command`, completion drain, router 송신)이다.
+
+스스로 우발적 복잡도로 부르고 싶은 잔여물은 없다. 남은 것 중 가장 논쟁적인 두 가지는 12.1
+끝에 적은 epoch와 credit 인계이며, 둘 다 (a)를 직접 지킨다. Epoch wrap 규칙은 10줄이고
+`UINT64_MAX`번의 상태 변경이라는 도달 불가능한 조건을 정의만 해 둔다.
+
+### 12.3 성능 위험
+
+Message마다 실행되는 경로에 추가된 것은 다음이 전부다. Lock·할당·syscall 추가는 없다.
+
+| 위치 | 추가된 것 | 빈도 |
+|---|---|---|
+| `pipe.cpp:1073` send admission | `remote_flow_blocked_unlocked ()` — bool 3개와 uint64 1개 비교. 이미 잡고 있는 `_out_sync` 안 | Frame마다 |
+| `pipe.cpp:1132` `check_write_status` | 같은 비교 | Admission 확인마다 |
+| `pipe.cpp:2374` message commit | relaxed atomic store 1회. 이미 잡고 있는 lock 안 | 완성된 message마다 |
+| `router_send_path.cpp:115` | relaxed atomic store 1회, **lock 없음** | Classic ROUTER message마다 |
+| `socket_request_reply_dispatch.cpp:119` | `flags & command` inline 분기. 일반 reply part는 호출 자체를 건너뛴다 | Completion part마다 |
+| `pipe.cpp:1479` `process_activate_write` | 비교 1회 | Credit 복귀마다(message마다 아님) |
+| `socket_base_api.cpp:758` `write_activated` | atomic exchange 1회 | Write 활성화마다(message마다 아님) |
+
+Recv 경로와 decoder에는 추가가 없다. Flow frame 자체는 상태가 바뀔 때만 흐른다.
+`router_send_path.cpp:115`의 marker는 처음에 `_out_sync`(실제 recursive pthread mutex)를
+잡았는데, ROUTER message마다 mutex를 하나 더 잡는 것이라 relaxed atomic으로 바꿨다.
