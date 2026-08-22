@@ -205,7 +205,17 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  clearing it only removes its own cause. A PAUSE that arrives while a
     //  multipart message is already started applies from the next message, so
     //  the started message keeps its existing atomicity.
+    //  Declares that this pipe's owner has accepted a message that has not
+    //  reached the pipe yet. A classic ROUTER consumes the routing-ID part
+    //  without writing it, so the outbound byte counters alone cannot tell that
+    //  a message is in progress. The marker clears itself when the message
+    //  commits, is rolled back or is discarded by a hiccup.
+    void mark_out_message_started ();
     bool remote_flow_paused () const;
+    //  Whether the remote state blocks the next message on this pipe. Unlike
+    //  remote_flow_paused () this honours the in-progress message exception, so
+    //  readiness predicates agree with send admission.
+    bool remote_flow_blocks_next_message () const;
 #ifdef ZLINK_BUILD_TESTS
     //  Test-only: reports the send-blocker causes without evaluating any of
     //  them, so observing the pipe cannot change it.
@@ -418,6 +428,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Remote receive-flow state applied on this pipe's own thread. Guarded by
     //  _out_sync, exactly like _transport_pair_write_held.
     bool _remote_flow_paused;
+    //  Set while the pipe's owner holds an accepted message that has not been
+    //  written yet. Guarded by _out_sync like the other outbound state.
+    bool _out_owner_message_started;
     //  Epoch of the last applied remote state. A command that does not advance
     //  it is a stale replay: the attach-time replay and a freshly accepted
     //  frame can be queued in either order.

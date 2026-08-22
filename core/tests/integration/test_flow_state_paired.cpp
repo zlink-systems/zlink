@@ -509,6 +509,96 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+bool wait_for_pipe_pause (void *socket_,
+                          uint64_t pair_id_,
+                          uint64_t generation_,
+                          bool expected_)
+{
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (2000);
+    while (!deadline_expired (deadline)) {
+        (void) as_socket (socket_)->process_submit_commands ();
+        if (as_socket (socket_)->application_pipe_remote_flow_paused (
+              pair_id_, generation_)
+            == expected_)
+            return true;
+        msleep (1);
+    }
+    return false;
+}
+
+//  Review finding 3. A classic ROUTER send accepts the routing-ID part without
+//  writing it to the pipe, so the pipe sees no message in progress. A PAUSE
+//  that lands between the routing-ID part and the first payload part must not
+//  break the message that the socket has already accepted.
+void test_router_routing_id_part_holds_message_atomicity_across_pause ()
+{
+    const int zero = 0;
+    const int mandatory = 1;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
+      router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory, sizeof (mandatory)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    send_string_expect_success (dealer, "hello", 0);
+    char rid[256];
+    const int rid_size = zlink_recv (router, rid, sizeof (rid), 0);
+    TEST_ASSERT_GREATER_THAN_INT (0, rid_size);
+    recv_string_expect_success (router, "hello", 0);
+
+    zlink_routing_id_t peer_rid;
+    memset (&peer_rid, 0, sizeof (peer_rid));
+    peer_rid.size = static_cast<uint8_t> (rid_size);
+    memcpy (peer_rid.data, rid, static_cast<size_t> (rid_size));
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool resolved = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (2000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (router)->select_routed_submit_target (&peer_rid, &target)
+              == 0
+            && target.transport_pair_id != 0) {
+            resolved = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (resolved);
+
+    //  The socket accepts the routing-ID part: the message has started even
+    //  though nothing has reached the pipe yet.
+    TEST_ASSERT_EQUAL_INT (rid_size, zlink_send (router, rid, rid_size,
+                                                 ZLINK_SNDMORE | ZLINK_DONTWAIT));
+
+    TEST_ASSERT_TRUE (
+      as_socket (router)->test_deliver_flow_state_command (
+        target.transport_pair_id, target.transport_pair_generation, 1, 1));
+    TEST_ASSERT_TRUE (wait_for_pipe_pause (router, target.transport_pair_id,
+                                           target.transport_pair_generation,
+                                           true));
+
+    //  The started message must still complete.
+    TEST_ASSERT_EQUAL_INT (7, zlink_send (router, "payload", 7, ZLINK_DONTWAIT));
+    recv_string_expect_success (dealer, "payload", 0);
+
+    //  The next message is blocked, from its very first part.
+    TEST_ASSERT_EQUAL_INT (
+      -1, zlink_send (router, rid, rid_size, ZLINK_SNDMORE | ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 //  Review finding 2. The remote-pause cause is evaluated before the byte HWM,
 //  so a send refused while PAUSED never records the HWM cause. If the queue is
 //  over its HWM at that moment, RESUME alone cannot publish the writable edge
@@ -668,6 +758,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
     RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);
     RUN_TEST (test_stale_flow_state_command_cannot_override_a_newer_epoch);
     RUN_TEST (test_no_application_recv_returns_a_flow_frame);

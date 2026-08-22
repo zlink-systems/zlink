@@ -198,6 +198,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _out_active (true),
     _transport_pair_write_held (false),
     _remote_flow_paused (false),
+    _out_owner_message_started (false),
     _remote_flow_epoch (0),
     _waiting_for_byte_credit (false),
     _waiting_for_flow_resume (false),
@@ -1086,10 +1087,24 @@ zlink::pipe_t::write_state_admission_unlocked () const
 
 bool zlink::pipe_t::remote_flow_blocked_unlocked () const
 {
-    //  A started multipart message keeps its existing atomicity: the remote
-    //  PAUSE only blocks from the next message boundary.
+    //  A started message keeps its existing atomicity: the remote PAUSE only
+    //  blocks from the next message boundary. A message counts as started once
+    //  bytes reached the pipe, and also once the pipe's owner accepted a part
+    //  it has not written yet - the classic ROUTER routing-ID part.
     return _remote_flow_paused && _out_incomplete_bytes == 0
-           && !_out_multipart_started_empty;
+           && !_out_multipart_started_empty && !_out_owner_message_started;
+}
+
+void zlink::pipe_t::mark_out_message_started ()
+{
+    scoped_fast_lock_t lock (_out_sync);
+    _out_owner_message_started = true;
+}
+
+bool zlink::pipe_t::remote_flow_blocks_next_message () const
+{
+    scoped_fast_lock_t lock (_out_sync);
+    return remote_flow_blocked_unlocked ();
 }
 
 bool zlink::pipe_t::write_state_ready_unlocked (
@@ -1511,6 +1526,9 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         _out_incomplete_bytes = 0;
         _out_incomplete_payload_bytes = 0;
         _out_multipart_started_empty = false;
+        //  A hiccup discards the outbound queue, including whatever the owner
+        //  had accepted for the message in progress.
+        _out_owner_message_started = false;
         _decoder_multipart_started_empty = false;
         if (incomplete_bytes > 0 && _registry_accounting)
             get_ctx ()->_physical_queue_registry.rollback_provisional (
@@ -2321,6 +2339,9 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         _out_incomplete_bytes = 0;
         _out_incomplete_payload_bytes = 0;
         _out_multipart_started_empty = false;
+        //  The message the owner started is now committed, so the next one
+        //  faces the remote flow state again.
+        _out_owner_message_started = false;
     }
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
@@ -2380,6 +2401,9 @@ void zlink::pipe_t::rollback_unlocked ()
     _out_incomplete_payload_bytes = 0;
     _out_multipart_started_empty = false;
     _decoder_multipart_started_empty = false;
+    //  The owner's accepted-but-unwritten part is gone with the rest of the
+    //  message, so the in-progress exception ends here.
+    _out_owner_message_started = false;
 }
 
 void zlink::pipe_t::flush_unlocked ()

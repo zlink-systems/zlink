@@ -106,6 +106,13 @@ int zlink::router_t::xsend (
                         }
                         return -1;
                     }
+                } else {
+                    //  The routing-ID part is consumed here and never written,
+                    //  so the pipe's own byte counters cannot tell that a
+                    //  message has started. Declare it, or a PAUSE arriving
+                    //  before the first payload part would break a message the
+                    //  socket has already accepted.
+                    _current_out->mark_out_message_started ();
                 }
             } else if (_mandatory) {
                 _more_out = false;
