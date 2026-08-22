@@ -203,28 +203,35 @@ class ReceiveFlowStatePublicSurfaceTests(unittest.TestCase):
             self.assertNotIn("flowframe", lowered)
             self.assertNotIn("flow_frame", lowered)
 
-        for socket_cls in (
-            zlink.PairSocket,
-            zlink.DealerSocket,
-            zlink.RouterSocket,
-            zlink.StreamSocket,
-            zlink.PubSocket,
-            zlink.SubSocket,
-        ):
-            for name in dir(socket_cls):
-                lowered = name.lower()
-                self.assertNotIn("flowframe", lowered)
-                self.assertNotIn("flow_frame", lowered)
-                self.assertNotIn("bypass_pause", lowered)
+        with zlink.create_context() as ctx:
+            factories = (
+                zlink.create_pair_socket,
+                zlink.create_dealer_socket,
+                zlink.create_router_socket,
+                zlink.create_stream_socket,
+                zlink.create_pub_socket,
+                zlink.create_sub_socket,
+            )
+            for factory in factories:
+                with factory(ctx) as socket:
+                    for name in dir(socket):
+                        lowered = name.lower()
+                        self.assertNotIn("flowframe", lowered)
+                        self.assertNotIn("flow_frame", lowered)
+                        self.assertNotIn("bypass_pause", lowered)
 
     def test_receive_flow_state_surface_is_exactly_the_candidate_surface(self):
         self.assertTrue(hasattr(zlink, "ReceiveFlowState"))
-        self.assertTrue(hasattr(zlink.DealerSocket, "set_receive_flow_state"))
-        self.assertTrue(hasattr(zlink.RouterSocket, "set_receive_flow_state"))
-        # No dedicated getter/receive surface was added; state is observed
-        # only through existing monitor/snapshot surfaces (plan §5.1).
-        self.assertFalse(hasattr(zlink.DealerSocket, "get_receive_flow_state"))
-        self.assertFalse(hasattr(zlink.DealerSocket, "receive_flow_state"))
+        with zlink.create_context() as ctx:
+            with zlink.create_dealer_socket(ctx) as dealer:
+                self.assertTrue(hasattr(dealer, "set_receive_flow_state"))
+                # No dedicated getter/receive surface was added; state is
+                # observed only through existing monitor/snapshot surfaces
+                # (plan §5.1).
+                self.assertFalse(hasattr(dealer, "get_receive_flow_state"))
+                self.assertFalse(hasattr(dealer, "receive_flow_state"))
+            with zlink.create_router_socket(ctx) as router:
+                self.assertTrue(hasattr(router, "set_receive_flow_state"))
 
 
 if __name__ == "__main__":
