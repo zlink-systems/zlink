@@ -302,6 +302,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     기록(schema `ordinal-or-zero` 적합, PrecommitCoordinator:70) — Java decoder가 0 거부
     (RelocationAuthorityStateCodec:128→PayloadCodec:120 slot-비어야함 실패), cpp도 동일
     (actor_authority_payload.hpp:618). **40/52/ZLJR 무결 — Java/C++ decoder의 schema 비준수.**
+    **[정책] 리뷰·수정 감사(2026-08-22 사용자 지시)**: sol 리뷰는 큰 단계 마감에만, 일상 리뷰는
+    코디네이터 직접. 랜딩된 수정이 스펙 외 단계 추가·복잡화·성능 저하를 만들면 보고 후 revert.
+    감사 결과: Java attempt=lifecycle(f04506d1ff 절반)은 제거된 cpp 스펙위반 검사에 맞춘 것 —
+    상수 1로 revert 진행. 3c revert-target: .NET nested-envelope 호환 분기 + RecoveryReplyContentType
+    단순화 재검토.
     Ruling: 두 언어가 frozen authority-relocation-state대로 source-phase slot 수용 — **랜딩
     `6a772686d8` → dotnet→java 그린(10/12,** stale Java host 재빌드 후 — installDist도 freshness
     함정 목록에 추가). dotnet→cpp는 잔존 red(무로그, /tmp/tmp.lMl9XR2K9m) — sol 진단 중. 이월

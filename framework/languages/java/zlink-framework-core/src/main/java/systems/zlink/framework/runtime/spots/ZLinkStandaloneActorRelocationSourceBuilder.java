@@ -660,7 +660,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         ZLinkMeshNodeDescriptor target = admission.target();
         return new ZLinkSpotRetireControl.StageRequest(
             new ZLinkSpotRetireControl.Fence(
-                relocationId, target.lifecycleGeneration()),
+                relocationId, 1),
             localNodeRid,
             localNodeGeneration,
             actor.snapshot().ownerId(),

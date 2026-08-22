@@ -123,7 +123,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     prepared.stageRequest().relocationPayload())
                     .applicationVersion());
             assertEquals(
-                9,
+                1,
                 prepared.stageRequest().fence().aggregateGeneration());
 
             prepared.abort().toCompletableFuture().get();
