@@ -2216,6 +2216,23 @@ void test_actor_join_recovery_round_trip (test_context_t &test)
         && decoded->reply == recovery.reply,
       "ZLJR saved-work must preserve the Node/.NET byte contract and identity fields");
 
+    auto independent_recovery = recovery;
+    independent_recovery.handoff_id = "source-issued-handoff";
+    independent_recovery.reservation_token = "target-issued-reservation";
+    independent_recovery.reserved_payload_bytes = 97;
+    const auto independently_issued =
+      protocol::decode_actor_join_recovery_saved_work (
+        protocol::encode_actor_join_recovery_saved_work (independent_recovery));
+    test.require (
+      independently_issued
+        && independently_issued->relocation == independent_recovery.relocation
+        && independently_issued->handoff_id == independent_recovery.handoff_id
+        && independently_issued->reservation_token
+             == independent_recovery.reservation_token
+        && independently_issued->reserved_payload_bytes
+             == independent_recovery.reserved_payload_bytes,
+      "ZLJR must preserve independently issued handoff and admission values");
+
     frozen_object_state_t actor{
       .owner = {object_kind_t::actor, "actor-a", 7, 11, "mesh", "src"},
       .stable_type = "sample.Actor",

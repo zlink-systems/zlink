@@ -315,12 +315,7 @@ inline frozen_record_t encode_actor_join_recovery_saved_work (
         || value.coordinator.node_generation == 0
         || value.coordinator.expected_authority_store_version.empty ()
         || (value.operation.high == 0 && value.operation.low == 0)
-        || value.reply_content_type.empty ()
-        || actor_join_relocation_id (value.handoff_id) != value.relocation
-        || value.reservation_token != value.handoff_id
-        || value.reserved_payload_bytes
-             != actor_join_reserved_payload_bytes (
-                  value.request.size (), value.relocation_content_type))
+        || value.reply_content_type.empty ())
         throw service_wire_error_t ("Actor Join recovery identity is invalid");
     if (value.request.size () > 1024u * 1024u
         || value.reply.size () > 1024u * 1024u)
@@ -561,13 +556,9 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
         || result.target_spot_generation == 0
         || result.target_authority_owner_generation == 0
         || result.target_spot_authority_owner_generation == 0
+        || result.reserved_payload_bytes == 0
         || (result.operation.high == 0 && result.operation.low == 0)
         || request_target != result.target_node_routing_id
-        || actor_join_relocation_id (result.handoff_id) != result.relocation
-        || result.reservation_token != result.handoff_id
-        || result.reserved_payload_bytes
-             != actor_join_reserved_payload_bytes (
-                  result.request.size (), result.relocation_content_type)
         || candidate->source.node_generation != result.actor_node_generation
         || candidate->source.owner_id != result.coordinator.owner_id
         || candidate->source.lease_generation
