@@ -258,7 +258,10 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
     - [x] **serializer 가드 축소**: `canonical_actor_join_application_reply` → `result_t<optional>`; reply 없으면 serializers 없이도 admit, reply 있는데 serializers null이면 typed protocol_error. 기존 동작 회귀 없음.
     - 이월(3b서 자연 해소): ① full source-path end-to-end 커버(Java→cpp/.NET→cpp pairwise가 정확히 구동) ② throwing reply serializer 시 pending-admission unwind(pathological) ③ **.NET source(ZLinkActorRemoteJoiner:1044) non-unwrap 의심 → pairwise서 확인**.
-  - [~] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **진행 중(6/12 그린: node↔dotnet,
+  - [x] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **✅ 완료(2026-08-22 19:47): 12/12 전 그린,
+    `all` 편입 `fe352b9e87`, 결정성 실증(11셀 2연속 + dotnet→java flake 해소 후 6연속 그린
+    `bf8ee1850f` — .NET full-width 난수 발급이 schema nonzero-u64 bounded 위반이던 것, 스펙
+    명문화 `5df53feae2`)**. 단계-마감 sol 리뷰 예정. 이하 진행 기록(6/12 시점부터): node↔dotnet,
     node→java, java→dotnet, cpp→dotnet, node→cpp)**. **node→cpp 그린 확정(2026-08-22)**: 최종
     blocker는 코드가 아닌 **stale C++ host 바이너리**(capacity-row 수정이 host 재빌드 이후 랜딩).
     재빌드 후 28→40→52→34→authority+capacity 원자 CAS→OnJoined→probe 전 구간 Redis MONITOR로
