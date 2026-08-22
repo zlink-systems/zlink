@@ -39,6 +39,7 @@ title: "C++ 바인딩 최종 구조"
 | [계약 폴더 레이아웃](#계약-폴더-레이아웃) | `Contracts/` 하위 카테고리별 소유 범위 |
 | [표준 인터페이스 규칙](#표준-인터페이스-규칙) | recv 시그니처, 빌더, handler 이름 규칙 |
 | [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약) | `byte_count_t` 표현과 monitor snapshot field |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [기능 범위](#기능-범위) | 완성된 공개 헤더가 다루는 그룹 |
 | [수명과 ownership](#수명과-ownership) | 리소스 클래스 해제·move·수신 저장소 규칙 |
 | [에러와 result 정책](#에러와-result-정책) | 실패 표현과 result 도메인 |
@@ -551,9 +552,30 @@ retained receive에 다시 넘기면 바인딩은 native receive를
 시작하기 전에 그 복사본의 이전 part와 lease 소유권을 초기화한다.
 
 Legacy `auto_hwm_msg_unit_bytes`, slot·size-cap·connection-bucket planner property는 alias 없이
-제거한다. Monitor snapshot은 Core monitoring ABI v3의 byte pending field를 투영하고,
+제거한다. Monitor snapshot은 Core monitoring ABI v4의 byte pending field를 투영하고,
 pending message count와 `snd_pending_bytes`·`rcv_pending_bytes`를 별도 값으로 유지하며,
 context-wide budget·accounting·queue count는 `core_hwm_budget_snapshot_t`에서 조회한다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 `zlink::receive_flow_state_t`로 노출한다.
+`int` 기반 `enum class`이며 `running = 0`, `paused = 1`이다. 설정 함수는
+`socket_t::set_receive_flow_state(receive_flow_state_t)`다. 반환형은 `void`이고 C++ 에러
+정책을 따른다. 실패한 `zlink_config_result_t`는 그 result 값을 담은 `config_error_t`로
+던지므로, completion lane이 없는 socket의 `ZLINK_CONFIG_NOT_SUPPORTED`는 not-supported
+result를 담은 `config_error_t`가 된다. 이미 유지하는 상태를 다시 설정하면 예외 없이
+정상 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## 기능 범위
 

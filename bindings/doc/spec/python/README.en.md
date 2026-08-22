@@ -25,6 +25,7 @@ title: "Python Bindings Public Contract"
 | [Ownership and lifetime](#ownership-and-lifetime) | Ownership/release rules for native handles, messages, and Received |
 | [Callback surface](#callback-surface) | The public callback paths, and the primitives that stay unexposed |
 | [Send/receive and no-data](#sendreceive-and-no-data) | How submit and no-data are represented, and how native failures are delivered |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Error](#error) | The `ZlinkError` family and its result fields |
 | [Python version and the type package](#python-version-and-the-type-package) | The supported Python version and the type-check target |
 | [Related documents](#related-documents) | Links to the guide, the Core spec, and internals |
@@ -179,6 +180,30 @@ routing id and is never converted to a different identity type. The
 current single-part accessor name matches the implementation and contract
 tests: `single_part_or_throw()`. A name change happens only after a
 separate draft is approved.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as the `ReceiveFlowState`
+`IntEnum` with `RUNNING = 0` and `PAUSED = 1`.
+`Socket.set_receive_flow_state(state)` sets it. It returns `None` and follows
+the Python error policy: a non-zero native result raises `ConfigError` carrying
+the matching `ConfigResult` and the native errno, so a socket without a
+completion lane raises `ConfigError` with `ConfigResult.NOT_SUPPORTED`. Setting
+the state the socket already holds returns normally.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Error
 

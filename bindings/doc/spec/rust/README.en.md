@@ -54,6 +54,7 @@ public crate API.
 | [Standard interface rules](#standard-interface-rules) | recv signatures, builder start methods, naming constraints |
 | [Crate layout](#crate-layout) | The classification of public modules |
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Rust `u64` and Core byte HWM |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Required capability coverage](#required-capability-coverage) | The user-facing capabilities that must be guaranteed once aligned |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `get_or_create_spot` contract |
 | [Receive and Subscribe shape](#receive-and-subscribe-shape) | Storage reuse, distinguishing no-data |
@@ -429,6 +430,33 @@ aggregates, application/completion queue counts,
 preserves current, pending, queue-count, and those three owner-lifecycle gauges,
 rebases both peaks to current, clears epoch counters, and increments
 `measurement_epoch`. An ABI version/size mismatch is an unsupported error.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as the `ReceiveFlowState`
+enum with `Running = 0` and `Paused = 1`. The setter is
+`CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState)
+-> Result<(), ConfigError>`, reached through the socket's common-options
+facade. It follows the Rust error policy: success is `Ok(())`, and a failure is
+`Err(ConfigError)` whose `ConfigResult` this binding derives from the native
+errno rather than from the returned result code. `ENOTSUP` therefore becomes
+`ConfigResult::NotSupported` for a socket without a completion lane, and
+`EINVAL` becomes `ConfigResult::InvalidArgument`. Setting the state the socket
+already holds returns `Ok(())`.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Required capability coverage
 

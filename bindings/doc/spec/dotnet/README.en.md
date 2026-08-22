@@ -52,7 +52,8 @@ user-facing behavior should never be discovered first in a runtime file.
 | [Required feature coverage](#required-feature-coverage) | The user-facing features that must be guaranteed once aligned |
 | [Receive and Subscribe shape](#receive-and-subscribe-shape) | Caller-provided storage and distinguishing no-data |
 | [Service and SPOT shape](#service-and-spot-shape) | The split of responsibility between `ISpotNode`/`ISpot` |
-| [Byte HWM and monitoring ABI v3](#byte-hwm-and-monitoring-abi-v3) | `ulong` byte HWM and the monitor snapshot fields |
+| [Byte HWM and monitoring ABI v4](#byte-hwm-and-monitoring-abi-v4) | `ulong` byte HWM and the monitor snapshot fields |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Error and validation policy](#error-and-validation-policy) | Validation timing and exception mapping |
 | [Performance policy](#performance-policy) | Hot-path constraints |
 | [Implementation checklist](#implementation-checklist) | What to confirm before declaring alignment, and required verification commands |
@@ -463,7 +464,7 @@ SPOT is a service-layer API — it is never a leak of the raw socket.
 - A channel-targeted SPOT operation uses `SendToChannel(...)` and `RequestToChannel(...)`, so the destination-bearing send/request names stay aligned with `SendToSpot(...)`, `RequestToSpot(...)`, `RequestToRouter(...)`.
 - Actor location and stream session binding are independent of each other. An actor joining a user Spot does not require a bound stream session.
 
-## Byte HWM and monitoring ABI v3
+## Byte HWM and monitoring ABI v4
 
 - HWM is a limit on Core-computed accounted bytes, not a message count on the queue.
 - The public type is `ulong`, which does not shrink Core's `uint64_t` range.
@@ -514,12 +515,12 @@ result and timeout contract. `0UL` means unlimited.
 the monitor queue. `0UL` selects the Core monitor default; a positive value is
 forwarded unchanged. There is no message-count overload or alias.
 
-- `MonitorStatus` provides the same fields as the native `zlink_monitor_status_t` ABI version 3.
+- `MonitorStatus` provides the same fields as the native `zlink_monitor_status_t` ABI version 4.
 - Planned, applied, and deferred HWM, and in-flight usage, are all `ulong` byte values.
 - A deferred value is valid only when the matching `AutoHwmDeferredSendHighWaterMarkValid` or `AutoHwmDeferredReceiveHighWaterMarkValid` is `true`.
 - A pending-message value stays a count diagnostic value, `SndPendingMsgs` and `RcvPendingMsgs`, and never shares a name with a byte field.
 - Pending bytes are exposed separately as `SndPendingBytes` and `RcvPendingBytes`.
-- If a snapshot's `AbiVersion` is not `3`, or its `StructSize` differs from the binding layout, it throws `NotSupportedException`. An older monitoring layout is not accepted.
+- If a snapshot's `AbiVersion` is not `4`, or its `StructSize` differs from the binding layout, it throws `NotSupportedException`. An older monitoring layout is not accepted.
 
 `CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
@@ -537,6 +538,30 @@ rebases both peaks to current, clears epoch counters, and increments
 Request/reply APIs take no HWM value as an argument. While `Async(...)` waits
 for HWM credit on the selected exact target, it preserves the request's
 original deadline. The caller implements neither retry nor polling.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as the `ReceiveFlowState`
+enum with `Running = 0` and `Paused = 1`. `ISocket.SetReceiveFlowState(ReceiveFlowState)`
+sets it. The method returns `void` and follows the .NET error policy: a
+non-zero native `zlink_config_result_t` is thrown as a `ZlinkConfigException`
+whose `ErrorCode` is the matching `ConfigResult`, so a socket without a
+completion lane raises `ZlinkConfigException` with `ConfigResult.NotSupported`.
+Setting the state the socket already holds returns normally.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Error and validation policy
 

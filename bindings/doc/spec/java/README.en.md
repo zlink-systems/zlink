@@ -53,7 +53,8 @@ constructors only to preserve the old Java surface.
 | [Messaging Values](#messaging-values) | The `Message`/`Received`/`TopicMessage`/`SubscriptionEvent` contract |
 | [Receive And Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage, no-data, and the Framework retained-credit boundary |
 | [Handler Registration Naming](#handler-registration-naming) | The `set...Handler` naming rule |
-| [Byte HWM And Monitoring ABI v3](#byte-hwm-and-monitoring-abi-v3) | Non-negative `long` HWM and monitor snapshot fields |
+| [Byte HWM And Monitoring ABI v4](#byte-hwm-and-monitoring-abi-v4) | Non-negative `long` HWM and monitor snapshot fields |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Error And Result Policy](#error-and-result-policy) | Typed exceptions and validation timing |
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` responsibilities and route results |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
@@ -850,7 +851,7 @@ Canonical Java names:
 - `recvRouted`
 - `recvActorLifecycle`
 
-## Byte HWM And Monitoring ABI v3
+## Byte HWM And Monitoring ABI v4
 
 - An HWM is not the number of queued messages but the limit on accounted bytes Core computes.
 - The Java public interface accepts byte values from `0` through
@@ -906,7 +907,7 @@ value for the monitor queue. Zero selects the Core monitor default; a positive
 value is forwarded unchanged. Java and Kotlin expose no message-count overload
 or alias.
 
-- The `MonitorStatus` record exposes the same fields as native `zlink_monitor_status_t` ABI version 3.
+- The `MonitorStatus` record exposes the same fields as native `zlink_monitor_status_t` ABI version 4.
 - Planned, applied, and deferred HWMs, and in-flight usage, are non-negative
   `long` byte values; a larger Core value is an overflow error.
 - A deferred value is meaningful only when its matching `autoHwmDeferredSendHwmValid()` or `autoHwmDeferredRecvHwmValid()` method returns `true`.
@@ -930,6 +931,31 @@ rebases both peaks to current, clears epoch counters, and increments
 Java and Kotlin call the same Java methods. No Kotlin-only adapter or option
 with a different unit is added. Request/reply APIs do not take an HWM argument
 and retain their existing lifetime and ownership contract.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as the `ReceiveFlowState`
+enum with `RUNNING(0)` and `PAUSED(1)`. The public setter is the common
+socket-option facade method `receiveFlowState(ReceiveFlowState)`. It returns
+`void` and follows the Java error policy: a non-zero native result is thrown as
+a `ZlinkConfigException` carrying the matching `ConfigResult`, so a socket
+without a completion lane raises `ZlinkConfigException` with the not-supported
+result. A null argument raises `NullPointerException` before any native call.
+Setting the state the socket already holds returns normally.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Error And Result Policy
 

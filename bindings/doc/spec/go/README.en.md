@@ -27,6 +27,7 @@ matching projection at the module root.
 | [Message and ownership](#message-and-ownership) | Native storage, ownership per builder path |
 | [Socket operation](#socket-operation) | Builder terminal signatures, per-socket operations |
 | [Receive and eventing](#receive-and-eventing) | Caller-provided receive return values; monitor/poller/timer |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Error contract](#error-contract) | The `ZlinkError` interface and concrete error types |
 | [FFI and package boundary](#ffi-and-package-boundary) | The cgo include boundary, the module proxy layout |
 | [What the public contract excludes](#what-the-public-contract-excludes) | The list of out-of-scope features |
@@ -309,6 +310,32 @@ timer is used to receive an interval event either via a poller or
 directly. The callback or event result for a monitor, poller, or timer
 never exposes the native callback thread as the execution location for a
 public consumer callback.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as the `ReceiveFlowState`
+type with `ReceiveFlowRunning` and `ReceiveFlowPaused`.
+`SetReceiveFlowState(ReceiveFlowState) error` sets it. It follows the Go error
+contract: success is a `nil` error, and a failure is a `*ConfigError` whose
+`Result` is the native `zlink_config_result_t` and whose errno is the native
+errno, so a socket without a completion lane returns a `*ConfigError` with
+`ConfigNotSupported`. A nil or closed handle returns `ConfigInvalidHandle`
+without calling into Core. Setting the state the socket already holds returns
+`nil`.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Error contract
 

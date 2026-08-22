@@ -24,6 +24,7 @@ title: "Python 바인딩 공개 계약"
 | [소유권과 수명](#소유권과-수명) | native handle·message·Received의 소유·해제 규칙 |
 | [Callback 표면](#callback-표면) | 공개 callback 경로와 노출하지 않는 primitive |
 | [송수신과 no-data](#송수신과-no-data) | submit·no-data 표현과 native failure 전달 |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [Error](#error) | `ZlinkError` 계열과 result 필드 |
 | [Python version과 type package](#python-version과-type-package) | 지원 Python 버전과 type check 대상 |
 | [관련 문서](#관련-문서) | guide·Core spec·internals 링크 |
@@ -158,6 +159,26 @@ DEALER와 ROUTER request/reply는 Core routing metadata와 request sequence를 �
 `Received.routing_id`는 raw routing id이며 다른 identity type으로 변환되지 않는다.
 현재 single-part accessor 이름은 구현·contract test와 같은 `single_part_or_throw()`를 사용한다.
 이름 변경은 별도 draft 승인 뒤에만 수행한다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` `IntEnum`으로 노출한다.
+`RUNNING = 0`, `PAUSED = 1`이며 설정은 `Socket.set_receive_flow_state(state)`다. 반환값은
+`None`이고 Python 에러 정책을 따른다. 0이 아닌 native 결과는 해당 `ConfigResult`와 native
+errno를 담은 `ConfigError`를 발생시키므로, completion lane이 없는 socket은
+`ConfigResult.NOT_SUPPORTED`를 담은 `ConfigError`를 발생시킨다. 이미 유지하는 상태를 다시
+설정하면 정상 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## Error
 

@@ -47,6 +47,7 @@ private `runtime` 모듈이 소스 소유권을 조직화하고, `lib.rs`가 어
 | [표준 인터페이스 규칙](#표준-인터페이스-규칙) | recv 시그니처, builder 시작 메서드, 이름 제약 |
 | [Crate 레이아웃](#crate-레이아웃) | 공개 모듈 분류 |
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Rust `u64`와 Core byte HWM의 매핑 |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [필수 능력 커버리지](#필수-능력-커버리지) | 정렬 완료 시 보장해야 할 사용자 대상 능력 |
 | [Spot Get-Or-Create](#spot-get-or-create) | `get_or_create_spot` 계약 |
 | [Receive와 Subscribe 형태](#receive와-subscribe-형태) | 저장소 재사용, no-data 구분 |
@@ -471,6 +472,28 @@ oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을
 제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
 peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measurement_epoch`을
 증가시킨다. ABI version/size 불일치는 unsupported error다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
+`Running = 0`, `Paused = 1`이며 설정 함수는 socket의 공통 option facade에서 접근하는
+`CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState)
+-> Result<(), ConfigError>`다. Rust 에러 정책을 따른다. 성공은 `Ok(())`이고 실패는
+`Err(ConfigError)`인데, 이 바인딩은 `ConfigResult`를 반환된 result 코드가 아니라 native
+errno에서 도출한다. 따라서 completion lane이 없는 socket의 `ENOTSUP`은
+`ConfigResult::NotSupported`가 되고 `EINVAL`은 `ConfigResult::InvalidArgument`가 된다.
+이미 유지하는 상태를 다시 설정하면 `Ok(())`를 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## 필수 능력 커버리지
 

@@ -45,6 +45,7 @@ depend on.
 | [Contract folder layout](#contract-folder-layout) | The ownership scope of each category under `Contracts/` |
 | [Standard interface rules](#standard-interface-rules) | recv signatures, builders, handler naming rules |
 | [64-bit byte HWM and the monitoring contract](#64-bit-byte-hwm-and-the-monitoring-contract) | The `byte_count_t` representation and the monitor snapshot fields |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Feature scope](#feature-scope) | The groups the finished public headers cover |
 | [Lifetime and ownership](#lifetime-and-ownership) | Resource-class release/move rules and the receive-storage rules |
 | [Error and result policy](#error-and-result-policy) | Failure representation and the result domain |
@@ -529,9 +530,34 @@ copy's prior parts and lease ownership before the binding starts native receive.
 
 The legacy `auto_hwm_msg_unit_bytes` and slot, size-cap, and connection-bucket
 planner properties are removed without aliases. The monitor snapshot projects
-Core monitoring ABI v3 byte-pending fields, keeping pending-message counts
+Core monitoring ABI v4 byte-pending fields, keeping pending-message counts
 separate from `snd_pending_bytes` and `rcv_pending_bytes`; context-wide budget, accounting,
 and queue counts come from `core_hwm_budget_snapshot_t`.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as
+`zlink::receive_flow_state_t`, an `enum class` over `int` with `running = 0`
+and `paused = 1`. `socket_t::set_receive_flow_state(receive_flow_state_t)`
+sets it. The method returns `void` and follows the C++ error policy: a failing
+`zlink_config_result_t` is thrown as a `config_error_t` carrying that result
+value, so `ZLINK_CONFIG_NOT_SUPPORTED` on a socket without a completion lane
+becomes a `config_error_t` with the not-supported result. Setting the state the
+socket already holds returns normally and throws nothing.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Feature scope
 

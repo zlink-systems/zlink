@@ -48,7 +48,8 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 | [필수 기능 커버리지](#필수-기능-커버리지) | 정렬 시 보장해야 할 사용자 노출 기능 |
 | [Receive 및 Subscribe 형태](#receive-및-subscribe-형태) | 호출자 제공 저장소와 no-data 구분 |
 | [Service 및 SPOT 형태](#service-및-spot-형태) | `ISpotNode`/`ISpot` 책임 분리 |
-| [Byte HWM 및 monitoring ABI v3](#byte-hwm-및-monitoring-abi-v3) | `ulong` byte HWM과 monitor snapshot field |
+| [Byte HWM 및 monitoring ABI v4](#byte-hwm-및-monitoring-abi-v4) | `ulong` byte HWM과 monitor snapshot field |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [에러 및 검증 정책](#에러-및-검증-정책) | 검증 시점과 예외 매핑 |
 | [성능 정책](#성능-정책) | hot path 제약 |
 | [구현 체크리스트](#구현-체크리스트) | 정렬 선언 전 확인 항목과 필수 검증 명령 |
@@ -555,7 +556,7 @@ SPOT은 서비스 계층 API이며, raw socket의 누출이 아니다.
 - Actor location과 stream session binding은 서로 독립적이다. actor가 사용자
   Spot에 join하기 위해 bound stream session이 반드시 필요하지는 않다.
 
-## Byte HWM 및 monitoring ABI v3
+## Byte HWM 및 monitoring ABI v4
 
 - HWM은 queue의 message 수가 아니라 Core가 계산한 accounted byte의 상한이다.
 - 공개 타입은 Core의 `uint64_t` 범위를 줄이지 않는 `ulong`이다.
@@ -604,12 +605,12 @@ accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressu
 받는다. `0UL`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다.
 Message-count overload나 alias는 없다.
 
-- `MonitorStatus`는 native `zlink_monitor_status_t` ABI version 3과 같은 field를 제공한다.
+- `MonitorStatus`는 native `zlink_monitor_status_t` ABI version 4와 같은 field를 제공한다.
 - Planned, applied, deferred HWM과 in-flight 사용량은 모두 `ulong` byte 값이다.
 - Deferred 값은 대응하는 `AutoHwmDeferredSendHighWaterMarkValid` 또는 `AutoHwmDeferredReceiveHighWaterMarkValid`가 `true`일 때만 유효하다.
 - Pending message 값은 `SndPendingMsgs`와 `RcvPendingMsgs`라는 count 진단값으로 유지하며 byte field와 이름을 공유하지 않는다.
 - Pending byte는 `SndPendingBytes`와 `RcvPendingBytes`로 별도 노출한다.
-- Snapshot의 `AbiVersion`이 `3`이 아니거나 `StructSize`가 binding layout과 다르면 `NotSupportedException`을 발생시킨다. 이전 monitoring layout은 받지 않는다.
+- Snapshot의 `AbiVersion`이 `4`가 아니거나 `StructSize`가 binding layout과 다르면 `NotSupportedException`을 발생시킨다. 이전 monitoring layout은 받지 않는다.
 
 `CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
 configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
@@ -624,6 +625,26 @@ peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `Measu
 Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`는 선택한 exact
 target의 HWM credit을 기다리는 동안 request의 원래 deadline을 유지한다.
 호출자는 별도 retry나 polling을 구현하지 않는다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
+`Running = 0`, `Paused = 1`이며 설정은 `ISocket.SetReceiveFlowState(ReceiveFlowState)`다.
+반환형은 `void`이고 .NET 에러 정책을 따른다. 0이 아닌 native `zlink_config_result_t`는
+해당 `ConfigResult`를 `ErrorCode`로 담은 `ZlinkConfigException`으로 던지므로, completion
+lane이 없는 socket은 `ConfigResult.NotSupported`를 담은 `ZlinkConfigException`을 발생시킨다.
+이미 유지하는 상태를 다시 설정하면 정상 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## 에러 및 검증 정책
 

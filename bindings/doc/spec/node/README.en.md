@@ -72,6 +72,7 @@ casing, or file names when a TypeScript idiom is clearer.
 | [Canonical Interface Rules](#canonical-interface-rules) | `recv` signatures, builders, exceptions such as `publishAsync` |
 | [Public Entry Shape](#public-entry-shape) | Domain grouping of the package entrypoint |
 | [64-bit Byte HWM and Monitoring Contract](#64-bit-byte-hwm-and-monitoring-contract) | `bigint` HWM representation and monitor snapshot fields |
+| [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Required Capability Coverage](#required-capability-coverage) | User-facing capabilities that alignment must guarantee |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
 | [Receive and Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage and no-data distinction |
@@ -720,7 +721,7 @@ existing result and timeout contract. `0n` means unlimited.
 the monitor queue. `0n` selects the Core monitor default; a positive value is
 forwarded unchanged. There is no number-valued or message-count alias.
 
-The monitor snapshot projects Core monitoring ABI v3 as-is. Planned,
+The monitor snapshot projects Core monitoring ABI v4 as-is. Planned,
 applied, and deferred values, and in-flight HWM values, include `Bytes` in
 their name and are provided as `bigint`. Whether a deferred value is valid
 is provided as a separate boolean. Pending-message counts are display
@@ -741,6 +742,30 @@ Reset preserves current, pending, queue-count, and those three owner-lifecycle
 gauges, rebases both peaks to current, clears epoch counters, and increments
 `measurementEpoch`. An ABI version/size mismatch uses the existing unsupported
 error, not `TypeError`.
+
+## Receive flow state
+
+The binding exposes the Core receive-flow state as the frozen `ReceiveFlowState`
+constant object with `RUNNING: 0` and `PAUSED: 1`, and the matching value type.
+`Socket.setReceiveFlowState(state)` sets it. It returns `void` and follows the
+Node error policy: a non-zero native config result is raised as a `ZlinkError`
+of the config category carrying the native errno, so a socket without a
+completion lane raises the config-category error for not-supported. Setting the
+state the socket already holds returns normally.
+
+The observation surface follows the C contract, so the constant and metric
+names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
+`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
+with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
+`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
+(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+fields `flow_paused_connections`, `flow_pause_applied_total`,
+`flow_resume_applied_total`, `flow_state_stale_total`, and
+`flow_pause_duration_ms`, projected with this language's naming convention.
+
+Flow-state frames stay inside Core. The binding calls the setter, reads the
+monitor events and the snapshot fields, and never encodes, decodes, sends, or
+receives a flow-state frame itself.
 
 ## Required Capability Coverage
 

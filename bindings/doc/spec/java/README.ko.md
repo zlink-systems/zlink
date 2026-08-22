@@ -52,7 +52,8 @@ deprecated wrapper, 중복 생성 경로, public runtime alias, direct construct
 | [Messaging Values](#messaging-values) | `Message`/`Received`/`TopicMessage`/`SubscriptionEvent` 계약 |
 | [Receive And Subscribe Shape](#receive-and-subscribe-shape) | 호출자 제공 저장소, no-data, Framework retained credit 경계 |
 | [Handler Registration Naming](#handler-registration-naming) | `set...Handler` 명명 규칙 |
-| [Byte HWM 및 monitoring ABI v3](#byte-hwm-및-monitoring-abi-v3) | 양수 `long` HWM과 monitor snapshot field |
+| [Byte HWM 및 monitoring ABI v4](#byte-hwm-및-monitoring-abi-v4) | 양수 `long` HWM과 monitor snapshot field |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [Error And Result Policy](#error-and-result-policy) | typed exception과 검증 시점 |
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` 책임과 route 결과 |
 | [Spot Get-Or-Create](#spot-get-or-create) | `getOrCreateSpot` 계약 |
@@ -822,7 +823,7 @@ Handler 등록 이름은 이벤트 발생이 아니라 등록을 설명한다.
 - `recvRouted`
 - `recvActorLifecycle`
 
-## Byte HWM 및 monitoring ABI v3
+## Byte HWM 및 monitoring ABI v4
 
 - HWM은 queue의 message 수가 아니라 Core가 계산한 accounted byte의 상한이다.
 - Java 공개 interface는 `0`부터 `Long.MAX_VALUE`까지의 byte 값을 허용한다. 음수 입력은
@@ -872,7 +873,7 @@ accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressu
 값을 받는다. `0`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다.
 Java와 Kotlin 모두 message-count overload나 alias를 노출하지 않는다.
 
-- `MonitorStatus` record는 native `zlink_monitor_status_t` ABI version 3과 같은 field를 제공한다.
+- `MonitorStatus` record는 native `zlink_monitor_status_t` ABI version 4와 같은 field를 제공한다.
 - Planned, applied, deferred HWM과 in-flight 사용량은 non-negative `long` byte 값이며,
   더 큰 Core 값은 overflow 오류다.
 - Deferred 값은 대응하는 `autoHwmDeferredSendHwmValid()` 또는 `autoHwmDeferredRecvHwmValid()`가 `true`일 때만 유효하다.
@@ -893,6 +894,27 @@ Budget snapshot ABI version/size가 맞지 않으면 `UnsupportedOperationExcept
 Java와 Kotlin은 같은 Java method를 호출한다. 별도 Kotlin adapter나 다른 단위의 option을
 추가하지 않는다. Request/reply API는 HWM 값을 인자로 받지 않으며 기존 lifetime과 ownership
 계약을 유지한다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
+`RUNNING(0)`, `PAUSED(1)`이며 공개 setter는 공통 socket option facade의
+`receiveFlowState(ReceiveFlowState)`다. 반환형은 `void`이고 Java 에러 정책을 따른다. 0이
+아닌 native 결과는 해당 `ConfigResult`를 담은 `ZlinkConfigException`으로 던지므로,
+completion lane이 없는 socket은 not-supported result를 담은 `ZlinkConfigException`을
+발생시킨다. 인자가 null이면 native 호출 전에 `NullPointerException`이 발생한다. 이미
+유지하는 상태를 다시 설정하면 정상 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## Error And Result Policy
 

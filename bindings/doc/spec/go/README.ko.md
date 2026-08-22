@@ -25,6 +25,7 @@ signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 
 | [Message와 ownership](#message와-ownership) | native storage, builder 경로별 ownership |
 | [Socket operation](#socket-operation) | builder terminal signature, socket별 operation |
 | [Receive와 eventing](#receive와-eventing) | caller-provided receive 반환값, monitor·poller·timer |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [Error contract](#error-contract) | `ZlinkError` interface와 concrete error type |
 | [FFI와 package 경계](#ffi와-package-경계) | cgo include 경계, module proxy layout |
 | [공개 계약에 포함하지 않는 것](#공개-계약에-포함하지-않는-것) | 범위 밖 기능 목록 |
@@ -283,6 +284,27 @@ Poller는 socket, file descriptor와 timer source의 readiness를 `PollEvent`로
 Timer는 interval event를 poller 또는 직접 receive하는 데 사용한다. Monitor, poller와
 timer의 callback 또는 event result는 native callback thread를 public consumer callback
 실행 위치로 노출하지 않는다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` 타입으로 노출한다. 값은
+`ReceiveFlowRunning`과 `ReceiveFlowPaused`이며 설정은
+`SetReceiveFlowState(ReceiveFlowState) error`다. Go error contract를 따른다. 성공은 `nil`
+error이고, 실패는 native `zlink_config_result_t`를 `Result`로, native errno를 errno로 담은
+`*ConfigError`다. 따라서 completion lane이 없는 socket은 `ConfigNotSupported`를 담은
+`*ConfigError`를 반환한다. Handle이 nil이거나 이미 닫혔으면 Core를 호출하지 않고
+`ConfigInvalidHandle`을 반환한다. 이미 유지하는 상태를 다시 설정하면 `nil`을 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## Error contract
 

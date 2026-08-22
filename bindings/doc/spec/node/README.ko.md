@@ -67,6 +67,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 | [정식 인터페이스 규칙](#정식-인터페이스-규칙) | recv 시그니처, builder, `publishAsync` 등 예외 규칙 |
 | [공개 엔트리 형태](#공개-엔트리-형태) | 패키지 entrypoint의 도메인별 그룹화 |
 | [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약) | `bigint` HWM 표현과 monitor snapshot field |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [필수 기능 범위](#필수-기능-범위) | 정렬 시 보장해야 할 사용자 대면 기능 |
 | [Spot Get-Or-Create](#spot-get-or-create) | `getOrCreateSpot` 계약 |
 | [Receive와 Subscribe 형태](#receive와-subscribe-형태) | 호출자 제공 저장소와 no-data 구분 |
@@ -660,7 +661,7 @@ backpressure를 나타내고, Node.js operation은 기존 result·timeout 계약
 `0n`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다. `number` 값이나
 message-count alias는 없다.
 
-Monitor snapshot은 Core monitoring ABI v3를 그대로 투영한다. Planned, applied, deferred와
+Monitor snapshot은 Core monitoring ABI v4를 그대로 투영한다. Planned, applied, deferred와
 in-flight HWM 값은 이름에 `Bytes`를 포함하고 `bigint`로 제공한다. Deferred 값의 유효
 여부는 별도 boolean으로 제공한다. Pending message count는 표시용 진단이며
 `sndPendingBytes`와 `rcvPendingBytes`는 별도 `bigint` byte 값이다.
@@ -676,6 +677,26 @@ oversize·blocked·aggregate flag, `budgetGeneration`과 `measurementEpoch`을 �
 owner-lifecycle gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를 0으로 만든
 뒤 `measurementEpoch`을 증가시킨다. ABI version/size 불일치는 `TypeError`가 아니라 기존
 unsupported error로 전달한다.
+
+## Receive flow state
+
+이 바인딩은 Core의 receive-flow 상태를 동결된 `ReceiveFlowState` 상수 객체로 노출한다.
+`RUNNING: 0`, `PAUSED: 1`이며 같은 이름의 값 타입도 함께 제공한다. 설정은
+`Socket.setReceiveFlowState(state)`다. 반환형은 `void`이고 Node 에러 정책을 따른다. 0이
+아닌 native config 결과는 native errno를 담은 config 범주의 `ZlinkError`로 발생시키므로,
+completion lane이 없는 socket은 not-supported에 해당하는 config 범주 오류를 발생시킨다.
+이미 유지하는 상태를 다시 설정하면 정상 반환한다.
+
+관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
+`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
+`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
+`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
+`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
+`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
+
+Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
+field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
 
 ## 필수 기능 범위
 
