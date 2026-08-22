@@ -902,9 +902,10 @@ class socket_base_t : public own_t,
     //  with the same state succeeds without emitting anything.
     unsigned char _local_receive_flow_state;
     uint64_t _local_receive_flow_epoch;
-#ifdef ZLINK_BUILD_TESTS
+    //  Kept in all builds so the class layout does not vary with the test
+    //  configuration, exactly like the counters above. Only a test build ever
+    //  writes or reads it.
     std::atomic<uint32_t> _test_transport_write_release_edges;
-#endif
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_base_t)
 };
