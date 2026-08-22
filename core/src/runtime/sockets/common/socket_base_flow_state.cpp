@@ -208,11 +208,25 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         transport_pair_pipes_t &pair =
           _transport_pairs[transport_pair_key_t (pair_id, generation)];
         //  Once the pair knows its completion lane, only that exact pipe may
-        //  carry the state. Before then the pipe's own lane attribute checked
-        //  above is the whole proof, which is what lets a frame that overtakes
-        //  pair admission still be accepted.
+        //  carry the state.
         if (pair.completion && pair.completion != completion_pipe_)
             return true;
+        if (!pair.ready || pair.completion != completion_pipe_) {
+            //  The pipe's own lane proves the frame came in on a completion
+            //  lane, but not yet that this connection is the one that owns the
+            //  pair: on a passive transport the peer supplies the pair
+            //  identity in its metadata. Hold the frame, latest-only, and
+            //  leave the accepted state and its epoch untouched so a
+            //  connection that never wins registration cannot burn either.
+            if (!pair.pending_flow_valid
+                || frame.epoch > pair.pending_flow_epoch) {
+                pair.pending_flow_valid = true;
+                pair.pending_flow_paused = paused;
+                pair.pending_flow_epoch = frame.epoch;
+                pair.pending_flow_source = completion_pipe_;
+            }
+            return true;
+        }
         //  Duplicate or reversed epoch within one generation.
         if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch)
             return true;
@@ -292,7 +306,38 @@ bool zlink::socket_base_t::test_flow_frame_accepted_before_pair_ready () const
     for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
                                            end = _transport_pairs.end ();
          it != end; ++it) {
-        if (it->second.remote_flow_seen && !it->second.ready)
+        if ((it->second.remote_flow_seen || it->second.pending_flow_valid)
+            && !it->second.ready)
+            return true;
+    }
+    return false;
+}
+
+bool zlink::socket_base_t::test_pending_flow_buffered (
+  bool *paused_out_, uint64_t *epoch_out_) const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
+                                           end = _transport_pairs.end ();
+         it != end; ++it) {
+        if (!it->second.pending_flow_valid)
+            continue;
+        if (paused_out_)
+            *paused_out_ = it->second.pending_flow_paused;
+        if (epoch_out_)
+            *epoch_out_ = it->second.pending_flow_epoch;
+        return true;
+    }
+    return false;
+}
+
+bool zlink::socket_base_t::test_any_pair_accepted_flow_state () const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
+                                           end = _transport_pairs.end ();
+         it != end; ++it) {
+        if (it->second.remote_flow_seen)
             return true;
     }
     return false;
@@ -320,3 +365,30 @@ void zlink::socket_base_t::test_run_attach_flow_window_hook (
         hook (socket_, transport_pair_id_, generation_);
 }
 #endif
+
+void zlink::socket_base_t::promote_pending_flow_state_locked (
+  transport_pair_pipes_t &pair_)
+{
+    if (!pair_.pending_flow_valid)
+        return;
+
+    const bool source_won_registration =
+      pair_.completion && pair_.pending_flow_source == pair_.completion;
+    const bool paused = pair_.pending_flow_paused;
+    const uint64_t epoch = pair_.pending_flow_epoch;
+    pair_.pending_flow_valid = false;
+    pair_.pending_flow_paused = false;
+    pair_.pending_flow_epoch = 0;
+    pair_.pending_flow_source = NULL;
+
+    //  A frame from a connection that did not win registration is dropped
+    //  outright: it never reaches the accepted state and never advances the
+    //  epoch.
+    if (!source_won_registration)
+        return;
+    if (pair_.remote_flow_seen && epoch <= pair_.remote_flow_epoch)
+        return;
+    pair_.remote_flow_epoch = epoch;
+    pair_.remote_flow_seen = true;
+    pair_.remote_flow_paused = paused;
+}

@@ -255,15 +255,20 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *flow_edge_pipe = NULL;
     {
         scoped_lock_t lock (_transport_pairs_sync);
-        const transport_pairs_t::const_iterator it =
-          _transport_pairs.find (pair_key);
-        if (pair_id != 0 && it != _transport_pairs.end ()
-            && it->second.remote_flow_seen && it->second.application) {
-            flow_edge_pipe = it->second.application;
-            publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
-              it->second.remote_flow_paused ? static_cast<unsigned char> (1)
-                                            : static_cast<unsigned char> (0),
-              it->second.remote_flow_epoch);
+        const transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
+        if (pair_id != 0 && it != _transport_pairs.end ()) {
+            //  A frame held while the pair was still unvalidated becomes the
+            //  accepted state here, now that registration has settled.
+            if (it->second.ready)
+                promote_pending_flow_state_locked (it->second);
+            if (it->second.remote_flow_seen && it->second.application) {
+                flow_edge_pipe = it->second.application;
+                publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
+                  it->second.remote_flow_paused
+                    ? static_cast<unsigned char> (1)
+                    : static_cast<unsigned char> (0),
+                  it->second.remote_flow_epoch);
+            }
         }
         if (ready_application)
             transport_write_released =

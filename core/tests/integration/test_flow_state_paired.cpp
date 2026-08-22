@@ -526,6 +526,84 @@ bool wait_for_pipe_pause (void *socket_,
     return false;
 }
 
+//  Round 2, R3. A frame that overtakes pair admission arrives on a pipe that is
+//  locally labelled completion-lane, but on a passive transport the peer
+//  supplies the pair identity in its metadata. Such a frame must be held, not
+//  applied: applying it would let a connection that never wins registration set
+//  the state and, worse, burn the epoch so the genuine state is refused later.
+void test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (router)->set_local_receive_flow_state (k_paused));
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    //  Only the ROUTER runs, so the DEALER's I/O thread takes the frame before
+    //  its socket thread has admitted - and validated - the pair.
+    for (int i = 0; i < 600; ++i) {
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+
+    bool buffered_paused = false;
+    uint64_t buffered_epoch = 0;
+    TEST_ASSERT_TRUE (as_socket (dealer)->test_pending_flow_buffered (
+      &buffered_paused, &buffered_epoch));
+    TEST_ASSERT_TRUE (buffered_paused);
+    TEST_ASSERT_EQUAL_UINT64 (1, buffered_epoch);
+    //  Held, not accepted: no epoch has been consumed.
+    TEST_ASSERT_FALSE (as_socket (dealer)->test_any_pair_accepted_flow_state ());
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool paused_seen = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
+            && target.transport_pair_id != 0
+            && as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            paused_seen = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    //  Validation promotes the held frame, and it still must not produce a
+    //  writable edge on the way.
+    TEST_ASSERT_TRUE (paused_seen);
+    TEST_ASSERT_FALSE (as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+    TEST_ASSERT_EQUAL_UINT32 (
+      0, as_socket (dealer)->test_transport_write_release_edges ());
+
+    //  The epoch was consumed exactly once, at promotion time.
+    TEST_ASSERT_TRUE (
+      as_socket (dealer)->test_deliver_flow_state_command (
+        target.transport_pair_id, target.transport_pair_generation, 0, 1));
+    TEST_ASSERT_TRUE (wait_for_pipe_pause (dealer, target.transport_pair_id,
+                                           target.transport_pair_generation,
+                                           true));
+    TEST_ASSERT_TRUE (
+      as_socket (dealer)->test_deliver_flow_state_command (
+        target.transport_pair_id, target.transport_pair_generation, 0, 2));
+    TEST_ASSERT_TRUE (wait_for_pipe_pause (dealer, target.transport_pair_id,
+                                           target.transport_pair_generation,
+                                           false));
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 //  Round 2, R2. attach_pipe snapshots the pair's flow state, drops the table
 //  mutex, and only then applies it and releases the transport hold. A newer
 //  PAUSE accepted in that window is overtaken by the stale snapshot, and the
@@ -1180,6 +1258,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
     RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);

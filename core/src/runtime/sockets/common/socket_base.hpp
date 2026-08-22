@@ -87,7 +87,11 @@ struct transport_pair_pipes_t
         draining (false),
         remote_flow_seen (false),
         remote_flow_paused (false),
-        remote_flow_epoch (0)
+        remote_flow_epoch (0),
+        pending_flow_valid (false),
+        pending_flow_paused (false),
+        pending_flow_epoch (0),
+        pending_flow_source (NULL)
     {
     }
 
@@ -109,6 +113,17 @@ struct transport_pair_pipes_t
     bool remote_flow_seen;
     bool remote_flow_paused;
     uint64_t remote_flow_epoch;
+    //  A frame that arrives before this pair's completion pipe is registered
+    //  and validated is held here, latest-only, instead of being applied. On a
+    //  passive transport the peer supplies the pair identity in its metadata,
+    //  so a second connection claiming a known pair key could otherwise land a
+    //  high-epoch state - and burn the epoch - before identity validation ever
+    //  runs. The buffer is promoted when the pair becomes ready, and only if
+    //  the pipe it arrived on is the one that won registration.
+    bool pending_flow_valid;
+    bool pending_flow_paused;
+    uint64_t pending_flow_epoch;
+    pipe_t *pending_flow_source;
 };
 
 class socket_recv_source_rid_scope_t
@@ -231,6 +246,13 @@ class socket_base_t : public own_t,
     bool consume_receive_flow_state_frame (pipe_t *completion_pipe_,
                                            const zlink::msg_t &msg_);
 
+  private:
+    //  Promotes a pair's buffered frame once its completion pipe is registered
+    //  and validated. Caller holds _transport_pairs_sync.
+    void promote_pending_flow_state_locked (transport_pair_pipes_t &pair_);
+
+  public:
+
 #ifdef ZLINK_BUILD_TESTS
     //  Test-only observation and injection for the completion-lane flow state.
     //  These compile out of the shipped runtime, so nothing here is reachable
@@ -258,6 +280,12 @@ class socket_base_t : public own_t,
     //  been admitted as ready yet. Tests assert this to prove they really
     //  produced the frame-before-admission ordering they mean to exercise.
     bool test_flow_frame_accepted_before_pair_ready () const;
+    //  Whether some pair is holding an unpromoted frame, and what it holds.
+    bool test_pending_flow_buffered (bool *paused_out_,
+                                     uint64_t *epoch_out_) const;
+    //  Whether any pair has accepted a remote state, which is what consumes
+    //  the epoch. A buffered frame must not show up here.
+    bool test_any_pair_accepted_flow_state () const;
     //  Runs inside attach_pipe, between the pair admission and the transport
     //  hold release, so a test can make a competing producer win that window
     //  on purpose. Installed globally and only ever set by a test.
