@@ -831,7 +831,7 @@ napi_value create_socket_monitor_event_value (napi_env env, const zlink_monitor_
     napi_create_int64 (env, static_cast<int64_t> (event.event), &value);
     napi_set_named_property (env, obj, "event", value);
 
-    napi_create_int64 (env, static_cast<int64_t> (event.value), &value);
+    napi_create_bigint_uint64 (env, event.value, &value);
     napi_set_named_property (env, obj, "value", value);
 
     napi_value routing_id = create_routing_id_value (env, event.routing_id);

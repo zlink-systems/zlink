@@ -41,6 +41,11 @@ export function materializeMonitorStatus(raw: MonitorStatusRaw): MonitorStatus {
     minimumCoreMessageChargeBytes: raw.minimumCoreMessageChargeBytes,
     oversizeMessageAdmissionCount: raw.oversizeMessageAdmissionCount,
     oversizeMessageAdmissionMaxBytes: raw.oversizeMessageAdmissionMaxBytes,
+    flowPausedConnections: raw.flowPausedConnections,
+    flowPauseAppliedTotal: raw.flowPauseAppliedTotal,
+    flowResumeAppliedTotal: raw.flowResumeAppliedTotal,
+    flowStateStaleTotal: raw.flowStateStaleTotal,
+    flowPauseDurationMs: raw.flowPauseDurationMs,
     isReady(): boolean {
       return (this.stateFlags & MONITOR_STATE_READY) !== 0;
     }

@@ -11,6 +11,41 @@ test('ReceiveFlowState enum values match the C ABI', () => {
     assert.equal(zlink.ReceiveFlowState.RUNNING, 0);
     assert.equal(zlink.ReceiveFlowState.PAUSED, 1);
 });
+test('flow monitor event constants match the C ABI', () => {
+    assert.equal(zlink.MonitorEventType.SendFlowPaused, 0x10000);
+    assert.equal(zlink.MonitorEventType.SendFlowResumed, 0x20000);
+    assert.equal(zlink.MonitorEventType.FlowStateStale, 0x40000);
+});
+test('flow monitor event flag constants match the C ABI', () => {
+    assert.equal(zlink.MonitorEventFlag.ConnectionReadyEdge, 0x1);
+    assert.equal(zlink.MonitorEventFlag.SendFlowWritable, 0x2);
+    assert.equal(zlink.MonitorEventFlag.FlowStateStaleGeneration, 0x4);
+    assert.equal(zlink.MonitorEventFlag.FlowStateStaleEpoch, 0x8);
+});
+test('SOCKET_MONITOR_EVENT_ALL covers the three new flow event bits', () => {
+    assert.equal(zlink.SOCKET_MONITOR_EVENT_ALL & zlink.MonitorEventType.SendFlowPaused, zlink.MonitorEventType.SendFlowPaused);
+    assert.equal(zlink.SOCKET_MONITOR_EVENT_ALL & zlink.MonitorEventType.SendFlowResumed, zlink.MonitorEventType.SendFlowResumed);
+    assert.equal(zlink.SOCKET_MONITOR_EVENT_ALL & zlink.MonitorEventType.FlowStateStale, zlink.MonitorEventType.FlowStateStale);
+});
+test('monitor status exposes the five flow metrics, zero on a fresh PAIR socket', () => {
+    const ctx = zlink.createContext();
+    const pair = zlink.createPairSocket(ctx);
+    const monitor = pair.monitorOpen();
+    const status = monitor.status();
+    for (const field of [
+        'flowPausedConnections',
+        'flowPauseAppliedTotal',
+        'flowResumeAppliedTotal',
+        'flowStateStaleTotal',
+        'flowPauseDurationMs'
+    ]) {
+        assert.equal(typeof status[field], 'bigint', field);
+        assert.equal(status[field], 0n, field);
+    }
+    monitor.close();
+    pair.close();
+    ctx.close();
+});
 test('setReceiveFlowState succeeds on DEALER/ROUTER and repeat calls are idempotent', () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);

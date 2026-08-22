@@ -23,9 +23,41 @@ export const MonitorEventType = Object.freeze({
   ConnectionReady: 0x1000,
   HandshakeFailedProtocol: 0x2000,
   HandshakeFailedAuth: 0x4000,
-  PeerWeightChanged: 0x8000
+  PeerWeightChanged: 0x8000,
+  /** A remote-PAUSE condition was first applied to an application pipe on the paired completion lane. */
+  SendFlowPaused: 0x10000,
+  /** A remote-PAUSE condition was cleared on the paired completion lane. */
+  SendFlowResumed: 0x20000,
+  /** A stale or duplicate receive-flow-state frame (old generation or non-advancing epoch) was ignored. */
+  FlowStateStale: 0x40000
 } as const);
 export type MonitorEventType = typeof MonitorEventType[keyof typeof MonitorEventType];
+
+/**
+ * Bits carried in `MonitorEvent.flags`. Values match
+ * `ZLINK_MONITOR_EVENT_FLAG_*` in `zlink/eventing/api.h`.
+ */
+export const MonitorEventFlag = Object.freeze({
+  /** Set on `ConnectionReady` when the connection changed from not-ready to ready. */
+  ConnectionReadyEdge: 0x1,
+  /**
+   * Set on `SendFlowResumed` when clearing the remote pause left the pipe
+   * actually writable. `value` carries the flow epoch.
+   */
+  SendFlowWritable: 0x2,
+  /**
+   * Set on `FlowStateStale` when the frame named a different connection
+   * generation. `value` carries the received generation;
+   * `transportPairGeneration` carries the current one.
+   */
+  FlowStateStaleGeneration: 0x4,
+  /**
+   * Set on `FlowStateStale` when the epoch did not advance inside the
+   * current generation. `value` carries the received epoch.
+   */
+  FlowStateStaleEpoch: 0x8
+} as const);
+export type MonitorEventFlag = typeof MonitorEventFlag[keyof typeof MonitorEventFlag];
 
 /**
  * A snapshot of a monitored socket's state and auto-high-water-mark telemetry.
@@ -69,6 +101,21 @@ export interface MonitorStatus {
   readonly minimumCoreMessageChargeBytes: bigint;
   readonly oversizeMessageAdmissionCount: bigint;
   readonly oversizeMessageAdmissionMaxBytes: bigint;
+  /**
+   * Paired DEALER/ROUTER completion-lane receive-flow telemetry (present
+   * since ABI 4). Populated only for DEALER/ROUTER sockets; other socket
+   * types report zero for all five fields.
+   */
+  /** Current count of application pipes this socket sees as remote-PAUSED. */
+  readonly flowPausedConnections: bigint;
+  /** Total PAUSED transitions actually applied (never a stale/duplicate). */
+  readonly flowPauseAppliedTotal: bigint;
+  /** Total RUNNING transitions actually applied (never a stale/duplicate). */
+  readonly flowResumeAppliedTotal: bigint;
+  /** Total stale or duplicate flow-state frames ignored. */
+  readonly flowStateStaleTotal: bigint;
+  /** Duration of the most recently completed PAUSED interval, in milliseconds. 0 if none has completed yet. */
+  readonly flowPauseDurationMs: bigint;
   /** Whether the monitored socket is in the ready state. */
   isReady(): boolean;
 }
@@ -77,8 +124,12 @@ export interface MonitorStatus {
 export class MonitorEvent {
   /** The kind of lifecycle event. */
   readonly event: MonitorEventType;
-  /** An event-specific value, such as an error code or reconnect interval. */
-  readonly value: number;
+  /**
+   * An event-specific value, such as an error code, reconnect interval, or
+   * (for the flow events) a generation/epoch counter. A full 64-bit unsigned
+   * value; use `bigint` arithmetic to read it losslessly.
+   */
+  readonly value: bigint;
   /** The peer routing id, or null when the event carries none. */
   readonly routingId: RoutingId | null;
   /** The local endpoint address. */

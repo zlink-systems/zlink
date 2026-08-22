@@ -32,11 +32,16 @@ export interface MonitorStatusRaw {
   minimumCoreMessageChargeBytes: bigint;
   oversizeMessageAdmissionCount: bigint;
   oversizeMessageAdmissionMaxBytes: bigint;
+  flowPausedConnections: bigint;
+  flowPauseAppliedTotal: bigint;
+  flowResumeAppliedTotal: bigint;
+  flowStateStaleTotal: bigint;
+  flowPauseDurationMs: bigint;
 }
 
 export interface MonitorEventValueRaw {
   event: number;
-  value: number;
+  value: bigint;
   routingId?: Buffer | null;
   local?: string;
   remote?: string;

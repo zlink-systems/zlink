@@ -59,7 +59,12 @@ test('monitor ABI v4 exposes byte telemetry as bigint', () => {
     'sndBytesInFlight',
     'rcvBytesInFlight',
     'minimumCoreMessageChargeBytes',
-    'oversizeMessageAdmissionMaxBytes'
+    'oversizeMessageAdmissionMaxBytes',
+    'flowPausedConnections',
+    'flowPauseAppliedTotal',
+    'flowResumeAppliedTotal',
+    'flowStateStaleTotal',
+    'flowPauseDurationMs'
   ]) {
     assert.equal(typeof status[field], 'bigint', field);
   }

@@ -87,7 +87,38 @@ stream.setPacketHandler((_source, header, body) => {
 });
 
 monitor.recv(zlink.RecvFlags.DontWait);
-monitor.status();
+const monitorStatus = monitor.status();
+const flowPausedConnections: bigint = monitorStatus.flowPausedConnections;
+const flowPauseAppliedTotal: bigint = monitorStatus.flowPauseAppliedTotal;
+const flowResumeAppliedTotal: bigint = monitorStatus.flowResumeAppliedTotal;
+const flowStateStaleTotal: bigint = monitorStatus.flowStateStaleTotal;
+const flowPauseDurationMs: bigint = monitorStatus.flowPauseDurationMs;
+void flowPausedConnections;
+void flowPauseAppliedTotal;
+void flowResumeAppliedTotal;
+void flowStateStaleTotal;
+void flowPauseDurationMs;
+// The flow events are part of the same MonitorEventType union as every
+// other socket monitor lifecycle event, and MonitorEvent.value is a
+// lossless uint64 bigint.
+const flowEventTypes: zlink.MonitorEventType[] = [
+  zlink.MonitorEventType.SendFlowPaused,
+  zlink.MonitorEventType.SendFlowResumed,
+  zlink.MonitorEventType.FlowStateStale
+];
+void flowEventTypes;
+const flowEventFlags: zlink.MonitorEventFlag[] = [
+  zlink.MonitorEventFlag.ConnectionReadyEdge,
+  zlink.MonitorEventFlag.SendFlowWritable,
+  zlink.MonitorEventFlag.FlowStateStaleGeneration,
+  zlink.MonitorEventFlag.FlowStateStaleEpoch
+];
+void flowEventFlags;
+const maybeEvent = monitor.recv(zlink.RecvFlags.DontWait);
+if (maybeEvent) {
+  const eventValue: bigint = maybeEvent.value;
+  void eventValue;
+}
 poller.add(pair, [zlink.PollEventFlag.PollIn], 1);
 poller.add(timer, 2);
 poller.wait(events, 0);

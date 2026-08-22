@@ -57,5 +57,15 @@ inline napi_value create_monitor_status_value (napi_env env,
                                 snapshot.oversize_message_admission_count);
     set_uint64_bigint_property (env, obj, "oversizeMessageAdmissionMaxBytes",
                                 snapshot.oversize_message_admission_max_bytes);
+    set_uint64_bigint_property (env, obj, "flowPausedConnections",
+                                snapshot.flow_paused_connections);
+    set_uint64_bigint_property (env, obj, "flowPauseAppliedTotal",
+                                snapshot.flow_pause_applied_total);
+    set_uint64_bigint_property (env, obj, "flowResumeAppliedTotal",
+                                snapshot.flow_resume_applied_total);
+    set_uint64_bigint_property (env, obj, "flowStateStaleTotal",
+                                snapshot.flow_state_stale_total);
+    set_uint64_bigint_property (env, obj, "flowPauseDurationMs",
+                                snapshot.flow_pause_duration_ms);
     return obj;
 }
