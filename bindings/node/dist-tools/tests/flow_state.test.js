@@ -46,6 +46,18 @@ test('monitor status exposes the five flow metrics, zero on a fresh PAIR socket'
     pair.close();
     ctx.close();
 });
+test('monitor status detail FLOW_STATE bit matches the C ABI', () => {
+    // core/include/zlink_enum.h: ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE = 1u << 5
+    const ctx = zlink.createContext();
+    const pair = zlink.createPairSocket(ctx);
+    const monitor = pair.monitorOpen();
+    const status = monitor.status();
+    assert.equal(typeof status.isFlowStateDetailPopulated, 'function');
+    assert.equal(status.isFlowStateDetailPopulated(), (status.detailFlags & (1 << 5)) !== 0);
+    monitor.close();
+    pair.close();
+    ctx.close();
+});
 test('setReceiveFlowState succeeds on DEALER/ROUTER and repeat calls are idempotent', () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
