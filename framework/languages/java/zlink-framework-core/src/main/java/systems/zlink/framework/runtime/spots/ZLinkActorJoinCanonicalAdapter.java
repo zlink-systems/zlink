@@ -469,13 +469,6 @@ final class ZLinkActorJoinCanonicalAdapter
     void completeMigration(
         UUID relocationId,
         Consumer<ZLinkActorJoinPrewarmRegistry.ParkedMessage> deliver,
-        Runnable liveAbort) {
-        prewarm.completeMigration(relocationId, deliver, liveAbort);
-    }
-
-    void completeMigration(
-        UUID relocationId,
-        Consumer<ZLinkActorJoinPrewarmRegistry.ParkedMessage> deliver,
         Runnable installed,
         Runnable liveAbort) {
         prewarm.completeMigration(relocationId, deliver, installed, liveAbort);

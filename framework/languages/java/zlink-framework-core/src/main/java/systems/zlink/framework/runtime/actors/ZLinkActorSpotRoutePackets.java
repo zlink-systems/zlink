@@ -60,45 +60,6 @@ public final class ZLinkActorSpotRoutePackets {
             Message.from(joinPayload));
     }
 
-    static List<Message> createCanonicalAdmissionRequestParts(
-        String transferId,
-        Duration timeout,
-        String actorId,
-        String actorType,
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceEntrySpotNodeRid,
-        String sourceEntrySpotId,
-        String sourceEntryRouterChannelId,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Message joinPayload,
-        ZLinkActorJoinOperationId operationId,
-        ZLinkActorRuntime.ActorJoinAuthority authority) {
-        return List.of(
-            Message.from(JOIN_SPOT_PACKET_NAME.getBytes(StandardCharsets.UTF_8)),
-            encodeTransferRequest(
-                ADMISSION_PHASE,
-                transferId,
-                timeout,
-                actorId,
-                actorType,
-                actorRef,
-                sourceEntrySpotNodeRid,
-                sourceEntrySpotId,
-                sourceEntryRouterChannelId,
-                sourceNodeRid,
-                sourceSessionRid,
-                ZLinkActorJoinAdmissionProfileCodec.encode(operationId),
-                0,
-                null,
-                null,
-                new byte[0],
-                authority.ownerNodeGeneration(),
-                authority.authorityOwnerGeneration(),
-                authority.ownerLeaseGeneration()),
-            Message.from(joinPayload));
-    }
-
     private static Message encodeTransferRequest(
         String phase,
         String transferId,

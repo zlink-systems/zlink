@@ -43,75 +43,6 @@ final class ZLinkActorJoinStoreAdmissionTest {
     private static final RoutingId NODE = RoutingId.from("node-a");
 
     @Test
-    void storeResolvedTypeAdmitsBeforeApplicationCallback() {
-        AtomicInteger callbacks = new AtomicInteger();
-        var result = admission(Map.of("canonical-type", Factory.class))
-            .prepareRoutedActor(request("canonical-type"), null, NODE, "spot", new Object(),
-                actor -> CompletableFuture.completedFuture(null),
-                ignored -> {
-                    callbacks.incrementAndGet();
-                    return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
-                })
-            .toCompletableFuture().join();
-
-        assertEquals(true, result.accepted());
-        assertEquals(1, callbacks.get());
-    }
-
-    @Test
-    void forgedWireTypeIsTypeMismatchBeforeApplicationCallback() {
-        AtomicInteger callbacks = new AtomicInteger();
-        CompletionException error = assertThrows(CompletionException.class,
-            () -> admission(Map.of("canonical-type", Factory.class))
-                .prepareRoutedActor(request("forged-type"), null, NODE, "spot", new Object(),
-                    actor -> CompletableFuture.completedFuture(null),
-                    ignored -> {
-                        callbacks.incrementAndGet();
-                        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
-                    })
-                .toCompletableFuture().join());
-
-        assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-            ((ZLinkFrameworkException) error.getCause()).kind());
-        assertEquals(0, callbacks.get());
-    }
-
-    @Test
-    void mismatchedFenceIsProtocolErrorBeforeApplicationCallback() {
-        AtomicInteger callbacks = new AtomicInteger();
-        CompletionException error = assertThrows(CompletionException.class,
-            () -> admission(Map.of("canonical-type", Factory.class))
-                .prepareRoutedActor(request("canonical-type", 8L),
-                    null, NODE, "spot", new Object(),
-                    actor -> CompletableFuture.completedFuture(null),
-                    ignored -> {
-                        callbacks.incrementAndGet();
-                        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
-                    })
-                .toCompletableFuture().join());
-
-        assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ((ZLinkFrameworkException) error.getCause()).kind());
-        assertEquals(0, callbacks.get());
-    }
-
-    @Test
-    void missingFactoryIsTypedRejectionBeforeApplicationCallback() {
-        AtomicInteger callbacks = new AtomicInteger();
-        var result = admission(Map.of())
-            .prepareRoutedActor(request("canonical-type"), null, NODE, "spot", new Object(),
-                actor -> CompletableFuture.completedFuture(null),
-                ignored -> {
-                    callbacks.incrementAndGet();
-                    return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
-                })
-            .toCompletableFuture().join();
-
-        assertEquals(false, result.accepted());
-        assertEquals(0, callbacks.get());
-    }
-
-    @Test
     void canonicalCommand28IngressUsesStoreResolvedTypeForCanonicalAdmission()
         throws Exception {
         ServiceWirePilotCodec.Fence actor = new ServiceWirePilotCodec.Fence(
@@ -177,13 +108,15 @@ final class ZLinkActorJoinStoreAdmissionTest {
         ServiceWirePilotCodec.Fence target = new ServiceWirePilotCodec.Fence(
             "spot", 11L, NODE.toString().getBytes(StandardCharsets.UTF_8),
             -9L, 2L, 3L);
+        ServiceWirePilotCodec.ActorJoin28 forged =
+            new ServiceWirePilotCodec.ActorJoin28(
+                43L, forgedActor, false, target, null);
         CompletionException error = assertThrows(CompletionException.class,
             () -> admission(Map.of("canonical-type", Factory.class))
                 .prepareCanonicalRoutedActor(
-                    ZLinkSpotRuntime.canonicalActorJoinRequest(
-                        new ServiceWirePilotCodec.ActorJoin28(
-                            43L, forgedActor, false, target, null), NODE),
-                    null, NODE, "spot", new Object(),
+                    ZLinkSpotRuntime.canonicalActorJoinRequest(forged, NODE),
+                    null, NODE, "spot", new Object(), forged,
+                    "application/octet-stream", new byte[0],
                     ignored -> CompletableFuture.completedFuture(null),
                     ignored -> CompletableFuture.completedFuture(
                         ZLinkSpotActorJoinResult.accept()))
@@ -228,20 +161,6 @@ final class ZLinkActorJoinStoreAdmissionTest {
         ZLinkActorSpotAdmission admission = new ZLinkActorSpotAdmission();
         admission.attach(runtime, () -> false, null);
         return admission;
-    }
-
-    private static ZLinkActorSpotRoutePackets.TransferRequest request(String type) {
-        return request(type, -9L);
-    }
-
-    private static ZLinkActorSpotRoutePackets.TransferRequest request(
-        String type,
-        long nodeGeneration) {
-        return new ZLinkActorSpotRoutePackets.TransferRequest(
-            "admission", "transfer-a", 1_000L, ACTOR_ID, type, NODE, 7L,
-            RoutingId.from("entry"), "entry", "router", null, null, null,
-            0, false, 0L, 0L, 0L, 0L, 0L, 0L, null, new byte[0],
-            nodeGeneration, 2L, 3L);
     }
 
     private static ZLinkLocationRepository store() {

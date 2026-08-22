@@ -1063,9 +1063,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     new ZLinkSpotRelocationReplyRoutes.CommittedFence(
                         participant.authorityKey(),
                         1L,
-                        targetOwnerGeneration(
-                            targetOwnerGenerations,
-                            participant.authorityKey()))));
+                        stageRequest.fence().aggregateGeneration())));
         }
 
         synchronized void completeSourceQueueCommit() {

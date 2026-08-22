@@ -367,9 +367,6 @@ final class SpotActivation
             packet.packetName(),
             received.requestSeq(),
             backendSpot.spotId());
-        if (ZLinkActorSpotRoutePackets.JOIN_SPOT_PACKET_NAME.equals(packet.packetName())) {
-            return dispatchRoutedActorJoinAsync(received, packet);
-        }
         if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(packet.packetName())) {
             CompletionStage<?> stage = received.requestSeq().isPresent()
                 ? handleRoutedBoundSessionSendRequestParts(received.parts())
@@ -577,118 +574,7 @@ final class SpotActivation
         if (parts.isEmpty()) {
             return Message.from(new byte[0]);
         }
-        if (parts.size() >= 3
-            && ZLinkActorSpotRoutePackets.JOIN_SPOT_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
-            return Message.from(parts.get(2).dataBuffer());
-        }
         return Message.from(parts.get(0).dataBuffer());
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private CompletionStage<Void> dispatchRoutedActorJoinAsync(
-        ZLinkBackendReceived received,
-        ParsedPacket packet) {
-        return handleRoutedActorJoinParts(null, null, received.parts())
-            .thenAccept(received::reply)
-            .whenComplete((ignored, error) -> {
-                if (error != null) {
-                    host.replySpotRouteDispatchError(
-                        received,
-                        packet.packetName(),
-                        backendSpot.spotId(),
-                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                        error);
-                } else {
-                    host.traceSpotRouteFlow(
-                        ZLinkMessageFlowOutcome.REPLIED,
-                        ZLinkDispatchMessageKind.REQUEST,
-                        packet.packetName(),
-                        received.requestSeq(),
-                        backendSpot.spotId());
-                }
-                closeRouteReceived(received);
-            });
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private CompletionStage<List<Message>> handleRoutedActorJoinParts(
-        String routeChannelName,
-        RoutingId sourcePeerRid,
-        List<Message> parts) {
-        List<Message> transferParts = parts.size() == 2
-            ? ZLinkActorEntryTransferEnvelope.decode(parts.get(1))
-            : parts;
-        boolean ownsTransferParts = transferParts != parts;
-        ParsedPacket packet = ZLinkSpotRuntime.parsePacket(transferParts);
-        ZLinkActorSpotRoutePackets.TransferRequest transferRequest =
-            ZLinkActorSpotRoutePackets.decodeTransferRequest(packet.payload());
-        Message phasePayload = transferParts.size() > 2
-            ? Message.from(transferParts.get(2).dataBuffer())
-            : Message.from(new byte[0]);
-        List<ZLinkActorSpotRoutePackets.WireHandoffPacket> backlog = transferRequest.commit()
-            ? ZLinkActorSpotRoutePackets.decodeHandoffPackets(
-                transferParts, transferRequest.backlogCount())
-            : List.of();
-        CompletionStage<List<Message>> replyStage = transferRequest.admission()
-            ? host.actorAdmissions().prepareRoutedActor(
-                transferRequest,
-                routeChannelName,
-                sourcePeerRid,
-                backendSpot.spotId(),
-                host.spotFor(backendSpot.spotId()),
-                actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
-                    spot,
-                    actor,
-                    backendSpot.spotId(),
-                    true),
-                actorId -> host.runWithOutbound(context.dispatchOutbound(), () ->
-                    ZLinkHandlerStages.fromStageSupplier(() ->
-                        (CompletionStage<ZLinkSpotActorJoinResult>)
-                        ((ZLinkSpot) spot).onActorJoin(
-                        actorId,
-                        ZLinkMessage.fromEncoded(
-                            ZLinkMessagePayloads.encoded(phasePayload),
-                            host.serializerForSpot())))))
-                .thenApply(response -> encodeRoutedAdmissionReply(transferRequest, response))
-            : host.actorAdmissions().commitRoutedActor(
-                transferRequest,
-                ZLinkMessage.fromEncoded(
-                    ZLinkMessagePayloads.encoded(phasePayload),
-                    host.serializerForSpot()),
-                host.primaryNode(),
-                backendSpot.spotId(),
-                host.spotFor(backendSpot.spotId()),
-                actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
-                    spot,
-                    actor,
-                    backendSpot.spotId(),
-                    true),
-                actorRef -> replayHandoff(actorRef, backlog))
-                .thenApply(join -> {
-                    List<Message> replies = new ArrayList<>();
-                    replies.add(encodeRoutedJoinReply(join.actorRef(), join.response()));
-                    replies.addAll(join.handoffReplies());
-                    return List.copyOf(replies);
-                });
-        return replyStage
-            .handle((replies, error) -> {
-                try {
-                    if (error != null) {
-                        throw new CompletionException(error);
-                    }
-                    List<Message> copies = replies.stream()
-                        .map(Message::from)
-                        .toList();
-                    replies.forEach(Message::close);
-                    return copies;
-                } finally {
-                    phasePayload.close();
-                    backlog.forEach(ZLinkActorSpotRoutePackets.WireHandoffPacket::close);
-                    if (ownsTransferParts) {
-                        transferParts.forEach(Message::close);
-                    }
-                }
-            });
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -718,81 +604,6 @@ final class SpotActivation
                         ZLinkMessage.fromEncoded(
                             ZLinkMessagePayloads.encoded(payload),
                             host.serializerForSpot())))));
-    }
-
-    private CompletionStage<List<Message>> replayHandoff(
-        ZLinkBackendActorRef actorRef,
-        List<ZLinkActorSpotRoutePackets.WireHandoffPacket> backlog) {
-        CompletionStage<List<Message>> tail =
-            CompletableFuture.completedFuture(new ArrayList<>());
-        for (ZLinkActorSpotRoutePackets.WireHandoffPacket packet : backlog) {
-            host.actorAdmissions().traceTransferMarker(
-                "backlog_enqueued", actorRef.actorId(), packet.arrivalIndex());
-            tail = tail.thenCompose(replies -> host.dispatchLocalSessionActor(
-                    actorRef,
-                    packet.header(),
-                    packet.payload())
-                .thenCompose(reply ->
-                    appendHandoffReply(replies, actorRef, packet, reply)));
-        }
-        return tail.thenApply(List::copyOf);
-    }
-
-    private CompletionStage<List<Message>> appendHandoffReply(
-        List<Message> replies,
-        ZLinkBackendActorRef actorRef,
-        ZLinkActorSpotRoutePackets.WireHandoffPacket packet,
-        Optional<LocalActorReply> reply) {
-        if (packet.replyRoute() == null || reply.isEmpty()) {
-            try {
-                replies.add(reply.map(value -> Message.from(value.payload()))
-                    .orElseGet(() -> Message.from(new byte[0])));
-                return CompletableFuture.completedFuture(replies);
-            } finally {
-                reply.ifPresent(value -> value.payload().close());
-            }
-        }
-        return host.replyTransferredRequestDirect(
-                actorRef, packet.header(), packet.replyRoute(), reply)
-            .thenApply(ignored -> {
-                replies.add(Message.from(new byte[0]));
-                return replies;
-            });
-    }
-
-    private List<Message> encodeRoutedAdmissionReply(
-        ZLinkActorSpotRoutePackets.TransferRequest request,
-        ZLinkSpotActorJoinResult response) {
-        Message reply = response.reply() == null
-            ? Message.from(new byte[0])
-            : ZLinkMessagePayloads.message(response.reply(), host.serializerForSpot());
-        try {
-            return ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                response.accepted(),
-                backendSpot.spotId(),
-                backendSpot.lifecycleGeneration(),
-                request.coreMembershipEpoch() + 1,
-                ZLinkActorJoinAdvertisedChunkLimit.conservativeReceiveChunkLimitBytes(),
-                reply);
-        } finally {
-            reply.close();
-        }
-    }
-
-    private Message encodeRoutedJoinReply(
-        ZLinkBackendActorRef actorRef,
-        ZLinkSpotActorJoinResult response) {
-        Message reply = response.reply() == null
-            ? Message.from(new byte[0])
-            : ZLinkMessagePayloads.message(response.reply(), host.serializerForSpot());
-        try {
-            return ZLinkActorSpotRoutePackets.encodeJoinReply(
-                response.accepted(),
-                actorRef,
-                reply);
-        } finally {
-            reply.close();
-        }
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

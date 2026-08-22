@@ -288,34 +288,6 @@ final class EntrySpotActivation
             packet.packetName(),
             received.requestSeq(),
             backendSpot.spotId());
-        if (ZLinkActorSpotRoutePackets.JOIN_SPOT_PACKET_NAME.equals(packet.packetName())) {
-            @SuppressWarnings({"rawtypes", "unchecked"})
-            ZLinkEntrySpot rawEntrySpot = entrySpot;
-            ZLinkRoutedActorTransferHandler transfer = new ZLinkRoutedActorTransferHandler(
-                host,
-                host.primaryNode(),
-                backendSpot.spotId(),
-                backendSpot.lifecycleGeneration(),
-                entrySpot,
-                (actorId, request) -> CompletableFuture.completedFuture(
-                    ZLinkSpotActorJoinResult.accept()),
-                actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
-                    entrySpot, actor, backendSpot.spotId(), true));
-            transfer.handle(received.parts())
-                .thenAccept(received::reply)
-                .whenComplete((ignored, error) -> {
-                    if (error != null) {
-                        host.replySpotRouteDispatchError(
-                            received,
-                            packet.packetName(),
-                            backendSpot.spotId(),
-                            ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                            error);
-                    }
-                    closeRouteReceived(received);
-                });
-            return;
-        }
         if (ZLinkActorSpotRoutePackets.BOUND_SESSION_SEND_PACKET_NAME.equals(packet.packetName())) {
             if (received.requestSeq().isPresent()) {
                 handleRoutedBoundSessionSendRequestParts(received.parts())
@@ -377,42 +349,6 @@ final class EntrySpotActivation
         } finally {
             flowScope.close();
         }
-    }
-
-    CompletionStage<Message> handleInternalActorTransfer(
-        RoutingId sourceRoutingId,
-        Message envelope) {
-        List<Message> parts = systems.zlink.framework.runtime.actors
-            .ZLinkActorEntryTransferEnvelope.decode(envelope);
-        @SuppressWarnings({"rawtypes", "unchecked"})
-        ZLinkEntrySpot rawEntrySpot = entrySpot;
-        ZLinkRoutedActorTransferHandler transfer = new ZLinkRoutedActorTransferHandler(
-            host,
-            host.primaryNode(),
-            backendSpot.spotId(),
-            backendSpot.lifecycleGeneration(),
-            entrySpot,
-            (actorId, request) -> CompletableFuture.completedFuture(
-                ZLinkSpotActorJoinResult.accept()),
-            actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
-                entrySpot, actor, backendSpot.spotId(), true));
-        CompletableFuture<Message> result = new CompletableFuture<>();
-        context.enqueueDispatch(() -> transfer.handle(parts, sourceRoutingId)
-                .thenAccept(replies -> {
-                    try {
-                        result.complete(systems.zlink.framework.runtime.actors
-                            .ZLinkActorEntryTransferEnvelope.encode(replies));
-                    } finally {
-                        replies.forEach(Message::close);
-                    }
-                }))
-            .whenComplete((ignored, error) -> {
-                parts.forEach(Message::close);
-                if (error != null) {
-                    result.completeExceptionally(error);
-                }
-            });
-        return result;
     }
 
     CompletionStage<ZLinkSpotActorJoinResult> admitCanonicalActorJoin(

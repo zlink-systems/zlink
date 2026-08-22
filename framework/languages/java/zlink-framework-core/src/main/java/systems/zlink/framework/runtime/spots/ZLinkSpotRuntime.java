@@ -3521,18 +3521,6 @@ public final class ZLinkSpotRuntime
         return spotLifecycle.entrySpotActivationFor(spotId);
     }
 
-    public CompletionStage<Message> handleEntryActorTransferRoute(
-        RoutingId sourceRoutingId,
-        Message envelope) {
-        EntrySpotActivation activation = entrySpotActivationFor(
-            primaryNode.entrySpot().spotId());
-        if (activation == null) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "Entry Spot activation is not available for actor transfer"));
-        }
-        return activation.handleInternalActorTransfer(sourceRoutingId, envelope);
-    }
-
     /**
      * Receives the canonical actorJoin(28) body after the raw service
      * boundary has selected it over the private transfer dialect.  The

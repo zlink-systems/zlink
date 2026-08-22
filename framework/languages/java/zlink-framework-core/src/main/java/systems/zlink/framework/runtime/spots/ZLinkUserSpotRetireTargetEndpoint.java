@@ -715,8 +715,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             new ZLinkServiceRelocationWireCodec.RelocationId(
                 request.fence().aggregateId().getMostSignificantBits(),
                 request.fence().aggregateId().getLeastSignificantBits()),
-            Math.addExact(
-                participant.fence().sourceAuthorityOwnerGeneration(), 1),
+            request.fence().aggregateGeneration(),
             coordinatorFence,
             participant.id(),
             completion.sequence(),

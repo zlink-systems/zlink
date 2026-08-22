@@ -235,29 +235,6 @@ final class ZLinkActorJoinPrewarmRegistry {
     }
 
     /**
-     * Installs the real stage PREPARE produced and migrates every parked
-     * arrival into it, in order, in the same critical section — the
-     * atomic transition spec 15 §4.2 requires: install real stage,
-     * migrate parked messages in order, and only then is the attempt
-     * live. {@code deliver} is the production sink for a parked message
-     * (e.g. {@code actorStaging.acceptIngress}); {@code liveAbort} tears
-     * the installed stage down if a newer exact identity evicts this
-     * attempt before publish commits (spec 15 §4.2 newest-attempt-wins).
-     *
-     * @throws IllegalStateException if this identity was evicted by a
-     *     newer exact identity before PREPARE reached this call — the
-     *     late PREPARE for a dead identity must be discarded, not
-     *     installed (spec 15 §4.2 "이전 identity의 늦은 chunk와 Restore는
-     *     조립에 연결하지 않고 폐기한다").
-     */
-    synchronized void completeMigration(
-        UUID relocationId,
-        Consumer<ParkedMessage> deliver,
-        Runnable liveAbort) {
-        completeMigration(relocationId, deliver, () -> { }, liveAbort);
-    }
-
-    /**
      * Variant used by the production target stage. {@code installed} publishes
      * the real stage only after every parked arrival has moved, while this
      * monitor is still held. A newer attempt therefore cannot run liveAbort

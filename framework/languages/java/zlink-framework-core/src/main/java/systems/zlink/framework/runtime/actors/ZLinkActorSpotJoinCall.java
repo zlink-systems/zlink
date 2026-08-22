@@ -637,95 +637,25 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         }
                         String actorType = authority.stableType();
                         String transferId = newRelocationId(operationId).toString();
-                        if (!context.hasBoundSession()
-                            && canUseCanonicalActorJoin(
-                                services.canonicalMeshNode(),
-                                currentActorRef,
-                                authority,
-                                target)) {
-                            return requestCanonicalActorJoin(
-                                services.canonicalMeshNode(),
-                                target,
-                                currentActorRef,
-                                authority,
-                                requestPart,
-                                transferId,
-                                actorType,
-                                operationId,
-                                deadlineNanos);
+                        ZLinkInternalMeshNode meshNode = services.canonicalMeshNode();
+                        if (meshNode == null) {
+                            return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    "canonical actor Join mesh transport is unavailable"));
                         }
-                        List<Message> admissionParts =
-                            ZLinkActorSpotRoutePackets.createCanonicalAdmissionRequestParts(
-                            transferId,
-                            timeout,
-                            currentActorRef.actorId(),
-                            actorType,
+                        return requestCanonicalActorJoin(
+                            meshNode,
+                            target,
                             currentActorRef,
-                            context.entrySpotNodeRid(),
-                            context.entrySpotId(),
-                            entryRouterChannelId(target),
-                            context.boundSessionSourceNodeRid(),
-                            context.boundSessionSourceSessionRid(),
+                            authority,
                             requestPart,
+                            transferId,
+                            actorType,
                             operationId,
-                            authority);
-                        try {
-                            return requestTransferWithReconciliation(
-                            target, admissionParts, deadlineNanos)
-                        .thenCompose(replyParts -> {
-                            try {
-                                if (replyParts.isEmpty()) {
-                                    return CompletableFuture.failedFuture(
-                                        new ZLinkFrameworkException(
-                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                            "remote actor Spot admission reply was empty: " + spotId));
-                                }
-                                ZLinkActorSpotRoutePackets.AdmissionReply admission =
-                                    ZLinkActorSpotRoutePackets.decodeAdmissionReply(replyParts);
-                                if (!admission.accepted()) {
-                                    return CompletableFuture.completedFuture(
-                                        rejectedRemoteJoin(currentActorRef, admission.reply()));
-                                }
-                                return submitCanonicalRelocation(
-                                    target,
-                                    transferId,
-                                    actorType,
-                                    currentActorRef,
-                                    admission.reply(),
-                                    admission.receiveChunkLimitBytes(),
-                                    "application/json",
-                                    operationId,
-                                    deadlineNanos);
-                            } finally {
-                                replyParts.forEach(Message::close);
-                            }
-                        })
-                        .whenComplete((ignored, admissionError) ->
-                            admissionParts.forEach(Message::close));
-                        } catch (RuntimeException error) {
-                            admissionParts.forEach(Message::close);
-                            throw error;
-                        }
+                            deadlineNanos);
                     });
             });
-    }
-
-    /**
-     * Spec 51 section 9 permits canonical command 28 only for the unbound
-     * admission leg.  The exact target authority comes from the observed
-     * Spot route, while the mesh transport additionally requires the active
-     * admitted peer to advertise the service-wire capability.
-     */
-    private static boolean canUseCanonicalActorJoin(
-        ZLinkInternalMeshNode meshNode,
-        ZLinkBackendActorRef actor,
-        ZLinkActorRuntime.ActorJoinAuthority authority,
-        SpotTransportAddress target) {
-        if (meshNode == null) {
-            return false;
-        }
-        return meshNode.canRequestCanonicalActorJoin(
-            canonicalActorJoinRequest(actor, authority, target, false, new byte[0]));
     }
 
     private CompletionStage<ZLinkBackendActorJoinResult> requestCanonicalActorJoin(
@@ -886,96 +816,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             target.spotGeneration(),
             target.authorityOwnerGeneration(),
             target.ownerLeaseGeneration());
-    }
-
-    /**
-     * Spec 32:58,87 — a route or connection that is not yet available ends
-     * as {@code Unavailable}; spec 15 §4 keeps the whole cross-node Join
-     * inside one operation deadline. The pre-admission transfer request can
-     * race automatic peer convergence (the guest node may not have admitted
-     * its direct play peer yet), so mirror .NET's reconciliation: retry an
-     * {@code Unavailable} transfer failure with backoff until the Join
-     * deadline. A transfer request that completed exceptionally produced no
-     * admission reply, so no admission handler may have accepted it and the
-     * retry cannot double-admit.
-     */
-    private CompletionStage<List<Message>> requestTransferWithReconciliation(
-        SpotTransportAddress address,
-        List<Message> parts,
-        long deadlineNanos) {
-        return requestTransfer(address, parts).handle((reply, failure) -> {
-                if (failure == null) {
-                    return CompletableFuture.completedFuture(reply);
-                }
-                if (!isUnavailableTransferFailure(failure)
-                    || remainingTimeout(deadlineNanos) == null) {
-                    return CompletableFuture.<List<Message>>failedFuture(
-                        unwrap(failure));
-                }
-                Executor retryDelay = CompletableFuture.delayedExecutor(
-                    50, TimeUnit.MILLISECONDS);
-                return CompletableFuture.supplyAsync(() -> null, retryDelay)
-                    .thenCompose(ignored -> requestTransferWithReconciliation(
-                        address, parts, deadlineNanos));
-            })
-            .thenCompose(stage -> stage);
-    }
-
-    private static boolean isUnavailableTransferFailure(Throwable failure) {
-        Throwable current = failure;
-        while (current != null) {
-            if (current instanceof ZLinkFrameworkException framework) {
-                return framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE;
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
-
-    private CompletionStage<List<Message>> requestTransfer(
-        SpotTransportAddress address,
-        List<Message> parts) {
-        if (services.transferTransport() != null) {
-            return services.transferTransport().request(
-                address,
-                parts,
-                timeout,
-                internalRouteChannel != null);
-        }
-        if (internalRouteChannel == null) {
-            Message packetName = Message.from(parts.getFirst());
-            Message envelope = ZLinkActorEntryTransferEnvelope.encode(parts);
-            List<Message> wireParts = List.of(packetName, envelope);
-            try {
-                return services.routedTransport().requestToSpotViaRouterChannel(
-                        address.routerChannelId(),
-                        address.targetNodeRid(),
-                        address.spotId(),
-                        address.spotGeneration(),
-                        wireParts,
-                        timeout)
-                    .whenComplete((ignored, error) ->
-                        wireParts.forEach(Message::close));
-            } catch (RuntimeException error) {
-                wireParts.forEach(Message::close);
-                throw error;
-            }
-        }
-        Message envelope = ZLinkActorEntryTransferEnvelope.encode(parts);
-        return services.routedTransport().requestInternalToNode(
-                address.routerChannelId(),
-                address.targetNodeRid(),
-                ZLinkActorEntryTransferEnvelope.PACKET_NAME,
-                envelope,
-                timeout)
-            .thenApply(reply -> {
-                try {
-                    return ZLinkActorEntryTransferEnvelope.decode(reply);
-                } finally {
-                    reply.close();
-                }
-            })
-            .whenComplete((ignored, error) -> envelope.close());
     }
 
     private String entryRouterChannelId(SpotTransportAddress target) {

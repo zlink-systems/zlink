@@ -416,6 +416,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             .ZLinkServiceRelocationWireCodec.RequestSourceFence>
             relayExpectedSources =
                 new CopyOnWriteArrayList<>();
+        List<Long> relayAttempts = new CopyOnWriteArrayList<>();
         FakeStagingBackend backend = new FakeStagingBackend();
         var staging = new ZLinkUserSpotAggregateStagingOwner(backend);
         var wire = new ZLinkServiceM6BWireCodec();
@@ -424,7 +425,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             backend.operations,
             relays,
             relayDestinations,
-            relayExpectedSources);
+            relayExpectedSources,
+            relayAttempts);
         var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
             targetRid,
             targetNodeGeneration,
@@ -471,6 +473,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             journalRid,
             expected.nodeRid(),
             "the expected source keeps the request-source lease fence"));
+        assertEquals(List.of(1L), relayAttempts,
+            "command 33 must echo the PREPARE targetAttemptGeneration");
     }
 
     private static byte[] acceptedSpotRecord(String spotId, int value) {
@@ -520,6 +524,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             operations,
             relays,
             new CopyOnWriteArrayList<>(),
+            new CopyOnWriteArrayList<>(),
             new CopyOnWriteArrayList<>());
     }
 
@@ -530,7 +535,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         List<RoutingId> relayDestinations,
         List<systems.zlink.framework.runtime.internal.service
             .ZLinkServiceRelocationWireCodec.RequestSourceFence>
-            relayExpectedSources) {
+            relayExpectedSources,
+        List<Long> relayAttempts) {
         var relocationWire =
             new systems.zlink.framework.runtime.internal.service
                 .ZLinkServiceRelocationWireCodec();
@@ -554,6 +560,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     relayExpectedSources.add(expected);
                     var relay = relocationWire.decodeReplyRelay(
                         (byte[]) arguments[2]);
+                    relayAttempts.add(relay.targetAttemptGeneration());
                     int status = relays.incrementAndGet() == 1 ? 1 : 2;
                     return CompletableFuture.completedFuture(
                         relocationWire.encodeReplyRelayAck(

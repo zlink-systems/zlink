@@ -78,8 +78,6 @@ final class ZLinkCanonicalRelocationStateMachine
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Fence, TargetAttempt> targets =
         new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Fence, RetryPrepared> retryPrepared =
-        new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Fence, TerminalTarget> terminalTargets =
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Fence, RetainedSource> retainedSources =
@@ -424,20 +422,6 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "terminal canonical relocation prepare differs"));
         }
-        RetryPrepared foundRetry = retryPrepared.get(fence);
-        if (foundRetry != null
-            && !Instant.now().isBefore(
-                foundRetry.prepared().restoreDeadline())) {
-            retryPrepared.remove(fence, foundRetry);
-            foundRetry = null;
-        }
-        RetryPrepared retry = foundRetry;
-        if (retry != null && !java.util.Arrays.equals(
-                retry.encodedPrepare(),
-                ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
-            return failed(new IllegalArgumentException(
-                "retry canonical relocation prepare differs"));
-        }
         TargetAttempt created = new TargetAttempt(prepare);
         TargetAttempt current = targets.putIfAbsent(fence, created);
         TargetAttempt attempt = current == null ? created : current;
@@ -466,9 +450,8 @@ final class ZLinkCanonicalRelocationStateMachine
             .thenCompose(restore -> {
                 attempt.request().complete(restore.request());
                 return target.stage(restore.request())
-                    .thenCompose(ignored -> retry == null
-                        ? coordinator.prepare(restore.authority(), OPEN)
-                        : CompletableFuture.completedFuture(retry.prepared()))
+                    .thenCompose(ignored -> coordinator.prepare(
+                        restore.authority(), OPEN))
                     .thenAccept(attempt.prepared()::complete);
             })
             .whenComplete((ignored, failure) -> {
@@ -641,10 +624,6 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void armCutoverFallback(Fence fence, TargetAttempt attempt) {
-        RetryPrepared retry = retryPrepared.get(fence);
-        if (retry != null && retry.prepared() == attempt.prepared().join()) {
-            retryPrepared.remove(fence, retry);
-        }
         attempt.fallbackArmed(true);
         scheduleCutoverFallback(fence, attempt);
     }
@@ -1745,19 +1724,6 @@ final class ZLinkCanonicalRelocationStateMachine
     private record TargetRestore(
         ZLinkSpotRetireControl.StageRequest request,
         ZLinkAggregateRelocationCoordinator.Request authority) {
-    }
-
-    private record RetryPrepared(
-        byte[] encodedPrepare,
-        ZLinkAggregateRelocationCoordinator.Prepared prepared) {
-        private RetryPrepared {
-            encodedPrepare = encodedPrepare.clone();
-            Objects.requireNonNull(prepared, "prepared");
-        }
-
-        @Override public byte[] encodedPrepare() {
-            return encodedPrepare.clone();
-        }
     }
 
     private record TerminalTarget(

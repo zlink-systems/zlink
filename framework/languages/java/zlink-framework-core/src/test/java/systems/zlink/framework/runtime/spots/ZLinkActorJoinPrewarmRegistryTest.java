@@ -81,7 +81,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  migrated by the same completeMigration call below.
         List<byte[]> delivered = new ArrayList<>();
         registry.completeMigration(
-            relocationId, parked -> delivered.add(parked.record()), () -> { });
+            relocationId, parked -> delivered.add(parked.record()), () -> { }, () -> { });
         assertEquals(1, delivered.size());
         assertArrayRecord(new byte[] {1}, delivered.getFirst());
     }
@@ -173,7 +173,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  PREPARE installs the real stage for the old identity.
         AtomicReference<Boolean> aborted = new AtomicReference<>(false);
         registry.completeMigration(
-            oldRelocationId, parked -> { }, () -> aborted.set(true));
+            oldRelocationId, parked -> { }, () -> { }, () -> aborted.set(true));
 
         //  A newer exact identity for the same object arrives before the
         //  old identity publishes: the installed-but-not-yet-published
@@ -266,7 +266,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  not installed (spec 15 §4.2).
         assertThrows(IllegalStateException.class, () ->
             registry.completeMigration(
-                oldRelocationId, parked -> { }, () -> { }));
+                oldRelocationId, parked -> { }, () -> { }, () -> { }));
     }
 
     private static void assertArrayRecord(byte[] expected, byte[] actual) {
