@@ -251,13 +251,15 @@ zlink::pipe_t *zlink::socket_base_t::test_pair_pipe (
 
 bool zlink::socket_base_t::test_application_pipe_flow_probe (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
-  bool *out_active_, bool *hwm_full_, bool *remote_paused_) const
+  bool *out_active_, bool *hwm_full_, bool *remote_paused_,
+  bool *byte_credit_waiter_, uint64_t *in_flight_bytes_) const
 {
     pipe_t *application =
       test_pair_pipe (transport_pair_id_, transport_pair_generation_, false);
     if (!application || !application->retain_lifetime_ref ())
         return false;
-    application->test_flow_probe (out_active_, hwm_full_, remote_paused_);
+    application->test_flow_probe (out_active_, hwm_full_, remote_paused_,
+                                  byte_credit_waiter_, in_flight_bytes_);
     application->release_lifetime_ref ();
     return true;
 }

@@ -1211,15 +1211,26 @@ bool zlink::pipe_t::remote_flow_paused () const
 #ifdef ZLINK_BUILD_TESTS
 void zlink::pipe_t::test_flow_probe (bool *out_active_,
                                      bool *hwm_full_,
-                                     bool *remote_paused_) const
+                                     bool *remote_paused_,
+                                     bool *byte_credit_waiter_,
+                                     uint64_t *in_flight_bytes_) const
 {
     scoped_fast_lock_t lock (_out_sync);
     if (out_active_)
         *out_active_ = _out_active;
+    //  Deliberately the cached peer credit, without refreshing it: a test has
+    //  to be able to see that the writer still believes it is full.
     if (hwm_full_)
         *hwm_full_ = !check_hwm_unlocked ();
     if (remote_paused_)
         *remote_paused_ = _remote_flow_paused;
+    if (byte_credit_waiter_)
+        *byte_credit_waiter_ =
+          _waiting_for_byte_credit.load (std::memory_order_acquire);
+    if (in_flight_bytes_)
+        *in_flight_bytes_ = _bytes_written > _peers_bytes_read
+                              ? _bytes_written - _peers_bytes_read
+                              : 0;
 }
 #endif
 
@@ -1255,21 +1266,23 @@ bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
         //  transport-pair hold keep their own state, so the send-ready edge is
         //  published only when every cause is clear.
         if (!paused && _state == active && !_transport_pair_write_held) {
-            if (check_hwm_unlocked ()) {
-                //  Byte credit is available. _out_active can still be false
-                //  when a credit return was suppressed while this pipe was
-                //  paused, so restore the HWM cause's own flag here.
+            //  A send refused by the remote cause never evaluated the HWM, so
+            //  no cause currently owns the pending wake. Hand it to the
+            //  byte-credit cause using the classic lost-wakeup discipline:
+            //  arm first, then re-read the credit the peer has published.
+            //
+            //  Arming first is what closes the race. A reader that publishes
+            //  credit after this store sees the armed waiter and sends the
+            //  activation itself; a reader that published before it is picked
+            //  up by the fresh re-read below. Deciding from the cached
+            //  snapshot instead would miss a sub-LWM read that published
+            //  credit while no waiter was registered - that read is the last
+            //  one that would ever have qualified.
+            _out_active = false;
+            _waiting_for_byte_credit.store (true, std::memory_order_release);
+            if (check_hwm_with_peer_snapshot_unlocked ()) {
                 _out_active = true;
                 notify = true;
-            } else {
-                //  The byte HWM is still full. A send refused by the remote
-                //  cause never evaluated the HWM, so no cause currently owns
-                //  the pending wake. Hand it to the byte-credit cause;
-                //  otherwise process_activate_write would decline to publish
-                //  the edge and the route would never come back.
-                _out_active = false;
-                _waiting_for_byte_credit.store (true,
-                                                std::memory_order_release);
             }
         }
     }

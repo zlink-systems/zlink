@@ -242,7 +242,9 @@ class socket_base_t : public own_t,
     //  without mutating - any of them.
     bool test_application_pipe_flow_probe (
       uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
-      bool *out_active_, bool *hwm_full_, bool *remote_paused_) const;
+      bool *out_active_, bool *hwm_full_, bool *remote_paused_,
+      bool *byte_credit_waiter_ = NULL,
+      uint64_t *in_flight_bytes_ = NULL) const;
     //  Queues one flow-state pipe command with a caller-chosen epoch, which is
     //  how a stale replay and a newer acceptance can be ordered on purpose.
     bool test_deliver_flow_state_command (uint64_t transport_pair_id_,

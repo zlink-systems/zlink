@@ -526,6 +526,106 @@ bool wait_for_pipe_pause (void *socket_,
     return false;
 }
 
+//  Round 2, R1. A receiver that consumes a sub-LWM message while more data
+//  remains publishes credit without sending an activation, because the byte
+//  waiter is not armed yet. RESUME must not then decide from the writer's stale
+//  cached credit: it would arm the waiter after the only qualifying read and
+//  wait for an activation that nobody will ever send.
+void test_resume_rereads_credit_published_before_the_waiter_was_armed ()
+{
+    paired_fixture_t fixture;
+    fixture.setup (0, "flow_state_resume_stale_credit");
+
+    //  Measure one message's exact charge, then set the HWM to a whole number
+    //  of them so the queue can be filled to exactly full without any send
+    //  ever failing - a failing send is what would arm the byte waiter.
+    const std::string payload (100, 'y');
+    //  Let the handshake's own credit land first, so the measurement below is
+    //  not disturbed by an activation arriving mid-sequence.
+    for (int i = 0; i < 50; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+
+    uint64_t before = 0;
+    uint64_t after = 0;
+    TEST_ASSERT_TRUE (dealer_send_nonblocking (fixture.dealer, payload.c_str (), 0));
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->test_application_pipe_flow_probe (
+                          fixture.pair_id, fixture.pair_generation, NULL, NULL,
+                          NULL, NULL, &before));
+    TEST_ASSERT_TRUE (dealer_send_nonblocking (fixture.dealer, payload.c_str (), 0));
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->test_application_pipe_flow_probe (
+                          fixture.pair_id, fixture.pair_generation, NULL, NULL,
+                          NULL, NULL, &after));
+    TEST_ASSERT_GREATER_THAN_UINT64 (before, after);
+    const uint64_t charge = after - before;
+
+    //  Eight more messages land the queue on exactly the HWM, so no send ever
+    //  fails and the byte waiter is never armed.
+    const uint64_t remaining = 8;
+    const uint64_t hwm = after + remaining * charge;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (fixture.dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    for (uint64_t i = 0; i < remaining; ++i)
+        TEST_ASSERT_TRUE (
+          dealer_send_nonblocking (fixture.dealer, payload.c_str (), 0));
+
+    bool out_active = false;
+    bool hwm_full = false;
+    bool remote_paused = false;
+    bool byte_waiter = false;
+    uint64_t in_flight = 0;
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->test_application_pipe_flow_probe (
+                          fixture.pair_id, fixture.pair_generation, &out_active,
+                          &hwm_full, &remote_paused, &byte_waiter, &in_flight));
+    TEST_ASSERT_EQUAL_UINT64 (hwm, in_flight);
+    TEST_ASSERT_TRUE (hwm_full);
+    TEST_ASSERT_TRUE (out_active);
+    TEST_ASSERT_FALSE (byte_waiter);
+
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 1));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+    //  Refused by the remote cause, so the byte cause is still unrecorded.
+    TEST_ASSERT_FALSE (dealer_send_nonblocking (fixture.dealer, "payload", 0));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+
+    //  Consume exactly one message. Its credit is below the LWM and no writer
+    //  is registered as waiting, so no activation is sent - but the credit is
+    //  published, and it is enough to clear the HWM.
+    char rid[256];
+    TEST_ASSERT_GREATER_THAN_INT (
+      0, zlink_recv (fixture.router, rid, sizeof (rid), 0));
+    recv_string_expect_success (fixture.router, payload.c_str (), 0);
+    msleep (50);
+
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->test_application_pipe_flow_probe (
+                          fixture.pair_id, fixture.pair_generation, &out_active,
+                          &hwm_full, &remote_paused, &byte_waiter, &in_flight));
+    //  The writer's cached view is unchanged: no activation arrived.
+    TEST_ASSERT_EQUAL_UINT64 (hwm, in_flight);
+    TEST_ASSERT_TRUE (hwm_full);
+    TEST_ASSERT_FALSE (byte_waiter);
+
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 0, 2));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
+
+    //  Nothing else will read, so the route can only come back if RESUME
+    //  looked at the credit the reader actually published.
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+
+    fixture.teardown ();
+}
+
 //  Review finding 7. Peer readiness answered from the byte HWM alone, so a
 //  route whose peer is PAUSED was still reported writable and the send that
 //  followed the report failed.
@@ -997,6 +1097,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);
     RUN_TEST (test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);

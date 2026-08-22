@@ -226,7 +226,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  them, so observing the pipe cannot change it.
     void test_flow_probe (bool *out_active_,
                           bool *hwm_full_,
-                          bool *remote_paused_) const;
+                          bool *remote_paused_,
+                          bool *byte_credit_waiter_ = NULL,
+                          uint64_t *in_flight_bytes_ = NULL) const;
 #endif
     //  Consumes the remote-pause wake marker, mirroring the HWM-credit marker
     //  so a resume publishes exactly one routed send-ready edge.
