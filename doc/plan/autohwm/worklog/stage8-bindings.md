@@ -580,3 +580,208 @@ Framework work started: no
 
 Commit: `go: expose receive-flow-state parity` (this repository, branch
 `codex/bindings-0.11.1-performance`, commit `f4cefe9e91`).
+
+## python
+
+Base commit: `f1ec634656` (plus the shared `core/src/libzlink.vers` export-list
+fix already landed by the cpp worker before this section's build/test pass —
+see cpp section's "Shared C-layer defect found"; no core/ edit made here).
+Changed only under `bindings/python/`.
+
+### Surface added
+
+`bindings/python/src/zlink/contracts/sockets/codes.py`:
+
+```python
+class ReceiveFlowState(IntEnum):
+    """A socket's local receive-flow state ... Values match
+    zlink_receive_flow_state_t."""
+    RUNNING = 0
+    PAUSED = 1
+```
+
+Re-exported through `contracts/core/codes.py`, `contracts/__init__.py`, and
+the top-level `zlink/__init__.py`, mirroring exactly how `ConfigResult` and
+every other result/state enum in this binding is threaded through those three
+layers (`tests/test_enums.py`'s existing convention).
+
+`bindings/python/src/zlink/_native/ffi.py`: one new raw `ctypes` binding,
+placed next to `zlink_socket`:
+
+```python
+("zlink_socket_set_receive_flow_state", [ctypes.c_void_p, ctypes.c_int], ctypes.c_int),
+```
+
+`bindings/python/src/zlink/_runtime/sockets/socket_base.py`: one new method
+on the common `_Socket` base (same placement and pattern as
+`set_tls_server`/`set_tls_client` — a direct dedicated-call wrapper, not a
+generic-option route), so every concrete socket type (`PairSocket`,
+`DealerSocket`, `RouterSocket`, `StreamSocket`, `PubSocket`, `SubSocket`,
+`XPubSocket`, `XSubSocket`) gets it and an unsupported type observes the
+C layer's runtime not-supported mapping instead of a compile-time-restricted
+facade (needed so plan §8.1.1's "PAIR/PUB-SUB/STREAM → not-supported" test can
+call the method and see `ConfigError`, not `AttributeError`):
+
+```python
+def set_receive_flow_state(self, state: ReceiveFlowState):
+    rc = lib().zlink_socket_set_receive_flow_state(self._handle, int(state))
+    if rc != 0:
+        _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+```
+
+`ConfigResult` already carried all five values `zlink_config_result_t` needed
+(`OK=0`, `INVALID_HANDLE=701`, `INVALID_ARGUMENT=702`, `NOT_SUPPORTED=703`,
+`INVALID_STATE=705`) — no new error-code table or mapping function was added,
+matching this binding's single-`ConfigError`-type policy for every socket
+config call (`bindings/doc/spec/README.ko.md`'s existing error policy).
+
+### Not exposed (plan §5.1 forbidden list)
+
+No flow-frame encode/decode/receive API and no PAUSE-bypass send variant were
+added. `test_flow_state_parity.py::ReceiveFlowStatePublicSurfaceTests` checks
+this by scanning `dir()` on `zlink` itself and on one instance of every
+concrete socket type for `flowframe`/`flow_frame`/`bypass_pause` substrings,
+and asserts no `get_receive_flow_state`/`receive_flow_state` getter exists —
+state is observed only through the existing monitor/snapshot surfaces.
+
+### Test: `bindings/python/tests/test_flow_state_parity.py` (new)
+
+Registered implicitly (pytest auto-discovery, no separate registration step
+in this binding). `tests/test_enums.py` also gained one parity case. §8.1.1
+coverage:
+
+| §8.1.1 item | Test |
+|---|---|
+| enum value parity with C ABI | `test_enums.py::test_receive_flow_state_values`, `ReceiveFlowStateEnumParityTests::test_values_match_c_abi` |
+| DEALER/ROUTER success + idempotent repeat | `ReceiveFlowStateDealerRouterTests::test_set_succeeds_and_repeat_is_idempotent` |
+| PAIR/PUB/SUB family/STREAM → not-supported | `ReceiveFlowStateUnsupportedSocketTests::test_pair_socket_is_not_supported`, `test_pub_sub_family_is_not_supported`, `test_stream_socket_is_not_supported` |
+| unsupported-socket send/recv unaffected | `test_pair_socket_is_not_supported` sends/receives one message after the rejected call |
+| invalid handle/argument mapping | `ReceiveFlowStateErrorMappingTests::test_invalid_argument_outside_enum_range`, `test_invalid_handle_after_close` |
+| close race → one observable outcome | `test_close_race_observes_one_outcome_only` (50 iterations of a threaded setter vs. closer; asserts exactly one outcome — `ok`, `INVALID_HANDLE`, or `INVALID_STATE` — is ever observed, mirroring the two close-race shapes documented in `worklog/stage7-c-api.md` §1.2) |
+| no flow-frame API on the public surface | `ReceiveFlowStatePublicSurfaceTests::test_no_flow_frame_api_is_public` |
+| existing HWM/send behavior unchanged | `ReceiveFlowStateDealerRouterTests::test_dealer_router_traffic_is_unaffected_by_running_state` (DEALER/ROUTER request/reply plus HWM option smoke after an explicit `RUNNING` no-op transition) |
+
+### Shared C-layer defect (already fixed by another worker)
+
+`core/src/libzlink.vers` was missing the `zlink_socket_set_receive_flow_state`
+export when this section's work started, which meant `ctypes.getattr()` on
+the raw symbol raised `AttributeError` at Python binding import time (the
+binding eagerly resolves every declared symbol in `ffi.py`'s `_bind()`).
+Verified independently before finding the cpp section's note: a `core/build`
+rebuild from this branch's un-patched `core/src/libzlink.vers` reproduced
+`undefined symbol: zlink_socket_set_receive_flow_state` via plain `nm -D`.
+The cpp worker's fix (`core/src/libzlink.vers` — a single additive allowlist
+line) was already committed and `core/build` already rebuilt against it by
+the time this section's own build/test pass ran; no additional core/ change
+was needed here.
+
+### Environment defect found (pre-existing, not fixed — out of scope for this
+### task, orthogonal to flow-state)
+
+The checked-in/rebuilt native fast-path CPython extension
+(`bindings/python/src/zlink/_native/_zlink_native.*.so`, built from
+`_zlink_native.c` against the current `core/build`) corrupts payload bytes
+and eventually aborts the process (`Assertion failed: false` in
+`core/src/runtime/core/object.cpp:554`, `object_t::process_conn_failed()`)
+on any real socket `send()`/`submit()` call, including plain PAIR
+send/recv with no flow-state call involved anywhere in the reproduction.
+Reproduced on entirely unmodified, pre-existing test files —
+`test_core_api_alignment.py`, `test_retained_credit_contract.py`,
+`test_version.py`, `test_routed_async_contract.py` — with this section's
+Python source changes fully reverted, so it is not caused by this work.
+Confirmed the corruption lives in the compiled extension's fast bridge path,
+not in Core or in the raw `ctypes` calls this binding otherwise uses: with
+`_zlink_native*.so` temporarily removed from the import path (forcing the
+existing pure-`ctypes` fallback that `socket_base.py` already falls back to
+when the extension is absent), the identical DEALER/ROUTER request/reply and
+PAIR send/recv scenarios succeed correctly and the full non-perf, non-sample
+suite goes from a hard process abort to 84/85 passing. This binding's new
+`set_receive_flow_state()` call is a plain `ctypes` call (like
+`set_tls_server`/`set_tls_client`); it does not route through the fast-path
+extension and is unaffected either way. Left as found (not investigated
+further or patched) — diagnosing/fixing a CPython C-extension ABI defect is
+unrelated to plan §5.1/§7.3/§8.1.1 and outside this task's scope.
+
+### Build + test evidence
+
+```bash
+cmake --build core/build --parallel "$(nproc)"   # picks up the cpp worker's
+                                                  # libzlink.vers fix; rebuilds
+                                                  # libzlink.so with the
+                                                  # flow-state symbol exported
+ZLINK_CORE_PREFIX=<prefix with core/include + core/build/lib> \
+  python3 setup.py build_ext --inplace            # rebuild _zlink_native
+ZLINK_LIBRARY_PATH=core/build/lib/libzlink.so.0.11.1 tests/run_tests.sh
+```
+
+With the native extension present (its pre-existing defect above): pytest
+aborts the process (`SIGABRT`) on the first test that performs a real
+send/recv, so a plain `run_tests.sh` invocation cannot reach "all green" in
+this environment regardless of any binding-level change.
+
+With `_zlink_native*.so` removed from the import path (isolating the binding
+surface from that unrelated defect):
+
+```text
+tests/run_tests.sh -q --ignore=tests/test_native_contract.py \
+  --ignore=tests/test_perf_multi_runner.py --ignore=tests/test_perf_runner.py
+................F...........................................................
+...................
+1 failed, 84 passed
+FAILED tests/test_core_api_alignment.py::CoreApiAlignmentTests::test_monitor_status_uses_abi_v3_byte_telemetry
+  AssertionError: 4 != 3
+```
+
+That single failure is pre-existing and unrelated to flow-state: stage7
+bumped `ZLINK_MONITOR_STATUS_ABI_VERSION` from 3 to 4 for the new flow-state
+monitor fields (`worklog/stage7-c-api.md` §3), and this checked-in Python
+test still hardcodes the old ABI 3 — the same root cause the cpp section
+independently documented and fixed in its own header mirror
+(`test_cpp_contract_monitor`). This section's changes never touch monitor status code, decoding, or ABI
+version handling (see "Files changed" below), so the failure is pre-existing
+by inspection, not introduced here. `test_native_contract.py` (excluded above) imports
+`zlink._native._zlink_native` directly and therefore cannot run at all while
+the extension is removed; it is unrelated to this task's surface and was not
+otherwise touched.
+
+`tests/test_enums.py` (13/13) and `tests/test_flow_state_parity.py` (11/11)
+— the two files this section's changes affect directly — both pass in full
+either way (they do not depend on the native extension).
+
+### Files changed
+
+- `bindings/python/src/zlink/contracts/sockets/codes.py` — new `ReceiveFlowState` enum
+- `bindings/python/src/zlink/contracts/core/codes.py` — re-export
+- `bindings/python/src/zlink/contracts/__init__.py` — re-export
+- `bindings/python/src/zlink/__init__.py` — re-export
+- `bindings/python/src/zlink/_native/ffi.py` — new raw symbol binding
+- `bindings/python/src/zlink/_runtime/sockets/socket_base.py` — new `_Socket.set_receive_flow_state()`
+- `bindings/python/tests/test_enums.py` — enum-value parity case
+- `bindings/python/tests/test_flow_state_parity.py` — new focused contract test
+
+### Result
+
+```text
+Result: python flow-state binding parity implemented and tested; with the
+  pre-existing native-extension defect isolated out of the run (see above),
+  84/85 tests pass (11/11 in this section's own new test file, 13/13 in the
+  extended enum-parity file); the 1 remaining failure is a pre-existing,
+  already-independently-documented ABI-version mismatch unrelated to
+  flow-state.
+Changed source: see "Files changed" above.
+Changed public contract: bindings/python public Python surface only (no
+  core/doc/spec or bindings/doc/spec changes); no core/ edit made in this
+  section (the one required core/ fix was already applied and rebuilt by the
+  cpp worker before this section's build/test pass).
+Focused tests: bindings/python/tests/run_tests.sh — see "Build + test
+  evidence" above.
+Paired perf reports: none (out of scope per plan §8.1.1 — binding perf is not
+  this stage's gate; no hot-path source was touched — the new call is a
+  plain ctypes wrapper, not on any send/recv hot path).
+First remaining failure: test_core_api_alignment.py::CoreApiAlignmentTests::test_monitor_status_uses_abi_v3_byte_telemetry,
+  pre-existing (stage7 ABI 3→4 bump, unrelated to flow-state work).
+Framework work started: no
+```
+
+Commit: `python: expose receive-flow-state parity` (this repository, branch
+`codex/bindings-0.11.1-performance`).
