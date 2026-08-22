@@ -331,11 +331,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     지점에 identity 불일치 2건 — ⓐ .NET이 ZLJR coordinator를 precommit 전 스냅샷으로 조립
     (RemoteJoiner:631)해 40의 Capture-후 snapshot(:853)과 StoreVersion 불일치 → cpp exact
     equality(:5819) 실패 ⓑ cpp가 28 correlation과 ZLJR public completion operation을 동일 비교
-    (:5851) — 계약상 분리된 identity(스펙 외 동일시). cpp 동일시 제거 랜딩(작업 트리 — 커밋 대기). ⓐ는
-    **에이전트 STOP·에스컬레이션으로 판정 전환**(스펙-우선 게이트 정상 작동 사례): cpp reference·
-    .NET 내부 불변식 모두 40=V0(pre-precommit baseline) 전제 — ZLJR(V0)이 정본,
-    **CreatePrepare가 post-Capture V2를 쓰는 쪽이 버그**. 새 ruling: coordinator 단일 값(V0)을
-    40·ZLJR에 재사용 — sonnet 재위임 중. 이월
+    (:5851) — 계약상 분리된 identity(스펙 외 동일시). 에이전트 STOP·에스컬레이션으로 판정 전환(V0
+    단일 값 정본) → **랜딩 `c6e7323872` + cpp 동일시 제거 → dotnet→cpp 그린(11/12)**. A1(Java
+    ZLJR 선두삽입→꼬리 append 정렬) 랜딩 `5055950d7d` → java→cpp가 PROTOCOL_ERROR에서 admission
+    통과 후 silent로 전진(잔존 용의 = cpp 감사 #19 스펙 외 등식 — 제거 terra 진행 중). **단
+    dotnet→java가 V0 전환으로 red 회귀**(Java target의 coordinator 기대가 cpp와 상호 모순 의심 —
+    스펙 인용 판정 포함 sol 진단 중, dotnet→node는 그린 유지). 현재 10/12+1 요동. 이월
     카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
     strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
     test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
