@@ -432,7 +432,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     Java 방향(host User-Spot mode 신설) → C++ 방향(host actor-join mode 완전 신설, 최대) →
     12방향 완성 → 통과 스테이지 `all` 편입(무음 금지). 하니스:
     framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 진행: 항목별 lockstep + spec-gap.
-  - [ ] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어`
+  - [~] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어` — **4언어 배치 전부 랜딩(2026-08-23)**: Java
+    `aee042f05b` · .NET `9ec9ede6c0` · cpp `277a3ede16`(WSL 크래시 중단분 재개·검증) · Node
+    `694d849a7e`(0x01 사설 flavor·ZLAJ 삭제, 28 reply 프레이밍 정본 정렬 + ZLJR outer 검증,
+    capacity spotTypes ordinal 정렬; harness 7/7 그린). 잔여(마감 전): ① .NET revert-target 재검토
+    (nested-envelope 호환 분기·RecoveryReplyContentType 단순화) ② legacy JSON recovery 이중 표현
+    durable 마이그레이션 판정(dotnet Legacy_* red 2건과 동일 판정) ③ 28 reply content-type 보존
+    조항 충족성 4언어 교차 검증 ④ 결정성 스윕(12셀 반복) 후 단계-마감 sol 리뷰.
 - [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합` — 3건 병렬 착수(2026-08-22, canonical과 독립이므로
   단계 6 최단경로로 선행 투입)
@@ -507,8 +513,10 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     무관)**: ① `CanonicalAuthorityAggregateGenerationTests.Legacy_{standalone_actor,user_spot}_*` 2건 —
     legacy(aggregateGeneration extension 제거형) payload decode 실패. 최근 authority-state 인코더
     변경 계열 회귀 또는 3c legacy-recovery 제거의 의도 결과인지 판정 필요(durable 마이그레이션
-    판정 카드와 연계). ② `EntrySpotActorDispatchTests.Actor_Request_Subtracts_Location_Read_From_
-    Total_Timeout` — 격리에서도 결정적 실패. 별도 진단 필요.
+    판정 카드와 연계). ② **[x] EntrySpot timeout red — 해소 `a859029b51`**: stale 테스트 seam(지연 주입 substring이
+    35a39022b98의 정본 key 포맷 전환과 미매치) — 제품은 spec 32 §5 적합(location read는 총예산
+    포함). 스위트 hang 재귀속: ManagedNode_RejectsAdmission… native dispose flake(격리 3/3 통과,
+    별도 관찰 항목).
   - **[ ] [신규 등재 2026-08-22, 3c 재개 중 발견] cpp HEAD 기존 red 4건(전부 stash-baseline 재현으로
     3c diff 무관 확정 — stale 테스트 바이너리가 가리다 재빌드로 노출)**:
     ① **[x] test_cpp_framework_execution canonical cutover red — 해소 `00e4248a28`**: 원인 = cmd-40
