@@ -1230,6 +1230,13 @@ bool zlink::pipe_t::take_flow_resume_recovery ()
 
 void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
 {
+    if (apply_remote_flow_state (state_, epoch_))
+        _sink->write_activated (this);
+}
+
+bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
+                                             uint64_t epoch_)
+{
     const bool paused = state_ != 0;
     bool notify = false;
     {
@@ -1239,10 +1246,10 @@ void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
         //  the older state, and the socket record - which already holds the
         //  newer one - would deduplicate every correction away.
         if (epoch_ != 0 && epoch_ <= _remote_flow_epoch)
-            return;
+            return false;
         _remote_flow_epoch = epoch_;
         if (_remote_flow_paused == paused)
-            return;
+            return false;
         _remote_flow_paused = paused;
         //  Resuming removes only the remote-pause cause. Termination and the
         //  transport-pair hold keep their own state, so the send-ready edge is
@@ -1266,8 +1273,7 @@ void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
             }
         }
     }
-    if (notify)
-        _sink->write_activated (this);
+    return notify;
 }
 
 bool zlink::pipe_t::write (

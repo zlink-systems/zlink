@@ -249,6 +249,13 @@ class socket_base_t : public own_t,
                                           uint64_t transport_pair_generation_,
                                           unsigned char state_,
                                           uint64_t epoch_);
+    //  Counts the writable edges published by releasing a transport-pair hold.
+    //  A pair whose peer is already PAUSED must never produce one.
+    uint32_t test_transport_write_release_edges () const;
+    //  True while some pair already holds an accepted remote state but has not
+    //  been admitted as ready yet. Tests assert this to prove they really
+    //  produced the frame-before-admission ordering they mean to exercise.
+    bool test_flow_frame_accepted_before_pair_ready () const;
 #endif
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
@@ -895,6 +902,9 @@ class socket_base_t : public own_t,
     //  with the same state succeeds without emitting anything.
     unsigned char _local_receive_flow_state;
     uint64_t _local_receive_flow_epoch;
+#ifdef ZLINK_BUILD_TESTS
+    std::atomic<uint32_t> _test_transport_write_release_edges;
+#endif
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_base_t)
 };

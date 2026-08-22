@@ -262,3 +262,24 @@ bool zlink::socket_base_t::test_deliver_flow_state_command (
     return true;
 }
 #endif
+
+#ifdef ZLINK_BUILD_TESTS
+uint32_t zlink::socket_base_t::test_transport_write_release_edges () const
+{
+    return _test_transport_write_release_edges.load (std::memory_order_relaxed);
+}
+#endif
+
+#ifdef ZLINK_BUILD_TESTS
+bool zlink::socket_base_t::test_flow_frame_accepted_before_pair_ready () const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
+                                           end = _transport_pairs.end ();
+         it != end; ++it) {
+        if (it->second.remote_flow_seen && !it->second.ready)
+            return true;
+    }
+    return false;
+}
+#endif

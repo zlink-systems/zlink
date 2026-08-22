@@ -509,6 +509,66 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+//  Review finding 4. When a pair becomes ready and a PAUSE has already been
+//  accepted for it, releasing the transport-pair hold must not publish a
+//  writable edge first. Queueing the state and releasing the hold in the same
+//  breath leaves a window in which the pair looks writable although its peer
+//  has asked it to stop.
+void test_ready_pair_with_pending_pause_publishes_no_writable_edge ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (router)->set_local_receive_flow_state (k_paused));
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    //  Only the ROUTER is driven here. The DEALER's mailbox is left untouched
+    //  so its transport I/O thread accepts the PAUSE frame before the socket
+    //  thread ever runs the pair admission - the ordering in which the pair
+    //  becomes ready while a PAUSE is already on record.
+    for (int i = 0; i < 600; ++i) {
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (
+      as_socket (dealer)->test_flow_frame_accepted_before_pair_ready ());
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool paused_seen = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
+            && target.transport_pair_id != 0
+            && as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            paused_seen = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (paused_seen);
+
+    //  The pair went straight from held to paused; no writable edge in between.
+    TEST_ASSERT_EQUAL_UINT32 (
+      0, as_socket (dealer)->test_transport_write_release_edges ());
+    TEST_ASSERT_FALSE (dealer_send_nonblocking (dealer, "payload", 0));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 bool wait_for_pipe_pause (void *socket_,
                           uint64_t pair_id_,
                           uint64_t generation_,
@@ -758,6 +818,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_ready_pair_with_pending_pause_publishes_no_writable_edge);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
     RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);
     RUN_TEST (test_stale_flow_state_command_cannot_override_a_newer_epoch);

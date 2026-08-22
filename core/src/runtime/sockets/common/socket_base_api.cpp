@@ -246,18 +246,28 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     //  keeps sending into a socket that is still PAUSED.
     if (ready_completion)
         sync_local_receive_flow_state_to_pair (ready_completion);
+    //  Applied here, not queued: releasing the transport-pair hold below is an
+    //  admission transition, and a pair whose peer is already PAUSED must never
+    //  pass through a writable state on the way. This runs on the pipe's own
+    //  thread, which is exactly where the queued command would have run.
+    //
     //  The snapshot above can already be stale: a newer epoch may have been
     //  accepted on a transport I/O thread while this admission ran. The epoch
-    //  travels with the command so the pipe discards whichever replay lost.
-    if (pending_remote_flow_seen && pair_application)
-        send_flow_state (pair_application,
-                         pending_remote_flow_paused
-                           ? static_cast<unsigned char> (1)
-                           : static_cast<unsigned char> (0),
-                         pending_remote_flow_epoch);
+    //  is carried along so the pipe discards whichever replay lost.
+    if (pending_remote_flow_seen && pair_application
+        && pair_application->apply_remote_flow_state (
+          pending_remote_flow_paused ? static_cast<unsigned char> (1)
+                                     : static_cast<unsigned char> (0),
+          pending_remote_flow_epoch))
+        write_activated (pair_application);
     const bool transport_write_released =
       ready_application
       && ready_application->release_writes_for_transport_pair ();
+#ifdef ZLINK_BUILD_TESTS
+    if (transport_write_released)
+        _test_transport_write_release_edges.fetch_add (
+          1, std::memory_order_relaxed);
+#endif
     if (transport_write_released) {
         write_activated (ready_application);
         // A routed async submit can already be parked on transport_wait when

@@ -211,6 +211,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  a message is in progress. The marker clears itself when the message
     //  commits, is rolled back or is discarded by a hiccup.
     void mark_out_message_started ();
+    //  Applies an absolute remote state on the pipe's own thread and reports
+    //  whether the caller must publish the write-activated edge. Callers that
+    //  already run on that thread use this directly, so the state is in effect
+    //  before any admission transition they make next.
+    bool apply_remote_flow_state (unsigned char state_, uint64_t epoch_);
     bool remote_flow_paused () const;
     //  Whether the remote state blocks the next message on this pipe. Unlike
     //  remote_flow_paused () this honours the in-progress message exception, so
