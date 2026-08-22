@@ -5286,6 +5286,55 @@ test('Session binding refresh does not preserve the staged relocation fence when
   assert.equal(state.boundSessionTransferTarget.sessionRid.toHex(), '00000002');
 });
 
+test('bound-session refresh resolved through the mesh-router producer path carries Session identity and blocks a successor fence', () => {
+  // Regression for the gap the injected-identity test above cannot catch:
+  // the production bind-refresh path (bindRemoteSession ->
+  // resolveRemoteBoundSessionTarget -> MeshRouterResolver) must itself
+  // attach sessionNodeRid/sessionRid, not merely accept them when a caller
+  // hand-supplies them.
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      routeChannels: [{ routerChannelId: 'room.route' }]
+    })
+  });
+  const sourceNodeRid = zlink.RoutingId.from('session-node');
+  const predecessorSessionRid = zlink.RoutingId.fromHex('00000001');
+  const successorSessionRid = zlink.RoutingId.fromHex('00000002');
+
+  const predecessorTarget = host.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
+    sourceNodeRid,
+    predecessorSessionRid
+  );
+  assert.notEqual(predecessorTarget, undefined);
+  assert.equal(String(predecessorTarget.sessionNodeRid), 'session-node');
+  assert.equal(predecessorTarget.sessionRid.toHex(), '00000001');
+
+  const sealedFallback = {
+    ...predecessorTarget,
+    bindingGeneration: 7n,
+    relocationSealId: 'seal-predecessor'
+  };
+
+  // Same Session, coordinate-only refresh through the producer path: the
+  // resolved sourceSessionRid is unchanged, so the fence must be kept.
+  const sameSessionRefresh = host.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
+    sourceNodeRid,
+    predecessorSessionRid
+  );
+  const sameSessionMerged = framework.mergeRemoteBoundSessionTarget(sameSessionRefresh, sealedFallback);
+  assert.equal(sameSessionMerged.relocationSealId, 'seal-predecessor');
+
+  // A different sourceSessionRid resolved through the same producer path is
+  // a successor Session binding and must not inherit the staged fence.
+  const successorRefresh = host.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
+    sourceNodeRid,
+    successorSessionRid
+  );
+  assert.equal(successorRefresh.sessionRid.toHex(), '00000002');
+  const successorMerged = framework.mergeRemoteBoundSessionTarget(successorRefresh, sealedFallback);
+  assert.equal(successorMerged.relocationSealId, undefined);
+});
+
 test('target Actor materialization preserves only an exact bound-session relocation fence', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-reentry');
   state.setRemoteActorPacketTarget({

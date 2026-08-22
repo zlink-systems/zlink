@@ -563,9 +563,21 @@ export class ZLinkRemoteBoundSessionRelay {
 
   resolveRemoteBoundSessionTarget(
     sourceNodeRid: RoutingId,
-    _sourceSessionRid: RoutingId
+    sourceSessionRid: RoutingId
   ): ZLinkRemoteBoundSessionTarget | undefined {
-    return this.options.meshRouters.remoteBoundSessionTargetForSource(sourceNodeRid);
+    const target = this.options.meshRouters.remoteBoundSessionTargetForSource(sourceNodeRid);
+    if (target === undefined) return undefined;
+    // Spec 48 §116/§153/§324-332: the source Session's identity travels with
+    // the bind refresh so a later refresh can tell a same-Session
+    // coordinate-only update apart from a successor binding (a new Session
+    // never inherits the previous Session's staged relocation fence). The
+    // topology resolver stays identity-agnostic; identity is attached here,
+    // at the bind-refresh producer.
+    return {
+      ...target,
+      sessionNodeRid: sourceNodeRid,
+      sessionRid: sourceSessionRid
+    };
   }
 
   actorPacketTargetForState(
