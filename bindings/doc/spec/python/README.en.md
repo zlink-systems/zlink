@@ -6,15 +6,15 @@ title: "Python Bindings Public Contract"
 [Spec index](../README.en.md) | [Previous: Node.js](../node/README.en.md) | [Next: Go](../go/README.en.md)
 <!-- bindings-nav:end -->
 
-# Python binding Core 0.9.0 public contract
+# Python binding Core 0.12.0 public contract
 
 > **What this chapter defines** — the public type, ownership, and error
-> contract the `zlink` Python package provides on top of Core 0.9.0 raw
+> contract the `zlink` Python package provides on top of Core 0.12.0 raw
 > messaging.
 
-- This document defines the Core 0.9.0 raw messaging contract the `zlink` Python package provides.
+- This document defines the Core 0.12.0 raw messaging contract the `zlink` Python package provides.
 - A feature not in the current implementation and public header is not part of this contract.
-- It supports Python 3.9 and later; the current candidate package version is `0.9.0`.
+- It supports Python 3.9 and later; the current candidate package version is `0.12.0`.
 - The current native package target is Linux x86_64; other targets are outside this contract's supported scope until a separate candidate payload and clean-consumer verification exist.
 
 | Section | Covers |

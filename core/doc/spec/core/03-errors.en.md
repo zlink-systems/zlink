@@ -208,7 +208,7 @@ applies the state partially.
 
 ```c
 #define ZLINK_VERSION_MAJOR 0
-#define ZLINK_VERSION_MINOR 9
+#define ZLINK_VERSION_MINOR 12
 #define ZLINK_VERSION_PATCH 0
 
 #define ZLINK_MAKE_VERSION(major, minor, patch) \
@@ -222,4 +222,4 @@ ZLINK_EXPORT const char *zlink_strerror(int errnum);
 ZLINK_EXPORT void zlink_version(int *major, int *minor, int *patch);
 ```
 
-Core uses SOVERSION 11. The pointer returned by `zlink_strerror()` refers to library-owned static storage and must not be freed or modified. All three functions are thread-safe, and `zlink_errno()` returns only the calling thread’s value.
+Core uses SOVERSION 0. The pointer returned by `zlink_strerror()` refers to library-owned static storage and must not be freed or modified. All three functions are thread-safe, and `zlink_errno()` returns only the calling thread’s value.

@@ -217,7 +217,7 @@ socket으로 확인되지 않는 경우다. 어느 쪽도 state를 일부만 적
 
 ```c
 #define ZLINK_VERSION_MAJOR 0
-#define ZLINK_VERSION_MINOR 9
+#define ZLINK_VERSION_MINOR 12
 #define ZLINK_VERSION_PATCH 0
 
 #define ZLINK_MAKE_VERSION(major, minor, patch) \
@@ -231,6 +231,6 @@ ZLINK_EXPORT const char *zlink_strerror(int errnum);
 ZLINK_EXPORT void zlink_version(int *major, int *minor, int *patch);
 ```
 
-Core는 SOVERSION 11을 사용한다. `zlink_strerror()`가 반환한
+Core는 SOVERSION 0을 사용한다. `zlink_strerror()`가 반환한
 pointer는 library-owned static storage이며 해제하거나 수정하지 않는다. 세 함수는 thread-safe이고
 `zlink_errno()`는 호출 thread의 값만 반환한다.
