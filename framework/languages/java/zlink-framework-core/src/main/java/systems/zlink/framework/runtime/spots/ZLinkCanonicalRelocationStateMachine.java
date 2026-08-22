@@ -657,14 +657,22 @@ final class ZLinkCanonicalRelocationStateMachine
         boolean sendFailure) {
         ZLinkSpotRetireControl.StageRequest request =
             completedValue(attempt.request());
-        CompletionStage<Void> cleanup = request == null
-            ? CompletableFuture.completedFuture(null)
-            : target.abort(request);
+        CompletionStage<Void> cleanup;
+        try {
+            cleanup = request == null
+                ? CompletableFuture.completedFuture(null)
+                : target.abort(request);
+        } catch (RuntimeException cleanupFailure) {
+            cleanup = CompletableFuture.failedFuture(cleanupFailure);
+        }
         long wireFailureCode = wireFailureCode(
             unwrap(failure), attempt.prepare().object().kind());
         return cleanup.handle((ignored, cleanupFailure) -> {
             if (cleanupFailure != null) {
-                failure.addSuppressed(unwrap(cleanupFailure));
+                Throwable cause = unwrap(cleanupFailure);
+                failure.addSuppressed(cause);
+                LOGGER.warning("Canonical relocation failed-stage cleanup "
+                    + "could not complete; sending FAILED reply: " + cause);
             }
             return null;
         }).thenCompose(ignored -> sendFailure

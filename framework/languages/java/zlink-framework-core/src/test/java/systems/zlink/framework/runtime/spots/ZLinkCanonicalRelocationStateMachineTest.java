@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
@@ -331,6 +332,22 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             fixture.endpoint.lastStaged.get().relocationPayload());
     }
 
+    @Test
+    void preStageCleanupExceptionDoesNotSuppressTheFailedReply() {
+        FailingCleanupEndpoint endpoint = new FailingCleanupEndpoint();
+        Fixture fixture = fixture(null, endpoint);
+
+        assertThrows(java.util.concurrent.CompletionException.class, () ->
+            fixture.source.stage(
+                fixture.targetRid,
+                fixture.request(new byte[] {1}),
+                Duration.ofSeconds(2)).toCompletableFuture().join());
+
+        assertTrue(fixture.targetCommands.contains(
+            ServiceWireConstants.COMMAND_RELOCATION_FAILED),
+            "the target must send FAILED even when pre-stage cleanup throws");
+    }
+
     private Fixture fixture() {
         return fixture(null);
     }
@@ -343,6 +360,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     private Fixture fixture(
         ZLinkCanonicalRelocationStateMachine.RetentionScheduler
             retentionScheduler) {
+        return fixture(retentionScheduler, new CountingEndpoint());
+    }
+
+    private Fixture fixture(
+        ZLinkCanonicalRelocationStateMachine.RetentionScheduler
+            retentionScheduler,
+        CountingEndpoint endpoint) {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         String actorId = "actor-a";
@@ -398,7 +422,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             new AtomicReference<>();
         var sourceCommands = new CopyOnWriteArrayList<Integer>();
         var targetCommands = new CopyOnWriteArrayList<Integer>();
-        CountingEndpoint endpoint = new CountingEndpoint();
         if (retentionScheduler == null) {
             source.set(new ZLinkCanonicalRelocationStateMachine(
                 node(sourceRid, 11, target, sourceCommands),
@@ -573,7 +596,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             });
     }
 
-    private static final class CountingEndpoint
+    private static class CountingEndpoint
         implements ZLinkSpotRetireControl.TargetEndpoint {
         private final AtomicInteger staged = new AtomicInteger();
         private final AtomicInteger published = new AtomicInteger();
@@ -611,5 +634,20 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             return CompletableFuture.completedFuture(null);
         }
 
+    }
+
+    private static final class FailingCleanupEndpoint extends CountingEndpoint {
+        @Override
+        public CompletionStage<Void> stage(
+            ZLinkSpotRetireControl.StageRequest request) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("pre-stage failure"));
+        }
+
+        @Override
+        public CompletionStage<Void> abort(
+            ZLinkSpotRetireControl.StageRequest request) {
+            throw new IllegalStateException("target stage is unavailable");
+        }
     }
 }
