@@ -509,6 +509,89 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+bool wait_for_pipe_pause (void *socket_,
+                          uint64_t pair_id_,
+                          uint64_t generation_,
+                          bool expected_)
+{
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (2000);
+    while (!deadline_expired (deadline)) {
+        (void) as_socket (socket_)->process_submit_commands ();
+        if (as_socket (socket_)->application_pipe_remote_flow_paused (
+              pair_id_, generation_)
+            == expected_)
+            return true;
+        msleep (1);
+    }
+    return false;
+}
+
+//  Review finding 7. Peer readiness answered from the byte HWM alone, so a
+//  route whose peer is PAUSED was still reported writable and the send that
+//  followed the report failed.
+void test_router_peer_state_reports_remote_pause ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    send_string_expect_success (dealer, "hello", 0);
+    char rid[256];
+    const int rid_size = zlink_recv (router, rid, sizeof (rid), 0);
+    TEST_ASSERT_GREATER_THAN_INT (0, rid_size);
+    recv_string_expect_success (router, "hello", 0);
+
+    zlink_routing_id_t peer_rid;
+    memset (&peer_rid, 0, sizeof (peer_rid));
+    peer_rid.size = static_cast<uint8_t> (rid_size);
+    memcpy (peer_rid.data, rid, static_cast<size_t> (rid_size));
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool resolved = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (2000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (router)->select_routed_submit_target (&peer_rid, &target)
+              == 0
+            && target.transport_pair_id != 0) {
+            resolved = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (resolved);
+
+    //  Writable before the pause.
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_POLLOUT,
+      as_socket (router)->get_peer_state (rid, static_cast<size_t> (rid_size))
+        & ZLINK_POLLOUT);
+
+    TEST_ASSERT_TRUE (
+      as_socket (router)->test_deliver_flow_state_command (
+        target.transport_pair_id, target.transport_pair_generation, 1, 1));
+    TEST_ASSERT_TRUE (wait_for_pipe_pause (router, target.transport_pair_id,
+                                           target.transport_pair_generation,
+                                           true));
+
+    //  Readiness has to agree with what a send would now do.
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (router)->get_peer_state (rid, static_cast<size_t> (rid_size))
+           & ZLINK_POLLOUT);
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 //  Review finding 6. On a local pair the flow frame is queued on the completion
 //  pipe instead of being intercepted by a session, so the completion drain has
 //  to classify it. Classifying only a standalone first part let a FLOWSTATE
@@ -680,23 +763,6 @@ void test_ready_pair_with_pending_pause_publishes_no_writable_edge ()
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
-}
-
-bool wait_for_pipe_pause (void *socket_,
-                          uint64_t pair_id_,
-                          uint64_t generation_,
-                          bool expected_)
-{
-    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (2000);
-    while (!deadline_expired (deadline)) {
-        (void) as_socket (socket_)->process_submit_commands ();
-        if (as_socket (socket_)->application_pipe_remote_flow_paused (
-              pair_id_, generation_)
-            == expected_)
-            return true;
-        msleep (1);
-    }
-    return false;
 }
 
 //  Review finding 3. A classic ROUTER send accepts the routing-ID part without
@@ -931,6 +997,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_router_peer_state_reports_remote_pause);
     RUN_TEST (test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_ready_pair_with_pending_pause_publishes_no_writable_edge);

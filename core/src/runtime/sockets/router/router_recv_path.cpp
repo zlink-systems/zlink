@@ -516,7 +516,11 @@ int zlink::router_t::get_peer_state (const void *routing_id_, size_t routing_id_
     if (out_pipe->weight == 0)
         return 0;
 
-    if (out_pipe->pipe->check_hwm ())
+    //  Readiness has to agree with send admission, which composes the byte HWM
+    //  with the remote receive-flow state. Reporting POLLOUT for a paused peer
+    //  would hand the caller a send that is guaranteed to report backpressure.
+    if (out_pipe->pipe->check_hwm ()
+        && !out_pipe->pipe->remote_flow_blocks_next_message ())
         res |= ZLINK_POLLOUT;
 
     return res;
