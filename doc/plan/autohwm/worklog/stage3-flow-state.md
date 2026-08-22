@@ -360,3 +360,77 @@ ODR 문제가 될 수 있다. 이번 작업 범위가 아니므로 구조를 바
 - `socket_base_t::test_pending_flow_buffered ()`, `test_any_pair_accepted_flow_state ()`
 - `socket_base_t::test_set_local_receive_flow_epoch ()`, `test_local_receive_flow_epoch ()` —
   2^64회 상태 변경 없이 wraparound 경계에 도달하기 위한 것
+
+## 10. 3차 검토: 검증 계층을 늘리는 대신 구조를 단순화한다
+
+1·2차 수정은 경쟁을 하나씩 막느라 검증 장치를 세 겹으로 쌓았다: command에 실은 epoch,
+overtake buffer와 promotion, 그리고 publish 시점의 sequence 검증. 사용자가 지적한 대로 이는
+우발적 복잡도다. 구현 전에 두 단순화를 먼저 평가했다.
+
+### 10.1 평가: 순서 보장이 실제로 성립하는가
+
+두 단순화는 모두 "frame 적용을 socket thread로 넘기면 순서가 저절로 성립한다"는 한 가지
+사실에 기댄다. 코드로 확인했다.
+
+1. **Session은 frame보다 먼저 `bind`를 socket mailbox에 넣는다.**
+   `asio_zmp_engine.cpp:260`에서 handshake가 끝나면 `session()->engine_ready()`가 먼저
+   호출되고, 그 안에서 `session_base.cpp:395`/`:399`가 `send_bind (_socket, ...)`로 socket
+   mailbox에 `bind`를 넣는다. 그 뒤에야 같은 I/O thread가 `push_msg`로 frame을 밀어 넣는다
+   (`:275`, `:521`, `:589`). Handshake stage가 없는 engine은 `process_attach`
+   (`session_base.cpp:305-311`)에서 `plug()`보다 먼저 `engine_ready()`를 부른다. 어느
+   경로든 `bind`가 먼저다.
+2. **Socket의 command 처리는 직렬화되어 있다.** `process_commands`는
+   `socket_base_lifecycle.cpp:111`의 `receive.command_owner_sync`로 단일 소유자만 진행한다.
+
+따라서 flow frame의 **적용**을 socket mailbox로 넘기면, mailbox FIFO에 의해 socket thread는
+언제나 `bind`(= completion pipe 등록)를 먼저 처리한 뒤에 flow state를 적용한다.
+
+### 10.2 A: overtake buffer 삭제 — 성립하되 이유가 다르다
+
+Coordinator가 제안한 근거(§4.2의 ready-resync가 뒤늦게 상태를 다시 보낸다)는 **성립하지
+않는다**. Resync는 *보내는 쪽* pair가 ready가 될 때 한 번 발생하고, 받는 쪽 pair가 나중에
+ready가 되는 것을 보내는 쪽은 알지 못한다. 그러므로 등록 전 frame을 그냥 버리면 그 상태는
+영구히 사라진다.
+
+그러나 10.1의 순서 보장 때문에 **애초에 등록 전 frame이라는 상황이 발생하지 않는다.** 적용을
+socket thread로 넘기면 completion pipe는 항상 이미 등록되어 있다. Overtake는 사라지고,
+buffer·promotion·per-source slot·teardown 정리는 전부 불필요해진다. 결론: **A 채택**,
+단 근거는 "drop 후 resync가 수습한다"가 아니라 "overtake 자체가 불가능해진다"이다.
+
+### 10.3 B: 모든 적용과 edge 발행을 socket thread로 직렬화 — 창이 사라진다
+
+현재 이탈 지점은 두 곳이다. (a) I/O thread가 `consume_receive_flow_state_frame`에서 직접
+record를 바꾸고 pipe command를 queue한다. (b) `attach_pipe`가 mutex를 놓은 뒤 edge를
+발행한다.
+
+수락을 socket thread로 옮기면 flow state의 생산자는 하나가 된다. `attach_pipe`의 ready 경로도
+`process_bind`, 즉 같은 command 처리 안에서 돈다. 결정과 발행 사이에 다른 수락이 끼어들 수
+없으므로 **sequence 검증 counter가 불필요**하다. 같은 이유로 **pipe command의 epoch도
+불필요**하다: 단일 writer가 언제나 record의 최신값을 pipe에 반영하므로 stale replay가 생기지
+않는다. Record 수준의 epoch 검사는 wire frame의 중복·역전을 거르는 본래 역할로 남는다.
+
+`connect_internal`이 application thread에서 `attach_pipe`를 부르는 경로는 남지만, 그 시점의
+pair에는 completion pipe가 없어 수락이 향할 수 없다. Ready 전이는 언제나 `process_bind`에서
+일어난다.
+
+### 10.4 C: epoch wrap
+
+단일 writer가 되어도 wire epoch는 남으므로 `UINT64_MAX` 처리 규칙은 필요하다. 2차에서 넣은
+규칙(wrap이면 generation을 새로 만들고, epoch 0은 어디서도 유효하지 않음)이 가장 단순한
+정의이고 이미 test가 있으므로 그대로 둔다. 다만 pipe 계층이 사라지므로 "모든 수신 계층"은
+decode와 record 적용 두 곳으로 줄어든다.
+
+### 10.5 삭제 대상과 추가 대상
+
+삭제: `pending_flow_slot_t`와 slot 배열, `buffer_pending_flow_state_locked`,
+`promote_pending_flow_state_locked`, `discard_pending_flow_state_locked`와 그 호출,
+`_flow_state_sequence`와 bump·검증, `pipe_t::_remote_flow_epoch`와
+`pipe_t::process_flow_state`, `flow_state`의 pipe command 성격, 그리고 사라진 장치를 재던
+test hook들(`test_pending_flow_buffered`, `test_any_pair_accepted_flow_state`,
+`test_buffer_flow_frame`, `test_flow_frame_accepted_before_pair_ready`, publish-window hook).
+
+추가: socket을 목적지로 하는 `flow_state` command 인자 세 개와
+`socket_base_t::process_flow_state ()`/`apply_receive_flow_state ()`.
+
+계약을 주장하던 test는 남긴다. 사라진 장치를 직접 재던 test는 같은 계약을 새 구조에서
+확인하는 형태로 바꾼다.
