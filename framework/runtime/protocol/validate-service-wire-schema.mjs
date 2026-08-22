@@ -1159,6 +1159,25 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         relocationManifestDigest: "must-equal-location-authority-inventory-digest",
         manifestAuthority: "forbidden",
       },
+      authoritySlotProjection: {
+        format: "authority-relocation-state",
+        aggregateIdField: "relocation",
+        aggregateGenerationField: "aggregateGeneration",
+        preRootPhase: "preparing",
+        preRootValue: "zero-only",
+        rootExistsPhases: [
+          "captured", "prepared", "committed", "activating",
+          "activated", "cleaning", "completed", "aborted",
+        ],
+        issuedRange: {
+          minimum: "1",
+          maximum: "9223372036854775806",
+          exhaustedSentinel: "9223372036854775807",
+          sentinelIssued: "forbidden",
+        },
+        rootAgreement: "must-equal-maintenance-aggregate-v1.aggregateGeneration-when-root-exists",
+        participantAgreement: "all-authority-slots-in-one-aggregate-must-agree",
+      },
       replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
       orphanCleanup: "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
       deleteOrder: "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
@@ -2394,7 +2413,10 @@ function decodeGoldenBody(formatName, bytes) {
       decoded.relocationState = {
         relocationHigh: relocationBody.u64(),
         relocationLow: relocationBody.u64(),
+        aggregateGeneration: relocationBody.u64(),
         targetAttemptGeneration: relocationBody.u64(),
+        relocationReference: relocationBody.text16(),
+        relocationChecksumCrc32c: relocationBody.u32(),
         sourceNodeRidUtf8Fixture: relocationBody.text8(),
         sourceNodeGeneration: relocationBody.u64(),
         sourceOwnerId: relocationBody.text8(),
@@ -2748,7 +2770,10 @@ function encodeGoldenBody(formatName, decoded) {
     const relocation = new FixtureWriter();
     if (decoded.relocationState !== null) {
       relocation.u64(decoded.relocationState.relocationHigh).u64(decoded.relocationState.relocationLow)
+        .u64(decoded.relocationState.aggregateGeneration)
         .u64(decoded.relocationState.targetAttemptGeneration)
+        .text16(decoded.relocationState.relocationReference)
+        .u32(decoded.relocationState.relocationChecksumCrc32c)
         .text8(decoded.relocationState.sourceNodeRidUtf8Fixture)
         .u64(decoded.relocationState.sourceNodeGeneration)
         .text8(decoded.relocationState.sourceOwnerId)
@@ -3159,6 +3184,269 @@ function validateGoldenFixtures(schema, schemaPath) {
     throw new SchemaValidationError(errors);
   }
   return schema.durableFormats.length;
+}
+
+const AUTHORITY_AGGREGATE_GENERATION_EXHAUSTED = 0x7fff_ffff_ffff_ffffn;
+const AUTHORITY_AGGREGATE_GENERATION_MAX_ISSUED =
+  AUTHORITY_AGGREGATE_GENERATION_EXHAUSTED - 1n;
+
+function authorityRelocationFixtureError(code) {
+  const error = new Error(code);
+  error.code = code;
+  throw error;
+}
+
+function decodeAuthorityRelocationStateFixture(hex, rootAggregateGeneration) {
+  if (typeof hex !== "string" || !/^(?:[0-9a-f]{2})+$/.test(hex)) {
+    authorityRelocationFixtureError("invalid-hex");
+  }
+  const bytes = Buffer.from(hex, "hex");
+  let offset = 0;
+  const take = (size, code = "truncated-field") => {
+    if (!Number.isSafeInteger(size) || size < 0 || offset + size > bytes.length) {
+      authorityRelocationFixtureError(code);
+    }
+    const value = bytes.subarray(offset, offset + size);
+    offset += size;
+    return value;
+  };
+  const u8 = () => take(1)[0];
+  const u16 = () => take(2).readUInt16BE();
+  const u32 = () => take(4).readUInt32BE();
+  const u64 = () => take(8).readBigUInt64BE();
+  const i64 = () => take(8).readBigInt64BE();
+  const sizedBytes8 = (required) => {
+    const length = u8();
+    if (required && length === 0) authorityRelocationFixtureError("invalid-field");
+    return take(length).toString("hex");
+  };
+  const text = (length, required) => {
+    if (required && length === 0) authorityRelocationFixtureError("invalid-field");
+    const encoded = take(length);
+    const value = encoded.toString("utf8");
+    if (!Buffer.from(value, "utf8").equals(encoded) || value.includes("\0")) {
+      authorityRelocationFixtureError("invalid-field");
+    }
+    return value;
+  };
+  const text8 = (required) => text(u8(), required);
+  const text16 = (required) => text(u16(), required);
+  const ordinal = () => {
+    const value = u64();
+    if (value > AUTHORITY_AGGREGATE_GENERATION_EXHAUSTED) {
+      authorityRelocationFixtureError("invalid-field");
+    }
+    return value;
+  };
+  const nonzero = () => {
+    const value = ordinal();
+    if (value === 0n) authorityRelocationFixtureError("invalid-field");
+    return value;
+  };
+
+  if (u8() !== 1) authorityRelocationFixtureError("invalid-presence");
+  const bodyLength = u32();
+  if (bodyLength !== bytes.length - offset) authorityRelocationFixtureError("invalid-body-length");
+  const relocationHigh = u64();
+  const relocationLow = u64();
+  if (relocationHigh === 0n && relocationLow === 0n) {
+    authorityRelocationFixtureError("invalid-field");
+  }
+  const aggregateGeneration = ordinal();
+  const targetAttemptGeneration = ordinal();
+  const relocationReference = text16(true);
+  const relocationChecksumCrc32c = u32();
+  const sourceNodeRidHex = sizedBytes8(true);
+  const sourceNodeGeneration = nonzero();
+  const sourceOwnerId = text8(true);
+  const sourceOwnerLeaseGeneration = nonzero();
+  const targetNodeRidHex = sizedBytes8(false);
+  const targetNodeGeneration = ordinal();
+  const targetOwnerId = text8(false);
+  const targetOwnerLeaseGeneration = ordinal();
+  const coordinatorOwnerId = text8(true);
+  const coordinatorLeaseGeneration = nonzero();
+  const coordinatorNodeRidHex = sizedBytes8(true);
+  const coordinatorNodeGeneration = nonzero();
+  const phaseValue = u8();
+  const phase = fixtureEnum(FIXTURE_ENUMS.relocationPhase, phaseValue, "relocation phase");
+  if (phase === "none") authorityRelocationFixtureError("invalid-phase");
+  const applicationVersion = i64();
+  if (applicationVersion < 0n) authorityRelocationFixtureError("invalid-field");
+  const sourceCleanupState = fixtureEnum(
+    FIXTURE_ENUMS.sourceCleanup,
+    u8(),
+    "source cleanup state",
+  );
+  if (offset !== bytes.length) authorityRelocationFixtureError("trailing-byte");
+
+  const rootGeneration = rootAggregateGeneration === null
+    ? null : BigInt(rootAggregateGeneration);
+  if (phase === "preparing") {
+    if (aggregateGeneration !== 0n) authorityRelocationFixtureError("nonzero-before-root");
+    if (rootGeneration !== null) authorityRelocationFixtureError("unexpected-root");
+  } else {
+    if (aggregateGeneration === 0n) authorityRelocationFixtureError("zero-after-root");
+    if (aggregateGeneration === AUTHORITY_AGGREGATE_GENERATION_EXHAUSTED) {
+      authorityRelocationFixtureError("exhausted-sentinel");
+    }
+    if (aggregateGeneration > AUTHORITY_AGGREGATE_GENERATION_MAX_ISSUED) {
+      authorityRelocationFixtureError("invalid-field");
+    }
+    if (rootGeneration === null || aggregateGeneration !== rootGeneration) {
+      authorityRelocationFixtureError("root-disagreement");
+    }
+  }
+  const targetFencePresent = targetNodeRidHex.length !== 0 || targetNodeGeneration !== 0n
+    || targetOwnerId.length !== 0 || targetOwnerLeaseGeneration !== 0n;
+  if (phase === "preparing" || phase === "captured") {
+    if (targetFencePresent) authorityRelocationFixtureError("unexpected-target-fence");
+  } else if (!targetNodeRidHex.length || targetNodeGeneration === 0n
+      || !targetOwnerId.length || targetOwnerLeaseGeneration === 0n
+      || targetAttemptGeneration === 0n) {
+    authorityRelocationFixtureError("incomplete-target-fence");
+  }
+
+  return {
+    relocation: { high: relocationHigh.toString(), low: relocationLow.toString() },
+    aggregateGeneration: aggregateGeneration.toString(),
+    targetAttemptGeneration: targetAttemptGeneration.toString(),
+    relocationReference,
+    relocationChecksumCrc32c,
+    sourceNodeRidHex,
+    sourceNodeGeneration: sourceNodeGeneration.toString(),
+    sourceOwnerId,
+    sourceOwnerLeaseGeneration: sourceOwnerLeaseGeneration.toString(),
+    targetNodeRidHex,
+    targetNodeGeneration: targetNodeGeneration.toString(),
+    targetOwnerId,
+    targetOwnerLeaseGeneration: targetOwnerLeaseGeneration.toString(),
+    coordinatorOwnerId,
+    coordinatorLeaseGeneration: coordinatorLeaseGeneration.toString(),
+    coordinatorNodeRidHex,
+    coordinatorNodeGeneration: coordinatorNodeGeneration.toString(),
+    phase,
+    applicationVersion: applicationVersion.toString(),
+    sourceCleanupState,
+  };
+}
+
+function encodeAuthorityRelocationStateFixture(decoded) {
+  const body = new FixtureWriter();
+  const writeBytes8 = (hex) => {
+    const bytes = Buffer.from(hex, "hex");
+    body.u8(bytes.length).raw(bytes);
+  };
+  body.u64(decoded.relocation.high).u64(decoded.relocation.low)
+    .u64(decoded.aggregateGeneration).u64(decoded.targetAttemptGeneration)
+    .text16(decoded.relocationReference).u32(decoded.relocationChecksumCrc32c);
+  writeBytes8(decoded.sourceNodeRidHex);
+  body.u64(decoded.sourceNodeGeneration).text8(decoded.sourceOwnerId)
+    .u64(decoded.sourceOwnerLeaseGeneration);
+  writeBytes8(decoded.targetNodeRidHex);
+  body.u64(decoded.targetNodeGeneration).text8(decoded.targetOwnerId)
+    .u64(decoded.targetOwnerLeaseGeneration).text8(decoded.coordinatorOwnerId)
+    .u64(decoded.coordinatorLeaseGeneration);
+  writeBytes8(decoded.coordinatorNodeRidHex);
+  body.u64(decoded.coordinatorNodeGeneration)
+    .u8(fixtureEnumValue(FIXTURE_ENUMS.relocationPhase, decoded.phase, "relocation phase"))
+    .i64(decoded.applicationVersion)
+    .u8(fixtureEnumValue(
+      FIXTURE_ENUMS.sourceCleanup,
+      decoded.sourceCleanupState,
+      "source cleanup state",
+    ));
+  const bodyBytes = body.finish();
+  return new FixtureWriter().u8(1).u32(bodyBytes.length).raw(bodyBytes).finish();
+}
+
+function validateAuthorityRelocationStateFixture(schemaPath) {
+  const fixturePath = path.resolve(
+    path.dirname(schemaPath),
+    "golden/authority-relocation-state-v1.json",
+  );
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+  const errors = [];
+  const fail = (message) => errors.push(`fixture:authority-relocation-state-v1: ${message}`);
+  if (fixture.format !== "authority-relocation-state-v1"
+      || JSON.stringify(fixture.consumers) !== JSON.stringify(["cpp", "dotnet", "jvm", "node"])) {
+    fail("format or consumers");
+  }
+  const offsetLayouts = fixture.notes?.offsetLayouts;
+  if (!isObject(offsetLayouts)
+      || JSON.stringify(Object.keys(offsetLayouts)) !== JSON.stringify([
+        "canonicalEmptyTarget", "canonicalPreparedTarget", "legacyDotnetNode", "legacyJava",
+      ])
+      || Object.values(offsetLayouts).some((entries) => !Array.isArray(entries)
+        || entries.length === 0 || !entries.at(-1).includes("sourceCleanupState"))) {
+    fail("offset notes must document every canonical and legacy field through sourceCleanupState");
+  }
+  const validNames = [
+    "phase1AggregateGenerationZero",
+    "capturedNonzeroAggregateWithZeroAttempt",
+    "preparedDistinctAggregateAndAttempt",
+    "multiParticipantActorAgreement",
+    "multiParticipantSpotAgreement",
+    "maximumIssuedAggregateGeneration",
+  ];
+  const invalidNames = [
+    "exhaustedAggregateGenerationSentinel",
+    "zeroAggregateGenerationAfterRoot",
+    "swappedAggregateAndTargetAttempt",
+    "legacyDotnetNodeTrailingTagU64",
+    "legacyJavaThirdU64Layout",
+    "slotRootAggregateGenerationMismatch",
+  ];
+  if (JSON.stringify((fixture.valid ?? []).map((entry) => entry.name))
+      !== JSON.stringify(validNames)) fail("valid case matrix");
+  if (JSON.stringify((fixture.invalid ?? []).map((entry) => entry.name))
+      !== JSON.stringify(invalidNames)) fail("invalid case matrix");
+  const participantGroups = new Map();
+  for (const entry of fixture.valid ?? []) {
+    try {
+      if (!Array.isArray(offsetLayouts?.[entry.offsetLayout])) {
+        fail(`${entry.name} references an unknown offset layout`);
+      }
+      const decoded = decodeAuthorityRelocationStateFixture(
+        entry.hex,
+        entry.rootAggregateGeneration,
+      );
+      if (JSON.stringify(decoded) !== JSON.stringify(entry.decoded)) {
+        fail(`${entry.name} decoded value mismatch`);
+      }
+      if (!encodeAuthorityRelocationStateFixture(entry.decoded).equals(Buffer.from(entry.hex, "hex"))) {
+        fail(`${entry.name} does not re-encode byte-exactly`);
+      }
+      if (entry.agreementGroup !== undefined) {
+        const identity = `${decoded.relocation.high}:${decoded.relocation.low}:${decoded.aggregateGeneration}`;
+        const previous = participantGroups.get(entry.agreementGroup);
+        if (previous !== undefined && previous !== identity) {
+          fail(`${entry.name} participant aggregate disagreement`);
+        }
+        participantGroups.set(entry.agreementGroup, identity);
+      }
+    } catch (error) {
+      fail(`${entry.name} rejected as ${error.code ?? error.message}`);
+    }
+  }
+  if (participantGroups.get("aggregate-1") !== "1:2:2") {
+    fail("multi-participant agreement group is incomplete");
+  }
+  for (const entry of fixture.invalid ?? []) {
+    try {
+      if (!Array.isArray(offsetLayouts?.[entry.offsetLayout])) {
+        fail(`${entry.name} references an unknown offset layout`);
+      }
+      decodeAuthorityRelocationStateFixture(entry.hex, entry.rootAggregateGeneration);
+      fail(`${entry.name} was accepted`);
+    } catch (error) {
+      if (error.code !== entry.error) {
+        fail(`${entry.name} expected ${entry.error} but got ${error.code ?? error.message}`);
+      }
+    }
+  }
+  if (errors.length > 0) throw new SchemaValidationError(errors);
+  return 1;
 }
 
 function validateRelocationLogicalFixture(schema, schemaPath) {
@@ -4896,7 +5184,10 @@ function validateServiceInvariants(schema, types, fail) {
   const relocationCase = authorityRelocation?.cases?.find((entry) => entry.when?.hasRelocation === "true");
   requireFields(relocationCase?.fields, [
     { name: "relocation", $ref: "relocation-id" },
+    { name: "aggregateGeneration", $ref: "ordinal-or-zero" },
     { name: "targetAttemptGeneration", $ref: "ordinal-or-zero" },
+    { name: "relocationReference", $ref: "relocation-reference" },
+    { name: "relocationChecksumCrc32c", $ref: "u32" },
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceNodeGeneration", $ref: "nonzero-u64" },
     { name: "sourceOwnerId", $ref: "text8" },
@@ -4913,6 +5204,10 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "applicationVersion", $ref: "application-version" },
     { name: "sourceCleanupState", $ref: "source-cleanup-state" },
   ], "$.types", "early relocation phases must allow an absent target fence until Prepared");
+  if (relocationCase?.fields?.find((field) => field.name === "aggregateGeneration")?.maximum
+      !== "9223372036854775806") {
+    fail("$.types", "authority relocation aggregate generation must exclude the exhausted sentinel");
+  }
   const activationRecovery = types.get("authority-activation-recovery-state");
   const activationPresent = activationRecovery?.cases?.find(
     (entry) => entry.when?.hasActivationRecovery === "true",
@@ -6388,6 +6683,49 @@ function runSelfTests(schema) {
       );
       recovery.presence = "all-ready-authorities";
     }],
+    ["authority relocation aggregate generation omitted", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const present = relocation.cases.find((entry) => entry.when.hasRelocation === "true");
+      present.fields = present.fields.filter((field) => field.name !== "aggregateGeneration");
+    }],
+    ["authority relocation aggregate and target attempt swapped", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const fields = relocation.cases.find((entry) => entry.when.hasRelocation === "true").fields;
+      [fields[1], fields[2]] = [fields[2], fields[1]];
+    }],
+    ["authority relocation zero allowed after root", (candidate) => {
+      const integrity = candidate.semanticConstraints.find(
+        (entry) => entry.kind === "location-relocation-storage-integrity",
+      );
+      integrity.authoritySlotProjection.preRootPhase = "captured";
+    }],
+    ["authority relocation exhausted sentinel issued", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const fields = relocation.cases.find((entry) => entry.when.hasRelocation === "true").fields;
+      fields.find((field) => field.name === "aggregateGeneration").maximum =
+        "9223372036854775807";
+    }],
+    ["authority relocation root disagreement allowed", (candidate) => {
+      const integrity = candidate.semanticConstraints.find(
+        (entry) => entry.kind === "location-relocation-storage-integrity",
+      );
+      integrity.authoritySlotProjection.rootAgreement = "may-differ-from-root";
+    }],
+    ["authority relocation legacy trailing tag and u64 present", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const fields = relocation.cases.find((entry) => entry.when.hasRelocation === "true").fields;
+      fields.push(
+        { name: "legacyExtensionTag", $ref: "u8" },
+        { name: "legacyAggregateGeneration", $ref: "u64" },
+      );
+    }],
+    ["authority relocation legacy Java layout restored", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const present = relocation.cases.find((entry) => entry.when.hasRelocation === "true");
+      present.fields = present.fields.filter((field) => ![
+        "targetAttemptGeneration", "relocationReference", "relocationChecksumCrc32c",
+      ].includes(field.name));
+    }],
     ["ZLIA metadata frame omitted", (candidate) => {
       const recovery = candidate.types.find(
         (type) => type.name === "instance-activation-recovery-v1",
@@ -7263,6 +7601,7 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
     }
     const summary = validateSchema(schema);
     const fixtureCount = validateGoldenFixtures(schema, schemaPath);
+    const authorityRelocationFixtureCount = validateAuthorityRelocationStateFixture(schemaPath);
     const logicalFixtureCount = validateRelocationLogicalFixture(schema, schemaPath);
     const jsonFixtureCount = validateFrameworkJsonFixture(schema, schemaPath);
     const multipartFixtureCount = validateFrameworkMultipartFixture(schema, schemaPath);
@@ -7282,6 +7621,7 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
         + `${logicalFixtureCount} logical fixture, ${jsonFixtureCount} JSON fixture, `
         + `${multipartFixtureCount} multipart fixture, `
         + `${authorityKeyFixtureCount} authority key fixture, `
+        + `${authorityRelocationFixtureCount} authority relocation fixture, `
         + `${amendmentFixtureCount} amendment fixture, `
         + `${actorJoinFixtureCount} actorJoin request fixture${suffix}`,
     );
