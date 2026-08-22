@@ -10,9 +10,11 @@
 #include "../../src/runtime/core/flow_state_frame.hpp"
 #include "../../src/runtime/core/msg.hpp"
 #include "../../src/runtime/core/pipe.hpp"
+#include "../../src/api/socket/request_reply_protocol_internal.hpp"
 #include "../../src/runtime/sockets/common/socket_base.hpp"
 
 #include <chrono>
+#include <mutex>
 #include <string.h>
 #include <string>
 
@@ -524,6 +526,136 @@ bool wait_for_pipe_pause (void *socket_,
         msleep (1);
     }
     return false;
+}
+
+//  Round 2, R4. A consumed flow frame that terminates a message must not let
+//  the parts it terminated be parsed as a normal reply. parse_envelope only
+//  looks at the four control parts and does not validate more-flags, so a
+//  message cut short by a misplaced FLOWSTATE would otherwise complete an
+//  outstanding request successfully with an empty payload.
+struct reply_capture_t
+{
+    reply_capture_t () : invoked (false), result (ZLINK_REQUEST_OK) {}
+
+    std::mutex mutex;
+    bool invoked;
+    zlink_request_result_t result;
+};
+
+void capture_reply_result (zlink_request_result_t result_,
+                           zlink_msg_t *parts_,
+                           size_t part_count_,
+                           void *userdata_)
+{
+    reply_capture_t *capture = static_cast<reply_capture_t *> (userdata_);
+    {
+        std::lock_guard<std::mutex> lock (capture->mutex);
+        capture->invoked = true;
+        capture->result = result_;
+    }
+    zlink_multipart_close (parts_, part_count_);
+}
+
+void test_flow_frame_cannot_complete_a_truncated_reply ()
+{
+    const int zero = 0;
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://flow_state_truncated_reply"));
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://flow_state_truncated_reply"));
+
+    reply_capture_t capture;
+    zlink_msg_t request_part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request_part, 4));
+    memcpy (zlink_msg_data (&request_part), "ping", 4);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           zlink_dealer_request (dealer, &request_part, 1,
+                                                 &capture_reply_result,
+                                                 &capture, 0, 1500));
+
+    const zlink_routing_id_t *peer_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                           zlink_router_recv (router, &peer_rid, &request_seq,
+                                              &parts, &part_count, 0));
+    TEST_ASSERT_NOT_NULL (peer_rid);
+    const zlink_routing_id_t rid_value = *peer_rid;
+    zlink_multipart_close (parts, part_count);
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (router)->select_routed_submit_target (&rid_value, &target));
+    TEST_ASSERT_TRUE (target.transport_pair_id != 0);
+
+    zlink::pipe_t *router_completion =
+      as_socket (router)->completion_pipe_for_transport_pair (
+        target.transport_pair_id, target.transport_pair_generation);
+    TEST_ASSERT_NOT_NULL (router_completion);
+
+    //  A well-formed reply envelope for the outstanding request, then a
+    //  FLOWSTATE in place of its final part.
+    zlink_msg_t control[zlink::request_reply::control_part_count];
+    for (size_t i = 0; i < zlink::request_reply::control_part_count; ++i)
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&control[i]));
+    TEST_ASSERT_EQUAL_INT (
+      0, zlink::request_reply::init_envelope_control_parts (
+           control, zlink::request_reply::reply_type, request_seq));
+    for (size_t i = 0; i < zlink::request_reply::control_part_count; ++i) {
+        zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (&control[i]);
+        msg->set_flags (zlink::msg_t::more);
+        TEST_ASSERT_TRUE (router_completion->write (msg));
+        TEST_ASSERT_EQUAL_INT (0, msg->init ());
+        TEST_ASSERT_EQUAL_INT (0, msg->close ());
+    }
+
+    zlink::flow_state::frame_t frame;
+    frame.version = zlink::flow_state::frame_protocol_version;
+    frame.state = k_paused;
+    frame.pair_id = target.transport_pair_id;
+    frame.generation = target.transport_pair_generation;
+    frame.epoch = 21;
+    zlink::msg_t flow;
+    TEST_ASSERT_EQUAL_INT (0, flow.init ());
+    TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&flow, frame));
+    TEST_ASSERT_TRUE (router_completion->write_and_flush (&flow));
+    TEST_ASSERT_EQUAL_INT (0, flow.init ());
+    TEST_ASSERT_EQUAL_INT (0, flow.close ());
+
+    //  Drive the client's completion drain. The truncated envelope must never
+    //  be reported as a successful reply.
+    for (int i = 0; i < 400; ++i) {
+        uint32_t events = 0;
+        (void) as_socket (dealer)->get_events (ZLINK_POLLCOMPLETION, &events);
+        {
+            std::lock_guard<std::mutex> lock (capture.mutex);
+            if (capture.invoked)
+                break;
+        }
+        msleep (1);
+    }
+    {
+        std::lock_guard<std::mutex> lock (capture.mutex);
+        if (capture.invoked)
+            TEST_ASSERT_TRUE (capture.result != ZLINK_REQUEST_OK);
+    }
+
+    //  The frame itself stays Core-internal and is still applied.
+    TEST_ASSERT_TRUE (wait_for_pipe_pause (dealer, target.transport_pair_id,
+                                           target.transport_pair_generation,
+                                           true));
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
 }
 
 //  Round 2, R3. A frame that overtakes pair admission arrives on a pipe that is
@@ -1258,6 +1390,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
     RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);

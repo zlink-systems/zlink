@@ -90,6 +90,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
     while (true) {
         std::vector<zlink_msg_t> parts;
         bool complete = false;
+        bool malformed = false;
         while (!complete) {
             zlink::msg_t frame;
             const int init_rc = frame.init ();
@@ -101,7 +102,8 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 return;
             }
 
-            const bool more = (frame.flags () & zlink::msg_t::more) != 0;
+            const unsigned char frame_flags = frame.flags ();
+            const bool more = (frame_flags & zlink::msg_t::more) != 0;
 
             //  Core-internal flow state never reaches the reply dispatcher and
             //  never becomes an application part. On a local (inproc) pair the
@@ -109,14 +111,24 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             //  intercepted by a session, so it is classified here as well - at
             //  any position, because a frame that is not where it belongs must
             //  still never be delivered.
-            if (socket_->consume_receive_flow_state_frame (pipe_, frame)) {
+            //
+            //  Ordinary reply parts are not command frames, and this is the
+            //  per-part path of every completion, so the command-flag test
+            //  stays inline and only a command frame pays for the call.
+            if ((frame_flags & zlink::msg_t::command) != 0
+                && socket_->consume_receive_flow_state_frame (pipe_, frame)) {
                 const int close_rc = frame.close ();
                 errno_assert (close_rc == 0);
-                //  If it also terminated a message, whatever was accumulated is
-                //  malformed. Hand that on so the dispatcher rejects and closes
-                //  it; an empty accumulation is simply nothing to dispatch.
-                if (!more)
-                    complete = !parts.empty ();
+                if (!more && !parts.empty ()) {
+                    //  The frame stood where this message's final part should
+                    //  have been. The accumulated parts are a truncated
+                    //  message, and parse_envelope does not look at more-flags,
+                    //  so letting them through would complete an outstanding
+                    //  request with a reply that was never sent. End the
+                    //  message and reject it instead.
+                    complete = true;
+                    malformed = true;
+                }
                 continue;
             }
 
@@ -128,7 +140,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             complete = !more;
         }
 
-        if (!state) {
+        if (!state || malformed) {
             zlink::request_reply::close_built_parts (&parts);
             continue;
         }
