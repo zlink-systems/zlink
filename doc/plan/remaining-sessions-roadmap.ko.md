@@ -339,9 +339,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     (:5851) — 계약상 분리된 identity(스펙 외 동일시). 에이전트 STOP·에스컬레이션으로 판정 전환(V0
     단일 값 정본) → **랜딩 `c6e7323872` + cpp 동일시 제거 → dotnet→cpp 그린(11/12)**. A1(Java
     ZLJR 선두삽입→꼬리 append 정렬) 랜딩 `5055950d7d` → java→cpp가 PROTOCOL_ERROR에서 admission
-    통과 후 silent로 전진(잔존 용의 = cpp 감사 #19 스펙 외 등식 — 제거 terra 진행 중). **단
-    dotnet→java가 V0 전환으로 red 회귀**(Java target의 coordinator 기대가 cpp와 상호 모순 의심 —
-    스펙 인용 판정 포함 sol 진단 중, dotnet→node는 그린 유지). 현재 10/12+1 요동. 이월
+    통과 후 silent로 전진(잔존 용의 = cpp 감사 #19 스펙 외 등식 — 제거 terra 진행 중). dotnet→java V0 회귀는 **sol 스펙 인용 판정
+    수렴**: coordinator expectedStoreVersion = exact identity(V0), target CAS는 live V2 별도
+    (21:1073/:1140, schema:4425) — Java StateMachine:1341-1345의 live==V0 동일시가 스펙 외(Java
+    자신도 :1165 CAS는 live 사용). 제거 terra 진행 중. cpp #19 등식 제거 랜딩 `170ff4cf4e` —
+    java→cpp는 여전히 silent(별도 잔존, Java fix 후 재진단 예정). 이월
     카드: ① Java의 .NET slot 완전 semantic decode는 여전히 불가(field-12+ 레이아웃 발산 —
     strip은 경계 기반이라 무영향, 별도 판정 대상) ② cpp
     test_cpp_framework_actor_authority_payload의 user-spot hex assertion **HEAD 기존 red**(베이스
