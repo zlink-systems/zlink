@@ -469,8 +469,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     {ok:false} 무시(:45)로 조용한 유실. 스펙 48:125 위반. 1차 ruling(identity 가드)은 **구조적 무력 판명**
     (재접속 refresh 경로가 session identity를 아예 미탑재 — 에이전트 정적 증명·STOP). 관측성
     수정 랜딩 `454cb74f31`로 실오류 확정: 2라운드 JoinGameMsg bound-session send가 registry에
-    거부(:569 — queue 소멸 vs seal 불일치 분기 미상). 2차 계측 진단(sol) 중 — 거부 분기·seal
-    수명 타임라인 실측 후 올바른 계층에 재판정. 이하 기각된 정적 진단 기록:
+    거부(:569 — queue 소멸 vs seal 불일치 분기 미상). 2차 계측 진단 수렴 — **ruling ⓐ 확정**:
+    resolveRemoteBoundSessionTarget(:564)가 받는 sourceSessionRid 미사용이 identity 유실점 —
+    그 경계서 sessionNodeRid/sessionRid 보존 → 기존 successor 가드 유효화(스펙 48:116·20:153/
+    :324-332; ⓑ send전 seal제거·ⓒ registry 재평가는 스펙 위반 기각). sonnet 구현+TTT 10회
+    검증 중. 이하 기각된 정적 진단 기록:
   - **[기각된 정적 가설] Node TTT 모드 C 정적 진단(2026-08-22)**: 재접속 세션
     JoinGameNotify 미전달의 유력 기전 — relocation seal 창에서 push()가 fire-and-forget 보류 경로
     (bound-actor-relay-sender.ts:79-98)로 들어간 뒤, 브라우저 물리 재접속이
