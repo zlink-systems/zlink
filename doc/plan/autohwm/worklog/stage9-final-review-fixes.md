@@ -109,3 +109,43 @@ reserved minimum)은 남겼다.
 - 이전 회차의 기존 실패 3건(`test_xpub_nodrop`, `test_router_multiple_dealers`,
   `test_zmp_metadata`)은 다른 작업자가 고쳐 이제 통과한다.
 - `git diff --check` 통과.
+
+## M3. Gauge를 받은 상태가 아니라 계상된 상태에서 반납한다
+
+Gate 재점검이 남긴 마지막 lifecycle 결함이다. 종료 경로가 `flow_paused_connections` 반납
+여부를 pair record의 **마지막으로 받은** 상태(`remote_flow_paused`)로 판단하고 있었다. 그러나
+frame은 수락될 때 기록되고 pipe가 실제로 뒤집힐 때 비로소 계상된다. Pair가 그 사이에서
+종료될 수 있고 gauge는 socket 전역이라, 두 갈래 모두 gauge를 망가뜨렸다.
+
+- 받았지만 적용되지 않은 pause로 종료 → 더한 적 없는 count를 반납해 **다른 paused pair의
+  count를 가져간다**.
+- 계상된 pause 위에 RUNNING을 받았지만 아직 적용하지 않은 채 종료 → 종료 시점에 안 멈춘
+  것처럼 보여 **계상된 pause가 영구히 누수된다**.
+
+Pair record에 명시적인 계상 marker(`remote_flow_pause_accounted`,
+`socket_base.hpp:105-112`)를 두고, gauge와 duration을 움직이는 바로 그 호출
+(`socket_base_flow_state.cpp:284-294`, `flow_state_applied ()`)에서 같이 움직인다. 종료
+(`socket_base_api.cpp:847-850`)는 오직 이 marker만 보고 반납한다.
+
+Test 전용으로 pair의 받은 상태만 기록하는 setter를 추가했다
+(`test_set_pair_received_flow_state`). 수락과 적용 사이의 간극은 production에서 thread 간
+경쟁이라 그대로는 결정적으로 재현할 수 없다.
+
+| Test | Red 증거 |
+|---|---|
+| `test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone` | `:681 Expected 1 Was 0` — 정말로 paused인 다른 pair의 count를 빼앗김 |
+| `test_terminating_an_accounted_pause_releases_it_and_closes_the_duration` | `:728 Expected TRUE Was FALSE` — gauge가 1에 남아 누수. 기존 종료 test가 검사하지 않던 pause duration도 함께 단언한다 |
+| `test_paused_pair_lifecycle_keeps_gauge_and_events_matched` (기존 4-cycle) | 계속 통과 |
+
+Commit `dada6e8473`.
+
+### M3 이후 실행 결과
+
+- `test_flow_state_c_api` 15 tests 단독 12회 → 12/12
+- Focused 8 + flow test 3개 + poller/timer + `unittest_pipe_byte_charge` → 14/14
+- 전체 sweep 91개: `contract_public_surface`는 다른 작업자가 spec 항목을 추가해 이제 통과한다.
+  Sweep을 반복하면 매번 서로 다른 test 하나가 timeout으로 실패하는데(`test_zmp_request_reply`,
+  `test_backpressure_matrix_pubsub_regression` 등) 모두 재실행하면 통과한다. 같은 host에서 다른
+  작업자들이 동시에 빌드·측정 중인 부하 영향이며, 이전에 실패하던 test 전부와 이번 신규 test를
+  함께 돌리면 7/7 통과한다.
+- `git diff --check` 통과.
