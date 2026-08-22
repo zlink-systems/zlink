@@ -82,7 +82,7 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.equal(nativeBridge.includes('zlink_routed_send_parts'), false);
     strict_1.default.equal(nativeBridge.includes('zlink_routed_request_parts'), false);
 });
-(0, node_test_1.default)('bindings samples stay on the Core 0.11.1 raw socket boundary', () => {
+(0, node_test_1.default)('bindings samples stay on the Core 0.12.0 raw socket boundary', () => {
     const sampleRoots = [
         node_path_1.default.resolve(__dirname, '../../samples'),
         node_path_1.default.resolve(__dirname, '../../../javascript/samples')

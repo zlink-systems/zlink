@@ -97,7 +97,7 @@ test('managed routed admission uses only exact per-part Core APIs', () => {
   assert.equal(nativeBridge.includes('zlink_routed_request_parts'), false);
 });
 
-test('bindings samples stay on the Core 0.11.1 raw socket boundary', () => {
+test('bindings samples stay on the Core 0.12.0 raw socket boundary', () => {
   const sampleRoots = [
     path.resolve(__dirname, '../../samples'),
     path.resolve(__dirname, '../../../javascript/samples')
