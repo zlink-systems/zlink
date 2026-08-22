@@ -2,16 +2,21 @@
 
 /*
  * Focused contract test for the receive-flow-state binding parity
- * (doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md §5.1, §7.3, §8.1.1).
+ * (doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md §5.1, §7.3, §8.1.1)
+ * and the follow-up flow-state monitor parity (events + status metrics).
  *
  * Scope: enum ABI parity, DEALER/ROUTER success + idempotent repeat,
  * not-supported mapping for PAIR/PUB/SUB/STREAM, invalid handle/argument
- * mapping, absence of any flow-frame API on the public surface, and an
+ * mapping, absence of any flow-frame API on the public surface, an
  * existing-HWM/EAGAIN-equivalent smoke check that this feature does not
- * change unrelated send back-pressure behavior.
+ * change unrelated send back-pressure behavior, and monitor parity: the new
+ * event constants and flag constants match the C ABI, the ALL mask covers
+ * them, and the new status metrics are present (and zero on a fresh socket).
  */
 
 #include "support.hpp"
+
+#include <zlink.h>
 
 #include <type_traits>
 
@@ -95,6 +100,83 @@ static_assert (!has_pause_bypass_send_t<zlink::dealer_socket_t>::value,
                "no socket may expose a PAUSE-bypass send variant");
 static_assert (!has_pause_bypass_send_t<zlink::router_socket_t>::value,
                "no socket may expose a PAUSE-bypass send variant");
+
+// Monitor event constants must match the C ABI bit values exactly, and the
+// ALL mask must cover them.
+static_assert (static_cast<uint32_t> (zlink::monitor_event::send_flow_paused)
+                 == static_cast<uint32_t> (ZLINK_EVENT_SEND_FLOW_PAUSED),
+               "monitor_event::send_flow_paused must equal ZLINK_EVENT_SEND_FLOW_PAUSED");
+static_assert (static_cast<uint32_t> (zlink::monitor_event::send_flow_resumed)
+                 == static_cast<uint32_t> (ZLINK_EVENT_SEND_FLOW_RESUMED),
+               "monitor_event::send_flow_resumed must equal ZLINK_EVENT_SEND_FLOW_RESUMED");
+static_assert (static_cast<uint32_t> (zlink::monitor_event::flow_state_stale)
+                 == static_cast<uint32_t> (ZLINK_EVENT_FLOW_STATE_STALE),
+               "monitor_event::flow_state_stale must equal ZLINK_EVENT_FLOW_STATE_STALE");
+static_assert (static_cast<uint32_t> (zlink::monitor_event::all)
+                 == static_cast<uint32_t> (ZLINK_EVENT_ALL),
+               "monitor_event::all must equal ZLINK_EVENT_ALL (0x7FFFF)");
+static_assert ((static_cast<uint32_t> (zlink::monitor_event::all)
+                & static_cast<uint32_t> (zlink::monitor_event::send_flow_paused))
+                 == static_cast<uint32_t> (zlink::monitor_event::send_flow_paused),
+               "monitor_event::all must cover send_flow_paused");
+static_assert ((static_cast<uint32_t> (zlink::monitor_event::all)
+                & static_cast<uint32_t> (zlink::monitor_event::send_flow_resumed))
+                 == static_cast<uint32_t> (zlink::monitor_event::send_flow_resumed),
+               "monitor_event::all must cover send_flow_resumed");
+static_assert ((static_cast<uint32_t> (zlink::monitor_event::all)
+                & static_cast<uint32_t> (zlink::monitor_event::flow_state_stale))
+                 == static_cast<uint32_t> (zlink::monitor_event::flow_state_stale),
+               "monitor_event::all must cover flow_state_stale");
+
+// Monitor event flag constants (carried in monitor_event_t::flags) must match
+// the C ABI bit values exactly.
+static_assert (static_cast<uint32_t> (zlink::monitor_event_flag_t::send_flow_writable)
+                 == ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE,
+               "monitor_event_flag_t::send_flow_writable must equal the C flag bit");
+static_assert (
+  static_cast<uint32_t> (zlink::monitor_event_flag_t::flow_state_stale_generation)
+    == ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION,
+  "monitor_event_flag_t::flow_state_stale_generation must equal the C flag bit");
+static_assert (static_cast<uint32_t> (zlink::monitor_event_flag_t::flow_state_stale_epoch)
+                 == ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH,
+               "monitor_event_flag_t::flow_state_stale_epoch must equal the C flag bit");
+static_assert (static_cast<uint32_t> (zlink::monitor_event_flag_t::connection_ready_edge)
+                 == ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE,
+               "monitor_event_flag_t::connection_ready_edge must equal the C flag bit");
+
+// The event type must surface flags/value/routing-id/pair-id/generation.
+static_assert (std::is_same<decltype (zlink::monitor_event_t ().flags), std::uint32_t>::value,
+               "monitor_event_t must expose flags as uint32_t");
+static_assert (std::is_same<decltype (zlink::monitor_event_t ().value), std::uint64_t>::value,
+               "monitor_event_t must expose value as uint64_t");
+static_assert (
+  std::is_same<decltype (zlink::monitor_event_t ().routing_id),
+               std::optional<zlink::routing_id_t>>::value,
+  "monitor_event_t must expose an optional routing_id");
+static_assert (
+  std::is_same<decltype (zlink::monitor_event_t ().transport_pair_id), std::uint64_t>::value,
+  "monitor_event_t must expose transport_pair_id");
+static_assert (
+  std::is_same<decltype (zlink::monitor_event_t ().transport_pair_generation),
+               std::uint64_t>::value,
+  "monitor_event_t must expose transport_pair_generation");
+
+// The status projection must expose the five flow metrics as uint64_t.
+static_assert (
+  std::is_same<decltype (zlink::monitor_status_t ().flow_paused_connections), uint64_t>::value,
+  "monitor status must expose flow_paused_connections as uint64_t");
+static_assert (
+  std::is_same<decltype (zlink::monitor_status_t ().flow_pause_applied_total), uint64_t>::value,
+  "monitor status must expose flow_pause_applied_total as uint64_t");
+static_assert (
+  std::is_same<decltype (zlink::monitor_status_t ().flow_resume_applied_total), uint64_t>::value,
+  "monitor status must expose flow_resume_applied_total as uint64_t");
+static_assert (
+  std::is_same<decltype (zlink::monitor_status_t ().flow_state_stale_total), uint64_t>::value,
+  "monitor status must expose flow_state_stale_total as uint64_t");
+static_assert (
+  std::is_same<decltype (zlink::monitor_status_t ().flow_pause_duration_ms), uint64_t>::value,
+  "monitor status must expose flow_pause_duration_ms as uint64_t");
 
 namespace
 {
@@ -249,6 +331,25 @@ void test_existing_hwm_backpressure_is_unchanged ()
     assert (backpressured);
 }
 
+// Monitor status parity: the five new flow metrics are present on the public
+// projection and read back as zero on a fresh, unconnected PAIR socket (a
+// socket type with no completion lane, so these fields never populate).
+void test_monitor_status_flow_metrics_are_present_and_zero ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t pair (ctx);
+    zlink::socket_monitor_t monitor = pair.monitor_open (zlink::monitor_event::all);
+
+    const zlink::monitor_status_t snapshot = monitor.status ();
+    assert (snapshot.abi_version == ZLINK_MONITOR_STATUS_ABI_VERSION);
+    assert (snapshot.struct_size == sizeof (zlink_monitor_status_t));
+    assert (snapshot.flow_paused_connections == 0u);
+    assert (snapshot.flow_pause_applied_total == 0u);
+    assert (snapshot.flow_resume_applied_total == 0u);
+    assert (snapshot.flow_state_stale_total == 0u);
+    assert (snapshot.flow_pause_duration_ms == 0u);
+}
+
 } // namespace
 
 int main ()
@@ -259,5 +360,6 @@ int main ()
     test_invalid_handle_reports_invalid_handle ();
     test_close_then_set_reports_invalid_handle_or_invalid_state ();
     test_existing_hwm_backpressure_is_unchanged ();
+    test_monitor_status_flow_metrics_are_present_and_zero ();
     return 0;
 }

@@ -75,6 +75,11 @@ monitor_status_t make_monitor_status (const zlink_monitor_status_t &native_)
     status.minimum_core_message_charge_bytes = native_.minimum_core_message_charge_bytes;
     status.oversize_message_admission_count = native_.oversize_message_admission_count;
     status.oversize_message_admission_max_bytes = native_.oversize_message_admission_max_bytes;
+    status.flow_paused_connections = native_.flow_paused_connections;
+    status.flow_pause_applied_total = native_.flow_pause_applied_total;
+    status.flow_resume_applied_total = native_.flow_resume_applied_total;
+    status.flow_state_stale_total = native_.flow_state_stale_total;
+    status.flow_pause_duration_ms = native_.flow_pause_duration_ms;
     return status;
 }
 

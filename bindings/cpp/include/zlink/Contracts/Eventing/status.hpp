@@ -84,7 +84,12 @@ struct monitor_status_t
         rcv_bytes_in_flight (0),
         minimum_core_message_charge_bytes (0),
         oversize_message_admission_count (0),
-        oversize_message_admission_max_bytes (0)
+        oversize_message_admission_max_bytes (0),
+        flow_paused_connections (0),
+        flow_pause_applied_total (0),
+        flow_resume_applied_total (0),
+        flow_state_stale_total (0),
+        flow_pause_duration_ms (0)
     {
     }
 
@@ -121,6 +126,15 @@ struct monitor_status_t
     uint64_t minimum_core_message_charge_bytes;
     uint64_t oversize_message_admission_count;
     uint64_t oversize_message_admission_max_bytes;
+
+    /* Paired DEALER/ROUTER completion-lane receive-flow observation
+     * (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4;
+     * zero for socket types without a completion lane. */
+    uint64_t flow_paused_connections;
+    uint64_t flow_pause_applied_total;
+    uint64_t flow_resume_applied_total;
+    uint64_t flow_state_stale_total;
+    uint64_t flow_pause_duration_ms;
 };
 
 using monitor_source_kind_t = monitor_source_kind;
