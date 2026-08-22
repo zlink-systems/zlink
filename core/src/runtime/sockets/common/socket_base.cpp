@@ -118,6 +118,7 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _local_peer_weight (100),
     _local_receive_flow_state (flow_state::receive_flow_running),
     _local_receive_flow_epoch (0),
+    _flow_state_sequence (0),
     _test_transport_write_release_edges (0)
 {
     _term_pipe_acks_registered = 0;

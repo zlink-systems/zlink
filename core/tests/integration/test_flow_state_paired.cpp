@@ -871,6 +871,10 @@ void attach_window_injects_pause (zlink::socket_base_t *socket_,
 {
     if (socket_ != g_window_socket || g_window_fired)
         return;
+    //  Only the admission that actually makes the pair ready is the one whose
+    //  decision and publication this test means to race.
+    if (!socket_->test_pair_is_ready (pair_id_, generation_))
+        return;
     zlink::pipe_t *completion =
       socket_->test_pair_pipe (pair_id_, generation_, true);
     if (!completion)
@@ -889,6 +893,56 @@ void attach_window_injects_pause (zlink::socket_base_t *socket_,
     if (zlink::flow_state::init_frame (&msg, frame) == 0)
         (void) socket_->consume_receive_flow_state_frame (completion, msg);
     (void) msg.close ();
+}
+
+//  Pass 3, S1. The decision is taken under the table mutex but published after
+//  it is dropped. A state accepted in that gap must not be overtaken by the
+//  already-decided edge, so the publication is validated against the
+//  flow-state sequence the decision was taken with.
+void test_pause_accepted_in_the_publish_window_blocks_the_writable_edge ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    g_window_socket = as_socket (dealer);
+    g_window_fired = false;
+    zlink::socket_base_t::test_set_attach_publish_window_hook (
+      &attach_window_injects_pause);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool paused_seen = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
+            && target.transport_pair_id != 0
+            && as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            paused_seen = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    zlink::socket_base_t::test_set_attach_publish_window_hook (NULL);
+    TEST_ASSERT_TRUE (g_window_fired);
+    TEST_ASSERT_TRUE (paused_seen);
+    TEST_ASSERT_EQUAL_UINT32 (
+      0, as_socket (dealer)->test_transport_write_release_edges ());
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
 }
 
 void test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge ()
@@ -1515,6 +1569,7 @@ int main ()
     RUN_TEST (test_generation_change_resets_the_epoch_sequence);
     RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
+    RUN_TEST (test_pause_accepted_in_the_publish_window_blocks_the_writable_edge);
     RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);

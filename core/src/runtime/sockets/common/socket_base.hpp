@@ -286,6 +286,8 @@ class socket_base_t : public own_t,
     //  Whether any pair has accepted a remote state, which is what consumes
     //  the epoch. A buffered frame must not show up here.
     bool test_any_pair_accepted_flow_state () const;
+    bool test_pair_is_ready (uint64_t transport_pair_id_,
+                             uint64_t transport_pair_generation_) const;
     //  Seeds and reads the socket-wide epoch, so the wraparound boundary is
     //  reachable without performing 2^64 state changes.
     void test_set_local_receive_flow_epoch (uint64_t epoch_);
@@ -299,6 +301,13 @@ class socket_base_t : public own_t,
     static void test_set_attach_flow_window_hook (
       test_attach_flow_window_fn hook_);
     static void test_run_attach_flow_window_hook (
+      zlink::socket_base_t *socket_, uint64_t transport_pair_id_,
+      uint64_t generation_);
+    //  Second window: after the decision's critical section has been left and
+    //  before any edge is published.
+    static void test_set_attach_publish_window_hook (
+      test_attach_flow_window_fn hook_);
+    static void test_run_attach_publish_window_hook (
       zlink::socket_base_t *socket_, uint64_t transport_pair_id_,
       uint64_t generation_);
 #endif
@@ -947,6 +956,11 @@ class socket_base_t : public own_t,
     //  with the same state succeeds without emitting anything.
     unsigned char _local_receive_flow_state;
     uint64_t _local_receive_flow_epoch;
+    //  Bumped under _transport_pairs_sync every time an accepted remote state
+    //  actually changes. A decision taken under that mutex carries the value it
+    //  saw, and a publication that finds it moved is abandoned: the state that
+    //  moved it is already queued to the pipe and publishes its own edge.
+    std::atomic<uint64_t> _flow_state_sequence;
     //  Kept in all builds so the class layout does not vary with the test
     //  configuration, exactly like the counters above. Only a test build ever
     //  writes or reads it.

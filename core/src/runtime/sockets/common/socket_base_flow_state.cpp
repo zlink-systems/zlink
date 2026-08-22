@@ -240,6 +240,9 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         if (pair.remote_flow_paused == paused)
             return true;
         pair.remote_flow_paused = paused;
+        //  Published while the mutex is held, so a decision taken under it
+        //  either sees this change or is abandoned before it publishes.
+        _flow_state_sequence.fetch_add (1, std::memory_order_acq_rel);
         application = pair.application;
         if (application && !application->retain_lifetime_ref ())
             application = NULL;
@@ -393,9 +396,12 @@ void zlink::socket_base_t::promote_pending_flow_state_locked (
         return;
     if (pair_.remote_flow_seen && epoch <= pair_.remote_flow_epoch)
         return;
+    const bool changed = pair_.remote_flow_paused != paused;
     pair_.remote_flow_epoch = epoch;
     pair_.remote_flow_seen = true;
     pair_.remote_flow_paused = paused;
+    if (changed)
+        _flow_state_sequence.fetch_add (1, std::memory_order_acq_rel);
 }
 
 #ifdef ZLINK_BUILD_TESTS
@@ -409,5 +415,38 @@ uint64_t zlink::socket_base_t::test_local_receive_flow_epoch () const
 {
     scoped_lock_t lock (_transport_pairs_sync);
     return _local_receive_flow_epoch;
+}
+#endif
+
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+zlink::socket_base_t::test_attach_flow_window_fn
+  tls_attach_publish_window_hook = NULL;
+}
+
+void zlink::socket_base_t::test_set_attach_publish_window_hook (
+  test_attach_flow_window_fn hook_)
+{
+    tls_attach_publish_window_hook = hook_;
+}
+
+void zlink::socket_base_t::test_run_attach_publish_window_hook (
+  socket_base_t *socket_, uint64_t transport_pair_id_, uint64_t generation_)
+{
+    test_attach_flow_window_fn hook = tls_attach_publish_window_hook;
+    if (hook)
+        hook (socket_, transport_pair_id_, generation_);
+}
+#endif
+
+#ifdef ZLINK_BUILD_TESTS
+bool zlink::socket_base_t::test_pair_is_ready (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::const_iterator it = _transport_pairs.find (
+      transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
+    return it != _transport_pairs.end () && it->second.ready;
 }
 #endif

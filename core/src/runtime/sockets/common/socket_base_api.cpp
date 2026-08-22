@@ -253,8 +253,10 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     bool publish_flow_edge = false;
     bool transport_write_released = false;
     pipe_t *flow_edge_pipe = NULL;
+    uint64_t decided_sequence = 0;
     {
         scoped_lock_t lock (_transport_pairs_sync);
+        decided_sequence = _flow_state_sequence.load (std::memory_order_acquire);
         const transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
         if (pair_id != 0 && it != _transport_pairs.end ()) {
             //  A frame held while the pair was still unvalidated becomes the
@@ -273,6 +275,26 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         if (ready_application)
             transport_write_released =
               ready_application->release_writes_for_transport_pair ();
+    }
+#ifdef ZLINK_BUILD_TESTS
+    if (pair_id != 0)
+        test_run_attach_publish_window_hook (this, pair_key.first,
+                                             pair_key.second);
+#endif
+    //  Publishing an edge calls back into the socket and cannot run under the
+    //  table mutex, so the decision above and its publication are not one
+    //  step. Validate the decision against the flow-state sequence it was
+    //  taken with: if any state was accepted since, abandon the publication.
+    //
+    //  Abandoning is the correct re-decision, not merely the safe one. The
+    //  sequence only moves on a real state change, and that change is already
+    //  queued to this pipe: if it is a PAUSE no edge is wanted, and if it is a
+    //  RESUME the pipe transitions when that command runs and publishes the
+    //  edge itself.
+    if (_flow_state_sequence.load (std::memory_order_acquire)
+        != decided_sequence) {
+        publish_flow_edge = false;
+        transport_write_released = false;
     }
     if (publish_flow_edge)
         write_activated (flow_edge_pipe);
