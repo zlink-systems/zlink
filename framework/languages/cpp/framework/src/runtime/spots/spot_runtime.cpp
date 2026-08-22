@@ -5763,9 +5763,7 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
                 == admission->source_owner_lease_generation
            && prepare.target.target_node_routing_id == local_node
            && prepare.target.target_node_generation
-                == owner_node_generation (*target_context->second._state)
-           && prepare.target_attempt_generation
-                == prepare.target.target_node_generation;
+                == owner_node_generation (*target_context->second._state);
 }
 
 bool spot_node_runtime_t::consume_actor_join_recovery (
@@ -5836,7 +5834,7 @@ bool spot_node_runtime_t::consume_actor_join_recovery (
              == recovery->target_authority_owner_generation
         && recovery->target_node_routing_id == local_node
         && recovery->target_node_generation
-             == prepare.target_attempt_generation
+             == prepare.target.target_node_generation
         && recovery->target_spot_id
              == std::string (admission->target_spot_id)
         && recovery->target_spot_generation
