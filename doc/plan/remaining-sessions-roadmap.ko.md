@@ -291,8 +291,15 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     ManagedMeshNode:2262→:9557→RemoteJoiner:741, Java는 outer `application/x-zlink-multipart` 요구
     Adapter:363 → DATA_LOST). Ruling: .NET completion서 inner/outer 분리, ZLJR엔 outer — **랜딩
     `ad07fbdaa7`**(RecoveryReplyContentType 신설, DATA_LOST 소멸 실증, dotnet→node·node→dotnet
-    회귀 그린). 다음 rung: dotnet→java/cpp 공히 admission 후 silent join 미완료(무예외 —
-    /tmp/tmp.HMPoT5wneX, /tmp/tmp.P4MeZUUPz7) — sol 3라운드 계측 진단 중. java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
+    회귀 그린). **3라운드 계측 수렴**: ⓐ dotnet→java =
+    Java ZLAU codec signed 양수 검사(PayloadCodec:262)가 .NET high-bit nodeGeneration(u64) 거부
+    → authority invalid → 40 FAILED + **failure 경로 이중 결함**(pre-stage cleanup
+    requireActorStage 동기 예외로 FAILED reply 미전송 → silent, StateMachine:474/:652). Ruling:
+    opaque token용 unsigned-nonzero reader 분리 + failure reply 보장 — terra 수정 중. ⓑ
+    dotnet→cpp = .NET TargetAttemptGeneration=1(:967) vs cpp validator lifecycle 동일성 요구
+    (spot_runtime.cpp:5764). 스펙 28:73은 attempt="시도 순서" — cpp 검사·어제 java 정렬 모두
+    스펙 어긋 의심이나 node→cpp 그린(Node도 lifecycle 송신 가능성) + multiattempt 의미 걸림 →
+    **4언어 attempt-generation 설계 판정 opus 분석 중**(OPEN RULING). java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
     때문(정합 증거 아님). .NET coordinator fence 수정(1264653381)은 dotnet-java 재실행서 여전히
     joined 미관측 — 다음 불일치 여부 sol 연속 계측 진단 중.
     .NET 이중 decode 수정 랜딩 `adfa26824b` 후 새 rung **sol 계측으로 수렴**: unbound join에서
