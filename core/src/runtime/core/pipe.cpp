@@ -1256,7 +1256,11 @@ bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
         //  attach-time replay queued after a newer acceptance would reinstate
         //  the older state, and the socket record - which already holds the
         //  newer one - would deduplicate every correction away.
-        if (epoch_ != 0 && epoch_ <= _remote_flow_epoch)
+        //
+        //  0 is the "never set" marker and is invalid at every receiving
+        //  layer, this one included: treating it as a reset would let it
+        //  override whatever ordering the pipe has already established.
+        if (epoch_ == 0 || epoch_ <= _remote_flow_epoch)
             return false;
         _remote_flow_epoch = epoch_;
         if (_remote_flow_paused == paused)

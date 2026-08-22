@@ -45,6 +45,7 @@ int zlink::socket_base_t::set_local_receive_flow_state (int state_)
 
     const unsigned char state = static_cast<unsigned char> (state_);
     uint64_t epoch = 0;
+    bool wrapped = false;
     std::vector<pipe_t *> targets;
     {
         socket_public_api_lock_scope_t guard (lifecycle);
@@ -56,28 +57,35 @@ int zlink::socket_base_t::set_local_receive_flow_state (int state_)
             return 0;
         }
         _local_receive_flow_state = state;
-        //  0 is the "never set" marker and the frame contract refuses it, so
-        //  wrapping into it would silence this socket's flow state for good.
-        //  Skip it, exactly like the transport-pair generation does.
-        _local_receive_flow_epoch = _local_receive_flow_epoch == UINT64_MAX
-                                      ? 1
-                                      : _local_receive_flow_epoch + 1;
+        //  Continuing the sequence past the top would emit epochs an existing
+        //  receiver rejects as stale, freezing every current pair until its
+        //  generation changes anyway. Restart the sequence and force that
+        //  generation change instead: the pairs are torn down, reconnect
+        //  brings a fresh generation, and a fresh generation accepts the
+        //  sequence from the start. 0 stays reserved as "never set".
+        wrapped = _local_receive_flow_epoch == UINT64_MAX;
+        _local_receive_flow_epoch = wrapped ? 1 : _local_receive_flow_epoch + 1;
         epoch = _local_receive_flow_epoch;
         for (transport_pairs_t::iterator it = _transport_pairs.begin (),
                                          end = _transport_pairs.end ();
              it != end; ++it) {
-            pipe_t *completion = it->second.completion;
-            if (!it->second.ready || !completion)
+            //  The table slot is what proves the pipe is still alive; the pipe
+            //  itself is used after the table is unlocked.
+            pipe_t *target = wrapped && it->second.application
+                               ? it->second.application
+                               : it->second.completion;
+            if (!it->second.ready || !target)
                 continue;
-            //  The table slot is what proves the pipe is still alive; the frame
-            //  itself is written after the table is unlocked.
-            if (completion->retain_lifetime_ref ())
-                targets.push_back (completion);
+            if (target->retain_lifetime_ref ())
+                targets.push_back (target);
         }
     }
 
     for (size_t i = 0; i < targets.size (); ++i) {
-        write_receive_flow_state_frame (targets[i], state, epoch);
+        if (wrapped)
+            targets[i]->terminate (false);
+        else
+            write_receive_flow_state_frame (targets[i], state, epoch);
         targets[i]->release_lifetime_ref ();
     }
     return 0;

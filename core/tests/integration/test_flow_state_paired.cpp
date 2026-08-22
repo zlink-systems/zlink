@@ -895,6 +895,79 @@ void attach_window_injects_pause (zlink::socket_base_t *socket_,
     (void) msg.close ();
 }
 
+//  Pass 3, S4. Epoch 0 is the "never set" marker. The frame decoder already
+//  refuses it, and the pipe command must refuse it too rather than treat it as
+//  a reset that overrides whatever ordering the pipe has established.
+void test_epoch_zero_is_refused_by_the_pipe_command ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 0));
+    for (int i = 0; i < 100; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_FALSE (
+      as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+        fixture.pair_id, fixture.pair_generation));
+
+    //  An ordinary epoch still applies, so the refusal is about 0 and not
+    //  about the pipe having stopped accepting states.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 1));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+
+    fixture.teardown ();
+}
+
+//  Pass 3, S4. Continuing the sequence after a wrap would emit epochs an
+//  existing receiver rejects as stale, freezing the pair until its generation
+//  changes anyway. Force that generation change instead: the pairs are torn
+//  down, reconnect brings a fresh generation, and a fresh generation accepts
+//  the sequence from the start.
+void test_epoch_wraparound_forces_a_new_connection_generation ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    const uint64_t first_generation = fixture.pair_generation;
+    as_socket (fixture.router)->test_set_local_receive_flow_epoch (UINT64_MAX);
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (fixture.router)->set_local_receive_flow_state (k_paused));
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.router)->test_local_receive_flow_epoch () != 0);
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool replaced_and_paused = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (8000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (fixture.dealer)->select_routed_submit_target (NULL, &target)
+              == 0
+            && target.transport_pair_id != 0
+            //  Reconnect keeps the pair id and advances the generation, which
+            //  is exactly the fresh-generation path a receiver accepts
+            //  unconditionally.
+            && target.transport_pair_generation != first_generation
+            && as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            replaced_and_paused = true;
+            break;
+        }
+        (void) as_socket (fixture.router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (replaced_and_paused);
+
+    fixture.teardown ();
+}
+
 //  Pass 3, S3. A held state names its candidate by transport connection id,
 //  not by pipe address: a pipe pointer is not an identity across teardown,
 //  because the object can be freed and a later allocation can land on the same
@@ -1739,6 +1812,8 @@ int main ()
     RUN_TEST (test_generation_change_resets_the_epoch_sequence);
     RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
+    RUN_TEST (test_epoch_zero_is_refused_by_the_pipe_command);
+    RUN_TEST (test_epoch_wraparound_forces_a_new_connection_generation);
     RUN_TEST (test_held_state_is_dropped_when_its_connection_goes_away);
     RUN_TEST (test_losing_candidate_cannot_destroy_the_winners_held_state);
     RUN_TEST (test_pause_accepted_in_the_publish_window_blocks_the_writable_edge);
