@@ -608,14 +608,30 @@ void test_paused_pair_lifecycle_keeps_gauge_and_events_matched ()
         void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
         TEST_ASSERT_SUCCESS_ERRNO (
           zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        const int recv_timeout = 200;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+          router, ZLINK_OPT_RCVTIMEO, &recv_timeout, sizeof (recv_timeout)));
         bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
-        send_string_expect_success (dealer, "hello", 0);
+        //  The previous cycle's pipe may still be draining, so a first "hello"
+        //  can be lost with the connection it was written to. Retry until the
+        //  fresh route carries one rather than blocking forever on recv.
         char rid[256];
-        TEST_ASSERT_GREATER_THAN_INT (
-          0, zlink_recv (router, rid, sizeof (rid), 0));
+        int rid_size = -1;
+        const std::chrono::steady_clock::time_point hello_deadline =
+          deadline_in_ms (6000);
+        while (rid_size <= 0 && !deadline_expired (hello_deadline)) {
+            (void) zlink_send (dealer, "hello", 5, ZLINK_DONTWAIT);
+            rid_size = zlink_recv (router, rid, sizeof (rid), 0);
+        }
+        TEST_ASSERT_GREATER_THAN_INT (0, rid_size);
         recv_string_expect_success (router, "hello", 0);
+        //  Drain any duplicate "hello" the retry loop produced.
+        char spare[256];
+        while (zlink_recv (router, spare, sizeof (spare), ZLINK_DONTWAIT) > 0) {
+            (void) zlink_recv (router, spare, sizeof (spare), ZLINK_DONTWAIT);
+        }
 
         TEST_ASSERT_EQUAL_INT (
           ZLINK_CONFIG_OK,
