@@ -71,8 +71,8 @@ public record ZLinkMeshNodeDescriptor(
         entrySpotId.ifPresent(
             value -> systems.zlink.framework.runtime.internal.spots
                 .ZLinkSpotIdValidator.requireValid(value));
-        if ((objectRole == ZLinkMeshNodeObjectRole.SERVER)
-            != entrySpotId.isPresent()) {
+        if (entrySpotId.isPresent()
+            && objectRole != ZLinkMeshNodeObjectRole.SERVER) {
             throw new IllegalArgumentException(
                 "Only an Object Server descriptor must publish entrySpotId");
         }
