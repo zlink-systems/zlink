@@ -432,7 +432,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     Java 방향(host User-Spot mode 신설) → C++ 방향(host actor-join mode 완전 신설, 최대) →
     12방향 완성 → 통과 스테이지 `all` 편입(무음 금지). 하니스:
     framework/languages/cpp/cross-language/run_cross_language_smoke.sh. 진행: 항목별 lockstep + spec-gap.
-  - [~] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어` — **4언어 배치 전부 랜딩(2026-08-23)**: Java
+  - [x] 3c [A7] 사설 dialect 제거(H-15/S5) `4언어` — **완료(2026-08-23, 사용자 확인)**: DoD 충족
+    (사설 dialect 코드 4언어 제거 + 게이트 그린 + 12셀 매트릭스 2연속 그린). 이월 2건은 독립
+    카드로 이동: ① spec 51 §9 reply 조항 오류수정(판정 완료, 파일 잠금 해제 대기 —
+    scratchpad spec51-reply-framing-amendment.md) ② .NET revert-target 재검토(단계 4 .NET 배치에
+    동승). 단계-마감 sol 리뷰는 표면이 겹치는 단계 4 slot 정렬 랜딩 시 통합 실시. — Java
     `aee042f05b` · .NET `9ec9ede6c0` · cpp `277a3ede16`(WSL 크래시 중단분 재개·검증) · Node
     `694d849a7e`(0x01 사설 flavor·ZLAJ 삭제, 28 reply 프레이밍 정본 정렬 + ZLJR outer 검증,
     capacity spotTypes ordinal 정렬; harness 7/7 그린). 잔여(마감 전): ① .NET revert-target 재검토
