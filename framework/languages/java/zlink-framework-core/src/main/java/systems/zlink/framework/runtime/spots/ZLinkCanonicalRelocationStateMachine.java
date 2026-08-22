@@ -1338,9 +1338,7 @@ final class ZLinkCanonicalRelocationStateMachine
             }
         }
         validateResolvedPrimary(prepare, participants);
-        if (primarySnapshot == null
-            || !primarySnapshot.storeVersion().equals(
-                prepare.coordinator().expectedAuthorityStoreVersion())) {
+        if (primarySnapshot == null) {
             throw new IllegalStateException(
                 "relocation coordinator authority version differs");
         }
