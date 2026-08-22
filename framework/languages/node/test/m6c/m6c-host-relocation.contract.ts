@@ -1976,11 +1976,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           payload: Buffer.from('canonical-request')
         },
         {
-          packetName: 'ZLinkFrameworkMultipart',
-          contentType: 'application/vnd.zlink.framework-multipart',
-          payload: Buffer.from('private-fallback')
-        },
-        {
           targetNodeGeneration: 2n,
           authorityOwnerGeneration: 11n,
           ownerLeaseGeneration: 3n

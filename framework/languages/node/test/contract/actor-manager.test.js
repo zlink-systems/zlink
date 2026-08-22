@@ -21,10 +21,6 @@ const {
 const {
   runActorHandlerWithDeferredJoins
 } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
-const {
-  decodeFrameworkActorJoinPayload,
-  encodeFrameworkActorJoinPayload
-} = require('../../packages/framework/dist/runtime/messaging/actor-join-payload-codec');
 const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
 const {
   resolveLifecycleHandler
@@ -44,27 +40,9 @@ function customTextSerializer(prefix = 'custom:') {
   };
 }
 
-function actorJoinPayloadText(message) {
-  return decodeFrameworkActorJoinPayload(message.data()).payload.toString();
+function actorJoinPayloadText(payload) {
+  return Buffer.from(payload.payload).toString();
 }
-
-test('local Actor Join envelope preserves content type and accepts legacy JSON payloads', () => {
-  const registry = new Map([['application/x-custom-text', customTextSerializer()]]);
-  const request = payloadCodec.encodeFrameworkPayloadMessage('hello', registry);
-  try {
-    const decoded = decodeFrameworkActorJoinPayload(
-      encodeFrameworkActorJoinPayload(request)
-    );
-    assert.equal(decoded.contentType, 'application/x-custom-text');
-    assert.equal(decoded.payload.toString(), 'custom:hello');
-  } finally {
-    request.close();
-  }
-
-  const legacy = decodeFrameworkActorJoinPayload(Buffer.from('{"legacy":true}'));
-  assert.equal(legacy.contentType, 'application/json');
-  assert.equal(legacy.payload.toString(), '{"legacy":true}');
-});
 
 function encodedMessage(value) {
   return framework.ZLinkMessage.fromEncoded(zlink.Message.from(value));

@@ -85,7 +85,6 @@ import {
   frameworkPayloadContentType,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
-import { decodeFrameworkActorJoinPayload } from '../messaging/actor-join-payload-codec';
 import {
   decodeChannelEnvelope,
   decodeChannelPayload,
@@ -116,6 +115,7 @@ import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 import type {
   CanonicalActorJoinRecovery
 } from '../foundation/actor-join-recovery-codec';
+import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../foundation/service-wire-constants.generated';
 
 export { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 export {
@@ -1947,17 +1947,10 @@ export class DefaultZLinkSpotManager {
         );
         callbackRequest = ownedCallbackRequest;
       } else if (callbackRequest !== undefined) {
-        const decodedRequest = control.canonicalActorJoin === undefined
-          ? decodeFrameworkActorJoinPayload(
-              callbackRequest.data(),
-              requestContentType
-            )
-          : undefined;
         ownedCallbackRequest = RuntimeMessage.from(
-          decodedRequest?.payload ?? callbackRequest.data()
+          callbackRequest.data()
         );
         callbackRequest = ownedCallbackRequest;
-        requestContentType = decodedRequest?.contentType ?? requestContentType;
       }
       if (control.canonicalActorJoin !== undefined) {
         if (callbackRequest === undefined) {
@@ -2817,10 +2810,9 @@ export class DefaultZLinkSpotManager {
       }
       return;
     }
-    const admittedContentType = outcome.replyContentType
-      ?? (admittedReply.byteLength === 0
-        ? recovery.replyContentType
-        : 'application/octet-stream');
+    const admittedContentType = admittedReply.byteLength === 0
+      ? recovery.replyContentType
+      : SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
     if (recovery.replyContentType !== admittedContentType) {
       throw new Error(
         `Actor Join recovery '${recovery.request.handoffId}' changed its reply content type.`

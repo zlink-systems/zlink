@@ -43,7 +43,6 @@ import {
   encodeActorCreateHeader,
   encodeActorDestroyHeader,
   encodeActorHeader,
-  encodeActorJoinHeader,
   encodeActorLookupHeader,
   encodeBoundSessionBindHeader,
   encodeBoundSessionReplacedHeader,
@@ -58,7 +57,6 @@ import {
   encodeUserSpotCreateHeader,
   M6bServiceWireCommand,
   M6bServiceWireFlag,
-  M6bPrivateActorJoinFlag,
   sessionBindingFromWire,
   type ServiceActorRouteFence,
   type ServiceBoundSessionActorAuthority,
@@ -80,7 +78,6 @@ import {
   encodeActorJoin28,
   type ActorJoin28
 } from '../protocol/service_wire_pilot_codec.generated';
-import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
 import {
   canonicalActorJoinHandoffId,
   routingIdBytes
@@ -193,7 +190,6 @@ export interface ServiceStatefulMailboxData {
 
 export interface ServiceCanonicalActorJoinCandidate {
   readonly request: ServiceApplicationPayload;
-  readonly fallback: ServiceApplicationPayload;
   readonly actorFence: {
     readonly targetNodeGeneration: bigint;
     readonly authorityOwnerGeneration: bigint;
@@ -378,11 +374,7 @@ export class ServiceStatefulRuntime {
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceAuthorityTerminals = new Map<string, number>();
   private readonly instanceApplicationWaiters = new Map<string, Set<() => void>>();
-  private readonly actorJoinPhases = new Map<bigint, 'admission' | 'commit' | 'abort' | undefined>();
-  private readonly actorJoinTransferIds = new Map<bigint, string | undefined>();
   private readonly canonicalActorJoinHandoffs = new Map<bigint, string>();
-  private readonly actorJoinCommittedTransfers = new Map<string, number>();
-  private readonly actorJoinSourceLeaves = new Map<string, number>();
   private readonly actorRoutes = new Map<string, ServiceActorRouteFence>();
   // Direct application messages use the logical Spot ID. Actor joins and
   // lifecycle controls use the exact Spot object generation. Keep both views
@@ -1536,7 +1528,6 @@ export class ServiceStatefulRuntime {
     targetSpot: ServiceSpotRef,
     targetSpotGeneration: bigint,
     request: ServiceApplicationPayload,
-    fallback: ServiceApplicationPayload,
     actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
     local: ServiceCanonicalActorJoinCandidate['local'],
     timeoutMs: number
@@ -1551,9 +1542,9 @@ export class ServiceStatefulRuntime {
       actor,
       targetNodeRid,
       target,
-      fallback,
+      request,
       timeoutMs,
-      { request, fallback, actorFence, local }
+      { request, actorFence, local }
     );
     return pending;
   }
@@ -1580,7 +1571,6 @@ export class ServiceStatefulRuntime {
     actor: ServiceActorRef,
     targetNodeRid: string,
     request: ServiceApplicationPayload,
-    fallback: ServiceApplicationPayload,
     actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
     local: ServiceCanonicalActorJoinCandidate['local'],
     timeoutMs: number
@@ -1591,9 +1581,9 @@ export class ServiceStatefulRuntime {
       actor,
       targetNodeRid,
       this.tryEntrySpotFence(targetNodeRid),
-      fallback,
+      request,
       timeoutMs,
-      { request, fallback, actorFence, local }
+      { request, actorFence, local }
     );
     return pending;
   }
@@ -1921,18 +1911,12 @@ export class ServiceStatefulRuntime {
     let canonicalActorJoin: ActorJoin28 | undefined;
     try {
       if (record.command === M6bServiceWireCommand.actorJoin) {
-        if (record.flags === 0) {
-          try {
-            canonicalActorJoin = decodeActorJoin28(record.parts);
-          } catch {
-            return 'protocolError';
-          }
-          decoded = statefulActorJoinFromCanonical(canonicalActorJoin);
-        } else if (record.flags === M6bPrivateActorJoinFlag) {
-          decoded = decodeStatefulHeader(record.parts[0]!);
-        } else {
+        try {
+          canonicalActorJoin = decodeActorJoin28(record.parts);
+        } catch {
           return 'protocolError';
         }
+        decoded = statefulActorJoinFromCanonical(canonicalActorJoin);
       } else {
         decoded = decodeStatefulHeader(record.parts[0]!);
       }
@@ -3210,13 +3194,6 @@ export class ServiceStatefulRuntime {
           })
     };
     const applicationFrame = payloadFrame ?? encodeApplicationPayload(emptyPayload());
-    // Command 28 carries only the canonical proposal.  Its local transfer
-    // phase is therefore admission by definition; it must not be inferred
-    // from (or added to) the application envelope.
-    const actorJoinPhase = canonicalActorJoin === undefined
-      ? actorJoinPhaseFromApplicationFrame(payloadFrame)
-      : 'admission';
-    const actorJoinTransferId = actorJoinTransferIdFromApplicationFrame(payloadFrame);
     return this.enqueueLifecycleFrame(
       ingress,
       `spot:${record.target.spot.spotId}`,
@@ -3230,34 +3207,11 @@ export class ServiceStatefulRuntime {
         kindData: control,
         ...(canonicalApplicationPayload === undefined ? {} : { canonicalApplicationPayload }),
         reply: (terminalResult, failureCode, replyPayload, tail) => {
-          const committedReplay = actorJoinTransferId !== undefined
-            && this.hasCommittedActorJoin(actorJoinTransferId);
-          if (
-            actorJoinPhase !== 'admission'
-            && actorJoinPhase !== 'abort'
-            && !committedReplay
-            && terminalResult === RequestResult.Ok
-            && tail?.kind === 'actorJoin'
-            && tail.joinResult === 0
-          ) {
-            this.commitJoinedActor(record.actor.actor, record.target.spot, previousEpoch + 1n);
-            if (actorJoinTransferId !== undefined) {
-              this.rememberCommittedActorJoin(actorJoinTransferId);
-            }
-          }
-          const replyTail = committedReplay
-            && tail?.kind === 'actorJoin'
-            ? {
-                ...tail,
-                membershipEpoch: this.registry.actor(record.actor.actor.actorId)?.membershipEpoch
-                  ?? tail.membershipEpoch
-              }
-            : tail;
           return this.replyPort(ingress, record.correlation, 'actorJoin')(
             terminalResult,
             failureCode,
             replyPayload,
-            replyTail
+            tail
           );
         }
       }
@@ -4228,8 +4182,6 @@ export class ServiceStatefulRuntime {
       reply => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
       error => {
         if (operationKind === 'actorJoin') {
-          this.actorJoinPhases.delete(pending.id);
-          this.actorJoinTransferIds.delete(pending.id);
           this.canonicalActorJoinHandoffs.delete(pending.id);
         }
         this.operations.fail(pending.id, error);
@@ -4257,21 +4209,7 @@ export class ServiceStatefulRuntime {
       });
       return;
     }
-    const canUseCanonical = canonical !== undefined
-      && this.canOriginateCanonicalActorJoin(targetNodeRid, target);
-    this.actorJoinPhases.set(
-      pending.id,
-      canUseCanonical
-        ? canonical.local.phase
-        : actorJoinMetadataFromMultipartPayload(payload?.payload)?.phase
-    );
-    this.actorJoinTransferIds.set(
-      pending.id,
-      canUseCanonical
-        ? canonical.local.transferId
-        : actorJoinMetadataFromMultipartPayload(payload?.payload)?.transferId
-    );
-    if (canUseCanonical) {
+    if (canonical !== undefined) {
       this.canonicalActorJoinHandoffs.set(pending.id, canonicalActorJoinHandoffId({
         sourceActorNodeRid: routingIdBytes(actor.nodeRid as never),
         actorId: actor.actorId,
@@ -4283,37 +4221,27 @@ export class ServiceStatefulRuntime {
     this.submitRequest(
       pending,
       targetNodeRid,
-      canUseCanonical
-        ? encodeActorJoin28({
-            correlation: pending.id,
-            actor: {
-              id: actor.actorId,
-              generation: actor.generation,
-              targetNodeRid: routingIdBytes(actor.nodeRid as never),
-              targetNodeGeneration: actorRoute.targetNodeGeneration,
-              expectedAuthorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
-              expectedOwnerLeaseGeneration: actorRoute.ownerLeaseGeneration
-            },
-            entry: target.spot.spotId === targetNodeRid,
-            targetSpot: {
-              id: target.spot.spotId,
-              generation: target.spot.generation,
-              targetNodeRid: routingIdBytes(target.targetNodeRid as never),
-              targetNodeGeneration: target.targetNodeGeneration,
-              expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
-              expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
-            },
-            payload: canonical.request
-          }).map(frame => Buffer.from(frame))
-        : [
-            encodeActorJoinHeader(
-              pending.id,
-              actorRoute,
-              target.spot.spotId === targetNodeRid,
-              target
-            ),
-            ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
-          ],
+      encodeActorJoin28({
+        correlation: pending.id,
+        actor: {
+          id: actor.actorId,
+          generation: actor.generation,
+          targetNodeRid: routingIdBytes(actor.nodeRid as never),
+          targetNodeGeneration: actorRoute.targetNodeGeneration,
+          expectedAuthorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
+          expectedOwnerLeaseGeneration: actorRoute.ownerLeaseGeneration
+        },
+        entry: target.spot.spotId === targetNodeRid,
+        targetSpot: {
+          id: target.spot.spotId,
+          generation: target.spot.generation,
+          targetNodeRid: routingIdBytes(target.targetNodeRid as never),
+          targetNodeGeneration: target.targetNodeGeneration,
+          expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
+          expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
+        },
+        ...(payload === undefined ? {} : { payload })
+      }).map(frame => Buffer.from(frame)),
       timeoutMs,
       'actorJoin',
       actor
@@ -4329,10 +4257,19 @@ export class ServiceStatefulRuntime {
     actor?: ServiceActorRef,
     deadlineUnixMs?: bigint
   ): void {
-    const decoded = decodeStatefulHeader(ingress.parts[0]!);
-    const payloadFrame = ingress.parts.length < 2
-      ? undefined
-      : ingress.parts[1];
+    const canonicalActorJoin = operationKind === 'actorJoin'
+      ? decodeActorJoin28(ingress.parts)
+      : undefined;
+    const decoded = canonicalActorJoin === undefined
+      ? decodeStatefulHeader(ingress.parts[0]!)
+      : statefulActorJoinFromCanonical(canonicalActorJoin);
+    const payloadFrame = canonicalActorJoin?.payload === undefined
+      ? (ingress.parts.length < 2 ? undefined : ingress.parts[1])
+      : encodeApplicationPayload({
+          packetName: canonicalActorJoin.payload.packetName,
+          contentType: canonicalActorJoin.payload.contentType,
+          payload: Buffer.from(canonicalActorJoin.payload.payload)
+        });
     if (decoded.kind === 'actorLookup') {
       const found = this.registry.actor(decoded.actorId);
       this.operations.reply(pending.id, found === undefined
@@ -4435,24 +4372,21 @@ export class ServiceStatefulRuntime {
           targetSpot: decoded.target.spot,
           targetActor: decoded.actor.actor,
           kindData: control,
+          ...(canonicalActorJoin?.payload === undefined
+            ? {}
+            : {
+                canonicalApplicationPayload: {
+                  packetName: canonicalActorJoin.payload.packetName,
+                  contentType: canonicalActorJoin.payload.contentType,
+                  payload: Buffer.from(canonicalActorJoin.payload.payload)
+                }
+              }),
           isPending: () => this.operations.isPending(pending.id),
           ...(deadlineUnixMs === undefined ? {} : { deadlineUnixMs }),
           onTerminalCompletion: () => completeOnJoinDispatchTerminal?.(),
           reply: (terminalResult, failureCode, replyPayload, tail) => {
             if (actorJoinReplyAccepted) return false;
-            const actorJoinTransferId = actorJoinTransferIdFromApplicationFrame(payloadFrame);
-            const committedReplay = actorJoinTransferId !== undefined
-              && this.hasCommittedActorJoin(actorJoinTransferId);
-            const replyTail = committedReplay
-              && tail?.kind === 'actorJoin'
-              ? {
-                  ...tail,
-                  membershipEpoch: this.registry.actor(decoded.actor.actor.actorId)?.membershipEpoch
-                  ?? tail.membershipEpoch
-                }
-              : tail;
-            const acceptedJoin = !committedReplay
-              && terminalResult === RequestResult.Ok
+            const acceptedJoin = terminalResult === RequestResult.Ok
               && tail?.kind === 'actorJoin'
               && tail.joinResult === 0;
             if (acceptedJoin && this.operations.isPending(pending.id)) {
@@ -4464,7 +4398,7 @@ export class ServiceStatefulRuntime {
               const completeReply = (): void => {
                 if (completed) return;
                 completed = true;
-                localReply(terminalResult, failureCode, replyPayload, replyTail);
+                localReply(terminalResult, failureCode, replyPayload, tail);
               };
               this.commitJoinedActor(
                 decoded.actor.actor,
@@ -4472,9 +4406,6 @@ export class ServiceStatefulRuntime {
                 control.currentMembershipEpoch,
                 targetSpotKind === 'user' ? completeReply : undefined
               );
-              if (actorJoinTransferId !== undefined) {
-                this.rememberCommittedActorJoin(actorJoinTransferId);
-              }
               if (targetSpotKind === 'entry') {
                 completeOnJoinDispatchTerminal = completeReply;
               } else if (targetSpotKind !== 'user') {
@@ -4486,7 +4417,7 @@ export class ServiceStatefulRuntime {
               terminalResult,
               failureCode,
               replyPayload,
-              replyTail
+              tail
             );
             if (acceptedReply) actorJoinReplyAccepted = true;
             return acceptedReply;
@@ -4566,12 +4497,6 @@ export class ServiceStatefulRuntime {
     actor: ServiceActorRef | undefined,
     reply: readonly Buffer[]
   ): void {
-    const actorJoinPhase = operationKind === 'actorJoin'
-      ? this.actorJoinPhases.get(pending.id)
-      : undefined;
-    const actorJoinTransferId = operationKind === 'actorJoin'
-      ? this.actorJoinTransferIds.get(pending.id)
-      : undefined;
     const canonicalActorJoinHandoffId = operationKind === 'actorJoin'
       ? this.canonicalActorJoinHandoffs.get(pending.id)
       : undefined;
@@ -4579,24 +4504,6 @@ export class ServiceStatefulRuntime {
       if (reply.length < 1 || reply.length > 2) throw new ServiceWireProtocolError('Invalid M6B reply parts.');
       const decoded = decodeStatefulReply(reply[0]!, pending.id, operationKind, reply.length >= 2);
       const payload = reply.length < 2 ? undefined : decodeApplicationPayload(reply[1]);
-      if (
-        operationKind === 'actorJoin'
-        && actor !== undefined
-        && actorJoinPhase !== 'admission'
-        && actorJoinPhase !== 'abort'
-        && decoded.terminalResult === RequestResult.Ok
-        && decoded.tail?.kind === 'actorJoin'
-        && decoded.tail.joinResult === 0
-        && (
-          actorJoinTransferId === undefined
-          || !this.hasSourceLeave(actorJoinTransferId)
-        )
-      ) {
-        this.enqueueRemoteSourceLeave(actor);
-        if (actorJoinTransferId !== undefined) {
-          this.rememberSourceLeave(actorJoinTransferId);
-        }
-      }
       this.operations.reply(pending.id, this.resultFromReply(
         decoded.terminalResult,
         decoded.failureCode,
@@ -4613,33 +4520,9 @@ export class ServiceStatefulRuntime {
       this.operations.fail(pending.id, translateWireReplyDecodeError(error));
     } finally {
       if (operationKind === 'actorJoin') {
-        this.actorJoinPhases.delete(pending.id);
-        this.actorJoinTransferIds.delete(pending.id);
         this.canonicalActorJoinHandoffs.delete(pending.id);
       }
     }
-  }
-
-  private enqueueRemoteSourceLeave(actor: ServiceActorRef): void {
-    const current = this.registry.requireActor(actor);
-    const transition = this.registry.leaveActor(actor, current.membershipEpoch);
-    // The Core-owned remote Entry transfer emits the LEFT lifecycle event to
-    // the source membership. The actor state already points at the Entry
-    // Spot, so routing this control to currentSpot would skip the source
-    // User Spot's onLeaveActor callback and only notify the Entry callback.
-    this.enqueueActorControl(transition.previousSpot.spotId, {
-      kind: 'actorControl',
-      lifecycleKind: ActorLifecycleKind.Left,
-      previousActor: transition.actor.ref,
-      currentActor: transition.actor.ref,
-      previousSpotId: transition.previousSpot.spotId,
-      currentSpotId: transition.currentSpot.spotId,
-      previousSpotGeneration: transition.previousSpot.generation,
-      currentSpotGeneration: transition.currentSpot.generation,
-      previousMembershipEpoch: transition.previousMembershipEpoch,
-      currentMembershipEpoch: transition.currentMembershipEpoch,
-      resultCode: 0
-    });
   }
 
   private resultFromReply(
@@ -5069,16 +4952,6 @@ export class ServiceStatefulRuntime {
     };
   }
 
-  private canOriginateCanonicalActorJoin(
-    targetNodeRid: string,
-    target: ServiceSpotRouteFence
-  ): boolean {
-    if (targetNodeRid === this.nodeRid || target.targetNodeRid !== targetNodeRid) return false;
-    const peer = this.raw.topology.peer(targetNodeRid);
-    return peer?.descriptor.lifecycleGeneration === target.targetNodeGeneration
-      && peer.descriptor.protocolCapabilities.includes(SERVICE_WIRE_REQUIRED_CAPABILITY);
-  }
-
   private trySpotFence(
     targetNodeRid: string,
     spot: ServiceSpotRef
@@ -5242,33 +5115,6 @@ export class ServiceStatefulRuntime {
     }
   }
 
-  private hasCommittedActorJoin(transferId: string): boolean {
-    const expiresAt = this.actorJoinCommittedTransfers.get(transferId);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
-      this.actorJoinCommittedTransfers.delete(transferId);
-      return false;
-    }
-    return true;
-  }
-
-  private rememberCommittedActorJoin(transferId: string): void {
-    this.actorJoinCommittedTransfers.set(transferId, Date.now() + 30_000);
-  }
-
-  private hasSourceLeave(transferId: string): boolean {
-    const expiresAt = this.actorJoinSourceLeaves.get(transferId);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
-      this.actorJoinSourceLeaves.delete(transferId);
-      return false;
-    }
-    return true;
-  }
-
-  private rememberSourceLeave(transferId: string): void {
-    this.actorJoinSourceLeaves.set(transferId, Date.now() + 30_000);
-  }
 
   private requireOpen(): void {
     if (this.closed) throw new Error('Stateful runtime is closed.');
@@ -5724,61 +5570,6 @@ function statefulActorJoinFromCanonical(value: ActorJoin28): Extract<
 
 function decodeCanonicalRoutingId(bytes: Uint8Array): string {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
-}
-
-function actorJoinPhaseFromApplicationFrame(
-  frame: Uint8Array | undefined
-): 'admission' | 'commit' | 'abort' | undefined {
-  return actorJoinMetadataFromApplicationFrame(frame)?.phase;
-}
-
-function actorJoinTransferIdFromApplicationFrame(
-  frame: Uint8Array | undefined
-): string | undefined {
-  return actorJoinMetadataFromApplicationFrame(frame)?.transferId;
-}
-
-function actorJoinMetadataFromApplicationFrame(
-  frame: Uint8Array | undefined
-): {
-  readonly phase: 'admission' | 'commit' | 'abort' | undefined;
-  readonly transferId: string | undefined;
-} | undefined {
-  if (frame === undefined) return undefined;
-  try {
-    return actorJoinMetadataFromMultipartPayload(decodeApplicationPayload(frame).payload);
-  } catch {
-    return undefined;
-  }
-}
-
-function actorJoinMetadataFromMultipartPayload(
-  payload: Uint8Array | undefined
-): {
-  readonly phase: 'admission' | 'commit' | 'abort' | undefined;
-  readonly transferId: string | undefined;
-} | undefined {
-  if (payload === undefined || payload.byteLength < 8) return undefined;
-  const bytes = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
-  const partCount = bytes.readUInt32BE(0);
-  if (partCount < 1 || bytes.length < 8) return undefined;
-  const partLength = bytes.readUInt32BE(4);
-  if (partLength > bytes.length - 8) return undefined;
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(bytes.subarray(8, 8 + partLength).toString('utf8'));
-  } catch {
-    return undefined;
-  }
-  if (typeof decoded !== 'object' || decoded === null) return undefined;
-  const phase = (decoded as { readonly phase?: unknown }).phase;
-  const transferId = (decoded as { readonly transferId?: unknown }).transferId;
-  return {
-    phase: phase === 'admission' || phase === 'commit' || phase === 'abort'
-      ? phase
-      : undefined,
-    transferId: typeof transferId === 'string' ? transferId : undefined
-  };
 }
 
 function instanceOperationParts(

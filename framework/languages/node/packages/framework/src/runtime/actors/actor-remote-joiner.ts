@@ -65,8 +65,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
           }),
       completionTableProvider: options.completionTableProvider,
       actorJoinRelocation: options.actorJoinRelocation,
-      messageSerializers: options.messageSerializers,
-      entrySpotIdProvider: options.entrySpotIdProvider
+      messageSerializers: options.messageSerializers
     });
   }
 

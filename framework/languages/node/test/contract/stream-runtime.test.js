@@ -66,7 +66,6 @@ const {
 } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
 const actorPacketWire = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-const actorJoinPayloadCodec = require('../../packages/framework/dist/runtime/messaging/actor-join-payload-codec');
 const {
   ServiceWireProtocolError
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
@@ -5471,14 +5470,13 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
     primaryMeshNode: {
       status: () => ({ routingId: actorRid }),
       joinActorSpot(actorRef, targetNodeRid, targetSpotId, targetGeneration, request) {
-        const decodedRequest = actorJoinPayloadCodec.decodeFrameworkActorJoinPayload(request);
         submitted.push({
           actorRef,
           targetNodeRid,
           targetSpotId,
           targetGeneration,
-          request: decodedRequest.payload.toString(),
-          contentType: decodedRequest.contentType
+          request: Buffer.from(request.payload).toString(),
+          contentType: request.contentType
         });
         return operationId;
       }

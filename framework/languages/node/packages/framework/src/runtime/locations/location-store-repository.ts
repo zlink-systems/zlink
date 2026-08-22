@@ -3199,13 +3199,28 @@ function counterNextValue(counter: ZLinkStoreReadResult): bigint {
 }
 
 function encodeJson<T>(value: T): Uint8Array {
-  return Buffer.from(JSON.stringify(value, (_key, candidate) => {
+  return Buffer.from(JSON.stringify(value, (key, candidate) => {
     if (typeof candidate === 'bigint') return { $bigint: candidate.toString() };
     if (candidate instanceof Uint8Array) {
       return { $bytes: Buffer.from(candidate).toString('base64') };
     }
+    if (
+      key === 'spotTypes'
+      && candidate !== null
+      && typeof candidate === 'object'
+      && !Array.isArray(candidate)
+    ) {
+      return Object.fromEntries(
+        Object.entries(candidate as Record<string, unknown>)
+          .sort(([left], [right]) => compareUtf16Ordinal(left, right))
+      );
+    }
     return candidate;
   }), 'utf8');
+}
+
+function compareUtf16Ordinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function decodeJson<T>(value: Uint8Array): T {

@@ -301,17 +301,15 @@ export interface ZLinkBackendMeshNode {
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
     timeoutMs?: number
   ): MeshOperationId;
-  /** Internal canonical command-28 candidate; the transport owns its gate. */
-  joinActorSpotCanonical?(
+  joinActorSpotCanonical(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
     request: ServiceApplicationPayload,
-    fallbackParts: MessageLike | readonly MessageLike[],
     actorFence: {
       readonly targetNodeGeneration: bigint;
       readonly authorityOwnerGeneration: bigint;
@@ -323,14 +321,13 @@ export interface ZLinkBackendMeshNode {
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
     timeoutMs?: number
   ): MeshOperationId;
-  joinActorEntrySpotCanonical?(
+  joinActorEntrySpotCanonical(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
     request: ServiceApplicationPayload,
-    fallbackParts: MessageLike | readonly MessageLike[],
     actorFence: {
       readonly targetNodeGeneration: bigint;
       readonly authorityOwnerGeneration: bigint;

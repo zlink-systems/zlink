@@ -19,6 +19,7 @@ import {
   encodeCanonicalServiceWireText,
   encodeServiceWireRoutingId
 } from './service-wire-binary-primitives';
+import { decodeActorJoin28 } from '../protocol/service_wire_pilot_codec.generated';
 
 const PREFIX_SIZE = 5;
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
@@ -26,7 +27,6 @@ const MAGIC_1 = SERVICE_WIRE_MAGIC[1];
 const MAJOR = SERVICE_WIRE_MAJOR;
 
 export const M6bServiceWireCommand = ServiceWireCommand;
-export const M6bPrivateActorJoinFlag = 0x01;
 
 export interface ServiceWireOperationId {
   readonly high: bigint;
@@ -650,21 +650,6 @@ export function encodeActorDestroyHeader(
   return concat(prefix(M6bServiceWireCommand.actorDestroy), u64(correlation), actorFence(actor));
 }
 
-export function encodeActorJoinHeader(
-  correlation: bigint,
-  actor: ServiceActorRouteFence,
-  entry: boolean,
-  target: ServiceSpotRouteFence
-): Buffer {
-  return concat(
-    prefix(M6bServiceWireCommand.actorJoin, M6bPrivateActorJoinFlag),
-    u64(correlation),
-    actorFence(actor),
-    Buffer.of(entry ? 1 : 0),
-    spotFence(target)
-  );
-}
-
 export function encodeBoundSessionSendHeader(
   actor: ServiceActorRouteFence,
   expectedBindingGeneration: bigint
@@ -1168,13 +1153,33 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
       return result;
     }
     case M6bServiceWireCommand.actorJoin: {
-      requireFlags(command.flags, M6bPrivateActorJoinFlag);
-      const correlation = reader.nonZeroU64('correlation');
-      const actor = reader.actorFence();
-      const entry = reader.bool8('entry');
-      const target = reader.spotFence();
-      reader.end();
-      return { kind: 'actorJoin', correlation, actor, entry, target };
+      // Command 28 is canonical-only; the generated codec owns its validation.
+      const decoded = decodeActorJoin28([frame]);
+      return {
+        kind: 'actorJoin',
+        correlation: decoded.correlation,
+        actor: {
+          actor: {
+            actorId: decoded.actor.id,
+            generation: decoded.actor.generation,
+            nodeRid: Buffer.from(decoded.actor.targetNodeRid).toString('utf8')
+          },
+          targetNodeGeneration: decoded.actor.targetNodeGeneration,
+          authorityOwnerGeneration: decoded.actor.expectedAuthorityOwnerGeneration,
+          ownerLeaseGeneration: decoded.actor.expectedOwnerLeaseGeneration
+        },
+        entry: decoded.entry,
+        target: {
+          spot: {
+            spotId: decoded.targetSpot.id,
+            generation: decoded.targetSpot.generation
+          },
+          targetNodeRid: Buffer.from(decoded.targetSpot.targetNodeRid).toString('utf8'),
+          targetNodeGeneration: decoded.targetSpot.targetNodeGeneration,
+          authorityOwnerGeneration: decoded.targetSpot.expectedAuthorityOwnerGeneration,
+          ownerLeaseGeneration: decoded.targetSpot.expectedOwnerLeaseGeneration
+        }
+      };
     }
     case M6bServiceWireCommand.boundSessionSend: {
       requireFlags(command.flags, 0);

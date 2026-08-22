@@ -30,23 +30,15 @@ import {
   toFrameworkActorRef,
   toFrameworkRoutingId
 } from './actor-runtime-state';
-import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 import type { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
 import type { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import { routingIdsEqual } from '../routing-id';
 import { operationIdentityKey } from '../foundation/operation-identity';
-import {
-  buildRemoteActorJoinRequestPayload,
-  REMOTE_ACTOR_JOIN_ABORT,
-  REMOTE_ACTOR_JOIN_ADMISSION,
-} from './actor-remote-wire';
-import {
-  encodeFrameworkActorJoinPayload,
-  ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME
-} from '../messaging/actor-join-payload-codec';
 import { frameworkPayloadContentType } from '../messaging/payload-codec';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
+
+const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 export interface ZLinkLocalNativeActorJoinOptions {
   readonly postCommitLocation?: ZLinkPostCommitActorLocation;
@@ -54,7 +46,6 @@ export interface ZLinkLocalNativeActorJoinOptions {
   readonly completionTableProvider: () => ZLinkMeshCompletionTable | undefined;
   readonly actorJoinRelocation?: ZLinkActorJoinRelocation;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
-  readonly entrySpotIdProvider?: (meshName: string | undefined) => string | undefined;
 }
 
 /** Owns core-native actor joins and their local runtime state transition. */
@@ -101,7 +92,7 @@ export class ZLinkLocalNativeActorJoin {
         toBackendRoutingId(target.targetNodeRid),
         toBackendRoutingId(target.spotId),
         target.targetSpotGeneration,
-        encodeFrameworkActorJoinPayload(request),
+        actorJoinApplicationPayload(request),
         timeoutMs
       ),
       completions,
@@ -233,7 +224,7 @@ export class ZLinkLocalNativeActorJoin {
       () => node.joinActorEntrySpot(
         actorRef,
         toBackendRoutingId(targetNodeRid),
-        encodeFrameworkActorJoinPayload(request),
+        actorJoinApplicationPayload(request),
         timeoutMs
       ),
       completions,
@@ -355,84 +346,43 @@ export class ZLinkLocalNativeActorJoin {
       throw new Error('Actor Join OperationId must be distinct from RelocationId.');
     }
     const actorAuthorityFence = remoteJoinAuthorityFence(node, state);
-    const boundSessionTarget = enrichBoundSessionTransferTarget(state);
-    const admissionPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
-      actorId: actor.context.actorId,
-      actorType,
-      actorRef,
-      actorAuthorityFence,
-      // An actor's membership epoch starts at 0 (unassigned) until it is
-      // first placed in a Spot; the wire vocabulary requires a positive
-      // integer (relocation-envelope-v1), so an unassigned epoch advertises
-      // as its first value, matching the same `> 0n ? … : 1n` fallback used
-      // for every other membership-epoch wire projection in this runtime.
-      expectedMembershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n,
-      actorEntryNodeRid: state.entryNodeRid ?? actorRef.nodeRid as unknown as RoutingId,
-      actorCreateRequest: state.createRequestPayload,
-      request,
-      targetSpotId: target.spotId,
-      routerChannelId: target.routerChannelId,
-      sourceSpotId: state.spotId,
-      boundSessionTarget,
-      phase: REMOTE_ACTOR_JOIN_ADMISSION,
-      transferId: relocationId,
-      completionOperationId
-    })));
-    const canonicalAdmission = actorAuthorityFence === undefined || boundSessionTarget !== undefined
-      ? undefined
-      : {
-          request: {
-            packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
-            contentType: frameworkPayloadContentType(request),
-            payload: Buffer.from(request.data())
-          },
-          actorFence: {
-            targetNodeGeneration: actorAuthorityFence.nodeGeneration,
-            authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
-            ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
-          },
-          local: { phase: REMOTE_ACTOR_JOIN_ADMISSION, transferId: relocationId } as const
-        };
+    if (actorAuthorityFence === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+        `Actor '${actor.context.actorId}' canonical remote Join authority fence is not configured.`
+      );
+    }
+    const canonicalAdmission = {
+      request: actorJoinApplicationPayload(request),
+      actorFence: {
+        targetNodeGeneration: actorAuthorityFence.nodeGeneration,
+        authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
+        ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
+      },
+      local: { phase: 'admission', transferId: relocationId } as const
+    };
     let admissionOperationId: ZLinkActorJoinOperationId | undefined;
     const admission = await this.waitForJoinCompletion(
       () => {
         const operationId = entrySpot
-          ? canonicalAdmission !== undefined && node.joinActorEntrySpotCanonical !== undefined
-            ? node.joinActorEntrySpotCanonical(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                canonicalAdmission.request,
-                admissionPayload,
-                canonicalAdmission.actorFence,
-                canonicalAdmission.local,
-                timeoutMs
-              )
-            : node.joinActorEntrySpot(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                admissionPayload,
-                timeoutMs
-              )
-          : canonicalAdmission !== undefined && node.joinActorSpotCanonical !== undefined
-            ? node.joinActorSpotCanonical(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                toBackendRoutingId(target.spotId),
-                target.targetSpotGeneration!,
-                canonicalAdmission.request,
-                admissionPayload,
-                canonicalAdmission.actorFence,
-                canonicalAdmission.local,
-                timeoutMs
-              )
-            : node.joinActorSpot(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                toBackendRoutingId(target.spotId),
-                target.targetSpotGeneration!,
-                admissionPayload,
-                timeoutMs
-              );
+          ? node.joinActorEntrySpotCanonical(
+              actorRef,
+              toBackendRoutingId(target.targetNodeRid),
+              canonicalAdmission.request,
+              canonicalAdmission.actorFence,
+              canonicalAdmission.local,
+              timeoutMs
+            )
+          : node.joinActorSpotCanonical(
+              actorRef,
+              toBackendRoutingId(target.targetNodeRid),
+              toBackendRoutingId(target.spotId),
+              target.targetSpotGeneration!,
+              canonicalAdmission.request,
+              canonicalAdmission.actorFence,
+              canonicalAdmission.local,
+              timeoutMs
+            );
         admissionOperationId = operationId;
         return operationId;
       },
@@ -481,7 +431,7 @@ export class ZLinkLocalNativeActorJoin {
       );
     }
     disposeParts(admission.parts.slice(1));
-    if (control.canonicalHandoffId !== undefined && canonicalAdmission !== undefined) {
+    if (control.canonicalHandoffId !== undefined) {
       // Command 28 derives the canonical handoff identity from its authenticated
       // source fence and correlation. Direct recovery requires that exact value
       // to own the relocation aggregate as well; the public OperationId remains
@@ -491,19 +441,6 @@ export class ZLinkLocalNativeActorJoin {
     const relocation = this.options.actorJoinRelocation;
     if (relocation === undefined) {
       admission.parts[0]?.close();
-      await this.abortRemoteAdmission(
-        node,
-        completions,
-        actorRef,
-        target,
-        actor,
-        state,
-        request,
-        relocationId,
-        timeoutMs,
-        signal,
-        entrySpot
-      );
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
         `Actor '${actor.context.actorId}' canonical remote Join relocation is not configured.`
@@ -529,7 +466,7 @@ export class ZLinkLocalNativeActorJoin {
                 admissionOperationId: {
                   // Command 28 authenticates its operation as
                   // (source node generation, Core request sequence).
-                  high: actorAuthorityFence!.nodeGeneration,
+                  high: actorAuthorityFence.nodeGeneration,
                   low: admissionOperationId!.low
                 },
                 requestContentType: canonicalAdmission.request.contentType,
@@ -542,12 +479,12 @@ export class ZLinkLocalNativeActorJoin {
                 reply: completionOperationId === undefined
                   ? Buffer.alloc(0)
                   : Buffer.from(admission.parts[0]?.data() ?? []),
-                actorNodeGeneration: actorAuthorityFence!.nodeGeneration,
-                expectedOwnerLeaseGeneration: actorAuthorityFence!.ownerLeaseGeneration,
+                actorNodeGeneration: actorAuthorityFence.nodeGeneration,
+                expectedOwnerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration,
                 targetNodeGeneration: target.targetNodeGeneration!,
                 targetSpotGeneration: control.location.spotGeneration,
                 targetAuthorityOwnerGeneration:
-                  actorAuthorityFence!.authorityOwnerGeneration + 1n,
+                  actorAuthorityFence.authorityOwnerGeneration + 1n,
                 targetSpotAuthorityOwnerGeneration:
                   target.authorityOwnerGeneration ?? 1n
               }
@@ -557,19 +494,6 @@ export class ZLinkLocalNativeActorJoin {
       });
     } catch (error) {
       admission.parts[0]?.close();
-      await this.abortRemoteAdmission(
-        node,
-        completions,
-        actorRef,
-        target,
-        actor,
-        state,
-        request,
-        relocationId,
-        timeoutMs,
-        signal,
-        entrySpot
-      );
       throw error;
     }
     state.setNativeActorRef(relocated.actorRef);
@@ -595,69 +519,6 @@ export class ZLinkLocalNativeActorJoin {
       actor: targetActorRef,
       reply: admission.parts[0]
     };
-  }
-
-  private async abortRemoteAdmission(
-    node: ZLinkBackendMeshNode,
-    completions: ZLinkMeshCompletionTable,
-    actorRef: ZLinkBackendActorRef,
-    target: ZLinkSpotRouteTarget,
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
-    request: Message,
-    transferId: string,
-    timeoutMs: number | undefined,
-    signal: AbortSignal | undefined,
-    entrySpot = false
-  ): Promise<void> {
-    try {
-      const actorType = state.actorType;
-      if (actorType === undefined || (!entrySpot && target.targetSpotGeneration === undefined)) return;
-      const payload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
-        actorId: actor.context.actorId,
-        actorType,
-        actorRef,
-        actorAuthorityFence: remoteJoinAuthorityFence(node, state),
-        // An actor's membership epoch starts at 0 (unassigned) until it is
-        // first placed in a Spot; the wire vocabulary requires a positive
-        // integer (relocation-envelope-v1), so an unassigned epoch advertises
-        // as its first value, matching the same `> 0n ? … : 1n` fallback used
-        // for every other membership-epoch wire projection in this runtime.
-        expectedMembershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n,
-        actorEntryNodeRid: state.entryNodeRid ?? actorRef.nodeRid as unknown as RoutingId,
-        actorCreateRequest: state.createRequestPayload,
-        request,
-        targetSpotId: target.spotId,
-        routerChannelId: target.routerChannelId,
-        sourceSpotId: state.spotId ?? requireEntrySpotId(this.options, state.meshName),
-        boundSessionTarget: enrichBoundSessionTransferTarget(state),
-        phase: REMOTE_ACTOR_JOIN_ABORT,
-        transferId
-      })));
-      const completion = await submitJoinWhenConnected(
-        () => completions.submit(() => entrySpot
-          ? node.joinActorEntrySpot(
-            actorRef,
-            toBackendRoutingId(target.targetNodeRid),
-            payload,
-            timeoutMs
-          )
-          : node.joinActorSpot(
-            actorRef,
-            toBackendRoutingId(target.targetNodeRid),
-            toBackendRoutingId(target.spotId),
-            target.targetSpotGeneration!,
-            payload,
-            timeoutMs
-          ), signal),
-        timeoutMs,
-        signal
-      );
-      closeMeshCompletion(completion);
-    } catch {
-      // Admission cleanup is best effort. The target registry also expires
-      // abandoned admissions so a disconnected source cannot retain state.
-    }
   }
 
   private requireCompletions(): ZLinkMeshCompletionTable {
@@ -691,6 +552,14 @@ function remoteJoinAuthorityFence(
   };
 }
 
+function actorJoinApplicationPayload(request: Message) {
+  return {
+    packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
+    contentType: frameworkPayloadContentType(request),
+    payload: Buffer.from(request.data())
+  };
+}
+
 function canonicalHandoffRelocationId(handoffId: string): string {
   const hex = handoffId.replaceAll('-', '').toLowerCase();
   if (!/^[0-9a-f]{32}$/u.test(hex) || /^0+$/u.test(hex)) {
@@ -714,33 +583,6 @@ function runtimeActorMeshName(
     state as unknown as { readonly meshName?: string } | undefined
   )?.meshName;
   return context?.meshName ?? stateMeshName ?? fallback;
-}
-
-function enrichBoundSessionTransferTarget(state: ZLinkActorRuntimeState): ZLinkRemoteBoundSessionTarget | undefined {
-  const target = state.remoteBoundSessionTarget ?? state.boundSessionTransferTarget;
-  return target === undefined
-    ? undefined
-    : {
-        ...target,
-        previousAuthorityOwnerGeneration:
-          target.previousAuthorityOwnerGeneration ?? state.locationGeneration,
-        previousOwnerLeaseGeneration:
-          target.previousOwnerLeaseGeneration ?? state.ownerLeaseGeneration
-      };
-}
-
-function requireEntrySpotId(
-  options: ZLinkLocalNativeActorJoinOptions,
-  meshName: string | undefined
-): string {
-  const spotId = options.entrySpotIdProvider?.(meshName);
-  if (spotId === undefined) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-      'Actor source Entry Spot identity is not available.'
-    );
-  }
-  return spotId;
 }
 
 async function submitJoinWhenConnected<T>(

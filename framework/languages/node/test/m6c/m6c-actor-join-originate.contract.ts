@@ -9,22 +9,19 @@ import {
   ServiceStatefulRuntime,
   type ServiceStatefulMailboxData
 } from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
-import { decodeActorJoin28 } from '../../packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated';
 import {
-  ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME
-} from '../../packages/framework/src/runtime/messaging/actor-join-payload-codec';
+  decodeActorJoin28,
+  encodeActorJoin28
+} from '../../packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated';
 import { ZLinkBufferMessage } from '../../packages/framework/src/runtime/backend/runtime-message';
 import { ZLinkRemoteActorJoinReceiver } from '../../packages/framework/src/runtime/host/remote-actor-join-receiver';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import {
-  decodeStatefulHeader,
-  encodeActorJoinHeader,
   encodeStatefulReply
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
-import {
-  encodeApplicationPayload
-} from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
+
+const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 function applicationJobOwner() {
   const permit = {
@@ -217,11 +214,6 @@ test('unbound node-to-node Actor Join originates canonical 28 without target Act
         payload: Buffer.from(request.data())
       },
       {
-        packetName: 'ZLinkFrameworkMultipart',
-        contentType: 'application/vnd.zlink.framework-multipart',
-        payload: Buffer.from('legacy-json-fallback')
-      },
-      {
         targetNodeGeneration: 7n,
         authorityOwnerGeneration: actor.authorityOwnerGeneration,
         ownerLeaseGeneration: 13n
@@ -241,20 +233,18 @@ test('unbound node-to-node Actor Join originates canonical 28 without target Act
   }
 });
 
-test('canonical actorJoin candidate retains private JSON when the admitted peer lacks capability', async () => {
+test('canonical actorJoin never falls back when the admitted peer capability list is stale', async () => {
   const raw = {
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 11n, protocolCapabilities: [] } })
     },
     setServiceIngress() {},
     async requestService(_rid: string, parts: readonly Buffer[]) {
-      assert.equal(parts[0]![4], 0x01);
-      assert.throws(() => decodeActorJoin28(parts));
-      assert.equal(Buffer.concat(parts).includes(Buffer.from('local-only-transfer')), true);
-      const header = decodeStatefulHeader(parts[0]!);
-      assert.equal(header.kind, 'actorJoin');
-      if (header.kind !== 'actorJoin') throw new Error('expected legacy actorJoin header');
-      return [encodeStatefulReply(header.correlation, RequestResult.Ok, 0, {
+      assert.equal(parts[0]![4], 0);
+      assert.equal(Buffer.concat(parts).includes(Buffer.from('local-only-transfer')), false);
+      const decoded = decodeActorJoin28(parts);
+      assert.equal(Buffer.from(decoded.payload!.payload).toString(), 'canonical-request');
+      return [encodeStatefulReply(decoded.correlation, RequestResult.Ok, 0, {
         kind: 'actorJoin',
         joinResult: 1,
         spot: { spotId: 'room-b', generation: 1n }
@@ -282,11 +272,6 @@ test('canonical actorJoin candidate retains private JSON when the admitted peer 
       payload: Buffer.from('canonical-request')
     },
     {
-      packetName: 'ZLinkFrameworkMultipart',
-      contentType: 'application/vnd.zlink.framework-multipart',
-      payload: joinMultipartWithTransferId('local-only-transfer')
-    },
-    {
       targetNodeGeneration: 7n,
       authorityOwnerGeneration: actor.authorityOwnerGeneration,
       ownerLeaseGeneration: 13n
@@ -302,7 +287,7 @@ test('canonical actorJoin candidate retains private JSON when the admitted peer 
   }
 });
 
-test('command 28 flags structurally separate canonical, private, and protocol-error records', async () => {
+test('command 28 accepts only canonical flags-zero records', async () => {
   let ingress: ((record: RawServiceIngressRecord) => Promise<unknown>) | undefined;
   let enqueued = 0;
   const runtime = new ServiceStatefulRuntime({
@@ -311,56 +296,53 @@ test('command 28 flags structurally separate canonical, private, and protocol-er
     setServiceIngress(handler: typeof ingress) { ingress = handler; }
   } as unknown as RawServiceMeshRuntime, 'node-b', 11n);
   const targetSpot = runtime.createSpot('room-b', 'user');
-  const canonical = Buffer.from([0x5a, 0x4d, 1, 28, 0]);
-  const invalidFlags = Buffer.from(canonical);
-  invalidFlags[4] = 0x02;
-  try {
-    for (const [index, phase] of (['admission', 'commit', 'abort'] as const).entries()) {
-      const header = encodeActorJoinHeader(
-        BigInt(index + 1),
-        {
-          actor: { actorId: 'actor-a', generation: 5n, nodeRid: 'node-a' },
-          targetNodeGeneration: 7n,
-          authorityOwnerGeneration: 11n,
-          ownerLeaseGeneration: 13n
-        },
-        false,
-        {
-          spot: targetSpot.ref,
-          targetNodeRid: 'node-b',
-          targetNodeGeneration: 11n,
-          authorityOwnerGeneration: targetSpot.authorityOwnerGeneration,
-          ownerLeaseGeneration: targetSpot.authorityOwnerGeneration
-        }
-      );
-      assert.equal(header[4], 0x01);
-      assert.equal(await ingress!({
-        command: 28,
-        flags: 0x01,
-        sourceRoutingId: 'node-a',
-        parts: [header, encodeApplicationPayload({
-          packetName: 'ZLinkFrameworkMultipart',
-          contentType: 'application/vnd.zlink.framework-multipart',
-          payload: joinMultipartWithTransferId(`legacy-${phase}`, phase)
-        })],
-        applicationJobOwner: applicationJobOwner() as never
-      }), 'infrastructure', `private ${phase} command 28 must retain the legacy path`);
+  const canonical = encodeActorJoin28({
+    correlation: 1n,
+    actor: {
+      id: 'actor-a',
+      generation: 5n,
+      targetNodeRid: Buffer.from('node-a'),
+      targetNodeGeneration: 7n,
+      expectedAuthorityOwnerGeneration: 11n,
+      expectedOwnerLeaseGeneration: 13n
+    },
+    entry: false,
+    targetSpot: {
+      id: 'room-b',
+      generation: targetSpot.ref.generation,
+      targetNodeRid: Buffer.from('node-b'),
+      targetNodeGeneration: 11n,
+      expectedAuthorityOwnerGeneration: targetSpot.authorityOwnerGeneration,
+      expectedOwnerLeaseGeneration: targetSpot.authorityOwnerGeneration
     }
+  }).map(frame => Buffer.from(frame));
+  const privateFlags = canonical.map(frame => Buffer.from(frame));
+  privateFlags[0]![4] = 0x01;
+  const malformedCanonical = [Buffer.from([0x5a, 0x4d, 1, 28, 0])];
+  try {
     assert.equal(await ingress!({
       command: 28,
       flags: 0,
       sourceRoutingId: 'node-a',
-      parts: [canonical],
+      requestSequence: 1n,
+      parts: canonical,
       applicationJobOwner: applicationJobOwner() as never
-    }), 'protocolError', 'malformed canonical command 28 must not fall through to private decode');
+    }), 'infrastructure');
     assert.equal(await ingress!({
       command: 28,
-      flags: 0x02,
+      flags: 0x01,
       sourceRoutingId: 'node-a',
-      parts: [invalidFlags],
+      parts: privateFlags,
       applicationJobOwner: applicationJobOwner() as never
-    }), 'protocolError', 'unknown command 28 flags must be terminal');
-    assert.equal(enqueued, 3);
+    }), 'protocolError', 'the removed private 0x01 flavor must be terminal');
+    assert.equal(await ingress!({
+      command: 28,
+      flags: 0,
+      sourceRoutingId: 'node-a',
+      parts: malformedCanonical,
+      applicationJobOwner: applicationJobOwner() as never
+    }), 'protocolError', 'malformed canonical command 28 must be terminal');
+    assert.equal(enqueued, 1);
   } finally {
     runtime.close();
   }

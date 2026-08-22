@@ -1165,7 +1165,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
     timeoutMs = 30_000
   ): MeshOperationId {
     return this.observeStateful(
@@ -1175,7 +1175,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         String(targetNodeRid),
         { spotId: String(targetSpotId), generation: targetSpotGeneration },
         targetSpotGeneration,
-        parts === undefined ? undefined : encodeMultipart(parts),
+        request,
         timeoutMs
       )
     );
@@ -1187,7 +1187,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
     request: ServiceApplicationPayload,
-    fallbackParts: MessageLike | readonly MessageLike[],
     actorFence: {
       readonly targetNodeGeneration: bigint;
       readonly authorityOwnerGeneration: bigint;
@@ -1204,7 +1203,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         { spotId: String(targetSpotId), generation: targetSpotGeneration },
         targetSpotGeneration,
         request,
-        encodeMultipart(fallbackParts),
         actorFence,
         local,
         timeoutMs
@@ -1215,7 +1213,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
     timeoutMs = 30_000
   ): MeshOperationId {
     const target = String(targetNodeRid);
@@ -1224,7 +1222,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       this.requireStateful().joinActorEntrySpot(
         actor,
         target,
-        parts === undefined ? undefined : encodeMultipart(parts),
+        request,
         timeoutMs
       )
     );
@@ -1234,7 +1232,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
     request: ServiceApplicationPayload,
-    fallbackParts: MessageLike | readonly MessageLike[],
     actorFence: {
       readonly targetNodeGeneration: bigint;
       readonly authorityOwnerGeneration: bigint;
@@ -1250,7 +1247,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         actor,
         target,
         request,
-        encodeMultipart(fallbackParts),
         actorFence,
         local,
         timeoutMs
@@ -2259,7 +2255,9 @@ function decodeStatefulRecord(
   const payloadFrame = record.parts.length < 2 ? undefined : record.parts[1];
   const canonicalActorJoin = stateful.kindData?.kind === 'actorControl'
     && stateful.kindData.canonicalActorJoin !== undefined;
-  const application = canonicalActorJoin
+  const canonicalActorJoinPayload = stateful.operationKind === OperationKind.ActorJoin
+    && stateful.canonicalApplicationPayload !== undefined;
+  const application = canonicalActorJoinPayload
     ? stateful.canonicalApplicationPayload
     : (payloadFrame === undefined ? undefined : decodeApplicationEnvelope(payloadFrame));
   const operationId = record.correlation === undefined
@@ -2290,9 +2288,9 @@ function decodeStatefulRecord(
     ...ingressLifecycle,
     parts: application === undefined
       ? []
-      : !canonicalActorJoin
-        ? decodeMultipart(application.payload)
-        : [Message.from(application.payload)],
+      : canonicalActorJoinPayload
+        ? [Message.from(application.payload)]
+        : decodeMultipart(application.payload),
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
     ...(stateful.messageFollowOrigin === undefined
@@ -2309,7 +2307,7 @@ function decodeStatefulRecord(
         encodeMultipart(parts)
       ) ? SubmitResult.Ok : SubmitResult.InvalidState;
     },
-    replyActorJoin(joinResult, parts, _flags, replyContentType) {
+    replyActorJoin(joinResult, parts, _flags, _replyContentType) {
       if (stateful.reply === undefined || stateful.targetSpot === undefined) {
         return SubmitResult.InvalidState;
       }
@@ -2323,18 +2321,9 @@ function decodeStatefulRecord(
       if (canonicalActorJoin && replyParts.length > 1) {
         return SubmitResult.InvalidState;
       }
-      if (canonicalActorJoin && replyParts.length === 1 && replyContentType === undefined) {
-        return SubmitResult.InvalidState;
-      }
       const replyPayload = replyParts.length === 0
         ? undefined
-        : canonicalActorJoin
-          ? {
-              packetName: application!.packetName,
-              contentType: replyContentType!,
-              payload: messageBytesView(replyParts[0]!)
-            }
-          : encodeMultipart(replyParts);
+        : encodeMultipart(replyParts);
       const accepted = stateful.reply(
         RequestResult.Ok,
         0,
