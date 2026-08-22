@@ -174,6 +174,9 @@ func TestCoreEventFlagValuesRemainComplete(t *testing.T) {
 		{"handshake failed protocol", MonitorEventHandshakeFailedProtocol, 1 << 13},
 		{"handshake failed auth", MonitorEventHandshakeFailedAuth, 1 << 14},
 		{"peer weight changed", MonitorEventPeerWeightChanged, 1 << 15},
+		{"send flow paused", MonitorEventSendFlowPaused, 1 << 16},
+		{"send flow resumed", MonitorEventSendFlowResumed, 1 << 17},
+		{"flow state stale", MonitorEventFlowStateStale, 1 << 18},
 		{"all", MonitorEventAll, 0x7FFFF},
 	}
 	for _, tc := range monitorMasks {
@@ -184,8 +187,76 @@ func TestCoreEventFlagValuesRemainComplete(t *testing.T) {
 	if MonitorEventTypeConnectionReady != MonitorEventType(MonitorEventConnectionReady) {
 		t.Fatalf("MonitorEventTypeConnectionReady = %#x, want %#x", MonitorEventTypeConnectionReady, MonitorEventConnectionReady)
 	}
+	if MonitorEventTypeSendFlowPaused != MonitorEventType(MonitorEventSendFlowPaused) ||
+		MonitorEventTypeSendFlowResumed != MonitorEventType(MonitorEventSendFlowResumed) ||
+		MonitorEventTypeFlowStateStale != MonitorEventType(MonitorEventFlowStateStale) {
+		t.Fatalf("flow-state MonitorEventType constants do not match their MonitorEventMask counterparts")
+	}
 	if PollIn != 1 || PollOut != 2 || PollErr != 4 || PollPri != 8 || PollCompletion != 32 {
 		t.Fatalf("poll flags = (%d, %d, %d, %d, %d), want (1, 2, 4, 8, 32)", PollIn, PollOut, PollErr, PollPri, PollCompletion)
+	}
+}
+
+func TestCoreEventFlagBitValuesRemainComplete(t *testing.T) {
+	flagCases := []struct {
+		name string
+		got  MonitorEventFlag
+		want MonitorEventFlag
+	}{
+		{"connection ready edge", MonitorEventFlagConnectionReadyEdge, 1 << 0},
+		{"send flow writable", MonitorEventFlagSendFlowWritable, 1 << 1},
+		{"flow state stale generation", MonitorEventFlagFlowStateStaleGeneration, 1 << 2},
+		{"flow state stale epoch", MonitorEventFlagFlowStateStaleEpoch, 1 << 3},
+	}
+	for _, tc := range flagCases {
+		if tc.got != tc.want {
+			t.Errorf("MonitorEventFlag%s = %#x, want %#x", tc.name, tc.got, tc.want)
+		}
+	}
+	if MonitorTransportLaneApplication != 0 || MonitorTransportLaneCompletion != 1 {
+		t.Fatalf("MonitorTransportLane values = (%d, %d), want (0, 1)", MonitorTransportLaneApplication, MonitorTransportLaneCompletion)
+	}
+}
+
+// §8.1.1 follow-up: monitorEventFromC must preserve the full 64-bit value and
+// the transport-pair/connection/flag metadata Core carries alongside a
+// flow-state event, not just truncate to 32 bits.
+func TestMonitorEventFromCPreserves64BitValueAndPairMetadata(t *testing.T) {
+	const bigValue = uint64(0x1_0000_0002)
+	const bigConnectionID = uint64(0xFFFF_FFFF_0000_0001)
+	const bigPairID = uint64(0x2_0000_0003)
+	const bigGeneration = uint64(7)
+
+	event := monitorEventFromRawFieldsForTest(
+		MonitorEventTypeFlowStateStale,
+		bigValue, bigConnectionID, bigPairID, bigGeneration,
+		MonitorTransportLaneCompletion,
+		MonitorEventFlagFlowStateStaleGeneration|MonitorEventFlagFlowStateStaleEpoch,
+	)
+
+	if event.Value != bigValue {
+		t.Fatalf("Value = %#x, want %#x (must not truncate to 32 bits)", event.Value, bigValue)
+	}
+	if event.ConnectionID != bigConnectionID {
+		t.Fatalf("ConnectionID = %#x, want %#x", event.ConnectionID, bigConnectionID)
+	}
+	if event.TransportPairID != bigPairID {
+		t.Fatalf("TransportPairID = %#x, want %#x", event.TransportPairID, bigPairID)
+	}
+	if event.TransportPairGeneration != bigGeneration {
+		t.Fatalf("TransportPairGeneration = %d, want %d", event.TransportPairGeneration, bigGeneration)
+	}
+	if event.TransportLane != MonitorTransportLaneCompletion {
+		t.Fatalf("TransportLane = %d, want %d", event.TransportLane, MonitorTransportLaneCompletion)
+	}
+	if !event.HasFlag(MonitorEventFlagFlowStateStaleGeneration) || !event.HasFlag(MonitorEventFlagFlowStateStaleEpoch) {
+		t.Fatalf("Flags = %#x, missing expected stale-generation/stale-epoch bits", event.Flags)
+	}
+	if event.HasFlag(MonitorEventFlagConnectionReadyEdge) || event.HasFlag(MonitorEventFlagSendFlowWritable) {
+		t.Fatalf("Flags = %#x, unexpected bit set", event.Flags)
+	}
+	if !event.IsFlowStateStale() {
+		t.Fatalf("IsFlowStateStale() = false, want true")
 	}
 }
 

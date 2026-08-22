@@ -15,13 +15,15 @@ type (
 	ReplyOp            = impl.ReplyOp
 	ReplySubmitOp      = impl.ReplySubmitOp
 
-	MonitorEventMask  = impl.MonitorEventMask
-	MonitorSourceKind = impl.MonitorSourceKind
-	MonitorEventType  = impl.MonitorEventType
-	MonitorOpenOption = impl.MonitorOpenOption
-	MonitorEvent      = impl.MonitorEvent
-	MonitorStatus     = impl.MonitorStatus
-	SocketMonitor     = impl.SocketMonitor
+	MonitorEventMask     = impl.MonitorEventMask
+	MonitorSourceKind    = impl.MonitorSourceKind
+	MonitorEventType     = impl.MonitorEventType
+	MonitorEventFlag     = impl.MonitorEventFlag
+	MonitorTransportLane = impl.MonitorTransportLane
+	MonitorOpenOption    = impl.MonitorOpenOption
+	MonitorEvent         = impl.MonitorEvent
+	MonitorStatus        = impl.MonitorStatus
+	SocketMonitor        = impl.SocketMonitor
 
 	RoutingID              = impl.RoutingID
 	Message                = impl.Message
@@ -111,6 +113,9 @@ const (
 	MonitorEventHandshakeFailedProtocol = impl.MonitorEventHandshakeFailedProtocol
 	MonitorEventHandshakeFailedAuth     = impl.MonitorEventHandshakeFailedAuth
 	MonitorEventPeerWeightChanged       = impl.MonitorEventPeerWeightChanged
+	MonitorEventSendFlowPaused          = impl.MonitorEventSendFlowPaused
+	MonitorEventSendFlowResumed         = impl.MonitorEventSendFlowResumed
+	MonitorEventFlowStateStale          = impl.MonitorEventFlowStateStale
 	MonitorEventAll                     = impl.MonitorEventAll
 
 	MonitorEventTypeConnected               = impl.MonitorEventTypeConnected
@@ -129,8 +134,18 @@ const (
 	MonitorEventTypeHandshakeFailedProtocol = impl.MonitorEventTypeHandshakeFailedProtocol
 	MonitorEventTypeHandshakeFailedAuth     = impl.MonitorEventTypeHandshakeFailedAuth
 	MonitorEventTypePeerWeightChanged       = impl.MonitorEventTypePeerWeightChanged
+	MonitorEventTypeSendFlowPaused          = impl.MonitorEventTypeSendFlowPaused
+	MonitorEventTypeSendFlowResumed         = impl.MonitorEventTypeSendFlowResumed
+	MonitorEventTypeFlowStateStale          = impl.MonitorEventTypeFlowStateStale
 	MonitorEventTypeAll                     = impl.MonitorEventTypeAll
 	MonitorSourceSocket                     = impl.MonitorSourceSocket
+
+	MonitorEventFlagConnectionReadyEdge      = impl.MonitorEventFlagConnectionReadyEdge
+	MonitorEventFlagSendFlowWritable         = impl.MonitorEventFlagSendFlowWritable
+	MonitorEventFlagFlowStateStaleGeneration = impl.MonitorEventFlagFlowStateStaleGeneration
+	MonitorEventFlagFlowStateStaleEpoch      = impl.MonitorEventFlagFlowStateStaleEpoch
+	MonitorTransportLaneApplication          = impl.MonitorTransportLaneApplication
+	MonitorTransportLaneCompletion           = impl.MonitorTransportLaneCompletion
 
 	AutoHwmProfileCompact             = impl.AutoHwmProfileCompact
 	AutoHwmProfileLowLatency          = impl.AutoHwmProfileLowLatency

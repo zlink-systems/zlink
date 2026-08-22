@@ -39,7 +39,14 @@ const (
 	MonitorEventHandshakeFailedProtocol MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL)
 	MonitorEventHandshakeFailedAuth     MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH)
 	MonitorEventPeerWeightChanged       MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED)
-	MonitorEventAll                     MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_ALL)
+	// MonitorEventSendFlowPaused selects the paired DEALER/ROUTER completion-lane
+	// PAUSED-transition event (core-byte-hwm-flow-control-plan.ko.md §6).
+	MonitorEventSendFlowPaused MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED)
+	// MonitorEventSendFlowResumed selects the paired completion-lane RUNNING-transition event.
+	MonitorEventSendFlowResumed MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED)
+	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
+	MonitorEventFlowStateStale MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE)
+	MonitorEventAll            MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_ALL)
 )
 
 type MonitorEventMask uint32
@@ -92,7 +99,39 @@ const (
 	MonitorEventTypeHandshakeFailedProtocol MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedProtocol)
 	MonitorEventTypeHandshakeFailedAuth     MonitorEventType = MonitorEventType(MonitorEventHandshakeFailedAuth)
 	MonitorEventTypePeerWeightChanged       MonitorEventType = MonitorEventType(MonitorEventPeerWeightChanged)
+	MonitorEventTypeSendFlowPaused          MonitorEventType = MonitorEventType(MonitorEventSendFlowPaused)
+	MonitorEventTypeSendFlowResumed         MonitorEventType = MonitorEventType(MonitorEventSendFlowResumed)
+	MonitorEventTypeFlowStateStale          MonitorEventType = MonitorEventType(MonitorEventFlowStateStale)
 	MonitorEventTypeAll                     MonitorEventType = MonitorEventType(MonitorEventAll)
+)
+
+// MonitorEventFlag is a bitmask of event-specific detail flags carried in
+// zlink_monitor_event_t.flags (core-byte-hwm-flow-control-plan.ko.md §6).
+type MonitorEventFlag uint32
+
+const (
+	// MonitorEventFlagConnectionReadyEdge is set on MonitorEventTypeConnectionReady
+	// when the event changes a connection from not-ready to ready.
+	MonitorEventFlagConnectionReadyEdge MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
+	// MonitorEventFlagSendFlowWritable is set on MonitorEventTypeSendFlowResumed when
+	// clearing the remote pause left the pipe actually writable. Value carries the flow epoch.
+	MonitorEventFlagSendFlowWritable MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE)
+	// MonitorEventFlagFlowStateStaleGeneration is set on MonitorEventTypeFlowStateStale
+	// when the frame named a different connection generation. Value carries the
+	// received generation; TransportPairGeneration carries the current one.
+	MonitorEventFlagFlowStateStaleGeneration MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION)
+	// MonitorEventFlagFlowStateStaleEpoch is set on MonitorEventTypeFlowStateStale when
+	// the epoch did not advance inside the current generation. Value carries the
+	// received epoch.
+	MonitorEventFlagFlowStateStaleEpoch MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH)
+)
+
+// MonitorTransportLane identifies the transport lane associated with a monitor event.
+type MonitorTransportLane uint32
+
+const (
+	MonitorTransportLaneApplication MonitorTransportLane = MonitorTransportLane(C.ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION)
+	MonitorTransportLaneCompletion  MonitorTransportLane = MonitorTransportLane(C.ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION)
 )
 
 const (
@@ -101,10 +140,21 @@ const (
 
 type MonitorEvent struct {
 	Event      MonitorEventType
-	Value      uint32
+	Value      uint64
 	RoutingID  RoutingID
 	LocalAddr  string
 	RemoteAddr string
+	// ConnectionID is the process-local identity of the physical transport attempt.
+	ConnectionID uint64
+	// TransportPairID is non-zero for a paired Application/Completion transport.
+	TransportPairID uint64
+	// TransportPairGeneration is the generation of the paired transport. Zero for
+	// an unpaired transport.
+	TransportPairGeneration uint64
+	// TransportLane identifies which lane of a paired transport this event describes.
+	TransportLane MonitorTransportLane
+	// Flags carries event-specific detail bits; see MonitorEventFlag.
+	Flags MonitorEventFlag
 }
 
 func (e *MonitorEvent) HasRoutingID() bool {
@@ -129,6 +179,22 @@ func (e *MonitorEvent) IsAccepted() bool {
 
 func (e *MonitorEvent) IsConnectionReady() bool {
 	return e != nil && e.Event&MonitorEventTypeConnectionReady != 0
+}
+
+func (e *MonitorEvent) IsSendFlowPaused() bool {
+	return e != nil && e.Event&MonitorEventTypeSendFlowPaused != 0
+}
+
+func (e *MonitorEvent) IsSendFlowResumed() bool {
+	return e != nil && e.Event&MonitorEventTypeSendFlowResumed != 0
+}
+
+func (e *MonitorEvent) IsFlowStateStale() bool {
+	return e != nil && e.Event&MonitorEventTypeFlowStateStale != 0
+}
+
+func (e *MonitorEvent) HasFlag(flag MonitorEventFlag) bool {
+	return e != nil && e.Flags&flag != 0
 }
 
 type MonitorStatus struct {
@@ -163,6 +229,14 @@ type MonitorStatus struct {
 	MinimumCoreMessageChargeBytes    uint64
 	OversizeMessageAdmissionCount    uint64
 	OversizeMessageAdmissionMaxBytes uint64
+	// Paired DEALER/ROUTER completion-lane receive-flow observation
+	// (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4; zero on
+	// socket types with no completion lane.
+	FlowPausedConnections  uint64
+	FlowPauseAppliedTotal  uint64
+	FlowResumeAppliedTotal uint64
+	FlowStateStaleTotal    uint64
+	FlowPauseDurationMs    uint64
 }
 
 func (s *MonitorStatus) IsReady() bool {
@@ -202,6 +276,11 @@ func monitorStatusFromC(raw C.zlink_monitor_status_t) MonitorStatus {
 		MinimumCoreMessageChargeBytes:    uint64(raw.minimum_core_message_charge_bytes),
 		OversizeMessageAdmissionCount:    uint64(raw.oversize_message_admission_count),
 		OversizeMessageAdmissionMaxBytes: uint64(raw.oversize_message_admission_max_bytes),
+		FlowPausedConnections:            uint64(raw.flow_paused_connections),
+		FlowPauseAppliedTotal:            uint64(raw.flow_pause_applied_total),
+		FlowResumeAppliedTotal:           uint64(raw.flow_resume_applied_total),
+		FlowStateStaleTotal:              uint64(raw.flow_state_stale_total),
+		FlowPauseDurationMs:              uint64(raw.flow_pause_duration_ms),
 	}
 }
 
@@ -335,12 +414,40 @@ func (m *SocketMonitor) Close() error {
 
 func monitorEventFromC(raw C.zlink_socket_monitor_event_t) *MonitorEvent {
 	return &MonitorEvent{
-		Event:      MonitorEventType(raw.event),
-		Value:      uint32(raw.value),
-		RoutingID:  routingIDFromC(raw.routing_id),
-		LocalAddr:  C.GoString(&raw.local_addr[0]),
-		RemoteAddr: C.GoString(&raw.remote_addr[0]),
+		Event:                   MonitorEventType(raw.event),
+		Value:                   uint64(raw.value),
+		RoutingID:               routingIDFromC(raw.routing_id),
+		LocalAddr:               C.GoString(&raw.local_addr[0]),
+		RemoteAddr:              C.GoString(&raw.remote_addr[0]),
+		ConnectionID:            uint64(raw.connection_id),
+		TransportPairID:         uint64(raw.transport_pair_id),
+		TransportPairGeneration: uint64(raw.transport_pair_generation),
+		TransportLane:           MonitorTransportLane(raw.transport_lane),
+		Flags:                   MonitorEventFlag(raw.flags),
 	}
+}
+
+// monitorEventFromRawFieldsForTest exercises monitorEventFromC's field-by-field
+// conversion from plain Go values, so a non-cgo test file in this package can
+// verify the 64-bit round-trip without itself importing "C" — this package's
+// cgo //export trampolines (goZlinkMonitorTrampoline, etc.) make a second
+// cgo-using compilation unit for its own _test.go files unsupported by the Go
+// toolchain ("use of cgo in test not supported").
+func monitorEventFromRawFieldsForTest(
+	eventType MonitorEventType,
+	value, connectionID, transportPairID, transportPairGeneration uint64,
+	transportLane MonitorTransportLane,
+	flags MonitorEventFlag,
+) *MonitorEvent {
+	var raw C.zlink_socket_monitor_event_t
+	raw.event = C.uint64_t(eventType)
+	raw.value = C.uint64_t(value)
+	raw.connection_id = C.uint64_t(connectionID)
+	raw.transport_pair_id = C.uint64_t(transportPairID)
+	raw.transport_pair_generation = C.uint64_t(transportPairGeneration)
+	raw.transport_lane = C.uint32_t(transportLane)
+	raw.flags = C.uint32_t(flags)
+	return monitorEventFromC(raw)
 }
 
 //export goZlinkMonitorTrampoline

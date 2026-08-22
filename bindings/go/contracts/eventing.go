@@ -11,6 +11,10 @@ type (
 	MonitorSourceKind = impl.MonitorSourceKind
 	// MonitorEventType is the kind of a delivered socket monitor event.
 	MonitorEventType = impl.MonitorEventType
+	// MonitorEventFlag is a bitmask of event-specific detail flags.
+	MonitorEventFlag = impl.MonitorEventFlag
+	// MonitorTransportLane identifies the transport lane associated with a monitor event.
+	MonitorTransportLane = impl.MonitorTransportLane
 	// MonitorOpenOption configures the event mask or byte HWM of a socket monitor.
 	MonitorOpenOption = impl.MonitorOpenOption
 	// MonitorEvent is a single socket connection-lifecycle event reported by a monitor.
@@ -68,6 +72,12 @@ const (
 	MonitorEventConnectionReady = impl.MonitorEventConnectionReady
 	// MonitorEventPeerWeightChanged fires when a peer's load-balancing weight changes.
 	MonitorEventPeerWeightChanged = impl.MonitorEventPeerWeightChanged
+	// MonitorEventSendFlowPaused selects the paired DEALER/ROUTER completion-lane PAUSED-transition event.
+	MonitorEventSendFlowPaused = impl.MonitorEventSendFlowPaused
+	// MonitorEventSendFlowResumed selects the paired completion-lane RUNNING-transition event.
+	MonitorEventSendFlowResumed = impl.MonitorEventSendFlowResumed
+	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
+	MonitorEventFlowStateStale = impl.MonitorEventFlowStateStale
 	// MonitorEventTypeConnected is the delivered value for a connection-established event.
 	MonitorEventTypeConnected = impl.MonitorEventTypeConnected
 	// MonitorEventTypeConnectDelayed is the delivered value for a connect-in-progress event.
@@ -100,10 +110,28 @@ const (
 	MonitorEventTypeHandshakeFailedAuth = impl.MonitorEventTypeHandshakeFailedAuth
 	// MonitorEventTypePeerWeightChanged is the delivered value for a peer weight change.
 	MonitorEventTypePeerWeightChanged = impl.MonitorEventTypePeerWeightChanged
+	// MonitorEventTypeSendFlowPaused is the delivered value for a completion-lane PAUSED transition.
+	MonitorEventTypeSendFlowPaused = impl.MonitorEventTypeSendFlowPaused
+	// MonitorEventTypeSendFlowResumed is the delivered value for a completion-lane RUNNING transition.
+	MonitorEventTypeSendFlowResumed = impl.MonitorEventTypeSendFlowResumed
+	// MonitorEventTypeFlowStateStale is the delivered value for a rejected stale or duplicate flow-state frame.
+	MonitorEventTypeFlowStateStale = impl.MonitorEventTypeFlowStateStale
 	// MonitorEventTypeAll is the mask value representing every monitor event.
 	MonitorEventTypeAll = impl.MonitorEventTypeAll
 	// MonitorSourceSocket identifies a plain socket as the monitored source.
 	MonitorSourceSocket = impl.MonitorSourceSocket
+	// MonitorEventFlagConnectionReadyEdge is set when a CONNECTION_READY event changes a connection from not-ready to ready.
+	MonitorEventFlagConnectionReadyEdge = impl.MonitorEventFlagConnectionReadyEdge
+	// MonitorEventFlagSendFlowWritable is set on a RESUMED event when the pipe became actually writable.
+	MonitorEventFlagSendFlowWritable = impl.MonitorEventFlagSendFlowWritable
+	// MonitorEventFlagFlowStateStaleGeneration is set on a STALE event whose frame named a different connection generation.
+	MonitorEventFlagFlowStateStaleGeneration = impl.MonitorEventFlagFlowStateStaleGeneration
+	// MonitorEventFlagFlowStateStaleEpoch is set on a STALE event whose epoch did not advance in the current generation.
+	MonitorEventFlagFlowStateStaleEpoch = impl.MonitorEventFlagFlowStateStaleEpoch
+	// MonitorTransportLaneApplication identifies the application lane of a paired transport.
+	MonitorTransportLaneApplication = impl.MonitorTransportLaneApplication
+	// MonitorTransportLaneCompletion identifies the completion lane of a paired transport.
+	MonitorTransportLaneCompletion = impl.MonitorTransportLaneCompletion
 	// PollIn reports that a receive will not block.
 	PollIn = impl.PollIn
 	// PollOut reports that a send will not block.

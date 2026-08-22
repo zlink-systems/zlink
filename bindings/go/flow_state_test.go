@@ -26,6 +26,87 @@ func TestReceiveFlowStateEnumMatchesCABI(t *testing.T) {
 	}
 }
 
+// Final-review follow-up (plan §6): the three flow-state monitor event
+// constants and the event-flag bits Core reuses on zlink_monitor_event_t.flags
+// must be on the public root-package surface with values matching the C ABI
+// (core/include/zlink_enum.h, core/include/zlink/eventing/api.h), and
+// MonitorEventAll must still cover them.
+func TestFlowStateMonitorEventConstantsMatchCABIAndArePublic(t *testing.T) {
+	maskCases := []struct {
+		name string
+		got  zlink.MonitorEventMask
+		want zlink.MonitorEventMask
+	}{
+		{"MonitorEventSendFlowPaused", zlink.MonitorEventSendFlowPaused, 1 << 16},
+		{"MonitorEventSendFlowResumed", zlink.MonitorEventSendFlowResumed, 1 << 17},
+		{"MonitorEventFlowStateStale", zlink.MonitorEventFlowStateStale, 1 << 18},
+	}
+	for _, tc := range maskCases {
+		if tc.got != tc.want {
+			t.Fatalf("%s = %#x, want %#x", tc.name, tc.got, tc.want)
+		}
+		if zlink.MonitorEventAll&tc.got == 0 {
+			t.Fatalf("MonitorEventAll does not cover %s", tc.name)
+		}
+	}
+	if zlink.MonitorEventAll != zlink.MonitorEventMask(0x7FFFF) {
+		t.Fatalf("MonitorEventAll = %#x, want %#x", zlink.MonitorEventAll, 0x7FFFF)
+	}
+
+	typeCases := []struct {
+		name string
+		got  zlink.MonitorEventType
+		want zlink.MonitorEventType
+	}{
+		{"MonitorEventTypeSendFlowPaused", zlink.MonitorEventTypeSendFlowPaused, 1 << 16},
+		{"MonitorEventTypeSendFlowResumed", zlink.MonitorEventTypeSendFlowResumed, 1 << 17},
+		{"MonitorEventTypeFlowStateStale", zlink.MonitorEventTypeFlowStateStale, 1 << 18},
+	}
+	for _, tc := range typeCases {
+		if tc.got != tc.want {
+			t.Fatalf("%s = %#x, want %#x", tc.name, tc.got, tc.want)
+		}
+	}
+
+	flagCases := []struct {
+		name string
+		got  zlink.MonitorEventFlag
+		want zlink.MonitorEventFlag
+	}{
+		{"MonitorEventFlagConnectionReadyEdge", zlink.MonitorEventFlagConnectionReadyEdge, 1 << 0},
+		{"MonitorEventFlagSendFlowWritable", zlink.MonitorEventFlagSendFlowWritable, 1 << 1},
+		{"MonitorEventFlagFlowStateStaleGeneration", zlink.MonitorEventFlagFlowStateStaleGeneration, 1 << 2},
+		{"MonitorEventFlagFlowStateStaleEpoch", zlink.MonitorEventFlagFlowStateStaleEpoch, 1 << 3},
+	}
+	for _, tc := range flagCases {
+		if tc.got != tc.want {
+			t.Fatalf("%s = %#x, want %#x", tc.name, tc.got, tc.want)
+		}
+	}
+
+	if zlink.MonitorTransportLaneApplication != 0 || zlink.MonitorTransportLaneCompletion != 1 {
+		t.Fatalf("MonitorTransportLane values = (%d, %d), want (0, 1)",
+			zlink.MonitorTransportLaneApplication, zlink.MonitorTransportLaneCompletion)
+	}
+}
+
+// Final-review follow-up: the five flow-state fields must be on the public
+// MonitorStatus surface (checked by field existence via the compiler; a
+// runtime zero-check on a fresh PAIR socket lives in monitor_test.go).
+func TestMonitorStatusExposesFlowMetricFields(t *testing.T) {
+	var status zlink.MonitorStatus
+	status.FlowPausedConnections = 1
+	status.FlowPauseAppliedTotal = 2
+	status.FlowResumeAppliedTotal = 3
+	status.FlowStateStaleTotal = 4
+	status.FlowPauseDurationMs = 5
+	if status.FlowPausedConnections != 1 || status.FlowPauseAppliedTotal != 2 ||
+		status.FlowResumeAppliedTotal != 3 || status.FlowStateStaleTotal != 4 ||
+		status.FlowPauseDurationMs != 5 {
+		t.Fatalf("MonitorStatus flow metric fields did not round-trip: %+v", status)
+	}
+}
+
 // §8.1.1 "DEALER/ROUTER socket에서 설정이 성공하고 같은 state의 반복 호출도 성공한다".
 func TestSetReceiveFlowStateSucceedsOnDealerAndRouterAndIsIdempotent(t *testing.T) {
 	ctx := newContext(t)
