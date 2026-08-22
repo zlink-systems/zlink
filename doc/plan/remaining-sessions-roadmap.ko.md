@@ -241,8 +241,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
 **L1 parity(다른 3언어 대조)** 필수.
 
 - [x] **단계 1 — [A1] .NET 수신자 wire-ingress 연결** `dotnet단일` — `e8409034c6` (포맷만·기존 admission 재사용·단일책임; sol 9/10 해소, 게이트 무회귀. fast-follow: 실제 wire→admission 통합 테스트 = sol #10 LOW/비차단)
-- [ ] **canon-2a-sender-app-reply-delivery (follow-up, 단계 3b서 닫음)**: .NET canonical 발신자가 target handler의 non-empty application reply를 조인 caller에 전달하지 못함(sol HIGH, latent — 현재 테스트 미커버). 단계 3b(A6 크로스랭 pairwise app-reply)에서 해소.
-- [ ] **canon-A1-real-wire-admission-integration-test (fast-follow)**: ProcessCanonicalActorJoin→AdmitCanonicalActorJoinAsync→AdmitRoutedActorJoinAsync 실제 경로 구동 테스트(accepted tail·Authority-row fence mismatch·TypeMismatch·malformed→ProtocolError·mailbox-full). sol #10(LOW/비차단). 기존 admission이 JSON 테스트로 커버되나 canonical 배선은 미커버.
+- [x] **canon-2a-sender-app-reply-delivery — 3b서 해소 확정(2026-08-22)**: .NET source의 이중 decode
+  제거(adfa26824b) + 28 reply 프레이밍 정본화(c56714a52c·9ec9ede6c0)로 Java/C++ target의
+  non-empty app reply 실소비 — dotnet→java/dotnet→cpp 그린이 실증. RemoteJoinerCanonicalReplyTests
+  3형태 고정 테스트로 커버.
+- [~] **canon-A1-real-wire-admission-integration-test**: happy path는 12셀 매트릭스가 실경로로
+  커버(3b). 잔여 = 음성 케이스 unit(Authority-row fence mismatch·TypeMismatch·malformed→
+  ProtocolError·mailbox-full). sol #10(LOW/비차단) 유지.
 - [ ] **단계 2 — canonical 수신·발신 활성화**
   - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
@@ -257,7 +262,9 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     - [x] **수신자(send)**: `actor_join_operation_result_t.application_reply` 추가 + `admit_wire_actor_join`가 handler reply를 framework-multipart(`[u32BE count=1][u32BE size][bytes]`) application_payload로 감싸 command-20 tail 뒤 2번째 frame으로 전송; `terminal_result!=0`이면 payload 거부. **.NET `EncodeFrameworkMultipart`/Java `encodeFrameworkMultipart`와 바이트 단위 일치**(BE count+per-part len).
     - [x] **발신자(receive) 언랩**: canonical source가 framework-multipart를 언랩(`unwrap_canonical_actor_join_application_reply`, 첫 파트 반환·non-multipart는 그대로·malformed는 protocol_error)해 handler 실제 reply message를 join caller에 전달. **JSON 경로(unwrapped 저장)·Java `decodeFrameworkMultipart`와 일치**. malformed reply는 negotiation chunk-limit 기록 **전에** 실패(순서 재배치).
     - [x] **serializer 가드 축소**: `canonical_actor_join_application_reply` → `result_t<optional>`; reply 없으면 serializers 없이도 admit, reply 있는데 serializers null이면 typed protocol_error. 기존 동작 회귀 없음.
-    - 이월(3b서 자연 해소): ① full source-path end-to-end 커버(Java→cpp/.NET→cpp pairwise가 정확히 구동) ② throwing reply serializer 시 pending-admission unwind(pathological) ③ **.NET source(ZLinkActorRemoteJoiner:1044) non-unwrap 의심 → pairwise서 확인**.
+    - 이월 판정(2026-08-22): ① full source-path e2e — **3b 12셀 그린으로 해소** ③ .NET :1044
+      non-unwrap — **실체 확인·수정 완료**(이중 decode, adfa26824b). 잔존: ② throwing reply
+      serializer 시 pending-admission unwind(pathological, 미커버 카드).
   - [x] 3b [A6] 크로스랭 canonical 매트릭스 `4언어` — **✅ 완료(2026-08-22 19:47): 12/12 전 그린,
     `all` 편입 `fe352b9e87`, 결정성 실증(11셀 2연속 + dotnet→java flake 해소 후 6연속 그린
     `bf8ee1850f` — .NET full-width 난수 발급이 schema nonzero-u64 bounded 위반이던 것, 스펙
@@ -475,9 +482,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     :324-332; ⓑ send전 seal제거·ⓒ registry 재평가는 스펙 위반 기각). ⓐ 랜딩 `18c0690a15`(유효하나 불충분 —
     동일 서명 잔존). diag3 실측 수렴: **정당한 old-binding unbind가 actorId 전체
     clearRelocation(:289→:863)으로 terminal seal retention(:569/:1140 의도 보존)까지 삭제** →
-    새 route 동일-seal outbound 거부. 스펙 48:137 위반. **최종 ruling: cleanup ownership 한정**
-    (route-scoped 정리, terminal record는 retention 유지, actor-wide는 destroy/shutdown 전용) —
-    sonnet 구현+TTT 10회 검증 중. 이하 기각된 정적 진단 기록:
+    새 route 동일-seal outbound 거부. 스펙 48:137 위반. **최종 ruling(cleanup ownership 한정) 랜딩
+    `9b4a1502ad` — 목표 서명 0/10**(메커니즘 회귀 테스트가 수정 부하 실증, 42/44 모드도 0 유지).
+    TTT 잔존 = staleDescriptor 조기 admission race 1/10(reconnect 이전 단계 — 별개 기존 모드,
+    run-dir /tmp/zlink-tictactoe.ts-98mCE1 보존, 후속 카드). bindingGeneration 미포함 편차는
+    보수 방향이라 수용. 이하 기각된 정적 진단 기록:
   - **[기각된 정적 가설] Node TTT 모드 C 정적 진단(2026-08-22)**: 재접속 세션
     JoinGameNotify 미전달의 유력 기전 — relocation seal 창에서 push()가 fire-and-forget 보류 경로
     (bound-actor-relay-sender.ts:79-98)로 들어간 뒤, 브라우저 물리 재접속이
