@@ -297,10 +297,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     requireActorStage 동기 예외로 FAILED reply 미전송 → silent, StateMachine:474/:652). Ruling:
     opaque token용 unsigned-nonzero reader 분리 + failure reply 보장 — 랜딩 `0a9fc8bd52`(silent
     hang 소멸). diag4: currentSpotGeneration도 동일 계열 → opaque 처리 랜딩 `534154d595`(ZLAU 거부 소진,
-    1098 테스트 그린). diag5: 다음 rung 'standalone Actor target stage is unavailable' 선행 표면
-    (/tmp/tmp.qnRvH4Is5G) — stage 설치 경로 계측 진단 중(sol). cpp attempt conjunct 수정도 랜딩
-    `8ae6886892`(회귀 4셀 그린; dotnet→cpp는 수정 전후 동일 증상 — dotnet→java와 공통 원인
-    가능성). 스펙 구체화는
+    1098 테스트 그린). cpp attempt conjunct 수정 랜딩 `8ae6886892`(회귀 4셀 그린). **diag5 수렴 — dotnet 2셀 공통
+    근본 원인**: .NET precommit이 40 전 source authority slot을 phase=2·attempt=0(빈 fence)로
+    기록(schema `ordinal-or-zero` 적합, PrecommitCoordinator:70) — Java decoder가 0 거부
+    (RelocationAuthorityStateCodec:128→PayloadCodec:120 slot-비어야함 실패), cpp도 동일
+    (actor_authority_payload.hpp:618). **40/52/ZLJR 무결 — Java/C++ decoder의 schema 비준수.**
+    Ruling: 두 언어가 frozen authority-relocation-state대로 source-phase slot 수용 — Java(sonnet)·
+    C++(terra) 병렬 수정 중(unit만, 스테이지 코디네이터 직렬). 스펙 구체화는
     sol 리뷰 승인(앵커 보완 `4a39e14dca`). ⓑ
     dotnet→cpp = .NET TargetAttemptGeneration=1(:967) vs cpp validator lifecycle 동일성 요구
     (spot_runtime.cpp:5764). **설계 판정 완료(opus 분석→Claude ruling, 후보 A)**:
