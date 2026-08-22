@@ -33,6 +33,13 @@ class MonitorEventFlag(IntFlag):
     FLOW_STATE_STALE_GENERATION = 1 << 2
     FLOW_STATE_STALE_EPOCH = 1 << 3
 
+class MonitorStatusDetail(IntFlag):
+    """Detail bits describing which ``MonitorStatus`` fields are populated.
+    Mirrors ``zlink_monitor_status_detail_flag_e`` in the C ABI. Only the
+    flow-state bit is named here; the raw ``MonitorStatus.detail_flags``
+    field carries the others."""
+    FLOW_STATE = 1 << 5
+
 class PollEventFlag(IntFlag):
     """Readiness conditions a poll source can be watched for or report (readable, writable, error)."""
     """Mirrors ``zlink_poller_event_flag_e`` in the C ABI. ``POLLCOMPLETION``
@@ -55,6 +62,7 @@ class PollSourceKind(IntEnum):
 __all__ = [
     "MonitorEventMask",
     "MonitorEventFlag",
+    "MonitorStatusDetail",
     "PollEventFlag",
     "PollSourceKind",
 ]

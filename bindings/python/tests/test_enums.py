@@ -78,6 +78,10 @@ class EnumValueTests(unittest.TestCase):
         )
         self.assertEqual(int(zlink.MonitorEventFlag.FLOW_STATE_STALE_EPOCH), 1 << 3)
 
+    def test_monitor_status_detail_values(self):
+        # ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE (core/include/zlink_enum.h).
+        self.assertEqual(int(zlink.MonitorStatusDetail.FLOW_STATE), 1 << 5)
+
     def test_error_code_values(self):
         self.assertEqual(int(zlink.ErrorCode.EFSM), 156384763)
         self.assertEqual(int(zlink.ErrorCode.EMTHREAD), 156384766)
