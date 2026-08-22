@@ -302,6 +302,18 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     기록(schema `ordinal-or-zero` 적합, PrecommitCoordinator:70) — Java decoder가 0 거부
     (RelocationAuthorityStateCodec:128→PayloadCodec:120 slot-비어야함 실패), cpp도 동일
     (actor_authority_payload.hpp:618). **40/52/ZLJR 무결 — Java/C++ decoder의 schema 비준수.**
+    **[전수 감사 — 스펙 외 요소] 진행 중(2026-08-22)**: 4언어 병렬 감사 중 Node(19건)·.NET(14건)
+    도착, Java·C++ 대기. **최대 발견 = 28 app-reply 프레이밍 4자 발산(상호 모순, 스펙 무규정)**:
+    cpp/Java/.NET target은 frame-2를 framework-multipart로 랩, Node target은 inner 타입 직접 —
+    Node ZLJR 검증(inner 일치, spots/index.ts:2820)과 Java claimRecovery(multipart 리터럴,
+    Adapter:363)는 동시 만족 불가. .NET source의 multipart 필수 conjunct(ManagedMeshNode:9529)도
+    스펙 근거 없음(이 탓에 dotnet→node non-empty reply 소비 불가 — 현재 empty reply라 잠복).
+    → 4런타임 공통 프레이밍 규칙 스펙 명문화 + 정렬이 유일 해소(통합 판정은 Java·C++ 감사 후).
+    보고서: scratchpad audit-extraspec-{node,cpp}-sol.log, .NET/Java는 Agent 태스크. 기타 주요:
+    .NET ZLAP/ZLAR 이중 래퍼(schema trailingBytes forbidden 위반 의심·LE byte-order), tautological
+    admission conjunct(RemoteJoiner:569), 순서 비교 잔존(:581 — 51 §9 위반), one-way 40 legacy
+    분기 제거 조건 충족(ManagedMeshNode:6214), 메시 전체 조회(:756 성능); Node Store 재조회
+    다수(4180 등)·Relocation Store 과잉 필수(actor-transfer-runtime.ts:424).
     **[정책] 리뷰·수정 감사(2026-08-22 사용자 지시)**: sol 리뷰는 큰 단계 마감에만, 일상 리뷰는
     코디네이터 직접. 랜딩된 수정이 스펙 외 단계 추가·복잡화·성능 저하를 만들면 보고 후 revert.
     감사 결과: Java attempt=lifecycle(f04506d1ff 절반)은 제거된 cpp 스펙위반 검사에 맞춘 것 —
