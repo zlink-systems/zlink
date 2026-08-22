@@ -1085,7 +1085,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             completion?.Location.MembershipEpoch ?? 0,
             completion?.ReceiveChunkLimitBytes ?? 0,
             record.FailureErrno,
-            completion?.Location.SpotGeneration ?? 0);
+            completion?.Location.SpotGeneration ?? 0,
+            completion?.ReplyContentType ?? "");
     }
 
     private static ZLinkBackendActorJoinEntrySpotResult BuildEntrySpotJoinResult(

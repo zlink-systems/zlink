@@ -107,7 +107,8 @@ internal readonly record struct ZLinkBackendActorJoinResult(
     //  reply header, 0 (None) on success or when the reply carried no fine code.
     //  Defaulted so existing/test constructors need not thread it.
     int FailureErrno = 0,
-    ulong JoinedSpotGeneration = 0);
+    ulong JoinedSpotGeneration = 0,
+    string ReplyContentType = "");
 
 internal readonly record struct ZLinkBackendActorJoinEntrySpotResult(
     RequestResult Result,

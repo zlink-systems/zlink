@@ -81,7 +81,8 @@ internal sealed record ActorLocation(
 
 internal sealed record ActorJoinCompletion(
     ActorJoinResult JoinResult, ActorRef Actor, ActorLocation Location,
-    uint ReceiveChunkLimitBytes = 0) : MeshRecordPayload;
+    uint ReceiveChunkLimitBytes = 0,
+    string ReplyContentType = "") : MeshRecordPayload;
 
 //  service-wire-v1.schema.json actor-join-reply-tail (reply(20),
 //  originalOperationKind actorJoin): the SPOT the joining Actor now belongs

@@ -2263,7 +2263,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             actor,
             request.TargetNodeRid,
             request.TargetSpotId,
-            request.TargetSpotGeneration);
+            request.TargetSpotGeneration,
+            request.ContentType);
         var head = ZLinkServiceWireCodec.EncodeActorJoinRequest(
             new ActorJoinRequest(
                 operation.OperationId.Low,
@@ -3284,7 +3285,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
             var actorLease = checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration));
             operation.ActorJoinOrigin = new ActorJoinOrigin(
-                actorRef, targetNodeRid, targetSpotId, targetSpotGeneration);
+                actorRef,
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                ZLinkEnvelopeCodec.DefaultContentType);
             var head = ZLinkServiceWireCodec.EncodeActorJoinRequest(
                 new ActorJoinRequest(
                     operation.OperationId.Low, actorRef, _lifecycleGeneration,
@@ -9548,7 +9553,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     spot?.SpotId ?? origin.TargetSpotId,
                     spot?.SpotGeneration ?? origin.TargetSpotGeneration,
                     actorJoinCompletion.MembershipEpoch),
-                actorJoinCompletion.ReceiveChunkLimitBytes);
+                actorJoinCompletion.ReceiveChunkLimitBytes,
+                origin.ReplyContentType);
             CompleteManagedOperation(
                 pending,
                 RequestResult.Ok,
@@ -11405,7 +11411,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ActorRef Actor,
         RoutingId TargetNodeRid,
         string TargetSpotId,
-        ulong TargetSpotGeneration);
+        ulong TargetSpotGeneration,
+        string ReplyContentType);
 
     private readonly record struct ManagedRequestCompletion(
         RequestResult Result,

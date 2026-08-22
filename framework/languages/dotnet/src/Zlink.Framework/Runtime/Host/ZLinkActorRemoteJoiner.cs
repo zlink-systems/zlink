@@ -1038,22 +1038,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     ZLinkFrameworkErrorKind.ProtocolError,
                     "Canonical actorJoin application reply is malformed.");
 
-            ZLinkApplicationPayloadEnvelope application;
-            if (replyParts.Count == 1)
-            {
-                if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecode(
-                        replyParts[0].AsReadOnlyMemory(), out application))
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.ProtocolError,
-                        "Canonical actorJoin application reply is malformed.");
-            }
-            else
-            {
-                application = new ZLinkApplicationPayloadEnvelope(
-                    typeof(ZLinkMessage).Name,
-                    ZLinkEnvelopeCodec.DefaultContentType,
-                    ReadOnlyMemory<byte>.Empty);
-            }
+            var application = DecodeCanonicalApplicationReply(join, replyParts);
             var handoffId = ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
                 request.Actor.NodeRid,
                 request.Actor.ActorId,
@@ -1091,6 +1076,33 @@ internal sealed class ZLinkActorRemoteJoiner(
         {
             ZLinkMessageParts.DisposeAll(replyParts);
         }
+    }
+
+    // The managed mesh has already unwrapped the framework-multipart reply.
+    // A nested application envelope is the legacy .NET-target shape; unwrap it
+    // once for compatibility. Other targets provide the sole raw reply part.
+    internal static ZLinkApplicationPayloadEnvelope DecodeCanonicalApplicationReply(
+        ZLinkBackendActorJoinResult join,
+        IReadOnlyList<Message> replyParts)
+    {
+        if (replyParts.Count > 1)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Canonical actorJoin application reply is malformed.");
+
+        if (replyParts.Count == 0)
+            return new ZLinkApplicationPayloadEnvelope(
+                typeof(ZLinkMessage).Name,
+                join.ReplyContentType,
+                ReadOnlyMemory<byte>.Empty);
+
+        var rawReply = replyParts[0].AsReadOnlyMemory();
+        return ZLinkApplicationPayloadEnvelopeCodec.TryDecode(rawReply, out var nested)
+            ? nested
+            : new ZLinkApplicationPayloadEnvelope(
+                typeof(ZLinkMessage).Name,
+                join.ReplyContentType,
+                rawReply);
     }
 
     private readonly record struct CanonicalAdmission(

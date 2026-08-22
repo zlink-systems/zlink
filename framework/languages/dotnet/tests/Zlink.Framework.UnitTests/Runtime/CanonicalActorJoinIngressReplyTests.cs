@@ -104,6 +104,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 checked((uint)ZLinkRemoteActorJoinPackets
                     .ConservativeReceiveChunkLimitBytes),
                 join.ReceiveChunkLimitBytes);
+            Assert.Equal("application/json", join.ReplyContentType);
 
             var applicationFrame = Assert.Single(replyParts);
             Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecode(
