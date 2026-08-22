@@ -1496,13 +1496,17 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task ObservedAuthorityAcceptsFullWidthEntrySpotGeneration()
+    public async Task ObservedAuthorityToleratesFullWidthLegacyGeneration()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = NewNode(context, "full-width-entry-source");
 
-        // Entry Spot routing uses the native MeshNode lifecycle generation,
-        // which is not the public SpotRef object-generation range.
+        // Local generation issuance (see ZLinkManagedMeshNode.NewNonZeroToken
+        // and ZLinkLocationAutoConnectHost.CreateLifecycleNonce) is now bounded
+        // to [1, long.MaxValue] to satisfy the wire schema's nonzero-u64 range.
+        // Acceptance of observed authority stays permissive across the full
+        // ulong range so values recorded before this bound existed, or issued
+        // by a peer that does not apply the same bound, still decode.
         source.ObserveSpotAuthority(
             RoutingId.From("full-width-entry-target"),
             "full-width-entry-target-spot",

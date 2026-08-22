@@ -11134,12 +11134,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private static ulong NewNonZeroToken()
     {
+        // Bounded to [1, long.MaxValue] to satisfy the wire schema's
+        // nonzero-u64 range (frozen at 2^63-1 for signed-language interop).
         Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+        ulong value;
         do
         {
             RandomNumberGenerator.Fill(bytes);
-        } while (BinaryPrimitives.ReadUInt64BigEndian(bytes) == 0);
-        return BinaryPrimitives.ReadUInt64BigEndian(bytes);
+            value = BinaryPrimitives.ReadUInt64BigEndian(bytes);
+        } while (value is 0 or > long.MaxValue);
+        return value;
     }
 
     private ulong NextAuthorityOwnerGeneration()
@@ -11173,10 +11177,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw new ArgumentException(
                 "The observed owner node routing id is required.",
                 nameof(targetNodeRid));
-        // Internal route fences carry the native ulong generation space. The
-        // public SpotRef/ActorRef object-generation contract is bounded by
-        // long.MaxValue, but an Entry Spot uses the MeshNode lifecycle
-        // generation and can legitimately occupy the upper half of ulong.
+        // Internal route fences carry the native ulong generation space.
+        // Local issuance (see NewNonZeroToken) is bounded to
+        // [1, long.MaxValue] to satisfy the wire schema's nonzero-u64
+        // range. Acceptance here stays permissive across the full ulong
+        // range to tolerate values issued before this bound existed, or by
+        // a peer whose own issuance is not bounded the same way.
         if (objectGeneration == 0)
             throw new ArgumentOutOfRangeException(nameof(objectGeneration));
         if (authorityOwnerGeneration == 0)
