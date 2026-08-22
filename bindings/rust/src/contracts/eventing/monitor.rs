@@ -307,4 +307,60 @@ impl MonitorStatus {
     pub fn is_closed(&self) -> bool {
         crate::monitor::monitor_status_is_closed(self)
     }
+
+    /// Returns `true` when `flow_paused_connections` and the other `flow_*`
+    /// fields are populated (ABI 4+, paired DEALER/ROUTER sockets only).
+    pub fn has_flow_state_detail(&self) -> bool {
+        crate::monitor::monitor_status_has_flow_state_detail(self)
+    }
+}
+
+/// Typed bitmask for the event-specific flags carried in the native
+/// `zlink_monitor_event_t.flags` field (not yet surfaced on [`MonitorEvent`];
+/// see core-byte-hwm-flow-control-plan.ko.md §5.1/§6). Mirrors
+/// `zlink_monitor_event_flag_e` in core/include/zlink/eventing/api.h.
+/// Combine with `|`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorEventFlags(u32);
+
+impl MonitorEventFlags {
+    /// No event-specific flags are set.
+    pub const NONE: Self = Self(0);
+    /// Set on a `ConnectionReady` event that moves a connection from
+    /// not-ready to ready.
+    pub const CONNECTION_READY_EDGE: Self = Self(1 << 0);
+    /// Set on `SendFlowResumed` when clearing the remote pause left the pipe
+    /// actually writable. Clear when another cause (byte high-water-mark,
+    /// transport wait, or termination) still blocks it.
+    pub const SEND_FLOW_WRITABLE: Self = Self(1 << 1);
+    /// Set on `FlowStateStale` when the frame named a different connection
+    /// generation.
+    pub const FLOW_STATE_STALE_GENERATION: Self = Self(1 << 2);
+    /// Set on `FlowStateStale` when the epoch did not advance inside the
+    /// current generation.
+    pub const FLOW_STATE_STALE_EPOCH: Self = Self(1 << 3);
+
+    /// Returns the raw flag bits.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// Returns `true` when `self` contains every bit set in `other`.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl BitOr for MonitorEventFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for MonitorEventFlags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
 }

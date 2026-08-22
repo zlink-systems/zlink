@@ -5,8 +5,8 @@ use std::thread;
 use std::time::Duration;
 
 use zlink::{
-    Context, MonitorEvent, MonitorEventType, RecvError, SocketMonitor, SocketMonitorEventMask,
-    SocketMonitorOpenOptions,
+    Context, MonitorEvent, MonitorEventFlags, MonitorEventType, RecvError, SocketMonitor,
+    SocketMonitorEventMask, SocketMonitorOpenOptions,
 };
 
 #[test]
@@ -25,6 +25,39 @@ fn flow_state_event_constants_match_c_abi_and_are_in_all() {
     assert_eq!(all & SocketMonitorEventMask::SEND_FLOW_PAUSED.bits(), 1 << 16);
     assert_eq!(all & SocketMonitorEventMask::SEND_FLOW_RESUMED.bits(), 1 << 17);
     assert_eq!(all & SocketMonitorEventMask::FLOW_STATE_STALE.bits(), 1 << 18);
+}
+
+#[test]
+fn monitor_status_detail_flow_state_bit_matches_c_abi() {
+    // core/include/zlink_enum.h:
+    //   ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE = 1u << 5
+    let ctx = Context::new().unwrap();
+    let sock = ctx.pair_socket().unwrap();
+    let mon = SocketMonitor::open(&sock).unwrap();
+    let snap = mon.status().unwrap();
+    // `has_flow_state_detail()` is `MonitorStatus`'s only public surface for
+    // the ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE (1 << 5) bit; assert it
+    // agrees with the raw detail_flags mask bit-for-bit.
+    assert_eq!(snap.has_flow_state_detail(), snap.detail_flags & (1 << 5) != 0);
+}
+
+#[test]
+fn monitor_event_flag_constants_match_c_abi() {
+    // core/include/zlink/eventing/api.h:
+    //   ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE       = 1u << 0
+    //   ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE          = 1u << 1
+    //   ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION = 1u << 2
+    //   ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH      = 1u << 3
+    assert_eq!(MonitorEventFlags::NONE.bits(), 0);
+    assert_eq!(MonitorEventFlags::CONNECTION_READY_EDGE.bits(), 1 << 0);
+    assert_eq!(MonitorEventFlags::SEND_FLOW_WRITABLE.bits(), 1 << 1);
+    assert_eq!(MonitorEventFlags::FLOW_STATE_STALE_GENERATION.bits(), 1 << 2);
+    assert_eq!(MonitorEventFlags::FLOW_STATE_STALE_EPOCH.bits(), 1 << 3);
+
+    let combined = MonitorEventFlags::SEND_FLOW_WRITABLE | MonitorEventFlags::FLOW_STATE_STALE_EPOCH;
+    assert!(combined.contains(MonitorEventFlags::SEND_FLOW_WRITABLE));
+    assert!(combined.contains(MonitorEventFlags::FLOW_STATE_STALE_EPOCH));
+    assert!(!combined.contains(MonitorEventFlags::CONNECTION_READY_EDGE));
 }
 
 #[test]

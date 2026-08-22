@@ -87,6 +87,10 @@ pub(crate) fn monitor_status_is_closed(status: &MonitorStatus) -> bool {
     status.state_flags & ffi::ZLINK_MONITOR_STATE_CLOSED != 0
 }
 
+pub(crate) fn monitor_status_has_flow_state_detail(status: &MonitorStatus) -> bool {
+    status.detail_flags & ffi::ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE != 0
+}
+
 // ---------------------------------------------------------------------------
 // SocketMonitor
 // ---------------------------------------------------------------------------

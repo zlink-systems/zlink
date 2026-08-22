@@ -367,6 +367,11 @@ pub type zlink_monitor_state_mask_t = u32;
 pub type zlink_monitor_status_detail_mask_t = u32;
 pub const ZLINK_MONITOR_STATE_READY: u32 = 1 << 0;
 pub const ZLINK_MONITOR_STATE_CLOSED: u32 = 1 << 3;
+/// Set when `flow_paused_connections` and the other `flow_*`
+/// `zlink_monitor_status_t` fields are populated (ABI 4+, paired
+/// DEALER/ROUTER sockets only). See `zlink_monitor_status_detail_flag_e` in
+/// core/include/zlink_enum.h.
+pub const ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE: u32 = 1 << 5;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
