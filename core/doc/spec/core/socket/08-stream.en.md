@@ -173,3 +173,14 @@ the same send-ready callback returns `ZLINK_HANDLER_DEADLOCK` with
 The [Socket Common](README.en.md) contract defines public socket-handle thread
 safety and close behavior. The same `zlink_msg_t` cannot be used concurrently
 from multiple threads.
+
+## Receive flow state
+
+STREAM has no paired DEALER/ROUTER completion lane, so it has no receive-flow
+state. `zlink_socket_set_receive_flow_state()` returns
+`ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a STREAM socket and
+changes nothing. The byte HWM, low water mark, and transport backpressure
+described above stay in effect unchanged, and a monitor for a STREAM socket never
+sets `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` or emits
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or
+`ZLINK_EVENT_FLOW_STATE_STALE`.

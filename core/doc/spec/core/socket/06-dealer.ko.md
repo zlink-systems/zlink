@@ -283,3 +283,41 @@ DEALER의 `ZLINK_POLLIN`은 raw 또는 request/reply record를 수신할 수 있
 request에서 `ZLINK_POLLOUT`과 `zlink_send_ready_handler()`는 backpressure 뒤 submit을 다시 시도할
 가치가 있음을 나타내지만 다음 submit 성공을 보장하지 않는다. 이 readiness 계약은 raw reply에
 적용하지 않는다.
+
+## 9. Receive flow state
+
+Completion lane으로 ROUTER와 pair를 이룬 DEALER는 자신에게 보내는 peer에게 전송을 멈추고
+다시 시작하라고 요청할 수 있다. `zlink_socket_set_receive_flow_state()`는 socket 전체에
+적용되는 상태 하나를 저장하고 이 socket의 ready pair마다 completion lane으로 보낸다. 함수
+선언은 [Socket 공통](README.ko.md)이, 결과 표는 [Errors](../03-errors.ko.md)가 소유한다.
+
+이 상태는 counter가 아니라 절대값이다. `ZLINK_RECEIVE_FLOW_PAUSED`를 두 번 설정해도 pause는
+하나이며 두 번째 호출은 아무것도 보내지 않고 성공한다. 중첩 count도 없고 그만큼 resume을
+해야 하는 규칙도 없다. Socket은 상태를 정확히 하나만 유지하므로 한 peer만 pause하고 다른
+peer는 running으로 둘 수 없다.
+
+각 상태 변경은 한 connection generation 안에서 증가하는 flow epoch를 함께 보내고, frame은
+자신이 기록된 connection의 pair id와 generation도 담는다. 수신 socket은 frame이 현재 pair와
+generation을 지칭하고 epoch가 그 generation에서 마지막으로 수락한 epoch보다 클 때만
+적용한다. 그 밖의 frame은 stale로 무시하며 Core는 적용 대신
+`ZLINK_EVENT_FLOW_STATE_STALE`로 보고한다. 따라서 이전 generation의 frame이 그것을 대체한
+connection에 적용되는 일은 없다.
+
+Pair가 ready가 되면 Core는 socket의 현재 상태를 새 completion lane으로 보낸다. 이 socket이
+pause한 동안 연결하거나 재연결한 peer는 추가 호출 없이 pause를 알게 된다. 상태를 한 번도
+설정하지 않은 socket은 아무것도 보내지 않는다. 새 pair는 이미 RUNNING을 가정하기 때문이다.
+
+Remote PAUSE는 그 peer로 보내는 전송을 막는다. 이는 기존 차단 요인과 합성되는 독립적인
+차단 요인이다. Byte HWM, transport wait와 termination도 각각 그대로 전송을 막으며, 어느
+것도 해당하지 않을 때만 send가 수락된다. 따라서 remote pause를 해제해도 그것만으로 다음
+send가 성공하지는 않는다. Send 결과와 readiness는 그대로다. 차단된 non-blocking send는
+계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고하고, `ZLINK_POLLOUT`과
+`zlink_send_ready_handler()`는 8절이 정의한 의미를 유지한다.
+
+Remote PAUSE는 다음 message 경계에서 적용되며 message를 쪼개지 않는다. 첫 byte가 이미
+pipe에 도달한 message와 socket이 첫 part를 이미 수락한 message는 남은 part를 끝까지 보내고,
+pause는 그다음 message부터 적용한다.
+
+[Monitoring](../07-monitoring.ko.md)의 status snapshot은 이 socket이 현재 pause 상태로 보는
+peer 수, 적용한 pause와 resume 전이 수, stale로 거부한 frame 수, 가장 최근에 끝난 pause의
+길이를 제공한다.

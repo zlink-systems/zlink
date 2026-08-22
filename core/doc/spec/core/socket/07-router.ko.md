@@ -260,3 +260,38 @@ submit은 `zlink_submit_result_t`, receive는 `zlink_recv_result_t`, option은
 ROUTER의 `ZLINK_POLLIN`은 완전한 raw record를 수신할 수 있음을 뜻한다. Ordinary send와 request에서
 `ZLINK_POLLOUT`과 `zlink_send_ready_handler()`는 backpressure 뒤 submit을 다시 시도할 가치가 있음을
 나타내지만 다음 submit 성공을 보장하지 않는다. 이 readiness 계약은 raw reply에 적용하지 않는다.
+
+## 11. Receive flow state
+
+Completion lane으로 DEALER peer와 pair를 이룬 ROUTER는 그 peer들에게 자신에게 보내는 전송을
+멈추고 다시 시작하라고 요청할 수 있다. `zlink_socket_set_receive_flow_state()`는 socket 전체에
+적용되는 상태 하나를 저장한다. 함수 선언은 [Socket 공통](README.ko.md)이, 결과 표는
+[Errors](../03-errors.ko.md)가 소유한다.
+
+이 상태는 routing ID가 아니라 socket에 속한다. Peer별 flow-state 호출은 없다. 한 번 호출하면
+이 ROUTER의 ready transport pair마다 completion lane으로 상태를 전달하므로 모든 peer가 같은
+상태를 받고, 나중에 ready가 된 peer도 새 completion lane으로 socket의 현재 상태를 받는다.
+Routing ID는 send의 목적지를 고르는 값이며 receive-flow 상태를 고르지 않는다.
+
+이 상태는 counter가 아니라 절대값이다. 현재 상태를 다시 설정하면 성공하고 아무것도 보내지
+않는다.
+
+각 상태 변경은 한 connection generation 안에서 증가하는 flow epoch를 함께 보내고, 각 frame은
+자신이 기록된 pair id와 generation을 담는다. Frame은 수신 pipe의 현재 pair와 generation을
+지칭하고 epoch가 그 generation에서 마지막으로 수락한 epoch보다 클 때만 적용한다. 그 밖의
+frame은 stale로 무시하고 `ZLINK_EVENT_FLOW_STATE_STALE`로 보고한다. Routing ID는 재연결
+후에도 유지되지만 pair generation은 유지되지 않으므로, peer가 재연결 전에 알린 상태가 그것을
+대체한 connection에 적용되는 일은 없다. 새 generation은 pair가 ready가 될 때 socket이 보내는
+상태에서 시작한다.
+
+Remote PAUSE는 pause한 peer로 보내는 전송만 막고 다른 peer로 가는 route에는 영향이 없다.
+이는 byte HWM, transport wait, termination과 합성되는 독립적인 차단 요인이므로 해제만으로
+다음 send가 수락되지는 않는다. Send 결과와 readiness는 그대로다. 차단된 non-blocking send는
+계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고하고, mandatory routing은
+5절이 정의한 동작을 유지한다.
+
+Remote PAUSE는 다음 message 경계부터 적용하며 multipart record를 쪼개지 않는다. 이 ROUTER가
+routing ID part를 이미 수락한 record는 남은 part를 끝까지 보낸 뒤에 pause가 적용된다.
+
+[Monitoring](../07-monitoring.ko.md)의 status snapshot은 현재 pause 상태인 peer 수와 함께
+socket 전체의 적용된 전이 수, stale 수, pause 길이를 제공한다.

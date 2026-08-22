@@ -195,3 +195,13 @@ subscription inventory를 소비하거나 변경하지 않으므로 호출자는
 handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 
 **참고:** `zlink_set_subscription`, `zlink_get_sub_option`
+
+## Receive flow state
+
+SUB에는 paired DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+`zlink_socket_set_receive_flow_state()`는 SUB socket에 대해 `errno == ENOTSUP`과 함께
+`ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다. 위에서 설명한 byte HWM,
+low water mark와 transport backpressure는 그대로 유지된다. SUB socket의 monitor는
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
+`ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.

@@ -311,3 +311,50 @@ DEALER `ZLINK_POLLIN` means that a raw or request/reply record can be received. 
 sends and requests, `ZLINK_POLLOUT` and `zlink_send_ready_handler()` indicate that retrying a
 backpressured submit is worthwhile; they do not guarantee that the next submit will succeed.
 This readiness contract does not apply to raw replies.
+
+## 9. Receive flow state
+
+A DEALER paired with a ROUTER over a completion lane can ask the peers that
+send to it to stop and resume. `zlink_socket_set_receive_flow_state()` stores
+one socket-wide state and sends it on the completion lane of every ready pair
+of this socket; [Socket overview](README.en.md) owns the declaration and
+[Errors](../03-errors.en.md) owns the result table.
+
+The state is absolute, not a counter. Setting `ZLINK_RECEIVE_FLOW_PAUSED`
+twice is one pause, and the second call succeeds without sending anything.
+There is no nesting count and no matching number of resumes to perform. The
+socket keeps exactly one state; a socket cannot pause one peer and leave
+another running.
+
+Each state change carries a flow epoch that increases within one connection
+generation, and the frame also names the pair id and the generation of the
+connection it was written on. A receiving socket applies a frame only when it
+names its current pair and generation and its epoch is greater than the last
+epoch accepted for that generation. Every other frame is ignored as stale, and
+Core reports it as `ZLINK_EVENT_FLOW_STATE_STALE` instead of applying it. A
+frame from a previous generation is therefore never applied to the connection
+that replaced it.
+
+When a pair becomes ready, Core sends the socket's current state on the new
+completion lane, so a peer that connects or reconnects while this socket is
+paused learns the pause without another call. A socket that has never set a
+state sends nothing, because RUNNING is what a fresh pair already assumes.
+
+A remote PAUSE blocks sending to that peer. It is an independent blocker that
+composes with the existing ones: byte HWM, a transport wait, and termination
+each still block on their own, and a send is admitted only when none of them
+applies. Clearing the remote pause therefore does not by itself make the next
+send succeed. Send results and readiness are unchanged: a blocked non-blocking
+send still reports `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and
+`ZLINK_POLLOUT` and `zlink_send_ready_handler()` keep the meaning defined in
+section 8.
+
+A remote PAUSE takes effect at the next message boundary and never splits a
+message. A message whose first bytes already reached the pipe, and a message
+whose first part the socket has already accepted, completes its remaining
+parts; the pause applies from the following message.
+
+The [Monitoring](../07-monitoring.en.md) status snapshot reports how many peers
+this socket currently sees as paused, how many pause and resume transitions it
+applied, how many frames it rejected as stale, and the length of the most
+recent completed pause.

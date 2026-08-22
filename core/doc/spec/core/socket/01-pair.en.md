@@ -101,3 +101,14 @@ the next retry succeeds.
 `zlink_handler_result_t` value.
 
 **See also:** `zlink_send_part`
+
+## Receive flow state
+
+PAIR has no paired DEALER/ROUTER completion lane, so it has no receive-flow
+state. `zlink_socket_set_receive_flow_state()` returns
+`ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a PAIR socket and
+changes nothing. The byte HWM, low water mark, and transport backpressure
+described above stay in effect unchanged, and a monitor for a PAIR socket never
+sets `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` or emits
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or
+`ZLINK_EVENT_FLOW_STATE_STALE`.

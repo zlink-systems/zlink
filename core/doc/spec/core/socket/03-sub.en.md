@@ -193,3 +193,14 @@ Applicable types: raw SUB, raw XSUB.
 too small. `ENOTSUP` if the handle type does not support subscription query.
 
 **See also:** `zlink_set_subscription`, `zlink_get_sub_option`
+
+## Receive flow state
+
+SUB has no paired DEALER/ROUTER completion lane, so it has no receive-flow
+state. `zlink_socket_set_receive_flow_state()` returns
+`ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a SUB socket and
+changes nothing. The byte HWM, low water mark, and transport backpressure
+described above stay in effect unchanged, and a monitor for a SUB socket never
+sets `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` or emits
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or
+`ZLINK_EVENT_FLOW_STATE_STALE`.

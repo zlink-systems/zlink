@@ -280,3 +280,45 @@ ROUTER `ZLINK_POLLIN` means that a complete raw record can be received. For ordi
 and requests, `ZLINK_POLLOUT` and `zlink_send_ready_handler()` indicate that retrying a
 backpressured submit is worthwhile; they do not guarantee that the next submit will succeed.
 This readiness contract does not apply to raw replies.
+
+## 11. Receive flow state
+
+A ROUTER paired with DEALER peers over a completion lane can ask those peers to
+stop and resume sending to it. `zlink_socket_set_receive_flow_state()` stores
+one socket-wide state; [Socket overview](README.en.md) owns the declaration and
+[Errors](../03-errors.en.md) owns the result table.
+
+The state belongs to the socket, not to a routing ID. There is no per-peer
+flow-state call. One call fans the state out to the completion lane of every
+ready transport pair of this ROUTER, so every peer receives the same state, and
+a peer that becomes ready later receives the socket's current state on its new
+completion lane. A routing ID selects the destination of a send; it does not
+select a receive-flow state.
+
+The state is absolute, not a counter: repeating the current state succeeds and
+sends nothing.
+
+Each state change carries a flow epoch that increases within one connection
+generation, and each frame names the pair id and generation it was written on.
+A frame is applied only when it names the receiving pipe's current pair and
+generation and its epoch is greater than the last epoch accepted for that
+generation. Every other frame is ignored as stale and reported as
+`ZLINK_EVENT_FLOW_STATE_STALE`. A routing ID is stable across a reconnect
+while the pair generation is not, so state that a peer published before a
+reconnect is never applied to the connection that replaced it; the new
+generation starts from the state the socket sends when the pair becomes ready.
+
+A remote PAUSE blocks sending to the paused peer only. Routes to other peers
+are unaffected. It is an independent blocker composed with byte HWM, transport
+waits, and termination, so clearing it does not by itself admit the next send.
+Send results and readiness are unchanged: a blocked non-blocking send still
+reports `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and mandatory
+routing keeps the behavior defined in section 5.
+
+A remote PAUSE applies from the next message boundary and never splits a
+multipart record. A record whose routing-ID part this ROUTER has already
+accepted completes its remaining parts before the pause takes effect.
+
+The [Monitoring](../07-monitoring.en.md) status snapshot reports the current
+number of paused peers together with the applied transition, stale, and
+pause-duration values for the whole socket.

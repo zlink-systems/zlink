@@ -105,3 +105,13 @@ ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
 **반환값:** 성공 시 `ZLINK_HANDLER_OK`, 실패 시 `zlink_handler_result_t` 값.
 
 **참고:** `zlink_send_part`
+
+## Receive flow state
+
+PAIR에는 paired DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+`zlink_socket_set_receive_flow_state()`는 PAIR socket에 대해 `errno == ENOTSUP`과 함께
+`ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다. 위에서 설명한 byte HWM,
+low water mark와 transport backpressure는 그대로 유지된다. PAIR socket의 monitor는
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
+`ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.

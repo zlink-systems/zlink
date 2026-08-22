@@ -177,3 +177,13 @@ send-ready는 이전 submit이 backpressure였을 때 다시 시도할 가치가
 
 공개 socket handle의 thread-safety와 close 계약은 [소켓 공통](README.ko.md)을
 따릅니다. 같은 `zlink_msg_t`를 여러 스레드가 동시에 사용할 수 없습니다.
+
+## Receive flow state
+
+STREAM에는 paired DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+`zlink_socket_set_receive_flow_state()`는 STREAM socket에 대해 `errno == ENOTSUP`과 함께
+`ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다. 위에서 설명한 byte HWM,
+low water mark와 transport backpressure는 그대로 유지된다. STREAM socket의 monitor는
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
+`ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.
