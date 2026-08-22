@@ -114,7 +114,8 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
  * Raw-binding RouteMesh owner. Service topology and application dispatch are
  * implemented in Framework code; the binding only owns ROUTER transport.
  */
-final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
+    ZLinkInternalMeshNode.CanonicalRelocationPrepareRequestReplySupport {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private static final Logger LOGGER =
@@ -2951,8 +2952,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             try {
                 return Objects.requireNonNull(
-                    handler.handle(routingId, record),
-                    "canonical relocation handler returned null");
+                    handler.handle(routingId, null, record),
+                    "canonical relocation handler returned null")
+                    .thenApply(ignored -> null);
             } catch (RuntimeException failure) {
                 return CompletableFuture.failedFuture(failure);
             }
@@ -2962,6 +2964,47 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             requireStarted(),
             targetNodeRid,
             List.of(record));
+    }
+
+    @Override
+    public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+        RoutingId targetNodeRid,
+        byte[] command,
+        Duration timeout) {
+        Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+        byte[] record = Objects.requireNonNull(command, "command").clone();
+        Objects.requireNonNull(timeout, "timeout");
+        validateCanonicalRelocationControl(record);
+        if (Byte.toUnsignedInt(record[3])
+            != ServiceWireConstants.COMMAND_RELOCATION_PREPARE) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                "only canonical relocation prepare is request/reply"));
+        }
+        if (targetNodeRid.equals(routingId)) {
+            var handler = canonicalRelocationControlHandler;
+            if (handler == null) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "local canonical relocation handler is unavailable"));
+            }
+            try {
+                return Objects.requireNonNull(
+                    handler.handle(routingId, 1L, record),
+                    "canonical relocation handler returned null")
+                    .thenApply(ZLinkJavaRawMeshNode::canonicalPrepareReply);
+            } catch (RuntimeException failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        RouterSocket router = requireStarted();
+        return port.request(router, targetNodeRid, List.of(record), timeout)
+            .thenApply(parts -> {
+                if (parts.size() != 1) {
+                    throw new IllegalStateException(
+                        "canonical relocation prepare reply is invalid");
+                }
+                return canonicalPrepareReply(parts.getFirst());
+            });
     }
 
     @Override
@@ -4726,15 +4769,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         byte[] command = inbound.frames().getFirst().clone();
         try {
             validateCanonicalRelocationControl(command);
-            CompletionStage<Void> completion =
+            int code = Byte.toUnsignedInt(command[3]);
+            if (inbound.requestSequence() != null
+                && code != ServiceWireConstants.COMMAND_RELOCATION_PREPARE) {
+                return;
+            }
+            CompletionStage<byte[]> completion =
                 Objects.requireNonNull(
-                    handler.handle(inbound.source(), command),
+                    handler.handle(
+                        inbound.source(), inbound.requestSequence(), command),
                     "canonical relocation handler returned null");
-            completion.exceptionally(failure -> {
-                streamTrace(STREAM_TRACE ? "canonical-relocation-control-failed source="
-                    + inbound.source()
-                    + " failure=" + failure : null);
-                return null;
+            completion.whenComplete((reply, failure) -> {
+                if (failure != null) {
+                    streamTrace(STREAM_TRACE
+                        ? "canonical-relocation-control-failed source="
+                            + inbound.source() + " failure=" + failure
+                        : null);
+                    return;
+                }
+                if (inbound.requestSequence() == null) {
+                    return;
+                }
+                try {
+                    port.reply(
+                        requireStarted(),
+                        inbound.source(),
+                        inbound.requestSequence(),
+                        List.of(canonicalPrepareReply(reply)));
+                } catch (RuntimeException rejected) {
+                    streamTrace(STREAM_TRACE
+                        ? "canonical-relocation-reply-rejected source="
+                            + inbound.source() + " failure=" + rejected
+                        : null);
+                }
             });
         } catch (RuntimeException failure) {
             // Invalid or rejected maintenance records never enter an
@@ -7083,6 +7150,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             throw new IllegalArgumentException(
                 "record is not a canonical relocation control command");
         }
+    }
+
+    private static byte[] canonicalPrepareReply(byte[] record) {
+        byte[] reply = Objects.requireNonNull(record, "record").clone();
+        validateCanonicalRelocationControl(reply);
+        int command = Byte.toUnsignedInt(reply[3]);
+        if (command != ServiceWireConstants.COMMAND_RELOCATION_READY
+            && command != ServiceWireConstants.COMMAND_RELOCATION_FAILED) {
+            throw new IllegalArgumentException(
+                "canonical relocation prepare reply must be READY or FAILED");
+        }
+        return reply;
     }
 
     private static boolean isCanonicalRelocationControl(int command) {

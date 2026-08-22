@@ -341,31 +341,41 @@ final class ZLinkCanonicalRelocationStateMachine
                 fence.aggregateGeneration()), OPEN);
     }
 
-    @Override
     public CompletionStage<Void> apply(
         RoutingId transportSource,
+        int command,
+        byte[] encoded) {
+        return apply(transportSource, null, command, encoded)
+            .thenApply(ignored -> null);
+    }
+
+    @Override
+    public CompletionStage<byte[]> apply(
+        RoutingId transportSource,
+        Long requestSequence,
         int command,
         byte[] encoded) {
         try {
             return switch (command) {
                 case ServiceWireConstants.COMMAND_RELOCATION_PREPARE ->
                     onPrepare(transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodePrepare(encoded));
+                        ZLinkCanonicalRelocationProtocol.decodePrepare(encoded),
+                        requestSequence != null);
                 case ServiceWireConstants.COMMAND_RELOCATION_READY ->
-                    onReady(transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeReady(encoded));
+                    oneWay(requestSequence, onReady(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeReady(encoded)));
                 case ServiceWireConstants.COMMAND_RELOCATION_FAILED ->
-                    onFailed(transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeFailed(encoded));
+                    oneWay(requestSequence, onFailed(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeFailed(encoded)));
                 case ServiceWireConstants.COMMAND_RELOCATION_DATA ->
-                    onData(transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeData(encoded));
+                    oneWay(requestSequence, onData(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeData(encoded)));
                 case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER ->
-                    onCutover(transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeCutover(encoded));
+                    oneWay(requestSequence, onCutover(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeCutover(encoded)));
                 case ServiceWireConstants.COMMAND_RELOCATION_STATE ->
-                    onState(transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeState(encoded));
+                    oneWay(requestSequence, onState(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeState(encoded)));
                 default -> failed(new IllegalArgumentException(
                     "unsupported canonical relocation command"));
             };
@@ -374,9 +384,20 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
-    private CompletionStage<Void> onPrepare(
+    private static CompletionStage<byte[]> oneWay(
+        Long requestSequence,
+        CompletionStage<Void> operation) {
+        if (requestSequence != null) {
+            return failed(new IllegalArgumentException(
+                "only canonical relocation prepare is request/reply"));
+        }
+        return operation.thenApply(ignored -> null);
+    }
+
+    private CompletionStage<byte[]> onPrepare(
         RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        ZLinkCanonicalRelocationProtocol.Prepare prepare,
+        boolean request) {
         validateTarget(prepare.target());
         if (!transportSource.equals(prepare.sourceNodeRid())
             || prepare.initiatorRole()
@@ -395,7 +416,10 @@ final class ZLinkCanonicalRelocationStateMachine
                 LOGGER.warning(
                     "Late or duplicate canonical PREPARE is a no-op: "
                         + fence.id());
-                return CompletableFuture.completedFuture(null);
+                return request
+                    ? failed(new IllegalStateException(
+                        "terminal canonical relocation prepare cannot reply"))
+                    : CompletableFuture.completedFuture(null);
             }
             return failed(new IllegalArgumentException(
                 "terminal canonical relocation prepare differs"));
@@ -425,6 +449,9 @@ final class ZLinkCanonicalRelocationStateMachine
                 "duplicate canonical relocation prepare differs"));
         }
         if (current != null) {
+            if (request) {
+                return replyReady(fence, attempt);
+            }
             publishReady(fence, attempt, transportSource)
                 .exceptionally(failure -> {
                     LOGGER.warning("Canonical relocation READY publication "
@@ -450,20 +477,37 @@ final class ZLinkCanonicalRelocationStateMachine
                 } else {
                     targets.remove(fence, attempt);
                     Throwable cause = unwrap(failure);
-                    attempt.ready().completeExceptionally(cause);
-                    publishFailure(fence, attempt, transportSource, cause)
-                        .exceptionally(publicationFailure -> {
-                            LOGGER.warning("Canonical relocation failure reply "
-                                + "could not be sent: "
-                                + unwrap(publicationFailure));
-                            return null;
-                        });
+                    if (request) {
+                        publishFailure(
+                            fence, attempt, transportSource, cause, false)
+                            .whenComplete((cleanup, cleanupFailure) -> {
+                                if (cleanupFailure != null) {
+                                    cause.addSuppressed(
+                                        unwrap(cleanupFailure));
+                                }
+                                attempt.ready().completeExceptionally(cause);
+                            });
+                    } else {
+                        attempt.ready().completeExceptionally(cause);
+                        publishFailure(
+                            fence, attempt, transportSource, cause, true)
+                            .exceptionally(publicationFailure -> {
+                                LOGGER.warning(
+                                    "Canonical relocation failure reply "
+                                        + "could not be sent: "
+                                        + unwrap(publicationFailure));
+                                return null;
+                            });
+                    }
                 }
             });
         // PREPARE is only the ordered registration point.  It must return
         // before relay-ready so command 52 chunks can follow on this same
         // connection; READY or FAILED is published asynchronously after the
         // target finishes assembly and restore.
+        if (request) {
+            return replyReady(fence, attempt);
+        }
         publishReady(fence, attempt, transportSource)
             .exceptionally(failure -> {
                 LOGGER.warning("Canonical relocation READY publication failed: "
@@ -483,15 +527,7 @@ final class ZLinkCanonicalRelocationStateMachine
             }
             CompletionStage<Void> publication = attempt.ready()
                 .thenCompose(ignored -> sendReady(source, attempt.prepare()))
-                .thenRun(() -> {
-                    RetryPrepared retry = retryPrepared.get(fence);
-                    if (retry != null
-                        && retry.prepared() == attempt.prepared().join()) {
-                        retryPrepared.remove(fence, retry);
-                    }
-                    attempt.fallbackArmed(true);
-                    scheduleCutoverFallback(fence, attempt);
-                })
+                .thenRun(() -> armCutoverFallback(fence, attempt))
                 .exceptionallyCompose(failure ->
                     rollbackReadySubmission(fence, attempt, unwrap(failure)));
             attempt.readyPublication(publication);
@@ -575,11 +611,50 @@ final class ZLinkCanonicalRelocationStateMachine
                 ZLinkCanonicalRelocationProtocol.TARGET)));
     }
 
+    private CompletionStage<byte[]> replyReady(
+        Fence fence,
+        TargetAttempt attempt) {
+        return attempt.ready().handle((ignored, failure) -> {
+            if (failure != null) {
+                return ZLinkCanonicalRelocationProtocol.encodeFailed(
+                    new ZLinkCanonicalRelocationProtocol.Failed(
+                        attempt.prepare().id(),
+                        attempt.prepare().targetAttemptGeneration(),
+                        attempt.prepare().coordinator(),
+                        attempt.prepare().target(),
+                        attempt.prepare().object(),
+                        ZLinkCanonicalRelocationProtocol.TARGET,
+                        wireFailureCode(
+                            unwrap(failure),
+                            attempt.prepare().object().kind())));
+            }
+            armCutoverFallback(fence, attempt);
+            return ZLinkCanonicalRelocationProtocol.encodeReady(
+                new ZLinkCanonicalRelocationProtocol.Ready(
+                    attempt.prepare().id(),
+                    attempt.prepare().targetAttemptGeneration(),
+                    attempt.prepare().coordinator(),
+                    attempt.prepare().target(),
+                    attempt.prepare().object(),
+                    ZLinkCanonicalRelocationProtocol.TARGET));
+        });
+    }
+
+    private void armCutoverFallback(Fence fence, TargetAttempt attempt) {
+        RetryPrepared retry = retryPrepared.get(fence);
+        if (retry != null && retry.prepared() == attempt.prepared().join()) {
+            retryPrepared.remove(fence, retry);
+        }
+        attempt.fallbackArmed(true);
+        scheduleCutoverFallback(fence, attempt);
+    }
+
     private CompletionStage<Void> publishFailure(
         Fence fence,
         TargetAttempt attempt,
         RoutingId source,
-        Throwable failure) {
+        Throwable failure,
+        boolean sendFailure) {
         ZLinkSpotRetireControl.StageRequest request =
             completedValue(attempt.request());
         CompletionStage<Void> cleanup = request == null
@@ -592,8 +667,8 @@ final class ZLinkCanonicalRelocationStateMachine
                 failure.addSuppressed(unwrap(cleanupFailure));
             }
             return null;
-        }).thenCompose(ignored -> send(source,
-            ZLinkCanonicalRelocationProtocol.encodeFailed(
+        }).thenCompose(ignored -> sendFailure
+            ? send(source, ZLinkCanonicalRelocationProtocol.encodeFailed(
                 new ZLinkCanonicalRelocationProtocol.Failed(
                     attempt.prepare().id(),
                     attempt.prepare().targetAttemptGeneration(),
@@ -601,7 +676,8 @@ final class ZLinkCanonicalRelocationStateMachine
                     attempt.prepare().target(),
                     attempt.prepare().object(),
                     ZLinkCanonicalRelocationProtocol.TARGET,
-                    wireFailureCode))));
+                    wireFailureCode)))
+            : CompletableFuture.completedFuture(null));
     }
 
     /**
@@ -1426,12 +1502,11 @@ final class ZLinkCanonicalRelocationStateMachine
     /**
      * Spec 15 §4.3 — the source's Actor Restore request is retried within
      * the Join deadline while the same target process is running, and a
-     * duplicate PREPARE is idempotent on the target. PREPARE is a one-way
-     * submission that can be lost while symmetric manual duplicate
-     * connections converge (spec 07 §518), so waiting the whole deadline on
-     * one submission turns a lost frame into a silent Join stall. Resend the
-     * idempotent PREPARE each bounded slice until relay readiness or the
-     * remaining deadline is spent.
+     * duplicate PREPARE is idempotent on the target. The request reply can be
+     * lost while symmetric manual duplicate connections converge (spec 07
+     * §518), so waiting the whole deadline on one submission turns a lost
+     * reply into a silent Join stall. Resend the idempotent PREPARE each
+     * bounded slice until relay readiness or the remaining deadline is spent.
      */
     private CompletionStage<Void> awaitReadyWithPrepareResend(
         RoutingId targetNodeRid,
@@ -1443,14 +1518,39 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new TimeoutException(
                 "relocation relay readiness timed out"));
         }
-        CompletionStage<Void> submitted = submitFirst && !attempt.ready().isDone()
-            ? send(targetNodeRid,
-                ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()))
-                .thenCompose(ignored -> sendStateChunks(
-                    targetNodeRid, attempt))
-            : CompletableFuture.completedFuture(null);
         Duration slice = Duration.ofNanos(
             Math.min(remainingNanos, TimeUnit.SECONDS.toNanos(1)));
+        CompletionStage<Void> submitted = CompletableFuture.completedFuture(null);
+        if (submitFirst && !attempt.ready().isDone()) {
+            if (node instanceof ZLinkInternalMeshNode
+                    .CanonicalRelocationPrepareRequestReplySupport) {
+                CompletionStage<byte[]> requestReply =
+                    node.requestCanonicalRelocationPrepare(
+                    targetNodeRid,
+                    ZLinkCanonicalRelocationProtocol.encodePrepare(
+                        attempt.prepare()),
+                    slice);
+                CompletionStage<Void> reply = requestReply
+                    .thenCompose(encoded -> apply(
+                        targetNodeRid,
+                        Byte.toUnsignedInt(encoded[3]),
+                        encoded));
+                reply.whenComplete((ignored, failure) -> {
+                    if (failure != null
+                        && !(unwrap(failure) instanceof TimeoutException)) {
+                        attempt.ready().completeExceptionally(unwrap(failure));
+                    }
+                });
+            } else {
+                submitted = send(targetNodeRid,
+                    ZLinkCanonicalRelocationProtocol.encodePrepare(
+                        attempt.prepare()));
+            }
+            // The request is now in flight; command 52 may follow before the
+            // target completes the reply leg.
+            submitted = submitted.thenCompose(ignored ->
+                sendStateChunks(targetNodeRid, attempt));
+        }
         return submitted
             .exceptionallyCompose(failure -> failed(unwrap(failure)))
             .thenCompose(ignored -> timed(

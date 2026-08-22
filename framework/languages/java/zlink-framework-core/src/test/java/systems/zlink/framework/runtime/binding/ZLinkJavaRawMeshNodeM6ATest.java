@@ -902,8 +902,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             });
             CompletableFuture<byte[]> received = new CompletableFuture<>();
             target.setCanonicalRelocationControlHandler(
-                (actualSource, command) -> {
+                (actualSource, requestSequence, command) -> {
                     assertEquals(sourceRid, actualSource);
+                    assertTrue(requestSequence == null);
                     received.complete(command);
                     return CompletableFuture.completedFuture(null);
                 });
@@ -920,6 +921,42 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 command30,
                 received.get(2, TimeUnit.SECONDS));
             assertEquals(0, applicationDispatches.get());
+        }
+    }
+
+    @Test
+    void canonicalRelocationPrepareUsesItsRequestReplyLeg()
+        throws Exception {
+        String endpoint =
+            "inproc://jvm-m6c-canonical-prepare-" + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-m6c-prepare-source");
+        RoutingId targetRid = RoutingId.from("jvm-m6c-prepare-target");
+        byte[] command40 = canonicalRelocationCommand(40);
+        byte[] command30 = canonicalRelocationCommand(30);
+        try (var context = Zlink.createContext();
+             var source = meshNode(context);
+             var target = meshNode(context)) {
+            source.setRoutingId(sourceRid);
+            source.setBind(
+                "inproc://jvm-m6c-prepare-source-" + System.nanoTime());
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.startDispatch(record -> record.close());
+            target.setCanonicalRelocationControlHandler(
+                (actualSource, requestSequence, command) -> {
+                    assertEquals(sourceRid, actualSource);
+                    assertNotNull(requestSequence);
+                    assertArrayEquals(command40, command);
+                    return CompletableFuture.completedFuture(command30);
+                });
+            source.start();
+            target.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+
+            assertArrayEquals(command30, source.requestCanonicalRelocationPrepare(
+                    targetRid, command40, Duration.ofSeconds(2))
+                .toCompletableFuture().get(2, TimeUnit.SECONDS));
         }
     }
 
@@ -954,8 +991,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             CompletableFuture<byte[]> controlReceived =
                 new CompletableFuture<>();
             target.setCanonicalRelocationControlHandler(
-                (actualSource, command) -> {
+                (actualSource, requestSequence, command) -> {
                     assertEquals(sourceRid, actualSource);
+                    assertTrue(requestSequence == null);
                     controlReceived.complete(command);
                     return CompletableFuture.completedFuture(null);
                 });

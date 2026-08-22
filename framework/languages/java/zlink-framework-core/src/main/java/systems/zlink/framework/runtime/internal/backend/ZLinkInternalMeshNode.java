@@ -309,11 +309,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 "Remote relocation control is unavailable"));
     }
 
-    /**
-     * Installs the canonical service-wire command 30-35/40-41 endpoint.
-     * These infrastructure records are one-way state-machine transitions and
-     * do not use the legacy relocation request/reply wrapper.
-     */
+    /** Installs the canonical service-wire command 30-35/40-41 endpoint. */
     default void setCanonicalRelocationControlHandler(
         CanonicalRelocationControlHandler handler) {
         // Alternate backends may not yet support canonical relocation control.
@@ -329,6 +325,19 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Canonical relocation control is unavailable"));
+    }
+
+    /**
+     * Sends command 40 as a request and completes with its command 30 or 53
+     * reply. Other canonical relocation controls remain one-way.
+     */
+    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+        RoutingId targetNodeRid,
+        byte[] command,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "Canonical relocation prepare request is unavailable"));
     }
 
     default void setActorLeftHandler(ActorLeftHandler handler) {
@@ -661,9 +670,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface CanonicalRelocationControlHandler {
-        CompletionStage<Void> handle(
+        CompletionStage<byte[]> handle(
             RoutingId sourceNodeRid,
+            Long requestSequence,
             byte[] command);
+    }
+
+    /** Marks a node that can carry command 40's required reply leg. */
+    interface CanonicalRelocationPrepareRequestReplySupport {
     }
 
     @FunctionalInterface
