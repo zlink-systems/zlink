@@ -47,13 +47,21 @@ struct paired_fixture_t
         memset (endpoint, 0, sizeof (endpoint));
     }
 
-    void setup (uint64_t dealer_sndhwm_ = 0)
+    void setup (uint64_t dealer_sndhwm_ = 0, const char *inproc_name_ = NULL)
     {
         const int zero = 0;
         router = test_context_socket (ZLINK_SOCKET_ROUTER);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
           router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-        bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+        if (inproc_name_) {
+            //  An inproc pair puts the peer's read cursor under the test's
+            //  control: byte credit moves only when the ROUTER application
+            //  actually dequeues, instead of when a session drains the pipe
+            //  onto a socket.
+            snprintf (endpoint, sizeof endpoint, "inproc://%s", inproc_name_);
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+        } else
+            bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
 
         dealer = test_context_socket (ZLINK_SOCKET_DEALER);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
@@ -501,6 +509,66 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+//  Review finding 2. The remote-pause cause is evaluated before the byte HWM,
+//  so a send refused while PAUSED never records the HWM cause. If the queue is
+//  over its HWM at that moment, RESUME alone cannot publish the writable edge
+//  and the byte-credit path refuses to publish it either, because it only fires
+//  when the HWM cause was recorded. The route would stay deactivated forever.
+void test_resume_while_hwm_full_still_recovers_through_byte_credit ()
+{
+    paired_fixture_t fixture;
+    //  A small HWM plus one message larger than it: the empty-pipe oversize
+    //  exception admits that message, which leaves the queue over its HWM while
+    //  the HWM cause has never been recorded.
+    fixture.setup (512, "flow_state_resume_credit");
+
+    bool out_active = false;
+    bool hwm_full = false;
+    bool remote_paused = false;
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->test_application_pipe_flow_probe (
+                          fixture.pair_id, fixture.pair_generation,
+                          &out_active, &hwm_full, &remote_paused));
+    TEST_ASSERT_FALSE (hwm_full);
+
+    const std::string oversize (4096, 'x');
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (oversize.size ()),
+      zlink_send (fixture.dealer, oversize.data (),
+                  static_cast<int> (oversize.size ()), ZLINK_DONTWAIT));
+
+    //  Precondition of the defect: over the HWM, yet the HWM cause is unset.
+    TEST_ASSERT_TRUE (as_socket (fixture.dealer)
+                        ->test_application_pipe_flow_probe (
+                          fixture.pair_id, fixture.pair_generation,
+                          &out_active, &hwm_full, &remote_paused));
+    TEST_ASSERT_TRUE (hwm_full);
+    TEST_ASSERT_TRUE (out_active);
+
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 1));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+
+    //  This send is refused by the remote-pause cause and deactivates the
+    //  route without recording the HWM cause.
+    TEST_ASSERT_FALSE (dealer_send_nonblocking (fixture.dealer, "payload", 0));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 0, 2));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
+
+    //  Draining returns the byte credit. The route has to come back.
+    (void) drain_router (fixture.router);
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+
+    fixture.teardown ();
+}
+
 //  Review finding 1. attach_pipe replays the pair's stored state to the
 //  application pipe, and a newer epoch can be accepted between the snapshot and
 //  the queueing. The stale replay must not overwrite the newer state: without
@@ -600,6 +668,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);
     RUN_TEST (test_stale_flow_state_command_cannot_override_a_newer_epoch);
     RUN_TEST (test_no_application_recv_returns_a_flow_frame);
     return UNITY_END ();

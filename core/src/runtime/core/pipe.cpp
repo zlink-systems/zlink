@@ -1229,11 +1229,27 @@ void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
         if (_remote_flow_paused == paused)
             return;
         _remote_flow_paused = paused;
-        //  Resuming removes only the remote-pause cause. Termination, the
-        //  transport-pair hold and the byte HWM keep their own state, so the
-        //  send-ready edge is published only when every cause is clear.
-        notify = !paused && _state == active && !_transport_pair_write_held
-                 && _out_active && check_hwm_unlocked ();
+        //  Resuming removes only the remote-pause cause. Termination and the
+        //  transport-pair hold keep their own state, so the send-ready edge is
+        //  published only when every cause is clear.
+        if (!paused && _state == active && !_transport_pair_write_held) {
+            if (check_hwm_unlocked ()) {
+                //  Byte credit is available. _out_active can still be false
+                //  when a credit return was suppressed while this pipe was
+                //  paused, so restore the HWM cause's own flag here.
+                _out_active = true;
+                notify = true;
+            } else {
+                //  The byte HWM is still full. A send refused by the remote
+                //  cause never evaluated the HWM, so no cause currently owns
+                //  the pending wake. Hand it to the byte-credit cause;
+                //  otherwise process_activate_write would decline to publish
+                //  the edge and the route would never come back.
+                _out_active = false;
+                _waiting_for_byte_credit.store (true,
+                                                std::memory_order_release);
+            }
+        }
     }
     if (notify)
         _sink->write_activated (this);
