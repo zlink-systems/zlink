@@ -43,7 +43,10 @@ typedef enum zlink_socket_monitor_event_e {
   ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL  = 1u << 13,
   ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH      = 1u << 14,
   ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED        = 1u << 15,
-  ZLINK_SOCKET_MONITOR_EVENT_ALL                        = 0xFFFFu,
+  ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED           = 1u << 16,
+  ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED          = 1u << 17,
+  ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE           = 1u << 18,
+  ZLINK_SOCKET_MONITOR_EVENT_ALL                        = 0x7FFFFu,
 
   ZLINK_EVENT_CONNECTED                  = ZLINK_SOCKET_MONITOR_EVENT_CONNECTED,
   ZLINK_EVENT_CONNECT_DELAYED            = ZLINK_SOCKET_MONITOR_EVENT_CONNECT_DELAYED,
@@ -65,6 +68,12 @@ typedef enum zlink_socket_monitor_event_e {
     ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH,
   ZLINK_EVENT_PEER_WEIGHT_CHANGED        =
     ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED,
+  ZLINK_EVENT_SEND_FLOW_PAUSED           =
+    ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED,
+  ZLINK_EVENT_SEND_FLOW_RESUMED          =
+    ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED,
+  ZLINK_EVENT_FLOW_STATE_STALE           =
+    ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE,
   ZLINK_EVENT_ALL                        = ZLINK_SOCKET_MONITOR_EVENT_ALL
 } zlink_socket_monitor_event_e;
 
@@ -82,7 +91,8 @@ typedef enum zlink_monitor_status_detail_flag_e {
   ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS = 1u << 1,
   ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS = 1u << 2,
   ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET  = 1u << 3,
-  ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4
+  ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4,
+  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5
 } zlink_monitor_status_detail_flag_e;
 
 typedef enum zlink_auto_hwm_recalc_reason_t {
@@ -129,6 +139,9 @@ typedef enum zlink_monitor_transport_lane_e {
 } zlink_monitor_transport_lane_t;
 
 #define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)
+#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2)
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)
 
 typedef void (*zlink_monitor_handler_fn)(
   const zlink_monitor_event_t *event,
@@ -137,7 +150,7 @@ typedef void (*zlink_monitor_handler_fn)(
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 
-#define ZLINK_MONITOR_STATUS_ABI_VERSION 3u
+#define ZLINK_MONITOR_STATUS_ABI_VERSION 4u
 
 ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
                                                 void *userdata_);
@@ -179,6 +192,11 @@ typedef struct zlink_monitor_status_t {
   uint64_t minimum_core_message_charge_bytes;
   uint64_t oversize_message_admission_count;
   uint64_t oversize_message_admission_max_bytes;
+  uint64_t flow_paused_connections;
+  uint64_t flow_pause_applied_total;
+  uint64_t flow_resume_applied_total;
+  uint64_t flow_state_stale_total;
+  uint64_t flow_pause_duration_ms;
 } zlink_monitor_status_t;
 
 ZLINK_EXPORT void *zlink_socket_monitor_open(
@@ -214,7 +232,8 @@ Context budget snapshot은 내부 monitor PAIR의 고유한 physical ypipe 방�
 `source_kind`는 `ZLINK_MONITOR_SOURCE_SOCKET`이다. `detail_flags`에 없는 선택 field는 0이며
 `abi_version`은 `ZLINK_MONITOR_STATUS_ABI_VERSION`이고, `struct_size`는 반환된 ABI version의
 전체 byte 크기다. Version 3은 `snd_pending_bytes`와 `rcv_pending_bytes`를 추가하고
-message-unit, slot, size-cap과 connection-bucket 진단 field를 제거한다. 이전 layout을
+message-unit, slot, size-cap과 connection-bucket 진단 field를 제거한다. Version 4는 구조체
+끝에 receive-flow field 5개를 덧붙이고 다른 변경은 없다. 이전 layout을
 호환 layout으로 받지 않는다.
 
 `zlink_socket_monitor_open`, open options와 status 구조체는 0.11.1의 현재 layout으로 기존
@@ -232,6 +251,7 @@ field를 모두 0으로 채운다.
 | `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs`, `rcv_pending_bytes` |
 | `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
 | `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS` | `auto_hwm_applied_sndhwm_bytes`, `auto_hwm_applied_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`, `auto_hwm_effective_rcvbuf`, `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
 
 Planned field는 현재 자동 정책의 계산 결과를 제공한다. Applied field는 수동 override를
 포함해 소켓이 실제로 사용하는 byte HWM을 제공한다. Deferred 값은 대응하는 `_valid`
@@ -246,6 +266,22 @@ message마다 allocator를 조회하지 않고도 byte 회계 결과를 진단�
 `auto_hwm_send_blocked_ratio_ppm`은 측정 epoch에서 해당 socket의 최초 send admission
 시도 중 application pipe HWM 때문에 block된 비율이다. 같은 submit의 wake 뒤 재시도는
 다시 세지 않으며 transport I/O wait, completion lane과 context aggregate 사용량은 제외한다.
+
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`는 paired DEALER/ROUTER completion lane을 가진
+socket 유형에서만 설정한다. 다른 socket 유형에서는 이 bit가 없고 field 5개가 모두 0이다.
+이 field는 해당 socket이 peer에서 관측한 receive-flow 상태를 제공한다.
+
+| Field | 종류 | 의미 |
+|---|---|---|
+| `flow_paused_connections` | gauge | 이 socket이 현재 remote-PAUSED로 보는 application pipe 수. 적용된 PAUSED 전이마다 1 증가하고, 짝이 되는 RUNNING 전이 또는 PAUSED 상태에서 종료된 pipe마다 1 감소한다. |
+| `flow_pause_applied_total` | counter | Socket 생성 이후 실제로 적용된 PAUSED 전이 수. Stale·중복·같은 상태 frame은 세지 않는다. |
+| `flow_resume_applied_total` | counter | 같은 규칙으로 실제 적용된 RUNNING 전이 수. PAUSED 상태에서 종료된 pipe는 resume으로 세지 않는다. |
+| `flow_state_stale_total` | counter | Stale이나 중복으로 판정해 무시한 flow-state frame 수. |
+| `flow_pause_duration_ms` | duration | 이 socket에서 가장 최근에 끝난 PAUSED 구간의 길이(밀리초). 완료된 구간이 없으면 0이다. Pipe 종료로 끝난 pause도 길이를 기록한다. |
+
+Counter 3개는 socket 수명 동안 단조 증가한다. 이 값을 reset하거나 rebase하는 공개 호출은
+없으며 `zlink_ctx_reset_auto_hwm_budget_metrics`도 이 값을 바꾸지 않는다. Snapshot 일관성
+규칙은 그대로다. 이 field는 같은 호출의 다른 모든 field와 같은 snapshot 경계에서 읽는다.
 
 socket monitor는 bind, accept, connect, disconnect, handshake, protocol error와 close event를 제공한다.
 handler mode와 recv mode는 상호 배타이며 두 번째 mode는 `EBUSY`다. event의 address와 routing ID는
@@ -270,6 +306,11 @@ pair id와 generation마다 ready edge를 정확히 한 번만 발생시키고 `
 `CONNECTION_READY`의 `value`는 해당 monitor source가 ready인 공개 transport 수의 현재 count다. Count가
 증가한 순간을 구분해야 하면 `flags`의 `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`를 사용한다.
 이 flag가 없는 ready count event는 count snapshot이며 새로운 연결의 ready edge를 뜻하지 않는다.
+
+`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`,
+`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`,
+`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`는 receive-flow event 3개에만 적용한다.
+발생 조건과 각 event의 `value` 의미는 [Events](05-events.ko.md)가 소유한다.
 
 `zlink_socket_monitor_recv`는 현재 0.11.1 `zlink_socket_monitor_event_t` layout 전체를 기록한다.
 호출자는 현재 layout 크기의 output buffer를 제공해야 하며, 이전 event prefix를 위한 별도 receive
