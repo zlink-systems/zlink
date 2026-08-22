@@ -120,6 +120,12 @@ struct paired_fixture_t
     //  lane would, then drains the socket mailbox so the pipe applies it.
     bool inject (uint8_t state_, uint64_t epoch_)
     {
+        return inject_generation (state_, epoch_, pair_generation);
+    }
+
+    bool inject_generation (uint8_t state_, uint64_t epoch_,
+                            uint64_t frame_generation_)
+    {
         zlink::pipe_t *completion = as_socket (dealer)->completion_pipe_for_transport_pair (
           pair_id, pair_generation);
         TEST_ASSERT_NOT_NULL (completion);
@@ -128,7 +134,7 @@ struct paired_fixture_t
         frame.version = zlink::flow_state::frame_protocol_version;
         frame.state = state_;
         frame.pair_id = pair_id;
-        frame.generation = pair_generation;
+        frame.generation = frame_generation_;
         frame.epoch = epoch_;
 
         zlink::msg_t msg;
@@ -331,6 +337,18 @@ void test_pause_and_resume_each_emit_exactly_one_event ()
     TEST_ASSERT_EQUAL_UINT64 (
       static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_PAUSED), test_monitor_probe_event_at (&probe, 0));
 
+    //  §6 field list for PAUSED: routing ID, pair ID, generation, epoch.
+    const zlink_monitor_event_t paused = test_monitor_probe_record_at (&probe, 0);
+    TEST_ASSERT_TRUE (paused.value != 0);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, paused.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
+                              paused.transport_pair_generation);
+    TEST_ASSERT_TRUE (paused.routing_id.size > 0);
+    //  A pause is never writable, so the RESUMED-only flag must be clear.
+    TEST_ASSERT_EQUAL_UINT32 (
+      0u, paused.flags & ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE);
+    const uint64_t paused_epoch = paused.value;
+
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_socket_set_receive_flow_state (fixture.router, ZLINK_RECEIVE_FLOW_RUNNING));
@@ -339,6 +357,17 @@ void test_pause_and_resume_each_emit_exactly_one_event ()
     TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 2, 200));
     TEST_ASSERT_EQUAL_UINT64 (
       static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_RESUMED), test_monitor_probe_event_at (&probe, 1));
+
+    //  §6 adds "actually writable" to RESUMED. Nothing else blocks this pipe,
+    //  so the resume really did make it writable and the flag must say so.
+    const zlink_monitor_event_t resumed = test_monitor_probe_record_at (&probe, 1);
+    TEST_ASSERT_TRUE (resumed.value > paused_epoch);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, resumed.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
+                              resumed.transport_pair_generation);
+    TEST_ASSERT_EQUAL_UINT32 (
+      ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE,
+      resumed.flags & ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE);
 
     close_test_monitor_probe (&monitor, &probe);
     fixture.teardown ();
@@ -368,6 +397,56 @@ void test_duplicate_frame_emits_stale_event ()
       static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_PAUSED), test_monitor_probe_event_at (&probe, 0));
     TEST_ASSERT_EQUAL_UINT64 (
       static_cast<uint64_t> (ZLINK_EVENT_FLOW_STATE_STALE), test_monitor_probe_event_at (&probe, 1));
+
+    //  §6 field list for STALE: pair ID plus the generation/epoch context. The
+    //  repeat carried the current generation, so the reason is the epoch and
+    //  `value` is the received epoch that did not advance.
+    const zlink_monitor_event_t stale = test_monitor_probe_record_at (&probe, 1);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, stale.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
+                              stale.transport_pair_generation);
+    TEST_ASSERT_EQUAL_UINT32 (
+      ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH,
+      stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH);
+    TEST_ASSERT_EQUAL_UINT32 (
+      0u, stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION);
+    TEST_ASSERT_EQUAL_UINT64 (5, stale.value);
+
+    close_test_monitor_probe (&monitor, &probe);
+    fixture.teardown ();
+}
+
+//  A frame from a previous connection generation is stale for a different
+//  reason, and the event has to say which: the reason flag flips and `value`
+//  becomes the received generation, while the event's own
+//  transport_pair_generation stays the current one.
+void test_stale_generation_event_reports_the_received_generation ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    test_monitor_probe_t probe;
+    void *monitor = open_test_monitor_probe (fixture.dealer, k_flow_events, &probe);
+
+    const uint64_t foreign_generation = fixture.pair_generation + 7;
+    TEST_ASSERT_TRUE (fixture.inject_generation (
+      zlink::flow_state::receive_flow_paused, 9, foreign_generation));
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&probe, 1, 2000));
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 1, 200));
+
+    TEST_ASSERT_EQUAL_UINT64 (
+      static_cast<uint64_t> (ZLINK_EVENT_FLOW_STATE_STALE),
+      test_monitor_probe_event_at (&probe, 0));
+    const zlink_monitor_event_t stale = test_monitor_probe_record_at (&probe, 0);
+    TEST_ASSERT_EQUAL_UINT32 (
+      ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION,
+      stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION);
+    TEST_ASSERT_EQUAL_UINT32 (
+      0u, stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH);
+    TEST_ASSERT_EQUAL_UINT64 (foreign_generation, stale.value);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, stale.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
+                              stale.transport_pair_generation);
 
     close_test_monitor_probe (&monitor, &probe);
     fixture.teardown ();
@@ -466,6 +545,7 @@ int main ()
     RUN_TEST (test_close_races_with_set_receive_flow_state);
     RUN_TEST (test_pause_and_resume_each_emit_exactly_one_event);
     RUN_TEST (test_duplicate_frame_emits_stale_event);
+    RUN_TEST (test_stale_generation_event_reports_the_received_generation);
     RUN_TEST (test_data_traffic_emits_no_flow_events);
     RUN_TEST (test_flow_state_metrics_snapshot_and_reset);
     return UNITY_END ();

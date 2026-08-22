@@ -30,7 +30,12 @@ class socket_base_t;
 enum
 {
     socket_monitor_max_values = 4,
-    socket_monitor_internal_connection_ready_edge = 1
+    //  Mirror the public ZLINK_MONITOR_EVENT_FLAG_* bit values; the record's
+    //  internal_flags is copied straight into the wire event's flags field.
+    socket_monitor_internal_connection_ready_edge = 1u << 0,
+    socket_monitor_internal_send_flow_writable = 1u << 1,
+    socket_monitor_internal_flow_state_stale_generation = 1u << 2,
+    socket_monitor_internal_flow_state_stale_epoch = 1u << 3
 };
 
 struct socket_monitor_event_record_t

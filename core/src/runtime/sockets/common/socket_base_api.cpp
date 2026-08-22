@@ -249,17 +249,21 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     bool publish_flow_edge = false;
     bool transport_write_released = false;
     pipe_t *flow_edge_pipe = NULL;
+    flow_state_transition_t flow_transition = flow_state_no_transition;
+    bool flow_actual_writable = false;
+    uint64_t flow_epoch = 0;
     {
         scoped_lock_t lock (_transport_pairs_sync);
         const transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
         if (pair_id != 0 && it != _transport_pairs.end ()) {
             if (it->second.remote_flow_seen && it->second.application) {
                 flow_edge_pipe = it->second.application;
+                flow_epoch = it->second.remote_flow_epoch;
                 publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
                   it->second.remote_flow_paused
                     ? static_cast<unsigned char> (1)
                     : static_cast<unsigned char> (0),
-                  it->second.remote_flow_epoch);
+                  flow_epoch, &flow_transition, &flow_actual_writable);
             }
         }
         if (ready_application)
@@ -272,6 +276,16 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     //  slips through is still bounded by the byte HWM, and the state converges
     //  as soon as the queued command runs. See the worklog's accepted-by-design
     //  transients.
+    //  This is the same PAUSED<->RUNNING flip that process_flow_state ()
+    //  reports, only reached through pair admission instead of through a
+    //  frame. It has to go through the same bookkeeping, or a pause applied
+    //  here would raise no event, move no gauge, start no duration, and the
+    //  matching RESUMED later would look unmatched. Emitted outside the table
+    //  mutex, exactly like the edges below.
+    if (flow_transition != flow_state_no_transition)
+        flow_state_applied (flow_edge_pipe,
+                            flow_transition == flow_state_transition_paused,
+                            flow_epoch, flow_actual_writable);
     if (publish_flow_edge)
         write_activated (flow_edge_pipe);
     if (transport_write_released) {
@@ -804,6 +818,7 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     const bool completion =
       pipe_ && pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
     bool application_attached = pair_id == 0;
+    bool release_paused_pair_accounting = false;
     if (pair_id != 0) {
         scoped_lock_t lock (_transport_pairs_sync);
         transport_pairs_t::iterator pair_it =
@@ -826,10 +841,20 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
                 pair_it->second.completion = NULL;
             else
                 pair_it->second.application = NULL;
+            //  A pair that is torn down while paused never sees a RESUMED, so
+            //  its +1 on the gauge would never be matched. Release it here,
+            //  once, on the lane that owns the accepted state.
+            if (!completion && pair_it->second.remote_flow_paused) {
+                pair_it->second.remote_flow_paused = false;
+                release_paused_pair_accounting = true;
+            }
             if (!pair_it->second.application && !pair_it->second.completion)
                 _transport_pairs.erase (pair_it);
         }
     }
+
+    if (release_paused_pair_accounting)
+        flow_pause_released_on_termination (pipe_);
 
     if (!completion && application_attached) {
         (void) enqueue_routed_send_ready (

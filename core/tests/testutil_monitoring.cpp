@@ -294,6 +294,16 @@ static void record_monitor_probe_event (const zlink_monitor_event_t *event_, voi
 
     std::lock_guard<std::mutex> lock (probe->sync);
     probe->events.push_back (event_->event);
+    probe->records.push_back (*event_);
+}
+
+zlink_monitor_event_t test_monitor_probe_record_at (test_monitor_probe_t *probe_,
+                                                    int index_)
+{
+    std::lock_guard<std::mutex> lock (probe_->sync);
+    TEST_ASSERT_TRUE (index_ >= 0);
+    TEST_ASSERT_TRUE (index_ < static_cast<int> (probe_->records.size ()));
+    return probe_->records[static_cast<size_t> (index_)];
 }
 
 int test_monitor_probe_count (test_monitor_probe_t *probe_)

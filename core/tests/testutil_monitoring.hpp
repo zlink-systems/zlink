@@ -50,6 +50,9 @@ struct test_monitor_probe_t
 {
     std::mutex sync;
     std::vector<uint64_t> events;
+    //  Full records, parallel to events, so a test can assert the payload an
+    //  operator actually receives and not only the event id.
+    std::vector<zlink_monitor_event_t> records;
 };
 
 void *open_test_monitor_probe (void *socket_,
@@ -59,6 +62,8 @@ void close_test_monitor_probe (void **monitor_p_, test_monitor_probe_t *probe_);
 
 int test_monitor_probe_count (test_monitor_probe_t *probe_);
 uint64_t test_monitor_probe_event_at (test_monitor_probe_t *probe_, int index_);
+zlink_monitor_event_t test_monitor_probe_record_at (test_monitor_probe_t *probe_,
+                                                    int index_);
 bool test_monitor_probe_wait_count (test_monitor_probe_t *probe_, int expected_, int timeout_ms_);
 bool test_monitor_probe_wait_no_additional (test_monitor_probe_t *probe_,
                                             int baseline_,

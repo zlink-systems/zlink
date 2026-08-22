@@ -211,8 +211,9 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
     //  A generation other than the one this physical connection carries is a
     //  late frame from a previous connection to the same pair and is ignored.
     if (frame.generation != generation) {
-        note_flow_state_stale (frame.generation, generation, frame.epoch, 0,
-                               pair_id, completion_pipe_->get_endpoint_pair ());
+        note_flow_state_stale (true, frame.generation, generation, frame.epoch,
+                               0, pair_id,
+                               completion_pipe_->get_endpoint_pair ());
         return true;
     }
 
@@ -242,8 +243,9 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
 
         //  Duplicate or reversed epoch within one generation.
         if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch) {
-            note_flow_state_stale (frame.generation, generation, frame.epoch,
-                                   pair.remote_flow_epoch, pair_id,
+            note_flow_state_stale (false, frame.generation, generation,
+                                   frame.epoch, pair.remote_flow_epoch,
+                                   pair_id,
                                    completion_pipe_->get_endpoint_pair ());
             return true;
         }
@@ -303,28 +305,73 @@ void zlink::socket_base_t::flow_state_applied (
     const blob_t &routing_id = pipe_->get_routing_id ();
     const unsigned char *routing_id_data =
       routing_id.size () > 0 ? routing_id.data () : NULL;
-    uint64_t values[2] = {epoch_, 0};
-    const uint64_t values_count = paused_ ? 1 : 2;
-    if (!paused_)
-        values[1] = actual_writable_ ? 1u : 0u;
+    //  The public event carries one value, so the epoch takes it and the
+    //  RESUMED-only "did this actually make the pipe writable" answer travels
+    //  in the event's documented event-specific flags field. Routing ID, pair
+    //  ID and generation are separate fields of the same event, so plan 6's
+    //  whole field list reaches an operator without widening the ABI.
+    uint64_t values[1] = {epoch_};
+    const uint32_t flags =
+      !paused_ && actual_writable_
+        ? static_cast<uint32_t> (socket_monitor_internal_send_flow_writable)
+        : 0u;
     event (pipe_->get_endpoint_pair (), routing_id_data, routing_id.size (),
-          values, values_count,
+          values, 1,
           paused_ ? ZLINK_EVENT_SEND_FLOW_PAUSED : ZLINK_EVENT_SEND_FLOW_RESUMED,
-          0, pipe_->get_transport_lane (), pipe_->get_transport_pair_id (),
+          flags, pipe_->get_transport_lane (), pipe_->get_transport_pair_id (),
           pipe_->get_transport_pair_generation ());
 }
 
+void zlink::socket_base_t::flow_pause_released_on_termination (pipe_t *pipe_)
+{
+    //  A pair torn down while paused never reaches a RESUMED, so nothing else
+    //  would ever match its +1 on the gauge and repeated disconnect-while-
+    //  paused would drift it upwards for good. This is a lifecycle release,
+    //  not a resume: it closes the pause measurement and frees the gauge slot
+    //  but raises no RESUMED event and does not count as a resume applied,
+    //  because the peer never resumed anything.
+    uint64_t paused_connections =
+      _flow_paused_connections.load (std::memory_order_relaxed);
+    if (paused_connections > 0)
+        _flow_paused_connections.fetch_sub (1, std::memory_order_relaxed);
+
+    if (!pipe_)
+        return;
+    const uint64_t started_ms = pipe_->remote_flow_pause_started_ms ();
+    if (started_ms != 0) {
+        const uint64_t now_ms = _clock.now_ms ();
+        _flow_last_pause_duration_ms.store (
+          now_ms > started_ms ? now_ms - started_ms : 0,
+          std::memory_order_relaxed);
+        pipe_->set_remote_flow_pause_started_ms (0);
+    }
+}
+
 void zlink::socket_base_t::note_flow_state_stale (
-  uint64_t received_generation_, uint64_t current_generation_,
-  uint64_t received_epoch_, uint64_t current_epoch_, uint64_t pair_id_,
+  bool generation_stale_, uint64_t received_generation_,
+  uint64_t current_generation_, uint64_t received_epoch_,
+  uint64_t current_epoch_, uint64_t pair_id_,
   const endpoint_uri_pair_t &endpoint_uri_pair_)
 {
     _flow_state_stale_total.fetch_add (1, std::memory_order_relaxed);
-    uint64_t values[4] = {received_generation_, current_generation_,
-                          received_epoch_, current_epoch_};
+    //  Two reasons, and each one has exactly one number the operator cannot
+    //  reconstruct. A generation-stale frame belongs to a dead connection, so
+    //  its epoch means nothing and the received generation is what matters;
+    //  the current generation is already a field of this event. An
+    //  epoch-stale frame carries the current generation by definition, so the
+    //  received epoch is what matters; the current epoch is the one the
+    //  preceding PAUSED or RESUMED event reported for this pair. The reason
+    //  flag says which of the two `value` holds, so it is never ambiguous.
+    uint64_t values[4] = {generation_stale_ ? received_generation_
+                                            : received_epoch_,
+                          received_generation_, received_epoch_,
+                          current_epoch_};
+    const uint32_t flags = static_cast<uint32_t> (
+      generation_stale_ ? socket_monitor_internal_flow_state_stale_generation
+                        : socket_monitor_internal_flow_state_stale_epoch);
     event (endpoint_uri_pair_, NULL, 0, values, 4,
-          ZLINK_EVENT_FLOW_STATE_STALE, 0, transport_lane_completion, pair_id_,
-          current_generation_);
+          ZLINK_EVENT_FLOW_STATE_STALE, flags, transport_lane_completion,
+          pair_id_, current_generation_);
 }
 
 void zlink::socket_base_t::flow_state_metrics (

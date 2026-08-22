@@ -411,6 +411,9 @@ class socket_base_t : public own_t,
     void hiccuped (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_peer_terminated (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_terminated (pipe_t *pipe_) ZLINK_FINAL;
+    //  Releases the gauge slot and closes the pause duration for a pair that
+    //  is torn down while paused, which never gets a RESUMED of its own.
+    void flow_pause_released_on_termination (pipe_t *pipe_);
     void flow_state_applied (pipe_t *pipe_, bool paused_, uint64_t epoch_,
                              bool actual_writable_) ZLINK_FINAL;
 
@@ -476,7 +479,8 @@ class socket_base_t : public own_t,
                              uint64_t *stale_total_,
                              uint64_t *last_pause_duration_ms_) const;
     void reset_flow_state_metrics ();
-    void note_flow_state_stale (uint64_t received_generation_,
+    void note_flow_state_stale (bool generation_stale_,
+                                uint64_t received_generation_,
                                 uint64_t current_generation_,
                                 uint64_t received_epoch_,
                                 uint64_t current_epoch_,
