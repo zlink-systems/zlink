@@ -55,6 +55,10 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void add_signaler (signaler_t *signaler_);
     void remove_signaler (signaler_t *signaler_);
     void signal_pollers ();
+    //  Re-arm the primary notification descriptor after the async command
+    //  executor has consumed it, so descriptor-based pollers watching this
+    //  mailbox's fd still wake. See socket_base_t::process_async_mailbox.
+    void rearm_primary_signaler ();
     void clear_signalers ();
 
 #ifdef HAVE_FORK

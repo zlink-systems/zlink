@@ -427,8 +427,15 @@ void zlink::socket_base_t::process_async_mailbox ()
             return;
         }
         if (lifecycle_coordinator ().is_async_mailbox_active ()) {
-            scoped_lock_t receive_lock (receive_runtime ().sync);
-            xdispatch_io ();
+            {
+                scoped_lock_t receive_lock (receive_runtime ().sync);
+                xdispatch_io ();
+            }
+            //  This executor consumed the mailbox's primary notification
+            //  descriptor while draining commands. A poller that registered
+            //  this socket watches that same descriptor, so re-arm it or the
+            //  poller sleeps through the input this drain just applied.
+            static_cast<mailbox_t *> (_mailbox)->rearm_primary_signaler ();
         }
         if (!lifecycle_coordinator ().is_async_mailbox_active ()) {
             mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);

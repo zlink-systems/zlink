@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include <new>
 #include <vector>
 
 #include "api/core/config_result_internal.hpp"
@@ -25,7 +26,15 @@ int zlink_poll (zlink_pollitem_t *items_,
     }
 
     zlink::socket_poller_t poller;
-    poller.reserve (static_cast<size_t> (nitems_));
+    try {
+        poller.reserve (static_cast<size_t> (nitems_));
+    }
+    catch (const std::bad_alloc &) {
+        errno = ENOMEM;
+        if (error_out_)
+            *error_out_ = zlink::config_result_internal::from_errno (errno);
+        return -1;
+    }
     for (int i = 0; i < nitems_; ++i) {
         items_[i].revents = 0;
         void *index_user_data = poller_index_user_data (static_cast<size_t> (i));

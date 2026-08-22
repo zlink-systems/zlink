@@ -49,12 +49,9 @@ int submit_retry_wait_ms (int remaining_ms_)
 template <typename Receive>
 int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
                           const Receive &receive_,
-                          uint64_t *observed_epoch_out_,
-                          bool guard_)
+                          uint64_t *observed_epoch_out_)
 {
-    //  Stage 1: the shared receive mutex is only needed against a concurrent
-    //  async command executor; see socket_base_t::read_activated.
-    zlink::scoped_optional_lock_t lock (guard_ ? &runtime_.sync : NULL);
+    zlink::scoped_lock_t lock (runtime_.sync);
     if (observed_epoch_out_)
         *observed_epoch_out_ = runtime_.progress_epoch;
     return receive_ ();
@@ -526,10 +523,9 @@ int zlink::socket_base_t::recv_common (
         return xrecv (msg_);
     };
 
-    const bool guard_receive = async_mailbox_owns_commands ();
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch, guard_receive);
+                                   &observed_epoch);
     if (unlikely (rc != 0 && errno != EAGAIN))
         return -1;
     if (rc == 0) {
@@ -542,7 +538,7 @@ int zlink::socket_base_t::recv_common (
             return -1;
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch, guard_receive);
+                                   &observed_epoch);
         if (rc < 0)
             return rc;
         extract_flags (msg_);
@@ -553,10 +549,7 @@ int zlink::socket_base_t::recv_common (
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {
-        //  Re-read ownership each iteration: a handoff may start while this
-        //  receive is blocked, and the guard must follow it.
-        const bool owns_commands = async_mailbox_owns_commands ();
-        const int progress_rc = owns_commands
+        const int progress_rc = async_mailbox_owns_commands ()
                                   ? wait_receive_progress (
                                       observed_epoch, block ? timeout : 0)
                                   : process_commands (block ? timeout : 0,
@@ -564,7 +557,7 @@ int zlink::socket_base_t::recv_common (
         if (unlikely (progress_rc != 0))
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch, owns_commands);
+                                   &observed_epoch);
         if (rc == 0) {
             command_runtime ().reset_recv_ticks ();
             break;

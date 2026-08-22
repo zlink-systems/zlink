@@ -232,6 +232,13 @@ void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
     _sync.unlock ();
 }
 
+void zlink::mailbox_t::rearm_primary_signaler ()
+{
+    _sync.lock ();
+    _signaler.send ();
+    _sync.unlock ();
+}
+
 void zlink::mailbox_t::signal_pollers ()
 {
     _sync.lock ();

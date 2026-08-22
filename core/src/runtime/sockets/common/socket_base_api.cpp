@@ -573,14 +573,7 @@ int zlink::socket_base_t::socket_type () const
 
 bool zlink::socket_base_t::has_in ()
 {
-    //  Stage 1 (plan 7.1): poll readiness asks this once per socket per
-    //  zlink_poll(), so a 100-socket poll took 100 shared-receive-mutex round
-    //  trips against the mutex the I/O side also uses. The mutex only orders
-    //  this against a concurrent async command executor; without one, command
-    //  dispatch and the receive path both run on this thread, which is what
-    //  the pre-3ef4d09a37 lock-free implementation relied on.
-    scoped_optional_lock_t lock (
-      async_mailbox_owns_commands () ? &receive_runtime ().sync : NULL);
+    scoped_lock_t lock (receive_runtime ().sync);
     return xhas_in ();
 }
 
@@ -702,16 +695,6 @@ void zlink::socket_base_t::read_activated (pipe_t *pipe_)
             pipe_->get_transport_pair_generation ()));
         if (it == _transport_pairs.end () || !it->second.ready)
             return;
-    }
-    //  Stage 1 (plan 7.1): read_activated is a per-message event. It only
-    //  needs the shared receive mutex when the async mailbox executor owns
-    //  command dispatch, because only then can it run concurrently with a
-    //  public receive. Without an async owner the command is dispatched on
-    //  the receiving thread itself, exactly as before 3ef4d09a37, so the
-    //  lock and the progress-epoch bump are pure overhead there.
-    if (!async_mailbox_owns_commands ()) {
-        xread_activated (pipe_);
-        return;
     }
     receive_runtime_t &receive = receive_runtime ();
     scoped_lock_t receive_lock (receive.sync);

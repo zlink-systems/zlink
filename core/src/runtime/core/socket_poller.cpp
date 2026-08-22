@@ -365,13 +365,14 @@ int zlink::socket_poller_t::rebuild ()
                 const int rc =
                   it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &_pollfds[item_nbr].fd, &fd_size);
                 if (rc != 0) {
-                    const int saved_errno = errno;
-                    free (_pollfds);
-                    _pollfds = NULL;
-                    _pollset_size = 0;
-                    _need_rebuild = true;
-                    errno = saved_errno ? saved_errno : ETERM;
-                    return -1;
+                    //  A socket whose close won the race against this rebuild
+                    //  rejects the descriptor query. That is not a poller
+                    //  failure: the registered source still owes its caller a
+                    //  one-time POLLERR, which check_socket_events() reports
+                    //  from get_events_for_poller(). Leave it out of the
+                    //  descriptor set and keep the rest of the pollset.
+                    errno = 0;
+                    continue;
                 }
 
                 _pollfds[item_nbr].events = POLLIN;
@@ -387,6 +388,9 @@ int zlink::socket_poller_t::rebuild ()
             }
         }
     }
+
+    //  Items skipped above (terminal sockets) leave no descriptor behind.
+    _pollset_size = static_cast<int> (item_nbr);
 
 #elif defined ZLINK_POLL_BASED_ON_SELECT
 
@@ -426,10 +430,10 @@ int zlink::socket_poller_t::rebuild ()
                 size_t fd_size = sizeof (zlink::fd_t);
                 int rc = it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &notify_fd, &fd_size);
                 if (rc != 0) {
-                    _pollset_size = 0;
-                    _need_rebuild = true;
-                    errno = errno ? errno : ETERM;
-                    return -1;
+                    //  See the poll() path: a closed registered source still
+                    //  owes a one-time POLLERR, so skip it instead of failing.
+                    errno = 0;
+                    continue;
                 }
 
                 FD_SET (notify_fd, _pollset_in.get ());
