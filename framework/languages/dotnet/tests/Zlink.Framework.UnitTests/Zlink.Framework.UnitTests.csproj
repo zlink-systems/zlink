@@ -64,6 +64,7 @@
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
         <Compile Include="Runtime/CanonicalActorJoinAttemptTests.cs"/>
         <Compile Include="Runtime/CanonicalActorJoinIngressReplyTests.cs"/>
+        <Compile Include="Runtime/CanonicalActorJoinWireAdmissionNegativeTests.cs"/>
         <Compile Include="Runtime/RemoteJoinerCanonicalReplyTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
