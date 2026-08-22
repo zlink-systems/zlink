@@ -78,7 +78,10 @@ public final class EnumCodecs {
             case 0x2000 -> MonitorEventType.HANDSHAKE_FAILED_PROTOCOL;
             case 0x4000 -> MonitorEventType.HANDSHAKE_FAILED_AUTH;
             case 0x8000 -> MonitorEventType.PEER_WEIGHT_CHANGED;
-            case 0xFFFF -> MonitorEventType.ALL;
+            case 0x10000 -> MonitorEventType.SEND_FLOW_PAUSED;
+            case 0x20000 -> MonitorEventType.SEND_FLOW_RESUMED;
+            case 0x40000 -> MonitorEventType.FLOW_STATE_STALE;
+            case 0x7FFFF -> MonitorEventType.ALL;
             default -> throw invalid("MonitorEventType", value);
         };
     }
@@ -101,7 +104,10 @@ public final class EnumCodecs {
             case HANDSHAKE_FAILED_PROTOCOL -> 0x2000;
             case HANDSHAKE_FAILED_AUTH -> 0x4000;
             case PEER_WEIGHT_CHANGED -> 0x8000;
-            case ALL -> 0xFFFF;
+            case SEND_FLOW_PAUSED -> 0x10000;
+            case SEND_FLOW_RESUMED -> 0x20000;
+            case FLOW_STATE_STALE -> 0x40000;
+            case ALL -> 0x7FFFF;
         };
     }
 

@@ -217,6 +217,9 @@ public final class Native {
                     ValueLayout.ADDRESS));
     private static final MethodHandle MH_SET_ROUTING_ID = downcall("zlink_set_routing_id",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+    private static final MethodHandle MH_SOCKET_SET_RECEIVE_FLOW_STATE =
+            downcall("zlink_socket_set_receive_flow_state",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle MH_GET_ROUTING_ID = downcall("zlink_get_routing_id",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     private static final MethodHandle MH_SET_SUBSCRIPTION = downcall("zlink_set_subscription",
@@ -996,6 +999,15 @@ public final class Native {
             return (int) MH_SET_ROUTING_ID.invokeExact(handle, value, len);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_set_routing_id failed", t);
+        }
+    }
+
+    public static int setReceiveFlowState(MemorySegment handle, int state) {
+        try {
+            return (int) MH_SOCKET_SET_RECEIVE_FLOW_STATE.invokeExact(handle, state);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_socket_set_receive_flow_state failed", t);
         }
     }
 

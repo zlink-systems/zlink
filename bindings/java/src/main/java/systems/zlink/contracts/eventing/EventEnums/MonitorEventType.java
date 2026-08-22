@@ -39,8 +39,21 @@ public enum MonitorEventType {
     HANDSHAKE_FAILED_AUTH(0x4000),
     /** A peer's load-balancing weight changed. */
     PEER_WEIGHT_CHANGED(0x8000),
+    /**
+     * A paired DEALER/ROUTER completion lane applied a remote PAUSED
+     * transition to an application pipe. No event fires for a normal data
+     * frame.
+     */
+    SEND_FLOW_PAUSED(0x10000),
+    /**
+     * A paired DEALER/ROUTER completion lane applied a remote RUNNING
+     * transition, resuming an application pipe.
+     */
+    SEND_FLOW_RESUMED(0x20000),
+    /** A stale or duplicate receive-flow-state frame was ignored. */
+    FLOW_STATE_STALE(0x40000),
     /** Every event; subscribes the monitor to all of the above. */
-    ALL(0xFFFF);
+    ALL(0x7FFFF);
 
     private final int value;
 

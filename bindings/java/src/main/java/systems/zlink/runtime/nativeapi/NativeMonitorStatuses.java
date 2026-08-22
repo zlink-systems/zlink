@@ -9,7 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 public final class NativeMonitorStatuses {
-    private static final int MONITOR_STATUS_ABI_VERSION = 3;
+    private static final int MONITOR_STATUS_ABI_VERSION = 4;
 
     private NativeMonitorStatuses() {
     }
@@ -87,6 +87,16 @@ public final class NativeMonitorStatuses {
           segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
             NativeLayouts.MONITOR_SNAPSHOT_OVERSIZE_MESSAGE_ADMISSION_COUNT_OFFSET),
           segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
-            NativeLayouts.MONITOR_SNAPSHOT_OVERSIZE_MESSAGE_ADMISSION_MAX_BYTES_OFFSET));
+            NativeLayouts.MONITOR_SNAPSHOT_OVERSIZE_MESSAGE_ADMISSION_MAX_BYTES_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_FLOW_PAUSED_CONNECTIONS_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_FLOW_PAUSE_APPLIED_TOTAL_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_FLOW_RESUME_APPLIED_TOTAL_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_FLOW_STATE_STALE_TOTAL_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_FLOW_PAUSE_DURATION_MS_OFFSET));
     }
 }

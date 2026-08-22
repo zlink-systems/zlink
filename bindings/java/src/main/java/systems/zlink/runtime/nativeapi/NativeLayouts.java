@@ -127,7 +127,12 @@ public final class NativeLayouts {
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("rcv_bytes_in_flight"),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("minimum_core_message_charge_bytes"),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("oversize_message_admission_count"),
-                    ValueLayout.JAVA_LONG_UNALIGNED.withName("oversize_message_admission_max_bytes"));
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("oversize_message_admission_max_bytes"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("flow_paused_connections"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("flow_pause_applied_total"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("flow_resume_applied_total"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("flow_state_stale_total"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("flow_pause_duration_ms"));
     public static final long MONITOR_SNAPSHOT_ABI_VERSION_OFFSET =
             MONITOR_SNAPSHOT_LAYOUT.byteOffset(
                     PathElement.groupElement("abi_version"));
@@ -221,6 +226,21 @@ public final class NativeLayouts {
     public static final long MONITOR_SNAPSHOT_OVERSIZE_MESSAGE_ADMISSION_MAX_BYTES_OFFSET =
             MONITOR_SNAPSHOT_LAYOUT.byteOffset(
                     PathElement.groupElement("oversize_message_admission_max_bytes"));
+    public static final long MONITOR_SNAPSHOT_FLOW_PAUSED_CONNECTIONS_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("flow_paused_connections"));
+    public static final long MONITOR_SNAPSHOT_FLOW_PAUSE_APPLIED_TOTAL_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("flow_pause_applied_total"));
+    public static final long MONITOR_SNAPSHOT_FLOW_RESUME_APPLIED_TOTAL_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("flow_resume_applied_total"));
+    public static final long MONITOR_SNAPSHOT_FLOW_STATE_STALE_TOTAL_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("flow_state_stale_total"));
+    public static final long MONITOR_SNAPSHOT_FLOW_PAUSE_DURATION_MS_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("flow_pause_duration_ms"));
 
     public static final MemoryLayout MONITOR_EVENT_LAYOUT = MemoryLayout.structLayout(
             ValueLayout.JAVA_LONG_UNALIGNED.withName("event"),

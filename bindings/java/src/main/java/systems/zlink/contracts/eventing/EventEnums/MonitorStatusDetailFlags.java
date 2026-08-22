@@ -13,7 +13,9 @@ public enum MonitorStatusDetailFlags {
     /** Automatic high-water-mark budget telemetry is populated. */
     AUTO_HWM_BUDGET(1 << 3),
     /** Automatic high-water-mark buffer telemetry is populated. */
-    AUTO_HWM_BUFFERS(1 << 4);
+    AUTO_HWM_BUFFERS(1 << 4),
+    /** Receive-flow-state telemetry is populated. */
+    FLOW_STATE(1 << 5);
 
     private final int mask;
 

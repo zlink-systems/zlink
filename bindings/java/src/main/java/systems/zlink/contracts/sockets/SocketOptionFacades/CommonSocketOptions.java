@@ -171,6 +171,18 @@ public class CommonSocketOptions {
         ContractAccess.socketSetOption(socket, SocketOptions.IMMEDIATE, enabled ? 1 : 0);
     }
 
+    /**
+     * Sets this socket's local receive-flow state. Repeating the current
+     * state is a successful no-op. Only DEALER and ROUTER sockets support
+     * this operation; every other socket type reports
+     * {@link systems.zlink.contracts.errors.ConfigResult#NOT_SUPPORTED} and
+     * leaves existing send/receive behavior unchanged.
+     */
+    public void receiveFlowState(ReceiveFlowState value) {
+        Objects.requireNonNull(value, "value");
+        ContractAccess.socketSetReceiveFlowState(socket, value.value());
+    }
+
     public RidDuplicatePolicy ridDuplicatePolicy() {
         return RidDuplicatePolicy.fromValue(
           ContractAccess.socketGetOption(socket, SocketOptions.RID_DUPLICATE_POLICY));

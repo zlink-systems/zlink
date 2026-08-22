@@ -97,6 +97,8 @@ public final class ContractAccess {
         int getRouterIntOption(Socket socket, int option);
 
         void setRouterIntOption(Socket socket, int option, int value);
+
+        void setReceiveFlowState(Socket socket, int state);
     }
 
     public interface SocketOptionFacadesAccess {
@@ -479,6 +481,10 @@ public final class ContractAccess {
     public static void socketSetRouterIntOption(Socket socket, int option,
                                                 int value) {
         socketOptionsAccess().setRouterIntOption(socket, option, value);
+    }
+
+    public static void socketSetReceiveFlowState(Socket socket, int state) {
+        socketOptionsAccess().setReceiveFlowState(socket, state);
     }
 
     public static CommonSocketOptions commonSocketOptions(Socket socket) {

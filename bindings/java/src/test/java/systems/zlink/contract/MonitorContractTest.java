@@ -41,8 +41,8 @@ public class MonitorContractTest {
             socket.options().recvHwm(recvHwmBytes);
 
             var status = monitor.status();
-            assertEquals(3, status.abiVersion());
-            assertEquals(192, status.structSize());
+            assertEquals(4, status.abiVersion());
+            assertEquals(232, status.structSize());
             assertTrue(status.sndPendingMsgs() >= 0L);
             assertTrue(status.sndPendingBytes() >= 0L);
             assertTrue(status.rcvPendingBytes() >= 0L);
@@ -51,6 +51,11 @@ public class MonitorContractTest {
             assertEquals(recvHwmBytes,
                 status.autoHwmAppliedRecvHwmBytes());
             assertTrue(status.minimumCoreMessageChargeBytes() > 0L);
+            assertTrue(status.flowPausedConnections() >= 0L);
+            assertTrue(status.flowPauseAppliedTotal() >= 0L);
+            assertTrue(status.flowResumeAppliedTotal() >= 0L);
+            assertTrue(status.flowStateStaleTotal() >= 0L);
+            assertTrue(status.flowPauseDurationMs() >= 0L);
         }
     }
 }

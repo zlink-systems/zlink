@@ -9,6 +9,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
@@ -195,6 +197,13 @@ final class SocketOptionSupport {
         int rc = Native.setRoutingId(socket.handle(), buf, length);
         if (rc != 0) {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        }
+    }
+
+    void setReceiveFlowState(int state) {
+        int rc = Native.setReceiveFlowState(socket.handle(), state);
+        if (rc != 0) {
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc));
         }
     }
 

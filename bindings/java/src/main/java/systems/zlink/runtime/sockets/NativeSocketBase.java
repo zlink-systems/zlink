@@ -152,6 +152,11 @@ abstract class NativeSocketBase implements Socket {
                 nativeSocket(socket).runtime.setRouterIntOption(option, value);
             }
 
+            @Override
+            public void setReceiveFlowState(Socket socket, int state) {
+                nativeSocket(socket).runtime.setReceiveFlowState(state);
+            }
+
             private NativeSocketBase nativeSocket(Socket socket) {
                 if (socket instanceof NativeSocketBase nativeSocket)
                     return nativeSocket;

@@ -192,6 +192,10 @@ final class NativeSocketRuntime implements AutoCloseable {
         optionSupport.setRouterIntOption(option, value);
     }
 
+    void setReceiveFlowState(int state) {
+        optionSupport.setReceiveFlowState(state);
+    }
+
     @SuppressWarnings("unchecked")
     public <T> T getOption(SocketOptionKey<T> option) {
         return socketCore.getOption(option);

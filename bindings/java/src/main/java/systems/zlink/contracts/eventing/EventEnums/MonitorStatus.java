@@ -39,6 +39,11 @@ import java.util.EnumSet;
  * @param minimumCoreMessageChargeBytes minimum charge for one Core frame
  * @param oversizeMessageAdmissionCount empty-pipe oversize admission count
  * @param oversizeMessageAdmissionMaxBytes largest admitted oversize message
+ * @param flowPausedConnections current count of application pipes seen as remote-PAUSED
+ * @param flowPauseAppliedTotal total PAUSED transitions actually applied
+ * @param flowResumeAppliedTotal total RUNNING transitions actually applied
+ * @param flowStateStaleTotal total stale or duplicate flow-state frames ignored
+ * @param flowPauseDurationMs duration of the most recently completed PAUSED interval, in milliseconds
  */
 public record MonitorStatus(int abiVersion, int structSize,
                               MonitorSourceKind sourceKind,
@@ -66,7 +71,12 @@ public record MonitorStatus(int abiVersion, int structSize,
                               long recvBytesInFlight,
                               long minimumCoreMessageChargeBytes,
                               long oversizeMessageAdmissionCount,
-                              long oversizeMessageAdmissionMaxBytes) {
+                              long oversizeMessageAdmissionMaxBytes,
+                              long flowPausedConnections,
+                              long flowPauseAppliedTotal,
+                              long flowResumeAppliedTotal,
+                              long flowStateStaleTotal,
+                              long flowPauseDurationMs) {
     public boolean isReady() {
         return stateFlags.contains(MonitorStateFlags.READY);
     }
