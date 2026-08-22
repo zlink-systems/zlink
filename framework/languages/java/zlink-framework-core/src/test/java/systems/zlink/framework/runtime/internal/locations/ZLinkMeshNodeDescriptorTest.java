@@ -13,7 +13,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 
 /**
@@ -77,9 +80,35 @@ final class ZLinkMeshNodeDescriptorTest {
         assertTrue(descriptor.entrySpotId().isEmpty());
     }
 
+    @Test
+    void nonServerDescriptorWithObjectCapabilitiesDecodesSuccessfully() {
+        ZLinkObjectCapability capability = new ZLinkObjectCapability(
+            ZLinkPlacementObjectKind.ACTOR,
+            "player",
+            ZLinkObjectMaintenancePolicyKind.DISABLED,
+            false,
+            0);
+
+        ZLinkMeshNodeDescriptor descriptor = descriptor(
+            ZLinkMeshNodeObjectRole.NONE,
+            Optional.empty(),
+            List.of(capability));
+
+        assertEquals(
+            List.of(capability),
+            descriptor.objectCapabilities());
+    }
+
     private static ZLinkMeshNodeDescriptor descriptor(
         ZLinkMeshNodeObjectRole role,
         Optional<String> entrySpotId) {
+        return descriptor(role, entrySpotId, List.of());
+    }
+
+    private static ZLinkMeshNodeDescriptor descriptor(
+        ZLinkMeshNodeObjectRole role,
+        Optional<String> entrySpotId,
+        List<ZLinkObjectCapability> objectCapabilities) {
         return new ZLinkMeshNodeDescriptor(
             "mesh",
             RID,
@@ -88,7 +117,7 @@ final class ZLinkMeshNodeDescriptorTest {
             "tcp://127.0.0.1:7000",
             Map.of(),
             1,
-            List.of(),
+            objectCapabilities,
             role,
             entrySpotId,
             100,

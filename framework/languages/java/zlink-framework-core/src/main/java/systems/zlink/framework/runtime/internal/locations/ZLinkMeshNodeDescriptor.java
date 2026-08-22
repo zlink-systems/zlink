@@ -108,11 +108,6 @@ public record ZLinkMeshNodeDescriptor(
             throw new IllegalArgumentException(
                 "objectCapabilities must contain at most 1024 entries");
         }
-        if (objectRole != ZLinkMeshNodeObjectRole.SERVER
-            && !objectCapabilities.isEmpty()) {
-            throw new IllegalArgumentException(
-                "Only a server descriptor may publish object capabilities");
-        }
         Set<String> capabilityKeys = new HashSet<>();
         for (ZLinkObjectCapability capability : objectCapabilities) {
             Objects.requireNonNull(capability, "objectCapability");
