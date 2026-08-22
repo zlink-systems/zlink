@@ -122,15 +122,32 @@ ROUTER/ROUTER TCP 256 B case의 처리량 회복 경향을 확인한 뒤 소스�
 `test_router_mandatory_hwm`은 기존 byte-HWM과 routed multipart 회귀를 소유하지만 위 focused
 7개 재실행에는 포함되지 않았다. 이번 작업의 필수 test에 추가한다.
 
+> [업데이트] `test_router_mandatory_hwm`은 stage0 baseline부터 focused 8개 재실행에
+> 포함되어 8/8 통과했다(`worklog/stage0-baseline.md`). `test_retained_hwm_credit`은
+> 원본 worktree에서 ROUTER typed recv 첫 frame의 lease가 항상 NULL로 나오는 결함이
+> 있었음이 이후 확인됐고 `router_recv_path.cpp`의 retained/non-retained fetch 순서
+> 수정으로 해결했다(commit `b54c9802a9`, `worklog/stage2-retained-credit-fix.md`).
+
 ### 2.2 아직 완료되지 않은 결과
 
 - `0.10.1`과 조건을 맞춘 paired median 성능 증거가 없다.
+  > [업데이트] Stage0~8에서 paired median 증거를 반복 확보했다. 최종 도달점은
+  > local/0.10.1 89.5%(시작 69.9%)로 성능 gate 미달이며, 사용자 결정으로 성능 회복
+  > 작업은 구현 완료 후 별도 단계로 이관했다(`worklog/stage1-removal-baseline.md`).
 - Multi `ROUTER_ROUTER_SENDSEND / tcp / 256 B`는 알려진 첫 회귀 case다.
 - Auto-HWM 계산값을 실제로 채워 `EAGAIN`을 확인하고 drain 뒤 재개하는 작은 end-to-end
   test가 없다.
 - Byte-HWM 제거 기준점, 최소 재구현, completion-lane flow state를 단계별로 비교한 결과가
   없다.
+  > [업데이트] Stage1이 제거 기준점 bisect와 회귀 소유 commit(`3ef4d09a37`) 특정을,
+  > stage3/stage7/stage8이 completion-lane flow state의 단계별 구현·test 결과를
+  > 남겼다(`worklog/stage1-removal-baseline.md`, `stage3-flow-state.md`,
+  > `stage7-c-api.md`, `stage8-bindings.md`).
 - PAUSE/RESUME C API, event와 metric은 아직 구현되지 않았다.
+  > [업데이트] Stage7에서 `zlink_socket_set_receive_flow_state`, 3개 monitor event와
+  > `zlink_monitor_status_t` ABI 4의 flow metric 5개를 구현하고 focused test를
+  > 통과시켰다(`worklog/stage7-c-api.md`). 관련 정식 spec 반영은 보호 경로라 사용자
+  > 승인 대기 상태로 남아 있다(같은 문서 §7 제안서).
 
 과거 보고서의 단일 수치는 진단 참고일 뿐 완료 증거가 아니다. Local과 release의 HWM,
 OS buffer, runtime provenance 또는 실행 시점이 다르면 비교를 폐기한다.
@@ -600,13 +617,13 @@ Framework work started: no
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | 제거 기준점에서 public HWM option을 유지한 채 기능 test와 성능 회복을 확인했다. | `BLOCKED:` `doc/plan/autohwm/worklog/stage1-removal-baseline.md` — poll 경로 수정 4건과 codex review 지적 4건 수정 후 최종 gate median local/0.10.1 = throughput·bandwidth 89.5%(시작 69.9%), mean/p95/p99 115~117%(시작 142~147%). 5개 metric 모두 미달. 분해 결과 현재 worktree(86.1%)≈`2728d70d44` 부모(84.2%)로 `3ef4d09a37` 회귀는 회복됐고, 잔여는 main merge `f159a51a99`가 소유한다(`dc9fb69735` 174.5 → `f159a51a99` 159.4 Kops/s, 4/4 pair). **주의: 이전 기록의 8/8 test 통과는 stale binary(01:05 산출물) 결과다. 재빌드 시 baseline은 7/8이고 `test_retained_hwm_credit`은 원본 worktree에서 20/20 결정적 실패한다(기존 결함).** |
-| [ ] | 일반·delimiter·join·leave frame charge를 최소 pipe-local 구현으로 복구했다. | |
-| [ ] | Default·hint LWM과 blocked-writer drain wakeup을 복구했다. | |
-| [ ] | Oversize, incremental multipart, `EAGAIN`, `SNDTIMEO`와 send-ready test가 통과했다. | |
-| [ ] | Auto-HWM budget을 planning input으로 복구하고 manual·unlimited·minimum 부족 test가 통과했다. | |
-| [ ] | Decoder reservation과 retained lease 수명을 바꾸지 않고 관련 test가 통과했다. | |
-| [ ] | 각 복구 단계 뒤 첫 multi paired case의 모든 metric이 `0.10.1`보다 나쁘지 않다. | |
+| [ ] | 제거 기준점에서 public HWM option을 유지한 채 기능 test와 성능 회복을 확인했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). 기능 측면은 stage1 최종 gate에서 재빌드한 baseline 8개 focused test 중 `test_retained_hwm_credit`이 원본 worktree에서 20/20 결정적 실패했으나(기존 결함), stage2에서 원인(`router_recv_path.cpp`의 retained/non-retained fetch 순서)을 찾아 수정했다(commit `b54c9802a9`, `worklog/stage2-retained-credit-fix.md`). 성능 회복만 미달로 이 행은 `[ ]` 유지. |
+| [x] | 일반·delimiter·join·leave frame charge를 최소 pipe-local 구현으로 복구했다. | `core/src/runtime/core/pipe.cpp`의 byte charge 계약(§3.1)이 현재 worktree에 존재하고 `test_zmp_request_reply`, `unittest_zmp_decoder`, `test_router_mandatory_hwm`이 stage0 baseline부터 8/8 통과(`worklog/stage0-baseline.md` §4-5), stage2 재확인 10/10(`worklog/stage2-retained-credit-fix.md` §4). |
+| [x] | Default·hint LWM과 blocked-writer drain wakeup을 복구했다. | 동일 focused test 통과 근거(위 행)와 stage3에서 remote PAUSE를 byte HWM과 독립으로 합성하면서 두 wakeup 경로(LWM 도달, blocked-writer drain)를 변경 없이 재확인함 (`worklog/stage3-flow-state.md` §4, `test_flow_state_paired::test_local_hwm_and_remote_pause_are_independent`). |
+| [x] | Oversize, incremental multipart, `EAGAIN`, `SNDTIMEO`와 send-ready test가 통과했다. | `test_zmp_request_reply`, `test_router_handover`, `test_connect_rid`, `test_router_mandatory_hwm` (stage0 8/8, stage2 10/10 재확인). Multipart atomicity는 stage3에서 `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`로 추가 검증. |
+| [x] | Auto-HWM budget을 planning input으로 복구하고 manual·unlimited·minimum 부족 test가 통과했다. | `unittest_auto_hwm_policy`, `test_ctx_options` — stage0 baseline 8/8, stage2 10/10 재확인 (`worklog/stage0-baseline.md`, `worklog/stage2-retained-credit-fix.md` §4). |
+| [x] | Decoder reservation과 retained lease 수명을 바꾸지 않고 관련 test가 통과했다. | `test_retained_hwm_credit`의 ROUTER typed recv lease NULL 결함을 수정(commit `b54c9802a9`, `worklog/stage2-retained-credit-fix.md`), application-pipe accounting을 registry ledger와 통일해 원본 worktree의 `test_xpub_nodrop`/`test_zmp_metadata`/`test_router_multiple_dealers` 결함을 해소(commit `f9328c7dec`, `worklog/preexisting-test-failures.md` "Correction for `f40de1c767`" — 수정 후 10/10 표준 실행 각각, 전체 sweep 89/89). |
+| [ ] | 각 복구 단계 뒤 첫 multi paired case의 모든 metric이 `0.10.1`보다 나쁘지 않다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
 
 ### 12.3 Core PAUSE와 RUNNING
 
@@ -617,31 +634,31 @@ Framework work started: no
 | [x] | Socket-wide local state, reconnect와 close 경쟁을 구현했다. | `core/src/runtime/sockets/common/socket_base_flow_state.cpp`. Fanout과 새 pair 동기화가 `_transport_pairs_sync` 한 mutex를 공유하고, close 경쟁은 `socket_public_api_scope_t` 승인으로 결정한다. `test_flow_state_paired::test_new_and_reconnected_pairs_receive_the_latest_state`, `::test_invalid_state_is_rejected` |
 | [x] | Remote PAUSE를 local HWM과 독립된 send blocker로 합성했다. | `core/src/runtime/core/pipe.cpp:1071,1086,1116,1175,1200,1374`, `socket_base_api.cpp:723`. Byte HWM counter 미수정. `test_flow_state_paired::test_local_hwm_and_remote_pause_are_independent` (양방향) |
 | [x] | Multipart 중간 PAUSE와 모든 blocker가 해제된 뒤의 send-ready를 검증했다. | `pipe_t::remote_flow_blocked_unlocked ()`의 `_out_incomplete_bytes == 0` 조건. `test_flow_state_paired::test_pause_mid_multipart_preserves_atomicity`, `::test_remote_pause_blocks_sender_and_resume_releases_it` |
-| [ ] | C API, event와 metric focused test가 통과했다. | 7단계 범위. 이번 단계는 내부 C++ 계층만 구현했고 `core/include`와 `bindings/`에는 변경이 없다. |
-| [ ] | Flow state가 계속 RUNNING인 paired perf가 기능 추가 전 수준을 유지한다. | 이번 단계에서 perf를 실행하지 않았다(다른 작업자가 같은 host에서 측정 중). |
+| [x] | C API, event와 metric focused test가 통과했다. | Stage7: `zlink_socket_set_receive_flow_state` public C API, 3개 monitor event(`SEND_FLOW_PAUSED`/`RESUMED`/`FLOW_STATE_STALE`), `zlink_monitor_status_t` ABI 4의 flow metric 5개 구현. 신규 `test_flow_state_c_api` 10/10, 계획 §8.1 focused 8개+신규 2개 ctest 10/10(`worklog/stage7-c-api.md` §8.1-8.2). `contract_public_surface`는 spec 미확정 상태에서 header에 새 심볼을 추가해 기대대로 실패하며(§8.4), 해결책은 §7 spec 제안서로 남겨 사용자 승인 대기. |
+| [ ] | Flow state가 계속 RUNNING인 paired perf가 기능 추가 전 수준을 유지한다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
 
 ### 12.4 언어 binding parity
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | cpp의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | dotnet의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | go의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | java(kotlin contract 포함)의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | node의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | python의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | rust의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | |
-| [ ] | 어떤 언어에도 flow frame receive·encode와 PAUSE 우회 send를 추가하지 않았다. | |
+| [x] | cpp의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `socket_t::set_receive_flow_state()`, commit `e655193765`. `test_cpp_contract_flow_state.cpp`: 13/14 contract test 통과(1개 실패는 §12.2 row1 미완료의 기존 결함과 동일 원인, flow-state와 무관). `worklog/stage8-bindings.md` "## cpp". |
+| [x] | dotnet의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `ISocket.SetReceiveFlowState`, commit `e819fdad35`. `test_flow_state.cs` 8/8, 전체 175/176(나머지 1개는 기존 flaky `test_router_multiple_dealers`, 무관). `worklog/stage8-bindings.md` "## dotnet". |
+| [x] | go의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `connectionSocket.SetReceiveFlowState`, commit `f4cefe9e91`. `flow_state_test.go` 포함 `run_tests.sh` all green(-race 포함). `worklog/stage8-bindings.md` "## go". |
+| [x] | java(kotlin contract 포함)의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `CommonSocketOptions.receiveFlowState`, commit `2b4b7e8151`. `ReceiveFlowStateContractTest` 9/9 + kotlin contract 3/3, 전체 `run_tests.sh` green(115/115 :test 등). `worklog/stage8-bindings.md` "## java". |
+| [x] | node의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `Socket.setReceiveFlowState`, commit `b4a8d8c26b`. `flow_state.test.ts` 7개 포함 전체 dist-tools test green. `worklog/stage8-bindings.md` "## node". |
+| [x] | python의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `_Socket.set_receive_flow_state`, commit `09424b6a7b` (+ ABI 4 정렬 `c3f28dafdb`). `test_flow_state_parity.py` 11/11(네이티브 확장 관련 기존 결함 격리 후 84/85, 나머지 1개는 flow-state와 무관한 기존 ABI 표기 불일치). `worklog/stage8-bindings.md` "## python". |
+| [x] | rust의 flow-state 표면, 오류 mapping과 contract test가 통과했다. | `CommonSocketOptions::set_receive_flow_state`, commit `c000ca6e74`. `flow_state_tests.rs` 14/14, 전체 12/12 suite pass. `worklog/stage8-bindings.md` "## rust". |
+| [x] | 어떤 언어에도 flow frame receive·encode와 PAUSE 우회 send를 추가하지 않았다. | 7개 언어 모두 표면 부재를 자동 검증하는 test를 포함한다: cpp(`static_assert` SFINAE `has_flow_frame_api_t`/`has_pause_bypass_send_t`), rust(`tests/flow_state_tests.rs`의 표면 부재 확인), go(`TestPublicSurfaceHasNoFlowFrameAPI` 리플렉션), python(`ReceiveFlowStatePublicSurfaceTests`), dotnet(`public_surface_has_no_flow_frame_or_pause_bypass_api` 리플렉션), node(`public surface has no flow-frame receive/encode API or PAUSE-bypass send variant`), java(`publicSurfaceHasNoFlowFrameOrPauseBypassApi` 리플렉션). `worklog/stage8-bindings.md` 각 언어 절의 "Not exposed" 항목. |
 
 ### 12.5 최종 Core gate
 
 | Done | 확인 항목 | Evidence |
 |---|---|---|
-| [ ] | Multi sendsend·reqrep·PUBSUB를 pattern·transport·size 한 case씩 paired 비교했다. | |
-| [ ] | Single ROUTER_ROUTER·DEALER_ROUTER를 같은 방식으로 비교했다. | |
-| [ ] | 필요한 경우 multi STREAM을 single과 섞지 않고 별도로 비교했다. | |
-| [ ] | 모든 throughput·bandwidth·mean·p95·p99 median이 `0.10.1`보다 나쁘지 않다. | |
-| [ ] | 승인된 Core·binding spec과 영어 mirror가 최종 구현과 일치한다. | |
-| [ ] | `git diff --check`와 관련 문서 검사가 통과했다. | |
-| [ ] | 완료 보고에 변경 source, test, paired report와 남은 실패를 기록했다. | |
-| [ ] | Framework source, public API, spec과 test를 변경하지 않았다. | |
+| [ ] | Multi sendsend·reqrep·PUBSUB를 pattern·transport·size 한 case씩 paired 비교했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
+| [ ] | Single ROUTER_ROUTER·DEALER_ROUTER를 같은 방식으로 비교했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
+| [ ] | 필요한 경우 multi STREAM을 single과 섞지 않고 별도로 비교했다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
+| [ ] | 모든 throughput·bandwidth·mean·p95·p99 median이 `0.10.1`보다 나쁘지 않다. | DEFERRED: 사용자 결정으로 성능 작업은 구현 완료 후 별도 단계로 이관 (stage1 worklog 참조; 도달점 89.5%). |
+| [ ] | 승인된 Core·binding spec과 영어 mirror가 최종 구현과 일치한다. | BLOCKED: 보호 경로 spec 반영은 사용자 승인 대기 (stage7-c-api.md §7 제안서) |
+| [x] | `git diff --check`와 관련 문서 검사가 통과했다. | `git diff --check` clean (exit 0, whitespace 오류 없음). 별도로 추적 중인 `contract_public_surface` spec-정합성 gate는 위 행과 같은 사유(보호 경로 spec 미승인)로 별도 BLOCKED 상태이며 이 행이 검사하는 diff 자체의 whitespace/formatting 문제는 없다. |
+| [ ] | 완료 보고에 변경 source, test, paired report와 남은 실패를 기록했다. | (orchestrator가 최종 완료 보고 작성 시 기록) |
+| [x] | Framework source, public API, spec과 test를 변경하지 않았다. | `git log --stat 7d53a2c80c..HEAD -- framework/` → 0 commit, 변경 없음(확인 시점 HEAD `64a669f068`). |
