@@ -283,7 +283,9 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     (ZLinkCanonicalActorRelocationEnvelope.java:126) vs 정본 target.applicationVersion()=0.
     ⓑ java→cpp = targetAttemptGeneration — 상수 new Fence(relocationId,1)(SourceBuilder:661) vs
     cpp 기대 target lifecycleGeneration(spot_runtime.cpp:5767, 16 conjunct 중 유일 실패). Ruling
-    2건 확정, terra 수정+4스테이지 검증 중. java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
+    2건 확정 → **수정 랜딩 `f04506d1ff`: java→node 그린(9/12)**, Java 게이트 198 XML 그린.
+    java→cpp는 targetAttempt 수정 후에도 PROTOCOL_ERROR 잔존(/tmp/tmp.JAfGly9W8Y — 다음 conjunct
+    계측 필요, 하니스 직렬 대기). 회귀 java→dotnet·node→java 코디네이터 실행 대기. java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
     때문(정합 증거 아님). .NET coordinator fence 수정(1264653381)은 dotnet-java 재실행서 여전히
     joined 미관측 — 다음 불일치 여부 sol 연속 계측 진단 중.
     .NET 이중 decode 수정 랜딩 `adfa26824b` 후 새 rung **sol 계측으로 수렴**: unbound join에서
