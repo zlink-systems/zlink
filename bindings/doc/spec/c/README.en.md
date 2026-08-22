@@ -41,6 +41,7 @@ folders.
 | [Library shape](#library-shape) | Native ABI function naming, flag, and multipart rules |
 | [Interface shape exceptions](#interface-shape-exceptions) | Where the higher-level binding wrapper rules don't apply to C |
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Core ABI byte-HWM configuration, calculation, and admission rules |
+| [Receive flow state](#receive-flow-state) | The receive-flow state enum, function, results, and monitor surface |
 | [Required feature coverage](#required-feature-coverage) | The header feature groups a review checks |
 | [Spot Get-Or-New](#spot-get-or-new) | The `zlink_spot_node_spot_get_or_new` contract |
 | [Ownership and lifecycle](#ownership-and-lifecycle) | Handle/message ownership transfer rules |
@@ -149,7 +150,7 @@ accumulate a separate message count or payload size. A submit that reaches the
 HWM reports backpressure according to that socket's blocking, non-blocking, and
 timeout contract.
 
-In `zlink_monitor_status_t` ABI version 3, planned, applied, and deferred HWM
+In `zlink_monitor_status_t` ABI version 4, planned, applied, and deferred HWM
 values and in-flight usage use bytes. `snd_pending_msgs` and
 `rcv_pending_msgs` are display counts, not admission inputs. No message-unit,
 slot, size-cap, or connection-bucket diagnostic is exposed.
@@ -158,6 +159,47 @@ slot, size-cap, or connection-bucket diagnostic is exposed.
 queue HWM option. Zero selects the Core default; a positive value is forwarded
 unchanged as the exact byte limit. No message-count alias or conversion is
 provided.
+
+## Receive flow state
+
+The C binding exposes the Core receive-flow surface unchanged. Every name
+below is the Core name, and `bindings/c/include` carries the same declarations
+as `core/include`.
+
+```c
+typedef enum zlink_receive_flow_state_t
+{
+    ZLINK_RECEIVE_FLOW_RUNNING = 0,
+    ZLINK_RECEIVE_FLOW_PAUSED = 1
+} zlink_receive_flow_state_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
+  void *handle_, zlink_receive_flow_state_t state_);
+```
+
+The call returns `zlink_config_result_t` and records the detailed cause in
+`zlink_errno()`, following the same rule as every other configuration call. A
+repeat of the current state is `ZLINK_CONFIG_OK`. An out-of-range state is
+`ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`. A socket type other than DEALER
+or ROUTER is `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`. A close that won
+admission is `ZLINK_CONFIG_INVALID_STATE` with `ESHUTDOWN`, and a close that
+already finished is `ZLINK_CONFIG_INVALID_HANDLE`. The formal result table
+lives in the Core error specification.
+
+The observation surface is also the Core surface:
+
+| Kind | Names |
+|---|---|
+| Events | `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED` (`1u << 16`), `..._SEND_FLOW_RESUMED` (`1u << 17`), `..._FLOW_STATE_STALE` (`1u << 18`), with the short aliases `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`; `ZLINK_SOCKET_MONITOR_EVENT_ALL` is `0x7FFFFu` |
+| Event flags | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` (`1u << 2`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`), read from `zlink_monitor_event_t.flags` |
+| Detail bit | `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` (`1u << 5`) |
+| Status fields | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms`, all `uint64_t` appended at the end of `zlink_monitor_status_t` |
+
+`ZLINK_MONITOR_STATUS_ABI_VERSION` is `4u`. A caller passes a structure of the
+current layout; there is no size or version negotiation.
+
+Flow-state frames are a Core-internal completion-lane detail. The C binding
+declares no function that receives, sends, encodes, or decodes one.
 
 ## Required feature coverage
 

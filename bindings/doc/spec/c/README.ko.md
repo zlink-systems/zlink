@@ -36,6 +36,7 @@ sockets, eventing, service, errors는 리뷰어가 C 헤더를 읽을 때 사용
 | [라이브러리 형태](#라이브러리-형태) | 네이티브 ABI 함수 네이밍·플래그·멀티파트 규칙 |
 | [인터페이스 형태 예외](#인터페이스-형태-예외) | 상위 바인딩 래퍼 규칙이 C에 적용되지 않는 부분 |
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Core ABI의 byte HWM 설정·계산·admission 규칙 |
+| [Receive flow state](#receive-flow-state) | receive-flow 상태 enum, 함수, 결과와 monitor 표면 |
 | [필수 기능 커버리지](#필수-기능-커버리지) | 리뷰가 점검하는 헤더 기능 그룹 |
 | [Spot Get-Or-New](#spot-get-or-new) | `zlink_spot_node_spot_get_or_new` 계약 |
 | [Ownership과 생명주기](#ownership과-생명주기) | 핸들·메시지 소유권 이동 규칙 |
@@ -152,7 +153,7 @@ accounted byte를 기준으로 하며 C 호출자가 message 수나 payload 크�
 누적하지 않는다. HWM에 도달한 submit은 해당 socket의 blocking·non-blocking과
 timeout 계약에 따라 backpressure 결과를 반환한다.
 
-`zlink_monitor_status_t` ABI version 3의 planned, applied, deferred HWM과
+`zlink_monitor_status_t` ABI version 4의 planned, applied, deferred HWM과
 in-flight 사용량은 byte 단위다. `snd_pending_msgs`와 `rcv_pending_msgs`는 표시용
 count이며 admission 기준이 아니다. Message-unit·slot·size-cap·connection-bucket
 진단은 제공하지 않는다.
@@ -160,6 +161,44 @@ count이며 admission 기준이 아니다. Message-unit·slot·size-cap·connect
 `zlink_socket_monitor_open_options_t.monitor_hwm_bytes`가 유일한 monitor queue HWM
 option이다. `0`은 Core 기본값을 선택하고, 양수는 정확한 byte 상한으로 변환 없이
 전달한다. Message-count alias나 변환은 제공하지 않는다.
+
+## Receive flow state
+
+C 바인딩은 Core의 receive-flow 표면을 그대로 노출한다. 아래 이름은 모두 Core의 이름이며
+`bindings/c/include`는 `core/include`와 같은 선언을 담는다.
+
+```c
+typedef enum zlink_receive_flow_state_t
+{
+    ZLINK_RECEIVE_FLOW_RUNNING = 0,
+    ZLINK_RECEIVE_FLOW_PAUSED = 1
+} zlink_receive_flow_state_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
+  void *handle_, zlink_receive_flow_state_t state_);
+```
+
+이 함수는 `zlink_config_result_t`를 반환하고 자세한 원인을 `zlink_errno()`에 기록한다.
+다른 configuration 호출과 같은 규칙이다. 현재 상태를 다시 설정하면 `ZLINK_CONFIG_OK`다.
+범위 밖 state는 `EINVAL`과 함께 `ZLINK_CONFIG_INVALID_ARGUMENT`, DEALER와 ROUTER가 아닌
+socket 유형은 `ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`다. Close가 admission을 먼저
+얻으면 `ESHUTDOWN`과 함께 `ZLINK_CONFIG_INVALID_STATE`이고, close가 이미 끝났으면
+`ZLINK_CONFIG_INVALID_HANDLE`이다. 정식 결과 표는 Core error 스펙이 소유한다.
+
+관측 표면도 Core의 표면 그대로다.
+
+| 종류 | 이름 |
+|---|---|
+| Event | `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED` (`1u << 16`), `..._SEND_FLOW_RESUMED` (`1u << 17`), `..._FLOW_STATE_STALE` (`1u << 18`)와 짧은 alias `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`. `ZLINK_SOCKET_MONITOR_EVENT_ALL`은 `0x7FFFFu`다 |
+| Event flag | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` (`1u << 2`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`). `zlink_monitor_event_t.flags`에서 읽는다 |
+| Detail bit | `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` (`1u << 5`) |
+| Status field | `zlink_monitor_status_t` 끝에 덧붙은 `uint64_t` 5개: `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
+
+`ZLINK_MONITOR_STATUS_ABI_VERSION`은 `4u`다. 호출자는 현재 layout의 구조체를 전달하며 크기나
+version 협상은 없다.
+
+Flow-state frame은 Core 내부의 completion-lane 세부 사항이다. C 바인딩은 이 frame을 수신,
+송신, encode 또는 decode하는 함수를 선언하지 않는다.
 
 ## 필수 기능 커버리지
 
