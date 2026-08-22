@@ -895,6 +895,86 @@ void attach_window_injects_pause (zlink::socket_base_t *socket_,
     (void) msg.close ();
 }
 
+//  Pass 3, S2. The hold for an unvalidated pair must be per candidate source.
+//  With one slot per pair, a candidate that goes on to lose registration can
+//  overwrite the winner's held state with a higher epoch; promotion then drops
+//  it as foreign and the winner's state is lost for good, because an absolute
+//  state is not repeated until it changes again.
+void test_losing_candidate_cannot_destroy_the_winners_held_state ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+    TEST_ASSERT_EQUAL_INT (
+      0, as_socket (router)->set_local_receive_flow_state (k_paused));
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    //  Only the ROUTER runs, so the winner's PAUSE is held while the DEALER's
+    //  pair is still unvalidated.
+    uint64_t pair_id = 0;
+    uint64_t generation = 0;
+    bool held_paused = false;
+    uint64_t held_epoch = 0;
+    bool buffered = false;
+    const std::chrono::steady_clock::time_point buffer_deadline =
+      deadline_in_ms (4000);
+    while (!deadline_expired (buffer_deadline)) {
+        if (as_socket (dealer)->test_pending_flow_buffered (
+              &held_paused, &held_epoch, &pair_id, &generation)) {
+            buffered = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (buffered);
+    TEST_ASSERT_TRUE (held_paused);
+
+    //  A competing candidate for the same pair key sends a higher-epoch
+    //  RUNNING. Any pipe pointer distinct from the registered completion pipe
+    //  stands in for it here; the point under test is the slot policy, not how
+    //  the second connection was obtained.
+    zlink::pipe_t *other_source =
+      as_socket (dealer)->test_pair_pipe (pair_id, generation, false);
+    TEST_ASSERT_NOT_NULL (other_source);
+    TEST_ASSERT_TRUE (other_source
+                      != as_socket (dealer)->test_pair_pipe (pair_id,
+                                                             generation, true));
+    TEST_ASSERT_TRUE (as_socket (dealer)->test_buffer_flow_frame (
+      pair_id, generation, other_source, false, held_epoch + 8));
+
+    //  The winner's PAUSE must survive and be the state that is promoted.
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool paused_seen = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
+            && target.transport_pair_id != 0
+            && as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            paused_seen = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (paused_seen);
+    TEST_ASSERT_FALSE (
+      as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 //  Pass 3, S1. The decision is taken under the table mutex but published after
 //  it is dropped. A state accepted in that gap must not be overtaken by the
 //  already-decided edge, so the publication is validated against the
@@ -1569,6 +1649,7 @@ int main ()
     RUN_TEST (test_generation_change_resets_the_epoch_sequence);
     RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
     RUN_TEST (test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated);
+    RUN_TEST (test_losing_candidate_cannot_destroy_the_winners_held_state);
     RUN_TEST (test_pause_accepted_in_the_publish_window_blocks_the_writable_edge);
     RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);

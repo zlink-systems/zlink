@@ -223,13 +223,8 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
             //  identity in its metadata. Hold the frame, latest-only, and
             //  leave the accepted state and its epoch untouched so a
             //  connection that never wins registration cannot burn either.
-            if (!pair.pending_flow_valid
-                || frame.epoch > pair.pending_flow_epoch) {
-                pair.pending_flow_valid = true;
-                pair.pending_flow_paused = paused;
-                pair.pending_flow_epoch = frame.epoch;
-                pair.pending_flow_source = completion_pipe_;
-            }
+            buffer_pending_flow_state_locked (pair, completion_pipe_, paused,
+                                              frame.epoch);
             return true;
         }
         //  Duplicate or reversed epoch within one generation.
@@ -314,29 +309,53 @@ bool zlink::socket_base_t::test_flow_frame_accepted_before_pair_ready () const
     for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
                                            end = _transport_pairs.end ();
          it != end; ++it) {
-        if ((it->second.remote_flow_seen || it->second.pending_flow_valid)
-            && !it->second.ready)
+        bool pending = false;
+        for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+             ++i)
+            pending = pending || it->second.pending_flow[i].valid;
+        if ((it->second.remote_flow_seen || pending) && !it->second.ready)
             return true;
     }
     return false;
 }
 
 bool zlink::socket_base_t::test_pending_flow_buffered (
-  bool *paused_out_, uint64_t *epoch_out_) const
+  bool *paused_out_, uint64_t *epoch_out_, uint64_t *pair_id_out_,
+  uint64_t *generation_out_) const
 {
     scoped_lock_t lock (_transport_pairs_sync);
     for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
                                            end = _transport_pairs.end ();
          it != end; ++it) {
-        if (!it->second.pending_flow_valid)
-            continue;
-        if (paused_out_)
-            *paused_out_ = it->second.pending_flow_paused;
-        if (epoch_out_)
-            *epoch_out_ = it->second.pending_flow_epoch;
-        return true;
+        for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+             ++i) {
+            if (!it->second.pending_flow[i].valid)
+                continue;
+            if (paused_out_)
+                *paused_out_ = it->second.pending_flow[i].paused;
+            if (epoch_out_)
+                *epoch_out_ = it->second.pending_flow[i].epoch;
+            if (pair_id_out_)
+                *pair_id_out_ = it->first.first;
+            if (generation_out_)
+                *generation_out_ = it->first.second;
+            return true;
+        }
     }
     return false;
+}
+
+bool zlink::socket_base_t::test_buffer_flow_frame (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  pipe_t *source_, bool paused_, uint64_t epoch_)
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::iterator it = _transport_pairs.find (
+      transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
+    if (it == _transport_pairs.end ())
+        return false;
+    buffer_pending_flow_state_locked (it->second, source_, paused_, epoch_);
+    return true;
 }
 
 bool zlink::socket_base_t::test_any_pair_accepted_flow_state () const
@@ -374,25 +393,64 @@ void zlink::socket_base_t::test_run_attach_flow_window_hook (
 }
 #endif
 
+void zlink::socket_base_t::buffer_pending_flow_state_locked (
+  transport_pair_pipes_t &pair_, pipe_t *source_, bool paused_,
+  uint64_t epoch_)
+{
+    if (!source_)
+        return;
+
+    //  One slot per candidate, latest state wins within a slot. A candidate
+    //  never touches another candidate's slot, so a source that goes on to
+    //  lose registration cannot destroy the winner's state.
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (!slot.valid || slot.source != source_)
+            continue;
+        if (epoch_ <= slot.epoch)
+            return;
+        slot.paused = paused_;
+        slot.epoch = epoch_;
+        return;
+    }
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        if (slot.valid)
+            continue;
+        slot.valid = true;
+        slot.paused = paused_;
+        slot.epoch = epoch_;
+        slot.source = source_;
+        return;
+    }
+    //  Every slot belongs to another candidate. Refuse the newcomer rather
+    //  than evict an existing candidate; only one of them can win anyway, and
+    //  refusing keeps this bounded without ever damaging a held state.
+}
+
 void zlink::socket_base_t::promote_pending_flow_state_locked (
   transport_pair_pipes_t &pair_)
 {
-    if (!pair_.pending_flow_valid)
-        return;
+    bool found = false;
+    bool paused = false;
+    uint64_t epoch = 0;
+    for (size_t i = 0; i < transport_pair_pipes_t::pending_flow_slot_count;
+         ++i) {
+        transport_pair_pipes_t::pending_flow_slot_t &slot = pair_.pending_flow[i];
+        //  Only the candidate that won registration is promoted. Everything
+        //  else is dropped outright: it never reaches the accepted state and
+        //  never advances the epoch.
+        if (slot.valid && pair_.completion && slot.source == pair_.completion) {
+            found = true;
+            paused = slot.paused;
+            epoch = slot.epoch;
+        }
+        slot = transport_pair_pipes_t::pending_flow_slot_t ();
+    }
 
-    const bool source_won_registration =
-      pair_.completion && pair_.pending_flow_source == pair_.completion;
-    const bool paused = pair_.pending_flow_paused;
-    const uint64_t epoch = pair_.pending_flow_epoch;
-    pair_.pending_flow_valid = false;
-    pair_.pending_flow_paused = false;
-    pair_.pending_flow_epoch = 0;
-    pair_.pending_flow_source = NULL;
-
-    //  A frame from a connection that did not win registration is dropped
-    //  outright: it never reaches the accepted state and never advances the
-    //  epoch.
-    if (!source_won_registration)
+    if (!found)
         return;
     if (pair_.remote_flow_seen && epoch <= pair_.remote_flow_epoch)
         return;

@@ -87,11 +87,7 @@ struct transport_pair_pipes_t
         draining (false),
         remote_flow_seen (false),
         remote_flow_paused (false),
-        remote_flow_epoch (0),
-        pending_flow_valid (false),
-        pending_flow_paused (false),
-        pending_flow_epoch (0),
-        pending_flow_source (NULL)
+        remote_flow_epoch (0)
     {
     }
 
@@ -114,16 +110,31 @@ struct transport_pair_pipes_t
     bool remote_flow_paused;
     uint64_t remote_flow_epoch;
     //  A frame that arrives before this pair's completion pipe is registered
-    //  and validated is held here, latest-only, instead of being applied. On a
-    //  passive transport the peer supplies the pair identity in its metadata,
-    //  so a second connection claiming a known pair key could otherwise land a
-    //  high-epoch state - and burn the epoch - before identity validation ever
-    //  runs. The buffer is promoted when the pair becomes ready, and only if
-    //  the pipe it arrived on is the one that won registration.
-    bool pending_flow_valid;
-    bool pending_flow_paused;
-    uint64_t pending_flow_epoch;
-    pipe_t *pending_flow_source;
+    //  and validated is held instead of being applied. On a passive transport
+    //  the peer supplies the pair identity in its metadata, so a second
+    //  connection claiming a known pair key could otherwise land a high-epoch
+    //  state - and burn the epoch - before identity validation ever runs.
+    //
+    //  The hold is per candidate source, not per pair: a candidate that never
+    //  wins registration must not be able to overwrite - and thereby destroy -
+    //  the state the winner sent, because an absolute state is not repeated
+    //  until it changes again. Two slots are enough, since only one candidate
+    //  can win; a third candidate is refused rather than allowed to evict an
+    //  existing one.
+    struct pending_flow_slot_t
+    {
+        pending_flow_slot_t () :
+            valid (false), paused (false), epoch (0), source (NULL)
+        {
+        }
+
+        bool valid;
+        bool paused;
+        uint64_t epoch;
+        pipe_t *source;
+    };
+    static const size_t pending_flow_slot_count = 2;
+    pending_flow_slot_t pending_flow[pending_flow_slot_count];
 };
 
 class socket_recv_source_rid_scope_t
@@ -250,6 +261,11 @@ class socket_base_t : public own_t,
     //  Promotes a pair's buffered frame once its completion pipe is registered
     //  and validated. Caller holds _transport_pairs_sync.
     void promote_pending_flow_state_locked (transport_pair_pipes_t &pair_);
+    //  Holds one candidate's latest state. Caller holds _transport_pairs_sync.
+    void buffer_pending_flow_state_locked (transport_pair_pipes_t &pair_,
+                                           pipe_t *source_,
+                                           bool paused_,
+                                           uint64_t epoch_);
 
   public:
 
@@ -282,7 +298,16 @@ class socket_base_t : public own_t,
     bool test_flow_frame_accepted_before_pair_ready () const;
     //  Whether some pair is holding an unpromoted frame, and what it holds.
     bool test_pending_flow_buffered (bool *paused_out_,
-                                     uint64_t *epoch_out_) const;
+                                     uint64_t *epoch_out_,
+                                     uint64_t *pair_id_out_ = NULL,
+                                     uint64_t *generation_out_ = NULL) const;
+    //  Drives the buffering step directly, so a competing candidate can be
+    //  simulated without standing up a second hostile connection.
+    bool test_buffer_flow_frame (uint64_t transport_pair_id_,
+                                 uint64_t transport_pair_generation_,
+                                 zlink::pipe_t *source_,
+                                 bool paused_,
+                                 uint64_t epoch_);
     //  Whether any pair has accepted a remote state, which is what consumes
     //  the epoch. A buffered frame must not show up here.
     bool test_any_pair_accepted_flow_state () const;
