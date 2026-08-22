@@ -309,6 +309,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     Adapter:363)는 동시 만족 불가. .NET source의 multipart 필수 conjunct(ManagedMeshNode:9529)도
     스펙 근거 없음(이 탓에 dotnet→node non-empty reply 소비 불가 — 현재 empty reply라 잠복).
     → 4런타임 공통 프레이밍 규칙 스펙 명문화 + 정렬이 유일 해소(통합 판정은 Java·C++ 감사 후).
+    **Java 감사 도착(A8건+B11+C12)**: ⭐A1 Java만 ZLJR을 saved-work 선두(order=1)+전체 +1 시프트
+    (.NET/C++은 꼬리 append — wire 발산, java→cpp 잔존 PROTOCOL_ERROR 유력 용의) ⭐A6
+    objectCapabilities 불변식(entrySpotId 동형 가짜 blocker 잔존, Descriptor:111) ⭐A3 `+1` 정확
+    일치 4런타임 공통(스펙 21:913은 `>`) — 전언어 ruling 대기 ⭐A4 replayCursor(기존 OPEN RULING)
+    + Java 내부 코덱 자기모순 ⭐A7/A8 스펙 명시 위반 재조회·재검증. 상세: 태스크 보고 +
+    scratchpad/java-audit-notes.md.
     보고서: scratchpad audit-extraspec-{node,cpp}-sol.log, .NET/Java는 Agent 태스크. 기타 주요:
     .NET ZLAP/ZLAR 이중 래퍼(schema trailingBytes forbidden 위반 의심·LE byte-order), tautological
     admission conjunct(RemoteJoiner:569), 순서 비교 잔존(:581 — 51 §9 위반), one-way 40 legacy
