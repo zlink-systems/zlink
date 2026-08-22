@@ -63,6 +63,21 @@ final class ZLinkActorAuthorityPayloadCodecTest {
     }
 
     @Test
+    void opaqueCurrentSpotGenerationAcceptsTheUnsignedHighBitFixedVector() {
+        var codec = new ZLinkActorAuthorityPayloadCodec();
+        long generation = 0xa70186055079275aL;
+        byte[] encoded = codec.encode(
+            ZLinkActorAuthorityPayloadCodec.State.READY,
+            "A", "B", "C", generation, 1, "D", 3, "E",
+            RoutingId.from("F"), 4);
+
+        assertArrayEquals(HexFormat.of().parseHex("a70186055079275a"),
+            Arrays.copyOfRange(encoded, 22, 30));
+        assertEquals(generation,
+            codec.decode(encoded).orElseThrow().currentSpotGeneration());
+    }
+
+    @Test
     void opaqueNodeGenerationRejectsOnlyZero() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
         assertThrows(IllegalArgumentException.class, () -> codec.encode(
@@ -82,10 +97,6 @@ final class ZLinkActorAuthorityPayloadCodecTest {
     @Test
     void boundedGenerationsRetainTheirSignedPositiveValidation() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
-        assertThrows(IllegalArgumentException.class, () -> codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", Long.MIN_VALUE, 1, "D", 3, "E",
-            RoutingId.from("F"), 1));
         assertThrows(IllegalArgumentException.class, () -> codec.encode(
             ZLinkActorAuthorityPayloadCodec.State.READY,
             "A", "B", "C", 2, 1, "D", Long.MIN_VALUE, "E",

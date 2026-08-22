@@ -51,7 +51,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
         actor.text8(actorId);
         actor.u8(state == State.CREATING ? 0 : 1);
         actor.text8(currentSpotId);
-        actor.nonzeroU64(currentSpotGeneration);
+        actor.opaqueNonzeroU64(currentSpotGeneration);
         actor.u8(currentSpotKind);
 
         Writer body = new Writer();
@@ -103,7 +103,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
             String actorId = object.text8();
             int stateValue = object.u8();
             String currentSpotId = object.text8();
-            long currentSpotGeneration = object.nonzeroU64();
+            long currentSpotGeneration = object.opaqueNonzeroU64();
             int currentSpotKind = object.u8();
             if (!object.end()) {
                 return Optional.empty();
