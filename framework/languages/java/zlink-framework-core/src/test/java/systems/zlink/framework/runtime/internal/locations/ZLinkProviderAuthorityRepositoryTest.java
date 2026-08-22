@@ -113,6 +113,54 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void capacityRowsUseTheNodeCppCanonicalKeyAndJsonShape()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owner = ((ZLinkOwnerLeaseClaimed)
+            new ZLinkProviderOwnerLeaseRepository(provider).claim(
+                "owner-canonical-capacity", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(
+            owner, "mesh /한", RoutingId.from("node /#?"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        var reservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(
+                        ZLinkAuthorityKeyCodec.spot("spot-canonical"),
+                        descriptor,
+                        owner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+        String key = "zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F";
+        assertCapacityRow(
+            provider,
+            key,
+            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
+                + "\"pending\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
+                + "\"user_spot\\u0000room\":1}}}");
+
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            repository.commit(reservation, new byte[] {2}, null, () -> false)
+                .toCompletableFuture().get());
+        assertCapacityRow(
+            provider,
+            key,
+            "{\"active\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
+                + "\"user_spot\\u0000room\":1}},\"pending\":{\"actors\":0,"
+                + "\"spots\":0,\"spotTypes\":{}}}");
+    }
+
+    @Test
     void exhaustedObjectCounterReturnsTypedResultWithoutChangingIt()
         throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
@@ -628,11 +676,33 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    private static void assertCapacityRow(
+        ZLinkLocationStore provider,
+        String key,
+        String expected) throws Exception {
+        var found = assertInstanceOf(
+            ZLinkStoreReadFound.class,
+            provider.read(new ZLinkStoreKey(key), () -> false)
+                .toCompletableFuture().get());
+        assertEquals(
+            expected,
+            new String(
+                found.value().bytes(),
+                java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     private static ZLinkMeshNodeDescriptor capacityDescriptor(
         ZLinkLocationOwnerToken owner) {
+        return capacityDescriptor(owner, "game", RoutingId.from("capacity-node"));
+    }
+
+    private static ZLinkMeshNodeDescriptor capacityDescriptor(
+        ZLinkLocationOwnerToken owner,
+        String meshName,
+        RoutingId nodeRid) {
         return new ZLinkMeshNodeDescriptor(
-            "game",
-            RoutingId.from("capacity-node"),
+            meshName,
+            nodeRid,
             1,
             1,
             "tcp://127.0.0.1:7100",
