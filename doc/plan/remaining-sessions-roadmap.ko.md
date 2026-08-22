@@ -283,8 +283,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     임시 dump — sol dotnet-diag 종료 후 직렬). java→dotnet 그린은 .NET ValidatePrepare(:2846)가
     target owner 비교를 안 하는 관대함 때문(정합 증거 아님). 수정 방향(잠정): 승인 fence 단일
     전달 or 재조회 시 전 필드 stale 검증.
-    .NET 이중 decode 수정도 랜딩 `adfa26824b`(reply decode 통과 실증) — dotnet→java 새 rung
-    40/52/34 상호운용 정지, sol 계측 진단 중. 러너 부수 변경: Java/C++ target
+    .NET 이중 decode 수정 랜딩 `adfa26824b` 후 새 rung **sol 계측으로 수렴**: unbound join에서
+    .NET source가 ZLJR coordinator fence를 빈값/gen0으로 송신(RemoteJoiner:625 hasBoundSession
+    조건 안에서만 채움, Packets:214) → Java decoder 필수 요구(RecoveryCodec:287)로
+    DATA_LOST→40 FAILED(RelocationDataLost)→34 미도달(실측 /tmp/tmp.TVjNIHjKI7). Ruling: fence
+    생성을 조건 밖으로 분리, unbound에서도 source authority로 채움 — sonnet 구현 중(unit만,
+    하니스는 코디네이터 직렬). java fence 실패 필드/conjunct는 sol 계측 재실행 진행 중. 러너 부수 변경: Java/C++ target
     peer-rid 선택값화(.NET 자동 RID 지원), Node target 실 probe handler. 이하 이전 기록: **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
     canonical slot 모델 — TTT 회귀 모드 A 0/8 소거 동반). **4언어 배치 랜딩**: Java
     `6bb05dce85`(flags 판별·eviction race·typed 21), .NET `63e551c2b4`(47/48/49 request/reply·
