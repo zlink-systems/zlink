@@ -5847,11 +5847,7 @@ bool spot_node_runtime_t::consume_actor_join_recovery (
         && recovery->actor_node_generation
              == admission->source_node_generation
         && recovery->expected_owner_lease_generation
-             == admission->source_owner_lease_generation
-        && recovery->operation.high
-             == admission->completion_operation_id_high
-        && recovery->operation.low
-             == admission->completion_operation_id_low;
+             == admission->source_owner_lease_generation;
     if (!valid)
         return false;
     const auto key = actor_key (

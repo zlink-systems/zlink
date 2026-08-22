@@ -233,8 +233,15 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     throw new ZLinkConfigurationException(
                         "The source MeshNode does not support canonical relocation commands.");
                 canonical = backend;
+                //  Same pre-precommit Coordinator fence as the remote-join
+                //  path (ZLinkActorRemoteJoiner.cs): sessionRelocationContext
+                //  above already fences on found.Snapshot (pre-BeginPreparing
+                //  StoreVersion) — Prepare must reuse that same baseline, not
+                //  the post-Capture precommitSnapshot, whose StoreVersion has
+                //  already rotated past what the durable ZLJR/saved-work
+                //  recovery carries.
                 prepare = CreatePrepare(
-                        precommitSnapshot,
+                        found.Snapshot,
                         sourceAuthority,
                         target,
                         initialEnvelope,

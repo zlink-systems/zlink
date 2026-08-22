@@ -850,8 +850,20 @@ internal sealed class ZLinkActorRemoteJoiner(
         if (sourceNode.Node is not IZLinkBackendCanonicalRelocation canonical)
             throw new ZLinkConfigurationException(
                 "The source MeshNode does not support canonical relocation commands.");
+        //  The Coordinator fence (owner/lease/node/StoreVersion) is a single
+        //  pre-precommit value shared by the durable ZLJR recovery record
+        //  (sessionRelocationContext above) and this command-40 Prepare —
+        //  never the post-BeginPreparing/post-Capture precommitSnapshot,
+        //  whose StoreVersion has already moved past what ZLJR carries. The
+        //  cpp reference source builds exactly one `coordinator` from the
+        //  pre-precommit authority snapshot and reuses it for both wire
+        //  messages (mesh_node_runtime.cpp's relocate_application_actor).
+        //  ObjectGeneration/AuthorityOwnerGeneration/OwnerId/LeaseGeneration
+        //  are unaffected by this swap: BeginPreparingAsync/CaptureAsync
+        //  preserve them (ZLinkAuthorityGenerationTransition.Preserve) and
+        //  only rotate Payload/StoreVersion.
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
-            precommitSnapshot,
+            currentAuthority.Snapshot,
             sourceAuthority,
             targetDescriptor,
             initialEnvelope,
