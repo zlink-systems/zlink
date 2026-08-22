@@ -51,6 +51,17 @@ const (
 	SubmitRetryLocalFailure SubmitRetryMode = 1
 )
 
+// ReceiveFlowState is the paired DEALER/ROUTER completion-lane receive-flow
+// state (core-byte-hwm-flow-control-plan.ko.md §5). It mirrors
+// zlink_receive_flow_state_t and is an absolute socket-wide state, not a
+// counter: setting the current value again succeeds as a no-op.
+type ReceiveFlowState int32
+
+const (
+	ReceiveFlowRunning ReceiveFlowState = 0
+	ReceiveFlowPaused  ReceiveFlowState = 1
+)
+
 type recvCallback func(*Received)
 type sendReadyCallback func()
 
@@ -404,6 +415,10 @@ func (s *StreamSocket) SetIPv6(value bool) error {
 
 func (s *StreamSocket) LastEndpoint() (string, error) {
 	return s.core.LastEndpoint()
+}
+
+func (s *StreamSocket) SetReceiveFlowState(value ReceiveFlowState) error {
+	return s.core.SetReceiveFlowState(value)
 }
 
 func (s *StreamSocket) SetTLSServer(certPath string, keyPath string, requireClientCert bool) error {

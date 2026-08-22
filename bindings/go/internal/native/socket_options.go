@@ -237,3 +237,11 @@ func (o *CommonSocketOptions) SubmitRetryAttempts() (int, error) {
 func (o *CommonSocketOptions) LastEndpoint() (string, error) {
 	return o.socket.LastEndpoint()
 }
+
+// SetReceiveFlowState sets this socket's local receive-flow state
+// (core-byte-hwm-flow-control-plan.ko.md §5). Only DEALER and ROUTER sockets
+// support this; every other socket type reports ConfigNotSupported.
+// Repeating the current state succeeds as a no-op.
+func (o *CommonSocketOptions) SetReceiveFlowState(value ReceiveFlowState) error {
+	return o.socket.SetReceiveFlowState(value)
+}

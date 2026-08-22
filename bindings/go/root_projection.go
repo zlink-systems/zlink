@@ -44,6 +44,7 @@ type (
 	SocketType          = impl.SocketType
 	RidDuplicatePolicy  = impl.RidDuplicatePolicy
 	SubmitRetryMode     = impl.SubmitRetryMode
+	ReceiveFlowState    = impl.ReceiveFlowState
 	CommonSocketOptions = impl.CommonSocketOptions
 	PubSocketOptions    = impl.PubSocketOptions
 	PairSocket          = impl.PairSocket
@@ -146,6 +147,8 @@ const (
 	RidDuplicateHandover    = impl.RidDuplicateHandover
 	SubmitRetryOff          = impl.SubmitRetryOff
 	SubmitRetryLocalFailure = impl.SubmitRetryLocalFailure
+	ReceiveFlowRunning      = impl.ReceiveFlowRunning
+	ReceiveFlowPaused       = impl.ReceiveFlowPaused
 	SendFlagsNone           = impl.SendFlagsNone
 	SendFlagsDontWait       = impl.SendFlagsDontWait
 	RecvFlagsNone           = impl.RecvFlagsNone

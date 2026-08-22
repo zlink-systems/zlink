@@ -93,6 +93,16 @@ func (s *connectionSocket) SubmitRetryAttempts() (int, error) {
 	return int(value), err
 }
 
+// SetReceiveFlowState sets this socket's local receive-flow state
+// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING/PAUSED is an absolute
+// state, not a counter: repeating the current state succeeds as a no-op.
+// Only DEALER and ROUTER sockets support this; every other socket type
+// reports ConfigNotSupported and keeps its existing byte HWM and transport
+// backpressure unchanged.
+func (s *connectionSocket) SetReceiveFlowState(value ReceiveFlowState) error {
+	return setNativeReceiveFlowState(s.raw(), s.socketCore.isClosed(), value)
+}
+
 func (s *connectionSocket) CommonOptions() *CommonSocketOptions {
 	return &CommonSocketOptions{socket: s}
 }

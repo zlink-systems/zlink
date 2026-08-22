@@ -174,7 +174,7 @@ func TestCoreEventFlagValuesRemainComplete(t *testing.T) {
 		{"handshake failed protocol", MonitorEventHandshakeFailedProtocol, 1 << 13},
 		{"handshake failed auth", MonitorEventHandshakeFailedAuth, 1 << 14},
 		{"peer weight changed", MonitorEventPeerWeightChanged, 1 << 15},
-		{"all", MonitorEventAll, 0xFFFF},
+		{"all", MonitorEventAll, 0x7FFFF},
 	}
 	for _, tc := range monitorMasks {
 		if tc.got != tc.want {

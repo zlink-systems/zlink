@@ -11,6 +11,8 @@ type (
 	RidDuplicatePolicy = impl.RidDuplicatePolicy
 	// SubmitRetryMode determines whether a failed submit is retried.
 	SubmitRetryMode = impl.SubmitRetryMode
+	// ReceiveFlowState is the paired DEALER/ROUTER completion-lane receive-flow state.
+	ReceiveFlowState = impl.ReceiveFlowState
 	// CommonSocketOptions is the typed facade over the socket options shared by every socket type.
 	CommonSocketOptions = impl.CommonSocketOptions
 	// PubSocketOptions is the typed facade over PUB/XPUB-specific socket options.
@@ -80,4 +82,8 @@ const (
 	RecvFlagsNone = impl.RecvFlagsNone
 	// RecvFlagsDontWait does not block; returns immediately when no message is available.
 	RecvFlagsDontWait = impl.RecvFlagsDontWait
+	// ReceiveFlowRunning is the default receive-flow state: the completion lane accepts data normally.
+	ReceiveFlowRunning = impl.ReceiveFlowRunning
+	// ReceiveFlowPaused pauses the completion lane's remote peer without touching byte HWM or transport backpressure.
+	ReceiveFlowPaused = impl.ReceiveFlowPaused
 )

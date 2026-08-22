@@ -72,8 +72,8 @@ func TestMonitorRecv(t *testing.T) {
 	}
 	_ = snapshot.AutoHwmProfile
 	_ = snapshot.AutoHwmPolicyClass
-	if snapshot.ABIVersion != 3 {
-		t.Fatalf("Status ABI = %d, want 3", snapshot.ABIVersion)
+	if snapshot.ABIVersion != 4 {
+		t.Fatalf("Status ABI = %d, want 4", snapshot.ABIVersion)
 	}
 	_ = snapshot.SndPendingBytes
 	_ = snapshot.RcvPendingBytes

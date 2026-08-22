@@ -33,6 +33,13 @@ func setNativeDurationOption(raw unsafe.Pointer, closed bool, option C.zlink_opt
 	return setNativeIntOption(raw, closed, option, ms)
 }
 
+func setNativeReceiveFlowState(raw unsafe.Pointer, closed bool, value ReceiveFlowState) error {
+	if raw == nil || closed {
+		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	return configErrorFromResult(ConfigResult(C.zlink_socket_set_receive_flow_state(raw, C.zlink_receive_flow_state_t(value))))
+}
+
 func setNativePubBoolOption(raw unsafe.Pointer, closed bool, option C.zlink_pub_option_t, value bool) error {
 	if raw == nil || closed {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
