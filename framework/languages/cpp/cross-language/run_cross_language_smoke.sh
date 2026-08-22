@@ -1896,6 +1896,20 @@ run_spot_route_stages
 # default gate.  Run it explicitly so its result is reported alongside the
 # other default smoke stages rather than being silently omitted.
 stage_dotnet_source_java_target_relocation
+# User-Spot Join 12-cell source -> target matrix. The multiattempt observation
+# remains an explicit selector and is intentionally not part of the default gate.
+stage_node_source_dotnet_target_user_spot_join
+stage_dotnet_source_node_target_user_spot_join
+stage_node_source_java_target_user_spot_join
+stage_java_source_dotnet_target_user_spot_join
+stage_node_source_cpp_target_user_spot_join
+stage_cpp_source_dotnet_target_user_spot_join
+stage_dotnet_source_java_target_user_spot_join
+stage_java_source_node_target_user_spot_join
+stage_dotnet_source_cpp_target_user_spot_join
+stage_cpp_source_node_target_user_spot_join
+stage_java_source_cpp_target_user_spot_join
+stage_cpp_source_java_target_user_spot_join
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"
