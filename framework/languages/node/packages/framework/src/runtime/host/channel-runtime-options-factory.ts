@@ -5,6 +5,10 @@ import {
   ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET
 } from '../actors';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type { ZLinkChannelRuntimeManagerOptions } from '../channels';
 import type { ZLinkMonitoringBackendAdapter } from '../backend';
 import type { DefaultZLinkSpotManager } from '../spots';
@@ -46,7 +50,17 @@ export class ZLinkChannelRuntimeOptionsFactory {
     return new Map([
       [ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET, {
         handle: async (payload) => {
-          await this.options.boundSessionRelay.boundSessions.receiveRemoteBoundSessionSend(payload);
+          const { ok } = await this.options.boundSessionRelay.boundSessions
+            .receiveRemoteBoundSessionSend(payload);
+          if (!ok) {
+            // A rejected relocation-fenced outbound must not read as a
+            // completed flow: surface it so the dispatch pipeline records
+            // an error terminal instead of silently dropping the notify.
+            throw createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.RelocationFailed,
+              `Bound-session send for '${ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET}' was rejected by the Session binding registry.`
+            );
+          }
         }
       }],
       [ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET, {

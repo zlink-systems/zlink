@@ -68,6 +68,7 @@ export function mergeRemoteBoundSessionTarget(
       !routingIdsEqual(fallback.spotId, target.spotId)
       && !sameRemoteSessionOwner(fallback, target)
     )
+    || isSuccessorSessionBinding(fallback, target)
   ) {
     return target;
   }
@@ -86,6 +87,39 @@ export function mergeRemoteBoundSessionTarget(
       target.serviceWireRelocation ?? fallback.serviceWireRelocation
   };
   return merged;
+}
+
+/**
+ * Spec 48 §125: reconnection creates a new Session; the previous Session's
+ * binding — and its staged relocation fence — is never inherited by a
+ * successor. A Core bind refresh only omits routing coordinates it did not
+ * recompute, so an explicit Session identity on both sides that disagrees
+ * marks the refresh as belonging to a different Session binding, not a
+ * same-Session coordinate/generation-only refresh (a bindingGeneration bump
+ * with the same sessionNodeRid/sessionRid is a legitimate same-Session
+ * refresh and must keep the fence — see the transfer-target generation test
+ * below).
+ *
+ * NOTE: this identity check is a no-op on the path exercised by
+ * `remoteBoundSessionTargetForSource` (mesh-router-resolver.ts), which never
+ * populates sessionNodeRid/sessionRid on the refresh it emits. Confirmed via
+ * TTT reproduction (2026-08-22, run-dir preserved) that a rejected successor
+ * bound-session send still occurs through that path after this change; see
+ * session report for the STOP writeup.
+ */
+function isSuccessorSessionBinding(
+  fallback: ZLinkRemoteBoundSessionTarget,
+  target: ZLinkRemoteBoundSessionTarget
+): boolean {
+  return (
+    fallback.sessionNodeRid !== undefined
+    && target.sessionNodeRid !== undefined
+    && !routingIdsEqual(fallback.sessionNodeRid, target.sessionNodeRid)
+  ) || (
+    fallback.sessionRid !== undefined
+    && target.sessionRid !== undefined
+    && !routingIdsEqual(fallback.sessionRid, target.sessionRid)
+  );
 }
 
 function sameRemoteSessionOwner(

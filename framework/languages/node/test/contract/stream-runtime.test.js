@@ -5237,6 +5237,55 @@ test('Session binding refresh preserves the staged relocation fence for the same
   assert.equal(String(state.boundSessionTransferTarget.spotId), 'refreshed-session-entry');
 });
 
+test('Session binding refresh does not preserve the staged relocation fence when the Session identity changes (successor binding)', () => {
+  const state = new framework.ZLinkActorRuntimeState('actor-session-successor-refresh');
+  state.setBoundSessionTransferTarget({
+    routerChannelId: 'room.route',
+    targetNodeRid: zlink.RoutingId.from('session-node'),
+    spotId: zlink.RoutingId.from('session-entry'),
+    sessionNodeRid: zlink.RoutingId.from('session-node'),
+    sessionRid: zlink.RoutingId.fromHex('00000001'),
+    bindingGeneration: 7n,
+    relocationSealId: 'seal-predecessor',
+    serviceWireRelocation: {
+      relocation: { high: 1n, low: 2n },
+      coordinator: {
+        ownerId: 'owner-a',
+        leaseGeneration: 3n,
+        nodeRid: 'actor-node',
+        nodeGeneration: 4n,
+        expectedAuthorityStoreVersion: '5'
+      },
+      session: {
+        sessionOwnerNodeRid: 'session-node',
+        sessionOwnerNodeGeneration: 6n,
+        sessionOwnerId: 'session-owner',
+        sessionOwnerLeaseGeneration: 7n,
+        sessionRid: '00000001',
+        bindingGeneration: 7n
+      }
+    }
+  });
+
+  // A successor Session binding for the same actor carries a different,
+  // explicit sessionRid (spec 48 §125: reconnection creates a new Session
+  // that never inherits the previous Session's binding). The previously
+  // staged relocation fence must not carry forward onto it.
+  state.setBoundSessionTransferTarget({
+    routerChannelId: 'room.route',
+    targetNodeRid: zlink.RoutingId.from('session-node'),
+    spotId: zlink.RoutingId.from('session-entry'),
+    sessionNodeRid: zlink.RoutingId.from('session-node'),
+    sessionRid: zlink.RoutingId.fromHex('00000002'),
+    bindingGeneration: 9n
+  });
+
+  assert.equal(state.boundSessionTransferTarget.relocationSealId, undefined);
+  assert.equal(state.boundSessionTransferTarget.serviceWireRelocation, undefined);
+  assert.equal(state.boundSessionTransferTarget.bindingGeneration, 9n);
+  assert.equal(state.boundSessionTransferTarget.sessionRid.toHex(), '00000002');
+});
+
 test('target Actor materialization preserves only an exact bound-session relocation fence', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-reentry');
   state.setRemoteActorPacketTarget({
