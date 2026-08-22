@@ -286,7 +286,11 @@ export class ZLinkActorSessionBindingRegistry<
       actorId,
       new Error(`Actor '${actorId}' session binding was removed while accepted frames were active.`)
     );
-    this.clearRelocation(actorId, new Error(`Actor '${actorId}' session binding was removed.`));
+    this.clearRouteRelocation(
+      actorId,
+      route,
+      new Error(`Actor '${actorId}' session binding was removed.`)
+    );
   }
 
   unbindActor(actorId: string): void {
@@ -860,6 +864,14 @@ export class ZLinkActorSessionBindingRegistry<
     this.rememberTerminalRelocation(state);
   }
 
+  /**
+   * Actor-wide relocation teardown: every seal (active and terminal-retained)
+   * and every held outbound entry for `actorId` is discarded unconditionally.
+   * Reserved for paths where the Actor itself is gone or being torn down
+   * (destroy, ownership clear, relocation-seal expiry/failure) — never for a
+   * single physical route's disconnect, which must not disturb a relocation
+   * seal it does not own (see `clearRouteRelocation`).
+   */
   clearRelocation(actorId: string, error: unknown): void {
     const queue = this.relocations.get(actorId);
     if (queue === undefined) return;
@@ -869,6 +881,48 @@ export class ZLinkActorSessionBindingRegistry<
       this.terminalRelocations.delete(state);
       if (state.phase !== 'terminal') state.resolveTerminal();
     }
+  }
+
+  /**
+   * Spec 48 §137: a relocation seal's lifecycle is independent of any single
+   * physical route's binding. Unbinding one physical route (a disconnect)
+   * must retire only the still-open (nonterminal) relocation seal that this
+   * exact route's Session owns, and the outbound held against that seal — it
+   * must never reach into a seal that has already reached 'terminal' (its
+   * bounded retention exists precisely so a late same-seal relay can still
+   * pass on a successor route) nor into a different Session's active seal
+   * (a concurrent successor that already re-sealed before this stale route
+   * noticed the disconnect).
+   */
+  private clearRouteRelocation(
+    actorId: string,
+    route: ZLinkActorSessionRoute<TContext, TActor>,
+    error: unknown
+  ): void {
+    const queue = this.relocations.get(actorId);
+    if (queue === undefined) return;
+    const activeSealId = queue.activeSealId;
+    const activeState = activeSealId === undefined ? undefined : queue.seals.get(activeSealId);
+    const ownsActiveSeal = activeState !== undefined
+      && activeState.phase !== 'terminal'
+      && activeState.sessionIdentity === route.sessionIdentity;
+    if (!ownsActiveSeal) {
+      // Nothing this exact route still holds open — leave terminal
+      // retention and any other Session's active seal untouched.
+      this.deleteEmptyRelocationQueue(queue);
+      return;
+    }
+    for (let index = queue.outbound.length - 1; index >= 0; index--) {
+      const entry = queue.outbound[index]!;
+      if (entry.sealId !== activeSealId) continue;
+      queue.outbound.splice(index, 1);
+      this.failOutbound(queue, entry, error);
+    }
+    queue.activeSealId = undefined;
+    queue.seals.delete(activeSealId!);
+    this.terminalRelocations.delete(activeState);
+    activeState.resolveTerminal();
+    this.deleteEmptyRelocationQueue(queue);
   }
 
   abortSeal(actorId: string, sealId: string): boolean {
