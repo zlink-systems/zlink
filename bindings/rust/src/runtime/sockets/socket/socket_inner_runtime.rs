@@ -540,6 +540,16 @@ impl crate::internal::SocketStorage {
         Ok(RoutingId::from_raw(unsafe { raw.assume_init() }))
     }
 
+    /// Sets this socket's local receive-flow state and synchronises it to the
+    /// paired DEALER/ROUTER completion lane. `value` is the C ABI discriminant
+    /// (0 = RUNNING, 1 = PAUSED; see `ReceiveFlowState`). Repeating the
+    /// current state succeeds as a no-op. Core reports
+    /// `ZLINK_CONFIG_NOT_SUPPORTED` for any socket type other than
+    /// DEALER/ROUTER.
+    pub(crate) fn set_receive_flow_state(&self, value: i32) -> Result<(), ConfigError> {
+        check_config_rc(unsafe { ffi::zlink_socket_set_receive_flow_state(self.handle, value) })
+    }
+
     pub(crate) fn last_endpoint(&self) -> Result<String, ConfigError> {
         let mut buf = [0u8; 256];
         let mut len = buf.len();

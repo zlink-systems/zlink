@@ -176,6 +176,18 @@ typedef enum zlink_stream_option_t
     ZLINK_STREAM_OPT_NOTIFY = 0x3501
 } zlink_stream_option_t;
 
+/*
+ * Receive-flow state for the paired DEALER/ROUTER completion lane
+ * (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
+ * absolute socket-wide state, not a counter: repeating the current value is
+ * a successful no-op.
+ */
+typedef enum zlink_receive_flow_state_t
+{
+    ZLINK_RECEIVE_FLOW_RUNNING = 0,
+    ZLINK_RECEIVE_FLOW_PAUSED = 1
+} zlink_receive_flow_state_t;
+
 typedef enum zlink_disconnect_reason_t
 {
     ZLINK_DISCONNECT_REASON_UNKNOWN = 0,
@@ -224,7 +236,14 @@ typedef enum zlink_socket_monitor_event_e
     ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL = 1u << 13,
     ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH = 1u << 14,
     ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED = 1u << 15,
-    ZLINK_SOCKET_MONITOR_EVENT_ALL = 0xFFFFu,
+    //  Paired DEALER/ROUTER completion-lane receive-flow observation
+    //  (core-byte-hwm-flow-control-plan.ko.md §6). No event fires for a
+    //  normal data frame; these fire only on a PAUSED<->RUNNING transition or
+    //  a rejected stale/duplicate flow frame.
+    ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED = 1u << 16,
+    ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED = 1u << 17,
+    ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE = 1u << 18,
+    ZLINK_SOCKET_MONITOR_EVENT_ALL = 0x7FFFFu,
 
     ZLINK_EVENT_CONNECTED = ZLINK_SOCKET_MONITOR_EVENT_CONNECTED,
     ZLINK_EVENT_CONNECT_DELAYED = ZLINK_SOCKET_MONITOR_EVENT_CONNECT_DELAYED,
@@ -242,6 +261,9 @@ typedef enum zlink_socket_monitor_event_e
     ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL = ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL,
     ZLINK_EVENT_HANDSHAKE_FAILED_AUTH = ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH,
     ZLINK_EVENT_PEER_WEIGHT_CHANGED = ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED,
+    ZLINK_EVENT_SEND_FLOW_PAUSED = ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED,
+    ZLINK_EVENT_SEND_FLOW_RESUMED = ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED,
+    ZLINK_EVENT_FLOW_STATE_STALE = ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE,
     ZLINK_EVENT_ALL = ZLINK_SOCKET_MONITOR_EVENT_ALL
 } zlink_socket_monitor_event_e;
 
@@ -260,7 +282,10 @@ typedef enum zlink_monitor_status_detail_flag_e
     ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS = 1u << 1,
     ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS = 1u << 2,
     ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET = 1u << 3,
-    ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4
+    ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4,
+    /* Set when flow_paused_connections and the other flow_* fields are
+     * populated (ABI 4+, paired DEALER/ROUTER sockets only). */
+    ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE = 1u << 5
 } zlink_monitor_status_detail_flag_e;
 
 typedef enum zlink_poller_source_kind_t

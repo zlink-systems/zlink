@@ -40,6 +40,17 @@ pub enum zlink_routed_send_ready_state_t {
     ZLINK_ROUTED_SEND_TERMINAL = 2,
 }
 
+/// Receive-flow state for the paired DEALER/ROUTER completion lane
+/// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
+/// absolute socket-wide state, not a counter; see
+/// `core/include/zlink_enum.h`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum zlink_receive_flow_state_t {
+    ZLINK_RECEIVE_FLOW_RUNNING = 0,
+    ZLINK_RECEIVE_FLOW_PAUSED = 1,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct zlink_routed_send_ready_event_t {
@@ -576,6 +587,12 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn zlink_set_routing_id(handle: *mut c_void, data: *const c_void, size: usize) -> c_int;
     pub fn zlink_get_routing_id(handle: *mut c_void, out: *mut zlink_routing_id_t) -> c_int;
+    // `state` is passed as a plain `c_int`, not `zlink_receive_flow_state_t`,
+    // so that a deliberately out-of-range value (used only to exercise
+    // Core's ZLINK_CONFIG_INVALID_ARGUMENT path) never has to be materialized
+    // as an invalid Rust enum discriminant, which would be undefined
+    // behavior even though it is a valid C int on the wire.
+    pub fn zlink_socket_set_receive_flow_state(handle: *mut c_void, state: c_int) -> c_int;
     pub fn zlink_set_tls_server(
         handle: *mut c_void,
         cert: *const c_char,

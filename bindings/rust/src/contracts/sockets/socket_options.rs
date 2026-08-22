@@ -68,6 +68,18 @@ pub enum SubmitRetryMode {
     LocalFailure = 1,
 }
 
+/// Receive-flow state for the paired DEALER/ROUTER completion lane
+/// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
+/// absolute socket-wide state, not a counter: repeating the current state
+/// succeeds as a no-op. Values match the C ABI (`zlink_receive_flow_state_t`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ReceiveFlowState {
+    /// The socket accepts data normally.
+    Running = 0,
+    /// The socket has signalled its paired peer to stop sending data.
+    Paused = 1,
+}
+
 /// Typed facade over the socket options shared by every socket type.
 pub struct CommonSocketOptions<'a> {
     inner: &'a SocketStorage,
@@ -142,6 +154,17 @@ impl<'a> CommonSocketOptions<'a> {
         } else {
             RidDuplicatePolicy::Reject
         })
+    }
+    /// Sets this socket's local receive-flow state and synchronises it to the
+    /// peer's paired DEALER/ROUTER completion lane
+    /// (core-byte-hwm-flow-control-plan.ko.md §5). Repeating the current
+    /// state succeeds as a no-op. Returns
+    /// [`ConfigResult::NotSupported`](crate::ConfigResult::NotSupported) for
+    /// any socket type other than DEALER/ROUTER, which has no completion
+    /// lane; the socket's existing byte HWM and transport back-pressure are
+    /// left unchanged in that case.
+    pub fn set_receive_flow_state(&self, value: ReceiveFlowState) -> Result<(), ConfigError> {
+        self.inner.set_receive_flow_state(value as i32)
     }
     /// Sets the time limit for a single connection attempt.
     pub fn set_connect_timeout(&self, d: Duration) -> Result<(), ConfigError> {

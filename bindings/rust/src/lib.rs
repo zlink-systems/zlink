@@ -93,8 +93,9 @@ pub use error::{
     SubmitError, ZlinkError,
 };
 pub use flags::{
-    CommonSocketOptions, DealerSocketOptions, PubSocketOptions, RecvFlags, RidDuplicatePolicy,
-    RouterSocketOptions, SendFlags, StreamSocketOptions, SubSocketOptions, SubmitRetryMode,
+    CommonSocketOptions, DealerSocketOptions, PubSocketOptions, ReceiveFlowState, RecvFlags,
+    RidDuplicatePolicy, RouterSocketOptions, SendFlags, StreamSocketOptions, SubSocketOptions,
+    SubmitRetryMode,
 };
 pub use message::Message;
 pub use message_socket_contracts::{DealerSocket, PairSocket};
