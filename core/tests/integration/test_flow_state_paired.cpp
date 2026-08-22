@@ -501,6 +501,49 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+//  Review finding 1. attach_pipe replays the pair's stored state to the
+//  application pipe, and a newer epoch can be accepted between the snapshot and
+//  the queueing. The stale replay must not overwrite the newer state: without
+//  an epoch on the pipe command the pipe stays PAUSED forever while the socket
+//  record says RUNNING, and every later RUNNING frame is deduplicated away.
+void test_stale_flow_state_command_cannot_override_a_newer_epoch ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    //  Epoch 1 PAUSED, then epoch 2 RUNNING: the state the socket accepted.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 1));
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 0, 2));
+    //  The attach replay carrying the older epoch 1 PAUSED arrives last.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->test_deliver_flow_state_command (fixture.pair_id,
+                                           fixture.pair_generation, 1, 1));
+
+    //  Drain every queued command before judging. Polling for the expected
+    //  value would otherwise stop on the transient RUNNING that sits between
+    //  the second and the third command.
+    for (int i = 0; i < 300; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+
+    TEST_ASSERT_FALSE (as_socket (fixture.dealer)->remote_receive_flow_paused (
+      fixture.pair_id, fixture.pair_generation));
+    TEST_ASSERT_FALSE (
+      as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+        fixture.pair_id, fixture.pair_generation));
+    TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 2000));
+
+    fixture.teardown ();
+}
+
 //  No application receive path ever returns a flow-state frame.
 void test_no_application_recv_returns_a_flow_frame ()
 {
@@ -557,6 +600,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_stale_flow_state_command_cannot_override_a_newer_epoch);
     RUN_TEST (test_no_application_recv_returns_a_flow_frame);
     return UNITY_END ();
 }

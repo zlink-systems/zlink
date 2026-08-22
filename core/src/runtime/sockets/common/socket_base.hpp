@@ -230,6 +230,26 @@ class socket_base_t : public own_t,
     //  could be applied; the caller must then not pass it anywhere else.
     bool consume_receive_flow_state_frame (pipe_t *completion_pipe_,
                                            const zlink::msg_t &msg_);
+
+#ifdef ZLINK_BUILD_TESTS
+    //  Test-only observation and injection for the completion-lane flow state.
+    //  These compile out of the shipped runtime, so nothing here is reachable
+    //  from a hot path.
+    zlink::pipe_t *test_pair_pipe (uint64_t transport_pair_id_,
+                                   uint64_t transport_pair_generation_,
+                                   bool completion_lane_) const;
+    //  Reads the pipe's send-blocker causes without evaluating - and therefore
+    //  without mutating - any of them.
+    bool test_application_pipe_flow_probe (
+      uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+      bool *out_active_, bool *hwm_full_, bool *remote_paused_) const;
+    //  Queues one flow-state pipe command with a caller-chosen epoch, which is
+    //  how a stale replay and a newer acceptance can be ordered on purpose.
+    bool test_deliver_flow_state_command (uint64_t transport_pair_id_,
+                                          uint64_t transport_pair_generation_,
+                                          unsigned char state_,
+                                          uint64_t epoch_);
+#endif
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();

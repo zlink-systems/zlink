@@ -206,6 +206,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  multipart message is already started applies from the next message, so
     //  the started message keeps its existing atomicity.
     bool remote_flow_paused () const;
+#ifdef ZLINK_BUILD_TESTS
+    //  Test-only: reports the send-blocker causes without evaluating any of
+    //  them, so observing the pipe cannot change it.
+    void test_flow_probe (bool *out_active_,
+                          bool *hwm_full_,
+                          bool *remote_paused_) const;
+#endif
     //  Consumes the remote-pause wake marker, mirroring the HWM-credit marker
     //  so a resume publishes exactly one routed send-ready edge.
     bool take_flow_resume_recovery ();
@@ -315,7 +322,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     typedef ypipe_base_t<msg_t> upipe_t;
 
     //  Command handlers.
-    void process_flow_state (unsigned char state_) ZLINK_OVERRIDE;
+    void process_flow_state (unsigned char state_,
+                             uint64_t epoch_) ZLINK_OVERRIDE;
     void process_activate_read () ZLINK_OVERRIDE;
     void process_activate_write (uint64_t generation_,
                                  uint64_t msgs_read_,
@@ -410,6 +418,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Remote receive-flow state applied on this pipe's own thread. Guarded by
     //  _out_sync, exactly like _transport_pair_write_held.
     bool _remote_flow_paused;
+    //  Epoch of the last applied remote state. A command that does not advance
+    //  it is a stale replay: the attach-time replay and a freshly accepted
+    //  frame can be queued in either order.
+    uint64_t _remote_flow_epoch;
     std::atomic<bool> _waiting_for_byte_credit;
     mutable std::atomic<bool> _waiting_for_flow_resume;
 

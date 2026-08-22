@@ -112,6 +112,10 @@ struct command_t
         //  value is simply idempotent.
         struct
         {
+            //  Ordering tag of the state, not a count. A command whose epoch
+            //  does not advance is a stale replay and is ignored, which is what
+            //  keeps an attach-time replay from overwriting a newer state.
+            uint64_t epoch;
             unsigned char state;
         } flow_state;
 

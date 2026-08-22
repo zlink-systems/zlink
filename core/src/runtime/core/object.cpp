@@ -81,7 +81,8 @@ void zlink::object_t::process_command (const command_t &cmd_)
             break;
 
         case command_t::flow_state:
-            process_flow_state (cmd_.args.flow_state.state);
+            process_flow_state (cmd_.args.flow_state.state,
+                                cmd_.args.flow_state.epoch);
             break;
 
         case command_t::routed_send_ready:
@@ -317,11 +318,13 @@ void zlink::object_t::send_activate_write (pipe_t *destination_,
 }
 
 void zlink::object_t::send_flow_state (pipe_t *destination_,
-                                       unsigned char state_)
+                                       unsigned char state_,
+                                       uint64_t epoch_)
 {
     command_t cmd;
     cmd.type = command_t::flow_state;
     cmd.args.flow_state.state = state_;
+    cmd.args.flow_state.epoch = epoch_;
     //  Never dispatched inline: the frame that carries the state is decoded on
     //  a transport I/O thread, while the pipe's write state belongs to the
     //  socket thread. The mailbox also keeps consecutive states ordered.
@@ -486,7 +489,7 @@ void zlink::object_t::process_retained_credit (uint64_t, uint64_t, uint64_t)
     zlink_assert (false);
 }
 
-void zlink::object_t::process_flow_state (unsigned char)
+void zlink::object_t::process_flow_state (unsigned char, uint64_t)
 {
     zlink_assert (false);
 }

@@ -144,6 +144,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *pair_application = NULL;
     bool pending_remote_flow_seen = false;
     bool pending_remote_flow_paused = false;
+    uint64_t pending_remote_flow_epoch = 0;
     //  A rejected pair is torn down after the table is unlocked: terminate()
     //  reaches other objects and must not run under this mutex.
     pipe_t *reject_pipes[3] = {NULL, NULL, NULL};
@@ -190,6 +191,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             //  exists; process_flow_state is idempotent.
             pending_remote_flow_seen = pair.remote_flow_seen;
             pending_remote_flow_paused = pair.remote_flow_paused;
+            pending_remote_flow_epoch = pair.remote_flow_epoch;
         }
         //  reject_pipes[1] and [2] were read out of the table, and the table
         //  slot is the only thing that keeps them alive: the sibling lane's
@@ -244,11 +246,15 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     //  keeps sending into a socket that is still PAUSED.
     if (ready_completion)
         sync_local_receive_flow_state_to_pair (ready_completion);
+    //  The snapshot above can already be stale: a newer epoch may have been
+    //  accepted on a transport I/O thread while this admission ran. The epoch
+    //  travels with the command so the pipe discards whichever replay lost.
     if (pending_remote_flow_seen && pair_application)
         send_flow_state (pair_application,
                          pending_remote_flow_paused
                            ? static_cast<unsigned char> (1)
-                           : static_cast<unsigned char> (0));
+                           : static_cast<unsigned char> (0),
+                         pending_remote_flow_epoch);
     const bool transport_write_released =
       ready_application
       && ready_application->release_writes_for_transport_pair ();

@@ -198,6 +198,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _out_active (true),
     _transport_pair_write_held (false),
     _remote_flow_paused (false),
+    _remote_flow_epoch (0),
     _waiting_for_byte_credit (false),
     _waiting_for_flow_resume (false),
     _hwm (outhwm_),
@@ -1192,17 +1193,39 @@ bool zlink::pipe_t::remote_flow_paused () const
     return _remote_flow_paused;
 }
 
+#ifdef ZLINK_BUILD_TESTS
+void zlink::pipe_t::test_flow_probe (bool *out_active_,
+                                     bool *hwm_full_,
+                                     bool *remote_paused_) const
+{
+    scoped_fast_lock_t lock (_out_sync);
+    if (out_active_)
+        *out_active_ = _out_active;
+    if (hwm_full_)
+        *hwm_full_ = !check_hwm_unlocked ();
+    if (remote_paused_)
+        *remote_paused_ = _remote_flow_paused;
+}
+#endif
+
 bool zlink::pipe_t::take_flow_resume_recovery ()
 {
     return _waiting_for_flow_resume.exchange (false, std::memory_order_acq_rel);
 }
 
-void zlink::pipe_t::process_flow_state (unsigned char state_)
+void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
 {
     const bool paused = state_ != 0;
     bool notify = false;
     {
         scoped_fast_lock_t lock (_out_sync);
+        //  A replay whose epoch does not advance is stale. Without this an
+        //  attach-time replay queued after a newer acceptance would reinstate
+        //  the older state, and the socket record - which already holds the
+        //  newer one - would deduplicate every correction away.
+        if (epoch_ != 0 && epoch_ <= _remote_flow_epoch)
+            return;
+        _remote_flow_epoch = epoch_;
         if (_remote_flow_paused == paused)
             return;
         _remote_flow_paused = paused;

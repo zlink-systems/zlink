@@ -216,8 +216,49 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
     if (application) {
         send_flow_state (application,
                          paused ? static_cast<unsigned char> (1)
-                                : static_cast<unsigned char> (0));
+                                : static_cast<unsigned char> (0),
+                         frame.epoch);
         application->release_lifetime_ref ();
     }
     return true;
 }
+
+#ifdef ZLINK_BUILD_TESTS
+zlink::pipe_t *zlink::socket_base_t::test_pair_pipe (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  bool completion_lane_) const
+{
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::const_iterator it = _transport_pairs.find (
+      transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
+    if (it == _transport_pairs.end ())
+        return NULL;
+    return completion_lane_ ? it->second.completion : it->second.application;
+}
+
+bool zlink::socket_base_t::test_application_pipe_flow_probe (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  bool *out_active_, bool *hwm_full_, bool *remote_paused_) const
+{
+    pipe_t *application =
+      test_pair_pipe (transport_pair_id_, transport_pair_generation_, false);
+    if (!application || !application->retain_lifetime_ref ())
+        return false;
+    application->test_flow_probe (out_active_, hwm_full_, remote_paused_);
+    application->release_lifetime_ref ();
+    return true;
+}
+
+bool zlink::socket_base_t::test_deliver_flow_state_command (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  unsigned char state_, uint64_t epoch_)
+{
+    pipe_t *application =
+      test_pair_pipe (transport_pair_id_, transport_pair_generation_, false);
+    if (!application || !application->retain_lifetime_ref ())
+        return false;
+    send_flow_state (application, state_, epoch_);
+    application->release_lifetime_ref ();
+    return true;
+}
+#endif
