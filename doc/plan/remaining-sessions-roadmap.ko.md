@@ -451,7 +451,12 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     된 후 재작성**(e2e-only 트리거·계약 완화 기각). 제작된 ZMP chunk-corruption 프록시 seam
     (SpotActorTransfer/Support/relocation_chunk_conflict_proxy.py, 미배선)은 그때 사용. SF-F7 주석
     모순은 1런 판정법 기록됨.
-  - **[ ] [신규 등재] Node TTT 모드 C 정적 진단 완료(2026-08-22, 실증 대기)**: 재접속 세션
+  - **[~] [갱신] Node TTT 모드 C — 정적 가설 실증 기각(2026-08-22)**: 실패 run서 보류 notify·
+    seal waiter 0, JoinGameNotify 미생성 — re-home 수정 부당(구현 전 실증 원칙 유효 실증). 실제
+    실패: 최초 join 42 seal 후 **44/route publication 미도착 → 3s 만료 → unbind**('Bound
+    session transport is not started', control handler dispatch_error·staleDescriptor 거부 관찰)
+    — 후속 진단(sol) 진행 중. 이하 기각된 정적 진단 기록:
+  - **[기각된 정적 가설] Node TTT 모드 C 정적 진단(2026-08-22)**: 재접속 세션
     JoinGameNotify 미전달의 유력 기전 — relocation seal 창에서 push()가 fire-and-forget 보류 경로
     (bound-actor-relay-sender.ts:79-98)로 들어간 뒤, 브라우저 물리 재접속이
     `notifyPhysicalDisconnect→unbind→clearRelocation`(actor-session-binding-registry.ts:274-290,
