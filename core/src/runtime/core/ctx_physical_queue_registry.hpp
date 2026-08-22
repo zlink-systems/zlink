@@ -207,16 +207,10 @@ class ctx_physical_queue_registry_t
     std::map<uint64_t, physical_queue_handle_t> _directions;
     uint64_t _next_queue_id;
     uint64_t _application_reserved_minimum_bytes;
-    std::atomic<uint64_t> _application_current_accounted_bytes;
-    std::atomic<uint64_t> _application_provisional_accounted_bytes;
     mutable std::atomic<uint64_t> _application_peak_accounted_bytes;
-    std::atomic<uint64_t> _completion_current_accounted_bytes;
     mutable std::atomic<uint64_t> _completion_peak_accounted_bytes;
-    std::atomic<uint64_t> _completion_pending_message_count;
-    std::atomic<uint64_t> _monitor_current_accounted_bytes;
     std::atomic<uint64_t> _application_lease_accounted_bytes;
     std::atomic<uint64_t> _outstanding_application_lease_count;
-    std::atomic<uint64_t> _deferred_origin_credit_bytes;
     std::atomic<uint64_t> _oversize_admission_count;
     std::atomic<uint64_t> _largest_oversize_message_bytes;
     std::atomic<uint64_t> _total_admission_attempts;
@@ -233,8 +227,6 @@ class ctx_physical_queue_registry_t
                                   bool force_);
     void erase_direction_if_retired_and_drained_unlocked (
       const physical_queue_handle_t &direction_);
-    void cancel_decoder_reservations_unlocked (
-      const physical_queue_handle_t &direction_, uint64_t generation_);
     void force_cancel_decoder_reservations ();
     bool sample_application_pipe_queue (
       const physical_queue_handle_t &direction_, uint64_t *provisional_out_,

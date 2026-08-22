@@ -451,16 +451,10 @@ zlink::physical_queue_endpoint_policy_t::physical_queue_endpoint_policy_t () :
 zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
     _next_queue_id (1),
     _application_reserved_minimum_bytes (0),
-    _application_current_accounted_bytes (0),
-    _application_provisional_accounted_bytes (0),
     _application_peak_accounted_bytes (0),
-    _completion_current_accounted_bytes (0),
     _completion_peak_accounted_bytes (0),
-    _completion_pending_message_count (0),
-    _monitor_current_accounted_bytes (0),
     _application_lease_accounted_bytes (0),
     _outstanding_application_lease_count (0),
-    _deferred_origin_credit_bytes (0),
     _oversize_admission_count (0),
     _largest_oversize_message_bytes (0),
     _total_admission_attempts (0),
@@ -479,28 +473,10 @@ zlink::ctx_physical_queue_registry_t::~ctx_physical_queue_registry_t ()
     force_cancel_decoder_reservations ();
     force_release_retained_credit ();
     zlink_assert (_directions.empty ());
-    zlink_assert (_application_current_accounted_bytes.load (
-                    std::memory_order_relaxed)
-                  == 0);
-    zlink_assert (_application_provisional_accounted_bytes.load (
-                    std::memory_order_relaxed)
-                  == 0);
-    zlink_assert (_completion_current_accounted_bytes.load (
-                    std::memory_order_relaxed)
-                  == 0);
-    zlink_assert (_completion_pending_message_count.load (
-                    std::memory_order_relaxed)
-                  == 0);
-    zlink_assert (_monitor_current_accounted_bytes.load (
-                    std::memory_order_relaxed)
-                  == 0);
     zlink_assert (_application_lease_accounted_bytes.load (
                     std::memory_order_relaxed)
                   == 0);
     zlink_assert (_outstanding_application_lease_count.load (
-                    std::memory_order_relaxed)
-                  == 0);
-    zlink_assert (_deferred_origin_credit_bytes.load (
                     std::memory_order_relaxed)
                   == 0);
     zlink_assert (_application_reserved_minimum_bytes == 0);
@@ -712,18 +688,10 @@ void zlink::ctx_physical_queue_registry_t::account_provisional_frame (
 {
     zlink_assert (direction_);
     zlink_assert (frame_bytes_ > 0);
-    const int lane = accounting_lane (*direction_);
+    //  Context aggregates are sampled from queue-local counters, so the lane
+    //  does not change what is charged here.
     saturating_add (&direction_->provisional_accounted_bytes, frame_bytes_,
                     &_aggregate_overflow);
-    if (lane == physical_queue_lane_application) {
-        // Context aggregates are sampled from queue-local counters.
-    } else {
-        if (lane == physical_queue_lane_completion) {
-            // Context aggregates are sampled from queue-local counters.
-        } else {
-            zlink_assert (lane == physical_queue_lane_monitor);
-        }
-    }
 }
 
 void zlink::ctx_physical_queue_registry_t::commit_message (
@@ -954,13 +922,6 @@ void zlink::ctx_physical_queue_registry_t::release_decoder_frame (
     *reservation_ = NULL;
     reservation->active = false;
     reservation->reset ();
-}
-
-void zlink::ctx_physical_queue_registry_t::cancel_decoder_reservations_unlocked (
-  const physical_queue_handle_t &, uint64_t)
-{
-    //  Inline reservations carry metadata only; no queue charge is owned
-    //  until the frame is committed.
 }
 
 int zlink::ctx_physical_queue_registry_t::retain_dequeued_frame (
@@ -1449,7 +1410,6 @@ void zlink::ctx_physical_queue_registry_t::advance_generation (
     zlink_assert (direction_->endpoint_refs > 0);
     zlink_assert (_directions.find (direction_->queue_id) != _directions.end ());
     const uint64_t current_generation = direction_->generation;
-    cancel_decoder_reservations_unlocked (direction_, current_generation);
     uint64_t retiring_held_bytes = 0;
     for (std::map<uint64_t, retained_credit_origin_t *>::const_iterator it =
            _retained_origins.begin ();
@@ -1490,8 +1450,6 @@ void zlink::ctx_physical_queue_registry_t::release_endpoint (
         zlink_assert (direction->endpoint_refs > 0);
         --direction->endpoint_refs;
         if (direction->endpoint_refs == 0) {
-            cancel_decoder_reservations_unlocked (direction,
-                                                  direction->generation);
             // Normal read, rollback, hiccup and termination paths publish
             // prompt refunds. Last-endpoint retirement is the sole lifecycle
             // backstop for record-owned charge that can no longer be observed.
