@@ -200,6 +200,16 @@ class pipe_t ZLINK_FINAL : public object_t,
     void hold_writes_until_transport_pair_ready ();
     bool release_writes_for_transport_pair ();
 
+    //  Remote receive-flow state, carried by the paired completion lane. It is
+    //  an independent send blocker: it never touches the byte HWM counters and
+    //  clearing it only removes its own cause. A PAUSE that arrives while a
+    //  multipart message is already started applies from the next message, so
+    //  the started message keeps its existing atomicity.
+    bool remote_flow_paused () const;
+    //  Consumes the remote-pause wake marker, mirroring the HWM-credit marker
+    //  so a resume publishes exactly one routed send-ready edge.
+    bool take_flow_resume_recovery ();
+
     //  Writes a message to the underlying pipe. Returns false if the
     //  message does not pass check_write. If false, the message object
     //  retains ownership of its message buffer.
@@ -305,6 +315,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     typedef ypipe_base_t<msg_t> upipe_t;
 
     //  Command handlers.
+    void process_flow_state (unsigned char state_) ZLINK_OVERRIDE;
     void process_activate_read () ZLINK_OVERRIDE;
     void process_activate_write (uint64_t generation_,
                                  uint64_t msgs_read_,
@@ -335,6 +346,7 @@ class pipe_t ZLINK_FINAL : public object_t,
                                  bool enforce_incremental_hwm_ = false,
                                  pipe_message_admission_t *admission_out_ = NULL);
     pipe_message_admission_t write_state_admission_unlocked () const;
+    bool remote_flow_blocked_unlocked () const;
     bool write_state_ready_unlocked (
       pipe_message_admission_t *admission_out_) const;
     bool hwm_credit_ready_unlocked (
@@ -395,7 +407,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool _in_active;
     bool _out_active;
     bool _transport_pair_write_held;
+    //  Remote receive-flow state applied on this pipe's own thread. Guarded by
+    //  _out_sync, exactly like _transport_pair_write_held.
+    bool _remote_flow_paused;
     std::atomic<bool> _waiting_for_byte_credit;
+    mutable std::atomic<bool> _waiting_for_flow_resume;
 
     //  High watermark for the outbound pipe.
     uint64_t _hwm;
@@ -528,7 +544,7 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     // Disconnect msg
     msg_t _disconnect_msg;
-    fast_mutex_t _out_sync;
+    mutable fast_mutex_t _out_sync;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pipe_t)
 };

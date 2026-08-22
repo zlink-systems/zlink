@@ -22,6 +22,7 @@ zlink::pipe_t *pipe_command_destination (const zlink::command_t &cmd_)
         case zlink::command_t::activate_read:
         case zlink::command_t::activate_write:
         case zlink::command_t::retained_credit:
+        case zlink::command_t::flow_state:
         case zlink::command_t::hiccup:
         case zlink::command_t::pipe_term:
         case zlink::command_t::pipe_term_ack:
@@ -77,6 +78,10 @@ void zlink::object_t::process_command (const command_t &cmd_)
             process_retained_credit (cmd_.args.retained_credit.generation,
                                      cmd_.args.retained_credit.msgs_read,
                                      cmd_.args.retained_credit.bytes_read);
+            break;
+
+        case command_t::flow_state:
+            process_flow_state (cmd_.args.flow_state.state);
             break;
 
         case command_t::routed_send_ready:
@@ -311,6 +316,18 @@ void zlink::object_t::send_activate_write (pipe_t *destination_,
     send_pipe_command (destination_, cmd, true);
 }
 
+void zlink::object_t::send_flow_state (pipe_t *destination_,
+                                       unsigned char state_)
+{
+    command_t cmd;
+    cmd.type = command_t::flow_state;
+    cmd.args.flow_state.state = state_;
+    //  Never dispatched inline: the frame that carries the state is decoded on
+    //  a transport I/O thread, while the pipe's write state belongs to the
+    //  socket thread. The mailbox also keeps consecutive states ordered.
+    send_pipe_command (destination_, cmd, false);
+}
+
 void zlink::object_t::send_retained_credit (pipe_t *destination_,
                                             uint64_t generation_,
                                             uint64_t msgs_read_,
@@ -465,6 +482,11 @@ void zlink::object_t::process_activate_write (uint64_t, uint64_t, uint64_t)
 }
 
 void zlink::object_t::process_retained_credit (uint64_t, uint64_t, uint64_t)
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_flow_state (unsigned char)
 {
     zlink_assert (false);
 }

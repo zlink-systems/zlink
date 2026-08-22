@@ -197,7 +197,9 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _in_active (true),
     _out_active (true),
     _transport_pair_write_held (false),
+    _remote_flow_paused (false),
     _waiting_for_byte_credit (false),
+    _waiting_for_flow_resume (false),
     _hwm (outhwm_),
     _lwm (compute_lwm (inhwm_)),
     _inhwm (inhwm_),
@@ -1072,9 +1074,21 @@ zlink::pipe_t::write_state_admission_unlocked () const
         return pipe_message_admission_inactive;
     if (_transport_pair_write_held)
         return pipe_message_admission_transport_wait;
+    if (remote_flow_blocked_unlocked ()) {
+        _waiting_for_flow_resume.store (true, std::memory_order_release);
+        return pipe_message_admission_transport_wait;
+    }
     if (!_out_active)
         return pipe_message_admission_hwm_full;
     return pipe_message_admission_ready;
+}
+
+bool zlink::pipe_t::remote_flow_blocked_unlocked () const
+{
+    //  A started multipart message keeps its existing atomicity: the remote
+    //  PAUSE only blocks from the next message boundary.
+    return _remote_flow_paused && _out_incomplete_bytes == 0
+           && !_out_multipart_started_empty;
 }
 
 bool zlink::pipe_t::write_state_ready_unlocked (
@@ -1106,6 +1120,13 @@ zlink::pipe_write_status_t zlink::pipe_t::check_write_status ()
         return pipe_write_inactive;
     if (unlikely (_transport_pair_write_held))
         return pipe_write_transport_wait;
+    //  Remote PAUSE is an independent cause. It never modifies the byte HWM
+    //  counters, so clearing the HWM cause alone does not make the pipe
+    //  writable and vice versa.
+    if (unlikely (remote_flow_blocked_unlocked ())) {
+        _waiting_for_flow_resume.store (true, std::memory_order_release);
+        return pipe_write_transport_wait;
+    }
     //  HWM admission sets _out_active=false until the peer returns write
     //  credit. The route still exists during that interval, so callers must
     //  keep reporting capacity pressure rather than an unreachable peer.
@@ -1160,7 +1181,39 @@ bool zlink::pipe_t::release_writes_for_transport_pair ()
     if (_state != active || !check_hwm_unlocked ())
         return false;
     _out_active = true;
-    return true;
+    //  This transition removes only the transport-wait cause. A remote PAUSE
+    //  that is still in effect keeps the pipe unwritable.
+    return !remote_flow_blocked_unlocked ();
+}
+
+bool zlink::pipe_t::remote_flow_paused () const
+{
+    scoped_fast_lock_t lock (_out_sync);
+    return _remote_flow_paused;
+}
+
+bool zlink::pipe_t::take_flow_resume_recovery ()
+{
+    return _waiting_for_flow_resume.exchange (false, std::memory_order_acq_rel);
+}
+
+void zlink::pipe_t::process_flow_state (unsigned char state_)
+{
+    const bool paused = state_ != 0;
+    bool notify = false;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        if (_remote_flow_paused == paused)
+            return;
+        _remote_flow_paused = paused;
+        //  Resuming removes only the remote-pause cause. Termination, the
+        //  transport-pair hold and the byte HWM keep their own state, so the
+        //  send-ready edge is published only when every cause is clear.
+        notify = !paused && _state == active && !_transport_pair_write_held
+                 && _out_active && check_hwm_unlocked ();
+    }
+    if (notify)
+        _sink->write_activated (this);
 }
 
 bool zlink::pipe_t::write (
@@ -1336,7 +1389,10 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
         if (!_transport_pair_write_held && !_out_active && _state == active
             && check_hwm_unlocked ()) {
             _out_active = true;
-            notify = true;
+            //  Byte credit removes only the HWM cause. While the peer keeps
+            //  this pipe PAUSED the send-ready edge stays suppressed; the
+            //  resume transition publishes it once every cause is clear.
+            notify = !remote_flow_blocked_unlocked ();
         }
     }
 

@@ -33,6 +33,7 @@ struct command_t
         activate_read,
         activate_write,
         retained_credit,
+        flow_state,
         routed_send_ready,
         request_completion,
         hiccup,
@@ -105,6 +106,14 @@ struct command_t
             uint64_t msgs_read;
             uint64_t bytes_read;
         } retained_credit;
+
+        //  Applies the peer's absolute receive-flow state to one application
+        //  pipe on the socket thread. The state is not a counter, so a repeated
+        //  value is simply idempotent.
+        struct
+        {
+            unsigned char state;
+        } flow_state;
 
         //  Schedules delivery of coalesced routed-target readiness records on
         //  the socket's async mailbox owner.
