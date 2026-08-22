@@ -134,7 +134,23 @@ void test_retained_pair_preserves_total_and_releases_credit_cross_thread ()
     TEST_ASSERT_EQUAL_UINT64 (
       0, released.outstanding_application_lease_count);
     TEST_ASSERT_EQUAL_UINT64 (0, released.deferred_origin_credit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (0, released.current_accounted_bytes);
+
+    //  The registry releases the lease exactly once and synchronously, but the
+    //  origin credit it hands back is published to the owning pipe by command,
+    //  not inside the release call. The snapshot contract is intra-snapshot
+    //  coherence, not synchronous visibility of that publication, so the
+    //  aggregate is polled until it settles.
+    bool credit_published = false;
+    const std::chrono::steady_clock::time_point credit_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (std::chrono::steady_clock::now () < credit_deadline) {
+        if (read_budget_snapshot ().current_accounted_bytes == 0) {
+            credit_published = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (credit_published);
 
     bool resumed = false;
     const std::chrono::steady_clock::time_point deadline =

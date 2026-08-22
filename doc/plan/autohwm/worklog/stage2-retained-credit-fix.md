@@ -186,3 +186,24 @@ local 105.2 K / release 19.4 K로 양쪽 모두 기준에서 크게 벗어났다
 
 - 진단용 임시 logging은 추가하지 않았다(코드 읽기와 기존 test 출력만으로 특정).
 - `gmon.out`은 손대지 않았다(untracked 상태 그대로).
+
+## 후속: `:137` flake의 원인 판정과 test 수정
+
+Codex spec review 결과 `test_retained_hwm_credit.cpp:137`의
+`released.current_accounted_bytes == 0` 즉시 단언은 계약이 보장하지 않는 조건이었다.
+`core/doc/spec/core/socket/README.ko.md`(~:1090)와 `01-context.ko.md`(~:594, :607)는 cross-thread
+lease release의 exact-once만 보장하고, release된 credit이 같은 호출 안에서 snapshot의
+`current_accounted_bytes`에 반영된다고 말하지 않는다. Snapshot 계약은 snapshot 내부 일관성만
+규정한다. 구현은 application lease credit을 `ctx_physical_queue_registry.cpp:1056-1062`에서
+`object.cpp:328`의 command로 비동기 publish한다. 이를 동기 publish로 바꾸면 frame마다 전역
+집계를 갱신해야 하므로 계획 §3.3의 "정상 frame마다 context 전역 합계를 갱신하지 않는다"
+제약을 위반한다.
+
+따라서 결함은 구현이 아니라 test에 있었고, `:137` 한 줄만 `test_zmp_metadata.cpp:148`과 같은
+bounded polling(2초 deadline, 1 ms 간격)으로 교체했다. 동기 registry 단언(:133-136)과 send 재개
+polling(:139-150)은 그대로 두었다. 수정 뒤 `core/build-tests`의 `test_retained_hwm_credit`을
+단독으로 20회 실행해 20/20 통과를 확인했다.
+
+권고(미적용): `core/doc/spec/core/07-monitoring.*.md`와 `01-context.*.md`에 lease release credit이
+snapshot에 반영되는 시점이 비동기라는 문장을 추가하는 것이 좋다. 보호 경로이므로 이번 작업에서는
+수정하지 않고 제안만 남긴다.
