@@ -380,84 +380,6 @@ inline bool read_actor_authority_relocation_state (reader_t &body_reader)
     return phase == 9 || has_target;
 }
 
-struct actor_relocation_envelope_t
-{
-    std::span<const std::byte> prefix;
-    std::span<const std::byte> application_payload;
-    std::uint8_t phase = 0;
-};
-
-inline std::optional<actor_relocation_envelope_t>
-decode_actor_relocation_envelope (std::span<const std::byte> encoded)
-{
-    try {
-        if (encoded.size () < 32 || encoded.size () > actor_authority_maximum_bytes)
-            return std::nullopt;
-        const auto checksum_offset = encoded.size () - 4;
-        reader_t checksum_reader (encoded.subspan (checksum_offset));
-        if (checksum_reader.u32le () != crc32c (encoded.first (checksum_offset)))
-            return std::nullopt;
-        reader_t reader (encoded.first (checksum_offset));
-        const auto magic = reader.take (4);
-        constexpr std::array<std::byte, 4> expected{
-          static_cast<std::byte> ('Z'), static_cast<std::byte> ('L'),
-          static_cast<std::byte> ('A'), static_cast<std::byte> ('P')};
-        if (!std::equal (magic.begin (), magic.end (), expected.begin ()))
-            return std::nullopt;
-        const auto version = reader.u16le ();
-        if (version != 5 && version != 6)
-            return std::nullopt;
-        const auto relocation_id = reader.take (16);
-        if (std::all_of (relocation_id.begin (), relocation_id.end (),
-                         [] (std::byte value) { return value == std::byte{}; }))
-            return std::nullopt;
-        const auto phase = reader.u8 ();
-        if (phase < 1 || phase > 4)
-            return std::nullopt;
-        const auto bound = reader.u8 ();
-        if (bound > 1)
-            return std::nullopt;
-        if (bound == 1) {
-            const auto node_rid_size = reader.u8 ();
-            if (node_rid_size == 0)
-                return std::nullopt;
-            (void) reader.take (node_rid_size);
-            const auto session_rid_size = reader.u8 ();
-            if (session_rid_size == 0)
-                return std::nullopt;
-            (void) reader.take (session_rid_size);
-            (void) reader.text16le ();
-            const auto binding_generation = reader.u64le ();
-            const auto object_generation = reader.u64le ();
-            const auto authority_owner_generation = reader.u64le ();
-            (void) reader.text16le ();
-            const auto target_node_generation = reader.u64le ();
-            const auto owner_lease_generation = reader.u64le ();
-            const auto session_owner_node_generation = reader.u64le ();
-            (void) reader.u64le (); // accepted high-water may be zero.
-            if (version == 6) {
-                (void) reader.text16le ();
-                (void) reader.u64le (); // session owner lease is not a generation fence.
-            }
-            if (binding_generation == 0 || object_generation == 0
-                || authority_owner_generation == 0 || target_node_generation == 0
-                || owner_lease_generation == 0 || session_owner_node_generation == 0)
-                return std::nullopt;
-        }
-        const auto prefix = encoded.first (reader.offset ());
-        const auto size = static_cast<std::int32_t> (reader.u32le ());
-        if (size < 1 || static_cast<std::size_t> (size) > actor_authority_maximum_bytes)
-            return std::nullopt;
-        const auto application_payload = reader.take (static_cast<std::size_t> (size));
-        if (!reader.done ())
-            return std::nullopt;
-        return actor_relocation_envelope_t{prefix, application_payload, phase};
-    }
-    catch (...) {
-        return std::nullopt;
-    }
-}
-
 } // namespace actor_authority_detail
 
 struct canonical_authority_payload_t
@@ -754,52 +676,13 @@ decode_direct_actor_authority_payload (std::span<const std::byte> encoded)
     }
 }
 
-inline std::optional<std::vector<std::byte>>
-actor_relocation_authority_application_payload (const std::vector<std::byte> &payload)
-{
-    const auto bytes = std::span<const std::byte> (payload);
-    if (bytes.size () >= 4
-        && std::to_integer<std::uint8_t> (bytes[0]) == 'Z'
-        && std::to_integer<std::uint8_t> (bytes[1]) == 'L'
-        && std::to_integer<std::uint8_t> (bytes[2]) == 'A'
-        && std::to_integer<std::uint8_t> (bytes[3]) == 'P') {
-        const auto relocation = actor_authority_detail::decode_actor_relocation_envelope (bytes);
-        if (!relocation || relocation->phase != 4)
-            return std::nullopt;
-        return std::vector<std::byte> (
-          relocation->application_payload.begin (), relocation->application_payload.end ());
-    }
-    return payload;
-}
-
-inline std::optional<std::vector<std::byte>>
-relocating_actor_relocation_authority_application_payload (const std::vector<std::byte> &payload)
-{
-    const auto bytes = std::span<const std::byte> (payload);
-    if (bytes.size () >= 4
-        && std::to_integer<std::uint8_t> (bytes[0]) == 'Z'
-        && std::to_integer<std::uint8_t> (bytes[1]) == 'L'
-        && std::to_integer<std::uint8_t> (bytes[2]) == 'A'
-        && std::to_integer<std::uint8_t> (bytes[3]) == 'P') {
-        const auto relocation = actor_authority_detail::decode_actor_relocation_envelope (bytes);
-        if (!relocation)
-            return std::nullopt;
-        return std::vector<std::byte> (
-          relocation->application_payload.begin (), relocation->application_payload.end ());
-    }
-    return payload;
-}
-
 inline std::optional<actor_authority_projection_t>
 decode_actor_authority_payload (const std::vector<std::byte> &bytes,
                                 std::uint64_t object_generation)
 {
     if (object_generation == 0)
         return std::nullopt;
-    const auto application = actor_relocation_authority_application_payload (bytes);
-    if (!application)
-        return std::nullopt;
-    const auto payload = decode_direct_actor_authority_payload (*application);
+    const auto payload = decode_direct_actor_authority_payload (bytes);
     if (!payload)
         return std::nullopt;
     return actor_authority_projection_t{
@@ -809,48 +692,6 @@ decode_actor_authority_payload (const std::vector<std::byte> &bytes,
       spot_id_t{payload->current_spot_id}, payload->current_spot_generation,
       payload->state, payload->current_spot_kind, payload->owner_id,
       payload->owner_lease_generation, payload->node_generation};
-}
-
-inline std::optional<actor_authority_projection_t>
-decode_relocating_actor_authority_payload (const std::vector<std::byte> &bytes,
-                                           std::uint64_t object_generation)
-{
-    if (object_generation == 0)
-        return std::nullopt;
-    const auto application = relocating_actor_relocation_authority_application_payload (bytes);
-    if (!application)
-        return std::nullopt;
-    const auto payload = decode_direct_actor_authority_payload (*application);
-    if (!payload)
-        return std::nullopt;
-    return actor_authority_projection_t{
-      ::zlink::framework::detail::actor_ref_access_t::make (
-        payload->node_rid, payload->stable_type, payload->actor_id, object_generation,
-        payload->mesh_name),
-      spot_id_t{payload->current_spot_id}, payload->current_spot_generation,
-      payload->state, payload->current_spot_kind, payload->owner_id,
-      payload->owner_lease_generation, payload->node_generation};
-}
-
-inline std::optional<std::vector<std::byte>>
-rewrite_actor_relocation_authority_application_payload (
-  const std::vector<std::byte> &payload,
-  const std::vector<std::byte> &application_payload)
-{
-    const auto relocation = actor_authority_detail::decode_actor_relocation_envelope (payload);
-    if (!relocation)
-        return std::nullopt;
-    if (application_payload.empty () || application_payload.size () > actor_authority_detail::actor_authority_maximum_bytes)
-        return std::nullopt;
-    std::vector<std::byte> result;
-    result.reserve (relocation->prefix.size () + 4 + application_payload.size () + 4);
-    actor_authority_detail::append_bytes (result, relocation->prefix);
-    actor_authority_detail::append_u32le (result, static_cast<std::uint32_t> (application_payload.size ()));
-    actor_authority_detail::append_bytes (result, application_payload);
-    actor_authority_detail::append_u32le (result, actor_authority_detail::crc32c (result));
-    if (result.size () > actor_authority_detail::actor_authority_maximum_bytes)
-        return std::nullopt;
-    return result;
 }
 
 } // namespace zlink::framework::runtime

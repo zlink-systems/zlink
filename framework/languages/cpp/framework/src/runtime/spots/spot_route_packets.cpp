@@ -290,7 +290,6 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                           {"boundSessionRid", value.bound_session_rid},
                           {"sessionRelocationRoute",
                            encode_base64 (value.session_relocation_route)},
-                          {"transferState", encode_base64 (value.transfer_state)},
                           {"handoffBacklog", value.handoff_backlog},
                           {"coreTransfer", value.core_transfer},
                           {"coreTransferIdHigh", value.core_transfer_id_high},
@@ -334,7 +333,6 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
       json.contains ("sessionRelocationRoute")
         ? decode_base64_field (json, "sessionRelocationRoute")
         : std::vector<std::uint8_t>{};
-    value.transfer_state = decode_base64_field (json, "transferState");
     const auto handoff_backlog = json.find ("handoffBacklog");
     if (handoff_backlog != json.end ()) {
         validate_handoff_backlog_json (*handoff_backlog);
@@ -391,26 +389,6 @@ void from_json (const nlohmann::json &json,
       json.at ("targetAuthorityOwnerGeneration").get<std::uint64_t> ();
     value.target_owner_lease_generation =
       json.at ("targetOwnerLeaseGeneration").get<std::uint64_t> ();
-}
-
-void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value)
-{
-    json = nlohmann::json{{"actorNodeRid", value.actor_node_rid},
-                          {"actorType", value.actor_type},
-                          {"actorId", value.actor_id},
-                          {"actorGeneration", value.actor_generation},
-                          {"spotId", value.spot_id},
-                          {"payload", encode_base64 (value.payload)}};
-}
-
-void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value)
-{
-    value.actor_node_rid = json.at ("actorNodeRid").get<std::string> ();
-    value.actor_type = json.at ("actorType").get<std::string> ();
-    value.actor_id = json.at ("actorId").get<std::string> ();
-    value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
-    value.spot_id = json.at ("spotId").get<std::string> ();
-    value.payload = decode_base64_field (json, "payload");
 }
 
 void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value)
@@ -598,12 +576,6 @@ void from_json (const nlohmann::json &json, actor_bound_session_route_reply_t &v
 zlink::message_t message_from_bytes (const std::vector<std::uint8_t> &bytes)
 {
     return zlink::message_t::from (bytes);
-}
-
-actor_ref_t actor_ref_from_spot_route (const spot_actor_join_route_request_t &request)
-{
-    return ::zlink::framework::detail::actor_ref_access_t::make (node_rid_t::from_string (request.actor_node_rid), request.actor_type,
-                        request.actor_id, request.actor_generation);
 }
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_admission_route_request_t &request)

@@ -151,13 +151,6 @@ class public_authority_store_adapter_t final :
                 || !same_owner (target_placement.owner, target_owner))
                 return {authority_publish_status_t::failed, std::nullopt};
             std::vector<std::byte> application_payload = target_application_payload;
-            if (source.kind == object_kind_t::actor && !application_payload.empty ()) {
-                if (const auto rewritten =
-                      runtime::rewrite_actor_relocation_authority_application_payload (
-                        snapshot->payload, application_payload)) {
-                    application_payload = std::move (*rewritten);
-                }
-            }
             authority_relocation_reference_t reference{
               source,
               source,
@@ -269,9 +262,8 @@ class public_authority_store_adapter_t final :
                       snapshot.allocation.stable_type;
                     if (decoded_key->kind == 'a') {
                         identity.owner.kind = object_kind_t::actor;
-                        const auto projection =
-                          runtime::decode_relocating_actor_authority_payload (
-                            snapshot.payload, snapshot.object_generation);
+                        const auto projection = runtime::decode_actor_authority_payload (
+                          snapshot.payload, snapshot.object_generation);
                         if (projection) {
                             identity.spot_membership = std::pair{
                               std::string (projection->spot_id),

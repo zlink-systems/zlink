@@ -88,7 +88,6 @@ struct spot_actor_commit_route_request_t
     std::string bound_session_node_rid;
     std::string bound_session_rid;
     std::vector<std::uint8_t> session_relocation_route;
-    std::vector<std::uint8_t> transfer_state;
     std::vector<spot_actor_handoff_packet_t> handoff_backlog;
     bool core_transfer = false;
     std::uint64_t core_transfer_id_high = 0;
@@ -116,18 +115,6 @@ struct spot_actor_leave_route_command_t
     std::uint64_t target_node_generation = 0;
     std::uint64_t target_authority_owner_generation = 0;
     std::uint64_t target_owner_lease_generation = 0;
-};
-
-struct spot_actor_join_route_request_t
-{
-    static constexpr const char *packet_name = "__zlink.spot.actor.join";
-
-    std::string actor_node_rid;
-    std::string actor_type;
-    std::string actor_id;
-    std::uint64_t actor_generation = 0;
-    std::string spot_id;
-    std::vector<std::uint8_t> payload;
 };
 
 /* Advertised inbound chunk-size cap (bytes) this node offers for
@@ -239,8 +226,6 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
 void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &value);
 void to_json (nlohmann::json &json, const spot_actor_leave_route_command_t &value);
 void from_json (const nlohmann::json &json, spot_actor_leave_route_command_t &value);
-void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value);
-void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value);
 void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value);
 void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value);
 void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &value);
@@ -265,8 +250,6 @@ result_t<zlink::message_t> encode_actor_bound_session_frame (
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_admission_route_request_t &request);
 actor_ref_t actor_ref_from_spot_route (const spot_actor_commit_route_request_t &request);
-
-actor_ref_t actor_ref_from_spot_route (const spot_actor_join_route_request_t &request);
 
 spot_actor_join_route_reply_t make_spot_actor_join_route_reply (const actor_join_reply_t &reply);
 

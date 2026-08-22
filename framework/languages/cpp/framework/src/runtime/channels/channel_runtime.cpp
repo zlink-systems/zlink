@@ -41,8 +41,7 @@ namespace
 
 bool is_internal_spot_route_packet (std::string_view packet_name)
 {
-    return packet_name == spot_actor_join_route_request_t::packet_name
-           || packet_name == spot_actor_packet_route_request_t::packet_name
+    return packet_name == spot_actor_packet_route_request_t::packet_name
            || packet_name == spot_actor_disconnect_route_request_t::packet_name
            || packet_name == actor_bound_session_route_request_t::packet_name;
 }

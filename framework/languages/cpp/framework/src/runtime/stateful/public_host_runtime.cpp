@@ -302,29 +302,6 @@ try_decode_canonical_actor_join (
     }
 }
 
-bool has_legacy_actor_join_transfer (
-  const std::vector<std::vector<std::uint8_t>> &parts)
-{
-    if (parts.size () < 2)
-        return false;
-    try {
-        const auto envelope = protocol::decode_application_payload (
-          parts[1], false);
-        const auto multipart = decode_parts (envelope.payload);
-        if (multipart.empty ())
-            return false;
-        const auto bytes = multipart.front ().to_bytes ();
-        const auto metadata = nlohmann::json::parse (
-          bytes.begin (), bytes.end (), nullptr, false);
-        return !metadata.is_discarded () && metadata.is_object ()
-               && metadata.contains ("transferId")
-               && metadata.at ("transferId").is_string ();
-    }
-    catch (const std::exception &) {
-        return false;
-    }
-}
-
 struct route_owner_fence_read_t
 {
     host::route_fence_t fence;
@@ -5145,30 +5122,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || mailbox_record.parts.size () > 2)
                         throw protocol::service_wire_error_t (
                           "Actor join has an invalid part count");
-                    /* command 28 is shared with C++'s pre-canonical actor
-                     * relocation records.  A private transferId lives in its
-                     * multipart payload and is explicitly outside spec 51
-                     * section 9's canonical body, so leave that record on the
-                     * established decoder/dispatch path.  For all other
-                     * records, the generated decoder is the recognition
-                     * authority; a failed recognition deliberately falls
-                     * back instead of dropping a private command-28 record. */
-                    const auto canonical = has_legacy_actor_join_transfer (
-                                             mailbox_record.parts)
-                                             ? std::nullopt
-                                             : try_decode_canonical_actor_join (
-                                                 mailbox_record.parts);
-                    const auto request = canonical
-                                           ? canonical->request
-                                           : protocol::decode_actor_join_request (
-                                               mailbox_record.parts.front ());
-                    std::optional<protocol::application_payload_t> payload;
-                    if (canonical) {
-                        payload = canonical->payload;
-                    } else if (mailbox_record.parts.size () == 2) {
-                        payload = protocol::decode_application_payload (
-                          mailbox_record.parts.back (), capture_flow ());
-                    }
+                    const auto canonical = try_decode_canonical_actor_join (
+                      mailbox_record.parts);
+                    if (!canonical)
+                        throw protocol::service_wire_error_t (
+                          "Actor join is not a canonical command-28 record");
+                    const auto &request = canonical->request;
+                    const auto &payload = canonical->payload;
                     if (!actor_join_target) {
                         (void) _transport->reply_actor_join (
                           mailbox_record,
