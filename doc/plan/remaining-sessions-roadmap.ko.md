@@ -512,9 +512,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     5회×2(현/base) 대조 판정.
   - **[ ] [신규 등재 2026-08-23] dotnet HEAD 기존 red 3건(stash-baseline 확정, capacity 정렬 diff
     무관)**: ① `CanonicalAuthorityAggregateGenerationTests.Legacy_{standalone_actor,user_spot}_*` 2건 —
-    legacy(aggregateGeneration extension 제거형) payload decode 실패. 최근 authority-state 인코더
-    변경 계열 회귀 또는 3c legacy-recovery 제거의 의도 결과인지 판정 필요(durable 마이그레이션
-    판정 카드와 연계). ② **[x] EntrySpot timeout red — 해소 `a859029b51`**: stale 테스트 seam(지연 주입 substring이
+    legacy(aggregateGeneration extension 제거형) payload decode 실패. **판정 분석 완료(2026-08-23,
+    sol branch-B STOP·증거 보존)**: clean-break로 해소 불가 — **Java가 현재도 extension-absent
+    slot을 생산**(Coordinator:321-340→Codec:71-95, aggregateGeneration을 trailing extension이
+    아닌 본문 세 번째 u64 위치에 기록) · .NET/Node는 trailing extension(tag 0x01+u64be) 부가 —
+    schema frozen field list(:6083-6160)는 extension 무정의+trailingBytes forbidden. → 이 red 2건은
+    **field-12+ slot 레이아웃 발산 통합 판정 카드**(§3b 이월 ①)로 흡수: 정본 슬롯에
+    aggregateGeneration을 (a) schema 필드로 승격 vs (b) 슬롯 제외·root에서 해석 중 Claude 설계
+    판정 후 4언어 정렬. golden엔 relocation-present slot 부재(oracle 공백도 함께 해소할 것). ② **[x] EntrySpot timeout red — 해소 `a859029b51`**: stale 테스트 seam(지연 주입 substring이
     35a39022b98의 정본 key 포맷 전환과 미매치) — 제품은 spec 32 §5 적합(location read는 총예산
     포함). 스위트 hang 재귀속: ManagedNode_RejectsAdmission… native dispose flake(격리 3/3 통과,
     별도 관찰 항목).
