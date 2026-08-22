@@ -34,16 +34,36 @@ public interface ISocketMonitor : IDisposable, IAsyncDisposable
 ///     A single socket connection-lifecycle event reported by a monitor.
 /// </summary>
 /// <param name="Event">The kind of lifecycle event.</param>
-/// <param name="Value">An event-specific value, such as an error code or a reconnect interval.</param>
+/// <param name="Value">
+///     An event-specific value, such as an error code, a reconnect
+///     interval, or (for the flow events) a flow epoch or a rejected
+///     generation/epoch — see <see cref="MonitorEventType.SendFlowPaused" />,
+///     <see cref="MonitorEventType.SendFlowResumed" />, and
+///     <see cref="MonitorEventType.FlowStateStale" />. Carries the full
+///     64-bit native value.
+/// </param>
 /// <param name="RoutingId">The peer routing id, when the event carries one.</param>
 /// <param name="LocalAddr">The local endpoint address.</param>
 /// <param name="RemoteAddr">The remote endpoint address.</param>
+/// <param name="TransportPairId">
+///     Identifies the paired application/completion transport this event
+///     belongs to, or zero when the connection is not paired.
+/// </param>
+/// <param name="TransportPairGeneration">
+///     The generation of the paired transport named by
+///     <paramref name="TransportPairId" />, or zero for an unpaired
+///     transport.
+/// </param>
+/// <param name="Flags">Event-specific flags; see <see cref="MonitorEventFlags" />.</param>
 public sealed record MonitorEvent(
     MonitorEventType Event,
-    uint Value,
+    ulong Value,
     RoutingId? RoutingId,
     string LocalAddr,
-    string RemoteAddr);
+    string RemoteAddr,
+    ulong TransportPairId,
+    ulong TransportPairGeneration,
+    MonitorEventFlags Flags);
 
 /// <summary>
 ///     A snapshot of a socket's monitored state and auto-high-water-mark telemetry.

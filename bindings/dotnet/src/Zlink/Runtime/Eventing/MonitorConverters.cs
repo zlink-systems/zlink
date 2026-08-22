@@ -22,9 +22,10 @@ internal static class MonitorConverters
         }
 
         return new MonitorEvent((MonitorEventType)(evt.Event & 0xFFFFFFFFuL),
-            (uint)evt.Value, RoutingIdCodec.ToRoutingId(
+            evt.Value, RoutingIdCodec.ToRoutingId(
                 NativeHelpers.ReadRoutingId(ref evt.RoutingId)),
-            local, remote);
+            local, remote, evt.TransportPairId, evt.TransportPairGeneration,
+            (MonitorEventFlags)evt.Flags);
     }
 
     internal static MonitorStatus FromNative(ref ZlinkMonitorStatus native)

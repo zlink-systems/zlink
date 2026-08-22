@@ -47,6 +47,63 @@ public sealed class test_flow_state
         router.SetReceiveFlowState(ReceiveFlowState.Running);
     }
 
+    // core-byte-hwm-flow-control-plan.ko.md §6: PAUSED/RESUMED fire on the
+    // *sender* whose pipe was actually blocked/unblocked, carrying routing
+    // id, pair id/generation, a flow epoch in Value, and the
+    // SendFlowWritable flag on RESUMED. Mirrors
+    // core/tests/integration/test_flow_state_c_api.cpp's
+    // test_pause_and_resume_each_emit_exactly_one_event.
+    [Fact]
+    public void pause_and_resume_report_flow_events_with_full_payload()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var dealer = ctx.CreateDealerSocket();
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "tcp", "flow-state-events");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+
+        // One round trip so the ROUTER learns the route and both
+        // transport-pair lanes are ready.
+        CoreTestSupport.SendAsyncWithTimeout(dealer, "hello"u8, 2000);
+        var received = Received.Create();
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => router.Recv(received, RecvFlags.DontWait), 2000));
+        received.Dispose();
+
+        using var events = new CallbackEventQueue<SocketMonitorEvent>();
+        using ISocketMonitor monitor = dealer.MonitorOpen(
+            SocketEvent.SendFlowPaused | SocketEvent.SendFlowResumed);
+        monitor.OnEvent(events.Enqueue);
+
+        // The ROUTER asking to pause blocks the DEALER's send pipe, so the
+        // event is observed on the DEALER's monitor, not the ROUTER's.
+        router.SetReceiveFlowState(ReceiveFlowState.Paused);
+
+        Assert.True(events.TryDequeue(2000, out SocketMonitorEvent paused));
+        Assert.Equal(MonitorEventType.SendFlowPaused, paused.Event);
+        Assert.NotEqual(0UL, paused.Value);
+        Assert.NotEqual(0UL, paused.TransportPairId);
+        Assert.NotNull(paused.RoutingId);
+        Assert.Equal(MonitorEventFlags.None,
+            paused.Flags & MonitorEventFlags.SendFlowWritable);
+
+        router.SetReceiveFlowState(ReceiveFlowState.Running);
+
+        Assert.True(events.TryDequeue(2000, out SocketMonitorEvent resumed));
+        Assert.Equal(MonitorEventType.SendFlowResumed, resumed.Event);
+        Assert.True(resumed.Value > paused.Value);
+        Assert.Equal(paused.TransportPairId, resumed.TransportPairId);
+        Assert.Equal(paused.TransportPairGeneration,
+            resumed.TransportPairGeneration);
+        Assert.Equal(MonitorEventFlags.SendFlowWritable,
+            resumed.Flags & MonitorEventFlags.SendFlowWritable);
+    }
+
     [Fact]
     public void unsupported_socket_types_report_not_supported()
     {

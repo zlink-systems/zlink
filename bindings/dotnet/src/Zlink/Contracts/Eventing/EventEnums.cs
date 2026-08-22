@@ -90,9 +90,33 @@ public enum SocketEvent
     PeerWeightChanged = 0x8000,
 
     /// <summary>
+    ///     A remote PAUSE was first applied to an application pipe over the
+    ///     paired DEALER/ROUTER completion lane. <c>Value</c> carries the
+    ///     flow epoch.
+    /// </summary>
+    SendFlowPaused = 0x10000,
+
+    /// <summary>
+    ///     A remote RUNNING cleared the remote-pause cause for a pipe.
+    ///     <c>Value</c> carries the flow epoch; check
+    ///     <see cref="MonitorEventFlags.SendFlowWritable" /> in
+    ///     <see cref="MonitorEvent.Flags" /> for whether the pipe is
+    ///     actually writable now.
+    /// </summary>
+    SendFlowResumed = 0x20000,
+
+    /// <summary>
+    ///     A stale or duplicate completion-lane flow-state frame was
+    ///     rejected. <see cref="MonitorEvent.Flags" /> disambiguates the
+    ///     stale reason and <see cref="MonitorEvent.Value" /> carries the
+    ///     corresponding rejected field.
+    /// </summary>
+    FlowStateStale = 0x40000,
+
+    /// <summary>
     ///     Every event; subscribes the monitor to all of the above.
     /// </summary>
-    All = 0xFFFF
+    All = 0x7FFFF
 }
 
 /// <summary>
@@ -179,7 +203,78 @@ public enum MonitorEventType
     /// <summary>
     ///     A peer's load-balancing weight changed.
     /// </summary>
-    PeerWeightChanged = 0x8000
+    PeerWeightChanged = 0x8000,
+
+    /// <summary>
+    ///     A remote PAUSE was first applied to an application pipe over the
+    ///     paired DEALER/ROUTER completion lane. <see cref="MonitorEvent.Value" />
+    ///     carries the flow epoch.
+    /// </summary>
+    SendFlowPaused = 0x10000,
+
+    /// <summary>
+    ///     A remote RUNNING cleared the remote-pause cause for a pipe.
+    ///     <see cref="MonitorEvent.Value" /> carries the flow epoch; check
+    ///     <see cref="MonitorEventFlags.SendFlowWritable" /> in
+    ///     <see cref="MonitorEvent.Flags" /> for whether the pipe is
+    ///     actually writable now.
+    /// </summary>
+    SendFlowResumed = 0x20000,
+
+    /// <summary>
+    ///     A stale or duplicate completion-lane flow-state frame was
+    ///     rejected. <see cref="MonitorEvent.Flags" /> disambiguates the
+    ///     stale reason and <see cref="MonitorEvent.Value" /> carries the
+    ///     corresponding rejected field.
+    /// </summary>
+    FlowStateStale = 0x40000
+}
+
+/// <summary>
+///     Bits that can appear in <see cref="MonitorEvent.Flags" />. Mirrors
+///     <c>ZLINK_MONITOR_EVENT_FLAG_*</c> in the C ABI. Combine as flags.
+/// </summary>
+[Flags]
+public enum MonitorEventFlags : uint
+{
+    /// <summary>
+    ///     No event-specific flags are set.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    ///     Set on a <see cref="MonitorEventType.ConnectionReady" /> event
+    ///     that moves a connection from not-ready to ready.
+    /// </summary>
+    ConnectionReadyEdge = 1u << 0,
+
+    /// <summary>
+    ///     Set on <see cref="MonitorEventType.SendFlowResumed" /> when
+    ///     clearing the remote pause left the pipe actually writable. Clear
+    ///     when another cause (byte high-water-mark, transport wait, or
+    ///     termination) still blocks it.
+    /// </summary>
+    SendFlowWritable = 1u << 1,
+
+    /// <summary>
+    ///     Set on <see cref="MonitorEventType.FlowStateStale" /> when the
+    ///     frame named a different connection generation.
+    ///     <see cref="MonitorEvent.Value" /> then carries the received
+    ///     generation, and <see cref="MonitorEvent.TransportPairGeneration" />
+    ///     carries the current one.
+    /// </summary>
+    FlowStateStaleGeneration = 1u << 2,
+
+    /// <summary>
+    ///     Set on <see cref="MonitorEventType.FlowStateStale" /> when the
+    ///     epoch did not advance inside the current generation.
+    ///     <see cref="MonitorEvent.Value" /> then carries the received
+    ///     epoch; the current epoch is the one reported by the preceding
+    ///     <see cref="MonitorEventType.SendFlowPaused" /> or
+    ///     <see cref="MonitorEventType.SendFlowResumed" /> event for the
+    ///     same pair.
+    /// </summary>
+    FlowStateStaleEpoch = 1u << 3
 }
 
 /// <summary>

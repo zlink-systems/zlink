@@ -158,4 +158,61 @@ public sealed class test_monitor_contract
         ZlinkRecvException error = Assert.Throws<ZlinkRecvException>(() => monitor.Recv());
         Assert.Equal(ZlinkRecvException.ErrorCode.Busy, error.Result);
     }
+
+    // core-byte-hwm-flow-control-plan.ko.md §6 / core/include/zlink_enum.h:
+    // the three flow-event bits and the widened ALL mask.
+    [Fact]
+    public void flow_event_enum_values_match_c_abi()
+    {
+        Assert.Equal(0x10000, (int)MonitorEventType.SendFlowPaused);
+        Assert.Equal(0x20000, (int)MonitorEventType.SendFlowResumed);
+        Assert.Equal(0x40000, (int)MonitorEventType.FlowStateStale);
+
+        Assert.Equal(0x10000, (int)SocketEvent.SendFlowPaused);
+        Assert.Equal(0x20000, (int)SocketEvent.SendFlowResumed);
+        Assert.Equal(0x40000, (int)SocketEvent.FlowStateStale);
+        Assert.Equal(0x7FFFF, (int)SocketEvent.All);
+    }
+
+    // core/include/zlink/eventing/api.h: ZLINK_MONITOR_EVENT_FLAG_*.
+    [Fact]
+    public void monitor_event_flag_values_match_c_abi()
+    {
+        Assert.Equal(1u << 0, (uint)MonitorEventFlags.ConnectionReadyEdge);
+        Assert.Equal(1u << 1, (uint)MonitorEventFlags.SendFlowWritable);
+        Assert.Equal(1u << 2, (uint)MonitorEventFlags.FlowStateStaleGeneration);
+        Assert.Equal(1u << 3, (uint)MonitorEventFlags.FlowStateStaleEpoch);
+    }
+
+    [Fact]
+    public void monitor_event_value_and_pair_fields_are_full_64_bit()
+    {
+        // Guards against the truncating `(uint)evt.Value` cast this section
+        // fixed: the public record's fields must be wide enough to carry
+        // the native uint64 payload without loss.
+        Assert.Equal(typeof(ulong),
+            typeof(MonitorEvent).GetProperty(nameof(MonitorEvent.Value))!
+                .PropertyType);
+        Assert.Equal(typeof(ulong),
+            typeof(MonitorEvent).GetProperty(
+                    nameof(MonitorEvent.TransportPairId))!
+                .PropertyType);
+        Assert.Equal(typeof(ulong),
+            typeof(MonitorEvent).GetProperty(
+                    nameof(MonitorEvent.TransportPairGeneration))!
+                .PropertyType);
+        Assert.Equal(typeof(MonitorEventFlags),
+            typeof(MonitorEvent).GetProperty(nameof(MonitorEvent.Flags))!
+                .PropertyType);
+
+        const ulong beyondUInt32 = (ulong)uint.MaxValue + 1UL;
+        var evt = new MonitorEvent(MonitorEventType.SendFlowPaused,
+            beyondUInt32, null, string.Empty, string.Empty,
+            beyondUInt32 + 1UL, beyondUInt32 + 2UL,
+            MonitorEventFlags.SendFlowWritable);
+
+        Assert.Equal(beyondUInt32, evt.Value);
+        Assert.Equal(beyondUInt32 + 1UL, evt.TransportPairId);
+        Assert.Equal(beyondUInt32 + 2UL, evt.TransportPairGeneration);
+    }
 }
