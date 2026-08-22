@@ -275,3 +275,88 @@ Counter member `_test_transport_write_release_edges`는 class layout이 build �
   이 작업 범위 밖이다(다른 작업자가 isolated worktree에서 담당).
 - 한 번 batch 실행에서 `test_zmp_request_reply`가 180s timeout으로 실패했으나 단독 3회
   38.66/38.52/38.85s로 재현되지 않았다. 같은 host에서 perf 측정이 병행 중인 부하 영향이다.
+
+## 9. Codex 재검토 round 2 (MEDIUM 4 + 검증 1 + 문서 1)
+
+Round 1과 같은 절차다. 항목마다 **재현 test를 먼저 작성해 red를 확인**하고 수정한 뒤 green을
+확인했다. 한 항목이 한 commit이고 test와 수정이 같은 commit에 있다. 모두 `core/build-tests`이며
+perf는 실행하지 않았다. Registry dual-ledger(`_registry_accounting`) 경로는 다른 작업자가
+별도 worktree에서 담당하므로 건드리지 않았다.
+
+| # | 지적 | Test | Red 증거 | Commit |
+|---|---|---|---|---|
+| R1 | RESUME이 stale cached credit으로 판단해 wakeup을 영구 상실 | `test_resume_rereads_credit_published_before_the_waiter_was_armed` | `:624 Expected TRUE Was FALSE` (drain 없이 route 복귀 불가) | `17f18aaf33` |
+| R2 | Attach의 상태 적용이 linearize되지 않아 stale snapshot이 hold를 해제 | `test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge` | `:605 Expected 0 Was 1` (writable edge 1건) | `505264dabe` |
+| R3 | Overtake 허용이 미검증 pipe의 frame을 적용하고 epoch를 소모 | `test_overtaking_flow_frame_is_buffered_until_the_pair_is_validated` | `:560 Expected TRUE Was FALSE` (buffer 없이 즉시 적용) | `0367cebca4` |
+| R4 | 소비된 flow frame이 자른 message가 유효한 빈 reply로 완료됨 | `test_flow_frame_cannot_complete_a_truncated_reply` | `:649` handler가 `ZLINK_REQUEST_OK`로 호출됨 | `bea276f957` |
+| R5 | Epoch edge case 검증 | `test_flow_state_epoch_edge_cases`, `test_generation_change_resets_the_epoch_sequence` | `:596 Expected TRUE Was FALSE` (socket epoch가 0으로 wrap) | `eb0b9a5c65` |
+| R6 | `socket_runtime.hpp`의 조건부 field | 문서화만 (아래 §9.2) | — | 이 문서 |
+
+### 9.1 수정 내용
+
+**R1** `pipe.cpp:1257-1275`. RESUME이 남은 HWM 차단을 byte-credit 원인에 넘길 때 **먼저 waiter를
+세우고 그 다음** `check_hwm_with_peer_snapshot_unlocked ()`로 peer가 실제로 publish한 credit을
+다시 읽는다. 고전적인 lost-wakeup 규율이다. Arm 이후에 credit을 publish하는 reader는 armed
+waiter를 보고 스스로 activation을 보내고, arm 이전에 publish한 reader는 이 재확인이 잡는다.
+Cached snapshot으로 판단하면 waiter가 없던 동안의 sub-LWM read — 마지막으로 자격이 있던 read —
+를 놓친다.
+
+**R2** `socket_base_api.cpp:253-283`. 상태 적용과 transport hold 해제를 `_transport_pairs_sync`
+아래 한 단계로 묶었다. Transport I/O thread는 frame을 수락할 때 같은 mutex로 record를 갱신한
+뒤에야 자기 command를 queue하므로, 이 자리에서 record를 다시 읽는 것이 두 생산자를
+linearize한다. 두 호출 모두 pipe의 lock만 잡고 결정값만 반환하며, edge는 mutex를 놓은 뒤
+발행한다.
+
+**R3** `socket_base_flow_state.cpp:214-232`, `promote_pending_flow_state_locked ()`. Pair가 ready가
+되기 전에 도착한 frame은 pair마다 최신 것 하나만 보관하고 accepted state와 epoch를 건드리지
+않는다. Pair가 ready가 될 때(`socket_base_api.cpp:262`) 승격하되, frame이 도착한 pipe가 등록에
+성공한 pipe와 같을 때만 적용하고 아니면 버린다. Passive transport에서 peer가 metadata로 pair
+식별자를 제공하므로, 등록에 실패할 연결이 상태를 세우거나 epoch를 태우지 못한다.
+
+**R4** `socket_request_reply_dispatch.cpp:104-146`. 소비된 flow frame이 message를 끝냈고 앞에
+쌓인 part가 있으면 그 message를 malformed로 표시해 dispatcher에 넘기지 않고 닫는다.
+`parse_envelope`는 more-flag를 검사하지 않으므로 그대로 두면 4개 control part가 유효한 빈
+reply로 해석되어 대기 중인 request를 성공 완료시킨다. 같은 자리에서 command flag 검사를
+inline으로 끌어올려 일반 reply part는 분류 호출 비용을 내지 않는다.
+
+**R5** `socket_base_flow_state.cpp:66-71`. Socket 전역 epoch가 `UINT64_MAX`에서 0으로 wrap하지
+않고 1로 넘어간다. 0은 "설정된 적 없음" 표식이고 frame 계약이 거부하는 값이라, 0으로 wrap하면
+그 socket의 흐름 상태가 영구히 침묵한다. Transport pair generation이 이미 쓰는 규칙과 같다.
+
+나머지 epoch edge는 이미 성립함을 test로 확인했다: epoch가 없는 pipe는 어떤 값이든 첫 상태로
+받고, 같은 epoch와 낮은 epoch는 무시하며, `UINT64_MAX`도 전진값으로 받는다. 그 위로는 해당
+generation에서 더 전진하지 않는데, 이는 의도한 trade-off다 — 순서는 generation 안에서만
+단조롭고, generation이 바뀌면 새 pipe가 새 sequence로 시작한다는 것을
+`test_generation_change_resets_the_epoch_sequence`가 검증한다.
+
+### 9.2 알려진 한계 (R6, 문서화만)
+
+`core/src/runtime/sockets/common/socket_runtime.hpp:228-250`의 `socket_receive_runtime_t`는
+`public_mailbox_drains`, `async_mailbox_drains`, `wait_hook`, `wait_hook_userdata`를
+`#ifdef ZLINK_BUILD_TESTS`로 감싸고 있어 build 설정에 따라 struct layout이 달라진다. In-tree
+build는 `core/CMakeLists.txt:1426`의 `add_compile_definitions`가 library와 test 모든 target에
+같은 값을 주므로 일관적이다. 서로 다른 macro 설정으로 빌드된 object를 out-of-tree에서 섞으면
+ODR 문제가 될 수 있다. 이번 작업 범위가 아니므로 구조를 바꾸지 않고 한계로만 기록한다. 이번에
+추가한 counter(`_test_transport_write_release_edges`)는 같은 위험을 만들지 않도록 모든 build에
+존재한다(§8.2).
+
+### 9.3 Round 2 이후 실행 결과
+
+- `test_flow_state_paired` 21 tests 단독 10회 → 10/10 통과
+- `unittest_flow_state_frame` 9 tests 단독 10회 → 10/10 통과
+- Focused 8 + `unittest_poller` + `test_timer_poller` + flow test 2개 →
+  `100% tests passed, 0 tests failed out of 12` (60.42s)
+- 전체 sweep 89개 → 86 passed. 실패 3개는 §6.1·§8.3과 같은 기존 실패이며 다른 작업자 소관이다.
+- `git diff --check` 통과.
+
+### 9.4 Round 2에서 추가한 test 전용 hook
+
+모두 `#ifdef ZLINK_BUILD_TESTS`다.
+
+- `pipe_t::test_flow_probe ()`에 byte-credit waiter와 in-flight byte를 추가 — 어떤 원인도
+  평가하지 않으므로 관찰이 상태를 바꾸지 않는다
+- `socket_base_t::test_set_attach_flow_window_hook ()` — attach의 pair admission과 hold 해제
+  사이 창에서 실행되어, 경쟁 생산자가 그 창을 이기게 만든다
+- `socket_base_t::test_pending_flow_buffered ()`, `test_any_pair_accepted_flow_state ()`
+- `socket_base_t::test_set_local_receive_flow_epoch ()`, `test_local_receive_flow_epoch ()` —
+  2^64회 상태 변경 없이 wraparound 경계에 도달하기 위한 것
