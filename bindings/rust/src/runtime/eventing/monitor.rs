@@ -7,8 +7,8 @@ use crate::ffi;
 use crate::internal::{CallbackBox, MonitorStorage};
 use crate::message::RoutingId;
 use crate::monitor_contracts::{
-    MonitorEvent, MonitorEventType, MonitorSourceKind, MonitorStatus, Monitorable, SocketMonitor,
-    SocketMonitorOpenOptions,
+    MonitorEvent, MonitorEventFlags, MonitorEventType, MonitorSourceKind, MonitorStatus,
+    Monitorable, SocketMonitor, SocketMonitorOpenOptions,
 };
 use crate::native_errors::{
     check_close_rc, check_config_rc, check_handler_rc, check_recv_rc, last_errno,
@@ -22,11 +22,63 @@ impl MonitorEvent {
     fn from_raw(raw: &ffi::zlink_monitor_event_t) -> Self {
         Self {
             event: MonitorEventType(raw.event),
-            value: raw.value as u32,
+            value: raw.value,
             routing_id: RoutingId::from_raw_optional(raw.routing_id),
             local_addr: cstr_array_to_string(&raw.local_addr),
             remote_addr: cstr_array_to_string(&raw.remote_addr),
+            connection_id: raw.connection_id,
+            transport_pair_id: raw.transport_pair_id,
+            transport_pair_generation: raw.transport_pair_generation,
+            transport_lane: raw.transport_lane,
+            flags: MonitorEventFlags::from_raw(raw.flags),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_event_from_raw_projects_the_full_payload_without_truncation() {
+        // The native `value` field is a u64 (core/include/zlink/eventing/api.h);
+        // the public MonitorEvent used to narrow it to u32, silently dropping
+        // the high bits. Pick a value that only round-trips correctly if the
+        // full 64 bits survive the conversion.
+        let large_value: u64 = u64::from(u32::MAX) + 1_000_000;
+
+        let raw = ffi::zlink_monitor_event_t {
+            event: 0x1000,
+            value: large_value,
+            routing_id: ffi::zlink_routing_id_t {
+                size: 0,
+                data: [0; 255],
+            },
+            local_addr: [0; 256],
+            remote_addr: [0; 256],
+            connection_id: 0xAAAA_BBBB_CCCC_DDDD,
+            transport_pair_id: 0x1111_2222_3333_4444,
+            transport_pair_generation: 7,
+            transport_lane: 3,
+            flags: MonitorEventFlags::CONNECTION_READY_EDGE.bits()
+                | MonitorEventFlags::SEND_FLOW_WRITABLE.bits(),
+        };
+
+        let event = MonitorEvent::from_raw(&raw);
+
+        assert_eq!(event.value, large_value);
+        assert!(event.value > u64::from(u32::MAX));
+        assert_eq!(event.connection_id, 0xAAAA_BBBB_CCCC_DDDD);
+        assert_eq!(event.transport_pair_id, 0x1111_2222_3333_4444);
+        assert_eq!(event.transport_pair_generation, 7);
+        assert_eq!(event.transport_lane, 3);
+        assert!(
+            event
+                .flags
+                .contains(MonitorEventFlags::CONNECTION_READY_EDGE)
+        );
+        assert!(event.flags.contains(MonitorEventFlags::SEND_FLOW_WRITABLE));
+        assert!(!event.flags.contains(MonitorEventFlags::FLOW_STATE_STALE_EPOCH));
     }
 }
 

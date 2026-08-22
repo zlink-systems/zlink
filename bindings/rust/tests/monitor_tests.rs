@@ -93,6 +93,43 @@ fn socket_monitor_hwm_bytes_are_forwarded_exactly() {
 }
 
 #[test]
+fn socket_monitor_event_exposes_full_payload_fields() {
+    // Final gate (core-byte-hwm-flow-control-plan.ko.md): MonitorEvent used
+    // to narrow `value` to u32 and omit connection_id / transport_pair_id /
+    // transport_pair_generation / transport_lane / flags entirely. Confirm
+    // all of them are reachable, correctly typed, on a real event from a
+    // live connection.
+    let ctx = Context::new().unwrap();
+    let server = ctx.pair_socket().unwrap();
+    server.bind("inproc://mon-full-payload").unwrap();
+
+    let mon = SocketMonitor::open(&server).unwrap();
+
+    let client = ctx.pair_socket().unwrap();
+    client.connect("inproc://mon-full-payload").unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+
+    let mut saw_event = false;
+    for _ in 0..20 {
+        if let Ok(ev) = mon.recv() {
+            saw_event = true;
+            let _value: u64 = ev.value;
+            let _connection_id: u64 = ev.connection_id;
+            let _transport_pair_id: u64 = ev.transport_pair_id;
+            let _transport_pair_generation: u64 = ev.transport_pair_generation;
+            let _transport_lane: u32 = ev.transport_lane;
+            let _flags: MonitorEventFlags = ev.flags;
+            // Confirms `flags` really is `MonitorEventFlags`, not a raw
+            // integer -- this compiles only if the type and its API match.
+            let _ = ev.flags.contains(MonitorEventFlags::CONNECTION_READY_EDGE);
+            break;
+        }
+    }
+    assert!(saw_event, "expected at least one monitor event from a live connect");
+}
+
+#[test]
 fn socket_monitor_observes_connection() {
     let ctx = Context::new().unwrap();
     let server = ctx.pair_socket().unwrap();

@@ -58,6 +58,19 @@ run_test_file() {
 echo "Running test suites:"
 echo ""
 
+TOTAL=$((TOTAL + 1))
+echo -n "  lib_tests ... "
+LIB_LOG="$(mktemp)"
+if cargo test --lib -- --test-threads=1 >"$LIB_LOG" 2>&1; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL"
+    cat "$LIB_LOG"
+    FAIL=$((FAIL + 1))
+fi
+rm -f "$LIB_LOG"
+
 run_test_file surface_tests
 run_test_file contract_tests
 run_test_file behavior_tests

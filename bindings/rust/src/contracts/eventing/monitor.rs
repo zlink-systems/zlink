@@ -98,13 +98,24 @@ pub struct MonitorEvent {
     /// The kind of lifecycle event.
     pub event: MonitorEventType,
     /// An event-specific value, such as an error code or reconnect interval.
-    pub value: u32,
+    pub value: u64,
     /// The peer routing id, when the event carries one.
     pub routing_id: Option<RoutingId>,
     /// The local endpoint address.
     pub local_addr: String,
     /// The remote endpoint address.
     pub remote_addr: String,
+    /// A stable identifier for the underlying transport connection.
+    pub connection_id: u64,
+    /// The paired DEALER/ROUTER completion-lane transport pair id, when the
+    /// event applies to one (core-byte-hwm-flow-control-plan.ko.md §5/§6).
+    pub transport_pair_id: u64,
+    /// The transport pair's generation, when `transport_pair_id` applies.
+    pub transport_pair_generation: u64,
+    /// The transport lane index, when the event applies to one.
+    pub transport_lane: u32,
+    /// Event-specific detail flags; see [`MonitorEventFlags`].
+    pub flags: MonitorEventFlags,
 }
 
 impl MonitorEvent {
@@ -316,16 +327,20 @@ impl MonitorStatus {
 }
 
 /// Typed bitmask for the event-specific flags carried in the native
-/// `zlink_monitor_event_t.flags` field (not yet surfaced on [`MonitorEvent`];
-/// see core-byte-hwm-flow-control-plan.ko.md §5.1/§6). Mirrors
-/// `zlink_monitor_event_flag_e` in core/include/zlink/eventing/api.h.
-/// Combine with `|`.
+/// `zlink_monitor_event_t.flags` field and projected onto
+/// [`MonitorEvent::flags`] (core-byte-hwm-flow-control-plan.ko.md §5.1/§6).
+/// Mirrors `zlink_monitor_event_flag_e` in
+/// `core/include/zlink/eventing/api.h`. Combine with `|`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonitorEventFlags(u32);
 
 impl MonitorEventFlags {
     /// No event-specific flags are set.
     pub const NONE: Self = Self(0);
+    /// Wraps a raw flag bitmask read from `zlink_monitor_event_t.flags`.
+    pub(crate) const fn from_raw(bits: u32) -> Self {
+        Self(bits)
+    }
     /// Set on a `ConnectionReady` event that moves a connection from
     /// not-ready to ready.
     pub const CONNECTION_READY_EDGE: Self = Self(1 << 0);
