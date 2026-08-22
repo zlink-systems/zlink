@@ -295,7 +295,10 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     Java ZLAU codec signed 양수 검사(PayloadCodec:262)가 .NET high-bit nodeGeneration(u64) 거부
     → authority invalid → 40 FAILED + **failure 경로 이중 결함**(pre-stage cleanup
     requireActorStage 동기 예외로 FAILED reply 미전송 → silent, StateMachine:474/:652). Ruling:
-    opaque token용 unsigned-nonzero reader 분리 + failure reply 보장 — terra 수정 중. ⓑ
+    opaque token용 unsigned-nonzero reader 분리 + failure reply 보장 — 랜딩 `0a9fc8bd52`(silent
+    hang 소멸). diag4: 같은 계열 잔존 — currentSpotGeneration도 positive 검사로 high-bit 거부
+    (codec :106/:271, 실측 0xa701...) → opaque 동일 처리 ruling, terra 수정 중. 스펙 구체화는
+    sol 리뷰 승인(앵커 보완 `4a39e14dca`). ⓑ
     dotnet→cpp = .NET TargetAttemptGeneration=1(:967) vs cpp validator lifecycle 동일성 요구
     (spot_runtime.cpp:5764). **설계 판정 완료(opus 분석→Claude ruling, 후보 A)**:
     attempt = RelocationId 내 시도별 유일 nonzero 불투명 값, 정확 equality 전용(결정 근거 21
