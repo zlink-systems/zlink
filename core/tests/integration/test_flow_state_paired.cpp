@@ -526,6 +526,89 @@ bool wait_for_pipe_pause (void *socket_,
     return false;
 }
 
+//  Round 2, R2. attach_pipe snapshots the pair's flow state, drops the table
+//  mutex, and only then applies it and releases the transport hold. A newer
+//  PAUSE accepted in that window is overtaken by the stale snapshot, and the
+//  hold release publishes a writable edge for a route the peer has already
+//  stopped. Epochs repair the eventual state but not that transient edge.
+zlink::socket_base_t *g_window_socket = NULL;
+bool g_window_fired = false;
+
+void attach_window_injects_pause (zlink::socket_base_t *socket_,
+                                  uint64_t pair_id_,
+                                  uint64_t generation_)
+{
+    if (socket_ != g_window_socket || g_window_fired)
+        return;
+    zlink::pipe_t *completion =
+      socket_->test_pair_pipe (pair_id_, generation_, true);
+    if (!completion)
+        return;
+    g_window_fired = true;
+
+    zlink::flow_state::frame_t frame;
+    frame.version = zlink::flow_state::frame_protocol_version;
+    frame.state = k_paused;
+    frame.pair_id = pair_id_;
+    frame.generation = generation_;
+    frame.epoch = 4;
+    zlink::msg_t msg;
+    if (msg.init () != 0)
+        return;
+    if (zlink::flow_state::init_frame (&msg, frame) == 0)
+        (void) socket_->consume_receive_flow_state_frame (completion, msg);
+    (void) msg.close ();
+}
+
+void test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge ()
+{
+    const int zero = 0;
+    char endpoint[MAX_SOCKET_STRING];
+
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
+
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    g_window_socket = as_socket (dealer);
+    g_window_fired = false;
+    zlink::socket_base_t::test_set_attach_flow_window_hook (
+      &attach_window_injects_pause);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    bool paused_seen = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
+            && target.transport_pair_id != 0
+            && as_socket (dealer)->application_pipe_remote_flow_paused (
+                 target.transport_pair_id, target.transport_pair_generation)) {
+            paused_seen = true;
+            break;
+        }
+        (void) as_socket (router)->process_submit_commands ();
+        msleep (1);
+    }
+    zlink::socket_base_t::test_set_attach_flow_window_hook (NULL);
+    TEST_ASSERT_TRUE (g_window_fired);
+    TEST_ASSERT_TRUE (paused_seen);
+
+    //  The state accepted inside the window has to win over the snapshot, so
+    //  the hold release never sees a running pair.
+    TEST_ASSERT_EQUAL_UINT32 (
+      0, as_socket (dealer)->test_transport_write_release_edges ());
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 //  Round 2, R1. A receiver that consumes a sub-LWM message while more data
 //  remains publishes credit without sending an activation, because the byte
 //  waiter is not armed yet. RESUME must not then decide from the writer's stale
@@ -1097,6 +1180,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_pause_accepted_inside_the_attach_window_blocks_the_writable_edge);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);
     RUN_TEST (test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair);

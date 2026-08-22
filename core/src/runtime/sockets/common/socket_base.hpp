@@ -258,6 +258,17 @@ class socket_base_t : public own_t,
     //  been admitted as ready yet. Tests assert this to prove they really
     //  produced the frame-before-admission ordering they mean to exercise.
     bool test_flow_frame_accepted_before_pair_ready () const;
+    //  Runs inside attach_pipe, between the pair admission and the transport
+    //  hold release, so a test can make a competing producer win that window
+    //  on purpose. Installed globally and only ever set by a test.
+    typedef void (*test_attach_flow_window_fn) (zlink::socket_base_t *socket_,
+                                                uint64_t transport_pair_id_,
+                                                uint64_t generation_);
+    static void test_set_attach_flow_window_hook (
+      test_attach_flow_window_fn hook_);
+    static void test_run_attach_flow_window_hook (
+      zlink::socket_base_t *socket_, uint64_t transport_pair_id_,
+      uint64_t generation_);
 #endif
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();

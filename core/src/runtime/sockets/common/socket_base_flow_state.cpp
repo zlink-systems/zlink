@@ -298,3 +298,25 @@ bool zlink::socket_base_t::test_flow_frame_accepted_before_pair_ready () const
     return false;
 }
 #endif
+
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+zlink::socket_base_t::test_attach_flow_window_fn tls_attach_flow_window_hook =
+  NULL;
+}
+
+void zlink::socket_base_t::test_set_attach_flow_window_hook (
+  test_attach_flow_window_fn hook_)
+{
+    tls_attach_flow_window_hook = hook_;
+}
+
+void zlink::socket_base_t::test_run_attach_flow_window_hook (
+  socket_base_t *socket_, uint64_t transport_pair_id_, uint64_t generation_)
+{
+    test_attach_flow_window_fn hook = tls_attach_flow_window_hook;
+    if (hook)
+        hook (socket_, transport_pair_id_, generation_);
+}
+#endif

@@ -142,9 +142,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *ready_application = NULL;
     pipe_t *ready_completion = NULL;
     pipe_t *pair_application = NULL;
-    bool pending_remote_flow_seen = false;
-    bool pending_remote_flow_paused = false;
-    uint64_t pending_remote_flow_epoch = 0;
     //  A rejected pair is torn down after the table is unlocked: terminate()
     //  reaches other objects and must not run under this mutex.
     pipe_t *reject_pipes[3] = {NULL, NULL, NULL};
@@ -185,13 +182,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 }
             }
             pair_application = pair.application;
-            //  A flow-state frame for this connection can be decoded on the
-            //  transport I/O thread before this admission runs. Apply whatever
-            //  state was accepted for the pair as soon as its application lane
-            //  exists; process_flow_state is idempotent.
-            pending_remote_flow_seen = pair.remote_flow_seen;
-            pending_remote_flow_paused = pair.remote_flow_paused;
-            pending_remote_flow_epoch = pair.remote_flow_epoch;
         }
         //  reject_pipes[1] and [2] were read out of the table, and the table
         //  slot is the only thing that keeps them alive: the sibling lane's
@@ -246,23 +236,41 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     //  keeps sending into a socket that is still PAUSED.
     if (ready_completion)
         sync_local_receive_flow_state_to_pair (ready_completion);
-    //  Applied here, not queued: releasing the transport-pair hold below is an
-    //  admission transition, and a pair whose peer is already PAUSED must never
-    //  pass through a writable state on the way. This runs on the pipe's own
-    //  thread, which is exactly where the queued command would have run.
+#ifdef ZLINK_BUILD_TESTS
+    if (pair_id != 0)
+        test_run_attach_flow_window_hook (this, pair_key.first, pair_key.second);
+#endif
+    //  Applying the accepted state and releasing the transport-pair hold is one
+    //  step, taken under the table mutex. Releasing the hold is an admission
+    //  transition, and a pair whose peer is already PAUSED must never pass
+    //  through a writable state on the way.
     //
-    //  The snapshot above can already be stale: a newer epoch may have been
-    //  accepted on a transport I/O thread while this admission ran. The epoch
-    //  is carried along so the pipe discards whichever replay lost.
-    if (pending_remote_flow_seen && pair_application
-        && pair_application->apply_remote_flow_state (
-          pending_remote_flow_paused ? static_cast<unsigned char> (1)
-                                     : static_cast<unsigned char> (0),
-          pending_remote_flow_epoch))
-        write_activated (pair_application);
-    const bool transport_write_released =
-      ready_application
-      && ready_application->release_writes_for_transport_pair ();
+    //  The state read at admission above can be stale by now: a transport I/O
+    //  thread updates this record - under this same mutex - before it queues
+    //  its own command, so re-reading it here is what makes the two producers
+    //  linearizable. Both calls below only take the pipe's own lock and return
+    //  a decision; the edges are published after this mutex is dropped.
+    bool publish_flow_edge = false;
+    bool transport_write_released = false;
+    pipe_t *flow_edge_pipe = NULL;
+    {
+        scoped_lock_t lock (_transport_pairs_sync);
+        const transport_pairs_t::const_iterator it =
+          _transport_pairs.find (pair_key);
+        if (pair_id != 0 && it != _transport_pairs.end ()
+            && it->second.remote_flow_seen && it->second.application) {
+            flow_edge_pipe = it->second.application;
+            publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
+              it->second.remote_flow_paused ? static_cast<unsigned char> (1)
+                                            : static_cast<unsigned char> (0),
+              it->second.remote_flow_epoch);
+        }
+        if (ready_application)
+            transport_write_released =
+              ready_application->release_writes_for_transport_pair ();
+    }
+    if (publish_flow_edge)
+        write_activated (flow_edge_pipe);
 #ifdef ZLINK_BUILD_TESTS
     if (transport_write_released)
         _test_transport_write_release_edges.fetch_add (
