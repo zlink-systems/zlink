@@ -6216,31 +6216,29 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private async ValueTask SendRelocationPrepareTerminalAsync(
+    private ValueTask SendRelocationPrepareTerminalAsync(
         Peer peer,
         RoutingId sourceNodeRid,
         ulong? requestSequence,
         byte[] terminal,
         CancellationToken cancellationToken)
     {
+        // All four runtimes now send command 40 (relocation Prepare) as a
+        // request, so a one-way command 40 with no native reply token is no
+        // longer a supported wire shape — the legacy command-30/53
+        // notification fallback is removed (audit #10).
         if (requestSequence is not { } sequence)
-        {
-            // A legacy one-way command 40 has no native reply token. Retain
-            // its command-30/53 notification path while request ingress uses
-            // the corresponding reply leg below.
-            await SendCanonicalRelocationRecordAsync(
-                    peer,
-                    terminal,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Canonical relocation Prepare (command 40) arrived without a "
+                + "request sequence.");
 
         if (!SendInfrastructureReply(sourceNodeRid, sequence, terminal))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "The command 40 relocation terminal could not be submitted on its reply leg.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
+        return ValueTask.CompletedTask;
     }
 
     private void ProcessRelocationReady(RoutingId sourceNodeRid,

@@ -121,9 +121,14 @@ public sealed class RemoteJoinerCanonicalReplyTests
     }
 
     [Fact]
-    public void Nested_dotnet_reply_is_unwrapped_once_for_compatibility()
+    public void Envelope_shaped_reply_bytes_are_never_reinterpreted_as_nested()
     {
-        using var nested = Message.From(
+        // spec 51 (c56714a52c): the sole actorJoin(28) reply part is always
+        // delivered as raw application-reply bytes. Even a part that happens
+        // to look like a ZLinkApplicationPayloadEnvelopeCodec-encoded frame
+        // must not be decoded as a nested envelope — the .NET-target-only
+        // nested-envelope dialect is removed.
+        using var envelopeShaped = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 "ActorJoinReply",
                 "application/json",
@@ -131,10 +136,12 @@ public sealed class RemoteJoinerCanonicalReplyTests
 
         var application = ZLinkActorRemoteJoiner.DecodeCanonicalApplicationReply(
             JoinResult("application/x-protobuf"),
-            [nested]);
+            [envelopeShaped]);
 
-        Assert.Equal("application/json", application.ContentType);
-        Assert.Equal("{\"accepted\":true}"u8.ToArray(), application.Payload.ToArray());
+        Assert.Equal("application/x-protobuf", application.ContentType);
+        Assert.Equal(
+            envelopeShaped.AsReadOnlyMemory().ToArray(),
+            application.Payload.ToArray());
     }
 
     private static ZLinkBackendActorJoinResult JoinResult(string replyContentType) => new(

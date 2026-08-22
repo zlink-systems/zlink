@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -6317,6 +6318,69 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task ReplyCanonicalAdmission_SendsSoleRawPart_NoNestedEnvelope()
+    {
+        // spec 51 (c56714a52c): the actorJoin(28) reply carries the
+        // application reply as a sole raw part — the target must never wrap
+        // it in an additional ZLinkApplicationPayloadEnvelopeCodec envelope
+        // (the removed .NET-only nested-envelope dialect).
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var spot = new ActorJoinFlowProbeSpot();
+            var actorJoins = new ZLinkSpotActorJoinRegistry();
+            actorJoins.Bind(spot);
+            var actors = new ZLinkSpotActorMembership();
+            actors.Add(actor);
+            await using var handlerInstances = new ZLinkScopedHandlerInstanceOwner(runtime.Services);
+            var invoker = new ZLinkSpotHandlerInvoker(
+                handlerInstances,
+                spot,
+                runtime.Registration.Codecs,
+                ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec());
+            var nativeSpot = new CapturingSpot();
+            var dispatcher = new ZLinkSpotActorJoinDispatcher(
+                runtime,
+                nativeSpot,
+                "join-channel",
+                actorJoins,
+                actors,
+                () => invoker);
+
+            using var emptyRequestPart = Message.From(ReadOnlySpan<byte>.Empty);
+            var joinRequest = new ZLinkBackendActorJoinRequest(
+                actorRef,
+                actorRef,
+                RoutingId.From("source-node"),
+                "target-spot",
+                1,
+                emptyRequestPart,
+                [emptyRequestPart]);
+            var rawReplyBytes = "{\"accepted\":true}"u8.ToArray();
+            var admission = new ZLinkRemoteActorAdmissionReply(
+                Accepted: true,
+                ReplyContentType: "application/json",
+                Reply: rawReplyBytes);
+
+            var method = typeof(ZLinkSpotActorJoinDispatcher).GetMethod(
+                "ReplyCanonicalAdmission",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new InvalidOperationException(
+                    "ReplyCanonicalAdmission was not found by reflection.");
+            method.Invoke(dispatcher, [joinRequest, admission]);
+
+            Assert.Equal(0, nativeSpot.ActorJoinResultCode);
+            Assert.Equal(rawReplyBytes, nativeSpot.ActorJoinReplyMessageBytes);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task DeferredJoin_UsesTheCapturedActorGeneration_WhenRegistryPublishesASuccessor()
     {
         var node = new CapturingSpotNode();
@@ -8869,6 +8933,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ZLinkEnvelopeHeader? ActorJoinReplyHeader { get; private set; }
 
+        public byte[]? ActorJoinReplyMessageBytes { get; private set; }
+
         public SubmitResult SpotSendResult { get; set; } = SubmitResult.Backpressured;
 
         public Func<IReadOnlyList<Message>, IReadOnlyList<Message>>? SpotRequestHandler { get; set; }
@@ -9130,6 +9196,7 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = request;
             ActorJoinResultCode = joinResultCode;
             ActorJoinReplyHeader = null;
+            ActorJoinReplyMessageBytes = reply.AsReadOnlyMemory().ToArray();
         }
 
         public void ReplyActorJoin(

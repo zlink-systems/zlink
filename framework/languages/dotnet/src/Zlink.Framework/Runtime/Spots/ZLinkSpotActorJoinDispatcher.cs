@@ -337,11 +337,13 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             return;
         }
 
-        using var reply = Message.From(
-            ZLinkApplicationPayloadEnvelopeCodec.Encode(
-                typeof(ZLinkMessage).Name,
-                admission.ReplyContentType,
-                admission.Reply));
+        // service-wire-v1 ActorJoin(28): spec 51 fixes the reply framing as
+        // multipart wrap + sole raw part — the part preserves the handler's
+        // packet name/content type only insofar as the transport carries no
+        // per-part metadata channel; it must never be reinterpreted as a
+        // nested application envelope (see spec 51's Framework multipart
+        // application profile note on actorJoin(28)).
+        using var reply = Message.From(admission.Reply);
         nativeSpot.ReplyActorJoin(
             joinRequest,
             admission.Accepted ? 0 : 1,
