@@ -278,11 +278,14 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     새 rung: java→node JoinSpot dispatch handler_exception(INTERNAL_FAILURE, Node측 'prepare
     target fence does not match the target owner')·java→cpp(PROTOCOL_ERROR) — terra 진단 NOT-CONVERGED:
     공통 취약 seam 확정 — Java source가 40 target fence를 승인 fence가 아닌 **재조회 descriptor로
-    재구성**(ownerId/appVersion 무대조, SourceBuilder.java:498/:651, StateMachine:1053). Node 실패
-    필드·cpp validator(spot_runtime.cpp:5720) 실패 conjunct는 계측 재실행 필요(add-then-delete
-    임시 dump — sol dotnet-diag 종료 후 직렬). java→dotnet 그린은 .NET ValidatePrepare(:2846)가
-    target owner 비교를 안 하는 관대함 때문(정합 증거 아님). 수정 방향(잠정): 승인 fence 단일
-    전달 or 재조회 시 전 필드 stale 검증.
+    재구성**(ownerId/appVersion 무대조, SourceBuilder.java:498/:651, StateMachine:1053). **계측 수렴(2026-08-22)**: ⓐ java→node =
+    40 applicationVersion 불일치 — envelope 인코더 writer.u64(1) 하드코딩
+    (ZLinkCanonicalActorRelocationEnvelope.java:126) vs 정본 target.applicationVersion()=0.
+    ⓑ java→cpp = targetAttemptGeneration — 상수 new Fence(relocationId,1)(SourceBuilder:661) vs
+    cpp 기대 target lifecycleGeneration(spot_runtime.cpp:5767, 16 conjunct 중 유일 실패). Ruling
+    2건 확정, terra 수정+4스테이지 검증 중. java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
+    때문(정합 증거 아님). .NET coordinator fence 수정(1264653381)은 dotnet-java 재실행서 여전히
+    joined 미관측 — 다음 불일치 여부 sol 연속 계측 진단 중.
     .NET 이중 decode 수정 랜딩 `adfa26824b` 후 새 rung **sol 계측으로 수렴**: unbound join에서
     .NET source가 ZLJR coordinator fence를 빈값/gen0으로 송신(RemoteJoiner:625 hasBoundSession
     조건 안에서만 채움, Packets:214) → Java decoder 필수 요구(RecoveryCodec:287)로
