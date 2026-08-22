@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -747,7 +748,10 @@ internal sealed class ZLinkActorRemoteJoiner(
             targetReservation.TargetAuthorityOwnerGeneration,
             operationId?.High ?? 0,
             operationId?.Low ?? 0,
-            operationId is null ? null : admissionReply.ReplyContentType,
+            operationId is null
+                ? null
+                : admissionReply.RecoveryReplyContentType
+                  ?? admissionReply.ReplyContentType,
             operationId is null ? [] : admissionReply.Reply);
         var targetDescriptor = (await authorityStore.ListAllMeshNodesAsync(
                 sourceAuthority.MeshName,
@@ -996,7 +1000,10 @@ internal sealed class ZLinkActorRemoteJoiner(
             encodedRequest.Payload.ToArray());
     }
 
-    private static async ValueTask<CanonicalAdmission?>
+    // internal (not private) so unit tests can exercise the ZLJR
+    // outer-vs-inner ReplyContentType split directly, matching
+    // DecodeCanonicalApplicationReply/ResolveSourceSpotId below.
+    internal static async ValueTask<CanonicalAdmission?>
         TryRequestCanonicalAdmissionAsync(
             IZLinkBackendCanonicalActorJoin transport,
             ZLinkBackendCanonicalActorJoinRequest request,
@@ -1060,7 +1067,12 @@ internal sealed class ZLinkActorRemoteJoiner(
                     request.ActorAuthorityOwnerGeneration + 1),
                 TargetSpotAuthorityOwnerGeneration:
                     request.TargetAuthorityOwnerGeneration,
-                ReceiveChunkLimitBytes: join.Flags);
+                ReceiveChunkLimitBytes: join.Flags,
+                // The ZLJR saved-work row (command 40) fences this as the
+                // fixed outer service-wire profile, not the reply's actual
+                // typed content type — see ZLinkRemoteActorAdmissionReply.
+                RecoveryReplyContentType:
+                    ServiceWireConstants.FrameworkMultipartContentType);
             return new CanonicalAdmission(reply, handoffId);
         }
         catch (ZLinkFrameworkException)
@@ -1107,7 +1119,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 rawReply);
     }
 
-    private readonly record struct CanonicalAdmission(
+    internal readonly record struct CanonicalAdmission(
         ZLinkRemoteActorAdmissionReply Reply,
         string HandoffId);
 

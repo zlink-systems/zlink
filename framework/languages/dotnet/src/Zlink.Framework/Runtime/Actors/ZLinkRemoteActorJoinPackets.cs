@@ -673,7 +673,19 @@ internal sealed record ZLinkRemoteActorAdmissionReply(
     ulong TargetSpotGeneration = 0,
     ulong TargetAuthorityOwnerGeneration = 0,
     ulong TargetSpotAuthorityOwnerGeneration = 0,
-    ulong ReceiveChunkLimitBytes = 0);
+    ulong ReceiveChunkLimitBytes = 0,
+    // service-wire-v1 ActorJoin(28): the ZLJR saved-work `ReplyContentType`
+    // recorded into the durable relocation recovery root (command 40) is the
+    // OUTER service-wire application-payload profile
+    // (ServiceWireConstants.FrameworkMultipartContentType) — every target,
+    // Java included, always frames the sole canonical actorJoin reply part
+    // through the fixed framework-multipart envelope, so that profile is a
+    // structural invariant rather than a per-reply value. This is distinct
+    // from `ReplyContentType` above, which stays the reply's actual typed
+    // content type (e.g. "application/json") used to decode the raw reply
+    // bytes locally. Null preserves legacy router-channel/admission-JSON
+    // behaviour, where the two meanings still coincide.
+    string? RecoveryReplyContentType = null);
 
 internal sealed record ZLinkRemoteActorAdmissionAbortRequest(
     string ActorId,
