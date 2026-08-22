@@ -469,6 +469,75 @@ per-call poller 구조 자체이며, 이를 고치려면 poller 재사용 또는
 바꿔야 한다. 이는 byte-HWM 계약과 무관한 poll API 내부 설계 변경이므로 범위
 승인이 필요하다.
 
+### 8.10 재부팅 후 한산한 host에서 gate 재실행 (final2 무효화 + final3)
+
+08:59 host 재부팅 뒤 `09:08`~`09:09`에 실행한 `autohwm-stage1-final2-*` gate는
+**무효**로 처리한다. 재부팅 직후 host가 아직 정상 상태로 안정화되지 않아
+0.10.1 자체의 처리량이 정상 대역(약 170~190 Kops/s)에 크게 못 미치는 약 87
+Kops/s로 측정됐고, 이 때문에 local과 release가 거의 동일한 값(약 87 Kops/s
+모두)으로 나와 비교가 무의미했다. 참고용 report 경로:
+
+1. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_090851_autohwm-stage1-final2-local.txt` (87.568 Kops/s)
+2. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_090857_autohwm-stage1-final2-release-0101.txt` (90.665 Kops/s)
+3. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_090903_autohwm-stage1-final2-local.txt` (99.272 Kops/s)
+4. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_090909_autohwm-stage1-final2-release-0101.txt` (87.826 Kops/s)
+5. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_090916_autohwm-stage1-final2-local.txt` (78.379 Kops/s)
+6. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_090922_autohwm-stage1-final2-release-0101.txt` (83.536 Kops/s)
+
+local median ≈ 87.567, release median ≈ 87.826 — 거의 동일해 host 저하가
+release baseline까지 함께 끌어내렸음을 보여준다. 이 데이터로는 gate 판정을
+내릴 수 없어 폐기한다.
+
+같은 host를 재부팅 5~6분 뒤(부팅 안정화 후, load average 0.05~0.16, 다른
+user 프로세스 없음) 재측정했다. 8개 focused test는 전부 통과(2개는 host가
+아직 8-test를 동시 실행하며 걸린 순간적 스케줄링 경합으로 1회 실패했으나,
+개별 재실행 시 `test_retained_hwm_credit`, `test_router_mandatory_hwm` 모두
+바로 통과 — §8.7에 기록된 기존 flakiness와 일치하며 host 정상 판정에 영향
+없음).
+
+측정 직전 `uptime` load average: `0.05, 0.08, 0.04`.
+
+Tag `autohwm-stage1-final3-local` / `autohwm-stage1-final3-release-0101`,
+local/release 교대 3회, `--runs 1`로 실행.
+
+Report 경로 (실행 순서):
+
+1. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_092151_autohwm-stage1-final3-local.txt`
+2. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_092202_autohwm-stage1-final3-release-0101.txt`
+3. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_092212_autohwm-stage1-final3-local.txt`
+4. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_092221_autohwm-stage1-final3-release-0101.txt`
+5. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_092231_autohwm-stage1-final3-local.txt`
+6. `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260822_092241_autohwm-stage1-final3-release-0101.txt`
+
+각 report의 `META,core_source`와 `META,core_version`을 확인해 순서가 의도대로
+local(0.11.1)/release(0.10.1)로 교대했음을 확인했다.
+
+| Run | Version | Throughput (Kops/s) | Bandwidth (MB/s) | Mean(ms) | P95(ms) | P99(ms) |
+|---|---|---|---|---|---|---|
+| 1 | local | 168.141 | 86.088 | 0.286 | 0.451 | 0.549 |
+| 2 | 0.10.1 | 192.050 | 98.329 | 0.243 | 0.378 | 0.472 |
+| 3 | local | 164.053 | 83.995 | 0.292 | 0.460 | 0.556 |
+| 4 | 0.10.1 | 181.110 | 92.728 | 0.257 | 0.397 | 0.500 |
+| 5 | local | 162.885 | 83.397 | 0.294 | 0.468 | 0.579 |
+| 6 | 0.10.1 | 185.180 | 94.812 | 0.252 | 0.387 | 0.485 |
+
+Sanity check: 0.10.1 처리량 median 185.180 Kops/s로 정상 대역(약 170~190) 안에
+있어 host는 건강하다고 판정한다(BLOCKED(host) 아님).
+
+| Metric | Local median | 0.10.1 median | Local/0.10.1 | 판정 |
+|---|---|---|---|---|
+| Throughput (Kops/s) | 164.053 | 185.180 | 88.6% | FAIL |
+| Bandwidth (MB/s) | 83.995 | 94.812 | 88.6% | FAIL |
+| Lat.Mean (ms) | 0.292 | 0.252 | 115.9% | FAIL |
+| Lat.P95 (ms) | 0.460 | 0.387 | 118.9% | FAIL |
+| Lat.P99 (ms) | 0.556 | 0.485 | 114.6% | FAIL |
+
+§8.2.3 기준(local throughput·bandwidth median ≥ 0.10.1 median, 세 latency
+median 모두 ≤ 0.10.1 median)으로 5개 metric 모두 여전히 FAIL이다. 다만 §8.8의
+무효 이전(host 정상 상태) 측정과 비교하면 격차가 계속 줄고 있다(처리량/대역폭
+82.3% → 88.6%, latency 125~126% → 115~119%). **최종 판정: FAIL** — relaxed
+threshold 없이 그대로 기록한다.
+
 ## 9. 다음 stage로 넘어가는 조건
 
 미충족. `doc/plan/autohwm/core-byte-hwm-flow-control-plan.ko.md` §12.2 첫 행은
