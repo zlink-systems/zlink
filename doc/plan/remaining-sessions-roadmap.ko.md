@@ -557,7 +557,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     실패 — 재빌드 후 ST-C4/D2 `get_actor_ref` 404(원격 Join 후 target actor_directory find 실패),
     ST-C2 session bind 실패. 용의: `ea7805d54b`(cpp ZLAU 정렬) 또는 `dd234c3110`. 회귀 판정 진행 중.
 - [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
-- [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어`
+- [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어` — **recon 완료(2026-08-23,
+  `doc/plan/zoneworld-stage7-recon.md`)**: ① "게이트 제외"는 stale — 4언어 러너 모두 이미
+  ZoneWorld 포함(JVM samples/README만 6샘플 서술 잔존), 실 문제는 **완주 판정 엄밀성 격차**
+  (.NET만 ZW-A~G 전 판정 AND 게이트; Java/Kotlin은 A2·B7 grep뿐, C++는 7개 체크로 광역 완료
+  선언) ② **정본 = .NET** 확정(판정 비위조성·다중 관측면·B6/B7/G3-G4 relocation 증명·browser
+  경로 보유), 포팅 순서 Node→Java→Kotlin→C++ ③ golden 추출 계획 9종(위 문서 §5) ④ 언어별
+  effort map(§6). 시나리오 스펙 준수 감사 별도 진행 중(사용자 요청) — 그 판정 반영 후 착수.
 - [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합`(집계=주로 JVM, 보고=전체)
 - [ ] **단계 9 — 모든 e2e 추가·구현·실행 (맨 마지막 작업)** `4언어`(항목별 lockstep)
   - [ ] B1 config-6 (14 시나리오)
