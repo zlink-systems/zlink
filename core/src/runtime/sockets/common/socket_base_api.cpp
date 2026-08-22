@@ -236,10 +236,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     //  keeps sending into a socket that is still PAUSED.
     if (ready_completion)
         sync_local_receive_flow_state_to_pair (ready_completion);
-#ifdef ZLINK_BUILD_TESTS
-    if (pair_id != 0)
-        test_run_attach_flow_window_hook (this, pair_key.first, pair_key.second);
-#endif
     //  Applying the accepted state and releasing the transport-pair hold is one
     //  step, taken under the table mutex. Releasing the hold is an admission
     //  transition, and a pair whose peer is already PAUSED must never pass
@@ -253,16 +249,10 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     bool publish_flow_edge = false;
     bool transport_write_released = false;
     pipe_t *flow_edge_pipe = NULL;
-    uint64_t decided_sequence = 0;
     {
         scoped_lock_t lock (_transport_pairs_sync);
-        decided_sequence = _flow_state_sequence.load (std::memory_order_acquire);
         const transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
         if (pair_id != 0 && it != _transport_pairs.end ()) {
-            //  A frame held while the pair was still unvalidated becomes the
-            //  accepted state here, now that registration has settled.
-            if (it->second.ready)
-                promote_pending_flow_state_locked (it->second);
             if (it->second.remote_flow_seen && it->second.application) {
                 flow_edge_pipe = it->second.application;
                 publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
@@ -276,33 +266,14 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             transport_write_released =
               ready_application->release_writes_for_transport_pair ();
     }
-#ifdef ZLINK_BUILD_TESTS
-    if (pair_id != 0)
-        test_run_attach_publish_window_hook (this, pair_key.first,
-                                             pair_key.second);
-#endif
     //  Publishing an edge calls back into the socket and cannot run under the
-    //  table mutex, so the decision above and its publication are not one
-    //  step. Validate the decision against the flow-state sequence it was
-    //  taken with: if any state was accepted since, abandon the publication.
-    //
-    //  Abandoning is the correct re-decision, not merely the safe one. The
-    //  sequence only moves on a real state change, and that change is already
-    //  queued to this pipe: if it is a PAUSE no edge is wanted, and if it is a
-    //  RESUME the pipe transitions when that command runs and publishes the
-    //  edge itself.
-    if (_flow_state_sequence.load (std::memory_order_acquire)
-        != decided_sequence) {
-        publish_flow_edge = false;
-        transport_write_released = false;
-    }
+    //  table mutex, so a state accepted in between can leave this edge
+    //  momentarily stale. That transient is accepted by design: a send that
+    //  slips through is still bounded by the byte HWM, and the state converges
+    //  as soon as the queued command runs. See the worklog's accepted-by-design
+    //  transients.
     if (publish_flow_edge)
         write_activated (flow_edge_pipe);
-#ifdef ZLINK_BUILD_TESTS
-    if (transport_write_released)
-        _test_transport_write_release_edges.fetch_add (
-          1, std::memory_order_relaxed);
-#endif
     if (transport_write_released) {
         write_activated (ready_application);
         // A routed async submit can already be parked on transport_wait when
@@ -855,12 +826,6 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
                 pair_it->second.completion = NULL;
             else
                 pair_it->second.application = NULL;
-            //  Whatever this connection was holding goes away with it, and
-            //  once the completion lane is gone nothing can be validated for
-            //  this pair any more, so nothing may stay held either.
-            discard_pending_flow_state_locked (
-              pair_it->second, pipe_->get_transport_connection_id (),
-              pair_it->second.completion == NULL);
             if (!pair_it->second.application && !pair_it->second.completion)
                 _transport_pairs.erase (pair_it);
         }

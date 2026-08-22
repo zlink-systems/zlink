@@ -1282,8 +1282,15 @@ bool zlink::pipe_t::apply_remote_flow_state (unsigned char state_,
             //  snapshot instead would miss a sub-LWM read that published
             //  credit while no waiter was registered - that read is the last
             //  one that would ever have qualified.
+            //  Arm and re-read form a store-load pair, which is the one order
+            //  a release store does not constrain. The fence keeps the re-read
+            //  below from being hoisted above the arm above. The reader's own
+            //  half of this pair - it publishes credit before reading the
+            //  waiter - lives in the inbound accounting path and needs the
+            //  matching barrier there; see the worklog.
             _out_active = false;
             _waiting_for_byte_credit.store (true, std::memory_order_release);
+            std::atomic_thread_fence (std::memory_order_seq_cst);
             if (check_hwm_with_peer_snapshot_unlocked ()) {
                 _out_active = true;
                 notify = true;

@@ -109,37 +109,6 @@ struct transport_pair_pipes_t
     bool remote_flow_seen;
     bool remote_flow_paused;
     uint64_t remote_flow_epoch;
-    //  A frame that arrives before this pair's completion pipe is registered
-    //  and validated is held instead of being applied. On a passive transport
-    //  the peer supplies the pair identity in its metadata, so a second
-    //  connection claiming a known pair key could otherwise land a high-epoch
-    //  state - and burn the epoch - before identity validation ever runs.
-    //
-    //  The hold is per candidate source, not per pair: a candidate that never
-    //  wins registration must not be able to overwrite - and thereby destroy -
-    //  the state the winner sent, because an absolute state is not repeated
-    //  until it changes again. Two slots are enough, since only one candidate
-    //  can win; a third candidate is refused rather than allowed to evict an
-    //  existing one.
-    struct pending_flow_slot_t
-    {
-        pending_flow_slot_t () :
-            valid (false), paused (false), epoch (0), source_connection_id (0)
-        {
-        }
-
-        bool valid;
-        bool paused;
-        uint64_t epoch;
-        //  The candidate is named by its transport connection id, not by its
-        //  pipe address. A pipe pointer is not an identity across teardown:
-        //  the object can be freed and a later allocation can land on the same
-        //  address, which would let a stale hold be promoted as if it came
-        //  from the winner.
-        uint64_t source_connection_id;
-    };
-    static const size_t pending_flow_slot_count = 2;
-    pending_flow_slot_t pending_flow[pending_flow_slot_count];
 };
 
 class socket_recv_source_rid_scope_t
@@ -262,23 +231,6 @@ class socket_base_t : public own_t,
     bool consume_receive_flow_state_frame (pipe_t *completion_pipe_,
                                            const zlink::msg_t &msg_);
 
-  private:
-    //  Promotes a pair's buffered frame once its completion pipe is registered
-    //  and validated. Caller holds _transport_pairs_sync.
-    void promote_pending_flow_state_locked (transport_pair_pipes_t &pair_);
-    //  Holds one candidate's latest state. Caller holds _transport_pairs_sync.
-    void buffer_pending_flow_state_locked (transport_pair_pipes_t &pair_,
-                                           uint64_t source_connection_id_,
-                                           bool paused_,
-                                           uint64_t epoch_);
-    //  Drops holds that belong to a connection that is going away. Caller
-    //  holds _transport_pairs_sync.
-    static void discard_pending_flow_state_locked (
-      transport_pair_pipes_t &pair_, uint64_t source_connection_id_,
-      bool discard_all_);
-
-  public:
-
 #ifdef ZLINK_BUILD_TESTS
     //  Test-only observation and injection for the completion-lane flow state.
     //  These compile out of the shipped runtime, so nothing here is reachable
@@ -301,50 +253,12 @@ class socket_base_t : public own_t,
                                           uint64_t epoch_);
     //  Counts the writable edges published by releasing a transport-pair hold.
     //  A pair whose peer is already PAUSED must never produce one.
-    uint32_t test_transport_write_release_edges () const;
-    //  True while some pair already holds an accepted remote state but has not
-    //  been admitted as ready yet. Tests assert this to prove they really
-    //  produced the frame-before-admission ordering they mean to exercise.
-    bool test_flow_frame_accepted_before_pair_ready () const;
-    //  Whether some pair is holding an unpromoted frame, and what it holds.
-    bool test_pending_flow_buffered (bool *paused_out_,
-                                     uint64_t *epoch_out_,
-                                     uint64_t *pair_id_out_ = NULL,
-                                     uint64_t *generation_out_ = NULL) const;
-    //  Drives the buffering step directly, so a competing candidate can be
-    //  simulated without standing up a second hostile connection.
-    bool test_buffer_flow_frame (uint64_t transport_pair_id_,
-                                 uint64_t transport_pair_generation_,
-                                 uint64_t source_connection_id_,
-                                 bool paused_,
-                                 uint64_t epoch_);
-    //  Whether any pair has accepted a remote state, which is what consumes
-    //  the epoch. A buffered frame must not show up here.
-    bool test_any_pair_accepted_flow_state () const;
     bool test_pair_is_ready (uint64_t transport_pair_id_,
                              uint64_t transport_pair_generation_) const;
     //  Seeds and reads the socket-wide epoch, so the wraparound boundary is
     //  reachable without performing 2^64 state changes.
     void test_set_local_receive_flow_epoch (uint64_t epoch_);
     uint64_t test_local_receive_flow_epoch () const;
-    //  Runs inside attach_pipe, between the pair admission and the transport
-    //  hold release, so a test can make a competing producer win that window
-    //  on purpose. Installed globally and only ever set by a test.
-    typedef void (*test_attach_flow_window_fn) (zlink::socket_base_t *socket_,
-                                                uint64_t transport_pair_id_,
-                                                uint64_t generation_);
-    static void test_set_attach_flow_window_hook (
-      test_attach_flow_window_fn hook_);
-    static void test_run_attach_flow_window_hook (
-      zlink::socket_base_t *socket_, uint64_t transport_pair_id_,
-      uint64_t generation_);
-    //  Second window: after the decision's critical section has been left and
-    //  before any edge is published.
-    static void test_set_attach_publish_window_hook (
-      test_attach_flow_window_fn hook_);
-    static void test_run_attach_publish_window_hook (
-      zlink::socket_base_t *socket_, uint64_t transport_pair_id_,
-      uint64_t generation_);
 #endif
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
@@ -991,15 +905,6 @@ class socket_base_t : public own_t,
     //  with the same state succeeds without emitting anything.
     unsigned char _local_receive_flow_state;
     uint64_t _local_receive_flow_epoch;
-    //  Bumped under _transport_pairs_sync every time an accepted remote state
-    //  actually changes. A decision taken under that mutex carries the value it
-    //  saw, and a publication that finds it moved is abandoned: the state that
-    //  moved it is already queued to the pipe and publishes its own edge.
-    std::atomic<uint64_t> _flow_state_sequence;
-    //  Kept in all builds so the class layout does not vary with the test
-    //  configuration, exactly like the counters above. Only a test build ever
-    //  writes or reads it.
-    std::atomic<uint32_t> _test_transport_write_release_edges;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_base_t)
 };
