@@ -180,6 +180,13 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
     if (decoded != flow_state::decode_ok || !completion_pipe_)
         return true;
 
+    //  Both lanes of a pair carry the same id and generation, so those two
+    //  fields cannot tell them apart. The lane of the receiving pipe is local
+    //  truth the peer cannot influence: flow state travels on the completion
+    //  lane only, and an application-lane frame is dropped.
+    if (completion_pipe_->get_transport_lane () != transport_lane_completion)
+        return true;
+
     const uint64_t pair_id = completion_pipe_->get_transport_pair_id ();
     const uint64_t generation =
       completion_pipe_->get_transport_pair_generation ();
@@ -200,6 +207,12 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         //  attach_pipe applies it as soon as the application lane exists.
         transport_pair_pipes_t &pair =
           _transport_pairs[transport_pair_key_t (pair_id, generation)];
+        //  Once the pair knows its completion lane, only that exact pipe may
+        //  carry the state. Before then the pipe's own lane attribute checked
+        //  above is the whole proof, which is what lets a frame that overtakes
+        //  pair admission still be accepted.
+        if (pair.completion && pair.completion != completion_pipe_)
+            return true;
         //  Duplicate or reversed epoch within one generation.
         if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch)
             return true;

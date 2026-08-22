@@ -509,6 +509,59 @@ void test_new_and_reconnected_pairs_receive_the_latest_state ()
     test_context_socket_close_zero_linger (router);
 }
 
+//  Review finding 5. Pair id and generation are the same on both lanes of a
+//  pair, so they cannot on their own tell a completion-lane frame from an
+//  application-lane one. A FLOWSTATE that arrives on the application lane must
+//  be dropped: otherwise a peer could pause a route over the data lane and, by
+//  advancing the epoch there, make the real completion-lane state unusable.
+void test_flow_frame_on_the_application_lane_is_rejected ()
+{
+    paired_fixture_t fixture;
+    fixture.setup ();
+
+    zlink::pipe_t *application = as_socket (fixture.dealer)
+                                   ->test_pair_pipe (fixture.pair_id,
+                                                     fixture.pair_generation,
+                                                     false);
+    TEST_ASSERT_NOT_NULL (application);
+
+    zlink::flow_state::frame_t frame;
+    frame.version = zlink::flow_state::frame_protocol_version;
+    frame.state = k_paused;
+    frame.pair_id = fixture.pair_id;
+    frame.generation = fixture.pair_generation;
+    frame.epoch = 7;
+
+    zlink::msg_t msg;
+    TEST_ASSERT_EQUAL_INT (0, msg.init ());
+    TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+    //  Consumed - it is a flow frame and must never reach another handler -
+    //  but not applied.
+    TEST_ASSERT_TRUE (
+      as_socket (fixture.dealer)
+        ->consume_receive_flow_state_frame (application, msg));
+    TEST_ASSERT_EQUAL_INT (0, msg.close ());
+
+    for (int i = 0; i < 100; ++i) {
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        msleep (1);
+    }
+    TEST_ASSERT_FALSE (as_socket (fixture.dealer)->remote_receive_flow_paused (
+      fixture.pair_id, fixture.pair_generation));
+    TEST_ASSERT_FALSE (
+      as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
+        fixture.pair_id, fixture.pair_generation));
+
+    //  The rejected frame must not have consumed the epoch either: the same
+    //  epoch arriving on the completion lane is still the real state.
+    TEST_ASSERT_TRUE (fixture.inject (
+      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
+      fixture.pair_generation, 7));
+    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+
+    fixture.teardown ();
+}
+
 //  Review finding 4. When a pair becomes ready and a PAUSE has already been
 //  accepted for it, releasing the transport-pair hold must not publish a
 //  writable edge first. Queueing the state and releasing the hold in the same
@@ -818,6 +871,7 @@ int main ()
     RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
     RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
     RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_ready_pair_with_pending_pause_publishes_no_writable_edge);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
     RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);
