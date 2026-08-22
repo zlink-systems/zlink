@@ -461,7 +461,10 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     seal waiter 0, JoinGameNotify 미생성 — re-home 수정 부당(구현 전 실증 원칙 유효 실증). 실제
     실패: 최초 join 42 seal 후 **44/route publication 미도착 → 3s 만료 → unbind**('Bound
     session transport is not started', control handler dispatch_error·staleDescriptor 거부 관찰)
-    — 후속 진단(sol) 진행 중. 이하 기각된 정적 진단 기록:
+    — **근원 수렴·수정 랜딩 `0d7d26b1d2`**(deferred-Join root
+    reference+CRC를 target CAS에 연결 유지 + spec26 관측성 필드) — **기존 모드 0/10 소멸**(베이스
+    라인 2/5 재현 대비). 신규 관측 서명 'LeaveGameMsg completed timeout' 2/10(베이스라인 0/5 —
+    부작용 배제 안 됨, run-dir 2건 보존) sol 진단 중. 이하 기각된 정적 진단 기록:
   - **[기각된 정적 가설] Node TTT 모드 C 정적 진단(2026-08-22)**: 재접속 세션
     JoinGameNotify 미전달의 유력 기전 — relocation seal 창에서 push()가 fire-and-forget 보류 경로
     (bound-actor-relay-sender.ts:79-98)로 들어간 뒤, 브라우저 물리 재접속이
