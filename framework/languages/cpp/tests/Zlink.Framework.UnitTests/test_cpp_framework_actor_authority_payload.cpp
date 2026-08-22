@@ -173,9 +173,14 @@ int main ()
                  == target_phase_authority);
 
     constexpr std::string_view user_spot_hex =
-      "5a4c41550100000000002c000200080200050142014101"
-      "0144000000000000000301450146000000000000000400"
-      "00000000000000000000034b8d34";
+      "5a4c41550100000000002c"
+      "0002000802000501420141010144"
+      "0000000000000003"
+      "01450146"
+      "0000000000000004"
+      "0000000000"
+      "0000000000"
+      "034b8d34";
     const auto user_spot = encode_user_spot_authority_payload ({
       .state = user_spot_authority_state_t::ready,
       .stable_type = "A",
