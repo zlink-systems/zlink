@@ -267,9 +267,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     **잔여 6 selector 작성 완료 `ec6b721205`** — cpp→node·cpp→java 즉시 그린 → **8/12**. 실패 4셀
     (run-dir 보존): ① dotnet→java `/tmp/tmp.slXFHHqITk` ② dotnet→cpp `/tmp/tmp.myoxg6d7L0` — 둘 다
     admission 후 joined 미관측(.NET source 공통 원인 의심 — ZLinkActorRemoteJoiner:1044 non-unwrap
-    이월 항목 포함, sol 진단 중) ③ java→node `/tmp/tmp.e0S4ZOi4TW`(source peer discovery 전)
-    ④ java→cpp `/tmp/tmp.t09MHQHVhl`(target reciprocal peer 전) — discovery 단계, identity 정규화
-    (plaintext→default) 대칭 누락 1순위 용의(terra 진단 중). 러너 부수 변경: Java/C++ target
+    이월 항목 포함, sol 진단 중) ③④ java→node·java→cpp — **진단 확정(공통
+    단일 원인, identity 가설 기각)**: Java decode 불변식 `SERVER ⇔ entrySpotId`
+    (ZLinkMeshNodeDescriptor.java:74)가 Node/C++의 정당한 Server+entry없음 Store row를 거부해
+    Java startup 자체가 사망("Only an Object Server descriptor must publish entrySpotId"). Ruling:
+    단방향 완화(entrySpotId 있으면 SERVER 유지, 역방향 제거) — sonnet 수정+4스테이지 검증 중. 러너 부수 변경: Java/C++ target
     peer-rid 선택값화(.NET 자동 RID 지원), Node target 실 probe handler. 이하 이전 기록: **역방향 .NET→Node 그린** `00dbdfd054`(Node provisional admission + journal
     canonical slot 모델 — TTT 회귀 모드 A 0/8 소거 동반). **4언어 배치 랜딩**: Java
     `6bb05dce85`(flags 판별·eviction race·typed 21), .NET `63e551c2b4`(47/48/49 request/reply·
