@@ -503,6 +503,18 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     3/5). ② Bingo — detached FIFO `pending.dispatch()` 사후 실패 시 `target_closed`
     (actor_gateway_runtime.cpp:119, baseline 재현). 모두 Join-chunk 전환과 무관한 기존 결함으로
     5회×2(현/base) 대조 판정.
+  - **[ ] [신규 등재 2026-08-22, 3c 재개 중 발견] cpp HEAD 기존 red 4건(전부 stash-baseline 재현으로
+    3c diff 무관 확정 — stale 테스트 바이너리가 가리다 재빌드로 노출)**:
+    ① **test_cpp_framework_execution — "canonical Actor Join relocation did not complete(terminal=1,
+    reason=10), actor cutover production ownership regression"**: 실제 런타임 회귀(지문 아님).
+    최근 canonical 랜딩 계열 회귀 판정 필요 — 우선순위 최상.
+    ② test_cpp_framework_target_contract 3건(E2E-CP-53 ×2, E2E-CP-33): 소스 지문 게이트가
+    canonical 전환 이전 코드 문자열(mesh_node_runtime `.prepare=true`/`.finalize=true` 등, 현재
+    0건)에 핀 — 지문을 스펙 15 §4.2 순서의 canonical 경로 심볼로 재핀 필요(행동 회귀 아님).
+    ③ test_cpp_framework_label_contract: `actor-join` 라벨이 taxonomy 미등록(이전 랜딩이 라벨만
+    추가) — taxonomy 정식 등재로 해소(게이트 약화 금지 원칙 준수).
+    ④ test_cpp_framework_tooling_contract: CLion-style configure smoke가 vcpkg toolchain 경로
+    미해석(환경성) — 환경 판정 후 처방.
   - **[x] [해소] cpp SpotActorTransfer e2e HEAD red(5/5 결정적)**: stale e2e 바이너리가 가리던
     실패 — 재빌드 후 ST-C4/D2 `get_actor_ref` 404(원격 Join 후 target actor_directory find 실패),
     ST-C2 session bind 실패. 용의: `ea7805d54b`(cpp ZLAU 정렬) 또는 `dd234c3110`. 회귀 판정 진행 중.
