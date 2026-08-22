@@ -5907,11 +5907,12 @@ public sealed partial class EntrySpotActorDispatchTests
             //  returns to the source — the exact call the production
             //  admission path makes
             //  (ZLinkFrameworkRuntimeActors.AdmitRoutedActorJoinAsync).
-            runtime.RegisterActorJoinPrewarm(
+            await runtime.RegisterActorJoinPrewarmAsync(
                 handoffId,
                 actorId,
                 actorGeneration,
-                DateTimeOffset.UtcNow.AddSeconds(30));
+                DateTimeOffset.UtcNow.AddSeconds(30),
+                CancellationToken.None);
 
             //  Step 2: an arrival for this exact Actor lands on
             //  production ingress before PREPARE (Restore) has installed
