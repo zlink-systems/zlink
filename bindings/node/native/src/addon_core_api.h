@@ -73,6 +73,7 @@ napi_value subscription_at (napi_env env, napi_callback_info info);
 napi_value socket_stream_attach (napi_env env, napi_callback_info info);
 napi_value socket_setopt (napi_env env, napi_callback_info info);
 napi_value socket_getopt (napi_env env, napi_callback_info info);
+napi_value socket_set_receive_flow_state (napi_env env, napi_callback_info info);
 napi_value socket_set_subscription (napi_env env, napi_callback_info info);
 napi_value socket_unset_subscription (napi_env env, napi_callback_info info);
 napi_value handle_set_routing_id (napi_env env, napi_callback_info info);

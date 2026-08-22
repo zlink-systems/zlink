@@ -3504,6 +3504,24 @@ napi_value socket_setopt (napi_env env, napi_callback_info info)
     return ok;
 }
 
+napi_value socket_set_receive_flow_state (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+    int32_t state = 0;
+    napi_get_value_int32 (env, argv[1], &state);
+    const zlink_config_result_t rc = zlink_socket_set_receive_flow_state (
+      sock, static_cast<zlink_receive_flow_state_t> (state));
+    if (rc != ZLINK_CONFIG_OK)
+        return throw_last_error (env, "socket_set_receive_flow_state failed");
+    napi_value ok;
+    napi_get_undefined (env, &ok);
+    return ok;
+}
+
 napi_value socket_getopt (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];

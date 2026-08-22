@@ -9,6 +9,7 @@ export {
   SubmitRetryMode,
   StreamPacketBodyMaterialization,
   PollEventFlag,
+  ReceiveFlowState,
 } from './socket_constants';
 export type {
   MonitorEventMask,
@@ -19,6 +20,7 @@ export type {
   SubmitRetryMode as SubmitRetryModeValue,
   StreamPacketBodyMaterialization as StreamPacketBodyMaterializationValue,
   PollEventFlagValue,
+  ReceiveFlowState as ReceiveFlowStateValue,
 } from './socket_constants';
 export type {
   BaseSocket,

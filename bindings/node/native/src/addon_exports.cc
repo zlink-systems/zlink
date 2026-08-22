@@ -84,6 +84,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("socketStreamAttach", socket_stream_attach),
       ZLINK_METHOD ("socketSetOpt", socket_setopt),
       ZLINK_METHOD ("socketGetOpt", socket_getopt),
+      ZLINK_METHOD ("socketSetReceiveFlowState", socket_set_receive_flow_state),
       ZLINK_METHOD ("socketSetSubscription", socket_set_subscription),
       ZLINK_METHOD ("socketUnsetSubscription", socket_unset_subscription),
       ZLINK_METHOD ("handleSetRoutingId", handle_set_routing_id),

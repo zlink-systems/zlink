@@ -37,6 +37,8 @@ const dealerRequest: Promise<zlink.Message[]> = dealer.request()
   .message('request')
   .timeout(1000)
   .submit();
+dealer.setReceiveFlowState(zlink.ReceiveFlowState.RUNNING);
+router.setReceiveFlowState(zlink.ReceiveFlowState.PAUSED);
 const routerSend: Promise<void> = router.send(routingId).message('routed').submit();
 const routerRequest: Promise<zlink.Message[]> = router.request(routingId)
   .message('request')

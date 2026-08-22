@@ -182,6 +182,7 @@ export interface SocketNativeBinding {
     flags: number
   ) => void;
   socketSetOpt: (socket: NativeHandle, option: number, value: Buffer) => void;
+  socketSetReceiveFlowState: (socket: NativeHandle, state: number) => void;
   socketSetSubscription: (socket: NativeHandle, topic: string) => void;
   socketSetTlsClient: (
     socket: NativeHandle,

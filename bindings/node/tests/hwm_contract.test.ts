@@ -40,14 +40,14 @@ test('HWM and Core HWM budget options preserve uint64 byte values', () => {
   ctx.close();
 });
 
-test('monitor ABI v3 exposes byte telemetry as bigint', () => {
+test('monitor ABI v4 exposes byte telemetry as bigint', () => {
   const ctx = zlink.createContext();
   const socket = zlink.createPairSocket(ctx);
   const monitorHwmBytes = 12_345n;
   const monitor = socket.monitorOpen(undefined, monitorHwmBytes);
   const status = monitor.status();
 
-  assert.equal(status.abiVersion, 3);
+  assert.equal(status.abiVersion, 4);
   assert.ok(status.structSize > 0);
   for (const field of [
     'autoHwmPlannedSndHwmBytes',

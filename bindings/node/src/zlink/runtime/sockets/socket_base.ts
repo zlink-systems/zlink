@@ -14,6 +14,7 @@ import {
 import { validateCString } from '../options/validation';
 import { RoutingId } from '../../contracts';
 import { type MonitorEventType } from '../../contracts/eventing';
+import { SOCKET_MONITOR_EVENT_ALL, type ReceiveFlowState } from '../../contracts/sockets/socket_constants';
 import type { SocketSendReadyHandler } from '../../contracts/messaging';
 import { normalizeRoutingId } from '../core/routing_id';
 import { MonitorSocket } from '../eventing/monitor_socket';
@@ -67,6 +68,12 @@ export class SocketBase extends NativeHandle {
     });
   }
 
+  setReceiveFlowState(state: ReceiveFlowState): void {
+    configCall('socket receive-flow-state configuration failed', () => {
+      requireNative().socketSetReceiveFlowState(getNativeHandle(this), state | 0);
+    });
+  }
+
   /** @internal */
   setSockOptRaw(option: number, value: Buffer | number): void {
     const buf = typeof value === 'number' ? Buffer.from([value & 0xff, 0, 0, 0]) : value;
@@ -87,7 +94,7 @@ export class SocketBase extends NativeHandle {
     monitorHwmBytes: bigint = 0n
   ): MonitorSocket {
     const mask = events === undefined
-      ? 0xFFFF
+      ? SOCKET_MONITOR_EVENT_ALL
       : events.reduce((current, event) => current | (event | 0), 0);
     const exactMonitorHwmBytes = validateUInt64(
       monitorHwmBytes,

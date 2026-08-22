@@ -20,7 +20,19 @@ export type SocketTypeValue = typeof SocketType[keyof typeof SocketType];
 /** A bitmask selecting which socket monitor events to subscribe to. */
 export type MonitorEventMask = number;
 /** Subscribe to every socket monitor event. */
-export const SOCKET_MONITOR_EVENT_ALL = 0xFFFF;
+export const SOCKET_MONITOR_EVENT_ALL = 0x7FFFF;
+
+/**
+ * A socket's local receive-flow state, applied to DEALER/ROUTER sockets via
+ * `setReceiveFlowState`. Values match `zlink_receive_flow_state_t`. Setting
+ * `PAUSED` synthesizes a remote-PAUSE condition for peers on the paired
+ * completion lane; setting the same state again is a no-op success.
+ */
+export const ReceiveFlowState = Object.freeze({
+  RUNNING: 0,
+  PAUSED: 1
+} as const);
+export type ReceiveFlowState = typeof ReceiveFlowState[keyof typeof ReceiveFlowState];
 
 /** Flags that modify send behavior; `DontWait` reports back-pressure instead of blocking. */
 export const SendFlags = Object.freeze({ None: 0, DontWait: 0x0001 } as const);

@@ -2,6 +2,7 @@
 
 import type { MonitorEventType, MonitorSocket } from '../eventing';
 import type { RoutingId } from '../core';
+import type { ReceiveFlowState } from './socket_constants';
 import type { DealerSocket } from './dealer_socket';
 import type { PairSocket } from './pair_socket';
 import type { PubSocket, SubSocket, XPubSocket, XSubSocket } from './pubsub_sockets';
@@ -38,6 +39,15 @@ export interface Socket {
    * also trusts the system CA store.
    */
   setTlsClient(ca: string, hostname: string, trustSystem?: boolean): void;
+  /**
+   * Set this socket's local receive-flow state. Only DEALER and ROUTER
+   * sockets support this; PAIR, the PUB/SUB family, and STREAM report
+   * `ConfigResult.NotSupported`. Setting the same state again succeeds
+   * (idempotent). This does not expose flow frames or any PAUSE-bypass send
+   * path; observe flow transitions only through the existing monitor and
+   * snapshot surfaces.
+   */
+  setReceiveFlowState(state: ReceiveFlowState): void;
 }
 
 /** A socket that can also initiate outbound connections, not just bind. */
