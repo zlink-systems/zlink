@@ -406,11 +406,16 @@ int zlink::router_t::xrecv_routed_with_credit (
     }
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (msg_, &pipe);
 
+    // Every fetch must use the retained form when a public HWM lease was
+    // requested, otherwise the credit of the caller-visible frame is returned
+    // to the queue on receive and the caller ends up with an empty token.
     // Routing-id frames are Core-owned metadata and are never exposed to the
-    // caller. Return their byte credit immediately; only retain the first
-    // caller-visible frame when a public HWM lease was requested.
+    // caller: recvpipe_retained() resets the token before each fetch, so the
+    // credit of a skipped routing-id frame is released as soon as the next
+    // frame is pulled, leaving only the caller-visible frame retained.
+    int rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                        : _fq.recvpipe (msg_, &pipe);
     while (rc == 0 && msg_->is_routing_id ())
         rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
                         : _fq.recvpipe (msg_, &pipe);
