@@ -297,9 +297,16 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     requireActorStage 동기 예외로 FAILED reply 미전송 → silent, StateMachine:474/:652). Ruling:
     opaque token용 unsigned-nonzero reader 분리 + failure reply 보장 — terra 수정 중. ⓑ
     dotnet→cpp = .NET TargetAttemptGeneration=1(:967) vs cpp validator lifecycle 동일성 요구
-    (spot_runtime.cpp:5764). 스펙 28:73은 attempt="시도 순서" — cpp 검사·어제 java 정렬 모두
-    스펙 어긋 의심이나 node→cpp 그린(Node도 lifecycle 송신 가능성) + multiattempt 의미 걸림 →
-    **4언어 attempt-generation 설계 판정 opus 분석 중**(OPEN RULING). java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
+    (spot_runtime.cpp:5764). **설계 판정 완료(opus 분석→Claude ruling, 후보 A)**:
+    attempt = RelocationId 내 시도별 유일 nonzero 불투명 값, 정확 equality 전용(결정 근거 21
+    §7.1 — lifecycle 유도값은 같은 target 재시도 구분 불가; later-attempt-wins는 admission
+    registry 담당이라 ordinality 불요). cpp 초과 제약 2곳만 수정(spot_runtime.cpp:5766-5768
+    conjunct 삭제, :5838-5839 비교대상 target_node_generation으로), source 3언어 무변경. 스펙
+    모호성 구체화 `d89aaad84d`(28:73·21 §7.1 ko/en, sol 리뷰 중). sonnet cpp 수정+5스테이지 검증
+    중. **부수 발견 카드**: ① Java command 33이 attempt 슬롯에 authority owner generation+1 오용
+    (RetireTargetEndpoint:719-721↔ReplyRoutes:337-339 자기정합 — 52:286 위반, 잠복) ② java→cpp
+    PROTOCOL_ERROR는 attempt 원인 아님(별도 conjunct — 미진단) ③ 재시도 카운터 도입 시 4언어
+    source 증가값 발행(향후). java→dotnet 그린은 .NET ValidatePrepare(:2846) 관대함
     때문(정합 증거 아님). .NET coordinator fence 수정(1264653381)은 dotnet-java 재실행서 여전히
     joined 미관측 — 다음 불일치 여부 sol 연속 계측 진단 중.
     .NET 이중 decode 수정 랜딩 `adfa26824b` 후 새 rung **sol 계측으로 수렴**: unbound join에서
