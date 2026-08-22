@@ -9363,7 +9363,7 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkStoreKey key,
             CancellationToken cancellationToken = default)
         {
-            if (key.Value.Contains("authority:meta:", StringComparison.Ordinal))
+            if (key.Value.StartsWith("authority\0actor\0", StringComparison.Ordinal))
                 await Task.Delay(delay, cancellationToken);
             return await inner.ReadAsync(key, cancellationToken);
         }
