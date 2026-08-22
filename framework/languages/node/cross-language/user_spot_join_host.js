@@ -17,6 +17,8 @@ const { decodeActorJoin28 } = require(
 const CANONICAL_ACTOR_JOIN_PACKET = 'ZLinkFrameworkActorJoinRequest';
 const mode = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
+let userSpotTargetJoined;
+let resolveUserSpotTargetJoined;
 
 function parseArgs(argv) {
   const values = {};
@@ -309,6 +311,7 @@ class RelocationUserSpot {
       `user-spot-joined|actor=${actor.actorId}|spot=${this.context.spotId}`
       + `|nodeRid=${this.context.nodeRid}`
     );
+    resolveUserSpotTargetJoined?.();
   }
 
   async onLeaveActor() {}
@@ -349,6 +352,25 @@ nestjs.zlinkEntrySpotActorRequestHandler({
   entrySpot: () => RelocationEntrySpot,
   packetName: 'UserSpotProbeReq'
 })(SourceProbeHandler);
+
+class TargetProbeHandler {
+  async handle(_spot, actor, _context, request) {
+    const nodeRid = require_('node-rid');
+    appendEvent(`user-spot-probe-served|nodeRid=${nodeRid}|actor=${actor.actorId}`);
+    return {
+      actorId: actor.actorId,
+      spotId: String(actor.context.spotId),
+      nodeRid,
+      stateVersion: actor.stateVersion,
+      marker: request.marker
+    };
+  }
+}
+nestjs.zlinkSpotActorRequestHandler({
+  actor: () => RelocationActor,
+  spot: () => RelocationUserSpot,
+  packetName: 'UserSpotProbeReq'
+})(TargetProbeHandler);
 
 async function userSpotJoinSource() {
   const meshName = require_('mesh-name');
@@ -454,6 +476,9 @@ async function userSpotJoinTarget() {
   const spotId = require_('spot-id');
   const keyPrefix = args['redis-key-prefix'] ?? 'zlink-cross-user-spot-join';
   const flowProvider = installMessageFlowCapture();
+  userSpotTargetJoined = new Promise(resolve => {
+    resolveUserSpotTargetJoined = resolve;
+  });
 
   class UserSpotJoinTargetModule {}
   Module({
@@ -488,7 +513,12 @@ async function userSpotJoinTarget() {
         return builder.build();
       }
     })],
-    providers: [RelocationActorFactory, RelocationActorAdapter, RelocationUserSpot]
+    providers: [
+      RelocationActorFactory,
+      RelocationActorAdapter,
+      RelocationUserSpot,
+      TargetProbeHandler
+    ]
   })(UserSpotJoinTargetModule);
 
   const app = await NestFactory.createApplicationContext(
@@ -514,9 +544,46 @@ async function userSpotJoinTarget() {
   runtimeOptions.mesh(meshName).placementWeight = 0;
   writeReady();
 
+  const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
+  void probeUserSpotTarget(actorClient, created.spot.nodeRid);
+
   await new Promise(() => {});
   await app.close();
   await flowProvider?.shutdown();
+}
+
+async function probeUserSpotTarget(actorClient, targetNodeRid) {
+  const joined = await Promise.race([
+    userSpotTargetJoined.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 75_000))
+  ]);
+  if (!joined) {
+    appendEvent(`user-spot-probe-timeout|targetRid=${targetNodeRid}|failure=join-not-observed`);
+    return;
+  }
+
+  const deadline = Date.now() + 90_000;
+  let lastFailure = 'none';
+  while (Date.now() < deadline) {
+    try {
+      const reply = await actorClient
+        .requestToActor(require_('actor-id'), new UserSpotProbeReq('target-owner-probe'))
+        .timeout(5_000)
+        .submit();
+      if (reply.nodeRid === targetNodeRid) {
+        appendEvent(
+          `user-spot-probe|nodeRid=${reply.nodeRid}|targetRid=${targetNodeRid}`
+          + `|actor=${reply.actorId}|stateVersion=${reply.stateVersion}`
+        );
+        return;
+      }
+      lastFailure = `unexpected-owner:${reply.nodeRid}`;
+    } catch (error) {
+      lastFailure = `${errorKindName(error?.kind)}:${String(error?.message ?? error)}`;
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  appendEvent(`user-spot-probe-timeout|targetRid=${targetNodeRid}|failure=${lastFailure}`);
 }
 
 async function main() {

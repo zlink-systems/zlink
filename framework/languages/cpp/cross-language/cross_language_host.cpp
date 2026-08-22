@@ -1314,9 +1314,11 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                      + "|state=" + state_name);
         write_ready ();
 
-        _discovery = std::thread ([this, &sink, &routes, &mesh_runtime] {
-            observe_source_peer (sink, routes, mesh_runtime);
-        });
+        if (!_source_node_rid.empty ()) {
+            _discovery = std::thread ([this, &sink, &routes, &mesh_runtime] {
+                observe_source_peer (sink, routes, mesh_runtime);
+            });
+        }
         _probe = std::thread ([this, &sink, &actors, target_node_rid] {
             probe_joined_actor (sink, actors, target_node_rid);
         });
@@ -1808,7 +1810,7 @@ int main (int argc, char **argv)
              * Spot exists and the placement weight has dropped to zero. */
             app.add_hosted_service (std::make_unique<user_spot_target_service_t> (
               require ("mesh-name"), require ("spot-id"),
-              option ("actor-id", "cross-lang-user-spot-actor"), require ("peer-rid")));
+              option ("actor-id", "cross-lang-user-spot-actor"), option ("peer-rid")));
         }
         if (mode == "user-spot-source") {
             app.add_hosted_service (std::make_unique<user_spot_source_service_t> (

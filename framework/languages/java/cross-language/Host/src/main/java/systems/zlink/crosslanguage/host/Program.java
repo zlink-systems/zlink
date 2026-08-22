@@ -423,7 +423,7 @@ public final class Program {
         String meshName = args.require("mesh-name");
         String spotId = args.require("spot-id");
         String actorId = args.option("actor-id", "cross-lang-user-spot-actor");
-        String sourceNodeRid = args.require("peer-rid");
+        String sourceNodeRid = args.option("peer-rid", null);
         try {
             ZLinkSpotCreateResult created = spots
                 .getOrCreate(spotId, RelocationUserSpot.SPOT_TYPE)
@@ -443,8 +443,10 @@ public final class Program {
             // ApplicationRunners run before main() writes the ready file, and
             // the source only starts after it appears; write it here.
             writeReadyFile(args);
-            startDaemon("user-spot-target-discovery",
-                () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
+            if (sourceNodeRid != null && !sourceNodeRid.isBlank()) {
+                startDaemon("user-spot-target-discovery",
+                    () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
+            }
             startDaemon("user-spot-target-probe",
                 () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
         } catch (ExecutionException | TimeoutException error) {

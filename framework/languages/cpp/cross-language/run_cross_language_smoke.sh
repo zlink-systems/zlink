@@ -54,6 +54,8 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-node" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-dotnet" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-java" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-java" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-node" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -1398,6 +1400,207 @@ stage_cpp_source_dotnet_target_user_spot_join() {
   RESULTS+=("User-Spot Join: C++ source -> .NET target (JoinSpot admission, joined lifecycle, target-owner probe)")
 }
 
+wait_for_user_spot_target_outcome() {
+  local target_events="$1"
+  wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
+  wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
+  wait_for_line "${target_events}" "user-spot-probe|nodeRid=" 90
+  if grep -qF "user-spot-probe-timeout" "${target_events}"; then
+    echo "User-Spot Join stage: target-side Actor probe did not reach the target RID" >&2
+    exit 1
+  fi
+}
+
+# --- User-Spot JoinSpot: .NET source -> Java target --------------------------
+stage_dotnet_source_java_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint source_events target_events
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/dotnet-user-spot-join-source-java.events"
+  target_events="${RUN_DIR}/java-user-spot-target-dotnet.events"
+
+  start_redis user-spot-join-redis-dotnet-java "${redis_port}"
+  start_java java-user-spot-target-dotnet user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid java-user-spot-join-target \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot --actor-id cross-lang-user-spot-actor --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/java-user-spot-target-dotnet.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_dotnet dotnet-user-spot-join-source-java user-spot-source \
+    --mesh-name cross.user-spot-join --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${source_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-user-spot-join-source-java.ready" 180
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_user_spot_target_outcome "${target_events}"
+  stop_all
+  RESULTS+=("User-Spot Join: .NET source -> Java target (admission, joined lifecycle, target-owner probe)")
+}
+
+# --- User-Spot JoinSpot: Java source -> Node target --------------------------
+stage_java_source_node_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/java-user-spot-join-source-node.events"
+  target_events="${RUN_DIR}/node-user-spot-target-java.events"
+  start_file="${RUN_DIR}/user-spot-join-java-node.start"
+
+  start_redis user-spot-join-redis-java-node "${redis_port}"
+  start_node_user_spot_join node-user-spot-target-java user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid node-user-spot-join-target \
+    --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/node-user-spot-target-java.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_java java-user-spot-join-source-node user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid java-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${source_events}" --start-file "${start_file}"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_user_spot_target_outcome "${target_events}"
+  stop_all
+  RESULTS+=("User-Spot Join: Java source -> Node target (admission, joined lifecycle, target-owner probe)")
+}
+
+# --- User-Spot JoinSpot: .NET source -> C++ target ---------------------------
+stage_dotnet_source_cpp_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint source_events target_events
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/dotnet-user-spot-join-source-cpp.events"
+  target_events="${RUN_DIR}/cpp-user-spot-target-dotnet.events"
+
+  start_redis user-spot-join-redis-dotnet-cpp "${redis_port}"
+  start_cpp cpp-user-spot-target-dotnet user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid cpp-user-spot-join-target \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot --actor-id cross-lang-user-spot-actor \
+    --event-file "${target_events}" --ready-file "${RUN_DIR}/cpp-user-spot-target-dotnet.ready"
+  wait_for_ready "${RUN_DIR}/cpp-user-spot-target-dotnet.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_dotnet dotnet-user-spot-join-source-cpp user-spot-source \
+    --mesh-name cross.user-spot-join --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${source_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-user-spot-join-source-cpp.ready" 180
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_user_spot_target_outcome "${target_events}"
+  stop_all
+  RESULTS+=("User-Spot Join: .NET source -> C++ target (admission, joined lifecycle, target-owner probe)")
+}
+
+# --- User-Spot JoinSpot: C++ source -> Node target ---------------------------
+stage_cpp_source_node_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/cpp-user-spot-join-source-node.events"
+  target_events="${RUN_DIR}/node-user-spot-target-cpp.events"
+  start_file="${RUN_DIR}/user-spot-join-cpp-node.start"
+
+  start_redis user-spot-join-redis-cpp-node "${redis_port}"
+  start_node_user_spot_join node-user-spot-target-cpp user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid node-user-spot-join-target \
+    --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/node-user-spot-target-cpp.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_cpp cpp-user-spot-join-source-node user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid cpp-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${source_events}" \
+    --start-file "${start_file}" --ready-file "${RUN_DIR}/cpp-user-spot-join-source-node.ready"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_user_spot_target_outcome "${target_events}"
+  stop_all
+  RESULTS+=("User-Spot Join: C++ source -> Node target (admission, joined lifecycle, target-owner probe)")
+}
+
+# --- User-Spot JoinSpot: Java source -> C++ target ---------------------------
+stage_java_source_cpp_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/java-user-spot-join-source-cpp.events"
+  target_events="${RUN_DIR}/cpp-user-spot-target-java.events"
+  start_file="${RUN_DIR}/user-spot-join-java-cpp.start"
+
+  start_redis user-spot-join-redis-java-cpp "${redis_port}"
+  start_cpp cpp-user-spot-target-java user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid cpp-user-spot-join-target \
+    --peer-rid java-user-spot-join-source --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot --actor-id cross-lang-user-spot-actor \
+    --event-file "${target_events}" --ready-file "${RUN_DIR}/cpp-user-spot-target-java.ready"
+  wait_for_ready "${RUN_DIR}/cpp-user-spot-target-java.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_java java-user-spot-join-source-cpp user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid java-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${source_events}" --start-file "${start_file}"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_user_spot_target_outcome "${target_events}"
+  stop_all
+  RESULTS+=("User-Spot Join: Java source -> C++ target (admission, joined lifecycle, target-owner probe)")
+}
+
+# --- User-Spot JoinSpot: C++ source -> Java target ---------------------------
+stage_cpp_source_java_target_user_spot_join() {
+  local redis_port source_port target_port source_endpoint target_endpoint source_events target_events start_file
+  redis_port="$(free_port)"; source_port="$(free_port)"; target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"; target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/cpp-user-spot-join-source-java.events"
+  target_events="${RUN_DIR}/java-user-spot-target-cpp.events"
+  start_file="${RUN_DIR}/user-spot-join-cpp-java.start"
+
+  start_redis user-spot-join-redis-cpp-java "${redis_port}"
+  start_java java-user-spot-target-cpp user-spot-target \
+    --mesh-name cross.user-spot-join --node-rid java-user-spot-join-target \
+    --peer-rid cpp-user-spot-join-source --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
+    --spot-id cross-lang-user-spot --actor-id cross-lang-user-spot-actor --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/java-user-spot-target-cpp.ready" 180
+  wait_for_line "${target_events}" "user-spot-created|spot=cross-lang-user-spot" 30
+  start_cpp cpp-user-spot-join-source-java user-spot-source \
+    --mesh-name cross.user-spot-join --node-rid cpp-user-spot-join-source \
+    --bind-endpoint "${source_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
+    --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
+    --actor-id cross-lang-user-spot-actor --event-file "${source_events}" \
+    --start-file "${start_file}" --ready-file "${RUN_DIR}/cpp-user-spot-join-source-java.ready"
+  wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
+  wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
+  touch "${start_file}"
+  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
+  wait_for_user_spot_target_outcome "${target_events}"
+  stop_all
+  RESULTS+=("User-Spot Join: C++ source -> Java target (admission, joined lifecycle, target-owner probe)")
+}
+
 # --- entry-spot relocation: Java source -> .NET target ------------------------
 # Same scenario as stage_node_source_dotnet_target_relocation, but both sides
 # now use pure automatic (Location-Store-only) discovery -- confirmed by
@@ -1618,6 +1821,54 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=user-spot-join-cpp-dotnet result=passed"
+    exit 0
+    ;;
+  user-spot-join-dotnet-java)
+    stage_dotnet_source_java_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-dotnet-java result=passed"
+    exit 0
+    ;;
+  user-spot-join-java-node)
+    stage_java_source_node_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-java-node result=passed"
+    exit 0
+    ;;
+  user-spot-join-dotnet-cpp)
+    stage_dotnet_source_cpp_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-dotnet-cpp result=passed"
+    exit 0
+    ;;
+  user-spot-join-cpp-node)
+    stage_cpp_source_node_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-cpp-node result=passed"
+    exit 0
+    ;;
+  user-spot-join-java-cpp)
+    stage_java_source_cpp_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-java-cpp result=passed"
+    exit 0
+    ;;
+  user-spot-join-cpp-java)
+    stage_cpp_source_java_target_user_spot_join
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=user-spot-join-cpp-java result=passed"
     exit 0
     ;;
   all)
