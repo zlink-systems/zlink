@@ -374,11 +374,11 @@ stable public results at the API boundary.
 
 The code is organized around three files:
 
-- [core/include/zlink_errno.h](../../../include/zlink_errno.h)
+- [core/include/zlink_errno.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_errno.h)
   defines public extended errno values.
-- [core/include/zlink_enum.h](../../../include/zlink_enum.h)
+- [core/include/zlink_enum.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_enum.h)
   defines public result enums.
-- [core/src/runtime/core/internal_errno.hpp](../../../src/runtime/core/internal_errno.hpp)
+- [core/src/runtime/core/internal_errno.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/runtime/core/internal_errno.hpp)
   defines the internal errno catalog used by normalization helpers.
 
 ### Why Internal `errno` Stays
@@ -411,7 +411,7 @@ NOT_SUPPORTED, INVALID_STATE, THREAD_VIOLATION, OUT_OF_MEMORY,
 SEQ_EXHAUSTED, INTERNAL_ERROR).
 
 The normalization helper lives in
-[core/src/api/message/submit_result_internal.hpp](../../../src/api/message/submit_result_internal.hpp).
+[core/src/api/message/submit_result_internal.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/api/message/submit_result_internal.hpp).
 It maps the internal submit errno catalog to public submit results.
 
 ### Request Completion Normalization
@@ -422,7 +422,7 @@ PROTOCOL_ERROR, INTERNAL_ERROR, REJECTED, CONFLICT, BUSY, NOT_CONNECTED,
 INVALID_ARGUMENT, INVALID_STATE, NOT_SUPPORTED).
 
 The normalization helper lives in
-[core/src/api/message/request_result_internal.hpp](../../../src/api/message/request_result_internal.hpp).
+[core/src/api/message/request_result_internal.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/api/message/request_result_internal.hpp).
 It maps callback completion errno values to the public completion result
 contract.
 
@@ -432,7 +432,7 @@ Language bindings inherit this 8-category structure as eight per-function
 exception/error subclasses (e.g. `SubmitException` / `BindException` /
 `RecvException` ...). The method signature reveals which failure category
 can occur. See
-[bindings/doc/spec/README.md](../../../../bindings/doc/spec/README.en.md)
+[bindings/doc/spec/README.md](https://zlink-systems.github.io/zlink/bindings/spec/README/)
 (Per-Function Error Type Hierarchy) for the canonical binding rule and the
 [Result and errno mapping](#result-and-errno-mapping) section above for the
 full enum catalog.

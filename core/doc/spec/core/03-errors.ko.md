@@ -378,11 +378,11 @@ output을 변경하지 않는다.
 
 코드는 세 파일을 중심으로 구성된다.
 
-- [core/include/zlink_errno.h](../../../include/zlink_errno.h)는
+- [core/include/zlink_errno.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_errno.h)는
   공개 확장 errno 값을 정의한다.
-- [core/include/zlink_enum.h](../../../include/zlink_enum.h)는
+- [core/include/zlink_enum.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_enum.h)는
   공개 result enum을 정의한다.
-- [core/src/runtime/core/internal_errno.hpp](../../../src/runtime/core/internal_errno.hpp)는
+- [core/src/runtime/core/internal_errno.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/runtime/core/internal_errno.hpp)는
   정규화 helper가 사용하는 내부 errno catalog를 정의한다.
 
 ### 내부 `errno`를 유지하는 이유
@@ -413,7 +413,7 @@ INVALID_ARGUMENT, NOT_SUPPORTED, INVALID_STATE, THREAD_VIOLATION, OUT_OF_MEMORY,
 INTERNAL_ERROR)을 공유한다.
 
 정규화 helper는
-[core/src/api/message/submit_result_internal.hpp](../../../src/api/message/submit_result_internal.hpp)에
+[core/src/api/message/submit_result_internal.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/api/message/submit_result_internal.hpp)에
 있다. 이 helper는 내부 submit errno catalog를 공개 submit result로 대응시킨다.
 
 ### Request completion 정규화
@@ -423,7 +423,7 @@ NOT_FOUND, TERMINATED, PROTOCOL_ERROR, INTERNAL_ERROR, REJECTED, CONFLICT, BUSY,
 INVALID_ARGUMENT, INVALID_STATE, NOT_SUPPORTED)을 사용한다.
 
 정규화 helper는
-[core/src/api/message/request_result_internal.hpp](../../../src/api/message/request_result_internal.hpp)에
+[core/src/api/message/request_result_internal.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/api/message/request_result_internal.hpp)에
 있다. 이 helper는 callback completion errno 값을 공개 completion result 계약으로 대응시킨다.
 
 ### Binding 표면
@@ -431,7 +431,7 @@ INVALID_ARGUMENT, INVALID_STATE, NOT_SUPPORTED)을 사용한다.
 언어 bindings는 이 8개 범주 구조를 함수별 8개 exception/error subclass(예: `SubmitException` /
 `BindException` / `RecvException` ...)로 그대로 물려받는다. method signature를 보면 어떤 실패
 범주가 발생할 수 있는지 알 수 있다. 정식 binding 규칙은
-[bindings/doc/spec/README.md](../../../../bindings/doc/spec/README.ko.md)(Per-Function Error Type
+[bindings/doc/spec/README.md](https://zlink-systems.github.io/zlink/ko/bindings/spec/README/)(Per-Function Error Type
 Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-errno-대응) 절을 참조한다.
 
 ### `zlink_errno()`의 범위
