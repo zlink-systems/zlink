@@ -292,7 +292,8 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
                                   uint64_t *connection_id_out_,
                                   pipe_t **source_pipe_out_)
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
+    socket_msg_dispatch_lock_t dispatch_lock =
+      lock_socket_msg_dispatch_if_active ();
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (source_pipe_out_)

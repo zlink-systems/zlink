@@ -81,7 +81,11 @@ boost::asio::ip::tcp protocol_for_fd (fd_t fd_)
     return boost::asio::ip::tcp::v4 ();
 }
 
-const bool tcp_allow_sync_write_on = env::flag_enabled ("ZLINK_ASIO_TCP_SYNC_WRITE");
+// TCP owns the immediate-write decision: a ready socket can complete the
+// small data-plane write without an executor round trip, while EAGAIN falls
+// back to the existing asynchronous path. Keep an opt-out for diagnostics.
+const bool tcp_allow_sync_write_on =
+  !env::flag_enabled ("ZLINK_ASIO_TCP_DISABLE_SYNC_WRITE");
 
 const bool tcp_use_async_write_some_on = env::flag_enabled ("ZLINK_ASIO_TCP_ASYNC_WRITE_SOME");
 

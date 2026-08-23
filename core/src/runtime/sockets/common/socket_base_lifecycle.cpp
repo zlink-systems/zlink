@@ -228,6 +228,10 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
 {
     receive_runtime_t &receive = receive_runtime ();
     mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);
+    // Block new lock-free receive attempts before installing the async owner.
+    // A receive that already passed its second check must complete before the
+    // executor can enter xdispatch_io()/command delivery under receive.sync.
+    receive.require_receive_sync_for_async_owner ();
     receive.async_command_handoff_pending.store (true, std::memory_order_release);
     // Wake the former public owner before waiting for its command scope.  The
     // pending bit prevents a second public waiter from taking ownership while
@@ -247,6 +251,7 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
         // waiting on the separate receive-progress channel.
         notify_receive_progress ();
     } else {
+        receive.release_receive_sync_from_async_owner ();
         // A public waiter may have observed the pending handoff and switched
         // to the progress channel. Return it to the primary mailbox owner.
         notify_receive_progress ();
@@ -270,6 +275,12 @@ void zlink::socket_base_t::stop_async_mailbox_processing ()
 void zlink::socket_base_t::wait_async_quiesced (int timeout_ms_)
 {
     lifecycle_coordinator ().wait_async_quiesced (timeout_ms_);
+}
+
+void zlink::socket_base_t::retain_async_command_processing ()
+{
+    monitor_runtime ().owns_async_command_processing.store (
+      false, std::memory_order_release);
 }
 
 int zlink::socket_base_t::ensure_async_command_processing ()
@@ -420,6 +431,7 @@ void zlink::socket_base_t::process_async_mailbox ()
                 if (!mailbox->detach_io_context_if_idle ())
                     continue;
                 lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
+                receive_runtime ().release_receive_sync_from_async_owner ();
                 notify_receive_progress ();
                 finish_deferred_close_after_async_quiesced ();
             }
@@ -443,6 +455,7 @@ void zlink::socket_base_t::process_async_mailbox ()
                 continue;
             //  Signal quiesce completion to waiting close()/start_reaping().
             lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
+            receive_runtime ().release_receive_sync_from_async_owner ();
             notify_receive_progress ();
             finish_deferred_close_after_async_quiesced ();
             return;

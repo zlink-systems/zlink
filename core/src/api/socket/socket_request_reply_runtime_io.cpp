@@ -264,35 +264,65 @@ int recv_router_message_direct (socket_handle_t handle_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
-                                std::vector<retained_credit_token_t> *credits_out_)
+                                std::vector<retained_credit_token_t> *credits_out_,
+                                zlink_msg_t *terminal_part_out_,
+                                bool *terminal_part_returned_out_,
+                                zlink_routing_id_t *terminal_source_storage_)
 {
     if (!handle_.socket || !source_node_rid_out_ || !request_seq_out_ || !parts_out_
         || !part_count_out_) {
         errno = EFAULT;
         return -1;
     }
+    if (terminal_part_returned_out_)
+        *terminal_part_returned_out_ = false;
 
+    // Raw ROUTER traffic does not own request/reply state. Only consult an
+    // already-active request surface here so its bounded reply-target contract
+    // can stop us before consuming another message. Pure routed data therefore
+    // stays out of the request registry and its mutex entirely.
     std::shared_ptr<socket_request_reply_state_t> state =
-      find_or_create_request_reply_state (handle_);
-    reply_target_reservation_t reply_target_reservation (state);
-    if (!reply_target_reservation.acquire ())
-        return -1;
+      handle_.socket->has_request_reply_state ()
+        ? handle_.socket->request_reply_state ()
+        : std::shared_ptr<socket_request_reply_state_t> ();
+    if (state) {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        if (state->closing) {
+            errno = ETERM;
+            return -1;
+        }
+        if (state->reply_target_slots >= max_reply_target_slots) {
+            errno = EAGAIN;
+            return -1;
+        }
+    }
 
-    zlink::msg_t current;
-    const int current_init_rc = current.init ();
-    errno_assert (current_init_rc == 0);
-    zlink_routing_id_t source_rid;
-    memset (&source_rid, 0, sizeof (source_rid));
+    const bool receive_terminal_direct =
+      terminal_part_out_ && terminal_part_returned_out_ && !credits_out_;
+    zlink::msg_t current_storage;
+    if (!receive_terminal_direct) {
+        const int current_init_rc = current_storage.init ();
+        errno_assert (current_init_rc == 0);
+    }
+    zlink::msg_t &current =
+      receive_terminal_direct
+        ? *reinterpret_cast<zlink::msg_t *> (terminal_part_out_)
+        : current_storage;
+    zlink_routing_id_t source_rid_storage;
+    zlink_routing_id_t *const source_rid =
+      terminal_source_storage_ ? terminal_source_storage_
+                               : &source_rid_storage;
+    memset (source_rid, 0, sizeof (*source_rid));
     zlink::pipe_t *source_pipe = NULL;
     if (credits_out_)
         credits_out_->clear ();
     retained_credit_token_t current_credit;
     const int first_recv_rc = credits_out_
                                 ? handle_.socket->recv_routed_retained (
-                                    &current, &source_rid, &current_credit,
+                                    &current, source_rid, &current_credit,
                                     flags_, NULL, &source_pipe)
                                 : handle_.socket->recv_routed (
-                                    &current, &source_rid, flags_, NULL,
+                                    &current, source_rid, flags_, NULL,
                                     &source_pipe);
     if (first_recv_rc != 0) {
         return -1;
@@ -304,6 +334,16 @@ int recv_router_message_direct (socket_handle_t handle_,
       source_pipe ? source_pipe->get_transport_pair_generation () : 0;
 
     if ((current.flags () & zlink::msg_t::more) == 0) {
+        zlink_routing_id_t *const exported_source = source_rid;
+        *source_node_rid_out_ = exported_source;
+        *request_seq_out_ = 0;
+        if (receive_terminal_direct) {
+            // The part API already owns an initialized destination. A terminal
+            // raw frame was received there directly; no multipart TLS view or
+            // request-envelope state exists for this data-plane role.
+            *terminal_part_returned_out_ = true;
+            return 0;
+        }
         zlink_msg_t *first_slot = NULL;
         if (zlink::recv_tls_view::begin_with_first_slot (parts_out_, part_count_out_, &first_slot)
             != 0) {
@@ -323,14 +363,22 @@ int recv_router_message_direct (socket_handle_t handle_,
             return -1;
         }
 
-        assign_routing_id_compact (&metadata.source_rid, source_rid);
-        *source_node_rid_out_ = &metadata.source_rid;
-        *request_seq_out_ = 0;
         const int export_rc = zlink::recv_tls_view::commit_reserved_single (
           parts_out_, part_count_out_);
         if (export_rc == 0 && credits_out_)
             credits_out_->push_back (std::move (current_credit));
         return export_rc;
+    }
+
+    if (!state)
+        state = find_or_create_request_reply_state (handle_);
+    reply_target_reservation_t reply_target_reservation (state);
+    if (!reply_target_reservation.acquire ()) {
+        const int saved_errno = errno;
+        const int close_rc = current.close ();
+        errno_assert (close_rc == 0);
+        errno = saved_errno;
+        return -1;
     }
 
     std::vector<zlink_msg_t> raw_parts;
@@ -394,8 +442,8 @@ int recv_router_message_direct (socket_handle_t handle_,
             }
             pending_key_t key;
             key.peer_rid.assign (
-              reinterpret_cast<const char *> (source_rid.data),
-              source_rid.size);
+              reinterpret_cast<const char *> (source_rid->data),
+              source_rid->size);
             key.request_seq = envelope.request_seq;
             {
                 std::lock_guard<std::mutex> lock (state->mutex);
@@ -423,7 +471,7 @@ int recv_router_message_direct (socket_handle_t handle_,
     } else
         *request_seq_out_ = 0;
 
-    metadata.source_rid = source_rid;
+    metadata.source_rid = *source_rid;
     *source_node_rid_out_ = &metadata.source_rid;
     const int export_rc = export_router_payload_parts (
       raw_parts.data (), raw_parts.size (), start_index, parts_out_,
@@ -444,17 +492,29 @@ int recv_dealer_message_direct (
   zlink_msg_t **parts_out_,
   size_t *part_count_out_,
   int flags_,
-  std::vector<retained_credit_token_t> *credits_out_)
+  std::vector<retained_credit_token_t> *credits_out_,
+  zlink_msg_t *terminal_part_out_,
+  bool *terminal_part_returned_out_)
 {
-    if (!handle_.socket || !state_ || !message_type_out_ || !request_seq_out_
+    if (!handle_.socket || !message_type_out_ || !request_seq_out_
         || !parts_out_ || !part_count_out_) {
         errno = EFAULT;
         return -1;
     }
+    if (terminal_part_returned_out_)
+        *terminal_part_returned_out_ = false;
 
-    zlink::msg_t current;
-    const int current_init_rc = current.init ();
-    errno_assert (current_init_rc == 0);
+    const bool receive_terminal_direct =
+      terminal_part_out_ && terminal_part_returned_out_ && !credits_out_;
+    zlink::msg_t current_storage;
+    if (!receive_terminal_direct) {
+        const int current_init_rc = current_storage.init ();
+        errno_assert (current_init_rc == 0);
+    }
+    zlink::msg_t &current =
+      receive_terminal_direct
+        ? *reinterpret_cast<zlink::msg_t *> (terminal_part_out_)
+        : current_storage;
     zlink::pipe_t *source_pipe = NULL;
     if (credits_out_)
         credits_out_->clear ();
@@ -467,6 +527,27 @@ int recv_dealer_message_direct (
                                     &current, &source_pipe, flags_);
     if (first_recv_rc != 0)
         return -1;
+
+    if ((current.flags () & zlink::msg_t::more) == 0) {
+        // A request envelope is multipart by contract. A terminal DEALER
+        // frame is therefore an ordinary raw message and has no reply-target
+        // or envelope state to own.
+        int export_rc = 0;
+        if (receive_terminal_direct) {
+            *terminal_part_returned_out_ = true;
+        } else {
+            export_rc = zlink::recv_tls_view::export_single (
+              reinterpret_cast<zlink_msg_t *> (&current), parts_out_,
+              part_count_out_);
+        }
+        if (export_rc != 0)
+            return -1;
+        if (credits_out_)
+            credits_out_->push_back (std::move (current_credit));
+        *message_type_out_ = ZLINK_DEALER_MESSAGE_RAW;
+        *request_seq_out_ = 0;
+        return 0;
+    }
 
     std::vector<zlink_msg_t> raw_parts;
     std::vector<retained_credit_token_t> raw_credits;
@@ -521,19 +602,22 @@ int recv_dealer_message_direct (
             errno = EPROTO;
             return -1;
         }
-        reply_target_reservation_t reply_target_reservation (state_);
+        std::shared_ptr<socket_request_reply_state_t> request_state = state_;
+        if (!request_state)
+            request_state = find_or_create_request_reply_state (handle_);
+        reply_target_reservation_t reply_target_reservation (request_state);
         if (!reply_target_reservation.acquire ()) {
             zlink::close_msg_frames (&raw_parts);
             return -1;
         }
         {
-            std::lock_guard<std::mutex> lock (state_->mutex);
-            if (state_->closing) {
+            std::lock_guard<std::mutex> lock (request_state->mutex);
+            if (request_state->closing) {
                 zlink::close_msg_frames (&raw_parts);
                 errno = ETERM;
                 return -1;
             }
-            exported_seq = allocate_dealer_reply_token (state_.get ());
+            exported_seq = allocate_dealer_reply_token (request_state.get ());
             if (exported_seq == 0) {
                 zlink::close_msg_frames (&raw_parts);
                 return -1;
@@ -541,7 +625,7 @@ int recv_dealer_message_direct (
             dealer_reply_target_t target;
             target.pipe = source_pipe;
             target.request_seq = envelope.request_seq;
-            state_->dealer_reply_targets[exported_seq] = target;
+            request_state->dealer_reply_targets[exported_seq] = target;
             if (!reply_target_reservation.commit_locked ()) {
                 zlink::close_msg_frames (&raw_parts);
                 return -1;

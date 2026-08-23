@@ -79,7 +79,7 @@ int zlink::router_t::xsend (
                   _current_out->get_transport_connection_id ();
 
                 const pipe_message_admission_t write_admission =
-                  _current_out->check_write_admission ();
+                  _current_out->admit_owner_message_start ();
                 if (write_admission != pipe_message_admission_ready) {
                     // HWM removes the pipe from the writable set until an
                     // activation command restores credit. During that window
@@ -106,13 +106,6 @@ int zlink::router_t::xsend (
                         }
                         return -1;
                     }
-                } else {
-                    //  The routing-ID part is consumed here and never written,
-                    //  so the pipe's own byte counters cannot tell that a
-                    //  message has started. Declare it, or a PAUSE arriving
-                    //  before the first payload part would break a message the
-                    //  socket has already accepted.
-                    _current_out->mark_out_message_started ();
                 }
             } else if (_mandatory) {
                 _more_out = false;
@@ -147,10 +140,8 @@ int zlink::router_t::xsend (
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
-        const bool ok = _more_out
-                          ? _current_out->write (msg_, &write_admission)
-                          : _current_out->write_and_flush (
-                              msg_, &write_admission);
+        const bool ok = _current_out->write_owner_started_message (
+          msg_, &write_admission);
         if (router_debug_enabled ())
             fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
                      static_cast<void *> (_current_out), ok ? 1 : 0,
@@ -268,7 +259,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             *pipe_out_ = _current_out;
         out_pipe = NULL;
     }
-    if (scoped_pipe) {
+    if (scoped_pipe && _more_out) {
         const pipe_message_admission_t write_admission =
           _current_out->check_write_admission ();
         if (write_admission != pipe_message_admission_ready) {
@@ -315,7 +306,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             *pipe_out_ = _current_out;
 
         const pipe_message_admission_t write_admission =
-          _current_out->check_write_admission ();
+          _more_out ? _current_out->check_write_admission ()
+                    : pipe_message_admission_ready;
         if (write_admission != pipe_message_admission_ready) {
             // Preserve the HWM classification while this route is awaiting
             // write activation. Pipe termination removes the routing-table
@@ -372,7 +364,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
           pipe_message_admission_invalid;
         const bool ok = _more_out
                           ? _current_out->write (msg_, &write_admission)
-                          : _current_out->write_and_flush (
+                          : _current_out->write_single_message_and_flush_no_recursive_hwm_check (
                               msg_, &write_admission);
         if (unlikely (!ok)) {
             // A routed multipart send can reach HWM after its first frame.

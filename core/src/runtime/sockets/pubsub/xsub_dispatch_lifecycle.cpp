@@ -25,6 +25,7 @@ int zlink::xsub_t::sub_dispatch_start (sub_io_handler_fn callback_, void *userda
         return -1;
     }
 
+    retain_async_command_processing ();
     _dispatch_userdata.store (userdata_, std::memory_order_release);
     _dispatch_callback.store (callback_, std::memory_order_release);
     _dispatch_active.store (true, std::memory_order_release);

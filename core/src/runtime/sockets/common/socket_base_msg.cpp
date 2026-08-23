@@ -51,6 +51,16 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
                           const Receive &receive_,
                           uint64_t *observed_epoch_out_)
 {
+    // The normal public-recv path does not share its socket with an async
+    // mailbox owner.  The runtime owns the handoff when that changes.
+    if (runtime_.try_acquire_public_receive_lease ()) {
+        if (observed_epoch_out_)
+            *observed_epoch_out_ = runtime_.progress_epoch;
+        const int rc = receive_ ();
+        runtime_.release_public_receive_lease ();
+        return rc;
+    }
+
     zlink::scoped_lock_t lock (runtime_.sync);
     if (observed_epoch_out_)
         *observed_epoch_out_ = runtime_.progress_epoch;
@@ -452,8 +462,79 @@ int zlink::socket_base_t::rollback_scoped (socket_public_send_scope_t &scope_)
 
 int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
 {
-    return recv_common (msg_, NULL, false, flags_, receive_runtime_t::mode_plain,
-                        NULL, NULL, NULL);
+    // Plain public receive is the dominant data-plane role. Keep its state
+    // machine explicit instead of routing every frame through the retained and
+    // routed receive policy branches in recv_common(). The guarded receive
+    // operation still owns the public/async reader handoff.
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+    if (unlikely (!msg_ || !msg_->check ())) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if (command_runtime ().should_poll_commands_after_recv (inbound_poll_rate)) {
+        if (unlikely (process_commands (0, false) != 0))
+            return -1;
+        command_runtime ().reset_recv_ticks ();
+    }
+
+    const auto recv_once = [&] () -> int { return xrecv (msg_); };
+    uint64_t observed_epoch = 0;
+    int rc = receive_once_guarded (receive_runtime (), recv_once,
+                                   &observed_epoch);
+    if (unlikely (rc != 0 && errno != EAGAIN))
+        return -1;
+    if (rc == 0) {
+        extract_flags (msg_);
+        return 0;
+    }
+
+    if ((flags_ & ZLINK_DONTWAIT) || options.rcvtimeo == 0) {
+        if (unlikely (process_commands (0, false) != 0))
+            return -1;
+        command_runtime ().reset_recv_ticks ();
+        rc = receive_once_guarded (receive_runtime (), recv_once,
+                                   &observed_epoch);
+        if (rc < 0)
+            return rc;
+        extract_flags (msg_);
+        return 0;
+    }
+
+    int timeout = options.rcvtimeo;
+    const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
+    bool block = command_runtime ().should_block_on_recv ();
+    while (true) {
+        const int progress_rc = async_mailbox_owns_commands ()
+                                  ? wait_receive_progress (
+                                      observed_epoch, block ? timeout : 0)
+                                  : process_commands (block ? timeout : 0,
+                                                      false);
+        if (unlikely (progress_rc != 0))
+            return -1;
+        rc = receive_once_guarded (receive_runtime (), recv_once,
+                                   &observed_epoch);
+        if (rc == 0) {
+            command_runtime ().reset_recv_ticks ();
+            break;
+        }
+        if (unlikely (errno != EAGAIN))
+            return -1;
+        block = true;
+        if (timeout > 0) {
+            timeout = static_cast<int> (end - _clock.now_ms ());
+            if (timeout <= 0) {
+                errno = EAGAIN;
+                return -1;
+            }
+        }
+    }
+
+    extract_flags (msg_);
+    return 0;
 }
 
 int zlink::socket_base_t::recv_retained (
@@ -596,8 +677,84 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
                                       uint64_t *connection_id_out_,
                                       pipe_t **source_pipe_out_)
 {
-    return recv_common (msg_, NULL, false, flags_, receive_runtime_t::mode_routed,
-                        source_pipe_out_, source_rid_out_, connection_id_out_);
+    if (source_rid_out_)
+        source_rid_out_->size = 0;
+    if (connection_id_out_)
+        *connection_id_out_ = 0;
+    if (source_pipe_out_)
+        *source_pipe_out_ = NULL;
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+    if (unlikely (!msg_ || !msg_->check ())) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if (command_runtime ().should_poll_commands_after_recv (inbound_poll_rate)) {
+        if (unlikely (process_commands (0, false) != 0))
+            return -1;
+        command_runtime ().reset_recv_ticks ();
+    }
+
+    const auto recv_once = [&] () -> int {
+        return xrecv_routed (msg_, source_rid_out_, connection_id_out_,
+                             source_pipe_out_);
+    };
+    uint64_t observed_epoch = 0;
+    int rc = receive_once_guarded (receive_runtime (), recv_once,
+                                   &observed_epoch);
+    if (unlikely (rc != 0 && errno != EAGAIN))
+        return -1;
+    if (rc == 0) {
+        extract_flags (msg_);
+        return 0;
+    }
+
+    if ((flags_ & ZLINK_DONTWAIT) || options.rcvtimeo == 0) {
+        if (unlikely (process_commands (0, false) != 0))
+            return -1;
+        command_runtime ().reset_recv_ticks ();
+        rc = receive_once_guarded (receive_runtime (), recv_once,
+                                   &observed_epoch);
+        if (rc < 0)
+            return rc;
+        extract_flags (msg_);
+        return 0;
+    }
+
+    int timeout = options.rcvtimeo;
+    const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
+    bool block = command_runtime ().should_block_on_recv ();
+    while (true) {
+        const int progress_rc = async_mailbox_owns_commands ()
+                                  ? wait_receive_progress (
+                                      observed_epoch, block ? timeout : 0)
+                                  : process_commands (block ? timeout : 0,
+                                                      false);
+        if (unlikely (progress_rc != 0))
+            return -1;
+        rc = receive_once_guarded (receive_runtime (), recv_once,
+                                   &observed_epoch);
+        if (rc == 0) {
+            command_runtime ().reset_recv_ticks ();
+            break;
+        }
+        if (unlikely (errno != EAGAIN))
+            return -1;
+        block = true;
+        if (timeout > 0) {
+            timeout = static_cast<int> (end - _clock.now_ms ());
+            if (timeout <= 0) {
+                errno = EAGAIN;
+                return -1;
+            }
+        }
+    }
+
+    extract_flags (msg_);
+    return 0;
 }
 
 void zlink::socket_base_t::extract_flags (const msg_t *msg_)

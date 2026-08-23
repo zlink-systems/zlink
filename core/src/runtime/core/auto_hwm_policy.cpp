@@ -46,7 +46,7 @@ profile_budget_t profile_budget (zlink_auto_hwm_profile_t profile_)
             return profile_budget_t{20, 128 * kib, 16 * mib, 256 * kib, 512 * kib};
         case ZLINK_AUTO_HWM_PROFILE_BALANCED:
         default:
-            return profile_budget_t{10, 64 * kib, 4 * mib, 64 * kib, 128 * kib};
+            return profile_budget_t{20, 64 * kib, 1 * mib, 64 * kib, 128 * kib};
     }
 }
 
@@ -185,6 +185,9 @@ uint64_t zlink::auto_hwm_profile_maximum_bytes (zlink_auto_hwm_profile_t profile
     if (role_ == auto_hwm_role_none)
         return 0;
     const profile_budget_t budget = profile_budget (profile_);
+    if (normalize_profile (profile_) == ZLINK_AUTO_HWM_PROFILE_BALANCED
+        && role_ == auto_hwm_role_recv_ingress)
+        return 2 * mib;
     return stream_role (role_) ? budget.stream_maximum : budget.data_maximum;
 }
 

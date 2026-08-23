@@ -135,7 +135,8 @@ int control_runtime_t::remove_task (uint64_t task_id_)
     return 0;
 }
 
-int control_runtime_t::wakeup_task (uint64_t task_id_)
+int control_runtime_t::schedule_task_after (uint64_t task_id_,
+                                            uint32_t delay_ms_)
 {
     if (task_id_ == 0)
         return 0;
@@ -146,8 +147,9 @@ int control_runtime_t::wakeup_task (uint64_t task_id_)
         errno = EINVAL;
         return -1;
     }
+    zlink::clock_t clock;
     deschedule_task_locked (&it->second);
-    it->second.next_run_ms = 0;
+    it->second.next_run_ms = clock.now_ms () + delay_ms_;
     schedule_task_locked (&it->second);
     _cv.broadcast ();
     return 0;

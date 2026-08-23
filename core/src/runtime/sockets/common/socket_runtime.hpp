@@ -159,7 +159,8 @@ struct socket_monitor_runtime_t
         event_accounted_bytes (0),
         queue_stop (false),
         task_id (0),
-        task_running (false)
+        task_running (false),
+        owns_async_command_processing (false)
     {
     }
 
@@ -209,6 +210,10 @@ struct socket_monitor_runtime_t
     bool queue_stop;
     uint64_t task_id;
     bool task_running;
+    // A raw monitor can bootstrap the socket command executor while the
+    // application waits only on monitor events. The lease ends with that
+    // monitor unless a longer-lived async consumer explicitly takes it over.
+    std::atomic<bool> owns_async_command_processing;
     std::set<std::string> ready_connections;
     std::map<std::string, uint8_t> transport_pair_ready_lanes;
 };
@@ -228,6 +233,7 @@ struct socket_receive_runtime_t
 
     socket_receive_runtime_t () :
         async_command_handoff_pending (false),
+        receive_owner (receive_owner_available),
         progress_epoch (0),
         waiters (0)
 #ifdef ZLINK_BUILD_TESTS
@@ -242,6 +248,57 @@ struct socket_receive_runtime_t
 
     mutex_t command_owner_sync;
     std::atomic<bool> async_command_handoff_pending;
+    // The async mailbox executor mutates receive-side socket state under
+    // `sync`.  These operations own the transition from a lock-free public
+    // receive lease to that exclusive owner; callers do not manipulate the
+    // gate or reader count directly.
+    bool try_acquire_public_receive_lease ()
+    {
+        uint8_t expected = receive_owner_available;
+        while (!receive_owner.compare_exchange_weak (
+          expected, receive_owner_public, std::memory_order_acquire,
+          std::memory_order_relaxed)) {
+            if (expected == receive_owner_async)
+                return false;
+            expected = receive_owner_available;
+        }
+        return true;
+    }
+
+    void release_public_receive_lease ()
+    {
+        receive_owner.store (receive_owner_available,
+                             std::memory_order_release);
+    }
+
+    void require_receive_sync_for_async_owner ()
+    {
+        uint8_t expected = receive_owner_available;
+        while (!receive_owner.compare_exchange_weak (
+          expected, receive_owner_async, std::memory_order_acquire,
+          std::memory_order_relaxed)) {
+            if (expected == receive_owner_async)
+                return;
+            expected = receive_owner_available;
+        }
+    }
+
+    void release_receive_sync_from_async_owner ()
+    {
+        receive_owner.store (receive_owner_available,
+                             std::memory_order_release);
+    }
+
+  private:
+    enum receive_owner_t : uint8_t
+    {
+        receive_owner_available,
+        receive_owner_public,
+        receive_owner_async
+    };
+    std::atomic<uint8_t> receive_owner;
+
+  public:
     mutex_t sync;
     condition_variable_t progress_cv;
     uint64_t progress_epoch;

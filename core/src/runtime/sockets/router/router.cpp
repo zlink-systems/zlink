@@ -17,6 +17,7 @@
 namespace
 {
 const bool router_debug_on = zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
+const int router_transport_write_batch_size = 16 * 1024;
 
 void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t buf_size_)
 {
@@ -154,6 +155,7 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _dispatch_source_rid_valid (false)
 {
     options.type = ZLINK_CORE_SOCKET_ROUTER;
+    options.out_batch_size = router_transport_write_batch_size;
     options.recv_routing_id = true;
     options.can_send_hello_msg = true;
     options.can_recv_disconnect_msg = true;

@@ -99,7 +99,10 @@ int recv_router_message_direct (socket_handle_t handle_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
-                                std::vector<retained_credit_token_t> *credits_out_ = NULL);
+                                std::vector<retained_credit_token_t> *credits_out_ = NULL,
+                                zlink_msg_t *terminal_part_out_ = NULL,
+                                bool *terminal_part_returned_out_ = NULL,
+                                zlink_routing_id_t *terminal_source_storage_ = NULL);
 int recv_dealer_message_direct (socket_handle_t handle_,
                                 const std::shared_ptr<socket_request_reply_state_t> &state_,
                                 uint8_t *message_type_out_,
@@ -107,7 +110,9 @@ int recv_dealer_message_direct (socket_handle_t handle_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
-                                std::vector<retained_credit_token_t> *credits_out_ = NULL);
+                                std::vector<retained_credit_token_t> *credits_out_ = NULL,
+                                zlink_msg_t *terminal_part_out_ = NULL,
+                                bool *terminal_part_returned_out_ = NULL);
 int take_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
                               uint64_t request_token_,
                               dealer_reply_target_t *target_out_);

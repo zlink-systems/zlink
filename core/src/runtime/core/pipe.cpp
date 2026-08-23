@@ -208,6 +208,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _transport_pair_write_held (false),
     _remote_flow_paused (false),
     _out_owner_message_started (false),
+    _out_owner_message_start_pending (false),
     _remote_flow_epoch (0),
     _remote_flow_pause_started_ms (0),
     _waiting_for_byte_credit (false),
@@ -890,8 +891,15 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
         if (track_multipart_ && (msg_flags_ & msg_t::more) != 0)
             _decoder_multipart_started_empty =
               multipart_started_empty;
-        _out_active = true;
-        _waiting_for_byte_credit.store (false, std::memory_order_release);
+        //  Admission normally stays writable for many frames. Publish the
+        //  waiter transition only when credit recovery actually changes the
+        //  writer state; rewriting the shared marker for every decoded frame
+        //  creates avoidable reader-side cache traffic.
+        if (!_out_active) {
+            _out_active = true;
+            _waiting_for_byte_credit.store (false,
+                                             std::memory_order_release);
+        }
         return 0;
     }
 
@@ -1110,12 +1118,56 @@ bool zlink::pipe_t::remote_flow_blocked_unlocked () const
     //  it has not written yet - the classic ROUTER routing-ID part.
     return _remote_flow_paused && _out_incomplete_bytes == 0
            && !_out_multipart_started_empty
-           && !_out_owner_message_started.load (std::memory_order_relaxed);
+           && !_out_owner_message_started;
 }
 
-void zlink::pipe_t::mark_out_message_started ()
+zlink::pipe_message_admission_t zlink::pipe_t::admit_owner_message_start ()
 {
-    _out_owner_message_started.store (true, std::memory_order_relaxed);
+    scoped_fast_lock_t lock (_out_sync);
+    pipe_message_admission_t admission;
+    if (!write_state_ready_unlocked (&admission)
+        || !hwm_credit_ready_unlocked (&admission))
+        return admission;
+
+    _out_owner_message_started = true;
+    _out_owner_message_start_pending = true;
+    return pipe_message_admission_ready;
+}
+
+bool zlink::pipe_t::write_owner_started_message (
+  const msg_t *msg_, pipe_message_admission_t *admission_out_)
+{
+    scoped_fast_lock_t lock (_out_sync);
+    const bool reuse_start_admission = _out_owner_message_start_pending;
+    _out_owner_message_start_pending = false;
+
+    if (reuse_start_admission) {
+        // A terminal state can arrive after the routing ID was accepted. It
+        // must still be reported, but a concurrent PAUSE applies only after
+        // this already-started message.
+        if (_state != active) {
+            if (admission_out_)
+                *admission_out_ = pipe_message_admission_inactive;
+            return false;
+        }
+        if (_transport_pair_write_held) {
+            if (admission_out_)
+                *admission_out_ = pipe_message_admission_transport_wait;
+            return false;
+        }
+    } else {
+        if (unlikely (!write_state_ready_unlocked (admission_out_)))
+            return false;
+        if (unlikely (!hwm_credit_ready_unlocked (admission_out_)))
+            return false;
+    }
+
+    const bool more = (msg_->flags () & msg_t::more) != 0;
+    if (!write_message_unlocked (msg_, true, true, admission_out_))
+        return false;
+    if (!more)
+        flush_unlocked ();
+    return true;
 }
 
 bool zlink::pipe_t::remote_flow_blocks_next_message () const
@@ -1486,6 +1538,78 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
     if (unlikely (!write_state_ready_unlocked (admission_out_)))
         return false;
 
+    // The distributor, ROUTER, and STREAM direct-send paths own a complete
+    // single application message. Keep that explicit contract out of the generic
+    // multipart/registry state machine: it avoids provisional counter writes
+    // and repeated policy branches for every subscriber while preserving the
+    // same byte-HWM decision under _out_sync.
+    if (likely (!_registry_accounting && !_conflate
+                && (msg_->flags () & msg_t::more) == 0
+                && !msg_->is_delimiter ())) {
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_invalid;
+        const uint64_t payload_bytes = static_cast<uint64_t> (msg_->size ());
+        const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+        const uint64_t message_bytes =
+          frame_bytes == UINT64_MAX
+              || UINT64_MAX - _out_incomplete_bytes < frame_bytes
+            ? UINT64_MAX
+            : _out_incomplete_bytes + frame_bytes;
+        const uint64_t message_payload_bytes =
+          UINT64_MAX - _out_incomplete_payload_bytes < payload_bytes
+            ? UINT64_MAX
+            : _out_incomplete_payload_bytes + payload_bytes;
+        if (unlikely (message_bytes == UINT64_MAX
+                      || message_payload_bytes == UINT64_MAX
+                      || (_max_message_bytes != 0
+                          && message_payload_bytes > _max_message_bytes))) {
+            errno = EMSGSIZE;
+            if (admission_out_)
+                *admission_out_ = pipe_message_admission_too_large;
+            return false;
+        }
+
+        if (unlikely (!can_commit_bytes_with_peer_snapshot_unlocked (
+                        message_bytes, message_payload_bytes,
+                        _out_incomplete_bytes == 0
+                          || _out_multipart_started_empty))) {
+            if (_bytes_written > _peers_bytes_read) {
+                _out_active = false;
+                _waiting_for_byte_credit.store (true,
+                                                 std::memory_order_release);
+            }
+            errno = EAGAIN;
+            if (admission_out_)
+                *admission_out_ = pipe_message_admission_hwm_full;
+            return false;
+        }
+
+        _out_pipe->write (*msg_, false);
+        const uint64_t in_flight =
+          _bytes_written > _peers_bytes_read
+            ? _bytes_written - _peers_bytes_read
+            : 0;
+        if (_hwm > 0 && in_flight == 0 && message_bytes > _hwm) {
+            ++_oversize_message_admission_count;
+            _oversize_message_admission_max_bytes = std::max (
+              _oversize_message_admission_max_bytes, message_bytes);
+        }
+        _bytes_written = UINT64_MAX - _bytes_written < message_bytes
+                           ? UINT64_MAX
+                           : _bytes_written + message_bytes;
+        if (!msg_->is_routing_id () && !msg_->is_credential ())
+            ++_msgs_written;
+        _out_incomplete_bytes = 0;
+        _out_incomplete_payload_bytes = 0;
+        _out_multipart_started_empty = false;
+        _out_owner_message_started = false;
+        _out_owner_message_start_pending = false;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_ready;
+        flush_unlocked ();
+        return true;
+    }
+
     if (unlikely (!hwm_credit_ready_unlocked (admission_out_)))
         return false;
 
@@ -1628,7 +1752,8 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         _out_multipart_started_empty = false;
         //  A hiccup discards the outbound queue, including whatever the owner
         //  had accepted for the message in progress.
-        _out_owner_message_started.store (false, std::memory_order_relaxed);
+        _out_owner_message_started = false;
+        _out_owner_message_start_pending = false;
         _decoder_multipart_started_empty = false;
         if (incomplete_bytes > 0 && _registry_accounting)
             get_ctx ()->_physical_queue_registry.rollback_provisional (
@@ -1885,8 +2010,6 @@ uint64_t zlink::pipe_t::compute_lwm (uint64_t hwm_)
     //     message to the queue and go back to sleep immediately. This would
     //     result in low performance.
     //
-    //  Given the 3. it would be good to keep HWM and LWM as far apart as
-    //  possible to reduce the thread switching overhead to almost zero.
     //  Let's make LWM 1/2 of HWM.
     return hwm_ / 2 + hwm_ % 2;
 }
@@ -2442,7 +2565,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         _out_multipart_started_empty = false;
         //  The message the owner started is now committed, so the next one
         //  faces the remote flow state again.
-        _out_owner_message_started.store (false, std::memory_order_relaxed);
+        _out_owner_message_started = false;
+        _out_owner_message_start_pending = false;
     }
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
@@ -2451,6 +2575,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
 
 void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
 {
+    const bool completes_multipart = _in_incomplete_bytes != 0;
     const uint64_t frame_bytes = frame_accounted_bytes (msg_);
     _in_incomplete_bytes =
       frame_bytes == UINT64_MAX || UINT64_MAX - _in_incomplete_bytes < frame_bytes
@@ -2473,11 +2598,23 @@ void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
     if (!msg_->is_routing_id () && !msg_->is_credential ())
         ++_msgs_read;
     _in_incomplete_bytes = 0;
-    // Publish the reset before the completed total. A sampler that observes
-    // the latter therefore cannot combine it with an old multipart prefix.
-    _published_incomplete_bytes_read.store (0, std::memory_order_release);
-    _published_msgs_read.store (_msgs_read, std::memory_order_release);
-    _published_bytes_read.store (_bytes_read, std::memory_order_release);
+    // Publish a reset only when a multipart prefix was visible. Single-frame
+    // messages leave this snapshot component at zero, so rewriting it on every
+    // receive adds coherence traffic without changing observable state. Keep
+    // the reset before the completed total so a sampler that observes the
+    // latter cannot combine it with an old multipart prefix.
+    if (completes_multipart)
+        _published_incomplete_bytes_read.store (0, std::memory_order_release);
+    // Completed counters are monotonic credit snapshots, not publication of
+    // data owned by this reader. Single-frame traffic therefore needs no
+    // synchronizes-with edge. A multipart completion does need to stay after
+    // the visible prefix reset, so retain release ordering for that rarer
+    // transition.
+    const std::memory_order completed_order =
+      completes_multipart ? std::memory_order_release
+                          : std::memory_order_relaxed;
+    _published_msgs_read.store (_msgs_read, completed_order);
+    _published_bytes_read.store (_bytes_read, completed_order);
 
     const uint64_t credit_delta = _bytes_read - _last_credit_bytes_read;
     const uint64_t lwm = _lwm.load (std::memory_order_relaxed);
@@ -2551,7 +2688,8 @@ void zlink::pipe_t::rollback_unlocked ()
     _decoder_multipart_started_empty = false;
     //  The owner's accepted-but-unwritten part is gone with the rest of the
     //  message, so the in-progress exception ends here.
-    _out_owner_message_started.store (false, std::memory_order_relaxed);
+    _out_owner_message_started = false;
+    _out_owner_message_start_pending = false;
 }
 
 void zlink::pipe_t::flush_unlocked ()

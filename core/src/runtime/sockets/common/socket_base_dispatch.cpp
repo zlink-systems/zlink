@@ -73,6 +73,7 @@ int zlink::socket_base_t::ensure_completion_processing ()
     scoped_lock_t owner_lock (_completion_owner_sync);
     if (_completion_poller_refs.load (std::memory_order_acquire) != 0)
         return 0;
+    retain_async_command_processing ();
     if (lifecycle_coordinator ().is_async_mailbox_active ())
         return 0;
     io_thread_t *io_thread = choose_io_thread (options.affinity);
@@ -224,6 +225,7 @@ int zlink::socket_base_t::socket_set_send_ready_handler_with_userdata (
     }
 
     dispatch_bridge_t &dispatch = dispatch_runtime ();
+    retain_async_command_processing ();
     if (!lifecycle.is_async_mailbox_active ()) {
         io_thread_t *io_thread = choose_io_thread (options.affinity);
         if (!io_thread || start_async_mailbox_processing (io_thread) != 0) {
@@ -258,6 +260,7 @@ int zlink::socket_base_t::socket_set_routed_send_ready_handler_with_userdata (
     }
 
     dispatch_bridge_t &dispatch = dispatch_runtime ();
+    retain_async_command_processing ();
     if (!lifecycle.is_async_mailbox_active ()) {
         io_thread_t *io_thread = choose_io_thread (options.affinity);
         if (!io_thread || start_async_mailbox_processing (io_thread) != 0) {

@@ -70,6 +70,25 @@ template <typename T, typename A = c_single_allocator> class decoder_base_t : pu
     {
         bytes_used_ = 0;
 
+        // The allocator can expose the decoder's destination directly for a
+        // zero-copy transport read. In that ownership mode no copy-loop state
+        // remains to perform: advance the destination once, then run framing
+        // actions until another read is required. Derived actions still own
+        // frame admission and can return EAGAIN exactly as in the generic path.
+        if (data_ == _read_pos && size_ <= _to_read) {
+            _read_pos += size_;
+            _to_read -= size_;
+            bytes_used_ = size_;
+
+            while (_to_read == 0) {
+                const int rc =
+                  (static_cast<T *> (this)->*_next) (data_ + bytes_used_);
+                if (rc != 0)
+                    return rc;
+            }
+            return 0;
+        }
+
         while (bytes_used_ < size_) {
             //  Copy the data from buffer to the message.
             const size_t to_copy = std::min (_to_read, size_ - bytes_used_);

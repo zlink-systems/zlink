@@ -12,6 +12,8 @@
 
 namespace
 {
+const int xsub_transport_read_batch_size = 128 * 1024;
+
 unsigned int resolve_non_matching_skip_budget ()
 {
     return zlink::env::positive_uint ("ZLINK_XSUB_NON_MATCHING_SKIP_BUDGET", 64u);
@@ -84,6 +86,7 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _delivery_ready_count (0)
 {
     options.type = ZLINK_CORE_SOCKET_XSUB;
+    options.in_batch_size = xsub_transport_read_batch_size;
     refresh_auto_hwm_policy ();
 
     //  When socket is being closed down we don't want to wait till pending

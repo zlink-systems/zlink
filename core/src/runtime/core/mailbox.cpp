@@ -77,20 +77,16 @@ void zlink::mailbox_t::signal ()
 
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 {
-    scoped_lock_t receive_owner (_recv_sync);
-
     if (!_active) {
         signaler_t *shared_signaler = NULL;
-        bool has_shared_command = false;
         _sync.lock ();
         if (!_signalers.empty ()
-            && !_primary_signaler_required.load (std::memory_order_acquire)) {
+            && !_primary_signaler_required.load (std::memory_order_acquire))
             shared_signaler = _signalers.front ();
-            has_shared_command = _cpipe.check_read ();
-        }
         _sync.unlock ();
 
         if (shared_signaler) {
+            const bool has_shared_command = _cpipe.check_read ();
             if (!has_shared_command) {
                 if (timeout_ == 0) {
                     errno = EAGAIN;
@@ -101,10 +97,7 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
                     errno_assert (errno == EAGAIN || errno == EINTR);
                     return -1;
                 }
-                _sync.lock ();
-                has_shared_command = _cpipe.check_read ();
-                _sync.unlock ();
-                if (!has_shared_command) {
+                if (!_cpipe.check_read ()) {
                     errno = EAGAIN;
                     return -1;
                 }
@@ -131,9 +124,7 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
         _active = true;
     }
 
-    _sync.lock ();
     const bool has_command = _cpipe.read (cmd_);
-    _sync.unlock ();
     if (has_command)
         return 0;
 

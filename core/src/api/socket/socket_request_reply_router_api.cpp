@@ -75,17 +75,26 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
     if (!handle.socket)
         return zlink::recv_result_internal::from_errno (EFAULT);
 
+    // ROUTER is a native socket handle here, so its optional multipart state
+    // is owned by the socket. Do not route the steady-state raw role through
+    // the generic foreign-handle registry.
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-      zlink::part_helper_internal::find_handle_state (router_);
+      handle.socket->has_part_helper_state ()
+        ? handle.socket->part_helper_state ()
+        : std::shared_ptr<zlink::part_helper_internal::handle_state_t> ();
 
     const bool recv_sequence_active =
       zlink::part_helper_internal::recv_sequence_active (helper_state);
     auto recv_router_parts_once = [&] (const zlink_routing_id_t **source_node_rid_out,
                                        uint64_t *request_seq_out, zlink_msg_t **parts_out,
-                                       size_t *part_count_out) -> zlink_recv_result_t {
+                                       size_t *part_count_out,
+                                       zlink_msg_t *terminal_part_out,
+                                       bool *terminal_part_returned_out,
+                                       zlink_routing_id_t *terminal_source_storage) -> zlink_recv_result_t {
         return reqrep::recv_router_message_direct (
                  handle, source_node_rid_out, request_seq_out, parts_out, part_count_out,
-                 static_cast<int> (flags_))
+                 static_cast<int> (flags_), NULL, terminal_part_out,
+                 terminal_part_returned_out, terminal_source_storage)
                  == 0
                ? ZLINK_RECV_OK
                : zlink::recv_result_internal::from_errno (errno);
@@ -96,10 +105,21 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
         uint64_t request_seq = 0;
         zlink_msg_t *parts = NULL;
         size_t part_count = 0;
+        bool terminal_part_returned = false;
+        router_recv_part_metadata_tls_t &part_metadata =
+          router_recv_part_metadata_tls ();
         const zlink_recv_result_t recv_rc = recv_router_parts_once (
-          &source_node_rid, &request_seq, &parts, &part_count);
+          &source_node_rid, &request_seq, &parts, &part_count, part_out_,
+          &terminal_part_returned, &part_metadata.source_node_rid);
         if (recv_rc != ZLINK_RECV_OK)
             return zlink::recv_result_internal::from_errno (errno);
+
+        if (terminal_part_returned) {
+            *source_node_rid_out_ = source_node_rid;
+            *request_seq_out_ = request_seq;
+            *has_more_out_ = ZLINK_PART_FINAL;
+            return ZLINK_RECV_OK;
+        }
 
         if (!parts || part_count == 0) {
             errno = EPROTO;
@@ -172,7 +192,8 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
         zlink_msg_t *parts = NULL;
         size_t part_count = 0;
         const zlink_recv_result_t recv_rc = recv_router_parts_once (
-          &source_node_rid, &request_seq, &parts, &part_count);
+          &source_node_rid, &request_seq, &parts, &part_count, NULL, NULL,
+          NULL);
         if (recv_rc != ZLINK_RECV_OK) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);

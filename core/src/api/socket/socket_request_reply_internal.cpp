@@ -198,8 +198,9 @@ find_or_create_request_reply_state (socket_handle_t handle_)
 
 std::shared_ptr<socket_request_reply_state_t> find_request_reply_state (socket_handle_t handle_)
 {
-    return handle_.socket ? handle_.socket->request_reply_state ()
-                          : std::shared_ptr<socket_request_reply_state_t> ();
+    return handle_.socket && handle_.socket->has_request_reply_state ()
+             ? handle_.socket->request_reply_state ()
+             : std::shared_ptr<socket_request_reply_state_t> ();
 }
 
 }

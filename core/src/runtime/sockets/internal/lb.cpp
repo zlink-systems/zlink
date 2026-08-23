@@ -291,7 +291,8 @@ int zlink::lb_t::sendpipe_to (
     pipe_message_admission_t write_admission =
       pipe_message_admission_invalid;
     const bool ok = more ? pipe_->write (msg_, &write_admission)
-                         : pipe_->write_and_flush (msg_, &write_admission);
+                         : pipe_->write_single_message_and_flush_no_recursive_hwm_check (
+                             msg_, &write_admission);
     if (!ok) {
         if (admission_out_)
             *admission_out_ = write_admission;
@@ -424,8 +425,9 @@ int zlink::lb_t::sendpipe (
           pipe_message_admission_invalid;
         const bool ok =
           more ? _weighted_multipart_pipe->write (msg_, &write_admission)
-               : _weighted_multipart_pipe->write_and_flush (
-                   msg_, &write_admission);
+               : _weighted_multipart_pipe
+                   ->write_single_message_and_flush_no_recursive_hwm_check (
+                     msg_, &write_admission);
         if (!ok) {
             if (admission_out_)
                 *admission_out_ = write_admission;
@@ -455,7 +457,8 @@ int zlink::lb_t::sendpipe (
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
         const bool ok = more ? pipe->write (msg_, &write_admission)
-                             : pipe->write_and_flush (msg_, &write_admission);
+                             : pipe->write_single_message_and_flush_no_recursive_hwm_check (
+                                 msg_, &write_admission);
         if (!ok) {
             if (admission_out_)
                 *admission_out_ = write_admission;
@@ -503,7 +506,8 @@ int zlink::lb_t::sendpipe (
             pipe_message_admission_t write_admission =
               pipe_message_admission_invalid;
             const bool ok = more ? pipe->write (msg_, &write_admission)
-                                 : pipe->write_and_flush (msg_, &write_admission);
+                                 : pipe->write_single_message_and_flush_no_recursive_hwm_check (
+                                     msg_, &write_admission);
             if (ok) {
                 //  Running values move only for a write that happened, so a
                 //  retried selection never applies the same step twice.

@@ -6,6 +6,7 @@
 #include "core/control_runtime.hpp"
 
 #include <atomic>
+#include <limits.h>
 #include <new>
 
 #include <unity.h>
@@ -77,6 +78,34 @@ void test_worker_survives_task_bad_alloc_and_remove_returns ()
                            static_cast<int> (zlink_ctx_term (ctx_handle)));
 }
 
+void test_task_can_be_scheduled_at_owned_deadline ()
+{
+    void *ctx_handle = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx_handle);
+    zlink::ctx_t *ctx = static_cast<zlink::ctx_t *> (ctx_handle);
+
+    {
+        zlink::control_runtime_t runtime (ctx, "core-ut");
+        TEST_ASSERT_TRUE (runtime.start ());
+
+        g_ticks.store (0, std::memory_order_relaxed);
+        g_throw_once.store (false, std::memory_order_release);
+        const uint64_t task_id =
+          runtime.add_periodic_task (&throwing_task, NULL, UINT_MAX, false);
+        TEST_ASSERT_TRUE (task_id != 0);
+        TEST_ASSERT_EQUAL_INT (0, runtime.schedule_task_after (task_id, 1));
+        wait_for_ticks (1);
+
+        msleep (10);
+        TEST_ASSERT_EQUAL_INT (1, g_ticks.load (std::memory_order_relaxed));
+        TEST_ASSERT_EQUAL_INT (0, runtime.remove_task (task_id));
+        runtime.stop ();
+    }
+
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (ZLINK_CLOSE_OK),
+                           static_cast<int> (zlink_ctx_term (ctx_handle)));
+}
+
 int main (void)
 {
     UNITY_BEGIN ();
@@ -84,6 +113,7 @@ int main (void)
     setup_test_environment ();
 
     RUN_TEST (test_worker_survives_task_bad_alloc_and_remove_returns);
+    RUN_TEST (test_task_can_be_scheduled_at_owned_deadline);
 
     return UNITY_END ();
 }

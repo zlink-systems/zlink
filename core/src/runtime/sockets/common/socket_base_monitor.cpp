@@ -332,10 +332,14 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
         // socket-wide command owner also used by retained-credit processing;
         // it remains active for the source socket lifetime, so closing one
         // monitor cannot strand another asynchronous consumer.
+        const bool started_monitor_owner =
+          !lifecycle_coordinator ().is_async_mailbox_active ();
         if (ensure_async_command_processing () != 0) {
             stop_monitor (false);
             return -1;
         }
+        monitor.owns_async_command_processing.store (
+          started_monitor_owner, std::memory_order_release);
     }
     return rc;
 }
@@ -744,10 +748,15 @@ zlink::socket_base_t *
 zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
 {
     monitor_runtime_t &monitor = monitor_runtime ();
-    scoped_lock_t lock (monitor.sync);
-    if (monitor.socket) {
+    socket_base_t *monitor_socket = NULL;
+    bool release_async_owner = false;
+    {
+        scoped_lock_t lock (monitor.sync);
+        if (!monitor.socket)
+            return NULL;
+
         monitor.events_atomic.store (0, std::memory_order_release);
-        socket_base_t *monitor_socket = static_cast<socket_base_t *> (monitor.socket);
+        monitor_socket = static_cast<socket_base_t *> (monitor.socket);
         bool can_emit_monitor_stopped = false;
         if ((monitor.events & ZLINK_EVENT_MONITOR_STOPPED) && send_monitor_stopped_event_) {
             monitor_socket->process_commands (0, false);
@@ -771,7 +780,15 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
         monitor.socket = NULL;
         monitor.events = 0;
         monitor.lossy = true;
-        return monitor_socket;
+        release_async_owner =
+          monitor.owns_async_command_processing.exchange (
+            false, std::memory_order_acq_rel);
     }
-    return NULL;
+
+    if (release_async_owner) {
+        stop_async_mailbox_processing ();
+        if (current_async_mailbox_dispatch_socket () != this)
+            wait_async_quiesced (10000);
+    }
+    return monitor_socket;
 }

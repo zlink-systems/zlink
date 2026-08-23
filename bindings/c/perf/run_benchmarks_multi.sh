@@ -495,6 +495,12 @@ verify_benchmark_core_runtime() {
       echo "Error: benchmark runtime check target is missing: ${binary}" >&2
       return 1
     fi
+    # STREAM's peer is an independent raw TCP/TLS/WebSocket load generator.
+    # It intentionally does not link Core; only the STREAM server participates
+    # in the Core runtime identity check.
+    if [[ "${target}" == "perf_stream_client" ]]; then
+      continue
+    fi
     loaded_runtime="$({ ldd "${binary}" | sed -n 's/^[[:space:]]*libzlink\.so\.0 => \([^[:space:]]*\).*/\1/p' | head -n 1; } || true)"
     if [[ -z "${loaded_runtime}" ]]; then
       echo "Error: failed to resolve libzlink.so.0 for benchmark: ${binary}" >&2

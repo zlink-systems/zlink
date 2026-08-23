@@ -28,7 +28,7 @@ enum
     //  If there are no unprocessed messages available, poll is done
     //  immediately. Decreasing the value trades overall latency for more
     //  real-time behaviour (less latency peaks).
-    inbound_poll_rate = 100,
+    inbound_poll_rate = 1536,
 
     //  Maximal delta between high and low watermark.
     max_wm_delta = 1024,

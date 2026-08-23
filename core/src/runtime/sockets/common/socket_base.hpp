@@ -70,8 +70,16 @@ typedef void (*sub_io_handler_fn) (const zlink_routing_id_t *source_rid_,
 
 struct socket_request_reply_bridge_t
 {
+    socket_request_reply_bridge_t () :
+        request_reply_state_present (false),
+        part_helper_state_present (false)
+    {
+    }
+
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> request_reply_state;
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state;
+    std::atomic<bool> request_reply_state_present;
+    std::atomic<bool> part_helper_state_present;
 };
 
 struct transport_pair_pipes_t
@@ -536,11 +544,13 @@ class socket_base_t : public own_t,
     int socket_id () const;
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t>
     request_reply_state () const;
+    bool has_request_reply_state () const;
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t>
     set_request_reply_state (
       const std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> &state_);
     void clear_request_reply_state ();
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state () const;
+    bool has_part_helper_state () const;
     std::shared_ptr<part_helper_internal::handle_state_t>
     set_part_helper_state (const std::shared_ptr<part_helper_internal::handle_state_t> &state_);
     void clear_part_helper_state ();
@@ -690,6 +700,9 @@ class socket_base_t : public own_t,
     void arm_send_ready_after_backpressure ();
 
   protected:
+    // Transfer a monitor-started command executor lease to a longer-lived
+    // async socket consumer before registering that consumer.
+    void retain_async_command_processing ();
     int recv_common (zlink::msg_t *msg_,
                      retained_credit_token_t *token_out_,
                      bool retained_,
@@ -702,6 +715,14 @@ class socket_base_t : public own_t,
     socket_msg_dispatch_lock_t lock_socket_msg_dispatch ()
     {
         return socket_msg_dispatch_lock_t (dispatch_runtime ().socket_msg_dispatch_sync);
+    }
+    socket_msg_dispatch_lock_t lock_socket_msg_dispatch_if_active ()
+    {
+        socket_msg_dispatch_lock_t lock (
+          dispatch_runtime ().socket_msg_dispatch_sync, std::defer_lock);
+        if (socket_msg_dispatch_active ())
+            lock.lock ();
+        return lock;
     }
     void arm_send_ready_notification ();
     void notify_send_ready_if_armed ();

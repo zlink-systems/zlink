@@ -8,6 +8,8 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/clock.hpp"
 
+#include <limits.h>
+
 namespace
 {
 uint64_t add_counter_saturating (uint64_t current_, uint64_t amount_,
@@ -48,7 +50,8 @@ void zlink::ctx_t::ensure_auto_hwm_recalc_task_started ()
         return;
 
     _auto_hwm.set_recalc_task_id (
-      runtime->add_periodic_task (&ctx_t::auto_hwm_recalc_task_main, this, 10, false));
+      runtime->add_periodic_task (&ctx_t::auto_hwm_recalc_task_main, this,
+                                  UINT_MAX, false));
 }
 
 void zlink::ctx_t::stop_auto_hwm_recalc_task ()
@@ -80,7 +83,9 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
             if (_auto_hwm.recalc_task_id () != 0) {
                 control_runtime_t *runtime = _runtime_resources.control_runtime ();
                 if (runtime)
-                    (void) runtime->wakeup_task (_auto_hwm.recalc_task_id ());
+                    (void) runtime->schedule_task_after (
+                      _auto_hwm.recalc_task_id (),
+                      static_cast<uint32_t> (debounce_ms));
             }
         }
     }

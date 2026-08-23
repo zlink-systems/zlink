@@ -31,7 +31,7 @@ class control_runtime_t
                                 uint32_t interval_ms_,
                                 bool run_immediately_);
     int remove_task (uint64_t task_id_);
-    int wakeup_task (uint64_t task_id_);
+    int schedule_task_after (uint64_t task_id_, uint32_t delay_ms_);
 
     bool is_current_thread () const;
 

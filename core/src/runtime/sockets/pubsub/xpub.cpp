@@ -486,6 +486,7 @@ int zlink::xpub_t::xpub_dispatch_start ()
     if (_dispatch_active.load (std::memory_order_acquire))
         return 0;
 
+    retain_async_command_processing ();
     _dispatch_active.store (true, std::memory_order_release);
     if (start_async_mailbox_processing (io_thread) != 0) {
         _dispatch_active.store (false, std::memory_order_release);

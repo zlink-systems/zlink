@@ -21,8 +21,9 @@ std::shared_ptr<zlink::part_helper_internal::handle_state_t>
 try_socket_owned_handle_state (void *handle_)
 {
     zlink::socket_base_t *socket = try_as_socket (handle_);
-    return socket ? socket->part_helper_state ()
-                  : std::shared_ptr<zlink::part_helper_internal::handle_state_t> ();
+    return socket && socket->has_part_helper_state ()
+             ? socket->part_helper_state ()
+             : std::shared_ptr<zlink::part_helper_internal::handle_state_t> ();
 }
 
 std::shared_ptr<zlink::part_helper_internal::handle_state_t>

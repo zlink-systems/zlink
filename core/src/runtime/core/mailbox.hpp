@@ -77,14 +77,11 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     signaler_t _signaler;
     bool _active;
 
-    // Async socket dispatch and a public blocking operation may both reach
-    // recv().  Keep the command-pipe receive endpoint single-owner even while
-    // ownership is handed between those executors.
-    mutex_t _recv_sync;
-
     //  There is an arbitrary number of threads sending. Given that ypipe
-    //  requires synchronised access on both of its endpoints, we also have to
-    //  synchronise the sending side.
+    //  requires a single writer, synchronise that endpoint. The receiving
+    //  endpoint remains single-owner: socket runtimes serialize public/async
+    //  handoff, while I/O, reaper and termination mailboxes each have one
+    //  dedicated consumer.
     mutex_t _sync;
 
     boost::asio::io_context *_io_context;

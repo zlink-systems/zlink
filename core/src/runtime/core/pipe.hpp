@@ -232,12 +232,17 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  clearing it only removes its own cause. A PAUSE that arrives while a
     //  multipart message is already started applies from the next message, so
     //  the started message keeps its existing atomicity.
-    //  Declares that this pipe's owner has accepted a message that has not
-    //  reached the pipe yet. A classic ROUTER consumes the routing-ID part
-    //  without writing it, so the outbound byte counters alone cannot tell that
-    //  a message is in progress. The marker clears itself when the message
-    //  commits, is rolled back or is discarded by a hiccup.
-    void mark_out_message_started ();
+    //  Admits the beginning of an owner-held message and records it as started
+    //  while the outbound-state lock is held. A classic ROUTER consumes the
+    //  routing-ID part without writing it, so the outbound byte counters alone
+    //  cannot tell that a message is in progress. The record clears itself when
+    //  the message commits, is rolled back or is discarded by a hiccup.
+    pipe_message_admission_t admit_owner_message_start ();
+    //  Writes the next part of an owner-started message. The first part reuses
+    //  the readiness decision made by admit_owner_message_start(); its actual
+    //  byte-HWM admission is still checked while the part is recorded.
+    bool write_owner_started_message (
+      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
     //  Applies an absolute remote state on the pipe's own thread and reports
     //  whether the caller must publish the write-activated edge. Callers that
     //  already run on that thread use this directly, so the state is in effect
@@ -485,12 +490,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  _out_sync, exactly like _transport_pair_write_held.
     bool _remote_flow_paused;
     //  Set while the pipe's owner holds an accepted message that has not been
-    //  written yet. Atomic rather than _out_sync-guarded so declaring it costs
-    //  no lock on the per-message ROUTER send path; the frames of that message
-    //  take _out_sync straight afterwards, so the send side always observes its
-    //  own store, and a concurrent flow-state application can at worst shift
-    //  the pause by one message - a transient the design already tolerates.
-    std::atomic<bool> _out_owner_message_started;
+    //  written yet. Guarded by _out_sync with the rest of the outbound state.
+    bool _out_owner_message_started;
+    //  The first owner message part can reuse the readiness check performed
+    //  when the owner consumed its routing identifier.
+    bool _out_owner_message_start_pending;
     //  Epoch of the last applied remote state. A command that does not advance
     //  it is a stale replay: the attach-time replay and a freshly accepted
     //  frame can be queued in either order.

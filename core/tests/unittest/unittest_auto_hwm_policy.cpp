@@ -30,12 +30,12 @@ void test_budget_input_priority_and_profile_ratio ()
     zlink::auto_hwm_context_plan_t plan;
     zlink::auto_hwm_context_plan_make (input, &plan);
     TEST_ASSERT_EQUAL_UINT64 (600, plan.resolved_memory_limit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (60, plan.effective_core_budget_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (120, plan.effective_core_budget_bytes);
 
     input.configured_memory_limit_bytes = 700;
     zlink::auto_hwm_context_plan_make (input, &plan);
     TEST_ASSERT_EQUAL_UINT64 (700, plan.resolved_memory_limit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (70, plan.effective_core_budget_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (140, plan.effective_core_budget_bytes);
 
     input.configured_core_budget_bytes = 333;
     zlink::auto_hwm_context_plan_make (input, &plan);
@@ -57,9 +57,18 @@ void test_profile_byte_boundaries ()
       zlink::auto_hwm_profile_minimum_bytes (
         ZLINK_AUTO_HWM_PROFILE_BALANCED, zlink::auto_hwm_role_stream));
     TEST_ASSERT_EQUAL_UINT64 (
-      4ull * 1024ull * 1024ull,
+      1024ull * 1024ull,
       zlink::auto_hwm_profile_maximum_bytes (
         ZLINK_AUTO_HWM_PROFILE_BALANCED, zlink::auto_hwm_role_routed));
+    TEST_ASSERT_EQUAL_UINT64 (
+      1ull * 1024ull * 1024ull,
+      zlink::auto_hwm_profile_maximum_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED, zlink::auto_hwm_role_fanout));
+    TEST_ASSERT_EQUAL_UINT64 (
+      2ull * 1024ull * 1024ull,
+      zlink::auto_hwm_profile_maximum_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED,
+        zlink::auto_hwm_role_recv_ingress));
     TEST_ASSERT_EQUAL_UINT64 (
       512ull * 1024ull,
       zlink::auto_hwm_profile_maximum_bytes (
