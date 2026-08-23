@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.zoneworld.server.configuration
 
 import io.lettuce.core.RedisClient
 import io.lettuce.core.api.StatefulRedisConnection
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
@@ -24,14 +25,15 @@ class NodeMaintenanceState {
     private val values = ConcurrentHashMap<String, Boolean>()
     fun apply(nodeId: String, enabled: Boolean) { values[nodeId] = enabled }
     fun isUnderMaintenance(nodeId: String) = values[nodeId] == true
-    fun rejectsArrival(targetNode: String, sourceNode: String) =
-        isUnderMaintenance(targetNode) && targetNode != sourceNode
+    fun rejectsArrival(ownNodeId: String, targetZoneId: String, sourceZoneId: String) =
+        isUnderMaintenance(ownNodeId) && targetZoneId != sourceZoneId
 }
 
 class NodeCensus {
     private val counts = ConcurrentHashMap<String, Int>()
     fun record(zoneId: String, count: Int) { counts[zoneId] = count }
     fun total() = counts.values.sum()
+    fun zoneIds() = counts.keys.sorted()
 }
 
 /**
@@ -45,54 +47,61 @@ class NodeCensus {
  * a restart can only have come from the restarted process.
  */
 class NodeRegistry {
-    private val nodes = ConcurrentHashMap<String, Messages.NodeView>()
-    private val routingIds = ConcurrentHashMap<String, String>()
-    @Volatile private var live: Map<String, String> = emptyMap()
+    private data class State(val view: Messages.NodeView, val lastReportNanos: Long)
+    private val reportTtlNanos = Duration.ofMillis(ZoneWorldSpec.NODE_STATUS_REPORT_TTL_MS).toNanos()
+    private val nodes = ConcurrentHashMap<String, State>()
+    private val nodeByRoutingId = ConcurrentHashMap<String, String>()
+    private val routingIdByNode = ConcurrentHashMap<String, String>()
+    @Volatile private var liveRoutingIds: Set<String> = emptySet()
+    @Volatile private var changed: (Messages.NodeView) -> Unit = {}
+    @Volatile private var alerted: (Messages.NodeAlertNotify) -> Unit = {}
 
-    @Synchronized fun applyLivePeers(observed: Map<String, String>) {
-        live = observed.toMap()
-        observed.forEach { (nodeId, routingId) -> apply(nodeId, routingId, true) }
-        nodes.keys.toList().filterNot { observed.containsKey(it) }
-            .forEach { apply(it, routingIds[it], false) }
+    fun onChanged(handler: (Messages.NodeView) -> Unit) { changed = handler }
+    fun onAlert(handler: (Messages.NodeAlertNotify) -> Unit) { alerted = handler }
+
+    @Synchronized fun applyLiveRoutingIds(observed: Set<String>) {
+        liveRoutingIds = observed.toSet()
+        nodes.toMap().forEach { (nodeId, state) ->
+            val connected = routingIdByNode[nodeId]?.let(observed::contains) == true
+            if (state.view.connected != connected) {
+                val updated = state.view.copy(connected = connected)
+                nodes[nodeId] = State(updated, state.lastReportNanos)
+                changed(updated)
+                println("node connection observed. node=$nodeId, connected=$connected")
+            }
+        }
     }
 
-    @Synchronized fun report(report: Messages.ReportNodeStatusMsg) {
-        val present = live.containsKey(report.nodeId)
-        nodes[report.nodeId] = Messages.NodeView(
-            report.nodeId, present, present, report.maintenance, report.zones, report.playerCount)
-        println("report node=${report.nodeId} zones=${report.zones} players=${report.playerCount}")
+    @Synchronized fun report(report: Messages.ReportNodeStatusMsg, routingId: String) {
+        val now = System.nanoTime()
+        routingIdByNode.put(report.nodeId, routingId)?.takeIf { it != routingId }?.let(nodeByRoutingId::remove)
+        nodeByRoutingId[routingId] = report.nodeId
+        val view = Messages.NodeView(report.nodeId, true, routingId in liveRoutingIds,
+            report.maintenance, report.zones.toList(), report.playerCount)
+        nodes[report.nodeId] = State(view, now); changed(view)
+        println("node status observed. node=${report.nodeId}, rid=$routingId, registered=true, connected=${view.connected}")
     }
 
-    fun alert(report: Messages.ReportSpotEventMsg) = println(
-        "node alert node=${report.nodeId} kind=${report.kind} detail=${report.detail}")
-
-    fun find(nodeId: String) = nodes[nodeId]
-    fun snapshot() = nodes.values.sortedBy { it.nodeId }.map { it.copy(zones = it.zones.toList()) }
-
-    private fun apply(nodeId: String, routingId: String?, present: Boolean) {
-        val current = nodes[nodeId]
-        if (present && routingId != null) routingIds[nodeId] = routingId
-        // A node the console can no longer see tells it nothing about its own runtime
-        // state, so the reported fields are dropped rather than kept as a stale row.
-        val updated = if (present) {
-            Messages.NodeView(
-                nodeId, true, true, current?.maintenance == true,
-                current?.zones ?: ZoneWorldSpec.zonesOf(nodeId), current?.playerCount ?: 0)
-        } else {
-            Messages.NodeView(nodeId, false, false, false, ZoneWorldSpec.zonesOf(nodeId), 0)
+    @Synchronized fun expireStaleReports() {
+        val now = System.nanoTime()
+        nodes.toMap().forEach { (nodeId, state) ->
+            if (state.view.registered && now - state.lastReportNanos >= reportTtlNanos) {
+                val expired = state.view.copy(registered = false)
+                nodes[nodeId] = State(expired, state.lastReportNanos); changed(expired)
+            }
         }
-        nodes[nodeId] = updated
-        if (current != null &&
-            current.registered == updated.registered &&
-            current.connected == updated.connected
-        ) {
-            return
-        }
-        println(
-            "node status observed. node=$nodeId" +
-                ", rid=${routingIds[nodeId] ?: "none"}" +
-                ", registered=${updated.registered}" +
-                ", connected=${updated.connected}",
-        )
+    }
+
+    fun alert(report: Messages.ReportSpotEventMsg) {
+        val alert = Messages.NodeAlertNotify(report.nodeId, report.kind, report.detail, report.occurredAt)
+        alerted(alert)
+        println("node alert node=${report.nodeId} kind=${report.kind} detail=${report.detail}")
+    }
+    fun nodeIdOf(routingId: String) = nodeByRoutingId[routingId]
+    fun routingIdOf(nodeId: String) = routingIdByNode[nodeId]
+    fun find(nodeId: String) = nodes[nodeId]?.view
+    fun snapshot(): List<Messages.NodeView> {
+        expireStaleReports()
+        return nodes.values.map { it.view }.sortedBy { it.nodeId }
     }
 }

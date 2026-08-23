@@ -18,7 +18,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinCall;
@@ -320,9 +324,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             return bounded.execute(operationId, deadlineNanos).handle((result, error) -> {
                     if (error != null) {
                         Throwable cause = unwrap(error);
-                        ZLinkFrameworkErrorKind kind = cause instanceof ZLinkFrameworkException framework
-                            ? framework.kind()
-                            : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                        ZLinkFrameworkErrorKind kind = completionFailureKind(cause);
                         //  A deferred Join that ends in `Failed` reports only
                         //  an error kind to the application. Trace the cause on
                         //  the message flow so the failure carries the same
@@ -434,6 +436,25 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return error instanceof CompletionException && error.getCause() != null
             ? error.getCause()
             : error;
+    }
+
+    static ZLinkFrameworkErrorKind completionFailureKind(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof ZLinkFrameworkException framework) {
+                return framework.kind();
+            }
+            if (current instanceof ZlinkRequestException request
+                && request.getResult() == RequestResult.NOT_CONNECTED) {
+                return ZLinkFrameworkErrorKind.UNAVAILABLE;
+            }
+            if (current instanceof ZlinkSubmitException submit
+                && submit.getResult() == SubmitResult.NOT_CONNECTED) {
+                return ZLinkFrameworkErrorKind.UNAVAILABLE;
+            }
+            current = current.getCause();
+        }
+        return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
     }
 
     private static <T> CompletionStage<T> manage(CompletionStage<T> stage) {

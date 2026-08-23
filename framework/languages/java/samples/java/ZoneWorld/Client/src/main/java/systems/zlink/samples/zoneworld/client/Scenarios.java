@@ -321,10 +321,9 @@ final class Scenarios {
             resetMaintenance(ops);
             List<List<String>> pairs = List.of(List.of("zone-nw", "zone-ne"), List.of("zone-nw", "zone-sw"),
                 List.of("zone-ne", "zone-se"), List.of("zone-sw", "zone-se"));
-            // Registration settles asynchronously, so re-read the roster for a moment before giving
-            // up. The zone Spots are placed by a race between the zone nodes, so a diagonal split
-            // (nw+se / ne+sw) leaves no node owning two adjacent zones and this scenario cannot be
-            // set up at all - name that precondition instead of dying on an empty Optional.
+            // Registration settles asynchronously, so re-read the roster for a moment. ZoneBootstrap
+            // prefers an adjacent second claim, making this precondition satisfiable; keep the named
+            // failure as a guard against a future bootstrap regression.
             long deadline = System.nanoTime() + TOPOLOGY_SETTLE_TIMEOUT.toNanos();
             Messages.WatchNodesRes nodes; List<String> selected;
             while (true) {

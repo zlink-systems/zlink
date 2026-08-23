@@ -14,6 +14,8 @@ object ZoneWorldSpec {
     const val BOT_TICK_PERIOD_MS = 500L
     const val BOT_STEP = 3
     const val BORDER_EXPIRY_TICKS = 3
+    const val NODE_STATUS_REPORT_PERIOD_MS = 5_000L
+    const val NODE_STATUS_REPORT_TTL_MS = NODE_STATUS_REPORT_PERIOD_MS * 3
 
     data class MoveDecision(val accepted: Boolean, val zoneChanged: Boolean, val reason: String? = null)
     data class BotFixture(val id: String, val x: Int, val y: Int, val dirX: Int, val dirY: Int)
@@ -37,17 +39,7 @@ object ZoneWorldSpec {
         else -> error("unknown zone: $zone")
     }
 
-    fun nodeOf(zone: String) = when (zone) {
-        "zone-nw", "zone-sw" -> "zone-node-1"
-        "zone-ne", "zone-se" -> "zone-node-2"
-        else -> error("unknown zone: $zone")
-    }
-
-    fun zonesOf(nodeId: String) = when (nodeId) {
-        "zone-node-1" -> listOf("zone-nw", "zone-sw")
-        "zone-node-2" -> listOf("zone-ne", "zone-se")
-        else -> emptyList()
-    }
+    fun zones() = listOf("zone-nw", "zone-ne", "zone-sw", "zone-se")
 
     fun inBorderBand(x: Int, y: Int, from: String, to: String): Boolean {
         if (zoneOf(x, y) != from) return false

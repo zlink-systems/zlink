@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -14,6 +15,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -336,6 +338,58 @@ final class ZLinkBoundActorRouteContractTest {
         assertEquals(
             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, framework.kind());
         assertInstanceOf(TimeoutException.class, framework.getCause());
+    }
+
+    @Test
+    void relocationRouteDoesNotWaitForAnActorMailboxAcknowledgement() {
+        AtomicInteger relocations = new AtomicInteger();
+        AtomicInteger actorRequests = new AtomicInteger();
+        ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
+            Proxy.newProxyInstance(
+                ZLinkBackendStreamSocket.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "relocateBoundActor" -> {
+                        relocations.incrementAndGet();
+                        yield CompletableFuture.completedFuture(null);
+                    }
+                    case "requestBoundActor" -> {
+                        actorRequests.incrementAndGet();
+                        yield new CompletableFuture<List<Message>>();
+                    }
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkBoundActor actor = new ZLinkBoundActor(
+            stream,
+            RoutingId.from("session"),
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-a"), "actor-1", 7),
+            "game",
+            Optional.empty(),
+            null,
+            new UnsupportedSerializer(),
+            0,
+            1,
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.JSON,
+            new ZLinkSessionRelayHeaders(),
+            null,
+            () -> true,
+            operation -> operation.apply(1),
+            ZLinkRelayMetadataPolicy.EMPTY);
+
+        CompletionStage<Void> preparation = actor.prepareNativeActorRoute(
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-b"), "actor-1", 7),
+            Duration.ofSeconds(1));
+
+        assertTrue(preparation.toCompletableFuture().isDone(),
+            "command 44 must not wait behind the target Actor mailbox");
+        assertEquals(1, relocations.get());
+        assertEquals(0, actorRequests.get());
     }
 
     private static ZLinkBoundActor actor(boolean currentBinding) {

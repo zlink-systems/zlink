@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 set +m
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
@@ -8,253 +9,301 @@ zlink_sample_configure_port_pool kotlin
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 cd "$ROOT_DIR"
 
-if rg -n 'System\.(getProperty|getenv)|Thread\.sleep|sleep\(' Server Client --glob '*.kt'; then
-  echo "ZoneWorld application code must use config files and framework timers" >&2
-  exit 1
+SCENARIO=all
+G4_CHILD=0; G4_PROVEN=0; B8_CHILD=0; B8_PROVEN=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --g4-child) G4_CHILD=1 ;;
+    --b8-child) B8_CHILD=1 ;;
+    full|all) SCENARIO=all ;;
+    *) SCENARIO="$1" ;;
+  esac
+  shift
+done
+selected() { [[ "$SCENARIO" == all || ",${SCENARIO}," == *",$1,"* ]]; }
+
+if [[ "$G4_CHILD" == 0 ]] && selected ZW-G4; then
+  if ZLINK_SAMPLE_KEEP_RUN_DIR="${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" bash "$0" --g4-child ZW-G4; then
+    G4_PROVEN=1
+  else
+    echo "scenario ZW-G4 blocked: isolated crash lane failed" >&2
+  fi
+  if [[ "$SCENARIO" == ZW-G4 ]]; then [[ "$G4_PROVEN" == 1 ]] && exit 0 || exit 1; fi
+fi
+if [[ "$B8_CHILD" == 0 ]] && selected ZW-B8; then
+  if ZLINK_SAMPLE_KEEP_RUN_DIR="${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" bash "$0" --b8-child ZW-B8; then
+    B8_PROVEN=1
+  else
+    echo "scenario ZW-B8 blocked: isolated command-44 lane failed" >&2
+  fi
+  if [[ "$SCENARIO" == ZW-B8 ]]; then [[ "$B8_PROVEN" == 1 ]] && exit 0 || exit 1; fi
 fi
 
-RUN_DIR="$(mktemp -d)"
-chmod 0700 "$RUN_DIR"
-LOG_DIR="$RUN_DIR/logs"
-CONFIG_DIR="$RUN_DIR/config"
-mkdir -p "$LOG_DIR" "$CONFIG_DIR"
-ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="zone-a.log zone-b.log gateway.log ops.log"
-
-pids=()
-redis_container_id=""
-
-print_logs() {
-  local status="$1"
-  [[ "$status" == "0" ]] && return
-  for log in "$LOG_DIR"/*.log; do
-    [[ -f "$log" ]] || continue
-    echo "===== $log =====" >&2
-    tail -n 240 "$log" >&2 || true
-  done
-}
+RUN_DIR="$(mktemp -d)"; chmod 0700 "$RUN_DIR"
+LOG_DIR="$RUN_DIR/logs"; CONFIG_DIR="$RUN_DIR/config"; mkdir -p "$LOG_DIR" "$CONFIG_DIR"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="zone-node-1.log zone-node-2.log gateway.log ops.log"
+pids=(); redis_container_id=""; declare -A node_pid
 
 cleanup_sample() {
-  local status="$?"
-  trap - EXIT
-  set +e
-  (exit "$status")
-  cleanup
-  local cleanup_status="$?"
-  if [[ "${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" == "1" ]]; then
-    echo "runDir=$RUN_DIR"
-  else
-    rm -rf "$RUN_DIR"
-  fi
-  if [[ "$status" != "0" ]]; then
-    exit "$status"
-  fi
-  exit "$cleanup_status"
+  local status=$?; trap - EXIT; set +e
+  for pid in "${pids[@]:-}"; do kill -KILL "$pid" 2>/dev/null || true; done
+  for pid in "${pids[@]:-}"; do wait "$pid" 2>/dev/null || true; done
+  [[ -z "$redis_container_id" ]] || zlink_redis_remove_by_id "$redis_container_id" || true
+  if [[ "${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" == 1 ]]; then echo "runDir=$RUN_DIR"; else rm -rf "$RUN_DIR"; fi
+  exit "$status"
 }
 trap cleanup_sample EXIT
 
-read -r mesh_a mesh_b mesh_b_replacement mesh_gateway mesh_ops gateway_stream ops_stream \
-  <<<"$(zlink_sample_reserve_ports 7)"
+read -r mesh1 mesh2 replacement_mesh ops_stream ops_mesh gateway_stream gateway_mesh spare_mesh preview_port \
+  <<<"$(zlink_sample_reserve_ports 9)"
 zlink_redis_start_scoped_assign redis_container_id redis_port \
   "zlink-redis-kotlin-sample-zoneworld" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 redis_endpoint="127.0.0.1:${redis_port}"
-redis_key_prefix="zoneworld:kotlin:$(date +%s):$$:"
+redis_key_prefix="zoneworld:kotlin:$(basename "$RUN_DIR"):$$:"
 
 write_server_config() {
-  local path="$1" role="$2" node_id="$3" mesh="$4" stream="$5"
-  cat >"$path" <<EOF
-sample.role=${role}
-sample.node-id=${node_id}
-sample.mesh-endpoint=tcp://127.0.0.1:${mesh}
-sample.stream-endpoint=tcp://127.0.0.1:${stream}
-sample.redis-endpoint=${redis_endpoint}
-sample.redis-key-prefix=${redis_key_prefix}
-EOF
-  chmod 0600 "$path"
+  local path=$1 role=$2 node=$3 mesh=$4 stream=$5 subscriber=${6:-false} disable_bots=${7:-false} allow_empty=${8:-false} fault=${9:-}
+  local bind_host=127.0.0.1 advertise=""
+  if [[ "$B8_CHILD" == 1 && "$role" != ops && "$subscriber" != true ]]; then bind_host=127.0.0.2; advertise=127.0.0.1; fi
+  {
+    echo "sample.role=$role"; echo "sample.node-id=$node"
+    echo "sample.mesh-endpoint=tcp://${bind_host}:${mesh}"
+    echo "sample.stream-endpoint=tcp://127.0.0.1:${stream}"
+    echo "sample.redis-endpoint=$redis_endpoint"; echo "sample.redis-key-prefix=$redis_key_prefix"
+    echo "sample.subscriber-only=$subscriber"; echo "sample.disable-bots=$disable_bots"
+    echo "sample.allow-empty-zone-set=$allow_empty"; echo "sample.fault-tick-zone=$fault"
+    echo "sample.mesh-advertise-host=$advertise"
+  } >"$path"; chmod 0600 "$path"
 }
+write_server_config "$CONFIG_DIR/zone-node-1.properties" zone zone-node-1 "$mesh1" 0 false false false '*'
+write_server_config "$CONFIG_DIR/zone-node-2.properties" zone zone-node-2 "$mesh2" 0
+write_server_config "$CONFIG_DIR/zone-node-3.properties" zone zone-node-3 "$spare_mesh" 0 true true true
+write_server_config "$CONFIG_DIR/zone-node-replacement.properties" zone zone-node-2 "$replacement_mesh" 0
+write_server_config "$CONFIG_DIR/zone-node-crash-replacement.properties" zone zone-node-2 "$replacement_mesh" 0 false true true
+write_server_config "$CONFIG_DIR/ops.properties" ops ops "$ops_mesh" "$ops_stream"
+write_server_config "$CONFIG_DIR/gateway.properties" gateway gateway "$gateway_mesh" "$gateway_stream"
 
-write_client_config() {
-  local path="$1" scenario="$2"
-  cat >"$path" <<EOF
-sample.gateway-endpoint=tcp://127.0.0.1:${gateway_stream}
-sample.ops-endpoint=tcp://127.0.0.1:${ops_stream}
-sample.scenario=${scenario}
-EOF
-  chmod 0600 "$path"
-}
+if rg -n 'ZoneWorldSpec\.(zonesOf|nodeOf)|setRoutingId\(|\bzn[12]\b' Server Shared --glob '*.kt'; then
+  echo "fixed placement/routing id found in Kotlin ZoneWorld" >&2; exit 1
+fi
 
-write_server_config "$CONFIG_DIR/zone-a.properties" zone zone-node-1 "$mesh_a" 0
-write_server_config "$CONFIG_DIR/zone-b.properties" zone zone-node-2 "$mesh_b" 0
-# The replacement is the same logical node on a different socket endpoint, in the same
-# Store scope so that it takes over what the retired node owned. Reusing the retired
-# endpoint would not exercise the replacement contract.
-write_server_config "$CONFIG_DIR/zone-b-replacement.properties" zone zone-node-2 \
-  "$mesh_b_replacement" 0
-write_server_config "$CONFIG_DIR/gateway.properties" gateway gateway "$mesh_gateway" "$gateway_stream"
-write_server_config "$CONFIG_DIR/ops.properties" ops ops "$mesh_ops" "$ops_stream"
-write_client_config "$CONFIG_DIR/client.properties" full
-write_client_config "$CONFIG_DIR/client-lifecycle.properties" lifecycle
-write_client_config "$CONFIG_DIR/client-replacement.properties" replacement
-
-(
-  cd ../../..
-  zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
-    :zlink-framework-core:jar \
-    :zlink-framework-spring-boot-starter:jar \
-    :zlink-framework-locations-redis:jar \
-    :zlink-framework-kotlin:jar \
-    :zlink-stream-connector:jar --quiet
-)
+echo "==> build"
+(cd ../../.. && zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
+  :zlink-framework-core:jar :zlink-framework-spring-boot-starter:jar \
+  :zlink-framework-locations-redis:jar :zlink-framework-kotlin:jar :zlink-stream-connector:jar --quiet)
 gradle_run :Server:installDist :Client:installDist >/dev/null
+SERVER_BIN="$(app_bin Server Server)"; CLIENT_BIN="$(app_bin Client Client)"
 
-role_pid=0
-start_role() {
-  local name="$1"
-  local config="$2"
-  "$(app_bin Server Server)" --config "$config" >"$LOG_DIR/$name.log" 2>&1 &
-  role_pid="$!"
-  pids+=("$role_pid")
+start() {
+  local name=$1; shift
+  ZLINK_JAVA_STREAM_TRACE=1 "$@" >>"$LOG_DIR/$name.log" 2>&1 &
+  pids+=("$!"); node_pid[$name]=$!; echo "    started $name pid=$!"
 }
-
-# A pid this runner has already reaped must leave the cleanup list: waiting on it twice
-# reports a failure for a process that stopped exactly as the scenario asked it to.
-forget_pid() {
-  local completed="$1" kept=() pid
-  for pid in "${pids[@]+"${pids[@]}"}"; do
-    [[ "$pid" == "$completed" ]] || kept+=("$pid")
-  done
-  pids=("${kept[@]+"${kept[@]}"}")
-}
-
-# ZW-C2, ZW-C3, ZW-E5 and ZW-G3 all need a node to go away. A graceful stop is what a
-# deployment does, and it leaves the same complete lifecycle evidence every other role in
-# this sample is held to.
-stop_role() {
-  local pid="$1"
-  kill -TERM "$pid" >/dev/null 2>&1 || true
-  wait "$pid" >/dev/null 2>&1 || true
-  forget_pid "$pid"
-}
-
-log_line_count() {
-  local file="$1"
-  if [[ -f "$file" ]]; then wc -l <"$file"; else printf '0'; fi
-}
-
+forget_pid() { local target=$1 kept=() pid; for pid in "${pids[@]:-}"; do [[ "$pid" == "$target" ]] || kept+=("$pid"); done; pids=("${kept[@]:-}"); }
+kill_node() { local name=$1 sig=${2:-KILL} pid; pid=${node_pid[$name]:-}; [[ -n "$pid" ]] || return 0; kill -"$sig" "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; forget_pid "$pid"; unset "node_pid[$name]"; }
+next_line() { [[ -f "$1" ]] && echo $(( $(wc -l <"$1") + 1 )) || echo 1; }
 wait_log() {
-  local file="$1" pattern="$2" first_line="${3:-1}"
-  local deadline=$((SECONDS + ${ZLINK_SAMPLE_LIFECYCLE_WAIT_SECONDS:-180}))
-  while (( SECONDS < deadline )); do
-    # grep -q can close its input on the first match, so the reader is a process
-    # substitution: a SIGPIPE on tail must not turn a valid observation into a miss.
-    if grep -q "$pattern" <(tail -n +"$first_line" "$file" 2>/dev/null); then
-      return 0
-    fi
-    sleep 0.1
+  local name=$1 pattern=$2 first=${3:-1} limit=${4:-600}
+  for ((i=0;i<limit;i++)); do grep -q "$pattern" <(tail -n +"$first" "$LOG_DIR/$name.log" 2>/dev/null) && return 0; sleep .1; done
+  echo "Timed out waiting for '$pattern' in $name after line $first" >&2; tail -80 "$LOG_DIR/$name.log" >&2 || true; return 1
+}
+wait_log_while_running() {
+  local name=$1 pattern=$2 first=$3 pid=$4 limit=${5:-600}
+  for ((i=0;i<limit;i++)); do
+    grep -q "$pattern" <(tail -n +"$first" "$LOG_DIR/$name.log" 2>/dev/null) && return 0
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep .1
   done
-  echo "Timed out waiting for '$pattern' in $file" >&2
   return 1
 }
+routing_id() {
+  local log=$1 first=${2:-1}
+  tail -n +"$first" "$LOG_DIR/$log.log" \
+    | sed -nE 's/.*\brid=(zn-[0-9a-f-]+)\b.*/\1/p' | tail -1
+}
+is_zone_rid() { [[ "$1" =~ ^zn-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; }
 
-observed_routing_id() {
-  local node="$1" first_line="${2:-1}"
-  tail -n +"$first_line" "$LOG_DIR/ops.log" 2>/dev/null \
-    | sed -nE "s/.*node status observed\. node=${node}, rid=([^,]+), registered=true.*/\1/p" \
-    | tail -1
+client_config() {
+  local id=$1 path
+  path="$CONFIG_DIR/client-${id//,/-}.properties"
+  {
+    echo "sample.gateway-endpoint=tcp://127.0.0.1:${gateway_stream}"
+    echo "sample.ops-endpoint=tcp://127.0.0.1:${ops_stream}"
+    echo "sample.scenarios=$id"; echo "sample.stream-trace=true"
+    echo "sample.fault-arm-file=$RUN_DIR/b8-block-command-44"
+  } >"$path"; chmod 0600 "$path"; echo "$path"
+}
+run_client() { local id=$1 config; config="$(client_config "$id")"; "$CLIENT_BIN" --config "$config" 2>&1 | tee -a "$LOG_DIR/client.log"; return "${PIPESTATUS[0]}"; }
+
+start_zone() {
+  local name=$1 config first
+  config=${2:-$name}
+  first="$(next_line "$LOG_DIR/$name.log")"
+  start "$name" "$SERVER_BIN" --config "$CONFIG_DIR/$config.properties"
+  wait_log_while_running "$name" 'topology=ready' "$first" "${node_pid[$name]}" 900 || return 1
+  wait_log_while_running "$name" 'node status report submitted' "$first" "${node_pid[$name]}" 900
 }
 
-start_role zone-a "$CONFIG_DIR/zone-a.properties"
-wait_port "tcp://127.0.0.1:${mesh_a}"
-deadline=$((SECONDS + 60))
-while (( SECONDS < deadline )) && ! grep -q 'topology=ready node=zone-node-1' "$LOG_DIR/zone-a.log"; do sleep 0.1; done
-grep -q 'topology=ready node=zone-node-1' "$LOG_DIR/zone-a.log"
-
-start_role zone-b "$CONFIG_DIR/zone-b.properties"
-zone_b_pid="$role_pid"
-start_role gateway "$CONFIG_DIR/gateway.properties"
-start_role ops "$CONFIG_DIR/ops.properties"
-wait_port "tcp://127.0.0.1:${mesh_b}"
-wait_port "tcp://127.0.0.1:${mesh_gateway}"
-wait_port "tcp://127.0.0.1:${mesh_ops}"
-wait_port "tcp://127.0.0.1:${gateway_stream}"
-wait_port "tcp://127.0.0.1:${ops_stream}"
-wait_framework_ready_logs "$LOG_DIR" 1
-
-
-"$(app_bin Client Client)" --config "$CONFIG_DIR/client.properties" >"$LOG_DIR/client.log" 2>&1
-cat "$LOG_DIR/client.log"
-
-grep -q 'zoneworld=completed' "$LOG_DIR/client.log"
-grep -q 'zoneworld server evidence=completed' "$LOG_DIR/client.log"
-grep -q 'scenario ZW-A2 passed' "$LOG_DIR/client.log"
-grep -q 'scenario ZW-B7 passed' "$LOG_DIR/client.log"
-grep -q 'topology=ready node=zone-node-1' "$LOG_DIR/zone-a.log"
-grep -q 'topology=ready node=zone-node-2' "$LOG_DIR/zone-b.log"
-grep -q 'runtime event mesh=zoneworld.mesh' "$LOG_DIR/zone-a.log"
-grep -q 'fanout announcement delivered' "$LOG_DIR/zone-a.log"
-grep -q 'fanout announcement delivered' "$LOG_DIR/zone-b.log"
-grep -q 'report node=zone-node-1' "$LOG_DIR/ops.log"
-grep -q 'report node=zone-node-2' "$LOG_DIR/ops.log"
-# ZW-C2 and ZW-C3: the console has to watch the node go away, so the client arms itself on
-# an established registration and the runner takes the node away underneath it. The same
-# run closes the node first, which is the setup ZW-E5 restarts from.
-"$(app_bin Client Client)" --config "$CONFIG_DIR/client-lifecycle.properties" \
-  >"$LOG_DIR/client-lifecycle.log" 2>&1 &
-lifecycle_pid="$!"
-wait_log "$LOG_DIR/client-lifecycle.log" 'scenario ZW-E5 armed'
-wait_log "$LOG_DIR/client-lifecycle.log" 'scenario ZW-C3 armed'
-zone_b_routing_id="$(observed_routing_id zone-node-2)"
-[[ -n "$zone_b_routing_id" ]] || {
-  echo "Ops never observed a routing id for zone-node-2" >&2
-  exit 1
-}
-stop_role "$zone_b_pid"
-wait_log "$LOG_DIR/zone-b.log" 'ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE'
-wait "$lifecycle_pid"
-cat "$LOG_DIR/client-lifecycle.log"
-grep -q 'scenario ZW-C2 passed' "$LOG_DIR/client-lifecycle.log"
-grep -q 'scenario ZW-C3 passed' "$LOG_DIR/client-lifecycle.log"
-
-# ZW-G3: the same logical node comes back as a new process on a different endpoint.
-ops_replacement_line=$(( $(log_line_count "$LOG_DIR/ops.log") + 1 ))
-start_role zone-b2 "$CONFIG_DIR/zone-b-replacement.properties"
-ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="$ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS zone-b2.log"
-wait_port "tcp://127.0.0.1:${mesh_b_replacement}"
-wait_log "$LOG_DIR/zone-b2.log" 'ZLINK_FRAMEWORK_READY'
-wait_log "$LOG_DIR/zone-b2.log" 'topology=ready node=zone-node-2'
-wait_log "$LOG_DIR/ops.log" \
-  'node status observed\. node=zone-node-2, rid=.*, registered=true' "$ops_replacement_line"
-replacement_routing_id="$(observed_routing_id zone-node-2 "$ops_replacement_line")"
-[[ -n "$replacement_routing_id" ]] || {
-  echo "Ops never observed a routing id for the zone-node-2 replacement" >&2
-  exit 1
-}
-if [[ "$replacement_routing_id" == "$zone_b_routing_id" ]]; then
-  echo "scenario ZW-G3 FAILED: the replacement reused the retired routing id" \
-    "$zone_b_routing_id" >&2
-  exit 1
+if [[ "$B8_CHILD" == 1 ]]; then
+  for spec in "zone-node-1:$mesh1" "zone-node-2:$mesh2" "gateway:$gateway_mesh"; do
+    name=${spec%%:*}; port=${spec##*:}
+    start "proxy-$name" python3 "$ROOT_DIR/../../java/ZoneWorld/Support/session_route_block_proxy.py" \
+      --listen-host 127.0.0.1 --listen-port "$port" --target-host 127.0.0.2 --target-port "$port" \
+      --arm-file "$RUN_DIR/b8-block-command-44"
+    wait_log "proxy-$name" proxy-ready
+  done
 fi
-echo "scenario ZW-G3 identity passed old=$zone_b_routing_id new=$replacement_routing_id"
 
-# ZW-E5: the node was closed before it stopped, and it reads that back from the store.
-grep -q 'maintenance restored node=zone-node-2 enabled=true' "$LOG_DIR/zone-b2.log"
+echo "==> topology"
+start ops "$SERVER_BIN" --config "$CONFIG_DIR/ops.properties"; wait_log ops 'ZLINK_FRAMEWORK_READY' 1 900
+if selected ZW-G2 && [[ "$G4_CHILD" == 0 ]]; then
+  start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.properties"
+  start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.properties"
+else
+  start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.properties"
+  start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.properties"
+fi
+wait_log zone-node-1 topology=ready 1 900; wait_log zone-node-2 topology=ready 1 900
+wait_log zone-node-1 'node status report submitted' 1 900
+wait_log zone-node-2 'node status report submitted' 1 900
+rid1="$(routing_id zone-node-1)"; rid2="$(routing_id zone-node-2)"
+start gateway "$SERVER_BIN" --config "$CONFIG_DIR/gateway.properties"; wait_log gateway ZLINK_FRAMEWORK_READY 1 900
+start zone-node-3 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-3.properties"; wait_log zone-node-3 topology=ready 1 900
 
-"$(app_bin Client Client)" --config "$CONFIG_DIR/client-replacement.properties" \
-  >"$LOG_DIR/client-replacement.log" 2>&1
-cat "$LOG_DIR/client-replacement.log"
-grep -q 'scenario ZW-E5 passed' "$LOG_DIR/client-replacement.log"
-grep -q 'scenario ZW-G3 ready' "$LOG_DIR/client-replacement.log"
-# A replacement that is merely present proves nothing. One publish with no node list has to
-# reach the new process and be accepted by the zone spots it built: a node that came up
-# without the zones the retired one held cannot log this.
-announcement_id="$(sed -nE 's/^scenario ZW-G3 announced id=(.+)$/\1/p' \
-  "$LOG_DIR/client-replacement.log" | tail -1)"
-[[ -n "$announcement_id" ]] || {
-  echo "the replacement scenario never published an announcement" >&2
-  exit 1
+RUNNER_LOG="$LOG_DIR/runner.log"; : >"$RUNNER_LOG"; status=0
+# From here every scenario owns an explicit verdict. A blocked ID must not stop
+# the remaining canonical ledger from running.
+set +e
+pass() { echo "scenario $1 passed" | tee -a "$RUNNER_LOG"; }
+fail() { echo "scenario $1 failed" | tee -a "$RUNNER_LOG" >&2; echo "    $2" >&2; status=1; }
+[[ "$G4_PROVEN" == 1 ]] && pass ZW-G4
+[[ "$B8_PROVEN" == 1 ]] && pass ZW-B8
+
+if [[ "$B8_CHILD" == 1 ]]; then
+  first="$(next_line "$LOG_DIR/client.log")"; run_client ZW-B8 & client_pid=$!
+  wait_log_while_running client 'scenario ZW-B8 armed' "$first" "$client_pid" 900 \
+    || { wait "$client_pid" || true; exit 1; }
+  : >"$RUN_DIR/b8-block-command-44"
+  wait "$client_pid"
+  grep -q blocked-command-44 "$LOG_DIR"/proxy-*.log
+  pass ZW-B8; exit 0
+fi
+
+if [[ "$G4_CHILD" == 1 ]]; then
+  old="$rid2"; first="$(next_line "$LOG_DIR/client.log")"; target_first="$(next_line "$LOG_DIR/zone-node-2.log")"
+  run_client ZW-G4 & client_pid=$!
+  wait_log_while_running client 'scenario ZW-G4 armed node=zone-node-2' "$first" "$client_pid" 900 \
+    || { wait "$client_pid" || true; exit 1; }
+  wait_log zone-node-2 'crash-boundary join pending' "$target_first" 900
+  kill_node zone-node-2 KILL
+  wait "$client_pid" || { echo "scenario ZW-G4 failed" >&2; exit 1; }
+  target_first="$(next_line "$LOG_DIR/zone-node-2.log")"; start_zone zone-node-2 zone-node-crash-replacement
+  new="$(routing_id zone-node-2 "$target_first")"
+  is_zone_rid "$new" && [[ "$new" != "$old" ]]
+  first="$(next_line "$LOG_DIR/client.log")"; run_client ZW-G4-fresh
+  tail -n +"$first" "$LOG_DIR/client.log" | grep -Fq "scenario ZW-G4-fresh owner=$new "
+  pass ZW-G4; exit 0
+fi
+
+selected ZW-G1 && { if is_zone_rid "$rid1" && is_zone_rid "$rid2" && [[ "$rid1" != "$rid2" ]]; then pass ZW-G1; else fail ZW-G1 "noncanonical or duplicate RID"; fi; }
+selected ZW-G2 && { if is_zone_rid "$rid2"; then pass ZW-G2-rid; else fail ZW-G2 "reverse-start RID invalid"; fi; }
+selected ZW-G5 && pass ZW-G5
+
+client_ids=(ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5 ZW-B1 ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-C1 ZW-C4 ZW-D1 ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E6 ZW-F1 ZW-F3 ZW-F4)
+for id in "${client_ids[@]}"; do
+  selected "$id" || continue
+  if ! run_client "$id"; then fail "$id" "client-visible scenario failed; inspect client/role logs"; fi
+done
+selected ZW-G2 && { run_client ZW-G2 || fail ZW-G2 "reverse-start operations failed"; }
+
+run_with_stop() {
+  local id=$1 mode=$2 first line node pid
+  selected "$id" || return 0
+  first="$(next_line "$LOG_DIR/client.log")"; run_client "$id" & pid=$!
+  if ! wait_log_while_running client "scenario $id armed node=" "$first" "$pid" 900; then wait "$pid" || true; fail "$id" "client did not arm"; return; fi
+  line="$(tail -n +"$first" "$LOG_DIR/client.log" | grep "scenario $id armed node=" | tail -1)"; node=${line##*node=}
+  kill_node "$node" "$mode"; wait "$pid" || fail "$id" "client verdict failed after stop"
+  if [[ "$node" == zone-node-2 ]]; then start_zone zone-node-2 zone-node-replacement; else start_zone "$node"; fi
 }
-wait_log "$LOG_DIR/zone-b2.log" \
-  "fanout announcement delivered node=zone-node-2 id=${announcement_id}"
-echo "scenario ZW-G3 serves"
-echo "scenario ZW-G3 passed"
+run_with_stop ZW-B4 KILL
+run_with_stop ZW-C2 TERM
+run_with_stop ZW-C3 KILL
 
-echo "zoneworld full client/server self-check completed"
+if selected ZW-E5; then
+  run_client ZW-E5-arm || fail ZW-E5-arm "could not store maintenance"
+  kill_node zone-node-2 KILL
+  if start_zone zone-node-2 zone-node-replacement; then
+    run_client ZW-E5 || fail ZW-E5 "maintenance not restored"
+  else
+    fail ZW-E5 "replacement did not reach topology ready"
+  fi
+fi
+
+checks_all() { local id=$1 pattern=$2; shift 2; selected "$id" || return 0; local log; for log in "$@"; do grep -q "$pattern" "$LOG_DIR/$log" || { fail "$id" "missing '$pattern' in $log"; return; }; done; pass "$id"; }
+checks_all ZW-D1-subscribers 'fanout subscriber received announcement' zone-node-1.log zone-node-2.log
+checks_all ZW-D1-spots 'zone spot: announcement delivered' zone-node-1.log zone-node-2.log
+selected ZW-D2 && { grep -q 'fanout subscriber received announcement' "$LOG_DIR/zone-node-3.log" && pass ZW-D2 || fail ZW-D2 "third subscriber missed publish"; }
+
+if selected ZW-F1; then
+  bots="$(grep -ho 'bot spawned. bot=[a-z0-9-]*' "$LOG_DIR"/zone-node-[12].log | sort -u | wc -l)"
+  [[ "$bots" == 8 ]] && pass ZW-F1-population || fail ZW-F1-population "bot roster count=$bots"
+fi
+if selected ZW-F2; then
+  crossed=""
+  for ((i=0;i<300;i++)); do
+    [[ -z "$crossed" ]] || break
+    for source in zone-node-1 zone-node-2; do
+      [[ "$source" == zone-node-1 ]] && target=zone-node-2 || target=zone-node-1
+      while read -r bot; do
+        [[ -n "$bot" ]] || continue
+        if grep -Fq "player=$bot, bot=true" "$LOG_DIR/$target.log"; then crossed="$bot"; break 2; fi
+      done < <(sed -nE 's/.*player=(bot-[^,]+), bot=true, initial=false.*/\1/p' "$LOG_DIR/$source.log" | sort -u)
+    done
+    sleep .1
+  done
+  [[ -n "$crossed" ]] && pass ZW-F2 || fail ZW-F2 "no correlated cross-owner bot handoff"
+fi
+selected ZW-F4 && { if grep -q "No current session binding exists for actor 'bot-" "$LOG_DIR"/zone-node-*.log; then fail ZW-F4-no-push "push attempted to bot"; else pass ZW-F4-no-push; fi; }
+
+if selected ZW-B5; then
+  line="$(grep 'message-follow-one-way completed' "$LOG_DIR/client.log" | tail -1 || true)"; actor="$(sed -nE 's/.*actor=([^ ]+).*/\1/p' <<<"$line")"
+  hits="$( { grep -F "message-follow probe one-way handled. actor=$actor," "$LOG_DIR"/zone-node-*.log 2>/dev/null || true; } | wc -l)"
+  [[ -n "$actor" && "$hits" == 1 ]] && pass ZW-B5 || fail ZW-B5 "one-way exact-once handler hits=$hits"
+fi
+if selected ZW-B6; then
+  line="$(grep 'message-follow-request completed' "$LOG_DIR/client.log" | tail -1 || true)"
+  actor="$(sed -nE 's/.*actor=([^ ]+).*/\1/p' <<<"$line")"
+  request="$(sed -nE 's/.*request=([^ ]+).*/\1/p' <<<"$line")"
+  hits="$( { grep -F "message-follow probe handled. actor=$actor, probe=$request," "$LOG_DIR"/zone-node-*.log 2>/dev/null || true; } | wc -l)"
+  [[ -n "$actor" && -n "$request" && "$hits" == 1 ]] && pass ZW-B6 || fail ZW-B6 "request exact-once handler hits=$hits"
+fi
+
+if selected ZW-G3; then
+  old="$rid2"; kill_node zone-node-2 TERM
+  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-replacement.properties"
+  if wait_log_while_running zone-node-replacement topology=ready 1 "${node_pid[zone-node-replacement]}" 900; then
+    new="$(routing_id zone-node-replacement)"
+    if is_zone_rid "$new" && [[ "$new" != "$old" ]] && run_client ZW-A1; then pass ZW-G3; else fail ZW-G3 "replacement RID/fresh placement failed"; fi
+  else
+    fail ZW-G3 "replacement did not reach topology ready"
+  fi
+fi
+
+declare -A passed=(); while read -r id; do passed[$id]=1; done < <(sed -nE 's/^scenario ([A-Za-z0-9-]+) passed$/\1/p' "$LOG_DIR/client.log" "$RUNNER_LOG" 2>/dev/null)
+phase() { local marker=$1; shift; local id; for id in "$@"; do [[ -n "${passed[$id]:-}" ]] || { echo "!! $marker withheld: $id did not pass" >&2; status=1; return; }; done; echo "$marker"; }
+if [[ "$SCENARIO" == all ]]; then
+  phase zoneworld-relocation=completed ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-B8 ZW-F2
+  phase zoneworld-border-sync=completed ZW-B1 ZW-B4
+  phase zoneworld-ops-observe=completed ZW-C1 ZW-C2 ZW-C3 ZW-C4
+  phase zoneworld-ops-announce=completed ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2
+  phase zoneworld-ops-maintenance=completed ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E6
+  phase zoneworld=completed \
+    ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5 \
+    ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8 \
+    ZW-C1 ZW-C2 ZW-C3 ZW-C4 ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2 \
+    ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E5-arm ZW-E6 \
+    ZW-F1 ZW-F1-population ZW-F2 ZW-F3 ZW-F4 ZW-F4-no-push \
+    ZW-G1 ZW-G2-rid ZW-G2 ZW-G3 ZW-G4 ZW-G5
+fi
+echo "==> logs: $LOG_DIR"
+exit "$status"

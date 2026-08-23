@@ -9,7 +9,8 @@ import systems.zlink.framework.monitoring.ZLinkPeerState
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeRegistry
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldNames
-import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Whether a zone node is registered and its link is up. Neither is a question the console
@@ -24,6 +25,9 @@ class NodeLivenessObserver(
     // stream stops as soon as the publisher is collected. The console watches node
     // lifecycles for as long as it runs, so it keeps the publisher for that long.
     private var observation: Flow.Publisher<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>? = null
+    private val expiry = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "zoneworld-report-expiry").apply { isDaemon = true }
+    }
 
     override fun run(args: ApplicationArguments) {
         val publisher = runtime.observe(ZoneWorldNames.MESH, 32)
@@ -35,7 +39,7 @@ class NodeLivenessObserver(
                 }
 
                 override fun onNext(observed: ZLinkObservedStatus<ZLinkMeshNodeSnapshot>) {
-                    registry.applyLivePeers(zoneNodes(observed.status()))
+                    registry.applyLiveRoutingIds(readyRoutingIds(observed.status()))
                 }
 
                 override fun onError(error: Throwable) {
@@ -49,19 +53,14 @@ class NodeLivenessObserver(
                 }
             },
         )
+        expiry.scheduleAtFixedRate(registry::expireStaleReports, 1, 1, TimeUnit.SECONDS)
     }
 
-    private fun zoneNodes(status: ZLinkMeshNodeSnapshot): Map<String, String> {
-        val observed = LinkedHashMap<String, String>()
+    private fun readyRoutingIds(status: ZLinkMeshNodeSnapshot): Set<String> {
+        val observed = linkedSetOf<String>()
         status.peers()
             .filter { it.state() == ZLinkPeerState.READY }
-            .forEach { peer ->
-                val routingId = peer.nodeRid().toString()
-                val identity = ZoneWorldNames.identityOfRoutingId(routingId)
-                if (identity != null && ZoneWorldSpec.zonesOf(identity).isNotEmpty()) {
-                    observed[identity] = routingId
-                }
-            }
+            .forEach { observed += it.nodeRid().toString() }
         return observed
     }
 }

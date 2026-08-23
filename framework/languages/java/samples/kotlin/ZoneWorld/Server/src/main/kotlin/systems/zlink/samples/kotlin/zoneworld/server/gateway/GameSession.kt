@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSession
 import systems.zlink.framework.streams.ZLinkSessionContext
@@ -15,6 +16,8 @@ import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
 class GameSession(
     private val sessionContext: ZLinkSessionContext,
     private val actors: ZLinkActorManager,
+    private val actorClient: ZLinkActorClient,
+    private val probes: RelocationProbeService,
 ) : ZLinkSession {
     override fun context() = sessionContext
     override fun onConnected(): CompletionStage<Void> = CompletableFuture.completedFuture<Void>(null)
@@ -22,6 +25,26 @@ class GameSession(
     override fun onError(error: ZLinkStreamError): CompletionStage<Void> = CompletableFuture.completedFuture<Void>(null)
 
     override fun onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): CompletionStage<Void> {
+        if (dispatch.packetName() == "RelocationPairReq") return probes.selectPair()
+            .thenCompose { sessionContext.client().reply(it).submit() }
+        if (dispatch.packetName() == "ActorLocationProbeReq") {
+            val request = payload.decode(Messages.ActorLocationProbeReq::class.java)
+            return probes.findActor(request.actorId).thenCompose { sessionContext.client().reply(it).submit() }
+        }
+        if (dispatch.packetName() == "FreshActorProbeReq") {
+            val request = payload.decode(Messages.FreshActorProbeReq::class.java)
+            return probes.createFresh(request.actorId).thenCompose { sessionContext.client().reply(it).submit() }
+        }
+        if (dispatch.packetName() == "MessageFollowProbeReq") {
+            val request = payload.decode(Messages.MessageFollowProbeReq::class.java)
+            return actorClient.requestToActor(request.actorId, request)
+                .submit(Messages.MessageFollowProbeRes::class.java)
+                .thenCompose { sessionContext.client().reply(it).submit() }
+        }
+        if (dispatch.packetName() == "MessageFollowProbeMsg") {
+            val message = payload.decode(Messages.MessageFollowProbeMsg::class.java)
+            return actorClient.sendToActor(message.actorId, message).submit()
+        }
         if (dispatch.packetName() == "JoinWorldReq") return join(dispatch, payload)
         require(sessionContext.actors().bound().size == 1) { "JoinWorldReq must bind an actor first" }
         return sessionContext.actors().bound().single().relay(dispatch, payload)
@@ -31,7 +54,7 @@ class GameSession(
         val request = payload.decode(Messages.JoinWorldReq::class.java)
         return actors.getOrCreate(request.playerId, ZoneWorldNames.PLAYER_ACTOR_TYPE)
             .inMesh(ZoneWorldNames.MESH)
-            .request(Messages.EnterWorldReq(ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y, false, 0, 0))
+            .request(ZLinkMessage.empty())
             .submit()
             .thenCompose { result ->
                 if (result is ZLinkActorCreateResult.Rejected) {
