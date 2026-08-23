@@ -25,6 +25,7 @@ internal sealed class ZoneNodeBootstrap(
     IZLinkActorClient actors,
     IMaintenanceStorePort store,
     NodeMaintenancePolicy maintenance,
+    NodePlayerCensus census,
     ZoneNodeSettings settings,
     ILogger<ZoneNodeBootstrap> logger) : IHostedService
 {
@@ -35,17 +36,40 @@ internal sealed class ZoneNodeBootstrap(
     {
         await RestoreMaintenanceAsync(cancellationToken);
 
-        var zones = ZoneTopology.ZonesOf(maintenance.OwnNodeId);
-        foreach (var zoneId in zones)
+        // Every eligible process requests the same four global ZoneIds. Placement capacity,
+        // not NodeId, distributes two Spot owners to each process. A process that fills its
+        // local capacity keeps retrying until the other eligible process is ready and owns the
+        // remaining objects.
+        for (var attempt = 0; census.ZoneIds.Count != 2; attempt++)
         {
-            var result = await spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)
-                .InMesh(ZoneWorldNames.MeshName)
-                .Request(ZLinkMessage.Empty)
-                .Async(cancellationToken);
-            if (result.State is ZLinkSpotCreateState.Rejected)
+            // GetOrCreate can initially observe an object that is still registered to the
+            // process the runner just crashed. Re-issuing the canonical create operation is
+            // what lets this replacement claim the Zone after that owner expires; merely
+            // waiting on the local census would never trigger a new placement decision.
+            foreach (var zoneId in ZoneTopology.Zones)
+                await EnsureZoneAsync(zoneId, cancellationToken);
+
+            if (settings.AllowEmptyZoneSet
+                && census.ZoneIds.Count == 0
+                && attempt >= 8)
+                break;
+            if (attempt + 1 >= StartupRetryAttempts)
                 throw new InvalidOperationException(
-                    $"Zone Spot creation was rejected. zone={zoneId}");
-            logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
+                    $"Zone Spot capacity did not settle at two local owners. node={maintenance.OwnNodeId}; "
+                    + $"zones={string.Join(',', census.ZoneIds)}");
+            await Task.Delay(StartupRetryDelay, cancellationToken);
+        }
+        var zones = census.ZoneIds;
+
+        // A crash replacement must not claim the dead Ready owner's Zone objects. It still
+        // advertises the Actor factory and can accept brand-new objects; the G4 runner probes
+        // that exact boundary through the replacement RID.
+        if (settings.AllowEmptyZoneSet && zones.Count == 0)
+        {
+            logger.LogInformation(
+                "topology=ready node={NodeId} zones= crash_replacement=True",
+                maintenance.OwnNodeId);
+            return;
         }
 
         if (!settings.DisableBots)
@@ -59,6 +83,36 @@ internal sealed class ZoneNodeBootstrap(
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private async Task EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var result = await spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)
+                    .InMesh(ZoneWorldNames.MeshName)
+                    .Request(ZLinkMessage.Empty)
+                    .Async(cancellationToken);
+                if (result.State is not ZLinkSpotCreateState.Rejected)
+                {
+                    logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
+                    return;
+                }
+            }
+            catch (ZLinkFrameworkException exception)
+                when (exception.Kind is (ZLinkFrameworkErrorKind.Unavailable
+                          or ZLinkFrameworkErrorKind.DeadlineExceeded)
+                      && attempt + 1 < StartupRetryAttempts)
+            {
+            }
+
+            if (attempt + 1 >= StartupRetryAttempts)
+                throw new InvalidOperationException(
+                    $"Zone Spot creation did not settle. zone={zoneId}");
+            await Task.Delay(StartupRetryDelay, cancellationToken);
+        }
+    }
 
     /// <summary>
     /// Reads the desired state for every node, not just this one. This node has to judge
@@ -127,9 +181,11 @@ internal sealed class ZoneNodeBootstrap(
             .Async<EnterWorldRes>(cancellationToken);
 
         logger.LogInformation(
-            "bot spawned. bot={PlayerId}, zone={ZoneId}, dir=({DirX},{DirY})",
+            "bot spawned. bot={PlayerId}, zone={ZoneId}, start=({X},{Y}), dir=({DirX},{DirY})",
             route.PlayerId,
             entered.ZoneId,
+            route.X,
+            route.Y,
             route.DirX,
             route.DirY);
     }

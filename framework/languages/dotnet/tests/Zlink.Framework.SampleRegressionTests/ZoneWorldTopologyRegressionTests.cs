@@ -159,7 +159,13 @@ public sealed partial class RegressionTests
             "PlayerMoveHandlers.cs"));
 
         Assert.DoesNotContain("Dictionary<string, PlayerActor>", spot, StringComparison.Ordinal);
-        Assert.DoesNotContain("actor.Context.BoundSession", spot, StringComparison.Ordinal);
+        // ZoneChanged is emitted only after the target Zone Spot's Actor Join completion.
+        // That callback owns the relocated Actor and its bound session; ordinary fanout below
+        // must still resolve the current Actor owner through the global route.
+        Assert.Contains(
+            "actor.Context.BoundSession\n                .Send(new ZoneChangedNotify",
+            spot,
+            StringComparison.Ordinal);
         // The sample resolves the owner per delivery through the fluent call, so the
         // send spans two lines. Pin the call itself rather than a single-line form.
         Assert.Contains(".SendToActor(playerId, message)", spot, StringComparison.Ordinal);
@@ -201,8 +207,9 @@ public sealed partial class RegressionTests
             sampleRoot, "Server", "ZoneNode", "Infrastructure", "ZLink", "Spots", "ZoneSpot.cs"));
         var runner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
 
-        Assert.Contains("[\"ZW-B5\"] = B5ActorGenerationPreserved", scenarios, StringComparison.Ordinal);
-        Assert.Contains("[\"ZW-B6\"] = B6MessageFollow", scenarios, StringComparison.Ordinal);
+        Assert.Contains("[\"ZW-B3\"] = B3ActorGenerationPreserved", scenarios, StringComparison.Ordinal);
+        Assert.Contains("[\"ZW-B5\"] = B5MessageFollowOneWay", scenarios, StringComparison.Ordinal);
+        Assert.Contains("[\"ZW-B6\"] = B6MessageFollowRequest", scenarios, StringComparison.Ordinal);
         Assert.Contains("SelectPairAsync", scenarios, StringComparison.Ordinal);
         Assert.Contains("before.ObjectGeneration == after.ObjectGeneration", scenarios, StringComparison.Ordinal);
         Assert.Contains("RequestMessageFollowProbeAsync", scenarios, StringComparison.Ordinal);
@@ -219,115 +226,39 @@ public sealed partial class RegressionTests
         Assert.Contains("nameof(MessageFollowProbeMsg)", gateway, StringComparison.Ordinal);
         Assert.Contains("nameof(MessageFollowProbeReq)", gateway, StringComparison.Ordinal);
         Assert.DoesNotContain("dispatch.CanReply", gateway, StringComparison.Ordinal);
-        Assert.Contains("message-follow-probe completed actor={playerId}", scenarios, StringComparison.Ordinal);
+        Assert.Contains("message-follow-one-way completed actor=", scenarios, StringComparison.Ordinal);
+        Assert.Contains("message-follow-request completed actor=", scenarios, StringComparison.Ordinal);
         Assert.Contains(
-            "ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-F2",
+            "ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-B8 ZW-F2",
             runner,
             StringComparison.Ordinal);
         Assert.Contains(
             "ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6",
             runner,
             StringComparison.Ordinal);
+        Assert.Contains("pass ZW-B5", runner, StringComparison.Ordinal);
         Assert.Contains("pass ZW-B6", runner, StringComparison.Ordinal);
         Assert.Contains("message_follow_relay", runner, StringComparison.Ordinal);
         Assert.Contains("payload=", runner, StringComparison.Ordinal);
-        Assert.Contains("relay_hits\" -eq 2", runner, StringComparison.Ordinal);
+        Assert.Contains("relay_hits\" -eq 1", runner, StringComparison.Ordinal);
         Assert.DoesNotContain("ZW-B6 remains withheld", runner, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ZoneWorld_Maintained_Source_Departure_Uses_Observed_Cross_Owner_Pair()
+    public void ZoneWorld_Maintenance_Uses_Target_Admission_And_Same_Zone_Only()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
         var scenarios = File.ReadAllText(Path.Combine(sampleRoot, "Client", "Scenarios.cs"));
-        var start = scenarios.IndexOf(
-            "private static async ValueTask E3LeavingMaintainedNode",
-            StringComparison.Ordinal);
-        var end = scenarios.IndexOf(
-            "private static async ValueTask E4NodeDiagnostics",
-            start,
-            StringComparison.Ordinal);
-
-        Assert.True(start >= 0 && end > start, "The ZW-E3 scenario must remain independently inspectable.");
-        var e3 = scenarios[start..end];
-
-        Assert.Contains("RelocationProbeClient.ConnectAsync", e3, StringComparison.Ordinal);
-        Assert.Contains("SelectPairAsync(ct)", e3, StringComparison.Ordinal);
-        Assert.Contains("pair.SourceZoneId", e3, StringComparison.Ordinal);
-        Assert.Contains("pair.TargetZoneId", e3, StringComparison.Ordinal);
-        Assert.Contains("MoveToAsync(player, source.X, source.Y, ct)", e3, StringComparison.Ordinal);
-        Assert.Contains("MoveToAsync(player, target.X, target.Y, ct)", e3, StringComparison.Ordinal);
-        Assert.DoesNotContain("ZoneIds.NorthWest", e3, StringComparison.Ordinal);
-        Assert.DoesNotContain("ZoneIds.NorthEast", e3, StringComparison.Ordinal);
-
-        var walkStart = scenarios.IndexOf(
-            "private static async ValueTask<ZoneChangedNotify?> MoveToAsync",
-            StringComparison.Ordinal);
-        var walkEnd = scenarios.IndexOf(
-            "private static async ValueTask B3IntraNodeZoneChange",
-            walkStart,
-            StringComparison.Ordinal);
-        Assert.True(walkStart >= 0 && walkEnd > walkStart, "The awaited movement helper must remain inspectable.");
-        var walk = scenarios[walkStart..walkEnd];
-        var sameZoneNotification = walk.IndexOf("WaitFor<ZoneStateNotify>()", StringComparison.Ordinal);
-        var sameZoneCommand = walk.IndexOf("await player.MoveAsync(nextX, nextY)", sameZoneNotification,
-            StringComparison.Ordinal);
-        var sameZoneTerminal = walk.IndexOf("await arrived", sameZoneCommand, StringComparison.Ordinal);
-        var zoneChangedNotification = walk.IndexOf("WaitFor<ZoneChangedNotify>()", StringComparison.Ordinal);
-        var zoneChangedCommand = walk.IndexOf("await player.MoveAsync(nextX, nextY)", zoneChangedNotification,
-            StringComparison.Ordinal);
-        var zoneChangedTerminal = walk.IndexOf("lastCrossing = (await changed).Payload", zoneChangedCommand,
-            StringComparison.Ordinal);
-        Assert.True(
-            sameZoneNotification >= 0
-            && sameZoneCommand > sameZoneNotification
-            && sameZoneTerminal > sameZoneCommand
-            && zoneChangedNotification >= 0
-            && zoneChangedCommand > zoneChangedNotification
-            && zoneChangedTerminal > zoneChangedCommand,
-            "ZW-E3 movement must await same-zone state and boundary-change notifications.");
-
-        var notification = e3.IndexOf(
-            "var initialMembership = player.Connector.WaitFor<ZoneStateNotify>()",
-            StringComparison.Ordinal);
-        var join = e3.IndexOf("await player.JoinWorldAsync(ct)", StringComparison.Ordinal);
-        var membershipBarrier = e3.IndexOf("await initialMembership", StringComparison.Ordinal);
-        var observedPair = e3.IndexOf("var pair = await probes.SelectPairAsync(ct)", StringComparison.Ordinal);
-        var sourceMove = e3.IndexOf(
-            "await MoveToAsync(player, source.X, source.Y, ct)",
-            StringComparison.Ordinal);
-        var maintenance = e3.IndexOf(
-            "SetMaintenanceAsync(sourceNodeId, enabled: true, ct)",
-            StringComparison.Ordinal);
-        var maintenanceObserved = e3.IndexOf(
-            "await enabledObserved",
-            StringComparison.Ordinal);
-        var targetMove = e3.IndexOf(
-            "await MoveToAsync(player, target.X, target.Y, ct)",
-            StringComparison.Ordinal);
-        var maintenanceClear = e3.IndexOf(
-            "SetMaintenanceAsync(sourceNodeId, enabled: false, ct)",
-            StringComparison.Ordinal);
-        var maintenanceClearObserved = e3.IndexOf(
-            "await disabledObserved",
-            StringComparison.Ordinal);
-
-        Assert.True(
-            notification >= 0
-            && join > notification
-            && membershipBarrier > join
-            && observedPair > membershipBarrier
-            && sourceMove > observedPair
-            && maintenance > sourceMove
-            && maintenanceObserved > maintenance
-            && targetMove > maintenanceObserved
-            && maintenanceClear > targetMove
-            && maintenanceClearObserved > maintenanceClear,
-            "ZW-E3 must connect each observable membership and maintenance transition before continuing.");
+        Assert.Contains("[\"ZW-E2\"] = E2MaintenanceBlocksNewEntry", scenarios, StringComparison.Ordinal);
+        Assert.Contains("[\"ZW-E3\"] = E3SameZoneMoveAllowed", scenarios, StringComparison.Ordinal);
+        Assert.Contains("[\"ZW-E4\"] = E4SameNodeDifferentZoneRejected", scenarios, StringComparison.Ordinal);
+        Assert.Contains("AdjacentZonePairs", scenarios, StringComparison.Ordinal);
+        Assert.Contains("node.Zones.Contains(pair.Source", scenarios, StringComparison.Ordinal);
+        Assert.Contains("MoveRejectReasons.ZoneMaintenance", scenarios, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ZoneWorld_Assigns_Adjacent_Zones_To_Different_Node_Owners()
+    public void ZoneWorld_Uses_Capacity_Placement_Without_Zone_To_Node_Fixtures()
     {
         var sampleRoot = ResolveSampleRoot("ZoneWorld");
         var topology = File.ReadAllText(Path.Combine(
@@ -357,16 +288,11 @@ public sealed partial class RegressionTests
             "ZoneNode",
             "Program.cs"));
 
-        Assert.Contains("public static IReadOnlyList<string> ZonesOf(string nodeId)", topology,
+        Assert.DoesNotContain("ZonesOf(", topology, StringComparison.Ordinal);
+        Assert.DoesNotContain("NodeOf(", topology, StringComparison.Ordinal);
+        Assert.Contains("foreach (var zoneId in ZoneTopology.Zones)", bootstrap,
             StringComparison.Ordinal);
-        Assert.Contains("NodeIds.West => [ZoneIds.NorthWest, ZoneIds.SouthWest]", topology,
-            StringComparison.Ordinal);
-        Assert.Contains("NodeIds.East => [ZoneIds.NorthEast, ZoneIds.SouthEast]", topology,
-            StringComparison.Ordinal);
-        Assert.Contains("ZoneTopology.ZonesOf(maintenance.OwnNodeId)", bootstrap,
-            StringComparison.Ordinal);
-        Assert.Contains("ZoneTopology.ZonesOf(maintenance.OwnNodeId)", fanout,
-            StringComparison.Ordinal);
+        Assert.Contains("var zones = census.ZoneIds", fanout, StringComparison.Ordinal);
         Assert.Contains(".StableTypeLimit(2)", program, StringComparison.Ordinal);
     }
 

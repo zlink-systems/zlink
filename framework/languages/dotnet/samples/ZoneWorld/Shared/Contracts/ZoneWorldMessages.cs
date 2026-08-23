@@ -101,6 +101,14 @@ public sealed record ActorLocationProbeRes(
     string OwnerNodeRid,
     string? Error = null);
 
+public sealed record FreshActorProbeReq(string ActorId);
+
+public sealed record FreshActorProbeRes(
+    string ActorId,
+    ulong ObjectGeneration,
+    string OwnerNodeRid,
+    string? Error = null);
+
 // ---------------------------------------------------------------------------
 // §7.3 server internal
 // ---------------------------------------------------------------------------
@@ -133,7 +141,7 @@ public sealed record EnterWorldRes(string ZoneId, int X, int Y, string? Error = 
 /// <summary>ZoneNode -> Ops (channel `zoneworld.report`). Sent when the event occurs (§8.1).</summary>
 public sealed record ReportSpotEventMsg(string NodeId, string Kind, string Detail, string OccurredAt);
 
-/// <summary>ZoneNode -> Ops (channel `zoneworld.report`). Sent every second (§8.1).</summary>
+/// <summary>ZoneNode -> Ops (channel `zoneworld.report`). Sent every five seconds (§2.2).</summary>
 public sealed record ReportNodeStatusMsg(
     string NodeId,
     IReadOnlyList<string> Zones,
@@ -156,9 +164,9 @@ public sealed record ZoneBorderEvent(
 /// relocation, so the zone change rides the join rather than a plain send (§2.6).
 /// The payload carries the global ActorId only. The framework resolves the current
 /// owner, so application messages never carry a cached ActorRef (§8.3). The logical
-/// source NodeId is included only for the target admission rule: maintenance allows a
-/// player to move between zones already hosted by the same node, but rejects a new or
-/// cross-node arrival.
+/// source ZoneId is included only for target admission. Maintenance permits movement
+/// inside the current zone and rejects every join into another zone; NodeId and transport
+/// placement never enter that decision.
 /// </summary>
 public sealed record EnterZoneReq(
     string PlayerId,
@@ -166,7 +174,8 @@ public sealed record EnterZoneReq(
     int Y,
     bool IsBot,
     bool InitialEntry,
-    string? FromNodeId);
+    string? FromZoneId,
+    bool CrashBoundaryProbe = false);
 
 public sealed record EnterZoneRes(string ZoneId, string? Error = null);
 
@@ -210,3 +219,12 @@ public sealed record MessageFollowProbeRes(string ProbeId, byte[] Payload);
 /// preserves the original payload without relying on a reply route.
 /// </summary>
 public sealed record MessageFollowProbeMsg(string ActorId, string ProbeId, byte[] Payload);
+
+/// <summary>
+/// Runner-only Actor message that starts one real cross-owner deferred join. The target
+/// admission holds only this explicitly marked operation so the runner can crash the Ready
+/// owner at a deterministic in-flight boundary (ZW-G4).
+/// </summary>
+public sealed record CrashRelocationProbeMsg(int X, int Y);
+
+public sealed record CrashRelocationProbeRes(string? Error = null);

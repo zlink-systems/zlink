@@ -61,6 +61,7 @@ public sealed class ZoneSpot(
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
+        census.RegisterZone(ZoneId);
         _tick = await Context.AddTimer<ZoneTickHandler>(
             $"zone-tick-{ZoneId}",
             TimeSpan.FromMilliseconds(ZoneWorldSpec.TickPeriodMs),
@@ -90,32 +91,37 @@ public sealed class ZoneSpot(
     /// <summary>
     /// Admission (§2.3). This node is the authority on its own maintenance state, so a
     /// stale cache on the node the player is leaving cannot let anyone in. Maintenance
-    /// blocks arrivals from another node and blocks new entries into the world; it does
-    /// not block a player who is already on this node from moving between its zones.
-    /// The framework does not hand the source node to this callback, so the join payload
-    /// carries it.
+    /// blocks every arrival except a logical same-zone rejoin. Physical NodeId placement
+    /// is deliberately absent from this decision; the join payload carries only the
+    /// logical source ZoneId.
     /// </summary>
-    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+    public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
         CancellationToken cancellationToken)
     {
         var enter = request.Decode<EnterZoneReq>();
-        if (maintenance.RejectsArrival(maintenance.OwnNodeId, enter.FromNodeId))
+        if (enter.CrashBoundaryProbe)
         {
             logger.LogInformation(
-                "zone spot: join rejected, node under maintenance. zone={ZoneId}, player={PlayerId}, from_node={FromNodeId}",
+                "crash-boundary join pending. zone={ZoneId}, player={PlayerId}",
+                ZoneId,
+                enter.PlayerId);
+            await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+        }
+        if (maintenance.RejectsArrival(ZoneId, enter.FromZoneId))
+        {
+            logger.LogInformation(
+                "zone spot: join rejected, node under maintenance. zone={ZoneId}, player={PlayerId}, from_zone={FromZoneId}",
                 ZoneId,
                 enter.PlayerId,
-                enter.FromNodeId ?? "<new>");
-            return ValueTask.FromResult<ZLinkSpotActorJoinResult>(
-                ZLinkSpotActorJoinResult.Reject(
-                    new EnterZoneRes(ZoneId, MoveRejectReasons.ZoneMaintenance)));
+                enter.FromZoneId ?? "<new>");
+            return ZLinkSpotActorJoinResult.Reject(
+                new EnterZoneRes(ZoneId, MoveRejectReasons.ZoneMaintenance));
         }
 
         _pendingJoins[actorId] = enter;
-        return ValueTask.FromResult<ZLinkSpotActorJoinResult>(
-            ZLinkSpotActorJoinResult.Accept(new EnterZoneRes(ZoneId)));
+        return ZLinkSpotActorJoinResult.Accept(new EnterZoneRes(ZoneId));
     }
 
     public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken)
@@ -131,12 +137,8 @@ public sealed class ZoneSpot(
         // after the handoff commits, making the notification a safe boundary for the client's
         // next command.
         if (!enter.IsBot && !enter.InitialEntry)
-            await actors
-                .SendToActor(
-                    actor.ActorId,
-                    new DeliverZoneChangedMsg(
-                        enter.PlayerId,
-                        ZoneId))
+            await actor.Context.BoundSession
+                .Send(new ZoneChangedNotify(enter.PlayerId, ZoneId))
                 .Async(cancellationToken);
 
         logger.LogInformation(

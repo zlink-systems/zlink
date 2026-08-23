@@ -74,6 +74,17 @@ public sealed class PlayerSession(
             return;
         }
 
+        if (dispatch.PacketName == nameof(FreshActorProbeReq))
+        {
+            var request = payload.Decode<FreshActorProbeReq>();
+            await Context.Client
+                .Reply(await relocationProbes.CreateFreshActorAsync(
+                    request.ActorId,
+                    cancellationToken))
+                .Async(cancellationToken);
+            return;
+        }
+
         if (dispatch.PacketName == nameof(MessageFollowProbeReq))
         {
             var request = payload.Decode<MessageFollowProbeReq>();

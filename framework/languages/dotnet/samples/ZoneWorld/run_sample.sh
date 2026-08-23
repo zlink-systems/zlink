@@ -6,11 +6,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
-BROWSER_SMOKE=0
+BROWSER_SMOKE=1
 SCENARIO="all"
 SCENARIO_SET=0
 G4_CHILD=0
 G4_PROVEN=0
+B8_CHILD=0
+B8_PROVEN=0
 TRACE_STREAM="${ZLINK_SAMPLE_TRACE_STREAM:-0}"
 SPOT_DISCOVERY_TRACE="${ZLINK_SAMPLE_SPOT_DISCOVERY_TRACE:-1}"
 while [[ "$#" -gt 0 ]]; do
@@ -19,8 +21,16 @@ while [[ "$#" -gt 0 ]]; do
       BROWSER_SMOKE=1
       shift
       ;;
+    --no-browser-smoke)
+      BROWSER_SMOKE=0
+      shift
+      ;;
     --g4-child)
       G4_CHILD=1
+      shift
+      ;;
+    --b8-child)
+      B8_CHILD=1
       shift
       ;;
     --*)
@@ -49,6 +59,13 @@ if [[ "$G4_CHILD" == "0" ]] && scenario_selected ZW-G4; then
   bash "$0" --g4-child ZW-G4
   G4_PROVEN=1
   if [[ "$SCENARIO" == "ZW-G4" ]]; then exit 0; fi
+fi
+# ZW-B8 intentionally drops the internal session-route command. Keep that destructive
+# transport fault in its own topology so the canonical lane that follows starts clean.
+if [[ "$B8_CHILD" == "0" ]] && scenario_selected ZW-B8; then
+  bash "$0" --b8-child ZW-B8
+  B8_PROVEN=1
+  if [[ "$SCENARIO" == "ZW-B8" ]]; then exit 0; fi
 fi
 RUN_DIR="$(mktemp -d)"
 RUN_DIR="$(cd "${RUN_DIR}" && pwd)"
@@ -122,7 +139,7 @@ GATEWAY_ENDPOINT="ws://127.0.0.1:${PORTS[6]}"
 OPS_ENDPOINT="ws://127.0.0.1:${PORTS[4]}"
 BROWSER_PREVIEW_PORT="${PORTS[8]}"
 
-python3 - "$CONFIG_DIR" "$REDIS_ENDPOINT" "$RUN_ID" "$LOG_DIR" "${PORTS[@]}" <<'PY'
+python3 - "$CONFIG_DIR" "$REDIS_ENDPOINT" "$RUN_ID" "$LOG_DIR" "$B8_CHILD" "${PORTS[@]}" <<'PY'
 import json
 import pathlib
 import sys
@@ -131,7 +148,8 @@ root = pathlib.Path(sys.argv[1])
 redis = sys.argv[2]
 run_id = sys.argv[3]
 log_dir = sys.argv[4]
-ports = [int(port) for port in sys.argv[5:]]
+b8_child = sys.argv[5] == "1"
+ports = [int(port) for port in sys.argv[6:]]
 shared = {
     "redisEndpoint": redis,
     "redisKeyPrefix": f"zoneworld-{run_id}:",
@@ -144,8 +162,9 @@ def write(name, role, value):
 for index in (1, 2, 3):
     write(f"zone-node-{index}", "zoneNode", {
         "nodeId": f"zone-node-{index}",
-        "meshEndpoint": f"tcp://127.0.0.1:{ports[index - 1]}",
-        "faultTickZone": "zone-nw" if index == 1 else None,
+        "meshEndpoint": f"tcp://{'127.0.0.2' if b8_child and index < 3 else '127.0.0.1'}:{ports[index - 1]}",
+        "meshAdvertiseHost": "127.0.0.1" if b8_child and index < 3 else None,
+        "faultTickZone": "zone-nw" if index in (1, 2) else None,
         "disableBots": False,
         "subscriberOnly": index == 3,
     })
@@ -160,13 +179,23 @@ write("zone-node-replacement", "zoneNode", {
     "subscriberOnly": False,
 })
 
+write("zone-node-crash-replacement", "zoneNode", {
+    "nodeId": "zone-node-2",
+    "meshEndpoint": f"tcp://127.0.0.1:{ports[3]}",
+    "faultTickZone": None,
+    "disableBots": True,
+    "subscriberOnly": False,
+    "allowEmptyZoneSet": True,
+})
+
 write("ops", "ops", {
     "streamEndpoint": f"ws://127.0.0.1:{ports[4]}",
     "meshEndpoint": f"tcp://127.0.0.1:{ports[5]}",
 })
 write("gateway", "gateway", {
     "streamEndpoint": f"ws://127.0.0.1:{ports[6]}",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[7]}",
+    "meshEndpoint": f"tcp://{'127.0.0.2' if b8_child else '127.0.0.1'}:{ports[7]}",
+    "meshAdvertiseHost": "127.0.0.1" if b8_child else None,
 })
 PY
 
@@ -247,18 +276,18 @@ is_zone_node_rid() {
 
 start_zone_node() {
   local name="$1"
-  local config_name="$name"
+  local config_name="${2:-$name}"
   local first_new_line first_new_ops_line first_peer_line
   local local_rid peer_rid
   # A restarted zone-node-2 uses the replacement endpoint. Reusing the original
   # config would publish a new RID on the retired socket and would not exercise
   # the different-endpoint replacement contract.
-  if [[ "$name" == "zone-node-2" ]]; then
+  if [[ "$name" == "zone-node-2" && "$config_name" == "$name" ]]; then
     config_name="zone-node-replacement"
   fi
-  first_new_line=$(($(wc -l <"$LOG_DIR/$name.log" 2>/dev/null || printf '0') + 1))
-  first_new_ops_line=$(($(wc -l <"$LOG_DIR/ops.log" 2>/dev/null || printf '0') + 1))
-  first_peer_line=$(($(wc -l <"$LOG_DIR/zone-node-1.log" 2>/dev/null || printf '0') + 1))
+  first_new_line="$(next_log_line "$LOG_DIR/$name.log")"
+  first_new_ops_line="$(next_log_line "$LOG_DIR/ops.log")"
+  first_peer_line="$(next_log_line "$LOG_DIR/zone-node-1.log")"
   : >"$LOG_DIR/$name.restart.marker"
   start "$name" "$SERVER_BIN" --config "$CONFIG_DIR/$config_name.json"
   # A restarted process gets a new RID. Wait for application readiness and the two independent
@@ -285,7 +314,7 @@ start_zone_node() {
 client_config() {
   local scenarios="$1" path="$CONFIG_DIR/client.json"
   python3 - "$CONFIG_DIR/ops.json" "$path" "$scenarios" "$GATEWAY_ENDPOINT" "$OPS_ENDPOINT" \
-    "$TRACE_STREAM" <<'PY'
+    "$TRACE_STREAM" "$RUN_DIR/b8-block-command-44" <<'PY'
 import json
 import pathlib
 import sys
@@ -297,6 +326,7 @@ source["client"] = {
     "opsEndpoint": sys.argv[5],
     "scenarios": sys.argv[3],
     "streamTrace": sys.argv[6] == "1",
+    "faultArmFile": sys.argv[7],
 }
 pathlib.Path(sys.argv[2]).write_text(json.dumps(source), encoding="utf-8")
 PY
@@ -310,9 +340,18 @@ run_client() {
   return "${PIPESTATUS[0]}"
 }
 
+next_log_line() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    echo $(( $(wc -l <"$path") + 1 ))
+  else
+    echo 1
+  fi
+}
+
 # Runs a client scenario while the runner disrupts the topology underneath it.
 run_client_with_stop() {
-  local id="$1" node="$2" first_new_line client_pid
+  local id="$1" node="$2" stop_kind="${3:-crash}" first_new_line client_pid armed_line
   if [[ "$SCENARIO" != "all" && "$SCENARIO" != *"$id"* ]]; then return 0; fi
 
   if [[ -f "$LOG_DIR/client.log" ]]; then
@@ -329,7 +368,22 @@ run_client_with_stop() {
     wait "$client_pid" || status=1
     return 0
   fi
-  stop_node "$node"
+  if [[ "$node" == "auto" ]]; then
+    armed_line="$(tail -n +"$first_new_line" "$LOG_DIR/client.log" \
+      | grep -F "scenario $id armed node=" | tail -n 1)"
+    node="${armed_line##*node=}"
+    if [[ -z "${NODE_PID[$node]:-}" ]]; then
+      echo "!! $id named an unknown node '$node'" >&2
+      wait "$client_pid" || status=1
+      status=1
+      return 0
+    fi
+  fi
+  if [[ "$stop_kind" == "graceful" ]]; then
+    graceful_stop_node "$node"
+  else
+    stop_node "$node"
+  fi
   wait "$client_pid" || status=1
   start_zone_node "$node"
 }
@@ -427,6 +481,18 @@ echo "==> zone nodes"
 # as the one faulting tick. The other node configurations do not select a faulting zone.
 # ZW-G2 starts the second application identity first. Each process receives an independent
 # prefix-based RID, while the application NodeId remains unchanged.
+if [[ "$B8_CHILD" == "1" ]]; then
+  for proxy_name in zone-node-1 zone-node-2; do
+    proxy_index="${proxy_name##*-}"
+    proxy_port="${PORTS[$((proxy_index - 1))]}"
+    start "session-route-proxy-$proxy_name" \
+      python3 "$ROOT_DIR/Support/session_route_block_proxy.py" \
+      --listen-host 127.0.0.1 --listen-port "$proxy_port" \
+      --target-host 127.0.0.2 --target-port "$proxy_port" \
+      --arm-file "$RUN_DIR/b8-block-command-44"
+    wait_for_log "session-route-proxy-$proxy_name" "proxy-ready"
+  done
+fi
 if scenario_selected ZW-G2 && [[ "$G4_CHILD" == "0" ]]; then
   start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.json"
   start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.json"
@@ -444,6 +510,7 @@ G_RUNNER_LOG="$LOG_DIR/routing-id-self-check.log"
 g_pass() { echo "scenario $1 passed" | tee -a "$G_RUNNER_LOG"; }
 g_fail() { echo "scenario $1 FAILED: $2" >&2; exit 1; }
 if [[ "$G4_PROVEN" == "1" ]]; then g_pass ZW-G4; fi
+if [[ "$B8_PROVEN" == "1" ]]; then g_pass ZW-B8; fi
 
 node1_mesh_rid="$(routing_id_of zone-node-1)"
 node2_mesh_rid="$(routing_id_of zone-node-2)"
@@ -472,26 +539,6 @@ if scenario_selected ZW-G2 && [[ "$G4_CHILD" == "0" ]]; then
   fi
 fi
 
-# ZW-G4 has its own process and Store scope. Crash the original process, then start the same
-# application identity at a different endpoint and prove that it receives a different RID.
-if [[ "$G4_CHILD" == "1" ]]; then
-  old_rid="$node2_mesh_rid"
-  stop_node zone-node-2
-  first_replacement_line=1
-  first_replacement_ops_line=$(($(wc -l <"$LOG_DIR/ops.log" 2>/dev/null || printf '0') + 1))
-  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-replacement.json"
-  wait_for_log_after zone-node-replacement "topology=ready" "$first_replacement_line" 600
-  wait_for_log_after ops "node status observed. node=zone-node-2, rid=zn-" \
-    "$first_replacement_ops_line" 600
-  crash_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
-  if is_zone_node_rid "$crash_rid" && [[ "$crash_rid" != "$old_rid" ]]; then
-    g_pass ZW-G4
-  else
-    g_fail ZW-G4 "crash replacement did not publish a new canonical zn-UUIDv4 RID"
-  fi
-  exit 0
-fi
-
 if scenario_selected ZW-G5; then
   set +e
   fixed_rid_hits="$(grep -R -nE \
@@ -516,6 +563,14 @@ start zone-node-3 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-3.json"
 wait_for_log zone-node-3 "topology=ready"
 
 echo "==> gateway"
+if [[ "$B8_CHILD" == "1" ]]; then
+  start session-route-proxy-gateway \
+    python3 "$ROOT_DIR/Support/session_route_block_proxy.py" \
+    --listen-host 127.0.0.1 --listen-port "${PORTS[7]}" \
+    --target-host 127.0.0.2 --target-port "${PORTS[7]}" \
+    --arm-file "$RUN_DIR/b8-block-command-44"
+  wait_for_log session-route-proxy-gateway "proxy-ready"
+fi
 start gateway "$GATEWAY_BIN" --config "$CONFIG_DIR/gateway.json"
 wait_for_log gateway "Application started."
 # topology=ready proves that each process created its local spots. Border synchronization has
@@ -525,6 +580,66 @@ wait_for_zone_log "border subscription ready. zone=zone-nw, from=zone-ne"
 wait_for_zone_log "border subscription ready. zone=zone-sw, from=zone-se"
 wait_for_zone_log "border subscription ready. zone=zone-ne, from=zone-nw"
 wait_for_zone_log "border subscription ready. zone=zone-se, from=zone-sw"
+
+if [[ "$B8_CHILD" == "1" ]]; then
+  first_b8_client_line="$(next_log_line "$LOG_DIR/client.log")"
+  run_client ZW-B8 &
+  b8_client_pid=$!
+  if ! wait_for_log_after client "scenario ZW-B8 armed" "$first_b8_client_line" 600; then
+    wait "$b8_client_pid" || true
+    g_fail ZW-B8 "client did not establish its initial bound session"
+  fi
+  : >"$RUN_DIR/b8-block-command-44"
+  if ! wait "$b8_client_pid"; then
+    g_fail ZW-B8 "client did not observe the 30 second route-seal timeout and reconnect"
+  fi
+  if ! grep -q "blocked-command-44" "$LOG_DIR"/session-route-proxy-*.log; then
+    g_fail ZW-B8 "the fault proxy never intercepted internal command 44"
+  fi
+  g_pass ZW-B8
+  exit 0
+fi
+
+# G4 owns a fresh process/Store scope. Start an actual cross-owner Actor Join, crash its target
+# after the client arms, require the source-side completion to surface Unavailable, then start a
+# new process with the same NodeId and prove both its RID and fresh-object path.
+if [[ "$G4_CHILD" == "1" ]]; then
+  old_rid="$node2_mesh_rid"
+  first_client_line="$(next_log_line "$LOG_DIR/client.log")"
+  first_target_line="$(next_log_line "$LOG_DIR/zone-node-2.log")"
+  run_client ZW-G4 &
+  g4_client_pid=$!
+  if ! wait_for_log_after client "scenario ZW-G4 armed node=zone-node-2" \
+      "$first_client_line" 600; then
+    wait "$g4_client_pid" || true
+    g_fail ZW-G4 "crash-boundary client never armed"
+  fi
+  if ! wait_for_log_after zone-node-2 "crash-boundary join pending" \
+      "$first_target_line" 600; then
+    wait "$g4_client_pid" || true
+    g_fail ZW-G4 "target owner never entered the in-flight crash boundary"
+  fi
+  stop_node zone-node-2
+  if ! wait "$g4_client_pid"; then
+    g_fail ZW-G4 "the interrupted operation did not terminate as Unavailable"
+  fi
+  first_replacement_ops_line="$(next_log_line "$LOG_DIR/ops.log")"
+  start_zone_node zone-node-2 zone-node-crash-replacement
+  crash_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
+  if ! is_zone_node_rid "$crash_rid" || [[ "$crash_rid" == "$old_rid" ]]; then
+    g_fail ZW-G4 "crash replacement did not publish a new canonical zn-UUIDv4 RID"
+  fi
+  first_fresh_line="$(next_log_line "$LOG_DIR/client.log")"
+  if ! run_client ZW-G4-fresh; then
+    g_fail ZW-G4 "crash replacement fresh-object probe failed"
+  fi
+  if ! tail -n +"$first_fresh_line" "$LOG_DIR/client.log" \
+      | grep -Fq "scenario ZW-G4-fresh owner=$crash_rid "; then
+    g_fail ZW-G4 "no fresh Actor was placed on the crash replacement RID"
+  fi
+  g_pass ZW-G4
+  exit 0
+fi
 
 if [[ "$SCENARIO" == "all" || "$SCENARIO" == *"ZW-G2"* ]]; then
   run_client ZW-G2
@@ -555,7 +670,10 @@ pathlib.Path(playwright_path).write_text(
         "timeout": 45_000,
         "workers": 1,
         "use": {"baseURL": f"http://127.0.0.1:{port}", "headless": True},
-        "metadata": {"lifecycleMarker": marker},
+        "metadata": {
+            "lifecycleMarker": marker,
+            "lifecycleNodeId": "zone-node-2",
+        },
     }), encoding="utf-8")
 PY
   (cd "$browser_client" && npm exec vite preview -- \
@@ -625,23 +743,17 @@ selects() {
   [[ "$SCENARIO" == *"$base"* ]]
 }
 
-# ZW-B6 has a client-visible reply, but the one-way half has no reply by definition. Confirm both
-# probe handlers ran exactly once and that the source node emitted the framework's Message Follow
-# relay evidence. This keeps a direct current-owner delivery from being mistaken for old-route
-# forwarding.
-if selects ZW-B6; then
-  b6_line="$(grep -F 'message-follow-probe completed ' "$LOG_DIR/client.log" | tail -n 1 || true)"
+# ZW-B5 is one-way and ZW-B6 is request/reply. Each primes the old owner independently, so each
+# must produce exactly one committed-target handler and exactly one source Follow relay.
+if selects ZW-B5; then
+  b5_line="$(grep -F 'message-follow-one-way completed ' "$LOG_DIR/client.log" | tail -n 1 || true)"
   actor_id=""
   one_way_id=""
-  request_id=""
-  if [[ "$b6_line" =~ actor=([^[:space:]]+)[[:space:]]one_way=([^[:space:]]+)[[:space:]]request=([^[:space:]]+) ]]; then
+  if [[ "$b5_line" =~ actor=([^[:space:]]+)[[:space:]]probe=([^[:space:]]+) ]]; then
     actor_id="${BASH_REMATCH[1]}"
     one_way_id="${BASH_REMATCH[2]}"
-    request_id="${BASH_REMATCH[3]}"
   fi
   one_way_payload="$(printf '%s' 'one-way-payload' | od -An -tx1 -v \
-    | tr -d ' \\n' | tr '[:lower:]' '[:upper:]')"
-  request_payload="$(printf '%s' 'request-payload' | od -An -tx1 -v \
     | tr -d ' \\n' | tr '[:lower:]' '[:upper:]')"
   one_way_hits="$(awk -v actor="$actor_id" -v probe="$one_way_id" -v payload="$one_way_payload" \
     '/message-follow probe one-way handled\./ \
@@ -649,6 +761,27 @@ if selects ZW-B6; then
       && index($0, "probe=" probe ",") > 0 \
       && index($0, "payload=" payload) > 0 { count++ } \
     END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
+  relay_hits="$(awk -v actor="$actor_id" \
+    '/message_follow_relay/ && index($0, "actor=" actor) > 0 { count++ } \
+    END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
+  if [[ -n "$actor_id" && -n "$one_way_id" \
+      && "$one_way_hits" -eq 1 && "$relay_hits" -eq 1 ]]; then
+    pass ZW-B5
+  else
+    fail ZW-B5 "one-way Follow evidence was incomplete (actor=$actor_id handler=$one_way_hits relay=$relay_hits)"
+  fi
+fi
+
+if selects ZW-B6; then
+  b6_line="$(grep -F 'message-follow-request completed ' "$LOG_DIR/client.log" | tail -n 1 || true)"
+  actor_id=""
+  request_id=""
+  if [[ "$b6_line" =~ actor=([^[:space:]]+)[[:space:]]request=([^[:space:]]+) ]]; then
+    actor_id="${BASH_REMATCH[1]}"
+    request_id="${BASH_REMATCH[2]}"
+  fi
+  request_payload="$(printf '%s' 'request-payload' | od -An -tx1 -v \
+    | tr -d ' \\n' | tr '[:lower:]' '[:upper:]')"
   request_hits="$(awk -v actor="$actor_id" -v probe="$request_id" -v payload="$request_payload" \
     '/message-follow probe handled\./ \
       && index($0, "actor=" actor ",") > 0 \
@@ -658,11 +791,11 @@ if selects ZW-B6; then
   relay_hits="$(awk -v actor="$actor_id" \
     '/message_follow_relay/ && index($0, "actor=" actor) > 0 { count++ } \
     END { print count + 0 }' "$LOG_DIR"/zone-node-*.log 2>/dev/null)"
-  if [[ -n "$actor_id" && -n "$one_way_id" && -n "$request_id" \
-      && "$one_way_hits" -eq 1 && "$request_hits" -eq 1 && "$relay_hits" -eq 2 ]]; then
+  if [[ -n "$actor_id" && -n "$request_id" \
+      && "$request_hits" -eq 1 && "$relay_hits" -eq 1 ]]; then
     pass ZW-B6
   else
-    fail ZW-B6 "Message Follow evidence was incomplete (actor=$actor_id one_way=$one_way_hits request=$request_hits relay=$relay_hits)"
+    fail ZW-B6 "request Follow evidence was incomplete (actor=$actor_id handler=$request_hits relay=$relay_hits)"
   fi
 fi
 
@@ -683,26 +816,22 @@ runner_scenario_pair() {
 
   if [[ "$id" == "ZW-F2" ]]; then
     # The fixed bot id is not a contract: all four X-axis bots are valid witnesses, and
-    # startup/replacement order can make any one of them cross first. Correlate a source
-    # leave with the same actor's non-initial entry on the other node.
-    local source_log target_log actor
+    # capacity placement can initially put either side on either process. A non-initial
+    # entry is the target-side completion of an Actor Join. Seeing the same bot complete
+    # one on both process logs proves it crossed the process-owner boundary in both
+    # directions without depending on an internal debug-only source-leave marker.
+    local actor
     for _ in $(seq 1 600); do
-      for source_log in zone-node-1.log zone-node-2.log; do
-        if [[ "$source_log" == "zone-node-1.log" ]]; then
-          target_log=zone-node-2.log
-        else
-          target_log=zone-node-1.log
+      while IFS= read -r actor; do
+        [[ -n "$actor" ]] || continue
+        if grep -Fq "player=$actor, bot=True, initial=False" \
+            "$LOG_DIR/zone-node-2.log" 2>/dev/null; then
+          pass "$id"
+          return 0
         fi
-        while IFS= read -r actor; do
-          [[ -n "$actor" ]] || continue
-          if grep -Fq "player=$actor, bot=True, initial=False" \
-              "$LOG_DIR/$target_log" 2>/dev/null; then
-            pass "$id"
-            return 0
-          fi
-        done < <(sed -nE 's/.*source_leave_completed actor=(bot-[^ ]+).*/\1/p' \
-          "$LOG_DIR/$source_log" 2>/dev/null)
-      done
+      done < <(sed -nE \
+        's/.*player=(bot-[^,]+), bot=True, initial=False.*/\1/p' \
+        "$LOG_DIR/zone-node-1.log" 2>/dev/null | sort -u)
       sleep 0.1
     done
     fail "$id" "$description (no correlated cross-node bot handoff)"
@@ -757,9 +886,9 @@ runner_scenario_absent() {
 # afterwards. ZW-B4 goes first because it is the only one that has to *use* zone-node-2 before
 # taking it away — it walks a player into zone-ne — and a node that has just come back is the
 # least reliable thing to walk into.
-run_client_with_stop ZW-B4 zone-node-2
-run_client_with_stop ZW-C2 zone-node-2
-run_client_with_stop ZW-C3 zone-node-2
+run_client_with_stop ZW-B4 auto crash
+run_client_with_stop ZW-C2 zone-node-2 graceful
+run_client_with_stop ZW-C3 zone-node-2 crash
 
 # ZW-E5: the operator closes a node, the node restarts, and it comes back still closed —
 # the desired state lives in the store, not in a message.
@@ -784,10 +913,27 @@ runner_scenario_all ZW-D1-spots "a zone spot never received the announcement" \
 if selects ZW-F1-population; then
   bots="$(grep -ho "bot spawned. bot=[a-z0-9-]*" "$LOG_DIR"/zone-node-*.log 2>/dev/null \
     | sort -u | wc -l)"
-  if [[ "$bots" -eq 8 ]]; then
+  expected_bots=(
+    'bot=bot-nw-x, zone=zone-nw, start=(10,15), dir=(1,0)'
+    'bot=bot-nw-y, zone=zone-nw, start=(15,10), dir=(0,1)'
+    'bot=bot-ne-x, zone=zone-ne, start=(90,15), dir=(-1,0)'
+    'bot=bot-ne-y, zone=zone-ne, start=(85,10), dir=(0,1)'
+    'bot=bot-sw-x, zone=zone-sw, start=(10,85), dir=(1,0)'
+    'bot=bot-sw-y, zone=zone-sw, start=(15,90), dir=(0,-1)'
+    'bot=bot-se-x, zone=zone-se, start=(90,85), dir=(-1,0)'
+    'bot=bot-se-y, zone=zone-se, start=(85,90), dir=(0,-1)'
+  )
+  fixed_roster=1
+  for expected in "${expected_bots[@]}"; do
+    if ! grep -Fq "$expected" "$LOG_DIR"/zone-node-*.log 2>/dev/null; then
+      fixed_roster=0
+      break
+    fi
+  done
+  if [[ "$bots" -eq 8 && "$fixed_roster" -eq 1 ]]; then
     pass ZW-F1-population
   else
-    fail ZW-F1-population "the world holds $bots bots, not 8"
+    fail ZW-F1-population "the fixed eight-bot roster/initial trajectory was not observed (count=$bots)"
   fi
 fi
 
@@ -799,7 +945,7 @@ fi
 # ZoneSpot.PushToClients). That is a different, known case — not what ZW-F3 is about — so the
 # check names bot ids ("bot-...") only. If the bot exclusion ever broke, the push would carry a
 # bot id and this would catch it; a human mid-disconnect does not.
-runner_scenario_absent ZW-F3-no-push "a push was attempted to a bot (an actor with no bound session)" \
+runner_scenario_absent ZW-F4-no-push "a push was attempted to a bot (an actor with no bound session)" \
   "No current session binding exists for actor 'bot-" \
   zone-node-1.log zone-node-2.log zone-node-3.log
 
@@ -824,10 +970,11 @@ if scenario_selected ZW-G3 && [[ "$G4_CHILD" == "0" ]]; then
   wait_for_log_after ops "node status observed. node=zone-node-2, rid=zn-" \
     "$first_replacement_ops_line" 600
   replacement_rid="$(routing_id_of zone-node-2 "$first_replacement_ops_line")"
-  if is_zone_node_rid "$replacement_rid" && [[ "$replacement_rid" != "$old_rid" ]]; then
+  if is_zone_node_rid "$replacement_rid" && [[ "$replacement_rid" != "$old_rid" ]] \
+      && run_client ZW-A1; then
     g_pass ZW-G3
   else
-    g_fail ZW-G3 "normal replacement did not publish a new canonical zn-UUIDv4 RID"
+    g_fail ZW-G3 "normal replacement did not publish a new RID and accept a fresh object"
   fi
 fi
 
@@ -845,6 +992,10 @@ while read -r id; do PASSED["$id"]=1; done < <(
 phase() {
   local marker="$1"; shift
   local id
+  if [[ "$status" -ne 0 ]]; then
+    echo "!! $marker withheld: at least one selected verdict failed" >&2
+    return 1
+  fi
   for id in "$@"; do
     if [[ -z "${PASSED[$id]:-}" ]]; then
       echo "!! $marker withheld: $id did not pass" >&2
@@ -857,7 +1008,7 @@ phase() {
 
 # Only a full run can claim a phase. A selective run proves one scenario, not a capability.
 if [[ "$SCENARIO" == "all" ]]; then
-  phase "zoneworld-relocation=completed"      ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-F2
+  phase "zoneworld-relocation=completed"      ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-B8 ZW-F2
   phase "zoneworld-border-sync=completed"     ZW-B1 ZW-B4
   phase "zoneworld-ops-observe=completed"     ZW-C1 ZW-C2 ZW-C3 ZW-C4
   phase "zoneworld-ops-announce=completed"    ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2
@@ -867,11 +1018,11 @@ if [[ "$SCENARIO" == "all" ]]; then
   # a scenario can fail without its id ever reaching the log.
   phase "zoneworld=completed" \
     ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5 \
-    ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 \
+    ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 ZW-B8 \
     ZW-C1 ZW-C2 ZW-C3 ZW-C4 \
     ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2 \
     ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E5-arm ZW-E6 \
-    ZW-F1 ZW-F1-population ZW-F2 ZW-F3 ZW-F3-no-push ZW-F4 \
+    ZW-F1 ZW-F1-population ZW-F2 ZW-F3 ZW-F4 ZW-F4-no-push \
     ZW-G1 ZW-G2-rid ZW-G2 ZW-G3 ZW-G4 ZW-G5
 fi
 

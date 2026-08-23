@@ -43,8 +43,11 @@ public static class ZoneWorldSpec
     /// <summary>An adjacent-zone snapshot older than this many ticks is dropped (§2.4).</summary>
     public const int BorderSnapshotExpiryTicks = 3;
 
-    /// <summary>Each ZoneNode reports its status to Ops on this period (§8.1).</summary>
-    public const int NodeStatusReportPeriodMs = 1000;
+    /// <summary>Each ZoneNode reports its status to Ops every five seconds (§2.2).</summary>
+    public const int NodeStatusReportPeriodMs = 5000;
+
+    /// <summary>The explicit report remains registered for exactly three report periods.</summary>
+    public const int NodeStatusReportTtlMs = NodeStatusReportPeriodMs * 3;
 }
 
 public static class ZoneIds

@@ -3,7 +3,6 @@ using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Server.Configuration;
-using ZoneWorld.Server.ZoneNode.Application.Node;
 using ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Actors;
 using ZoneWorld.Server.ZoneNode.Domain.ZoneWorld;
 using ZoneWorld.Shared.Contracts;
@@ -57,45 +56,24 @@ internal sealed class PlayerEnterWorldHandler(ILogger<PlayerEnterWorldHandler> l
 /// by the Gateway so that the relay itself reaches the node hosting the actor — that relay is
 /// what tells the node where to push.
 /// </summary>
-[ZLinkSpotActorRequestHandler(nameof(JoinWorldReq))]
-internal sealed class PlayerJoinWorldHandler(
-    ILogger<PlayerJoinWorldHandler> logger,
-    NodeMaintenancePolicy maintenance)
-    : IZLinkEntrySpotActorRequestHandler<ZoneEntrySpot, PlayerActor, JoinWorldReq, JoinWorldRes>
+[ZLinkSpotActorSendHandler(nameof(JoinWorldReq))]
+internal sealed class PlayerJoinWorldHandler(ILogger<PlayerJoinWorldHandler> logger)
+    : IZLinkEntrySpotActorSendHandler<ZoneEntrySpot, PlayerActor, JoinWorldReq>
 {
-    public async ValueTask<JoinWorldRes> HandleAsync(
+    public async ValueTask HandleAsync(
         ZoneEntrySpot entrySpot,
         PlayerActor actor,
         IZLinkMessageContext context,
         JoinWorldReq message,
         CancellationToken cancellationToken)
     {
-        // The actual User Spot admission remains the final authority. This early check
-        // only makes the request/reply contract deterministic: a deferred join cannot
-        // carry its later admission result back into this already-returning request.
-        var spawnNodeId = ZoneTopology.NodeOf(ZoneTopology.SpawnZone);
-        if (maintenance.IsUnderMaintenance(spawnNodeId))
-        {
-            return new JoinWorldRes(
-                message.PlayerId,
-                ZoneTopology.SpawnZone,
-                ZoneWorldSpec.SpawnX,
-                ZoneWorldSpec.SpawnY,
-                MoveRejectReasons.ZoneMaintenance);
-        }
-
-        var entered = await EnterWorld.RunAsync(
+        _ = entrySpot;
+        _ = context;
+        await EnterWorld.RunAsync(
             actor,
             new EnterWorldReq(ZoneWorldSpec.SpawnX, ZoneWorldSpec.SpawnY, IsBot: false),
             logger,
             cancellationToken);
-
-        return new JoinWorldRes(
-            message.PlayerId,
-            entered.ZoneId,
-            entered.X,
-            entered.Y,
-            entered.Error);
     }
 }
 
@@ -115,7 +93,11 @@ internal static class EnterWorld
         actor.PrepareEntry(message.IsBot);
 
         var zoneId = ZoneWorldSpec.ZoneOf(message.X, message.Y);
-        actor.TrackDeferredJoin(new PlayerPosition(message.X, message.Y));
+        actor.TrackDeferredJoin(
+            new PlayerPosition(message.X, message.Y),
+            message.IsBot
+                ? PlayerJoinPurpose.InitialBotEntry
+                : PlayerJoinPurpose.InitialHumanEntry);
         actor.Context.JoinSpot(
             zoneId,
             new EnterZoneReq(
@@ -124,7 +106,7 @@ internal static class EnterWorld
                 message.Y,
                 message.IsBot,
                 InitialEntry: true,
-                FromNodeId: null))
+                FromZoneId: null))
             .Defer();
 
         logger.LogInformation(

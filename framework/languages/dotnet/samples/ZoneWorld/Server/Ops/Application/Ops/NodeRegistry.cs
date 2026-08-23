@@ -10,8 +10,15 @@ namespace ZoneWorld.Server.Ops.Application.Ops;
 /// is registered and connected, and the node's own report says which zones it hosts, how
 /// many players it holds and whether it is under maintenance.
 /// </summary>
-public sealed class NodeRegistry
+public sealed class NodeRegistry(TimeProvider timeProvider)
 {
+    public NodeRegistry() : this(TimeProvider.System)
+    {
+    }
+
+    public static readonly TimeSpan ReportTtl =
+        TimeSpan.FromMilliseconds(ZoneWorldSpec.NodeStatusReportTtlMs);
+
     private readonly ConcurrentDictionary<string, NodeState> _nodes = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _nodeByRoutingId = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _routingIdByNode = new(StringComparer.Ordinal);
@@ -31,11 +38,7 @@ public sealed class NodeRegistry
         CancellationToken cancellationToken) =>
         UpdateAsync(nodeId, state => state with
         {
-            View = state.View with
-            {
-                Registered = registered,
-                Connected = registered && state.TransportConnected
-            }
+            View = state.View with { Registered = registered }
         }, cancellationToken);
 
     public ValueTask ApplyConnectionAsync(
@@ -45,10 +48,7 @@ public sealed class NodeRegistry
         UpdateAsync(nodeId, state => state with
         {
             TransportConnected = connected,
-            // A reconnecting socket can emit ConnectionReady after its remote node has already
-            // left the location topology. Keep that transport observation, but do not present
-            // an unavailable node to the console as connected.
-            View = state.View with { Connected = state.View.Registered && connected }
+            View = state.View with { Connected = connected }
         }, cancellationToken);
 
     public string? NodeIdOf(string routingId) =>
@@ -62,7 +62,7 @@ public sealed class NodeRegistry
         foreach (var nodeId in _nodes.Keys)
         {
             _routingIdByNode.TryGetValue(nodeId, out var routingId);
-            await ApplyRegistrationAsync(
+            await ApplyConnectionAsync(
                 nodeId,
                 routingId is not null && liveRoutingIds.Contains(routingId),
                 cancellationToken);
@@ -91,10 +91,11 @@ public sealed class NodeRegistry
         _nodeByRoutingId[routingId] = report.NodeId;
         await UpdateAsync(report.NodeId, state => state with
         {
-            TransportConnected = true,
+            TransportConnected = isLive,
+            LastReportTimestamp = timeProvider.GetTimestamp(),
             View = state.View with
             {
-                Registered = isLive,
+                Registered = true,
                 Connected = isLive,
                 Zones = report.Zones,
                 PlayerCount = report.PlayerCount,
@@ -102,6 +103,30 @@ public sealed class NodeRegistry
             }
         }, cancellationToken);
         return connectionCorrelated;
+    }
+
+    /// <summary>
+    /// Expires positive explicit reports after 15 seconds. A transport event never performs
+    /// this transition: a crashed node cannot submit a false report, so TTL is the sole owner.
+    /// </summary>
+    public async ValueTask ExpireStaleReportsAsync(CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetTimestamp();
+        foreach (var (nodeId, observed) in _nodes.ToArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!observed.View.Registered
+                || observed.LastReportTimestamp is not { } lastReport
+                || timeProvider.GetElapsedTime(lastReport, now) < ReportTtl)
+                continue;
+
+            var expired = observed with
+            {
+                View = observed.View with { Registered = false }
+            };
+            if (!_nodes.TryUpdate(nodeId, expired, observed)) continue;
+            await NotifyChangedAsync(expired.View, cancellationToken);
+        }
     }
 
     private async ValueTask UpdateAsync(
@@ -114,10 +139,17 @@ public sealed class NodeRegistry
             _ => change(Empty(nodeId)),
             (_, existing) => change(existing));
 
+        await NotifyChangedAsync(updated.View, cancellationToken);
+    }
+
+    private async ValueTask NotifyChangedAsync(
+        NodeView updated,
+        CancellationToken cancellationToken)
+    {
         if (Changed is not { } changed) return;
         foreach (var handler in changed.GetInvocationList()
                      .Cast<Func<NodeView, CancellationToken, ValueTask>>())
-            await handler(updated.View, cancellationToken);
+            await handler(updated, cancellationToken);
     }
 
     private static NodeState Empty(string nodeId) =>
@@ -129,7 +161,11 @@ public sealed class NodeRegistry
                 Maintenance: false,
                 Zones: [],
                 PlayerCount: 0),
-            TransportConnected: false);
+            TransportConnected: false,
+            LastReportTimestamp: null);
 
-    private sealed record NodeState(NodeView View, bool TransportConnected);
+    private sealed record NodeState(
+        NodeView View,
+        bool TransportConnected,
+        long? LastReportTimestamp);
 }

@@ -33,6 +33,7 @@ internal sealed class PlayerActorRelocationAdapter
                 actor.IsBot,
                 actor.DirX,
                 actor.DirY,
+                actor.PendingJoins,
                 actor.ProcessedJoinOperations)));
     }
 
@@ -57,6 +58,7 @@ internal sealed class PlayerActorRelocationAdapter
             restored.DirX,
             restored.DirY);
         actor.RestoreProcessedJoinOperations(restored.ProcessedJoinOperations);
+        actor.RestorePendingJoins(restored.PendingJoins);
         return ValueTask.CompletedTask;
     }
 
@@ -67,5 +69,6 @@ internal sealed class PlayerActorRelocationAdapter
         bool IsBot,
         int DirX,
         int DirY,
+        IReadOnlyCollection<PendingPlayerJoin> PendingJoins,
         IReadOnlyCollection<ZLinkActorJoinOperationId> ProcessedJoinOperations);
 }

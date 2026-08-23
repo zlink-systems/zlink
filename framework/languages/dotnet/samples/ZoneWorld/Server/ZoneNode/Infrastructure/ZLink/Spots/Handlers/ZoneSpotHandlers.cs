@@ -121,15 +121,17 @@ internal sealed class ZoneBorderSubscriptionHandler : IZLinkSpotSubscriptionHand
 /// session must not reset the actor's authoritative coordinate or move it back to
 /// the spawn zone.
 /// </summary>
-[ZLinkSpotActorRequestHandler(nameof(JoinWorldReq))]
+[ZLinkSpotActorSendHandler(nameof(JoinWorldReq))]
 internal sealed class RejoinWorldHandler :
-    IZLinkSpotActorRequestHandler<ZoneSpot, PlayerActor, JoinWorldReq, JoinWorldRes>
+    IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, JoinWorldReq>
 {
-    public ValueTask<JoinWorldRes> HandleAsync(
+    public async ValueTask HandleAsync(
         ZoneSpot spot,
         PlayerActor actor,
         IZLinkMessageContext context,
         JoinWorldReq message,
         CancellationToken cancellationToken) =>
-        ValueTask.FromResult(spot.Rejoin(actor));
+        await actor.Context.BoundSession
+            .Send(spot.Rejoin(actor))
+            .Async(cancellationToken);
 }
