@@ -41,9 +41,10 @@ internal sealed class ZoneNodeBootstrap(
         // not NodeId, distributes two Spot owners to each process. A process that fills its
         // local capacity keeps retrying until the other eligible process is ready and owns the
         // remaining objects.
+        var locallyClaimed = new HashSet<string>(StringComparer.Ordinal);
         for (var attempt = 0; census.ZoneIds.Count != 2; attempt++)
         {
-            var claimed = census.ZoneIds;
+            var claimed = ClaimedZones(locallyClaimed);
             var claimOrder = new List<string>();
             foreach (var zoneId in claimed)
                 foreach (var adjacent in World.AdjacentZones(zoneId))
@@ -59,8 +60,9 @@ internal sealed class ZoneNodeBootstrap(
             // waiting on the local census would never trigger a new placement decision.
             foreach (var zoneId in claimOrder)
             {
-                await EnsureZoneAsync(zoneId, cancellationToken);
-                if (!census.ZoneIds.SequenceEqual(claimed)) break;
+                if (await EnsureZoneAsync(zoneId, cancellationToken))
+                    locallyClaimed.Add(zoneId);
+                if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed)) break;
             }
 
             if (settings.AllowEmptyZoneSet
@@ -98,7 +100,14 @@ internal sealed class ZoneNodeBootstrap(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private async Task EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
+    private IReadOnlyList<string> ClaimedZones(IReadOnlySet<string> locallyClaimed) =>
+        census.ZoneIds
+            .Concat(locallyClaimed)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
+    private async Task<bool> EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -111,7 +120,7 @@ internal sealed class ZoneNodeBootstrap(
                 if (result.State is not ZLinkSpotCreateState.Rejected)
                 {
                     logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
-                    return;
+                    return result.State is ZLinkSpotCreateState.Created;
                 }
             }
             catch (ZLinkFrameworkException exception)
