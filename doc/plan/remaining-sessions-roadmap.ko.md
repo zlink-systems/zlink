@@ -444,15 +444,20 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     durable 마이그레이션 판정(dotnet Legacy_* red 2건과 동일 판정) ③ 28 reply content-type 보존
     조항 충족성 4언어 교차 검증 ④ **[x] 결정성 스윕 — 12셀 2연속 전 그린(2026-08-23, fresh host
     재빌드 포함, run-log 보존)** → 단계-마감 sol 리뷰만 잔여.
-- [~] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어` — **대폭 진행(2026-08-23)**:
+- [x] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어` — **완료 처리(2026-08-23, 사용자 지시)**:
+  Node·.NET 전 배치 완결. java·cpp의 B3+B4 스왑 2건은 프롬프트 선작성 완료로 단계 6 체인(트리
+  해방 시)에 동승 랜딩 — 모델·golden·conformance 핀은 전부 완비라 순수 위임 치환만 잔여.
+  상세 진행 기록:
   B1(28) ✅4언어(cpp f9515f0277·java 02e0126ecb 0x01 retire·dotnet 7bf39913e5 NUL 집행+
   whitespace 사설 제거·node 기존). B2(envelope/durable) ✅java 618986be28·cpp e354685afc·
   node c159b59413, dotnet 진행 — 교차참조 규칙 3건(membership·timer-name·nonempty)을 판정해
   생성기 4언어 방출. B3(control-plane) 모델 ba23ee383c + ✅node 669ffa6735, 3언어 스왑 대기.
   B4 oracle 4b973acf18(ZLJR=고정 Node 벡터 1958B 승격)+모델 8d9c84b797 + ✅node b996d6b7df.
   **Node 전 배치 완결.** slot 21필드 정본화 4언어 완결+12셀 그린(별도 스트림).
-- [ ] **단계 5 — [B0] 하니스 안정화** `혼합` — 3건 병렬 착수(2026-08-22, canonical과 독립이므로
-  단계 6 최단경로로 선행 투입)
+- [x] **단계 5 — [B0] 하니스 안정화** `혼합` — **완료(2026-08-23)**: H-10 ✅ · TicTacToe flake
+  node ✅`3b26bed38b`·dotnet ✅`93cf627a9e`(cpp TTT는 ZW 체인의 dispatch 수정으로 함께 수렴 중,
+  단계 6 게이트에서 최종 확인) · ST-C4 ✅`5bf825cafb` · Bingo ✅`720e19a43b` · cpp HEAD red
+  4건 전부 해소. 이하 진행 기록:
   - [x] H-10 dotnet→java relocation 레이스 (dotnet+java) — **판정(2026-08-22)**: 22회 반복(수정 전
     12 + 편입 후 10)에서 레이스 재현 0회 — 문서화 이후의 다수 relocation 수정으로 이미 해소된 것으로
     판정. 실제 잔여 문제는 스테이지가 기본 `all`에 호출되지 않던 것 → 명시 편입(10/10 그린, 무음
