@@ -5,11 +5,9 @@
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 
-test('send-ready callback queue does not keep the Node test worker alive', () => {
+test('send-completion callback queue does not keep the Node test worker alive', () => {
   const context = zlink.createContext();
   const socket = zlink.createPairSocket(context);
-
-  socket.setSendReadyHandler(() => {});
 
   socket.close();
   context.shutdown();

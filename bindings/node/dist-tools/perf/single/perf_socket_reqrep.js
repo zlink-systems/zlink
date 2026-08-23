@@ -146,6 +146,11 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         let seq = 1n;
         let outstanding = 0;
         const maxInFlight = Math.max(1, Math.min(64, Math.floor(REQUEST_WINDOW_BYTES / Math.max(1, msgSize))));
+        // parseSingleBinaryArgs yields NaN when PERF_SINGLE_RCVTIMEO_MS is unset,
+        // and NaN is not nullish, so `??` would forward it into timeout().
+        const requestTimeoutMs = Number.isFinite(options.recvTimeoutMs)
+            ? Math.trunc(options.recvTimeoutMs)
+            : 200;
         let failure = null;
         let completionSignal = Promise.resolve();
         const observe = async (request) => {
@@ -174,7 +179,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
                 try {
                     const operation = routedClient ? client.request(SERVER_RID) : client.request();
                     const request = operation.message(payload)
-                        .timeout(options.recvTimeoutMs ?? 200).submit();
+                        .timeout(requestTimeoutMs).submit();
                     outstanding += 1;
                     completionSignal = observe(request);
                     seq += 1n;

@@ -6,7 +6,6 @@
 #include "addon_tsfn_slots.h"
 
 #include <atomic>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -15,8 +14,7 @@
 struct request_completion_dispatcher_t
 {
     request_completion_dispatcher_t ()
-        : socket (NULL), env (NULL), tsfn (NULL), handler (NULL), active (0), closing (false),
-          scheduled (false)
+        : socket (NULL), env (NULL), tsfn (NULL), handler (NULL), active (0), closing (false)
     {
     }
 
@@ -26,9 +24,6 @@ struct request_completion_dispatcher_t
     napi_ref handler;
     std::atomic<size_t> active;
     std::atomic<bool> closing;
-    std::mutex queue_mu;
-    std::deque<void *> queue;
-    bool scheduled;
 };
 
 struct request_js_state_t
@@ -105,94 +100,53 @@ void request_dispatcher_finalize (napi_env env,
 void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *data)
 {
     (void) js_cb;
-    (void) data;
     request_completion_dispatcher_t *dispatcher =
       static_cast<request_completion_dispatcher_t *> (context);
-    if (!dispatcher)
+    std::unique_ptr<request_result_js_payload_t> payload (
+      static_cast<request_result_js_payload_t *> (data));
+    if (!dispatcher || !payload)
         return;
 
-    std::vector<request_result_js_payload_t *> batch;
-    napi_value completions;
-    bool reschedule = false;
-    {
-        std::lock_guard<std::mutex> lock (dispatcher->queue_mu);
-        const size_t count = std::min<size_t> (64, dispatcher->queue.size ());
-        batch.reserve (count);
-        for (size_t index = 0; index < count; ++index) {
-            batch.push_back (static_cast<request_result_js_payload_t *> (
-              dispatcher->queue.front ()));
-            dispatcher->queue.pop_front ();
-        }
-        reschedule = !dispatcher->queue.empty ();
-        dispatcher->scheduled = reschedule;
+    request_js_state_t *state = payload->state;
+    if (!env || !state || !dispatcher->handler) {
+        release_request_state (NULL, state);
+        return;
     }
 
-    napi_create_array_with_length (env, batch.size (), &completions);
-
-    for (size_t index = 0; index < batch.size (); ++index) {
-        std::unique_ptr<request_result_js_payload_t> payload (batch[index]);
-        request_js_state_t *state = payload->state;
-        if (!env || !state || !dispatcher->handler) {
-            release_request_state (NULL, state);
-            continue;
-        }
-        napi_value completion;
-        napi_create_object (env, &completion);
-        napi_value token;
-        napi_create_bigint_uint64 (env, state->token, &token);
-        napi_set_named_property (env, completion, "token", token);
-        napi_value result;
-        napi_create_int32 (env, payload->errnum, &result);
-        napi_set_named_property (env, completion, "result", result);
-        if (payload->errnum != 0) {
-            napi_value none;
-            napi_get_null (env, &none);
-            napi_set_named_property (env, completion, "parts", none);
-        } else {
-            napi_value parts_array;
-            napi_create_array_with_length (env, payload->parts.size (), &parts_array);
-            bool materialization_failed = false;
-            for (size_t part_index = 0; part_index < payload->parts.size (); ++part_index) {
-                napi_value part_buf = create_received_message_buffer (
-                  env, &payload->parts[part_index]);
-                if (!part_buf) {
-                    materialization_failed = true;
-                    break;
-                }
-                napi_set_element (env, parts_array, static_cast<uint32_t> (part_index),
-                                  part_buf);
-            }
-            if (materialization_failed) {
+    napi_value completion;
+    napi_create_object (env, &completion);
+    napi_value token;
+    napi_create_bigint_uint64 (env, state->token, &token);
+    napi_set_named_property (env, completion, "token", token);
+    napi_value result;
+    napi_create_int32 (env, payload->errnum, &result);
+    napi_set_named_property (env, completion, "result", result);
+    if (payload->errnum != 0) {
+        napi_value none;
+        napi_get_null (env, &none);
+        napi_set_named_property (env, completion, "parts", none);
+    } else {
+        napi_value parts_array;
+        napi_create_array_with_length (env, payload->parts.size (), &parts_array);
+        for (size_t part_index = 0; part_index < payload->parts.size (); ++part_index) {
+            napi_value part_buf = create_received_message_buffer (
+              env, &payload->parts[part_index]);
+            if (!part_buf) {
                 release_request_state (env, state);
-                for (size_t remaining = index + 1; remaining < batch.size (); ++remaining) {
-                    std::unique_ptr<request_result_js_payload_t> remaining_payload (
-                      batch[remaining]);
-                    release_request_state (env, remaining_payload->state);
-                }
                 return;
             }
-            napi_set_named_property (env, completion, "parts", parts_array);
+            napi_set_element (env, parts_array, static_cast<uint32_t> (part_index), part_buf);
         }
-        napi_set_element (env, completions, static_cast<uint32_t> (index), completion);
-        release_request_state (env, state);
+        napi_set_named_property (env, completion, "parts", parts_array);
     }
 
-    if (!batch.empty ()) {
-        napi_value handler;
-        napi_value this_arg;
-        napi_value recv;
-        napi_get_reference_value (env, dispatcher->handler, &handler);
-        napi_get_undefined (env, &this_arg);
-        napi_call_function (env, this_arg, handler, 1, &completions, &recv);
-    }
-
-    if (reschedule
-        && napi_call_threadsafe_function (dispatcher->tsfn, dispatcher,
-                                          napi_tsfn_nonblocking)
-             != napi_ok) {
-        std::lock_guard<std::mutex> lock (dispatcher->queue_mu);
-        dispatcher->scheduled = false;
-    }
+    napi_value handler;
+    napi_value this_arg;
+    napi_value recv;
+    napi_get_reference_value (env, dispatcher->handler, &handler);
+    napi_get_undefined (env, &this_arg);
+    napi_call_function (env, this_arg, handler, 1, &completion, &recv);
+    release_request_state (env, state);
 }
 
 request_completion_dispatcher_t *request_dispatcher (napi_env env, void *socket)
@@ -232,6 +186,7 @@ create_core_request_js_state (napi_env env, void *socket, uint64_t token)
     if (!dispatcher)
         return NULL;
     request_js_state_t *state = new request_js_state_t ();
+    state->env = env;
     state->dispatcher = dispatcher;
     state->token = token;
     dispatcher->active.fetch_add (1);
@@ -295,21 +250,10 @@ void request_reply_callback_trampoline (zlink_request_result_t errnum,
 
     payload->state = state;
     request_completion_dispatcher_t *dispatcher = state->dispatcher;
-    bool schedule = false;
-    {
-        std::lock_guard<std::mutex> lock (dispatcher->queue_mu);
-        dispatcher->queue.push_back (payload.get ());
+    if (napi_call_threadsafe_function (
+          dispatcher->tsfn, payload.get (), napi_tsfn_nonblocking)
+        == napi_ok)
         payload.release ();
-        if (!dispatcher->scheduled) {
-            dispatcher->scheduled = true;
-            schedule = true;
-        }
-    }
-    if (schedule
-        && napi_call_threadsafe_function (dispatcher->tsfn, dispatcher,
-                                          napi_tsfn_nonblocking)
-             != napi_ok) {
-        std::lock_guard<std::mutex> lock (dispatcher->queue_mu);
-        dispatcher->scheduled = false;
-    }
+    else
+        release_request_state (NULL, state);
 }

@@ -64,7 +64,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 | [런타임 파일 레이아웃](#런타임-파일-레이아웃) | `runtime/` 하위 카테고리별 파일과 정렬 실패 예시 |
 | [생성 엔트리 포인트](#생성-엔트리-포인트) | 패키지 루트 팩토리 함수 목록 |
 | [함수 이름 규칙](#함수-이름-규칙) | camelCase, 정식 액션 이름, handler 등록 규칙 |
-| [정식 인터페이스 규칙](#정식-인터페이스-규칙) | recv 시그니처, builder, `publishAsync` 등 예외 규칙 |
+| [정식 인터페이스 규칙](#정식-인터페이스-규칙) | recv 시그니처, builder, 비동기·동기 submit 규칙 |
 | [공개 엔트리 형태](#공개-엔트리-형태) | 패키지 entrypoint의 도메인별 그룹화 |
 | [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약) | `bigint` HWM 표현과 monitor snapshot field |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
@@ -84,7 +84,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 - 패키지 projection: 패키지 entrypoint에서 export되고 발행된 TypeScript 정의에
   선언된 심볼.
 - 내부 구현: 네이티브 addon 모듈, 비공개 소스 모듈, N-API 핸들, 콜백 트램펄린,
-  요청 progress 헬퍼, 컨버터, raw part-loop 헬퍼.
+  Core completion/reply callback bridge, 컨버터, raw part-loop 헬퍼.
 - 패키지 경계: `package.json` exports는 문서화된 공개 entrypoint만 노출한다.
 - 문서 역할: 이 README는 형태와 의미적 범위(semantic coverage)를 정의한다. 정확한
   공개 멤버 목록은 패키지 entrypoint와 선언이 소유한다.
@@ -113,7 +113,7 @@ Node/TypeScript 바인딩을 변경할 때 다음 경로를 일관되게 사용�
 - `package.json` exports에 의도적으로 나열되지 않는 한 deep 소스 경로를 공개 API로 노출하지 않는다.
 - 소스 디렉터리 이름은 소문자를 사용한다. `src/zlink/Contracts`나 `src/zlink/Runtime`을 만들지 않는다. 이런 이름은 공개 deep-import 표면으로 오인될 수 있다.
 - `src/zlink/contracts`는 공개 TypeScript 타입, 클래스, 빌더, enum, 에러, 팩토리 반환 계약을 소유한다. 패키지 entrypoint나 런타임 팩토리 모듈이 팩토리 구현을 소유한다.
-- `src/zlink/runtime`은 네이티브 기반 런타임 구현, 네이티브 addon 호출, 핸들 owner, 콜백 트램펄린, 요청 progress 헬퍼, 마샬링, 플랫폼 로딩을 소유한다.
+- `src/zlink/runtime`은 네이티브 기반 런타임 구현, 네이티브 addon 호출, 핸들 owner, 콜백 트램펄린, Core completion/reply callback bridge, 마샬링, 플랫폼 로딩을 소유한다.
 
 다음 트리가 정렬된 구현 구조다.
 
@@ -170,7 +170,7 @@ bindings/node/
 |   |   |   |   +-- lifetime.ts
 |   |   |   +-- messaging/
 |   |   |   |   +-- message_materializer.ts
-|   |   |   |   +-- request_progress.ts
+|   |   |   |   +-- send_completion.ts
 |   |   |   +-- buffers/
 |   |   |   |   +-- message_conversion.ts
 |   |   |   |   +-- buffer_policy.ts
@@ -305,7 +305,7 @@ TypeScript 인터페이스를 먼저 정의한다.
   send/request, SPOT send/request/reply, actor create, actor join, actor join
   reply builder.
 - callback 역할: stream packet handler, monitor handler, poll handler, SPOT
-  dispatch handler, route handler, admission handler.
+  dispatch handler, route handler.
 
 이 역할을 구현하는 런타임 클래스 이름은 private 또는 unexported여도 된다. 그러나
 패키지 루트 팩토리와 생성된 선언은 공개 계약 인터페이스 이름을 사용해야 한다.
@@ -497,7 +497,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - 메서드와 함수에는 `camelCase`를 사용한다.
 - 케이스만 다를 뿐 다른 바인딩과 동일한 정식 액션 이름을 사용한다.
   `send`, `request`, `reply`, `publish`, `subscribe`, `unsubscribe`,
-  `recv`, `recvRouted`, `receiveSubscriptionEvent`, `setSendReadyHandler`,
+  `recv`, `recvRouted`, `receiveSubscriptionEvent`,
   `setPacketHandler`, `setDispatchHandler`, `getOrCreateSpot`,
   `sendToChannel`, `requestToChannel`, `sendToSpot`, `requestToSpot`.
 - 호환성만을 위해 옛 alias를 유지하지 않는다. 리팩터링 이전 이름이 정식 의미와
@@ -543,59 +543,34 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - operation-start 명명은 위의 함수 이름 규칙을 따른다. 빌더의 종단 메서드는
   Promise 반환 표면에서도 지금처럼 `submit(...)`을 사용한다. `submitAsync` 같은
   별도 종단 이름을 추가하지 않는다.
-- DEALER/ROUTER `send(...).message(...).submit()`은 관리형 send 종단이며
-  `Promise<void>`를 반환한다. DEALER/ROUTER
-  `request(...).message(...).submit()`은 `Promise<Message[]>`를 반환한다. 이 관리형
-  빌더에는 flag, callback, blocking, no-wait, polling 호환 종단을 노출하지 않는다.
-  Pair, Stream, Pub 데이터 평면 종단은 기존 동기 계약을 유지한다. 공개 ROUTER
-  `sendTransportPair(...)`도 명시적인 one-shot immediate operation으로 유지하며,
-  관리형 HWM 대기 종단으로 해석하지 않는다.
+- Pair의 `send().message(...).submit()`와 DEALER/ROUTER의 routed
+  `send(...).message(...).submit()`은 Core send-complete callback으로 완료되는
+  관리형 `Promise<void>` 종단이다. timeout은 각 operation의 option으로 Core에
+  전달하며, `ADMITTED`면 Promise를 resolve하고 `TIMED_OUT`/`TERMINAL`이면
+  Core errno를 보존한 `SubmitError`로 reject한다. Promise를 버리거나 GC하는 것은
+  취소가 아니며 별도 cancel API를 노출하지 않는다. 이 binding은 thread, queue,
+  retry 또는 readiness/admission 상태를 소유하지 않고, native callback은 JS
+  completion 전달만 수행한다.
+- Stream의 managed `send(routingId)`도 같은 send-complete Promise 계약을 사용한다.
+  Stream의 `trySend`와 공개 ROUTER `sendTransportPair(...)` 같은 raw one-shot
+  operation은 기존 동기 `void`/`boolean` 계약을 유지하며 managed HWM 대기 종단으로
+  해석하지 않는다.
+- DEALER/ROUTER `request(...).message(...).submit()`은 binding admission이 아닌
+  Core reply callback 경로로만 완료되는 `Promise<Message[]>`를 반환한다. raw
+  ROUTER reply는 동기 one-shot이다. request/reply 경로에는 binding-owned retry,
+  pending queue 또는 progress timer를 추가하지 않는다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   HWM-managed 경로에 진입하지 않으며, terminal reply 또는 error reply를 HWM 없는
   completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는 reply 결과가
   아니며 `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `SubmitError`로 발생한다.
-- 관리형 routed submit은 native submit 전에 payload snapshot과 completion 상태를
-  만든다. Core target selector와 DEALER/ROUTER의 exact per-part DONTWAIT API만
-  사용한다. Node addon은 `zlink_routed_send_parts`, `zlink_routed_request_parts` 같은
-  array/multipart routed-submit ABI를 추가하거나 호출하지 않는다. 하나의 짧은
-  socket-local complete-record attempt gate는 첫 part부터 final part까지 한 번의
-  시도만 보호하며 HWM을 기다리기 전에 해제한다.
-- binding은 `(peer routing id, transport pair id, transport pair generation)` exact
-  tuple별 pending operation과 중복 제거된 ready-target queue/set을 소유한다. 장수하는
-  Core routed-readiness callback은 해당 exact target만 mark/wake하고 event-loop 작업을
-  예약한다. callback 안에서 submit, wait, retry하지 않는다. 따라서 막힌 target은
-  무관한 target을 막지 않고 stale generation은 교체된 route를 깨우지 않는다. 이
-  scheduling은 같은 routing id를 사용하는 동시 호출에 새로운 strict FIFO 보장을
-  추가하지 않는다.
-- send/request deadline은 공개 `submit()` 호출 시점부터 계산한 절대 시각이다. HWM
-  대기는 timer polling이 아니라 readiness-driven이다. 수락되면 전달한 `Message`를
-  정확히 한 번 consume하고 수락 전 실패 시에는 재사용할 수 있게 둔다. 빠른 reply가
-  등록을 앞지르지 않도록 첫 exact attempt 전에 request correlation을 설치한다.
-  timeout, target detach/terminal, socket close, native failure는 각 Promise를 정확히
-  한 번 완료하고 pending 상태를 제거한다. socket close는 Node event loop를 막지
-  않는다.
-- MeshNode의 Logical Multicast publisher는 Core의 한 번의 blocking publish를 Node.js
-  event loop 밖에서 실행해야 하므로 `publishAsync(...)`를 함께 제공한다. 이 이름은
-  이 publisher에만 적용하며 다른 binding operation의 async suffix 규칙을 바꾸지
-  않는다. payload와 metadata는 worker를 queue에 넣기 전에 binding이 소유한
-  storage로 복사한다. `AbortSignal`은 Core 호출이 시작되기 전까지만 operation을
-  취소할 수 있다. Core 호출이 시작된 뒤의 abort는 이미 시작한 publish의 정상 submit
-  result와 detail을 바꾸지 않는다. programming 또는 system failure는 예외로 유지한다.
-  별도 timeout option은 추가하지 않으며 Core의 MeshNode send timeout을 사용한다.
-- `publishAsync(...)`는 `Promise<MeshPublishResult>`를 반환한다. `Ok`,
-  `Backpressured`, `NotFound`, `NotConnected`, `Terminated`, `NotAdmitted`는
-  정상 submit 결과로 반환하며 Core가 채운 detail을 그대로 보존한다. 특히 일부
-  target만 수락한 `Backpressured` 결과의 non-zero detail을 버리지 않는다.
-  `InvalidArgument`, `InvalidHandle`, `InvalidState`, `NotSupported`,
-  `ThreadViolation`, `OutOfMemory`, `SeqExhausted`, `InternalError`는
-  programming 또는 system error이므로 `SubmitError`를 발생시킨다.
-- `publishAsync(...)`가 queue에 들어간 뒤 publisher를 `close()`하면 새 publish는
-  즉시 거부한다. `close()`는 Node.js event loop를 기다리게 하지 않는다. 이미
-  queue에 들어갔거나 Core 호출을 시작한 operation은 native publisher handle을
-  유지하며, 마지막 operation의 Core 호출과 Promise 완료 처리가 끝난 뒤 native
-  handle을 해제한다.
+- PUB/XPUB의 `publish(topic).message(...).submit()`은 동기 `void` 종단이다. 기본
+  PUB 경로는 lossy이므로 성공 시 즉시 반환하며, NODROP option은 수락할 수 없을 때
+  즉시 `SubmitError`를 발생시킨다. publish에는 `publishAsync`, binding-owned
+  pending queue, worker, retry 또는 send-ready/admission API를 추가하지 않는다.
+  전달한 Message는 Core submit이 성공한 경우에만 consume하고, 동기 실패에서는
+  호출자가 재사용할 수 있다.
 - MeshNode에서 Actor의 bound session으로 보내는 `sendActorBoundSession(...)`은
   0보다 큰 `expectedBindingGeneration`을 필수로 받는다. binding이 교체된 뒤 이전
   generation의 호출을 새 session으로 전달하지 않으며, 0은 current binding을
@@ -783,7 +758,8 @@ backpressure 결과는 바꾸지 않는다. 두 값 모두 callback이 받은 `M
 - 핫 경로에서는 reflection 식 속성 walking, 문자열 lookup에 의한 동적 dispatch,
   피할 수 있는 할당, 피할 수 있는 `Buffer` 복사, 숨은 sleep, busy wait, 광범위한
   락, worker-thread join을 사용하지 않는다.
-- 요청 progress는 outstanding 요청이 있는 동안 네이티브 핸들 단위로 공유한다.
+- send completion과 request reply는 Core callback을 native TSFN으로 전달한다. binding은
+  자체 thread, queue, retry, readiness/admission pump를 만들지 않는다.
 - Poll 결과 materialization은 이벤트별 reflective enum 스캐닝이 아니라 고정 매핑
   테이블을 사용한다.
 - Perf, 샘플, 테스트는 공개 패키지 entrypoint만 import 한다.

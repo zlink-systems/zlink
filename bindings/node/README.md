@@ -13,17 +13,17 @@ Aligned Node bindings for `libzlink`.
 - connectable sockets: `connect(endpoint)`, `disconnect(endpoint)`
 - discovery attachment: `attachDiscovery(discovery)` on `DealerSocket`,
   `RouterSocket`, `PubSocket`, `SubSocket`
-- publisher sockets: `publish(topic, message|parts)`,
-  `onSendReady(handler)`
-- message sockets: `send(message|parts)`, `recv(flags?)`,
-  `onSendReady(handler)`
-- routed sockets: `send(routingId, message|parts)`,
-  `recv(flags?)`,
-  `onSendReady(handler)`
+- publisher sockets: `publish(topic).message(...).submit()` (synchronous
+  void-or-throw)
+- message sockets: `send().message(...).submit()` (Core-completion Promise),
+  `recv(flags?)`
+- routed sockets: `send(routingId).message(...).submit()` (Core-completion
+  Promise), `recv(flags?)`
 - subscriber sockets: `setSubscription(topicOrPattern)`,
   `unsetSubscription(topicOrPattern)`, `subscribe(topicMessage, flags?)`
 - `XPubSocket`: `receiveSubscriptionEvent(subscriptionEvent, flags?)`
-- `StreamSocket`: `setRoutingId()`, `getRoutingId()`, `recv(flags?)`,
+- `StreamSocket`: `setRoutingId()`, `getRoutingId()`, managed Core-completion
+  `send(routingId)`, immediate `trySend(routingId)`, `recv(flags?)`,
   `onPacket(handler)`
 - TLS helpers: `setTlsServer(cert, key, requireClient?)`,
   `setTlsClient(ca, host, trust?)` on sockets, `Registry`, and `SpotNode`
@@ -71,14 +71,13 @@ Not part of the canonical stream API contract:
 length-prefixed stream framing such as `len32be` is only a sample helper and
 is not exposed as a public `StreamSocket` method.
 
-## Callback Handler Capacity
+## Callback Delivery
 
-Callback handlers that cross from native dispatch threads into JavaScript use
-fixed native thread-safe-function slots. The binding currently supports up to
-eight concurrently attached handlers for each callback family: stream packet
-handlers, send-ready handlers, socket monitor handlers, and timer fire
-handlers. Attaching a ninth handler in the same family throws an error until an
-existing owner is closed and its slot is released.
+Send completion and request reply callbacks are installed once per socket and
+use N-API thread-safe functions only to deliver completion data into JavaScript.
+The callback does not submit, wait, retry, or own a binding queue. Stream packet,
+socket monitor, and timer callbacks retain their existing native callback
+delivery limits; there is no send-ready or publisher-admission callback surface.
 
 ## Service Surface
 
@@ -95,9 +94,8 @@ existing owner is closed and its slot is released.
 `publish(serviceName, topic, ...)`, `sendChannel(channelName, ...)`,
 `requestChannel(channelName, ...)`, `setSubscription()` /
 `unsetSubscription()`, `subscribe(topicMessage, flags?)`,
-`receiveSubscriptionEvent(subscriptionEvent, flags?)`, `recvRouted(received, flags?)`,
-`recvActorLifecycle(flags?)`, `onDispatchEvent()`, and
-`onSendReady()`.
+  `receiveSubscriptionEvent(subscriptionEvent, flags?)`, `recvRouted(received, flags?)`,
+  `recvActorLifecycle(flags?)`, and `onDispatchEvent()`.
 
 `Discovery` uses `connectRegistry()`, `setValue()` / `getValue()`,
 `setMetadata()` / `getMetadata()`, `memberPeers()`,

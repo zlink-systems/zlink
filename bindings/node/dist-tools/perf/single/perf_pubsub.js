@@ -100,8 +100,8 @@ async function runPubSubBenchmark(msgSize, options) {
             senderHwmComponent: 'publisher',
             sendActive: (socket, payload) => {
                 try {
-                    return socket.publish(TOPIC).message(payload)
-                        .flags(zlink.SendFlags.DontWait).submit();
+                    socket.publish(TOPIC).message(payload).submit();
+                    return true;
                 }
                 catch (error) {
                     if (error instanceof zlink.SubmitError
@@ -119,8 +119,7 @@ async function runPubSubBenchmark(msgSize, options) {
                 }
             },
             sendStop: (socket) => {
-                socket.publish(TOPIC).message(STOP_TOKEN_BYTES)
-                    .flags(zlink.SendFlags.None).submit();
+                socket.publish(TOPIC).message(STOP_TOKEN_BYTES).submit();
             },
         });
     }

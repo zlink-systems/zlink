@@ -9,7 +9,11 @@ import {
   RuntimeRequestOperation,
   RoutedMessageSocket,
 } from './socket_operations';
-import { RoutedAdmission, resolvedRequestTimeout } from './routed_admission';
+import { SendCompletionOwner, consumeSubmittedMessages } from '../messaging/send_completion';
+import {
+  registerNativeRequest,
+  releaseNativeRequestDispatcher,
+} from '../messaging/request_executor';
 import { normalizeReplyFlags } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
 import { configCall, submitNativeError } from '../errors/native_errors';
@@ -22,17 +26,19 @@ import type {
   RequestOperation,
   RoutedSendOperation,
 } from '../../contracts/messaging';
+import { SubmitResult } from '../../contracts/errors/errors';
+import { submitErrorFromNativeResult } from './socket_submit_errors';
 
 const native = requireNative();
 
 export class RouterSocket extends RoutedMessageSocket {
-  private readonly admission: RoutedAdmission;
+  private readonly sendCompletion: SendCompletionOwner;
   readonly options: RouterSocketOptions;
   constructor(ctx: Context) {
     super(ctx, NativeSocketType.ROUTER);
     this.options = RouterSocketOptions.create(this);
     try {
-      this.admission = new RoutedAdmission(getNativeHandle(this), 'router');
+      this.sendCompletion = new SendCompletionOwner(getNativeHandle(this));
     } catch (error) {
       super.close();
       throw error;
@@ -54,24 +60,14 @@ export class RouterSocket extends RoutedMessageSocket {
   send(peerRid: RoutingId): RoutedSendOperation {
     const peer = normalizeRoutingId(peerRid, 'peerRid');
     return new ManagedRoutedRuntimeSendOperation(
-      (selector, parts, timeoutMs, startedAt) => this.admission.send(
-        selector,
-        parts,
-        timeoutMs === 0 ? this.options.sendTimeout : timeoutMs,
-        startedAt
-      ),
+      (selector, parts, timeoutMs) => this.sendCompletion.submit(parts, timeoutMs, selector),
       peer
     );
   }
   request(peerRid: RoutingId): RequestOperation {
     const peer = normalizeRoutingId(peerRid, 'peerRid');
-    return new RuntimeRequestOperation((parts, timeoutMs, startedAt) =>
-      this.admission.request(
-        peer,
-        parts,
-        resolvedRequestTimeout(timeoutMs, this.options.requestTimeout),
-        startedAt
-      )
+    return new RuntimeRequestOperation((parts, timeoutMs) =>
+      this.submitRequest(peer, parts, timeoutMs)
     );
   }
   requestTransportPair(
@@ -85,13 +81,13 @@ export class RouterSocket extends RoutedMessageSocket {
       transportPairId,
       transportPairGeneration,
     };
-    return new RuntimeRequestOperation((parts, timeoutMs, startedAt) =>
-      this.admission.request(
+    return new RuntimeRequestOperation((parts, timeoutMs) =>
+      this.submitRequest(
         peer,
         parts,
-        resolvedRequestTimeout(timeoutMs, this.options.requestTimeout),
-        startedAt,
-        exactTarget
+        timeoutMs,
+        exactTarget.transportPairId,
+        exactTarget.transportPairGeneration
       )
     );
   }
@@ -143,9 +139,48 @@ export class RouterSocket extends RoutedMessageSocket {
       throw submitNativeError(error, flags, 'reply failed');
     }
   }
+  private submitRequest(
+    peer: Buffer,
+    parts: import('../messaging/send_operation_base').OperationPayloadValue<MessageLike>,
+    timeoutMs: number,
+    transportPairId = 0n,
+    transportPairGeneration = 0n
+  ): Promise<import('../../contracts').Message[]> {
+    const handle = getNativeHandle(this);
+    const registration = registerNativeRequest(handle, 'request failed');
+    const resolvedTimeout = timeoutMs === 0
+      ? (this.options.requestTimeout === 0 ? 5_000 : this.options.requestTimeout)
+      : timeoutMs;
+    let result: { result: number; nativeErrno: number };
+    try {
+      result = native.routerRequest(
+        handle,
+        peer,
+        normalizeOperationPayload(parts),
+        registration.token,
+        resolvedTimeout,
+        transportPairId,
+        transportPairGeneration
+      );
+    } catch (error) {
+      registration.fail(submitNativeError(error, SendFlags.DontWait, 'request submit failed'));
+      return registration.promise;
+    }
+    if (result.result !== SubmitResult.Ok) {
+      registration.fail(submitErrorFromNativeResult(
+        result.result,
+        result.nativeErrno,
+        'request submit failed'
+      ));
+      return registration.promise;
+    }
+    consumeSubmittedMessages(parts);
+    return registration.promise;
+  }
+
   close(): void {
-    this.admission.close();
+    const handle = getNativeHandle(this);
     super.close();
-    this.admission.finishClose();
+    releaseNativeRequestDispatcher(handle);
   }
 }

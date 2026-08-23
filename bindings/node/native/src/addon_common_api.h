@@ -22,7 +22,7 @@ bool init_msg_from_value (napi_env env,
                           zlink_msg_t *msg,
                           bool *contains_native_frame = NULL);
 void close_msg_vector (std::vector<zlink_msg_t> &parts);
-void release_socket_send_ready_handler_slot (void *socket);
+void release_socket_send_completion_handler (void *socket);
 void release_socket_monitor_handler_slot (void *monitor);
 
 // Generic napi object-property setters shared across the addon translation

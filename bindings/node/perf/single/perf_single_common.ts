@@ -466,11 +466,8 @@ function isTransientSubmit(error) {
 
 async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
   try {
-    if (typeof socket.request === 'function') {
-      await socket.send().message(payload).submit();
-      return true;
-    }
-    return socket.send().message(payload).flags(flags).submit();
+    await socket.send().message(payload).submit();
+    return true;
   } catch (error) {
     if (isTransientSubmit(error)) {
       return false;
@@ -480,11 +477,7 @@ async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWai
 }
 
 async function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
-  if (typeof socket.request === 'function') {
-    await socket.send().message(payload).submit();
-    return;
-  }
-  socket.send().message(payload).flags(flags).submit();
+  await socket.send().message(payload).submit();
 }
 
 async function sendSocketStopWithRetry(socket) {

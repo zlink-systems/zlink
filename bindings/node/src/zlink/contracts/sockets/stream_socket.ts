@@ -2,7 +2,7 @@
 
 import type { RoutingId } from '../core';
 import type { Received } from '../messaging';
-import type { RoutedSendOperation, SendOperation } from '../messaging';
+import type { ImmediateSendOperation, RoutedSendOperation } from '../messaging';
 import type { StreamPacketHandler } from '../messaging';
 import type { RecvFlags } from './socket_constants';
 import type { StreamSocketOptions } from './socket_options';
@@ -21,7 +21,7 @@ export interface StreamSocket extends Socket {
    */
   send(routingId: RoutingId): RoutedSendOperation;
   /** Begin an explicit immediate DONTWAIT-capable send. */
-  trySend(routingId: RoutingId): SendOperation;
+  trySend(routingId: RoutingId): ImmediateSendOperation;
   /** Receive a message into `result`; false when `RecvFlags.DontWait` is set and none is available. */
   recv(result: Received, flags?: RecvFlags): boolean;
   /**
@@ -36,11 +36,6 @@ export interface StreamSocket extends Socket {
    * a background dispatch thread.
    */
   setPacketHandler(handler: StreamPacketHandler): void;
-  /**
-   * Register a callback invoked when the socket can accept more sends after
-   * back-pressure. The callback runs on a background dispatch thread.
-   */
-  setSendReadyHandler(handler: () => void): void;
   /**
    * Set the routing id that identifies this socket to its peers. Apply before
    * connecting so peers observe it from the first packet.

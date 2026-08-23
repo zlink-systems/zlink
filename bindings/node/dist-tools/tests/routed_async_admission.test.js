@@ -7,226 +7,131 @@ const zlink = require('@zlink-systems/zlink');
 let endpointSequence = 0;
 function endpoint(label) {
     endpointSequence += 1;
-    return `inproc://node-routed-async-${label}-${process.pid}-${endpointSequence}`;
+    return `inproc://node-send-completion-${label}-${process.pid}-${endpointSequence}`;
 }
 function nextTurn() {
     return new Promise((resolve) => setImmediate(resolve));
 }
-function within(promise, timeoutMs = 2_000) {
+function within(promise, timeoutMs = 1_000) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`operation did not settle within ${timeoutMs}ms`)), timeoutMs);
         promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
     });
 }
-async function registerDealer(dealer, router, label) {
-    await dealer.send().message(label).submit();
-    const registration = new zlink.Received();
-    assert.equal(router.recv(registration), true);
-    registration.close();
-}
-async function receiveWithin(socket, timeoutMs = 2_000) {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-        const received = new zlink.Received();
-        if (socket.recv(received, zlink.RecvFlags.DontWait))
-            return received;
-        received.close();
-        if (Date.now() >= deadline) {
-            throw new Error(`message did not arrive within ${timeoutMs}ms`);
-        }
-        await nextTurn();
-    }
-}
-async function closeEventually(socket, timeoutMs = 2_000) {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
+function closeAll(context, ...sockets) {
+    for (const socket of sockets.reverse()) {
         try {
             socket.close();
-            return;
         }
-        catch (error) {
-            if (!(error instanceof zlink.CloseError)
-                || error.result !== zlink.CloseResult.Busy
-                || Date.now() >= deadline) {
-                throw error;
-            }
-            await nextTurn();
-        }
+        catch { /* cleanup should not mask the assertion */ }
     }
+    context.close();
 }
-test('blocked routed submit keeps ownership and does not delay another target', async () => {
-    const ctx = zlink.createContext();
-    ctx.options.autoHwmEnabled = false;
-    const router = zlink.createRouterSocket(ctx);
-    const dealerA = zlink.createDealerSocket(ctx);
-    const dealerB = zlink.createDealerSocket(ctx);
-    const ridA = zlink.RoutingId.from('async-target-a');
-    const ridB = zlink.RoutingId.from('async-target-b');
-    dealerA.setRoutingId(ridA);
-    dealerB.setRoutingId(ridB);
-    router.options.sendHwm = 4096n;
-    router.options.sendTimeout = 2_000;
-    dealerA.options.recvHwm = 4096n;
-    dealerB.options.recvHwm = 4096n;
-    router.bind(endpoint('isolation'));
-    const address = router.options.lastEndpoint;
-    dealerA.connect(address);
-    dealerB.connect(address);
+test('managed PAIR send resolves from Core completion and consumes at submit', async () => {
+    const context = zlink.createContext();
+    const sender = zlink.createPairSocket(context);
+    const receiver = zlink.createPairSocket(context);
+    sender.bind(endpoint('inline'));
+    receiver.connect(sender.options.lastEndpoint);
+    const payload = zlink.Message.from('completion');
     try {
-        await registerDealer(dealerA, router, 'register-a');
-        await registerDealer(dealerB, router, 'register-b');
-        const payload = Buffer.alloc(64 * 1_024, 0x61);
-        await router.send(ridA).message(payload).submit();
-        const pendingMessage = zlink.Message.from(payload);
-        let pendingSettled = false;
-        const pendingA = router.send(ridA).message(pendingMessage).submit();
-        pendingA.then(() => { pendingSettled = true; }, () => { pendingSettled = true; });
-        await nextTurn();
-        assert.equal(pendingSettled, false);
-        assert.equal(pendingMessage.size(), payload.length);
-        await within(router.send(ridB).message(payload).submit());
-        const receivedB = new zlink.Received();
-        assert.equal(dealerB.recv(receivedB), true);
-        assert.equal(receivedB.singlePartOrThrow().size(), payload.length);
-        receivedB.close();
-        const firstA = new zlink.Received();
-        assert.equal(dealerA.recv(firstA), true);
-        firstA.close();
-        await within(pendingA);
-        assert.equal(pendingMessage.size(), 0);
-        const secondA = new zlink.Received();
-        assert.equal(dealerA.recv(secondA), true);
-        assert.equal(secondA.singlePartOrThrow().size(), payload.length);
-        secondA.close();
-        pendingMessage.close();
+        const result = sender.send().message(payload).submit();
+        assert.equal(typeof result.then, 'function');
+        await result;
+        assert.equal(payload.size(), 0);
+        const received = new zlink.Received();
+        assert.equal(receiver.recv(received), true);
+        assert.equal(received.singlePartOrThrow().getString(), 'completion');
+        received.close();
     }
     finally {
-        await closeEventually(dealerB);
-        await closeEventually(dealerA);
-        await closeEventually(router);
-        ctx.close();
+        closeAll(context, sender, receiver);
+        payload.close();
     }
 });
-test('terminal wake fails only the detached exact target', async () => {
-    const ctx = zlink.createContext();
-    ctx.options.autoHwmEnabled = false;
-    const router = zlink.createRouterSocket(ctx);
-    const dealerA = zlink.createDealerSocket(ctx);
-    const dealerB = zlink.createDealerSocket(ctx);
-    const ridA = zlink.RoutingId.from('terminal-target-a');
-    const ridB = zlink.RoutingId.from('terminal-target-b');
-    dealerA.setRoutingId(ridA);
-    dealerB.setRoutingId(ridB);
-    router.options.sendHwm = 4096n;
-    router.options.sendTimeout = -1;
-    dealerA.options.recvHwm = 4096n;
-    dealerB.options.recvHwm = 4096n;
-    router.bind(endpoint('terminal'));
-    const address = router.options.lastEndpoint;
-    dealerA.connect(address);
-    dealerB.connect(address);
+test('Core timeout maps to per-operation SubmitError with the Core errno', async () => {
+    const context = zlink.createContext();
+    context.options.autoHwmEnabled = false;
+    const sender = zlink.createPairSocket(context);
+    const receiver = zlink.createPairSocket(context);
+    sender.options.sendHwm = 4096n;
+    receiver.options.recvHwm = 4096n;
+    sender.bind(endpoint('timeout'));
+    receiver.connect(sender.options.lastEndpoint);
+    // Multipart routed records remain one-part here until the parallel Core
+    // multipart ROUTER/DEALER defect fix lands.
+    const first = zlink.Message.from(Buffer.alloc(4_096, 0x61));
+    const pending = zlink.Message.from(Buffer.alloc(4_096, 0x62));
     try {
-        await registerDealer(dealerA, router, 'register-a');
-        await registerDealer(dealerB, router, 'register-b');
-        const payload = Buffer.alloc(64 * 1_024, 0x62);
-        await router.send(ridA).message(payload).submit();
-        const pendingA = router.send(ridA).message(payload).submit();
-        await nextTurn();
-        await closeEventually(dealerA);
-        await assert.rejects(within(pendingA), (error) => error instanceof zlink.SubmitError
-            && error.result === zlink.SubmitResult.NotConnected);
-        await within(router.send(ridB).message('target-b-still-writable').submit());
-        const receivedB = new zlink.Received();
-        assert.equal(dealerB.recv(receivedB), true);
-        assert.equal(receivedB.singlePartOrThrow().getString(), 'target-b-still-writable');
-        receivedB.close();
+        await sender.send().message(first).submit();
+        await assert.rejects(within(sender.send().message(pending).timeout(20).submit()), (error) => error instanceof zlink.SubmitError
+            && error.result === zlink.SubmitResult.Backpressured
+            && error.nativeErrno !== 0);
+        // Ownership transfers when zlink_send_async returns OK, even when the
+        // eventual Core completion is TIMED_OUT.
+        assert.equal(pending.size(), 0);
     }
     finally {
-        await closeEventually(dealerB);
-        await closeEventually(dealerA);
-        await closeEventually(router);
-        ctx.close();
+        closeAll(context, sender, receiver);
+        first.close();
+        pending.close();
     }
 });
-test('request waits for exact HWM readiness and preserves fast-reply correlation', async () => {
-    const ctx = zlink.createContext();
-    ctx.options.autoHwmEnabled = false;
-    const router = zlink.createRouterSocket(ctx);
-    const dealer = zlink.createDealerSocket(ctx);
-    const rid = zlink.RoutingId.from('request-hwm-target');
-    dealer.setRoutingId(rid);
-    dealer.options.sendHwm = 4096n;
-    router.options.recvHwm = 4096n;
-    const address = endpoint('request');
-    router.bind(address);
-    dealer.connect(address);
+test('Core terminal completion rejects a pending send without a binding cancel API', async () => {
+    const context = zlink.createContext();
+    context.options.autoHwmEnabled = false;
+    const sender = zlink.createPairSocket(context);
+    const receiver = zlink.createPairSocket(context);
+    sender.options.sendHwm = 4096n;
+    receiver.options.recvHwm = 4096n;
+    sender.bind(endpoint('terminal'));
+    receiver.connect(sender.options.lastEndpoint);
+    const first = zlink.Message.from(Buffer.alloc(4_096, 0x63));
+    const pending = zlink.Message.from(Buffer.alloc(4_096, 0x64));
     try {
-        await registerDealer(dealer, router, 'register-request-route');
-        const payload = Buffer.alloc(64 * 1_024, 0x63);
-        await dealer.send().message(payload).submit();
-        let requestSettled = false;
-        const reply = dealer.request()
-            .message('request-after-hwm')
-            .timeout(2_000)
-            .submit();
-        reply.then(() => { requestSettled = true; }, () => { requestSettled = true; });
+        await sender.send().message(first).submit();
+        const result = sender.send().message(pending).timeout(-1).submit();
         await nextTurn();
-        assert.equal(requestSettled, false);
-        const occupying = new zlink.Received();
-        assert.equal(router.recv(occupying), true);
-        occupying.close();
-        const request = await receiveWithin(router);
-        assert.equal(request.singlePartOrThrow().getString(), 'request-after-hwm');
-        assert.ok(request.requestSeq > 0n);
-        request.reply().message('reply-after-hwm').submit();
+        sender.close();
+        await assert.rejects(within(result), (error) => error instanceof zlink.SubmitError
+            && error.result === zlink.SubmitResult.Terminated
+            && error.nativeErrno !== 0);
+        assert.equal(pending.size(), 0);
+    }
+    finally {
+        closeAll(context, sender, receiver);
+        first.close();
+        pending.close();
+    }
+});
+test('request Promise is settled only by the Core reply callback', async () => {
+    const context = zlink.createContext();
+    const router = zlink.createRouterSocket(context);
+    const dealer = zlink.createDealerSocket(context);
+    dealer.setRoutingId(zlink.RoutingId.from('request-client'));
+    router.bind(endpoint('request'));
+    dealer.connect(router.options.lastEndpoint);
+    try {
+        const replyPromise = dealer.request().message('request').timeout(1_000).submit();
+        let request = null;
+        for (let attempt = 0; attempt < 100 && !request; attempt += 1) {
+            const candidate = new zlink.Received();
+            if (router.recv(candidate, zlink.RecvFlags.DontWait))
+                request = candidate;
+            else
+                candidate.close();
+            if (!request)
+                await nextTurn();
+        }
+        assert.ok(request);
+        request.reply().message('reply').submit();
+        const parts = await within(replyPromise);
+        assert.equal(parts.length, 1);
+        assert.equal(parts[0].getString(), 'reply');
+        parts[0].close();
         request.close();
-        const replyParts = await within(reply);
-        assert.equal(replyParts.length, 1);
-        assert.equal(replyParts[0].getString(), 'reply-after-hwm');
-        for (const part of replyParts)
-            part.close();
     }
     finally {
-        await closeEventually(dealer);
-        await closeEventually(router);
-        ctx.close();
-    }
-});
-test('absolute timeout and socket close settle pending sends once without consuming input', async () => {
-    const ctx = zlink.createContext();
-    ctx.options.autoHwmEnabled = false;
-    const router = zlink.createRouterSocket(ctx);
-    const dealer = zlink.createDealerSocket(ctx);
-    const rid = zlink.RoutingId.from('deadline-target');
-    dealer.setRoutingId(rid);
-    router.options.sendHwm = 4096n;
-    router.options.sendTimeout = 25;
-    dealer.options.recvHwm = 4096n;
-    const address = endpoint('deadline');
-    router.bind(address);
-    dealer.connect(address);
-    try {
-        await registerDealer(dealer, router, 'register-deadline-route');
-        const payload = Buffer.alloc(64 * 1_024, 0x64);
-        await router.send(rid).message(payload).submit();
-        const timedOutMessage = zlink.Message.from(payload);
-        await assert.rejects(within(router.send(rid).message(timedOutMessage).submit(), 500), (error) => error instanceof zlink.SubmitError
-            && error.result === zlink.SubmitResult.Backpressured);
-        assert.equal(timedOutMessage.size(), payload.length);
-        router.options.sendTimeout = -1;
-        const closedMessage = zlink.Message.from(payload);
-        const pendingClose = router.send(rid).message(closedMessage).submit();
-        await nextTurn();
-        await closeEventually(router);
-        await assert.rejects(within(pendingClose, 500), (error) => error instanceof zlink.SubmitError
-            && error.result === zlink.SubmitResult.Terminated);
-        assert.equal(closedMessage.size(), payload.length);
-        timedOutMessage.close();
-        closedMessage.close();
-    }
-    finally {
-        await closeEventually(dealer);
-        await closeEventually(router);
-        ctx.close();
+        closeAll(context, dealer, router);
     }
 });

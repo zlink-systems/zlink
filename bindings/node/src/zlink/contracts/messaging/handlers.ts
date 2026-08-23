@@ -4,9 +4,6 @@ import type { RoutingId } from '../core';
 import type { MonitorEvent } from '../eventing';
 import type { Message } from './message';
 
-/** Invoked when a socket can accept more sends after back-pressure. */
-export type SocketSendReadyHandler = () => void;
-
 /** Invoked for each inbound framed packet; the callback owns both messages. */
 export type StreamPacketHandler = (
   sourceRid: RoutingId,

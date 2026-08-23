@@ -22,7 +22,7 @@ import {
   normalizeOperationPayload,
 } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
-import { ConnectableSocket, SendReadySocket } from './socket_base';
+import { ConnectableSocket } from './socket_base';
 import {
   Message,
   Received,
@@ -42,13 +42,13 @@ import {
 import type {
   SubscriptionEntry,
   SendOperation,
+  PublishOperation as PublishOperationContract,
 } from '../../contracts/messaging';
 import {
-  AsyncPublishOperation,
   PublishOperation,
   RuntimeSendOperation,
 } from './socket_operation_builders';
-import { PublisherAdmission } from './publisher_admission';
+import { SendCompletionOwner } from '../messaging/send_completion';
 export {
   ImmediateRoutedRuntimeSendOperation,
   ManagedRoutedRuntimeSendOperation,
@@ -61,7 +61,7 @@ import { submitErrorFromResult } from './socket_submit_errors';
 
 const native = requireNative();
 
-export class ReceiveSocket extends SendReadySocket {
+export class ReceiveSocket extends ConnectableSocket {
   /**
    * Receives into caller-provided storage. Pass a long-lived {@link Received}
    * and the binding refills its internal state in place each successful call.
@@ -102,58 +102,37 @@ export class ReceiveSocket extends SendReadySocket {
 }
 
 export class SendSocket extends ReceiveSocket {
-  private readonly sendOperation = {
-    submit: (parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
-      this.sendDirect(parts, flags),
-  };
-
-  send(): SendOperation {
-    return new RuntimeSendOperation(this.sendOperation.submit);
-  }
-  protected sendDirect(payloadOrParts: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
-    const payload = normalizeMessageLikePayload(payloadOrParts);
-    if ((flags | 0) & (SendFlags.DontWait | 0)) {
-      let result;
-      try {
-        result = Array.isArray(payload)
-          ? native.socketSendNoWaitResultParts(getNativeHandle(this), payload) as number
-          : native.socketSendNoWaitResult(getNativeHandle(this), payload) as number;
-      } catch (error) {
-        throw submitNativeError(error, flags, 'send failed');
-      }
-      if (result === SubmitResult.Ok) return true;
-      if (result === SubmitResult.Backpressured) return false;
-      throw submitErrorFromResult(result as SubmitResult, 'send failed');
-    }
-    try {
-      if (Array.isArray(payload)) {
-        native.socketSendParts(getNativeHandle(this), payload, flags | 0);
-      } else {
-        native.socketSend(getNativeHandle(this), payload, flags | 0);
-      }
-      return true;
-    } catch (error) {
-      throw submitNativeError(error, flags, 'send failed');
-    }
-  }
-}
-
-export class PublisherSocket extends SendReadySocket {
-  private readonly admission: PublisherAdmission;
-  private lastPublishTopic: string | undefined;
-  private lastValidatedPublishTopic: string | undefined;
-  private readonly publishInvoker =
-    (topic: string, payload: MessageLike | readonly MessageLike[], flags: SendFlags) =>
-      this.publishDirect(topic, payload, flags);
+  private readonly sendCompletion: SendCompletionOwner;
 
   constructor(ctx: import('../core/context').RuntimeContext, type: number) {
     super(ctx, type);
-    this.admission = new PublisherAdmission(getNativeHandle(this), () => this.publisherSendTimeout());
+    try {
+      this.sendCompletion = new SendCompletionOwner(getNativeHandle(this));
+    } catch (error) {
+      super.close();
+      throw error;
+    }
   }
 
-  protected publisherSendTimeout(): number { return -1; }
+  send(): SendOperation {
+    return new RuntimeSendOperation((payload, timeoutMs) =>
+      this.sendCompletion.submit(payload, timeoutMs, null)
+    );
+  }
+}
 
-  publish(topic: string): SendOperation {
+export class PublisherSocket extends ConnectableSocket {
+  private lastPublishTopic: string | undefined;
+  private lastValidatedPublishTopic: string | undefined;
+  private readonly publishInvoker =
+    (topic: string, payload: MessageLike | readonly MessageLike[]) =>
+      this.publishDirect(topic, payload);
+
+  constructor(ctx: import('../core/context').RuntimeContext, type: number) {
+    super(ctx, type);
+  }
+
+  publish(topic: string): PublishOperationContract {
     const normalizedTopic = topic === this.lastPublishTopic
       ? this.lastValidatedPublishTopic!
       : validateCString(topic, 'topic', Number.MAX_SAFE_INTEGER);
@@ -163,29 +142,6 @@ export class PublisherSocket extends SendReadySocket {
       this.publishInvoker,
       normalizedTopic
     );
-  }
-  publishAsync(topic: string): import('../../contracts/messaging').AsyncSendOperation {
-    const normalizedTopic = topic === this.lastPublishTopic
-      ? this.lastValidatedPublishTopic!
-      : validateCString(topic, 'topic', Number.MAX_SAFE_INTEGER);
-    this.lastPublishTopic = topic;
-    this.lastValidatedPublishTopic = normalizedTopic;
-    return new AsyncPublishOperation(
-      (publishTopic, payload, timeoutMs, startedAt) => this.admission.submit(
-        publishTopic,
-        payload,
-        timeoutMs,
-        startedAt
-      ),
-      normalizedTopic
-    );
-  }
-  setSendReadyHandler(handler: import('../../contracts/messaging').SocketSendReadyHandler): void {
-    this.admission.setObserver(handler);
-  }
-  close(): void {
-    this.admission.close();
-    super.close();
   }
   /** @internal */
   publishDirect(topic: string, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
@@ -273,7 +229,7 @@ export class SubscriberSocket extends ConnectableSocket {
   }
 }
 
-export class RoutedMessageSocket extends SendReadySocket {
+export class RoutedMessageSocket extends ConnectableSocket {
   private readonly receivedOperations = {
     send: (routingId: Buffer, parts: readonly Message[], flags: SendFlags) =>
       this.sendDirectRaw(routingId, parts, flags),

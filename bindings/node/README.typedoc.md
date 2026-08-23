@@ -25,14 +25,14 @@ bindings/node/typedoc/html/index.html
 
 - Public exports from `src/index.ts`
 - Socket types and domain objects
-- Message and result types (`Message`, `Received`, `SendResult`)
+- Message and result types (`Message`, `Received`, `SubmitError`)
 - Constants and enums (`SocketType`, `SocketOption`)
 - Internal symbols marked `@internal` are excluded
 
 ## Callback Handler Capacity
 
-Native callback delivery uses fixed thread-safe-function slots. The binding
-supports up to eight concurrently attached handlers for each callback family:
-stream packet handlers, send-ready handlers, socket monitor handlers, and
-timer fire handlers. Close the owning socket, monitor, or timer before
-attaching more handlers in the same family.
+Send completion and request reply callbacks are installed once per socket and
+use N-API thread-safe functions only to deliver completion data into
+JavaScript. The callback does not submit, wait, retry, or own a binding queue.
+There is no send-ready or publisher-admission callback surface. Stream packet,
+socket monitor, and timer callbacks retain their existing delivery limits.

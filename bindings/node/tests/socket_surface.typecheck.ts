@@ -15,7 +15,7 @@ const poller = zlink.createPoller();
 const events = zlink.createPollEvents(8);
 const timer = zlink.createTimer();
 
-const pairSend: boolean = pair.send().message('one').message(Buffer.from('two')).submit();
+const pairSend: Promise<void> = pair.send().message('one').message(Buffer.from('two')).submit();
 const received = new zlink.Received();
 pair.recv(received, zlink.RecvFlags.DontWait);
 pair.recvRetained(received, zlink.RecvFlags.DontWait);
@@ -24,7 +24,7 @@ router.recvRetained(received, zlink.RecvFlags.DontWait);
 stream.recvRetained(received, zlink.RecvFlags.DontWait);
 received.parts;
 
-const pubSend: boolean = pub.publish('topic').message('payload').submit();
+const pubSend: void = pub.publish('topic').message('payload').submit();
 sub.setSubscription('topic');
 const topicMessage = new zlink.TopicMessage();
 sub.subscribe(topicMessage, zlink.RecvFlags.DontWait);
@@ -77,9 +77,7 @@ router.reply(routingId, 1n).message('reply').submit();
 stream.setRoutingId(routingId);
 const streamSend: Promise<void> = stream.send(routingId).message('packet').timeout(1).submit();
 const streamTrySend: boolean = stream.trySend(routingId).message('packet').submit();
-const publisherAsync: Promise<void> = pub.publishAsync('events').message('packet').submit();
 void streamTrySend;
-void publisherAsync;
 void streamSend;
 stream.setPacketHandler((_source, header, body) => {
   header.size();
@@ -98,6 +96,10 @@ void flowPauseAppliedTotal;
 void flowResumeAppliedTotal;
 void flowStateStaleTotal;
 void flowPauseDurationMs;
+// @ts-expect-error Core-completion sends do not expose compatibility flags
+pair.send().message('legacy').flags(zlink.SendFlags.DontWait);
+// @ts-expect-error publish is synchronous and has no binding timeout stage
+pub.publish('events').message('legacy').timeout(1);
 // The flow events are part of the same MonitorEventType union as every
 // other socket monitor lifecycle event, and MonitorEvent.value is a
 // lossless uint64 bigint.

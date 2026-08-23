@@ -9,7 +9,7 @@ export interface PartBuilder<TNext> {
   message(message: MessageLike): TNext;
 }
 
-/** Builder stage that sets send flags and returns the next stage. */
+/** Builder stage that sets send flags for an immediate raw operation. */
 export interface Flaggable<TNext> {
   /** Set the send flags applied at submit time. */
   flags(flags: SendFlags): TNext;
@@ -21,44 +21,41 @@ export interface Timeoutable<TNext> {
   timeout(timeoutMs: number): TNext;
 }
 
-/**
- * Builds a multipart send: add parts, then submit.
- *
- * Submitting consumes the added {@link Message} parts: on a successful submit
- * each part's payload is moved into the transport and the managed message is
- * left empty, so a part must not be reused after a successful submit. The
- * request and reply builders share this same consume-on-submit ownership model.
- */
+/** Builds a Core-completion-driven multipart send. */
 export interface SendOperation extends PartBuilder<SendSubmitOperation> {}
 
-/** Accepts further parts, flags, and the terminal submit of a send. */
+/** Accepts further parts, an optional per-operation timeout, and submit. */
 export interface SendSubmitOperation
-  extends PartBuilder<SendSubmitOperation>, Flaggable<SendSubmitOperation> {
-  /**
-   * Submit the accumulated parts. Return true when queued, and false only when
-   * `SendFlags.DontWait` is set and the send would have blocked (back-pressure).
-   */
-  submit(): boolean;
-}
-
-/** Builds a binding-owned asynchronous admission wait for one send record. */
-export interface AsyncSendOperation extends PartBuilder<AsyncSendSubmitOperation> {}
-
-/** Async send terminal: Core, rather than a Framework retry queue, owns readiness. */
-export interface AsyncSendSubmitOperation
-  extends PartBuilder<AsyncSendSubmitOperation>, Timeoutable<AsyncSendSubmitOperation> {
-  /** Resolve after Core accepts the complete record; reject on timeout or terminal failure. */
+  extends PartBuilder<SendSubmitOperation>, Timeoutable<SendSubmitOperation> {
+  /** Resolve when Core reports send completion; reject on timeout or terminal failure. */
   submit(): Promise<void>;
 }
 
-/** Builds a DEALER/ROUTER send whose terminal waits asynchronously for Core admission. */
+/** Builds a DEALER/ROUTER/STREAM routed send. */
 export interface RoutedSendOperation extends PartBuilder<RoutedSendSubmitOperation> {}
 
-/** Accepts further routed parts and exposes the sole managed terminal. */
+/** Accepts further routed parts, a per-operation timeout, and submit. */
 export interface RoutedSendSubmitOperation
   extends PartBuilder<RoutedSendSubmitOperation>, Timeoutable<RoutedSendSubmitOperation> {
   /** Resolve after Core accepts the complete record; reject on terminal failure. */
   submit(): Promise<void>;
+}
+
+/** Immediate raw send retained for STREAM relay/try-send surfaces. */
+export interface ImmediateSendOperation extends PartBuilder<ImmediateSendSubmitOperation> {}
+
+/** Immediate raw send accepts flags and reports whether Core admitted it. */
+export interface ImmediateSendSubmitOperation
+  extends PartBuilder<ImmediateSendSubmitOperation>, Flaggable<ImmediateSendSubmitOperation> {
+  submit(): boolean;
+}
+
+/** Builds a synchronous lossy PUB/XPUB publish. */
+export interface PublishOperation extends PartBuilder<PublishSubmitOperation> {}
+
+/** PUB/XPUB submit is void-or-throw; Core owns lossy/NODROP behavior. */
+export interface PublishSubmitOperation extends PartBuilder<PublishSubmitOperation> {
+  submit(): void;
 }
 
 /** Builds a request: add the request parts, then submit and await a reply. */

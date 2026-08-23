@@ -172,7 +172,7 @@ test('dealer and router retained recv preserve typed metadata and multipart leas
     request.reply().message('reply').submit();
     request.close();
     assert.equal(ctx.getCoreHwmBudgetSnapshot().outstandingApplicationLeaseCount, 0n);
-    // Request progress intentionally uses an unref'ed interval so a pending
+    // The Core request callback bridge is intentionally unref'ed so a pending
     // request never keeps an application alive by itself. Keep this test alive
     // until the native callback settles the Promise.
     const keepAlive = setInterval(() => { }, 10);

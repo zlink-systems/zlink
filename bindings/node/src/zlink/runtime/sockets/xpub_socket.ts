@@ -19,7 +19,6 @@ import { RecvFlags, SocketType as NativeSocketType } from '../../contracts/socke
 export class XPubSocket extends PublisherSocket {
   readonly options: PubSocketOptions;
   constructor(ctx: Context) { super(ctx, NativeSocketType.XPUB); this.options = PubSocketOptions.create(this); }
-  protected publisherSendTimeout(): number { return this.options.sendTimeout; }
   receiveSubscriptionEvent(result: SubscriptionEvent, flags?: RecvFlags): boolean;
   receiveSubscriptionEvent(resultOrFlags: SubscriptionEvent | RecvFlags = RecvFlags.None,
                            maybeFlags: RecvFlags = RecvFlags.None): SubscriptionEvent | null | boolean {

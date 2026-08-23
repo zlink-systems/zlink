@@ -13,6 +13,17 @@ export function submitErrorFromResult(result: SubmitResult, message: string): Su
   return withRuntimeErrorMessage(new SubmitError(result, 0), message);
 }
 
+export function submitErrorFromNativeResult(
+  result: number,
+  nativeErrno: number,
+  message: string
+): SubmitError {
+  return withRuntimeErrorMessage(
+    new SubmitError(result as SubmitResult, nativeErrno),
+    message
+  );
+}
+
 export function normalizeReplyFlags(flags: SendFlags = SendFlags.None): SendFlags {
   const normalized = flags | 0;
   if (normalized !== SendFlags.None) {

@@ -14,10 +14,6 @@ import {
   readErrno,
   recvNativeError,
 } from '../errors/native_errors';
-import {
-  acquireExternalRequestProgress,
-  releaseExternalRequestProgress,
-} from '../messaging/request_progress';
 import { getNativeHandle } from '../handles/native_handle';
 import { requireNative } from '../native/native';
 import { flagsToMask } from '../sockets/socket_options';
@@ -36,7 +32,6 @@ function validateSlot(slot: number): number {
 
 export class Poller {
   private _native: unknown | null;
-  private readonly _externalProgressHandles = new Set<unknown>();
   private readonly _socketRegistrations = new Map<
     BasePollable,
     { events: number; handle: unknown; slot: number }
@@ -126,10 +121,6 @@ export class Poller {
       });
       this._native = null;
     }
-    for (const handle of this._externalProgressHandles) {
-      releaseExternalRequestProgress(handle);
-    }
-    this._externalProgressHandles.clear();
     this._socketRegistrations.clear();
   }
 
@@ -145,11 +136,6 @@ export class Poller {
         handle,
         slot: normalizedSlot,
       });
-      if ((events & PollEventFlag.PollCompletion) !== 0) {
-        const handle = getNativeHandle(socket);
-        acquireExternalRequestProgress(handle);
-        this._externalProgressHandles.add(handle);
-      }
     } catch (error) {
       throw createError('config', readErrno(), nativeErrorMessage(error, 'poller socket add failed'));
     }
@@ -162,25 +148,12 @@ export class Poller {
     });
     const registration = this._socketRegistrations.get(socket);
     if (registration) registration.events = events | 0;
-    const hasExternal = this._externalProgressHandles.has(handle);
-    const wantsExternal = (events & PollEventFlag.PollCompletion) !== 0;
-    if (wantsExternal && !hasExternal) {
-      acquireExternalRequestProgress(handle);
-      this._externalProgressHandles.add(handle);
-    } else if (!wantsExternal && hasExternal) {
-      releaseExternalRequestProgress(handle);
-      this._externalProgressHandles.delete(handle);
-    }
   }
 
   private removeSocketInternal(socket: BasePollable): boolean {
     configCall('poller socket remove failed', () => {
       requireNative().pollerRemove(this._native, getNativeHandle(socket));
     });
-    const handle = getNativeHandle(socket);
-    if (this._externalProgressHandles.delete(handle)) {
-      releaseExternalRequestProgress(handle);
-    }
     this._socketRegistrations.delete(socket);
     return true;
   }

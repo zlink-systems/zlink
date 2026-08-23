@@ -78,23 +78,43 @@ test('package exports expose only the public root', () => {
   assert.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
 
-test('managed routed admission uses only exact per-part Core APIs', () => {
-  const nativeBridge = fs.readFileSync(
-    path.resolve(__dirname, '../../native/src/addon_routed_admission.cc'),
+test('Node async surfaces use Core completion callbacks and have no readiness admission files', () => {
+  const nativeRoot = path.resolve(__dirname, '../../native/src');
+  const sourceRoot = path.resolve(__dirname, '../../src/zlink');
+  const gyp = fs.readFileSync(path.resolve(__dirname, '../../binding.gyp'), 'utf8');
+  const nativeBridge = fs.readFileSync(path.join(nativeRoot, 'addon_core.cc'), 'utf8');
+  const requestBridge = fs.readFileSync(path.join(nativeRoot, 'addon_request_callbacks.cc'), 'utf8');
+  const socketBinding = fs.readFileSync(
+    path.join(sourceRoot, 'runtime/native/binding_socket.ts'),
     'utf8'
   );
+  const sendCompletion = fs.readFileSync(
+    path.join(sourceRoot, 'runtime/messaging/send_completion.ts'),
+    'utf8'
+  );
+
+  assert.equal(fs.existsSync(path.join(nativeRoot, 'addon_routed_admission.cc')), false);
+  assert.equal(fs.existsSync(path.join(sourceRoot, 'runtime/sockets/routed_admission.ts')), false);
+  assert.equal(fs.existsSync(path.join(sourceRoot, 'runtime/sockets/publisher_admission.ts')), false);
+  assert.equal(fs.existsSync(path.join(sourceRoot, 'runtime/messaging/request_progress.ts')), false);
+  assert.equal(gyp.includes('addon_routed_admission.cc'), false);
   for (const symbol of [
-    'zlink_routed_send_ready_handler',
-    'zlink_select_routed_submit_target',
-    'zlink_dealer_send_transport_pair_part',
-    'zlink_dealer_request_transport_pair_part',
-    'zlink_send_part_transport_pair',
-    'zlink_router_request_transport_pair_part'
+    'zlink_send_complete_handler',
+    'zlink_send_async',
+    'napi_create_threadsafe_function',
+    'socket_send_async',
+    'dealer_request',
+    'router_request'
   ]) {
     assert.ok(nativeBridge.includes(symbol), symbol);
   }
-  assert.equal(nativeBridge.includes('zlink_routed_send_parts'), false);
-  assert.equal(nativeBridge.includes('zlink_routed_request_parts'), false);
+  assert.ok(requestBridge.includes('napi_call_threadsafe_function'));
+  assert.ok(socketBinding.includes('socketSendCompletionHandler'));
+  assert.ok(socketBinding.includes('socketSendAsync'));
+  assert.ok(sendCompletion.includes('new Map<bigint, PendingSend>()'));
+  assert.equal(nativeBridge.includes('send_ready'), false);
+  assert.equal(nativeBridge.includes('routed_send_ready'), false);
+  assert.equal(socketBinding.includes('sendReady'), false);
 });
 
 test('bindings samples stay on the Core 0.13.0 raw socket boundary', () => {

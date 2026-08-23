@@ -8,15 +8,15 @@ import {
 import type {
   ReplyOperation,
   ReplySubmitOperation,
-  SendOperation,
-  SendSubmitOperation,
+  ImmediateSendOperation,
+  ImmediateSendSubmitOperation,
 } from '../../contracts/messaging/operations';
 import { SendFlags } from '../../contracts/sockets/socket_constants';
 import { SendOperationBase } from './send_operation_base';
 
 class RuntimeReceivedSendOperation
   extends SendOperationBase<Message | BufferLike, Message>
-  implements SendOperation, SendSubmitOperation {
+  implements ImmediateSendOperation, ImmediateSendSubmitOperation {
   private readonly _invoke: (parts: readonly Message[], flags: SendFlags) => boolean;
 
   constructor(invoke: (parts: readonly Message[], flags: SendFlags) => boolean) {
@@ -55,7 +55,7 @@ class RuntimeReceivedReplyOperation
 
 export function createReceivedSendOperation(
   invoke: (parts: readonly Message[], flags: SendFlags) => boolean
-): SendOperation {
+): ImmediateSendOperation {
   return new RuntimeReceivedSendOperation(invoke);
 }
 

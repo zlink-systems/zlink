@@ -23,8 +23,6 @@ export interface DealerSocket extends ConnectableSocket {
   recv(result: Received, flags?: RecvFlags): boolean;
   /** Receive while retaining the origin Core HWM credit for Framework use. */
   recvRetained(result: Received, flags?: RecvFlags): boolean;
-  /** Register the socket-wide readiness callback used by immediate operations. */
-  setSendReadyHandler(handler: () => void): void;
   /**
    * Set the routing id that identifies this DEALER to its peers. Apply before
    * connecting so peers observe it from the first message.

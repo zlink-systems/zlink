@@ -8,7 +8,7 @@ import {
   ImmediateRoutedRuntimeSendOperation,
   ManagedRoutedRuntimeSendOperation,
 } from './socket_operations';
-import { RoutedAdmission } from './routed_admission';
+import { SendCompletionOwner } from '../messaging/send_completion';
 import { submitErrorFromResult } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
 import {
@@ -40,9 +40,8 @@ import {
   StreamPacketBodyMaterialization
 } from '../../contracts/sockets/socket_constants';
 import type {
+  ImmediateSendOperation,
   RoutedSendOperation,
-  SendOperation,
-  SocketSendReadyHandler,
   StreamPacketHandler,
 } from '../../contracts/messaging';
 
@@ -50,7 +49,7 @@ const native = requireNative();
 
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
-  private readonly admission: RoutedAdmission;
+  private readonly sendCompletion: SendCompletionOwner;
   private readonly _packetRoutingIdCache = new WeakMap<Buffer, RoutingId>();
   private readonly routedSend = {
     submit: (routingId: Buffer,
@@ -62,7 +61,7 @@ export class StreamSocket extends SocketBase {
     super(ctx, NativeSocketType.STREAM);
     this.options = StreamSocketOptions.create(this);
     try {
-      this.admission = new RoutedAdmission(getNativeHandle(this), 'stream');
+      this.sendCompletion = new SendCompletionOwner(getNativeHandle(this));
     } catch (error) {
       super.close();
       throw error;
@@ -71,23 +70,18 @@ export class StreamSocket extends SocketBase {
   send(routingId: RoutingId): RoutedSendOperation {
     const target = normalizeRoutingId(routingId);
     return new ManagedRoutedRuntimeSendOperation(
-      (selector, parts, timeoutMs, startedAt) => {
+      (selector, parts, timeoutMs) => {
         if (Array.isArray(parts)) {
           return Promise.reject(new TypeError(
             'STREAM managed send accepts one FINAL message; submit frames separately'
           ));
         }
-        return this.admission.send(
-          selector,
-          parts,
-          timeoutMs === 0 ? this.options.sendTimeout : timeoutMs,
-          startedAt
-        );
+        return this.sendCompletion.submit(parts, timeoutMs, selector);
       },
       target
     );
   }
-  trySend(routingId: RoutingId): SendOperation {
+  trySend(routingId: RoutingId): ImmediateSendOperation {
     return new ImmediateRoutedRuntimeSendOperation(
       this.routedSend.submit,
       normalizeRoutingId(routingId)
@@ -216,13 +210,8 @@ export class StreamSocket extends SocketBase {
     }
     return wrapped;
   }
-  setSendReadyHandler(handler: SocketSendReadyHandler): void {
-    this.registerSendReadyHandler(handler);
-  }
   close(): void {
-    this.admission.close();
     super.close();
-    this.admission.finishClose();
   }
   setRoutingId(routingId: RoutingId): void {
     const normalizedRoutingId = normalizeRoutingId(routingId);

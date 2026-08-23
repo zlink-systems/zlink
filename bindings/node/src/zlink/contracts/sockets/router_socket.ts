@@ -33,11 +33,6 @@ export interface RouterSocket extends ConnectableSocket {
    */
   recvRetained(result: Received, flags?: RecvFlags): boolean;
   /**
-   * Register a callback invoked when the socket can accept more sends after
-   * back-pressure. The callback runs on a background dispatch thread.
-   */
-  setSendReadyHandler(handler: () => void): void;
-  /**
    * Set the routing id that identifies this ROUTER to its peers. Apply before
    * connecting so peers observe it from the first message.
    */

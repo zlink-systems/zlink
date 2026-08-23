@@ -10,5 +10,4 @@ import { SocketType as NativeSocketType } from '../../contracts/sockets/socket_c
 export class PubSocket extends PublisherSocket {
   readonly options: PubSocketOptions;
   constructor(ctx: Context) { super(ctx, NativeSocketType.PUB); this.options = PubSocketOptions.create(this); }
-  protected publisherSendTimeout(): number { return this.options.sendTimeout; }
 }

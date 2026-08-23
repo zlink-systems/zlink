@@ -91,8 +91,8 @@ async function handshakeRouterSender(port, sender, receiverRoutingId) {
         reply.close();
     }
 }
-// C parity: direct PAIR/PUB roles retain their synchronous terminals, while
-// routed one-way roles await the canonical admission terminal. A transient
+// Core parity: PAIR and routed sends await the canonical completion terminal;
+// PUB/XPUB publish remains synchronous. A transient
 // submit must never become a thrown failure or a silent drop.
 // PERF_SINGLE_TEST_POLICY § 1.4.
 function isTransientSubmit(error) {
@@ -109,8 +109,8 @@ async function submitOnce(kind, socket, body, receiverRoutingId, topic) {
         ? zlink.Message.from(body)
         : body;
     if (kind === 'pubsub') {
-        return socket.publish(topic).message(message)
-            .flags(zlink.SendFlags.DontWait).submit();
+        socket.publish(topic).message(message).submit();
+        return true;
     }
     if (kind === 'router_router') {
         await socket.send(receiverRoutingId).message(message).submit();
@@ -124,7 +124,8 @@ async function submitOnce(kind, socket, body, receiverRoutingId, topic) {
         await socket.send().message(message).submit();
         return true;
     }
-    return socket.send().message(message).flags(zlink.SendFlags.DontWait).submit();
+    await socket.send().message(message).submit();
+    return true;
 }
 // Retry through transient backpressure until accepted (C send_step_retry
 // loop). Returns when the message is on the wire; throws only on a real
@@ -153,8 +154,7 @@ function sleepMillis(ms) {
 }
 async function submitStopOnce(kind, socket, receiverRoutingId, topic) {
     if (kind === 'pubsub') {
-        socket.publish(topic).message(STOP_TOKEN_BYTES)
-            .flags(zlink.SendFlags.None).submit();
+        socket.publish(topic).message(STOP_TOKEN_BYTES).submit();
         return;
     }
     if (kind === 'router_router') {
@@ -165,7 +165,7 @@ async function submitStopOnce(kind, socket, receiverRoutingId, topic) {
         await socket.send().message(STOP_TOKEN_BYTES).submit();
         return;
     }
-    socket.send().message(STOP_TOKEN_BYTES).flags(zlink.SendFlags.None).submit();
+    await socket.send().message(STOP_TOKEN_BYTES).submit();
 }
 async function sendStopToken(kind, socket, receiverRoutingId, topic) {
     // PERF_SINGLE_TEST_POLICY § 1.4 / C send_stop_token_with_retry

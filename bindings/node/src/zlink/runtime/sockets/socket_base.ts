@@ -8,14 +8,12 @@ import {
   closeCall,
   configCall,
   connectCall,
-  handlerCall,
   lastError
 } from '../errors/native_errors';
 import { validateCString } from '../options/validation';
 import { RoutingId } from '../../contracts';
 import { type MonitorEventType } from '../../contracts/eventing';
 import { SOCKET_MONITOR_EVENT_ALL, type ReceiveFlowState } from '../../contracts/sockets/socket_constants';
-import type { SocketSendReadyHandler } from '../../contracts/messaging';
 import { normalizeRoutingId } from '../core/routing_id';
 import { MonitorSocket } from '../eventing/monitor_socket';
 import { validateUInt64 } from '../options/byte_values';
@@ -109,12 +107,6 @@ export class SocketBase extends NativeHandle {
     ));
   }
 
-  protected registerSendReadyHandler(handler: SocketSendReadyHandler): void {
-    handlerCall('send-ready handler registration failed', () => {
-      requireNative().socketSendReadyHandler(getNativeHandle(this), handler);
-    });
-  }
-
   close(): void {
     if (!this._native) return;
     closeCall('socket close failed', () => {
@@ -157,11 +149,5 @@ export class ConnectableSocket extends SocketBase {
         transportPairGeneration
       );
     });
-  }
-}
-
-export class SendReadySocket extends ConnectableSocket {
-  setSendReadyHandler(handler: SocketSendReadyHandler): void {
-    this.registerSendReadyHandler(handler);
   }
 }

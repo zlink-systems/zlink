@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { SubmitError, SubmitResult } from '../errors/errors';
-import type { ReplyOperation, SendOperation } from './operations';
+import type { ImmediateSendOperation, ReplyOperation } from './operations';
 import { RoutingId } from '../core/routing_id';
 import { MessagePartsEnvelope } from './message_parts_envelope';
 
@@ -10,7 +10,7 @@ interface ReplyContext {
 }
 
 interface SendContext {
-  beginSend(): SendOperation;
+  beginSend(): ImmediateSendOperation;
 }
 
 function invalidReplyContextError(): SubmitError {
@@ -33,9 +33,9 @@ function invalidSendContextError(): SubmitError {
  * a per-receive allocation.
  */
 export class Received extends MessagePartsEnvelope {
-  /** Source transport identity used by framework routing admission. */
+  /** Source transport identity available to exact raw relay paths. */
   transportPairId?: bigint;
-  /** Source transport generation used by framework routing admission. */
+  /** Source transport generation available to exact raw relay paths. */
   transportPairGeneration?: bigint;
   /** The source routing id, or null when the receive path provides none. */
   routingId: RoutingId | null;
@@ -73,7 +73,7 @@ export class Received extends MessagePartsEnvelope {
    * submit. Parts are consumed on a successful submit. Throws when the envelope
    * carries no send context.
    */
-  send(): SendOperation {
+  send(): ImmediateSendOperation {
     if (!this._sendContext) {
       throw invalidSendContextError();
     }

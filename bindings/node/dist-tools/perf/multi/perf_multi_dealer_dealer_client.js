@@ -14,7 +14,7 @@ const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // is the SENDER. It creates one DEALER socket per client (connect),
 // prints CLIENT_READY,<size>, waits START,<size> from stdin, runs the
 // per-socket bounded send window (run_send_window ~142-265). This binding
-// awaits routed admission instead of using the removed DONTWAIT terminal,
+// awaits the Core send-completion terminal instead of using the removed DONTWAIT terminal,
 // then sends exactly ONE wire stop token per socket
 // (run_single_size_case ~290-293 / send_stop_token ~114-140). The
 // matching RECEIVER/MEASURER is perf_multi_dealer_dealer_server.cpp.

@@ -65,7 +65,7 @@ function applySocketPolicy(
   // the 200ms default on every benchmark socket UNCONDITIONALLY, and
   // returns early (no timeouts) only for the inproc transport. Direct
   // synchronous roles still use DONTWAIT + poller waits; routed roles await
-  // the canonical admission terminal. Match C's timeout policy: skip for
+  // the canonical Core completion terminal. Match C's timeout policy: skip for
   // inproc, otherwise apply the C default.
   const transport = String(
     options.transport || process.env.PERF_MULTI_TRANSPORT || ''
@@ -223,7 +223,9 @@ function trySocketSend(socket, ...args) {
   try {
     const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
     const payload = routed ? args[1] : args[0];
-    let op = routed ? socket.send(args[0]) : socket.send();
+    // STREAM packet callbacks keep their synchronous raw trySend relay;
+    // managed PAIR/DEALER/ROUTER sends use the completion Promise below.
+    let op = routed ? socket.trySend(args[0]) : socket.trySend();
     const parts = Array.isArray(payload) ? payload : [payload];
     for (const part of parts) {
       op = op.message(part);
@@ -281,7 +283,8 @@ function trySocketPublish(socket, topic, payload) {
     for (const part of parts) {
       op = op.message(part);
     }
-    return op.flags(zlink.SendFlags.DontWait).submit();
+    op.submit();
+    return true;
   } catch (error) {
     if (error instanceof zlink.SubmitError && error.result === zlink.SubmitResult.Backpressured) {
       return false;

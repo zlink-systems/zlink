@@ -7,42 +7,50 @@ import type {
   SubscriptionEntry
 } from './binding_types';
 
-interface NativeRoutedAttemptResult {
+export interface NativeSendCompletionEvent {
+  token: bigint;
+  opId: bigint;
   result: number;
-  nativeErrno: number;
-}
-
-interface NativeRoutedTargetResult extends NativeRoutedAttemptResult {
-  peerRid?: Buffer;
-  transportPairId?: bigint;
-  transportPairGeneration?: bigint;
-}
-
-interface NativeRoutedReadyEvent {
+  terminalErrno: number;
   peerRid: Buffer;
   transportPairId: bigint;
   transportPairGeneration: bigint;
-  state: number;
-  terminalErrno: number;
+}
+
+export interface NativeSendSubmitResult {
+  result: number;
+  nativeErrno: number;
+  opId: bigint;
+  inlineCompletion?: NativeSendCompletionEvent;
 }
 
 export interface SocketNativeBinding {
-  dealerRoutedSendAttempt: (
+  socketSendCompletionHandler: (
     socket: NativeHandle,
-    peerRid: Buffer,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Buffer[]
-  ) => NativeRoutedAttemptResult;
-  dealerRoutedRequestAttempt: (
+    handler: (event: NativeSendCompletionEvent) => void
+  ) => void;
+  socketSendAsync: (
     socket: NativeHandle,
-    peerRid: Buffer,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Buffer[],
+    parts: unknown,
+    timeoutMs: number,
+    routingId: Buffer | null,
+    token: bigint
+  ) => NativeSendSubmitResult;
+  dealerRequest: (
+    socket: NativeHandle,
+    parts: unknown,
     token: bigint,
     timeoutMs: number
-  ) => NativeRoutedAttemptResult;
+  ) => { result: number; nativeErrno: number };
+  routerRequest: (
+    socket: NativeHandle,
+    peerRid: Buffer,
+    parts: unknown,
+    token: bigint,
+    timeoutMs: number,
+    transportPairId?: bigint,
+    transportPairGeneration?: bigint
+  ) => { result: number; nativeErrno: number };
   socketRequestCompletionHandler: (socket: NativeHandle, handler: unknown) => void;
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
@@ -70,29 +78,6 @@ export interface SocketNativeBinding {
     requestSeq: bigint,
     parts: unknown
   ) => void;
-  routerRoutedSendAttempt: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Buffer[]
-  ) => NativeRoutedAttemptResult;
-  streamRoutedSendAttempt: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Buffer[]
-  ) => NativeRoutedAttemptResult;
-  routerRoutedRequestAttempt: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Buffer[],
-    token: bigint,
-    timeoutMs: number
-  ) => NativeRoutedAttemptResult;
   routerSendTransportPair: (
     socket: NativeHandle,
     peerRid: Buffer,
@@ -137,17 +122,6 @@ export interface SocketNativeBinding {
     parts: readonly unknown[],
     flags: number
   ) => void;
-  socketSendReadyHandler: (socket: NativeHandle, handler: unknown) => void;
-  socketRoutedSendReadyHandler: (
-    socket: NativeHandle,
-    handler: (event: NativeRoutedReadyEvent) => void
-  ) => void;
-  socketRoutedAdmissionClose: (socket: NativeHandle) => void;
-  socketRoutedAdmissionBeginClose: (socket: NativeHandle) => void;
-  socketSelectRoutedSubmitTarget: (
-    socket: NativeHandle,
-    routerRid: Buffer | null
-  ) => NativeRoutedTargetResult;
   socketSendRouting: (
     socket: NativeHandle,
     routingId: Buffer,

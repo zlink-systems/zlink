@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { SubscriptionEvent, TopicMessage } from '../messaging';
-import type { AsyncSendOperation, SendOperation } from '../messaging';
+import type { PublishOperation } from '../messaging';
 import type { SubscriptionEntry } from '../messaging';
 import type { RecvFlags } from './socket_constants';
 import type { PubSocketOptions, SubSocketOptions } from './socket_options';
@@ -11,15 +11,8 @@ import type { ConnectableSocket } from './socket';
 export interface PubSocket extends ConnectableSocket {
   /** The PUB-specific typed options facade. */
   readonly options: PubSocketOptions;
-  /** Begin publishing under `topic`; parts are consumed on a successful submit. */
-  publish(topic: string): SendOperation;
-  /** Begin a binding-owned asynchronous publish admission wait. */
-  publishAsync(topic: string): AsyncSendOperation;
-  /**
-   * Register a callback invoked when the socket can accept more sends after
-   * back-pressure. The callback runs on a background dispatch thread.
-   */
-  setSendReadyHandler(handler: () => void): void;
+  /** Begin synchronous lossy publishing under `topic`; submit is void-or-throw. */
+  publish(topic: string): PublishOperation;
 }
 
 /** XPUB socket: like PUB, but also surfaces subscriber subscription and unsubscription events. */
