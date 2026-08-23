@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -21,6 +23,8 @@ const {
 } = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
 const {
   crc32c,
+  decodeCanonicalRelocationSlot,
+  encodeCanonicalRelocationSlot,
   ServiceRelocationAuthorityPayloadCodec,
   serviceRelocationAuthorityApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
@@ -37,6 +41,103 @@ const relocationPublication = {
   targetOwnerId: 'owner-a',
   targetOwnerLeaseGeneration: 13n
 };
+
+const relocationPhases = {
+  preparing: 1,
+  captured: 2,
+  prepared: 3,
+  committed: 4,
+  activating: 5,
+  activated: 6,
+  cleaning: 7,
+  completed: 8,
+  aborted: 9
+};
+const sourceCleanupStates = { pending: 0, completed: 1, sourceLeaseExpired: 2 };
+
+function goldenRelocationSlot(value) {
+  const high = BigInt(value.relocation.high).toString(16).padStart(16, '0');
+  const low = BigInt(value.relocation.low).toString(16).padStart(16, '0');
+  const identity = high + low;
+  return {
+    aggregateId: `${identity.slice(0, 8)}-${identity.slice(8, 12)}`
+      + `-${identity.slice(12, 16)}-${identity.slice(16, 20)}-${identity.slice(20)}`,
+    aggregateGeneration: BigInt(value.aggregateGeneration),
+    targetAttemptGeneration: BigInt(value.targetAttemptGeneration),
+    reference: value.relocationReference,
+    checksumCrc32c: value.relocationChecksumCrc32c,
+    sourceNodeRid: Buffer.from(value.sourceNodeRidHex, 'hex').toString('utf8'),
+    sourceNodeGeneration: BigInt(value.sourceNodeGeneration),
+    sourceOwnerId: value.sourceOwnerId,
+    sourceOwnerLeaseGeneration: BigInt(value.sourceOwnerLeaseGeneration),
+    targetNodeRid: Buffer.from(value.targetNodeRidHex, 'hex').toString('utf8'),
+    targetNodeGeneration: BigInt(value.targetNodeGeneration),
+    targetOwnerId: value.targetOwnerId,
+    targetOwnerLeaseGeneration: BigInt(value.targetOwnerLeaseGeneration),
+    coordinatorOwnerId: value.coordinatorOwnerId,
+    coordinatorLeaseGeneration: BigInt(value.coordinatorLeaseGeneration),
+    coordinatorNodeRid: Buffer.from(value.coordinatorNodeRidHex, 'hex').toString('utf8'),
+    coordinatorNodeGeneration: BigInt(value.coordinatorNodeGeneration),
+    coordinatorExpectedStoreVersion: value.coordinatorExpectedStoreVersion,
+    phase: relocationPhases[value.phase],
+    applicationVersion: BigInt(value.applicationVersion),
+    sourceCleanupState: sourceCleanupStates[value.sourceCleanupState]
+  };
+}
+
+function selectedRelocationBody(hex) {
+  const selected = Buffer.from(hex, 'hex');
+  assert.equal(selected[0], 1);
+  assert.equal(selected.readUInt32BE(1), selected.byteLength - 5);
+  return selected.subarray(5);
+}
+
+test('authority-relocation-state-v1 golden matches the production 21-field slot codec', () => {
+  const fixture = JSON.parse(readFileSync(path.resolve(
+    __dirname,
+    '../../../../runtime/protocol/golden/authority-relocation-state-v1.json'
+  ), 'utf8'));
+  assert(fixture.consumers.includes('node'));
+
+  for (const vector of fixture.valid) {
+    const expected = goldenRelocationSlot(vector.decoded);
+    const body = selectedRelocationBody(vector.hex);
+    const rootAggregateGeneration = vector.rootAggregateGeneration === null
+      ? undefined
+      : BigInt(vector.rootAggregateGeneration);
+    assert.deepEqual(
+      decodeCanonicalRelocationSlot(body, rootAggregateGeneration),
+      expected,
+      vector.name
+    );
+    const encoded = encodeCanonicalRelocationSlot(expected);
+    const selected = Buffer.alloc(encoded.byteLength + 5);
+    selected[0] = 1;
+    selected.writeUInt32BE(encoded.byteLength, 1);
+    encoded.copy(selected, 5);
+    assert.equal(selected.toString('hex'), vector.hex, vector.name);
+    assert.equal(
+      vector.rootAggregateGeneration === null
+        || expected.aggregateGeneration === BigInt(vector.rootAggregateGeneration),
+      true,
+      `${vector.name}: slot/root agreement`
+    );
+  }
+
+  for (const vector of fixture.invalid) {
+    const rootAggregateGeneration = vector.rootAggregateGeneration === null
+      ? undefined
+      : BigInt(vector.rootAggregateGeneration);
+    assert.equal(
+      decodeCanonicalRelocationSlot(
+        selectedRelocationBody(vector.hex),
+        rootAggregateGeneration
+      ),
+      undefined,
+      vector.name
+    );
+  }
+});
 
 function harness(options = {}) {
   const roots = new Map();
@@ -606,39 +707,6 @@ function u64le(value) {
   return result;
 }
 
-function withZeroCanonicalAggregateGeneration(payload) {
-  const bytes = Buffer.from(payload);
-  let offset = 11;
-  offset += 2;
-  offset += 2 + bytes.readUInt16BE(offset);
-  for (const field of ['owner']) {
-    void field;
-    offset += 1 + bytes[offset];
-  }
-  offset += 8;
-  offset += 1 + bytes[offset];
-  offset += 1 + bytes[offset];
-  offset += 8;
-  assert.equal(bytes[offset], 1, 'canonical relocation slot presence');
-  const slotLength = bytes.readUInt32BE(offset + 1);
-  offset += 5;
-  const slotEnd = offset + slotLength;
-  offset += 24;
-  const skipText8 = () => { offset += 1 + bytes[offset]; };
-  skipText8(); offset += 8;
-  skipText8(); offset += 8;
-  skipText8(); offset += 8;
-  skipText8(); offset += 8;
-  skipText8(); offset += 8;
-  skipText8(); offset += 8;
-  offset += 10;
-  assert.equal(bytes[offset], 1, 'canonical relocation extension presence');
-  bytes.writeBigUInt64BE(0n, offset + 1);
-  assert.ok(offset + 9 <= slotEnd);
-  bytes.writeUInt32BE(crc32c(bytes.subarray(0, bytes.byteLength - 4)), bytes.byteLength - 4);
-  return bytes;
-}
-
 test('canonical journal-root classification requires the exact participant and aggregate fence', async () => {
   const context = harness({ relocationEnvelope: true });
   const actorRef = {
@@ -785,29 +853,6 @@ test('canonical ZLJC round-trip preserves a custom reply content type', async ()
     operation => operation()
   );
   assert.equal(decodedReply, '00010203');
-});
-
-test('a zero canonical aggregate generation fails as typed data loss instead of becoming one', async () => {
-  const context = harness({
-    relocationEnvelope: true,
-    mutateAuthorityPayload: withZeroCanonicalAggregateGeneration
-  });
-  const actorRef = {
-    nodeRid: 'node-a',
-    actorId: 'actor-a',
-    objectGeneration: 17n,
-    meshName: 'game'
-  };
-  await assert.rejects(
-    () => context.journal.prepare(
-      actorRef.actorId,
-      { high: 31n, low: 32n },
-      actorRef,
-      Buffer.alloc(0)
-    ),
-    error => error.kind === ZLinkFrameworkErrorKind.DataLost
-      && /no aggregate generation/.test(error.message)
-  );
 });
 
 test('discarding a prepared Join clears the canonical embedded relocation slot', async () => {

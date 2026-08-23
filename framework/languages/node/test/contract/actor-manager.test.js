@@ -2256,7 +2256,7 @@ test('remote relocation failures before READY preserve source ownership and neve
   ]);
 });
 
-test('formal remote join rejection rolls back prepared source movement and preserves ownership', async () => {
+test('cross-owner formal join rejection returns its typed terminal to the source Actor', async () => {
   class PlayerActor {
     constructor(actorId, context) {
       this.actorId = actorId;
@@ -2267,17 +2267,17 @@ test('formal remote join rejection rolls back prepared source movement and prese
     create(context) { return new PlayerActor(context.actorId, context); }
   }
   const node = createMockSpotNode({
+    canonicalJoin: true,
     routingId: rid('node-source'),
     createActor(actorId) { return { nodeRid: rid('node-source'), actorId, generation: 1n }; },
     joinActor(actorRef, targetNodeRid, targetSpotId, request, callback) {
-      const payload = JSON.parse(request.data().toString());
       callback({
         result: 0,
         joinResultCode: 1,
         actor: { ...actorRef, nodeRid: targetNodeRid, generation: 2n },
         joinedSpotId: targetSpotId,
         joinEpoch: 1n
-      }, []);
+      }, [zlink.Message.from('maintenance')]);
       return true;
     }
   });
@@ -2326,13 +2326,21 @@ test('formal remote join rejection rolls back prepared source movement and prese
     })
   });
   const actor = await manager.getOrCreateActor('alice', 'player');
+  const sourceState = manager.getState('alice');
+  sourceState.setNativeActorRef({
+    nodeRid: rid('node-source'),
+    actorId: 'alice',
+    generation: 1n
+  });
+  sourceState.setLocationGeneration(1n);
+  sourceState.setOwnerLeaseGeneration(1n);
 
   const result = await submitDeferredActorJoin(
     actor,
     actor.context.joinSpot('room-target', encodedMessage('join'))
   );
   assert.equal(result.status, 'rejected');
-  assert.equal(Object.hasOwn(result, 'reply'), false);
+  assert.equal(result.reply, 'maintenance');
   assert.equal(relocationStarted, false);
   assert.equal(manager.getState('alice').isMoving, false);
   assert.equal(manager.getState('alice').nativeActorRef.nodeRid.toHex(), rid('node-source').toHex());
@@ -5023,6 +5031,25 @@ function createMockSpotNode(overrides) {
     if (!submitted) throw new Error('formal actor join submit failed');
     return operationId;
   };
+  if (node.canonicalJoin === true) {
+    node.joinActorSpotCanonical ??= (
+      actor,
+      targetNodeRid,
+      targetSpotId,
+      targetGeneration,
+      request,
+      _actorFence,
+      _local,
+      timeoutMs
+    ) => node.joinActorSpot(
+      actor,
+      targetNodeRid,
+      targetSpotId,
+      targetGeneration,
+      request.payload,
+      timeoutMs
+    );
+  }
   const legacyJoinActorEntrySpot = node.joinActorEntrySpot.bind(node);
   node.joinActorEntrySpot = (actor, targetNodeRid, request, timeoutMs) => {
     const operationId = { high: 0n, low: nextOperation++ };

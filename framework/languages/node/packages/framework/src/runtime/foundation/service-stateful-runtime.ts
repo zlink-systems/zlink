@@ -4198,10 +4198,9 @@ export class ServiceStatefulRuntime {
     timeoutMs: number,
     canonical?: ServiceCanonicalActorJoinCandidate
   ): void {
-    const observedActorRoute = this.tryActorFence(actor);
     const actorRoute = canonical === undefined
-      ? observedActorRoute
-      : this.acceptCanonicalActorFence(actor, canonical.actorFence, observedActorRoute);
+      ? this.tryActorFence(actor)
+      : this.acceptCanonicalActorFence(actor, canonical.actorFence);
     if (target === undefined || actorRoute === undefined) {
       this.operations.reply(pending.id, {
         terminalResult: RequestResult.NotFound,
@@ -4929,18 +4928,20 @@ export class ServiceStatefulRuntime {
 
   private acceptCanonicalActorFence(
     actor: ServiceActorRef,
-    fence: ServiceCanonicalActorJoinCandidate['actorFence'],
-    observed: ServiceActorRouteFence | undefined
+    fence: ServiceCanonicalActorJoinCandidate['actorFence']
   ): ServiceActorRouteFence | undefined {
+    // Canonical command 28 carries the current Location Store authority
+    // snapshot selected for this attempt. A private Core route may describe a
+    // previous visit to the same owner, so it cannot veto that snapshot; the
+    // receiving runtime validates every field against the Store before
+    // application admission (spec 15 section 4.2 / spec 51 section 9).
     // Object/authority/lease are bounded counters.  Node lifecycle is a
     // full-range opaque token, where only zero represents absence.
     if (
-      observed === undefined
-      || actor.generation <= 0n
+      actor.generation <= 0n
       || fence.targetNodeGeneration === 0n
       || fence.authorityOwnerGeneration <= 0n
       || fence.ownerLeaseGeneration <= 0n
-      || observed.authorityOwnerGeneration !== fence.authorityOwnerGeneration
     ) {
       return undefined;
     }

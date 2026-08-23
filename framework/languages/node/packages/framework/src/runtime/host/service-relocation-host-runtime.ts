@@ -218,6 +218,7 @@ interface ZLinkHostRelocationOptions {
     clear?(): void;
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
+  readonly invalidateActorRoute?: (actorId: string) => void;
   readonly reconcileStatefulAuthorityRoutes?: (signal?: AbortSignal) => Promise<void>;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
@@ -1964,7 +1965,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // handoff original until the cutover submit terminal and the
     // retransmission window end (spec 28 §4.2).
     const canonicalEnvelope = canonicalizeCapturedHandoffBacklog(
-      { ...captured.envelope, aggregateGeneration: targetAttemptGeneration },
+      captured.envelope,
       coordinator,
       targetFence
     );
@@ -2639,6 +2640,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       stage.phase = 'committed';
       await stage.owner.normalize(stage.staging, authority, signal);
       await stage.owner.publish(stage.staging, authority, signal);
+      // The target may have visited this Actor before and still retain that
+      // tenure in its private Actor-client resolver. The target-only CAS is
+      // now authoritative, so expire the old projection before OnJoinedActor
+      // can issue an Actor request and deadlock behind source leave.
+      for (const hidden of stage.staging.hidden.values()) {
+        if (hidden.actor !== undefined) {
+          this.options.invalidateActorRoute?.(hidden.actor.context.actorId);
+        }
+      }
       await this.finalizeActorJoinProfiles(meshName, stage, signal);
       // Actor Join completion may advance its accepted-completion journal in
       // the canonical authority slot. Try to clear that final publication
@@ -3410,10 +3420,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             leaseGeneration: prepare.target.ownerLeaseGeneration
           },
           meshName,
-          nodeRid: prepare.target.nodeRid,
+            nodeRid: prepare.target.nodeRid,
             nodeGeneration: prepare.target.nodeGeneration,
             objectGeneration: expected.objectGeneration,
-            expectedStoreVersion: expected.storeVersion.value,
+            targetAttemptGeneration: prepare.targetAttemptGeneration,
+            coordinatorExpectedStoreVersion: expected.storeVersion.value,
           ...(membership === undefined
             ? expected.allocation.objectKind === 'actor'
               ? {
@@ -3457,7 +3468,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly nodeRid: string;
       readonly nodeGeneration: bigint;
       readonly objectGeneration: bigint;
-      readonly expectedStoreVersion: string;
+      readonly targetAttemptGeneration: bigint;
+      readonly coordinatorExpectedStoreVersion: string;
       readonly actorSpotId?: string;
       readonly actorSpotGeneration?: bigint;
       readonly actorSpotKind?: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
@@ -3489,20 +3501,40 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           rewriteAuthorityApplicationRoute(published, target)
         ),
         {
-          targetAttemptGeneration: publication.aggregateGeneration,
+          targetAttemptGeneration: target.targetAttemptGeneration,
           nodeRid: target.nodeRid,
           nodeGeneration: target.nodeGeneration,
           ownerId: target.owner.ownerId,
           ownerLeaseGeneration: target.owner.leaseGeneration,
-          expectedStoreVersion: target.expectedStoreVersion
+          coordinatorExpectedStoreVersion: target.coordinatorExpectedStoreVersion
         }
       );
     }
     if (existing === undefined) {
-      const applicationPayload = target === undefined
-        ? Buffer.from(payload)
-        : rewriteAuthorityApplicationRoute(payload, target);
-      return this.codec.publish(applicationPayload, publication);
+      const published = this.codec.publish(payload, publication);
+      if (target === undefined) {
+        return published;
+      }
+      if (serviceRelocationAuthoritySlotIdentity(published) !== undefined) {
+        return projectServiceRelocationAuthorityTargetReady(
+          replaceServiceRelocationAuthorityApplicationPayload(
+            published,
+            rewriteAuthorityApplicationRoute(published, target)
+          ),
+          {
+            targetAttemptGeneration: target.targetAttemptGeneration,
+            nodeRid: target.nodeRid,
+            nodeGeneration: target.nodeGeneration,
+            ownerId: target.owner.ownerId,
+            ownerLeaseGeneration: target.owner.leaseGeneration,
+            coordinatorExpectedStoreVersion: target.coordinatorExpectedStoreVersion
+          }
+        );
+      }
+      return this.codec.publish(
+        rewriteAuthorityApplicationRoute(payload, target),
+        publication
+      );
     }
     if (existing.reference !== publication.reference
       || existing.checksumCrc32c !== publication.checksumCrc32c
@@ -4851,7 +4883,7 @@ function maintenanceReplyRelay(
   const value = completion.result.ok ? completion.result.response : undefined;
   return {
     relocation: relocationWireId(stage.staging.envelope.aggregateId),
-    targetAttemptGeneration: stage.staging.envelope.aggregateGeneration,
+    targetAttemptGeneration: stage.offer.prepare.targetAttemptGeneration,
     coordinator,
     operation: operationWireId(completion.operationId),
     replyRouteId: BigInt(completion.source.replyRouteId),
@@ -5066,7 +5098,6 @@ function validatePrepareEnvelope(
   envelope: ServiceRelocationEnvelope
 ): void {
   if (!sameWireId(request.relocation, relocationWireId(envelope.aggregateId))
-    || request.targetAttemptGeneration !== envelope.aggregateGeneration
     || request.applicationVersion !== envelope.applicationVersion
     || stringifyWire(request.object) !== stringifyWire(relocationObject(envelope))) {
     throw new Error('Relocation Prepare does not match its immutable root identity.');
@@ -5106,6 +5137,14 @@ function relocationPublication(
     checksumCrc32c: prepare.payloadChecksumCrc32c,
     aggregateId: envelope.aggregateId,
     aggregateGeneration: envelope.aggregateGeneration,
+    targetAttemptGeneration: prepare.targetAttemptGeneration,
+    targetNodeRid: prepare.target.nodeRid,
+    targetNodeGeneration: prepare.target.nodeGeneration,
+    coordinatorOwnerId: prepare.coordinator.ownerId,
+    coordinatorLeaseGeneration: prepare.coordinator.leaseGeneration,
+    coordinatorNodeRid: prepare.coordinator.nodeRid,
+    coordinatorNodeGeneration: prepare.coordinator.nodeGeneration,
+    coordinatorExpectedStoreVersion: prepare.coordinator.expectedAuthorityStoreVersion,
     inventoryDigest: inventoryDigest(envelope.participants, envelope.memberships),
     targetOwnerId: prepare.target.ownerId,
     targetOwnerLeaseGeneration: prepare.target.ownerLeaseGeneration

@@ -901,7 +901,66 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
   assert.equal(committed.authorityOwnerGeneration, 12n);
 });
 
-test('ActorJoin target clears its publication before admission and preserves post-open relay order', async () => {
+test('target-ready authority keeps aggregate, attempt and coordinator StoreVersion distinct', () => {
+  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const sourceAuthority = encodeActorAuthorityIdentity({
+    actorType: 'Player',
+    actor: {
+      nodeRid: coordinator.nodeRid,
+      actorId: object.actorId,
+      objectGeneration: object.objectGeneration,
+      meshName: 'mesh-a'
+    },
+    meshName: 'mesh-a',
+    ownerNodeGeneration: coordinator.nodeGeneration,
+    owner: {
+      ownerId: coordinator.ownerId,
+      leaseGeneration: coordinator.leaseGeneration
+    },
+    spotId: 'source-entry',
+    spotGeneration: coordinator.nodeGeneration,
+    spotKind: ZLinkSpotKind.Entry
+  });
+  const projected = (runtime as unknown as {
+    authorityPayloadForPublication(
+      payload: Uint8Array,
+      publication: unknown,
+      target: unknown
+    ): Uint8Array;
+  }).authorityPayloadForPublication(sourceAuthority, {
+    reference: 'root/1',
+    checksumCrc32c: 0x0102_0304,
+    aggregateId: '00000000-0000-0001-0000-000000000002',
+    aggregateGeneration: 2n,
+    inventoryDigest: '0'.repeat(64),
+    targetOwnerId: target.ownerId,
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration
+  }, {
+    owner: {
+      ownerId: target.ownerId,
+      leaseGeneration: target.ownerLeaseGeneration
+    },
+    meshName: 'mesh-a',
+    nodeRid: target.nodeRid,
+    nodeGeneration: target.nodeGeneration,
+    objectGeneration: object.objectGeneration,
+    targetAttemptGeneration: 3n,
+    coordinatorExpectedStoreVersion: 'source-v1',
+    actorSpotId: 'target-entry',
+    actorSpotGeneration: target.nodeGeneration,
+    actorSpotKind: ZLinkSpotKind.Entry
+  });
+  const publication = new ServiceRelocationAuthorityPayloadCodec().read(projected)!;
+
+  assert.equal(publication.aggregateGeneration, 2n);
+  assert.equal(publication.targetAttemptGeneration, 3n);
+  assert.equal(publication.coordinatorExpectedStoreVersion, 'source-v1');
+  assert.equal(publication.sourceNodeRid, coordinator.nodeRid);
+  assert.equal(publication.targetNodeRid, target.nodeRid);
+  assert.equal(publication.coordinatorOwnerId, target.ownerId);
+});
+
+test('ActorJoin target invalidates a previous-owner Actor route before lifecycle and preserves post-open relay order', async () => {
   const events: string[] = [];
   const actor = { context: { actorId: 'actor-join', meshName: 'mesh-a' } };
   const nativeRef = { actorId: 'actor-join', generation: 5n, nodeRid: 'target' };
@@ -950,6 +1009,10 @@ test('ActorJoin target clears its publication before admission and preserves pos
       async publishRoutedActorOwnership() {
         events.push('command44');
       }
+    },
+    invalidateActorRoute: (actorId: string) => {
+      assert.equal(actorId, 'actor-join');
+      events.push('actorRoute:invalidated');
     }
   } as never);
   const internals = runtime as unknown as {
@@ -1009,6 +1072,7 @@ test('ActorJoin target clears its publication before admission and preserves pos
     'cas',
     'queue:merged',
     'route:closed',
+    'actorRoute:invalidated',
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',

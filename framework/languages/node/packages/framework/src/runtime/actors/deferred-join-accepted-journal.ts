@@ -114,6 +114,7 @@ interface DeferredJoinAuthorityPublication {
   readonly targetOwnerId: string;
   readonly targetOwnerLeaseGeneration: bigint;
   readonly canonical?: boolean;
+  readonly canonicalPublication?: ServiceRelocationPublication;
 }
 
 /**
@@ -168,23 +169,9 @@ export class ZLinkDeferredJoinAcceptedJournal {
     } as const;
     const initialPublication = decodeAuthorityPublication(read.payload);
     const initialCanonicalIdentity = serviceRelocationAuthoritySlotIdentity(read.payload);
-    const canonicalPublication: DeferredJoinAuthorityPublication | undefined =
-      initialPublication?.canonical === true
-        ? initialPublication
-        : initialCanonicalIdentity === undefined
-          ? undefined
-          : {
-              applicationPayload: serviceRelocationAuthorityApplicationPayload(read.payload),
-              reference: { value: 'zlink-direct:unpublished' } as ZLinkBlobReference,
-              checksumCrc32c: 0,
-              aggregateId: initialCanonicalIdentity.aggregateId,
-              aggregateGeneration: requireCanonicalAggregateGeneration(
-                initialCanonicalIdentity.aggregateGeneration
-              ),
-              targetOwnerId: read.ownerId,
-              targetOwnerLeaseGeneration: read.ownerLeaseGeneration,
-              canonical: true
-            };
+    const canonicalPublication = initialPublication?.canonical === true
+      ? initialPublication
+      : undefined;
     const root = canonicalPublication !== undefined
       && (canonicalInventoryDigest !== undefined
         || !canonicalPublication.reference.value.startsWith('zlink-direct:'))
@@ -220,7 +207,10 @@ export class ZLinkDeferredJoinAcceptedJournal {
           ? actor.objectGeneration
           : requireCanonicalAggregateGeneration(canonicalIdentity.aggregateGeneration),
         targetOwnerId: expected.ownerId,
-        targetOwnerLeaseGeneration: expected.ownerLeaseGeneration
+        targetOwnerLeaseGeneration: expected.ownerLeaseGeneration,
+        ...(currentPublication?.canonicalPublication === undefined
+          ? {}
+          : { canonicalPublication: currentPublication.canonicalPublication })
       };
       const result = await this.authority.compareExchangeAuthority(
         key,
@@ -804,6 +794,7 @@ function toServiceRelocationPublication(
   value: DeferredJoinAuthorityPublication
 ): ServiceRelocationPublication {
   return {
+    ...value.canonicalPublication,
     reference: value.reference.value,
     checksumCrc32c: value.checksumCrc32c,
     aggregateId: value.aggregateId,
@@ -880,7 +871,8 @@ function deferredJoinPublication(
     aggregateGeneration: publication.aggregateGeneration,
     targetOwnerId: publication.targetOwnerId,
     targetOwnerLeaseGeneration: publication.targetOwnerLeaseGeneration,
-    canonical: publication.canonical
+    canonical: publication.canonical,
+    ...(publication.canonical === true ? { canonicalPublication: publication } : {})
   };
 }
 

@@ -276,7 +276,8 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
           requestMessage.close();
         }
         if (
-          sourceNodeRid === undefined
+          !result.accepted
+          || sourceNodeRid === undefined
           || result.actor === undefined
           || String(sourceNodeRid) === String(result.actor.nodeRid)
         ) {
@@ -400,7 +401,8 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
           requestMessage.close();
         }
         if (
-          sourceNodeRid === undefined
+          !result.accepted
+          || sourceNodeRid === undefined
           || result.actor === undefined
           || String(sourceNodeRid) === String(result.actor.nodeRid)
         ) {

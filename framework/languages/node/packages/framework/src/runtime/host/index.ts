@@ -731,6 +731,8 @@ export class ZLinkFrameworkRuntimeHost implements
       },
       trackInstanceSpot: (input) =>
         this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
+      invalidateActorRoute: (actorId) =>
+        this.actorClientLocationResolver?.invalidateActorRoute(actorId),
       reconcileStatefulAuthorityRoutes: (signal) =>
         this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,

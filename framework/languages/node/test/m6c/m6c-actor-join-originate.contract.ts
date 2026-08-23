@@ -48,7 +48,7 @@ function joinMultipartWithTransferId(
   return payload;
 }
 
-test('unbound node-to-node Actor Join originates canonical 28 without target Actor materialization', async () => {
+test('canonical Actor Join uses the current authority fence when a previous-owner private route is stale', async () => {
   const canonicalPayload = joinMultipartWithTransferId('application-transfer-id');
   let targetIngress: ((record: RawServiceIngressRecord) => unknown) | undefined;
   let received: { readonly stateful?: ServiceStatefulMailboxData } | undefined;
@@ -97,7 +97,7 @@ test('unbound node-to-node Actor Join originates canonical 28 without target Act
             descriptorLifecycleGeneration: 7n
           },
           objectGeneration: 1n,
-          authorityOwnerGeneration: 1n,
+          authorityOwnerGeneration: 2n,
           ownerLeaseGeneration: 13n
         };
       }
@@ -193,6 +193,8 @@ test('unbound node-to-node Actor Join originates canonical 28 without target Act
   } as unknown as RawServiceMeshRuntime;
   const source = new ServiceStatefulRuntime(sourceRaw, 'node-a', 7n);
   const actor = source.createActor('actor-a');
+  assert.equal(actor.authorityOwnerGeneration, 1n,
+    'the private source registry intentionally retains the previous owner visit');
   source.rememberSpotRoute({
     spot: targetSpot.ref,
     targetNodeRid: 'node-b',
@@ -215,7 +217,7 @@ test('unbound node-to-node Actor Join originates canonical 28 without target Act
       },
       {
         targetNodeGeneration: 7n,
-        authorityOwnerGeneration: actor.authorityOwnerGeneration,
+        authorityOwnerGeneration: 2n,
         ownerLeaseGeneration: 13n
       },
       { phase: 'admission', transferId: 'local-only-transfer' },
