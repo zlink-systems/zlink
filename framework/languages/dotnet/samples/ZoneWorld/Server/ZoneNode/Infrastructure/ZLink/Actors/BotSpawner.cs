@@ -5,6 +5,7 @@ using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Server.Configuration;
 using ZoneWorld.Server.ZoneNode.Application.Node;
 using ZoneWorld.Server.ZoneNode.Application.Zone;
+using ZoneWorld.Server.ZoneNode.Domain.ZoneWorld;
 using ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Spots;
 using ZoneWorld.Server.ZoneNode.Ports;
 using ZoneWorld.Shared.Contracts;
@@ -42,12 +43,25 @@ internal sealed class ZoneNodeBootstrap(
         // remaining objects.
         for (var attempt = 0; census.ZoneIds.Count != 2; attempt++)
         {
+            var claimed = census.ZoneIds;
+            var claimOrder = new List<string>();
+            foreach (var zoneId in claimed)
+                foreach (var adjacent in World.AdjacentZones(zoneId))
+                    if (!claimed.Contains(adjacent) && !claimOrder.Contains(adjacent))
+                        claimOrder.Add(adjacent);
+            foreach (var zoneId in ZoneTopology.Zones)
+                if (!claimed.Contains(zoneId) && !claimOrder.Contains(zoneId))
+                    claimOrder.Add(zoneId);
+
             // GetOrCreate can initially observe an object that is still registered to the
             // process the runner just crashed. Re-issuing the canonical create operation is
             // what lets this replacement claim the Zone after that owner expires; merely
             // waiting on the local census would never trigger a new placement decision.
-            foreach (var zoneId in ZoneTopology.Zones)
+            foreach (var zoneId in claimOrder)
+            {
                 await EnsureZoneAsync(zoneId, cancellationToken);
+                if (!census.ZoneIds.SequenceEqual(claimed)) break;
+            }
 
             if (settings.AllowEmptyZoneSet
                 && census.ZoneIds.Count == 0

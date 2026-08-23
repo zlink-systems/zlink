@@ -9832,7 +9832,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private SubmitResult SubmitOrQueueNativeReply(
         PendingNativeTerminalReply pending)
     {
-        var submit = SubmitNativeTerminalReplyIfCurrent(pending);
+        // The ReplyOperation captured from the request is the exact Core reply
+        // route. A replacement Hello may refresh the local peer epoch while a
+        // Store-backed operation is committing, but that local record must not
+        // veto the terminal's first submit. The epoch remains the retry fence
+        // after Core reports backpressure.
+        var submit = SubmitNativeTerminalReply(pending.Submit);
         if (submit == SubmitResult.Backpressured)
         {
             if (CanRetryNativeTerminalReply(pending))

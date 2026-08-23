@@ -392,12 +392,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var attemptsAtDiscard = Volatile.Read(ref attempts);
         await runtime.ReconnectAsync();
         Assert.Equal(
-            SubmitResult.Terminated,
+            SubmitResult.Backpressured,
             staleIngress.ReplyTerminal(
                 RequestResult.InternalError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
         await Task.Delay(150);
-        Assert.Equal(attemptsAtDiscard, Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
             pendingIngress.ReplyJoin(
@@ -470,6 +471,77 @@ public sealed class CanonicalActorJoinIngressReplyTests
         finally
         {
             ZLinkMessageParts.DisposeAll(replacementReply);
+        }
+    }
+
+    [Fact]
+    public async Task ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
+        {
+            reply.Submit();
+            return SubmitResult.Ok;
+        });
+        var operationTarget = new DeferredActorCreateOperationTarget();
+        runtime.Target.SetActorCreateOperationTarget(operationTarget);
+        const ulong correlation = 58;
+        var targetGeneration = runtime.Target.Status().LifecycleGeneration;
+        var reservation = new ObjectReservationFence(
+            "actor-reservation",
+            "actor-store-version",
+            71,
+            73,
+            runtime.TargetRid,
+            targetGeneration,
+            "target-owner",
+            79,
+            1);
+        var operation = new ActorCreateOperation(
+            correlation,
+            new MeshOperationId(83, 89),
+            runtime.SourceRid,
+            1,
+            "remote-actor",
+            "Sample.RemoteActor",
+            reservation,
+            checked((ulong)DateTimeOffset.UtcNow
+                .AddSeconds(5)
+                .ToUnixTimeMilliseconds()));
+
+        var replyTask = SendActorCreateRequestAsync(runtime.Source, operation);
+        await operationTarget.Started.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // A duplicate/replacement Hello can race with a slow Store commit. The
+        // request's captured Core reply operation remains the exact route for
+        // the terminal and must get its first submit attempt after the commit.
+        await runtime.HandoverAsync();
+        operationTarget.Complete(new ActorCreateOperationTerminal(
+            RequestResult.Ok,
+            ServiceWireConstants.FrameworkErrorCode.None,
+            new ActorCreateCompletion(
+                ActorCreateResult.Created,
+                new ActorRef(
+                    operation.ActorId,
+                    reservation.ObjectGeneration,
+                    "mesh",
+                    runtime.TargetRid))));
+
+        var parts = await replyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            var reply = DecodeReply(parts, correlation);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeActorCreateReply(
+                reply,
+                "mesh",
+                out var completion,
+                out var error));
+            Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+            Assert.Equal(ActorCreateResult.Created, completion!.Result);
+            Assert.Equal("remote-actor", completion.Actor.ActorId);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
         }
     }
 
@@ -621,6 +693,18 @@ public sealed class CanonicalActorJoinIngressReplyTests
         return source.Request()
             .Message(head)
             .Message(payload)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async(CancellationToken.None);
+    }
+
+    private static Task<IReadOnlyList<Message>> SendActorCreateRequestAsync(
+        IDealerSocket source,
+        ActorCreateOperation operation)
+    {
+        using var head = Message.From(
+            ZLinkServiceWireCodec.EncodeActorCreate(operation));
+        return source.Request()
+            .Message(head)
             .Timeout(TimeSpan.FromSeconds(2))
             .Async(CancellationToken.None);
     }
@@ -889,5 +973,28 @@ public sealed class CanonicalActorJoinIngressReplyTests
             await Target.DisposeAsync();
             await Context.DisposeAsync();
         }
+    }
+
+    private sealed class DeferredActorCreateOperationTarget
+        : IActorCreateOperationTarget
+    {
+        private readonly TaskCompletionSource _started = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<ActorCreateOperationTerminal> _terminal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task Started => _started.Task;
+
+        public async ValueTask<ActorCreateOperationTerminal> CreateAsync(
+            ActorCreateOperation operation,
+            CancellationToken cancellationToken)
+        {
+            _ = operation;
+            _started.TrySetResult();
+            return await _terminal.Task.WaitAsync(cancellationToken);
+        }
+
+        internal void Complete(ActorCreateOperationTerminal terminal) =>
+            _terminal.TrySetResult(terminal);
     }
 }
