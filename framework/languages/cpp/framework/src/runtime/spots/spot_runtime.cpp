@@ -8393,7 +8393,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
               try {
                   auto submitted_leave = std::make_shared<task_t<void>> (
                     submit_source_leave ());
-                  detail::observe_task_completion (
+                  detail::observe_task_terminal (
                     *submitted_leave,
                     [submitted_leave,
                      continue_after_source_leave =

@@ -2862,20 +2862,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
             + std::string (actor.actor_id ().value ()));
         co_return zlink::submit_result_t::not_found;
     }
-    const auto object = resolve_actor (actor);
-    if (!object) {
-        trace_mesh_host (
-          "bound-session-send-rejected",
-          "reason=actor-not-registered actor="
-            + std::string (actor.actor_id ().value ())
-            + " generation="
-            + std::to_string (actor.object_generation ()));
-        co_return zlink::submit_result_t::not_found;
-    }
     if (authority_owner_generation == 0
-        || owner_lease_generation == 0
-        || object->authority_owner_generation
-             != authority_owner_generation) {
+        || owner_lease_generation == 0) {
         trace_mesh_host (
           "bound-session-send-rejected",
           "reason=bound-route-fence-mismatch actor="
@@ -2886,14 +2874,13 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
       _user_spot_store, '1', actor.actor_id ().value (),
       actor.object_generation (), authority_owner_generation,
       owner_lease_generation, _options.owner_lease_fencing_margin);
-    if (!owner
-        || owner->fence.first != object->authority_owner_generation) {
+    if (!owner || owner->fence.first != authority_owner_generation) {
         trace_mesh_host (
           "bound-session-send-rejected",
           "reason=owner-fence-mismatch actor="
             + std::string (actor.actor_id ().value ())
             + " authority="
-            + std::to_string (object->authority_owner_generation));
+            + std::to_string (authority_owner_generation));
         co_return zlink::submit_result_t::not_found;
     }
     co_return co_await _transport->send_bound_session_result (

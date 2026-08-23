@@ -119,7 +119,7 @@ bool drain_bound_session_sends (
                       auto task =
                         std::make_shared<task_t<result_t<void>>> (
                           pending.dispatch ());
-                      detail::observe_task_completion (
+                      detail::observe_task_terminal (
                         *task,
                         [state, queue_key, actor_id, task] (
                           const result_t<result_t<void>> &terminal) {

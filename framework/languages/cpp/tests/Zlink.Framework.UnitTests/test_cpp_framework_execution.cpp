@@ -4288,9 +4288,16 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       [&cutover_order, &source_leave_submit_order] {
           source_leave_submit_order.store (
             ++cutover_order, std::memory_order_release);
-          return task_t<void> (result_t<void>::failure (
+          detail::task_completion_source_t<void> terminal (
+            [] (std::function<void ()>) {
+                // The ordinary continuation is intentionally not run. The
+                // finalize owner must observe the physical task terminal.
+            });
+          auto task = terminal.task ();
+          terminal.complete (result_t<void>::failure (
             framework_error_kind_t::internal_failure,
             "deterministic source leave submit failure"));
+          return task;
       });
     {
         std::unique_lock lock (leave_order_mutex);
