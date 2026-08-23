@@ -356,6 +356,276 @@ void test_direct_awaitable_fast_completion_and_abandon ()
     owned_coroutine_t::resume_queue = nullptr;
 }
 
+void test_send_async_inline_completion ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t sender (ctx);
+    zlink::pair_socket_t receiver (ctx);
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("cpp-send-async-inline");
+    sender.bind (endpoint);
+    receiver.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    zlink::message_t payload = make_request_message ("send-async-inline");
+    auto completion = await_result (
+      std::move (sender.send ().message (payload).async ()));
+    completion.take ();
+    assert (!payload.valid ());
+
+    zlink::received_t received;
+    assert (receiver.recv (received) == 0);
+    assert (received.first_part ().to_string () == "send-async-inline");
+}
+
+void test_routed_send_async_inline_completion ()
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer (ctx);
+    zlink::router_socket_t router (ctx);
+    dealer.set_routing_id (zlink::routing_id_t::from ("cpp-routed-async-dealer"));
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("cpp-routed-async-inline");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    zlink::message_t payload = make_request_message ("routed-send-async-inline");
+    auto completion = await_result (
+      std::move (dealer.send ().message (payload).async ()));
+    completion.take ();
+    assert (!payload.valid ());
+
+    zlink::received_t received;
+    assert (router.recv (received) == 0);
+    assert (received.first_part ().to_string () == "routed-send-async-inline");
+}
+
+bool small_hwm_contract_gate_enabled ()
+{
+    const char *const value = std::getenv ("ZLINK_CPP_CONTRACT_SMALL_HWM");
+    return value && std::strcmp (value, "0") != 0;
+}
+
+struct small_hwm_pair_fixture_t
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t sender{ctx};
+    zlink::pair_socket_t receiver{ctx};
+
+    explicit small_hwm_pair_fixture_t (const char *name_)
+    {
+        ctx.options ().auto_hwm_enabled (false);
+        const uint64_t hwm = UINT64_C (128) + sizeof (zlink_msg_t);
+        sender.options ().send_hwm (zlink::byte_count_t::bytes (hwm));
+        receiver.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
+        const std::string endpoint = zlink_cpp_contract::unique_inproc (name_);
+        sender.bind (endpoint);
+        receiver.connect (endpoint);
+        std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    }
+
+    void fill_until_backpressured ()
+    {
+        const std::string filler_text (64, 'h');
+        for (int attempt = 0; attempt < 64; ++attempt) {
+            zlink::message_t filler = make_request_message (filler_text);
+            if (!sender.send ()
+                   .message (filler)
+                   .flags (zlink::send_flags_t::dontwait)
+                   .submit ())
+                return;
+        }
+        assert (false && "small HWM did not become backpressured");
+    }
+};
+
+void test_send_async_pending_completes_after_drain ()
+{
+    if (!small_hwm_contract_gate_enabled ())
+        return;
+    small_hwm_pair_fixture_t fixture ("cpp-send-async-pending");
+    fixture.fill_until_backpressured ();
+
+    zlink::message_t payload = make_request_message ("send-async-pending");
+    auto pending = fixture.sender.send ().message (payload).async ();
+    auto completion = await_result (std::move (pending));
+    assert (!completion.wait_for (std::chrono::milliseconds (100)));
+
+    zlink::received_t drained;
+    assert (fixture.receiver.recv (drained) == 0);
+    assert (completion.wait_for (std::chrono::seconds (2)));
+    completion.take ();
+    assert (!payload.valid ());
+}
+
+void test_send_async_timeout_surfaces_timed_out ()
+{
+    if (!small_hwm_contract_gate_enabled ())
+        return;
+    small_hwm_pair_fixture_t fixture ("cpp-send-async-timeout");
+    fixture.fill_until_backpressured ();
+
+    zlink::message_t payload = make_request_message ("send-async-timeout");
+    auto pending = fixture.sender.send ()
+                     .message (payload)
+                     .timeout (std::chrono::milliseconds (50))
+                     .async ();
+    auto completion = await_result (std::move (pending));
+    assert (completion.wait_for (std::chrono::seconds (2)));
+    try {
+        completion.take ();
+        assert (false && "timed-out send must fail its awaitable");
+    }
+    catch (const zlink::submit_error_t &error) {
+        assert (error.result () == zlink::submit_result_t::not_admitted);
+        assert (error.internal_errno () == ETIMEDOUT);
+    }
+}
+
+void test_send_async_cancel_and_drop ()
+{
+    if (!small_hwm_contract_gate_enabled ())
+        return;
+    small_hwm_pair_fixture_t fixture ("cpp-send-async-cancel");
+    fixture.fill_until_backpressured ();
+
+    zlink::message_t cancelled_payload = make_request_message ("send-async-cancel");
+    auto cancelled = fixture.sender.send ().message (cancelled_payload).async ();
+    assert (cancelled.cancel ());
+    auto cancelled_completion = await_result (std::move (cancelled));
+    assert (cancelled_completion.wait_for (std::chrono::seconds (2)));
+    try {
+        cancelled_completion.take ();
+        assert (false && "cancelled send must fail its awaitable");
+    }
+    catch (const zlink::submit_error_t &error) {
+        assert (error.result () == zlink::submit_result_t::not_admitted);
+        assert (error.internal_errno () == ECANCELED);
+    }
+
+    {
+        zlink::message_t dropped_payload = make_request_message ("send-async-drop");
+        auto dropped = fixture.sender.send ().message (dropped_payload).async ();
+    }
+}
+
+void test_send_async_close_fails_pending_operation ()
+{
+    if (!small_hwm_contract_gate_enabled ())
+        return;
+    small_hwm_pair_fixture_t fixture ("cpp-send-async-close");
+    fixture.fill_until_backpressured ();
+
+    zlink::message_t payload = make_request_message ("send-async-close");
+    auto pending = fixture.sender.send ().message (payload).async ();
+    fixture.sender.close ();
+    auto completion = await_result (std::move (pending));
+    assert (completion.wait_for (std::chrono::seconds (2)));
+    try {
+        completion.take ();
+        assert (false && "closing a pending send must fail it");
+    }
+    catch (const zlink::submit_error_t &error) {
+        assert (error.result () == zlink::submit_result_t::not_admitted);
+        assert (error.internal_errno () == ETERM || error.internal_errno () == ECANCELED
+                || error.internal_errno () == ESHUTDOWN);
+    }
+}
+
+void test_request_blocking_submit_returns_reply ()
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer (ctx);
+    zlink::router_socket_t router (ctx);
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("cpp-request-blocking");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    std::future<void> server = std::async (std::launch::async, [&router] {
+        zlink::received_t request;
+        assert (router.recv (request) == 0);
+        zlink::message_t reply = make_request_message ("blocking-reply");
+        request.reply ().message (reply).submit ();
+    });
+    zlink::message_t request = make_request_message ("blocking-request");
+    const std::vector<zlink::message_t> reply = dealer.request ()
+      .message (request)
+      .timeout (std::chrono::seconds (2))
+      .submit ();
+    assert (reply.size () == 1);
+    assert (reply[0].to_string () == "blocking-reply");
+    server.get ();
+}
+
+void test_request_blocking_submit_times_out ()
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer (ctx);
+    zlink::router_socket_t router (ctx);
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("cpp-request-timeout");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    zlink::message_t request = make_request_message ("blocking-timeout");
+    try {
+        (void) dealer.request ().message (request)
+          .timeout (std::chrono::milliseconds (50)).submit ();
+        assert (false && "blocking request must surface Core timeout");
+    }
+    catch (const zlink::request_error_t &error) {
+        assert (error.result () == zlink::request_result_t::timed_out);
+        assert (error.internal_errno () == ETIMEDOUT);
+    }
+}
+
+void test_request_callback_fires_exactly_once ()
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer (ctx);
+    zlink::router_socket_t router (ctx);
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("cpp-request-callback");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    int callback_count = 0;
+    std::string callback_payload;
+    std::future<void> server = std::async (std::launch::async, [&router] {
+        zlink::received_t request;
+        assert (router.recv (request) == 0);
+        zlink::message_t reply = make_request_message ("callback-reply");
+        request.reply ().message (reply).submit ();
+    });
+
+    zlink::message_t request = make_request_message ("callback-request");
+    assert (dealer.request ().message (request).timeout (std::chrono::seconds (2)).submit (
+      [&] (zlink::request_result_t result, std::vector<zlink::message_t> parts) {
+          assert (result == zlink::request_result_t::ok);
+          assert (parts.size () == 1);
+          {
+              std::lock_guard<std::mutex> lock (mutex);
+              ++callback_count;
+              callback_payload = parts[0].to_string ();
+          }
+          for (auto &part : parts)
+              part.close ();
+          changed.notify_all ();
+      }));
+
+    std::unique_lock<std::mutex> lock (mutex);
+    assert (changed.wait_for (lock, std::chrono::seconds (2), [&] {
+        return callback_count == 1;
+    }));
+    lock.unlock ();
+    server.get ();
+    std::this_thread::sleep_for (std::chrono::milliseconds (25));
+    assert (callback_count == 1);
+    assert (callback_payload == "callback-reply");
+}
+
 void test_request_dealer_router_roundtrip ()
 {
     zlink::context_t ctx;
@@ -1244,6 +1514,15 @@ void test_raw_router_reply_maps_submit_result ()
 int main ()
 {
     test_direct_awaitable_fast_completion_and_abandon ();
+    test_send_async_inline_completion ();
+    test_routed_send_async_inline_completion ();
+    test_send_async_pending_completes_after_drain ();
+    test_send_async_timeout_surfaces_timed_out ();
+    test_send_async_cancel_and_drop ();
+    test_send_async_close_fails_pending_operation ();
+    test_request_blocking_submit_returns_reply ();
+    test_request_blocking_submit_times_out ();
+    test_request_callback_fires_exactly_once ();
     test_request_dealer_router_roundtrip ();
     test_request_direct_await_suspends_until_reply ();
     test_dealer_request_without_initial_routed_target_is_terminal ();

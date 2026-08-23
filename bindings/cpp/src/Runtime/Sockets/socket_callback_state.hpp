@@ -9,6 +9,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 
 namespace zlink
 {
@@ -25,6 +26,13 @@ struct socket_callback_state_t :
     // the per-handle send-sequence gate, and so a close cannot run underneath
     // an in-flight submit.
     std::mutex outbound_record_attempt_mutex;
+
+    // One Core send-completion handler is installed lazily per socket. The
+    // values are opaque here so this socket-state header does not depend on
+    // the private per-operation anchor type in send_operations.cpp.
+    std::mutex send_completion_mutex;
+    bool send_completion_handler_registered = false;
+    std::unordered_map<void *, std::shared_ptr<void>> send_completion_anchors;
 };
 
 } // namespace detail

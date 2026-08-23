@@ -415,10 +415,10 @@ artifact. The finished binding therefore keeps the following build rules.
 - A multipart payload accumulates via repeated `message(...)` calls. A `messages(...)` convenience method is allowed only when it delegates to the same builder contract and is declared in `Contracts/`.
 - A Dealer socket does not expose protocol envelope helpers such as `request_frame(...)` or `reply(request_token, parts)`. Dealer can start a request with `request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token.
 - No operation-start overload family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The per-language name of the terminal builder method follows the [bindings async execution surface policy](../async-coroutine-policy.en.md).
-- The terminal for a routed **send** is the synchronous
-  `routed_send_submit_operation_t::submit() -> void`. It wraps the Core send
-  directly and finishes on the calling thread. The binding keeps no admission
-  park queue, no WRITABLE-callback retry, no deadline timer, and no dispatcher
+- A routed **send** has two terminals on `routed_send_submit_operation_t`:
+  blocking `submit() -> void` (Core waits on the caller's path) and
+  `async() -> async_result_t<void>` (Core send-completion). Both paths keep no
+  admission park queue, WRITABLE-callback retry, deadline timer, or dispatcher
   thread — see the
   [bindings routed send contract and async completion surface policy](../async-coroutine-policy.en.md).
   **The binding library owns no threads at all.**
@@ -428,34 +428,46 @@ artifact. The finished binding therefore keeps the following build rules.
   Backpressure policy belongs to the application; the binding never retries.
   Failure is thrown as `submit_error_t`, and the handle of a part Core did not
   accept stays with the caller.
-- The routed send builder exposes neither a flags stage nor an async terminal.
-  `DONTWAIT` semantics are expressed through the socket `SNDTIMEO`.
+- The routed send builder exposes no flags stage. Its `timeout(...)` stage sets
+  the Core per-operation deadline used by `async()`; blocking `submit()` uses
+  the socket `SNDTIMEO` bound.
 - Every C++ outbound path on the same native handle shares a binding-owned record-
   attempt gate. One native attempt calls the existing part API from its first part
   through `FINAL`, then immediately releases the gate. The gate only prevents two
   threads from interleaving part sequences and a close from running underneath an
   in-flight submit; it owns no retry or wait policy.
-- The terminal for a routed **request** is `request_submit_operation_t::async()`.
-  It submits synchronously on the calling thread to the exact Core-selected
-  `(RID, transport pair id, generation)` target and returns an
-  `async_result_t<std::vector<message_t>>` suspension. The submit itself follows
-  the same Core-owned HWM contract as a routed send (`SNDTIMEO` is the bound).
-  Completion is Core-driven: the Core reply handler callback completes the
-  suspension, and resumption happens in the context that delivered that
-  completion. The binding keeps no retry queue, timer, or dedicated thread for
-  this surface.
+- The terminals for a routed **request** are `submit()` (blocking caller return),
+  `submit(callback)` (immediate return), and `async()`
+  (`async_result_t<std::vector<message_t>>`). It submits synchronously on the
+  calling thread to the exact Core-selected `(RID, transport pair id, generation)`
+  target. Reply completion is Core-driven: the Core reply handler callback
+  completes the async suspension and invokes the callback in the context that
+  delivered that completion. The submit itself follows the same Core-owned HWM
+  contract as a routed send (`SNDTIMEO` is the bound). The binding keeps no retry
+  queue, timer, or dedicated thread for this surface.
 - The request timeout is Core-owned (`ZLINK_REQUEST_TIMED_OUT`); the builder's
   `timeout(...)` sets that Core-owned reply deadline. A submit failure is thrown as
   `submit_error_t`; after admission, Core's reply lifecycle owns completion. Drop
   and `async_result_t::cancel()` request cancellation, but a request Core already
   accepted still ends on its Core-owned terminal event.
-- Because resumption happens in the Core callback context, that continuation must
-  not destroy the socket or the context. Handing the continuation to another
-  execution model is the framework's and the application's job.
-- `send_submit_operation_t` (the PAIR/PUB/STREAM one-shot) has exactly one
-  terminal, `submit() -> bool`. `.flags(dontwait).submit()` returns `false`
-  immediately on backpressure. This builder has no async terminal and no per-call
-  timeout stage — the wait bound is the socket `SNDTIMEO`.
+- `request_submit_operation_t::submit()` blocks the caller on the Core reply
+  callback and returns `std::vector<message_t>`. `submit(callback)` installs the
+  existing Core reply bridge and returns `bool` immediately. Callback delivery
+  and `async()` resumption happen in the context that Core uses for completion.
+  Destroying the socket or context from that resumed continuation or callback
+  deadlocks; submitting send/publish/request from a completion callback fails
+  with `EDEADLK`. Handing the continuation to another execution model is the
+  framework's and the application's job.
+- `send_submit_operation_t` (the PAIR/STREAM one-shot) exposes
+  `submit() -> bool` and `async() -> async_result_t<void>`. Its `timeout(...)`
+  stage sets the Core per-operation deadline for `async()`; completion means
+  admission, not peer delivery. `.flags(dontwait).submit()` returns `false`
+  immediately on backpressure. Destroying the socket/context from an async
+  resumed continuation deadlocks, and submitting from its completion callback
+  fails with `EDEADLK`.
+- `publish_operation_t` (PUB/XPUB) has only synchronous `submit() -> bool`.
+  PUB/XPUB publish is lossy, so the publish builder has no `async()` terminal;
+  `ZLINK_PUB_OPT_NODROP` backpressure is surfaced only by synchronous submit.
 - The terminal for a raw ROUTER/`received_t` reply is the synchronous one-shot
   `reply_submit_operation_t::submit() -> void`. It submits a terminal reply or
   error reply to the HWM-free completion lane with one native call. HWM

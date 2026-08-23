@@ -708,7 +708,7 @@ void test_received_lifetime_retains_and_releases_core_hwm_credit ()
     ordinary.close ();
 }
 
-void test_publisher_async_admission_multipart ()
+void test_publisher_synchronous_multipart ()
 {
     zlink::context_t ctx;
     zlink::xpub_socket_t publisher (ctx);
@@ -799,7 +799,7 @@ int main ()
     test_router_direct_recv_multipart_failure_preserves_output ();
     test_pair_send_recv_multipart ();
     test_received_lifetime_retains_and_releases_core_hwm_credit ();
-    test_publisher_async_admission_multipart ();
+    test_publisher_synchronous_multipart ();
 #if !defined(_WIN32)
     test_pair_ipc_large_message_shutdown ();
 #endif

@@ -6,6 +6,8 @@
 namespace zlink
 {
 
+class publish_operation_t;
+
 /// @brief Base for publisher sockets (PUB and XPUB).
 class publisher_socket_t : public socket_t
 {
@@ -61,7 +63,7 @@ class pub_socket_t : public publisher_socket_t
   public:
     explicit pub_socket_t (context_t &ctx_);
 
-    send_operation_t publish (const std::string &topic_id_);
+    publish_operation_t publish (const std::string &topic_id_);
 
     pub_socket_options_t options () { return pub_socket_options_t (*this); }
 };
@@ -130,7 +132,7 @@ class xpub_socket_t : public publisher_socket_t
   public:
     explicit xpub_socket_t (context_t &ctx_);
 
-    send_operation_t publish (const std::string &topic_id_);
+    publish_operation_t publish (const std::string &topic_id_);
 
     int receive_subscription_event (subscription_event_t &out_,
                                     recv_flags_t flags_ = recv_flags_t::none);

@@ -9,6 +9,7 @@
 #include <Runtime/Options/socket_options_detail.hpp>
 
 #include <cerrno>
+#include <condition_variable>
 
 namespace zlink
 {
@@ -54,16 +55,50 @@ request_result_t request_result_from_submit (submit_result_t result_,
     }
 }
 
+int request_result_errno (request_result_t result_) noexcept
+{
+    switch (result_) {
+        case request_result_t::timed_out:
+            return ETIMEDOUT;
+        case request_result_t::not_found:
+            return ENOENT;
+        case request_result_t::terminated:
+            return ETERM;
+        case request_result_t::protocol_error:
+            return EPROTO;
+        case request_result_t::rejected:
+            return EACCES;
+        case request_result_t::conflict:
+            return ESTALE;
+        case request_result_t::busy:
+            return EBUSY;
+        case request_result_t::not_connected:
+            return ENOTCONN;
+        case request_result_t::invalid_argument:
+            return EINVAL;
+        case request_result_t::invalid_state:
+            return EFSM;
+        case request_result_t::not_supported:
+            return ENOTSUP;
+        default:
+            return EIO;
+    }
+}
+
 // Bridges the Core reply handler callback to the suspension. Core drives the
 // completion; the binding owns no retry queue, timer, or worker for it. The
 // suspension is resumed in the context Core delivered the reply on.
 struct managed_request_bridge_t
 {
     std::shared_ptr<detail::async_operation_state_t<std::vector<message_t>>> completion;
+    request_callback_t callback;
     std::mutex mutex;
+    std::condition_variable changed;
     std::optional<std::vector<message_t>> value;
     std::exception_ptr failure;
+    request_result_t result = request_result_t::internal_error;
     bool armed = false;
+    bool blocking = false;
     bool terminal = false;
     bool delivered = false;
 
@@ -72,11 +107,14 @@ struct managed_request_bridge_t
     {
         std::optional<std::vector<message_t>> result_parts;
         std::exception_ptr result_failure;
+        request_result_t result_kind = request_result_t::internal_error;
         if (result_ != ZLINK_REQUEST_OK) {
             detail::close_message_array (parts_, part_count_);
+            result_kind = static_cast<request_result_t> (result_);
             result_failure = std::make_exception_ptr (
-              request_error_t (static_cast<request_result_t> (result_)));
+              request_error_t (result_kind, request_result_errno (result_kind)));
         } else {
+            result_kind = request_result_t::ok;
             try {
                 result_parts.emplace (
                   detail::take_parts_from_native (parts_, part_count_));
@@ -84,6 +122,7 @@ struct managed_request_bridge_t
             catch (...) {
                 detail::close_message_array (parts_, part_count_);
                 result_failure = std::current_exception ();
+                result_kind = request_result_t::internal_error;
             }
         }
 
@@ -94,11 +133,26 @@ struct managed_request_bridge_t
                 return;
             value = std::move (result_parts);
             failure = std::move (result_failure);
+            result = result_kind;
             terminal = true;
             deliver = armed;
         }
         if (deliver)
             deliver_terminal ();
+    }
+
+    std::vector<message_t> wait ()
+    {
+        std::unique_lock<std::mutex> lock (mutex);
+        changed.wait (lock, [this] { return armed && terminal; });
+        std::exception_ptr result_failure = failure;
+        std::optional<std::vector<message_t>> result_parts = std::move (value);
+        lock.unlock ();
+        if (result_failure)
+            std::rethrow_exception (result_failure);
+        if (!result_parts)
+            throw request_error_t (request_result_t::internal_error, EIO);
+        return std::move (*result_parts);
     }
 
     void arm () noexcept
@@ -118,13 +172,40 @@ struct managed_request_bridge_t
     {
         std::optional<std::vector<message_t>> result_parts;
         std::exception_ptr result_failure;
+        request_callback_t result_callback;
+        request_result_t result_kind = request_result_t::internal_error;
+        bool notify_blocking = false;
         {
             std::lock_guard<std::mutex> lock (mutex);
             if (!armed || !terminal || delivered)
                 return;
             delivered = true;
-            result_parts = std::move (value);
+            if (blocking) {
+                notify_blocking = true;
+            } else {
+                result_parts = std::move (value);
+                result_callback = std::move (callback);
+            }
             result_failure = failure;
+            result_kind = result;
+        }
+        if (notify_blocking) {
+            changed.notify_all ();
+            return;
+        }
+        if (result_callback) {
+            try {
+                if (result_failure || !result_parts)
+                    result_callback (result_kind, {});
+                else
+                    result_callback (result_kind, std::move (*result_parts));
+            }
+            catch (...) {
+                // A C callback cannot propagate an application exception back
+                // through Core. Completion remains exactly once; the callback
+                // owns successful parts and is responsible for closing them.
+            }
+            return;
         }
         const auto target = completion;
         if (result_failure) {
@@ -186,8 +267,10 @@ void ensure_raw_request_state (const detail::operation_state_t &state_)
 // Submits the request part sequence to one exact Core target on the calling
 // thread. Core owns the send-side HWM wait (SNDTIMEO) exactly as it does for a
 // routed send, and owns the reply deadline through ZLINK_REQUEST_TIMED_OUT.
-async_result_t<std::vector<message_t>>
-submit_raw_request_awaitable (detail::operation_state_t &state_)
+// The caller chooses whether the bridge is consumed by a coroutine, a
+// blocking caller, or an application callback.
+void submit_raw_request (detail::operation_state_t &state_,
+                         const std::shared_ptr<managed_request_bridge_t> &bridge)
 {
     ensure_raw_request_state (state_);
     detail::socket_callback_state_t *const callbacks =
@@ -201,11 +284,6 @@ submit_raw_request_awaitable (detail::operation_state_t &state_)
     const uint32_t timeout = detail::native_timeout_ms (
       resolved_request_timeout (state_, dealer));
 
-    const auto completion = std::make_shared<
-      detail::async_operation_state_t<std::vector<message_t>>> ();
-    const auto bridge = std::make_shared<managed_request_bridge_t> ();
-    bridge->completion = completion;
-
     submit_result_t result = submit_result_t::internal_error;
     int result_errno = EINVAL;
     {
@@ -218,11 +296,11 @@ submit_raw_request_awaitable (detail::operation_state_t &state_)
           select_routed_submit_target (state_.raw.socket, router_rid);
 
         std::vector<message_t> parts = detail::take_send_parts (state_);
-        auto *bridge_ref =
-          new std::shared_ptr<managed_request_bridge_t> (bridge);
+        std::shared_ptr<managed_request_bridge_t> *bridge_ref = nullptr;
         int raw_rc = -1;
         errno = 0;
         try {
+            bridge_ref = new std::shared_ptr<managed_request_bridge_t> (bridge);
             raw_rc = detail::submit_borrowed_message_array (
               parts, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
                   size_t failed_index = 0;
@@ -277,7 +355,17 @@ submit_raw_request_awaitable (detail::operation_state_t &state_)
     }
 
     // Core owns the request from here: the reply handler callback completes
-    // the suspension, so there is no pending binding record to cancel.
+    // the selected bridge, so there is no pending binding record to cancel.
+}
+
+async_result_t<std::vector<message_t>>
+submit_raw_request_awaitable (detail::operation_state_t &state_)
+{
+    const auto completion = std::make_shared<
+      detail::async_operation_state_t<std::vector<message_t>>> ();
+    const auto bridge = std::make_shared<managed_request_bridge_t> ();
+    bridge->completion = completion;
+    submit_raw_request (state_, bridge);
     bridge->arm ();
     return detail::async_result_access_t::make<std::vector<message_t>> (
       completion);
@@ -341,6 +429,38 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
         return submit_raw_request_awaitable (state);
 
     throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+}
+
+std::vector<message_t> request_submit_operation_t::submit () &&
+{
+    auto &state = this->state ();
+    if (!detail::has_send_parts (state))
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    if (!is_raw_request_kind (state.kind))
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+
+    const auto bridge = std::make_shared<managed_request_bridge_t> ();
+    bridge->blocking = true;
+    submit_raw_request (state, bridge);
+    bridge->arm ();
+    return bridge->wait ();
+}
+
+bool request_submit_operation_t::submit (request_callback_t callback_) &&
+{
+    auto &state = this->state ();
+    if (!detail::has_send_parts (state))
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    if (!is_raw_request_kind (state.kind))
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    if (!callback_)
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+
+    const auto bridge = std::make_shared<managed_request_bridge_t> ();
+    bridge->callback = std::move (callback_);
+    submit_raw_request (state, bridge);
+    bridge->arm ();
+    return true;
 }
 
 } // namespace zlink

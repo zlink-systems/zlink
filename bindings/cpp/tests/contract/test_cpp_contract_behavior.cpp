@@ -118,22 +118,22 @@ static_assert (!has_blocking_get_t<zlink::async_result_t<void>>);
 static_assert (!has_blocking_wait_t<zlink::async_result_t<void>>);
 static_assert (!has_blocking_wait_for_t<zlink::async_result_t<void>>);
 static_assert (!has_managed_send_callback_t<zlink::send_submit_operation_t>);
-static_assert (!has_managed_request_callback_t<zlink::request_submit_operation_t>);
+static_assert (has_managed_request_callback_t<zlink::request_submit_operation_t>);
 template <typename T>
 concept has_async_t = requires (T &&operation) { std::move (operation).async (); };
 
-// Routed send is a synchronous submit() that wraps the Core send. It has no
-// async terminal, and no flags stage: SNDTIMEO/DONTWAIT policy is owned by the
-// socket options, i.e. by Core and the application.
+// Routed send exposes both Core-owned blocking submit() and completion-driven
+// async(); it still has no flags stage.
 static_assert (has_sync_submit_t<zlink::routed_send_submit_operation_t>);
 static_assert (!has_flags_t<zlink::routed_send_submit_operation_t>);
-static_assert (!has_async_t<zlink::routed_send_submit_operation_t>);
+static_assert (has_async_t<zlink::routed_send_submit_operation_t>);
 static_assert (std::is_same_v<
                decltype (std::declval<zlink::routed_send_submit_operation_t &&> ().submit ()),
                void>);
-// Plain send/publish builders keep the synchronous submit() only; the async
-// terminal is gone with the binding-owned admission machinery.
-static_assert (!has_async_t<zlink::send_submit_operation_t>);
+// Plain HWM-managed send exposes both terminals. Publish uses a separate
+// synchronous-only builder so its public type has no async() member.
+static_assert (has_async_t<zlink::send_submit_operation_t>);
+static_assert (!has_async_t<zlink::publish_submit_operation_t>);
 
 template <typename Fn> void expect_runtime_error (Fn fn_)
 {

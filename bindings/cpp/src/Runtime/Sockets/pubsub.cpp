@@ -50,9 +50,9 @@ pub_socket_t::pub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socket_
 {
 }
 
-send_operation_t pub_socket_t::publish (const std::string &topic_id_)
+publish_operation_t pub_socket_t::publish (const std::string &topic_id_)
 {
-    return send_operation_t (make_publish_state (
+    return publish_operation_t (make_publish_state (
       *this, topic_id_,
       [this] () -> detail::socket_callback_state_t & { return callback_state (); }));
 }
@@ -61,9 +61,9 @@ xpub_socket_t::xpub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socke
 {
 }
 
-send_operation_t xpub_socket_t::publish (const std::string &topic_id_)
+publish_operation_t xpub_socket_t::publish (const std::string &topic_id_)
 {
-    return send_operation_t (make_publish_state (
+    return publish_operation_t (make_publish_state (
       *this, topic_id_,
       [this] () -> detail::socket_callback_state_t & { return callback_state (); }));
 }
