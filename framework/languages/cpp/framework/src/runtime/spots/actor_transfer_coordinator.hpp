@@ -55,7 +55,8 @@ struct pending_actor_admission_t
     std::vector<std::uint8_t> session_relocation_route;
     std::string session_relocation_actor_type;
     std::uint64_t session_relocation_target_owner_lease_generation = 0;
-    std::uint64_t session_relocation_committed_authority_owner_generation = 0;
+    std::uint64_t session_relocation_committed_previous_authority_owner_generation = 0;
+    std::uint64_t session_relocation_committed_target_authority_owner_generation = 0;
 
     bool matches_prepare (const actor_ref_t &actor,
                           const spot_id_t &source_spot,
@@ -316,7 +317,8 @@ class actor_transfer_coordinator_t
       std::uint64_t target_owner_lease_generation);
     bool commit_session_relocation_route_authority (
       const std::string &transfer_id,
-      std::uint64_t authority_owner_generation);
+      std::uint64_t previous_authority_owner_generation,
+      std::uint64_t target_authority_owner_generation);
     std::optional<pending_actor_admission_t>
     session_relocation_admission (const std::string &transfer_id) const;
     void fail_commit (const std::string &transfer_id, bool reconcile);

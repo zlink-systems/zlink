@@ -841,9 +841,11 @@ bool actor_transfer_coordinator_t::stage_session_relocation_route (
 
 bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
   const std::string &transfer_id,
-  std::uint64_t authority_owner_generation)
+  std::uint64_t previous_authority_owner_generation,
+  std::uint64_t target_authority_owner_generation)
 {
-    if (authority_owner_generation == 0)
+    if (previous_authority_owner_generation == 0
+        || target_authority_owner_generation <= previous_authority_owner_generation)
         return false;
     std::lock_guard lock (_mutex);
     auto found = _admissions.find (transfer_id);
@@ -855,12 +857,16 @@ bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
     auto &admission = found->second;
     if (admission.session_relocation_route.empty ())
         return false;
-    if (admission.session_relocation_committed_authority_owner_generation != 0) {
-        return admission.session_relocation_committed_authority_owner_generation
-               == authority_owner_generation;
+    if (admission.session_relocation_committed_target_authority_owner_generation != 0) {
+        return admission.session_relocation_committed_previous_authority_owner_generation
+                 == previous_authority_owner_generation
+               && admission.session_relocation_committed_target_authority_owner_generation
+                    == target_authority_owner_generation;
     }
-    admission.session_relocation_committed_authority_owner_generation =
-      authority_owner_generation;
+    admission.session_relocation_committed_previous_authority_owner_generation =
+      previous_authority_owner_generation;
+    admission.session_relocation_committed_target_authority_owner_generation =
+      target_authority_owner_generation;
     return true;
 }
 

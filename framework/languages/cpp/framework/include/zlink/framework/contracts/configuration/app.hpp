@@ -12,6 +12,7 @@
 #include <zlink/framework/contracts/eventing/health.hpp>
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/spot_events.hpp>
 
 #include <chrono>
 #include <functional>
@@ -58,6 +59,7 @@ class app_t
 
     config_builder_t &config () noexcept;
     logging_builder_t &logging () noexcept;
+    monitoring_builder_t &monitoring () noexcept;
     health_builder_t &health () noexcept;
     app_advanced_t advanced () noexcept;
 

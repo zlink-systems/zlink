@@ -94,6 +94,8 @@ class raw_mesh_connection_candidates_t
     bool disconnect (
       const std::vector<std::uint8_t> &node_routing_id,
       const std::vector<std::uint8_t> &connection_id);
+    std::vector<std::vector<std::uint8_t>> disconnect_all (
+      const std::vector<std::uint8_t> &node_routing_id);
     std::optional<std::vector<std::uint8_t>> disconnect_by_connection_id (
       const std::vector<std::uint8_t> &connection_id,
       std::string_view remote_endpoint = {});
@@ -104,6 +106,9 @@ class raw_mesh_connection_candidates_t
       const std::vector<std::uint8_t> &node_routing_id) const;
     bool contains (const std::vector<std::uint8_t> &node_routing_id,
                    const std::vector<std::uint8_t> &connection_id) const;
+    bool endpoint_in_use_by_other (
+      std::string_view remote_endpoint,
+      const std::vector<std::uint8_t> &excluded_node_routing_id) const;
 
   private:
     std::map<
@@ -181,7 +186,7 @@ class raw_mesh_node_owner_t
     bool connect_peer (const std::string &endpoint,
                        service_node_descriptor_t expected_descriptor);
     void disconnect_peer (const std::string &endpoint) noexcept;
-    void disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
+    bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
     void expect_peer (service_node_descriptor_t expected_descriptor);
     void forget_peer (const std::vector<std::uint8_t> &node_routing_id,

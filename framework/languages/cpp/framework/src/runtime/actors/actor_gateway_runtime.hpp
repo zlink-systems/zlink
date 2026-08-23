@@ -22,6 +22,8 @@
 namespace zlink::framework::runtime::protocol
 {
 struct bound_session_replaced_t;
+struct bound_session_send_t;
+struct actor_route_fence_t;
 struct session_relocation_route_t;
 }
 
@@ -32,6 +34,8 @@ struct stream_binding_t;
 
 namespace zlink::framework::detail
 {
+
+class bound_session_delivery_fence_t;
 
 inline constexpr std::string_view local_actor_node_placeholder = "local";
 inline constexpr std::string_view bound_session_relay_binding_key =
@@ -103,12 +107,10 @@ struct session_relay_completion_fence_t
     friend bool operator< (const session_relay_completion_fence_t &left,
                            const session_relay_completion_fence_t &right) noexcept
     {
-        return std::tie (left.actor_id, left.object_generation,
-                         left.source_node_rid, left.session_rid,
-                         left.binding_generation, left.session_sequence)
-               < std::tie (right.actor_id, right.object_generation,
-                           right.source_node_rid, right.session_rid,
-                           right.binding_generation, right.session_sequence);
+        return std::tie (left.actor_id, left.object_generation, left.source_node_rid,
+                         left.session_rid, left.binding_generation, left.session_sequence)
+               < std::tie (right.actor_id, right.object_generation, right.source_node_rid,
+                           right.session_rid, right.binding_generation, right.session_sequence);
     }
 };
 
@@ -150,8 +152,7 @@ class session_actor_binding_context_t
     std::map<std::string, std::uint64_t> actor_tokens;
     std::set<std::string> ready_actors;
     std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
-    std::function<task_t<void> (actor_ref_t, std::uint64_t)>
-      native_binder;
+    std::function<task_t<void> (actor_ref_t, std::uint64_t)> native_binder;
 };
 
 class session_actor_manager_access_t
@@ -160,8 +161,7 @@ class session_actor_manager_access_t
     static void attach (session_actor_manager_t &manager, stream_t stream);
     static void set_codec (session_actor_manager_t &manager, stream_codec_t codec);
     static void bind_native (session_actor_manager_t &manager,
-                             std::function<task_t<void> (
-                               actor_ref_t, std::uint64_t)> binder);
+                             std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder);
     static void disconnect (session_actor_manager_t &manager) noexcept;
 };
 
@@ -182,13 +182,20 @@ class actor_gateway_state_t
     mutable std::recursive_mutex mutex;
     using create_dispatcher_t = std::function<result_t<actor_ref_t> (
       std::string, std::string, const std::optional<zlink::message_t> &)>;
-    using join_spot_dispatcher_t = std::function<task_t<actor_join_reply_t> (
-      const actor_ref_t &, spot_id_t, const zlink::message_t &,
-      std::string, std::string, std::chrono::milliseconds)>;
+    using join_spot_dispatcher_t =
+      std::function<task_t<actor_join_reply_t> (const actor_ref_t &,
+                                                spot_id_t,
+                                                const zlink::message_t &,
+                                                std::string,
+                                                std::string,
+                                                std::chrono::milliseconds)>;
     using join_entry_spot_dispatcher_t = std::function<result_t<actor_join_reply_t> (
       const actor_ref_t &, const zlink::message_t &, std::chrono::milliseconds)>;
     using relay_dispatcher_t = std::function<task_t<std::optional<zlink::message_t>> (
-      const actor_ref_t &, actor_context_t, const stream_header_t &, const zlink::message_t &,
+      const actor_ref_t &,
+      actor_context_t,
+      const stream_header_t &,
+      const zlink::message_t &,
       std::optional<bound_session_relay_source_t>)>;
     using disconnect_dispatcher_t = std::function<task_t<void> (const actor_ref_t &)>;
     using bound_session_registrar_t = std::function<result_t<void> (const actor_ref_t &)>;
@@ -208,20 +215,21 @@ class actor_gateway_state_t
     struct pending_bound_session_send_t
     {
         std::function<task_t<result_t<void>> ()> dispatch;
+        std::shared_ptr<bound_session_delivery_fence_t> completion_fence;
     };
 
     std::map<std::string, actor_record_t> actors_by_id;
     std::map<std::string, std::shared_ptr<bound_session_sink_t>> bound_session_sinks;
-    std::map<std::string,
-             std::vector<std::shared_ptr<bound_session_replacement_handler_t>>>
+    std::map<std::string, std::vector<std::shared_ptr<bound_session_replacement_handler_t>>>
       bound_session_replacement_handlers;
     std::vector<relayed_frame_t> relayed_frames;
     std::vector<relayed_frame_t> bound_session_pushes;
     std::map<std::string, std::deque<pending_session_relay_t>> pending_session_relays;
     std::set<std::string> active_session_relays;
-    std::map<std::string, std::deque<pending_bound_session_send_t>>
-      pending_bound_session_sends;
+    std::map<std::string, std::deque<pending_bound_session_send_t>> pending_bound_session_sends;
     std::set<std::string> active_bound_session_sends;
+    std::map<std::string, std::weak_ptr<bound_session_delivery_fence_t>>
+      join_completion_delivery_fences;
     std::set<session_relay_completion_fence_t> active_session_relay_completions;
     create_dispatcher_t create_dispatcher;
     join_spot_dispatcher_t join_spot_dispatcher;
@@ -243,10 +251,7 @@ class actor_gateway_runtime_t
     actor_gateway_runtime_t ();
     explicit actor_gateway_runtime_t (std::shared_ptr<actor_gateway_state_t> state);
 
-    std::weak_ptr<actor_gateway_state_t> weak_state () const noexcept
-    {
-        return _state;
-    }
+    std::weak_ptr<actor_gateway_state_t> weak_state () const noexcept { return _state; }
 
     session_actor_manager_t manager () const;
     std::vector<relayed_frame_t> relayed_frames () const;
@@ -254,9 +259,8 @@ class actor_gateway_runtime_t
     std::optional<actor_bound_session_route_t>
     bound_session_route (const actor_ref_t &actor_ref) const;
     std::optional<actor_bound_session_route_t>
-    resolve_bound_session_push_route (
-      const actor_ref_t &actor_ref,
-      const actor_bound_session_route_t &staged_route) const;
+    resolve_bound_session_push_route (const actor_ref_t &actor_ref,
+                                      const actor_bound_session_route_t &staged_route) const;
     bool actor_bound (std::string actor_id) const;
     bool actor_disconnected (std::string actor_id) const;
     actor_context_t actor_context (const actor_ref_t &actor_ref,
@@ -313,17 +317,18 @@ class actor_gateway_runtime_t
     result_t<void> record_session_relay_source (const actor_ref_t &actor_ref,
                                                 zlink::routing_id_t session_rid,
                                                 std::uint64_t binding_generation);
-    result_t<void> admit_session_relay (const actor_ref_t &actor_ref,
-                                        const zlink::routing_id_t &source_node_rid,
-                                        const zlink::routing_id_t &session_rid,
-                                        std::uint64_t binding_generation,
-                                        std::uint64_t session_sequence);
-    result_t<void> begin_session_relay_completion (
-      const actor_ref_t &actor_ref,
-      const zlink::routing_id_t &source_node_rid,
-      const zlink::routing_id_t &session_rid,
-      std::uint64_t binding_generation,
-      std::uint64_t session_sequence);
+    result_t<void>
+    admit_session_relay (const actor_ref_t &actor_ref,
+                         const zlink::routing_id_t &source_node_rid,
+                         const zlink::routing_id_t &session_rid,
+                         std::uint64_t binding_generation,
+                         std::uint64_t session_sequence,
+                         const runtime::protocol::actor_route_fence_t *target_route = nullptr);
+    result_t<void> begin_session_relay_completion (const actor_ref_t &actor_ref,
+                                                   const zlink::routing_id_t &source_node_rid,
+                                                   const zlink::routing_id_t &session_rid,
+                                                   std::uint64_t binding_generation,
+                                                   std::uint64_t session_sequence);
     result_t<void> complete_session_relay (const actor_ref_t &actor_ref,
                                            const zlink::routing_id_t &source_node_rid,
                                            const zlink::routing_id_t &session_rid,
@@ -333,28 +338,30 @@ class actor_gateway_runtime_t
                                                const zlink::routing_id_t &session_owner_node,
                                                const zlink::routing_id_t &session_rid,
                                                std::uint64_t retired_binding_generation);
-    bool commit_session_relocation_route (
+    bool
+    commit_session_relocation_route (const runtime::protocol::session_relocation_route_t &route,
+                                     const runtime::stateful::stream_binding_t &previous,
+                                     const runtime::stateful::stream_binding_t &target);
+    bool prepare_session_relocation_target_route (
       const runtime::protocol::session_relocation_route_t &route,
-      const runtime::stateful::stream_binding_t &previous,
-      const runtime::stateful::stream_binding_t &target);
+      std::uint64_t target_owner_lease_generation);
+    bool confirm_session_remote_tenure (const runtime::protocol::bound_session_send_t &send);
     void unbind_session_stream (std::string actor_id,
                                 std::string session_id = {},
                                 std::uint64_t binding_token = 0);
-    void restore_session_stream (
-      std::string actor_id,
-      const std::string &session_id,
-      std::uint64_t binding_token,
-      actor_session_binding_snapshot_t snapshot);
+    void restore_session_stream (std::string actor_id,
+                                 const std::string &session_id,
+                                 std::uint64_t binding_token,
+                                 actor_session_binding_snapshot_t snapshot);
     result_t<void> dispatch_bound_session_send (const actor_ref_t &actor_ref,
                                                 std::string packet_name,
                                                 stream_codec_t codec,
                                                 const zlink::message_t &payload) const;
-    using admitted_bound_session_delivery_t = std::function<result_t<void> (
-      std::string, stream_codec_t, const zlink::message_t &)>;
+    using admitted_bound_session_delivery_t =
+      std::function<result_t<void> (std::string, stream_codec_t, const zlink::message_t &)>;
     std::optional<admitted_bound_session_delivery_t>
-    admit_bound_session_delivery (
-      const actor_ref_t &actor_ref,
-      std::uint64_t binding_generation) const;
+    admit_bound_session_delivery (const actor_ref_t &actor_ref,
+                                  std::uint64_t binding_generation) const;
     std::shared_ptr<bound_session_replacement_handler_t>
     register_bound_session_replacement_handler (const zlink::routing_id_t &session_rid,
                                                 bound_session_replacement_handler_t handler);
@@ -372,14 +379,20 @@ class actor_gateway_runtime_t
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);
     void on_bound_session (actor_gateway_state_t::bound_session_registrar_t registrar);
     void on_bound_session_send (actor_gateway_state_t::bound_session_sender_t sender);
+    std::shared_ptr<bound_session_delivery_fence_t>
+    begin_join_completion_delivery_fence (const actor_ref_t &actor_ref);
+    void settle_join_completion_delivery_fence (
+      const actor_ref_t &actor_ref,
+      const std::shared_ptr<bound_session_delivery_fence_t> &fence,
+      result_t<void> callback_result,
+      std::function<void (result_t<void>)> settled);
     /* Stage traces emit only at detailed; callers building stage/result
      * strings must gate on trace_bound_session_send_stage_enabled() so the
      * off/errors/normal hot path pays no allocation (spec 26 §4). */
     bool trace_bound_session_send_stage_enabled () const noexcept;
-    void trace_bound_session_send_stage (
-      const std::string &actor_id,
-      std::string_view stage,
-      std::string_view result = {}) const;
+    void trace_bound_session_send_stage (const std::string &actor_id,
+                                         std::string_view stage,
+                                         std::string_view result = {}) const;
     void bind_serializers (serializer_registry_t &serializers);
     void set_dispatch (dispatch_options_t options);
 

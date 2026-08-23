@@ -378,10 +378,21 @@ The application configures the standard logging provider with
 `logging_builder_t`. Runtime state change and diagnostic information
 are delivered through `log_record_t`'s identifier and field.
 
-The following type and registration API aren't a public contract.
+C++ provides a public raw monitoring surface for Spot timer failures only.
+The `monitoring_builder_t` returned by `app_t::monitoring()` registers a
+SpotNode source with `add_spot_events(source_name)` and receives
+`spot_event_t` via `on_spot_event(handler)`. `spot_event_t` carries
+`source_name`, `timestamp`, `event`, and `spot_timer_diagnostic_t`, where
+`event` is `timer_handler_failed` or
+`timer_stopped_after_unhandled_exception`. Events from unregistered sources
+are not delivered, and a handler exception does not affect timer/runtime
+behavior.
 
-- Per-socket/Spot/Actor/STREAM raw event DTO
-- Raw event handler and source registration builder
+The following type and registration API remain outside the public contract.
+
+- Per-socket/Actor/STREAM raw event DTO
+- Raw event handler and source registration builder other than the Spot
+  timer failure surface above
 - Metric sample DTO and application callback
 - Exporter lifecycle, registry, and provider-internal state
 

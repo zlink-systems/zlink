@@ -710,7 +710,9 @@ stream_submitter (std::shared_ptr<detail::stream_state_t> state)
 
 stream_send_call_t stream_t::write_packet (const zlink::message_t &payload)
 {
-    stream_header_t header (stream_message_kind_t::send, stream_codec_t::raw,
+    stream_header_t header (stream_message_kind_t::send,
+                            _state->application_codec.load (
+                              std::memory_order_acquire),
                             stream_header_flags_t::none, std::nullopt, "", {});
     return stream_send_call_t (std::move (header), payload, _state->compression_codec,
                                stream_submitter (_state));
@@ -1516,6 +1518,8 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
               "STREAM decompressed payload exceeds configured receive limit");
         }
     }
+    stream._state->application_codec.store (
+      header.codec (), std::memory_order_release);
     const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
     const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
@@ -1600,6 +1604,8 @@ result_t<void> stream_runtime_t::dispatch_packet_async (
               "STREAM decompressed payload exceeds configured receive limit");
         }
     }
+    stream._state->application_codec.store (
+      header.codec (), std::memory_order_release);
     const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
     const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;

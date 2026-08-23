@@ -3,6 +3,8 @@
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 
+#include <zlink/framework.hpp>
+
 #include <cstddef>
 #include <iostream>
 #include <memory>
@@ -64,6 +66,40 @@ bool unsubscribed_metric_storage_unchanged ()
     return true;
 }
 
+bool public_spot_event_surface_reports_internal_timer_failure ()
+{
+    zlink::framework::monitoring_builder_t monitoring;
+    std::vector<zlink::framework::spot_event_t> observed;
+    monitoring
+      .add_spot_events ("zone-node-1")
+      .on_spot_event (
+        [&observed] (const zlink::framework::spot_event_t &event) {
+            observed.push_back (event);
+        });
+    const auto runtime = zlink::framework::detail::monitoring_runtime_t::from (
+      monitoring);
+    runtime.publish_timer_failure (
+      "unregistered-node", zlink::framework::spot_id_t ("zone-ignored"),
+      zlink::framework::timer_failure_event_t{
+        "ignored", std::type_index (typeid (int)), 1, false,
+        "ignored"});
+    runtime.publish_timer_failure (
+      "zone-node-1", zlink::framework::spot_id_t ("zone-a"),
+      zlink::framework::timer_failure_event_t{
+        "zone-tick", std::type_index (typeid (int)), 7, true,
+        "boom"});
+    return observed.size () == 1
+           && observed.front ().source_name == "zone-node-1"
+           && observed.front ().event
+                == zlink::framework::spot_event_kind_t::
+                     timer_stopped_after_unhandled_exception
+           && observed.front ().diagnostic.spot_id
+                == zlink::framework::spot_id_t ("zone-a")
+           && observed.front ().diagnostic.timer_name == "zone-tick"
+           && observed.front ().diagnostic.delivery_index == 7
+           && observed.front ().diagnostic.message == "boom";
+}
+
 } // namespace
 
 int main ()
@@ -73,6 +109,10 @@ int main ()
         return 1;
     }
     if (!unsubscribed_metric_storage_unchanged ()) {
+        return 1;
+    }
+    if (!public_spot_event_surface_reports_internal_timer_failure ()) {
+        std::cerr << "public Spot monitoring event was not delivered\n";
         return 1;
     }
     return 0;

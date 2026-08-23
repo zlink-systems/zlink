@@ -1974,11 +1974,14 @@ class stream_host_service_t::listener_t
         const auto previous_binding =
           _mesh_node->native_node ().sessions ().current_binding (
             std::string (actor.actor_id ().value ()));
-        /* Only a re-bind (a previous binding exists — the reconnect window)
-         * may be riding a stale locally-cached route; a first bind must not
-         * fence its own freshly resolved route. */
-        if (previous_binding
-            && local_node->to_hex () == actor_route->node_rid.to_hex ()) {
+        /* A re-bind (a previous binding exists -- the reconnect window) may
+         * be riding a stale cached route after its one-way command 44 was
+         * lost. The former owner can still accept the route during its
+         * retransmission window, so actor_not_ready is not a reliable
+         * refresh trigger. Re-resolve every re-bind from Store before
+         * selecting either the local or remote owner. A first bind keeps its
+         * freshly resolved route. */
+        if (previous_binding) {
             const auto cached_route = *actor_route;
             actor_route = _mesh_node->refresh_application_actor_route (
               actor, cached_route);
@@ -2281,6 +2284,13 @@ class stream_host_service_t::listener_t
                   actor, *actor_route,
                   std::min (remaining, std::chrono::milliseconds (1000)));
             } else {
+                /* actor_not_ready can be a short target-materialization lag,
+                 * but it is also how the former owner reports a route whose
+                 * Store watcher has not observed the committed relocation
+                 * yet. Refresh before retrying so a reconnect cannot pin the
+                 * removed source Actor for the entire binding deadline. */
+                (void) _mesh_node->refresh_application_actor_route (
+                  actor, *actor_route);
                 co_await detail::delay (
                   std::min (remaining, std::chrono::milliseconds (10)));
             }
@@ -2407,7 +2417,12 @@ class stream_host_service_t::listener_t
         auto stream = _runtime.open_session (_stream.name);
         _runtime.set_session_identity (stream, rid);
         auto transport_connection =
-          _mesh_node->native_node ().sessions ().open (key);
+          _mesh_node->native_node ().sessions ().open (
+            key,
+            [this, rid] {
+                request_core_peer_disconnect (
+                  rid, "session_relocation_seal_timeout");
+            });
         detail::session_actor_manager_access_t::attach (actors, stream);
         auto created = std::make_shared<core_session_t> (
           std::move (scope), session, actors, std::move (stream),
@@ -3603,7 +3618,8 @@ class stream_host_service_t::listener_t
         if (_mesh_node) {
             session_registry = &_mesh_node->native_node ().sessions ();
             transport_connection = session_registry->open (
-              stream_instance.session_id ());
+              stream_instance.session_id (),
+              [this, connection] { request_close (*connection); });
         }
         auto connection_state = std::make_shared<stream_connection_state_t> (
           std::move (scope), &session, std::move (stream_instance),

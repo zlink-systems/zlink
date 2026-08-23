@@ -43,6 +43,7 @@ class stream_state_t
     std::optional<std::string> local_address;
     std::optional<std::string> remote_address;
     std::atomic_bool closed{false};
+    std::atomic<stream_codec_t> application_codec{stream_codec_t::raw};
     std::deque<std::string> serial_log;
     std::vector<stream_header_t> written_headers;
     std::vector<zlink::message_t> written_payloads;

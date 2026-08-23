@@ -47,6 +47,7 @@
 #include <zlink/framework/contracts/monitoring/fanout_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/spot_events.hpp>
 #include <zlink/framework/contracts/placement.hpp>
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/spots/spot_identity.hpp>
@@ -1116,7 +1117,7 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().compress ()),
                  zlink::framework::stream_write_call_t &>);
 
-static_assert (!has_raw_monitoring<zlink::framework::app_t>);
+static_assert (has_raw_monitoring<zlink::framework::app_t>);
 static_assert (!has_raw_metrics<zlink::framework::app_t>);
 static_assert (!has_max_message_size_member<zlink::framework::mesh_node_socket_config_t>);
 static_assert (!has_native_code<zlink::framework::stream_error_t>);

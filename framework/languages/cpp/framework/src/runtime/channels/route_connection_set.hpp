@@ -23,6 +23,8 @@ class route_connection_set_t
     bool connect (std::string endpoint);
     bool connect (zlink::routing_id_t peer_rid, std::string endpoint);
     bool disconnect (const std::string &endpoint);
+    bool disconnect (const zlink::routing_id_t &peer_rid,
+                     const std::string &endpoint);
     bool contains (const std::string &endpoint) const;
     std::vector<std::string> list () const;
     std::vector<target_t> targets () const;

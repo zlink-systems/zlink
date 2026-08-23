@@ -34,6 +34,19 @@ bool route_connection_set_t::disconnect (const std::string &endpoint)
     return _manual_connections.erase (runtime::transport::normalize_endpoint (endpoint)) != 0;
 }
 
+bool route_connection_set_t::disconnect (
+  const zlink::routing_id_t &peer_rid,
+  const std::string &endpoint)
+{
+    const auto normalized = runtime::transport::normalize_endpoint (endpoint);
+    const auto found = _manual_connections.find (normalized);
+    if (found == _manual_connections.end () || !found->second
+        || *found->second != peer_rid)
+        return false;
+    _manual_connections.erase (found);
+    return true;
+}
+
 bool route_connection_set_t::contains (const std::string &endpoint) const
 {
     return _manual_connections.contains (endpoint);

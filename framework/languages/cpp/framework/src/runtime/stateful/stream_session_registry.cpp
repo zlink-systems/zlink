@@ -40,7 +40,8 @@ stream_session_registry_t::stream_session_registry_t (
 }
 
 stream_connection_t stream_session_registry_t::open (
-  std::string connection_id)
+  std::string connection_id,
+  std::function<void ()> close_connection)
 {
     if (connection_id.empty ()) {
         throw std::invalid_argument ("stream connection id is empty");
@@ -68,7 +69,8 @@ stream_connection_t stream_session_registry_t::open (
         }
     }
     _connections[connection.connection_id] =
-      connection_state_t{connection};
+      connection_state_t{
+        connection, {}, std::move (close_connection)};
     _changed.notify_all ();
     lock.unlock ();
     settle_retained_outbound (std::move (displaced), false);
@@ -626,6 +628,8 @@ bool stream_session_registry_t::close_remote_route_seal (
     if (connection_found == _connections.end ()
         || connection_found->second.connection != connection)
         return false;
+    auto close_connection = std::move (
+      connection_found->second.close_connection);
     std::vector<stream_retained_outbound_t> discarded;
     for (auto &[actor_id, binding] :
          connection_found->second.bindings) {
@@ -649,6 +653,13 @@ bool stream_session_registry_t::close_remote_route_seal (
     _changed.notify_all ();
     lock.unlock ();
     settle_retained_outbound (std::move (discarded), false);
+    if (close_connection) {
+        try {
+            close_connection ();
+        }
+        catch (...) {
+        }
+    }
     return true;
 }
 
@@ -684,6 +695,34 @@ stream_session_registry_t::remote_tenure_proof (
         || tenure.target_node_generation != target_node_generation)
         return std::nullopt;
     return aggregate->pending_remote_tenure;
+}
+
+bool stream_session_registry_t::confirm_remote_tenure (
+  const stream_remote_tenure_t &tenure)
+{
+    std::lock_guard lock (_mutex);
+    auto *aggregate = current_aggregate_unlocked (tenure.actor_id);
+    if (aggregate == nullptr
+        || aggregate->binding.actor.kind != object_kind_t::actor
+        || aggregate->binding.actor.key != tenure.actor_id
+        || aggregate->binding.actor.object_generation
+             != tenure.object_generation
+        || aggregate->binding.actor.authority_owner_generation
+             != tenure.authority_owner_generation
+        || aggregate->binding.actor.node_id != tenure.target_node_id
+        || aggregate->binding.target_node_generation
+             != tenure.target_node_generation
+        || aggregate->binding.binding_generation
+             != tenure.binding_generation
+        || tenure.owner_lease_generation == 0
+        || (aggregate->binding.owner_lease_generation != 0
+            && aggregate->binding.owner_lease_generation
+                 != tenure.owner_lease_generation)) {
+        return false;
+    }
+    aggregate->binding.owner_lease_generation =
+      tenure.owner_lease_generation;
+    return true;
 }
 
 bool stream_session_registry_t::memoize_remote_tenure (
@@ -829,7 +868,6 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
         || target.authority_owner_generation
              <= previous_authority_owner_generation
         || target_node_generation == 0
-        || target_owner_lease_generation == 0
         || !aggregate->ingress_drain->active.empty ()) {
         return {stateful_error_t::conflict,
                 aggregate->binding, last_sequence, {}};

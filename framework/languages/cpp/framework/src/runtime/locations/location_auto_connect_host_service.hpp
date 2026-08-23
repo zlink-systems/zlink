@@ -214,7 +214,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                       }
                   }
                   if (target.initiates_connection && !manual_endpoint)
-                      (void) route.disconnect (target.endpoint);
+                      (void) route.disconnect (
+                        target.node_rid, target.endpoint);
               });
         }
 
@@ -282,7 +283,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         zlink::routing_id_t node_rid = zlink::routing_id_t::from (std::uint32_t{0});
         std::string endpoint;
         std::string owner_id;
+        std::int64_t owner_lease_generation = 0;
         std::uint64_t lifecycle_generation = 0;
+        std::chrono::system_clock::time_point updated_at{};
         std::string security_identity;
         bool initiates_connection = true;
         bool accepting_work = true;
@@ -435,15 +438,18 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             return;
         }
 
-        auto desired = compute_desired (loop, descriptors);
+        auto desired = select_endpoint_winners (
+          compute_desired (loop, descriptors));
         loop.last_desired.clear ();
         for (const auto &[key, target] : desired) {
             if (target.accepting_work)
                 loop.last_desired.emplace (key, target);
         }
         _runtime->observe_discovered_peers (loop.last_desired.size ());
+        std::set<std::string> released_endpoints;
         for (auto it = loop.active.begin (); it != loop.active.end ();) {
             if (!desired.contains (it->first)) {
+                released_endpoints.insert (it->second.endpoint);
                 disconnect (loop, it->second);
                 it = loop.active.erase (it);
             } else {
@@ -458,6 +464,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  * before that transition. A host that observes only the
                  * draining row must not create a new connection. */
                 if (!target.accepting_work)
+                    continue;
+                /* The previous RID may still own a physical pair on this
+                 * endpoint. Disconnect and replacement are separate
+                 * reconciliation phases; let the binding observe teardown
+                 * before submitting the replacement on a later tick. */
+                if (released_endpoints.contains (target.endpoint))
                     continue;
                 connect (loop, target);
                 loop.active[key] = target;
@@ -474,6 +486,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  * removed. Keep the key absent and let the next tick create
                  * the replacement after the teardown has progressed. */
                 loop.active.erase (current);
+            } else {
+                /* A connect submission can be rejected while the previous
+                 * same-endpoint RID is still closing. Keep reconciling the
+                 * selected descriptor until the physical intent exists. */
+                connect (loop, target);
             }
         }
     }
@@ -496,6 +513,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (descriptor.mesh_name != loop.mesh_name || descriptor.endpoint.empty ()
                 || (loop.local_rid
                     && descriptor.rid.to_hex () == loop.local_rid->to_hex ())
+                || (!loop.local_endpoint.empty ()
+                    && descriptor.endpoint == loop.local_endpoint)
                 || descriptor.state == framework_runtime_state_t::relocating
                 || descriptor.state == framework_runtime_state_t::relocated
                 || descriptor.state == framework_runtime_state_t::stopped
@@ -522,7 +541,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             const auto key = descriptor.rid.to_hex ();
             desired.emplace (
               key, target_t{key, descriptor.rid, descriptor.endpoint,
-                            descriptor.owner_id, descriptor.lifecycle_generation,
+                            descriptor.owner_id, descriptor.lease_generation,
+                            descriptor.lifecycle_generation,
+                            descriptor.updated_at,
                             location_auto_connect_detail::
                               to_service_wire_admission_identity (
                               descriptor.security_identity),
@@ -531,6 +552,44 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                               != framework_runtime_state_t::draining});
         }
         return desired;
+    }
+
+    static bool supersedes_endpoint_target (
+      const target_t &candidate,
+      const target_t &current)
+    {
+        if (candidate.accepting_work != current.accepting_work)
+            return candidate.accepting_work;
+        if (candidate.updated_at != current.updated_at)
+            return candidate.updated_at > current.updated_at;
+        if (candidate.owner_lease_generation
+            != current.owner_lease_generation)
+            return candidate.owner_lease_generation
+                   > current.owner_lease_generation;
+        if (candidate.lifecycle_generation
+            != current.lifecycle_generation)
+            return candidate.lifecycle_generation
+                   > current.lifecycle_generation;
+        return candidate.key > current.key;
+    }
+
+    static std::map<std::string, target_t> select_endpoint_winners (
+      const std::map<std::string, target_t> &desired)
+    {
+        std::map<std::string, target_t> by_endpoint;
+        for (const auto &[_, target] : desired) {
+            const auto current = by_endpoint.find (target.endpoint);
+            if (current == by_endpoint.end ()
+                || supersedes_endpoint_target (
+                  target, current->second)) {
+                by_endpoint.insert_or_assign (target.endpoint, target);
+            }
+        }
+
+        std::map<std::string, target_t> winners;
+        for (auto &[_, target] : by_endpoint)
+            winners.emplace (target.key, std::move (target));
+        return winners;
     }
 
     void retry_pending_targets (loop_t &loop)

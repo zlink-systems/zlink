@@ -30,6 +30,7 @@
 #include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/fanout_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/spot_events.hpp>
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/streams/stream.hpp>
 #include <zlink/framework/contracts/timers/timer.hpp>

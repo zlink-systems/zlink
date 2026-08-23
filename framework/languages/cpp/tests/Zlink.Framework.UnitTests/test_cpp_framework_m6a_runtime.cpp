@@ -695,6 +695,71 @@ void verify_physical_candidates_preserve_survivor ()
     assert (removed.size () == 2);
     assert (candidates.size (peer) == 1);
     assert (candidates.size (second_peer) == 0);
+
+    candidates.ready (
+      peer, bytes ("old-peer-connection"),
+      mesh::service_connection_direction_t::outbound, shared_endpoint);
+    candidates.ready (
+      second_peer, bytes ("replacement-peer-connection"),
+      mesh::service_connection_direction_t::outbound, shared_endpoint);
+    assert (candidates.endpoint_in_use_by_other (shared_endpoint, peer));
+    const auto old_connections = candidates.disconnect_all (peer);
+    assert (old_connections.size () == 2);
+    assert (candidates.size (peer) == 0);
+    assert (candidates.size (second_peer) == 1);
+    assert (!candidates.endpoint_in_use_by_other (
+      shared_endpoint, second_peer));
+}
+
+void verify_stale_rid_disconnect_preserves_same_endpoint_replacement ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("replacement-source")});
+    auto old_target = std::make_unique<mesh::raw_mesh_node_owner_t> (
+      mesh::raw_mesh_node_options_t{descriptor ("replacement-old")});
+    source.start ();
+    old_target->start ();
+    const auto old_descriptor = old_target->topology ().local_descriptor ();
+    const auto endpoint = old_target->endpoint ();
+    admit_pair (source, *old_target, old_descriptor);
+
+    old_target->close ();
+    old_target.reset ();
+    const auto disconnect_deadline = std::chrono::steady_clock::now () + 2s;
+    while (source.topology ().peer (old_descriptor.node_routing_id)
+           && std::chrono::steady_clock::now () < disconnect_deadline) {
+        (void) source.drain_monitor_events (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        std::this_thread::sleep_for (1ms);
+    }
+
+    auto replacement_options = descriptor ("replacement-new", endpoint);
+    auto replacement = std::make_unique<mesh::raw_mesh_node_owner_t> (
+      mesh::raw_mesh_node_options_t{std::move (replacement_options)});
+    replacement->start ();
+    const auto replacement_descriptor =
+      replacement->topology ().local_descriptor ();
+    admit_pair (source, *replacement, replacement_descriptor);
+
+    assert (source.disconnect_peer (
+      old_descriptor.node_routing_id, endpoint));
+    assert (source.topology ().peer (
+      replacement_descriptor.node_routing_id));
+
+    const auto stable_deadline = std::chrono::steady_clock::now () + 500ms;
+    while (std::chrono::steady_clock::now () < stable_deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.drain_monitor_events (now);
+        (void) replacement->drain_monitor_events (now);
+        (void) await_task (source.pump_one (now));
+        (void) await_task (replacement->pump_one (now));
+        assert (source.topology ().peer (
+          replacement_descriptor.node_routing_id));
+        std::this_thread::sleep_for (1ms);
+    }
+
+    source.close ();
+    replacement->close ();
 }
 
 void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
@@ -2882,6 +2947,7 @@ int main ()
     verify_duplicate_connection_survivor_is_symmetric ();
     verify_lifecycle_token_requires_current_discovery_expectation ();
     verify_physical_candidates_preserve_survivor ();
+    verify_stale_rid_disconnect_preserves_same_endpoint_replacement ();
     verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ();
     verify_raw_admission_rejects_lifecycle_mismatch ();
     verify_object_client_connection_requirement ();

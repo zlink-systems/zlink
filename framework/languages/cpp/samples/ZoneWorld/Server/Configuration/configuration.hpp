@@ -4,6 +4,7 @@
 #include <zlink/framework.hpp>
 
 #include <stdexcept>
+#include <optional>
 #include <string>
 
 namespace zlink::samples::zoneworld
@@ -19,6 +20,10 @@ struct configuration_t
     std::string broadcast_endpoint;
     std::string bootstrap_http_endpoint;
     std::string log_dir;
+    std::optional<std::string> mesh_advertise_host;
+    bool subscriber_only = false;
+    bool disable_bots = false;
+    std::optional<std::string> fault_tick_zone;
 
     static configuration_t bind (
       const zlink::framework::configuration_section_t &section)
@@ -31,7 +36,11 @@ struct configuration_t
           section.require ("streamEndpoint"),
           section.require ("broadcastEndpoint"),
           section.require ("bootstrapHttpEndpoint"),
-          section.require ("logDir")};
+          section.require ("logDir"),
+          section.get ("meshAdvertiseHost"),
+          section.get ("subscriberOnly").value_or ("false") == "true",
+          section.get ("disableBots").value_or ("false") == "true",
+          section.get ("faultTickZone")};
     }
 };
 
