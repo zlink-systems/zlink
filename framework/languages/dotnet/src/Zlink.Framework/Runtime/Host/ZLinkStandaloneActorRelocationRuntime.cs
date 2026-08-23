@@ -1024,6 +1024,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             prepare.RelocationId.Low,
             prepare.TargetAttemptGeneration);
         using var lease = AcquireTargetAttempt(key);
+        if (envelope.Participants.Count == 1
+            && TryReadRoutedJoinSavedWork(
+                envelope.Participants[0],
+                out _,
+                out var routedJoinRecovery))
+            lease.Slot.ObserveRoutedJoinPreparation(
+                routedJoinRecovery.Request);
         await lease.Slot.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -2510,6 +2517,17 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         foreach (var pair in _targetAttempts.ToArray())
         {
+            // Spec 42: admission runs under the target Spot application turn.
+            // Waiting for an unrelated relocation gate here can retain that
+            // turn while the relocation owning the gate waits for another
+            // Spot turn, forming a cross-Spot cycle. The routed-join identity
+            // is published before target preparation takes its gate, so only
+            // the exact Actor candidate needs the serialized recheck below.
+            if (!pair.Value.MayOwnSupersededRoutedJoinPreparation(
+                    actorId,
+                    actorGeneration,
+                    newerHandoffId))
+                continue;
             if (!TryAcquireTargetAttempt(pair.Key, pair.Value, out var lease))
                 continue;
 
@@ -2900,6 +2918,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private sealed class AttemptSlot
     {
         private readonly ZLinkRelocationAttemptLeaseState _leases = new();
+        private RoutedJoinPreparationIdentity? _routedJoinPreparation;
         private TargetStage? _stage;
         private TargetAbort? _abort;
 
@@ -2916,6 +2935,34 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         internal void MarkClosing() => _leases.MarkClosing();
 
         internal bool CanRemove => _leases.CanRemove;
+
+        internal void ObserveRoutedJoinPreparation(
+            ZLinkRemoteActorJoinRequest request) =>
+            Interlocked.CompareExchange(
+                ref _routedJoinPreparation,
+                new RoutedJoinPreparationIdentity(
+                    request.ActorId,
+                    request.ActorGeneration,
+                    request.HandoffId),
+                null);
+
+        internal bool MayOwnSupersededRoutedJoinPreparation(
+            string actorId,
+            ulong actorGeneration,
+            string newerHandoffId)
+        {
+            var preparation = Volatile.Read(ref _routedJoinPreparation);
+            return preparation is not null
+                   && preparation.ActorGeneration == actorGeneration
+                   && string.Equals(
+                       preparation.ActorId,
+                       actorId,
+                       StringComparison.Ordinal)
+                   && !string.Equals(
+                       preparation.HandoffId,
+                       newerHandoffId,
+                       StringComparison.Ordinal);
+        }
 
         internal bool TrySetStage(TargetStage stage) =>
             Interlocked.CompareExchange(ref _stage, stage, null) is null;
@@ -2935,10 +2982,16 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 
         internal void Reset()
         {
+            Volatile.Write(ref _routedJoinPreparation, null);
             Volatile.Write(ref _stage, null);
             Volatile.Write(ref _abort, null);
         }
     }
+
+    private sealed record RoutedJoinPreparationIdentity(
+        string ActorId,
+        ulong ActorGeneration,
+        string HandoffId);
 
     private sealed class TargetAbort(TargetStage stage)
     {

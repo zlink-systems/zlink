@@ -6019,6 +6019,74 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task ActorJoinPrewarmSupersession_DoesNotWaitForUnrelatedTargetAttemptGate()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        object? targetAttemptLease = null;
+        SemaphoreSlim? targetAttemptGate = null;
+        try
+        {
+            var owner = runtime.StandaloneActorRelocationRuntime;
+            var ownerType = owner.GetType();
+            var keyType = ownerType.GetNestedType(
+                              "AttemptKey",
+                              BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Target attempt key was not found.");
+            var key = Activator.CreateInstance(
+                          keyType,
+                          BindingFlags.Instance
+                          | BindingFlags.Public
+                          | BindingFlags.NonPublic,
+                          binder: null,
+                          args: [11UL, 12UL, 1UL],
+                          culture: null)
+                      ?? throw new InvalidOperationException(
+                          "Target attempt key could not be created.");
+            var acquire = ownerType.GetMethod(
+                              "AcquireTargetAttempt",
+                              BindingFlags.Instance | BindingFlags.NonPublic,
+                              binder: null,
+                              types: [keyType],
+                              modifiers: null)
+                          ?? throw new InvalidOperationException(
+                              "Target attempt acquisition owner was not found.");
+            targetAttemptLease = acquire.Invoke(owner, [key])
+                                 ?? throw new InvalidOperationException(
+                                     "Target attempt lease was not acquired.");
+            var slot = targetAttemptLease.GetType()
+                           .GetProperty(
+                               "Slot",
+                               BindingFlags.Instance | BindingFlags.NonPublic)!
+                           .GetValue(targetAttemptLease)
+                       ?? throw new InvalidOperationException(
+                           "Target attempt slot was not found.");
+            targetAttemptGate = Assert.IsType<SemaphoreSlim>(
+                slot.GetType()
+                    .GetProperty(
+                        "Gate",
+                        BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(slot));
+            Assert.True(await targetAttemptGate.WaitAsync(0));
+
+            using var deadline = new CancellationTokenSource(
+                TimeSpan.FromMilliseconds(100));
+            await owner.AbortSupersededRoutedActorJoinPreparationAsync(
+                "different-actor",
+                actorGeneration: 42,
+                newerHandoffId: "newer-handoff",
+                deadline.Token);
+        }
+        finally
+        {
+            targetAttemptGate?.Release();
+            (targetAttemptLease as IDisposable)?.Dispose();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task ActorJoinPrewarmIngress_WithoutRegistration_ArrivalIsTreatedAsNotFound()
     {
         //  Disable-check: the same arrival, dispatched to the same
