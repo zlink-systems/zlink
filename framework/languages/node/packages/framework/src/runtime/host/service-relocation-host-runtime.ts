@@ -669,6 +669,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<boolean> {
     if (record.parts.length === 0) return false;
     const payload = record.parts[0]!.data();
+    if (isServiceWireCommand(payload, M6bServiceWireCommand.replyRelay)) {
+      await this.handleReplyRelay(
+        meshName,
+        decodeMaintenanceReplyRelay(record.parts.map(part => part.data())),
+        record.sourceNodeRid,
+        signal
+      );
+      return true;
+    }
     const sideband = record.parts.length === 1
       ? undefined
       : decodePrepareSideband(record.parts.slice(1).map(part => part.data()));
@@ -706,15 +715,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       await this.handleSessionRelocationRoute(
         meshName,
         request,
-        record.sourceNodeRid,
-        signal
-      );
-      return true;
-    }
-    if (isServiceWireCommand(payload, M6bServiceWireCommand.replyRelay)) {
-      await this.handleReplyRelay(
-        meshName,
-        decodeMaintenanceReplyRelay(payload),
         record.sourceNodeRid,
         signal
       );

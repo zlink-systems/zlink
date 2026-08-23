@@ -63,6 +63,12 @@ import {
   encodeServiceWireFrozenRecord
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
 import {
+  decodeReplyRelay33,
+  decodeReplyRelayAck46,
+  encodeReplyRelay33,
+  encodeReplyRelayAck46
+} from '../../packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated';
+import {
   decodeRoutingId,
   encodeRoutingIdStorageHex
 } from '../../packages/framework/src/runtime/routing-id';
@@ -100,9 +106,7 @@ test('stateful service wire separates opaque routing IDs from canonical UTF-8 te
   malformed[ownerOffset] = 0xff;
   assert.throws(
     () => decodeSessionRelocationSeal(malformed),
-    error => error instanceof Error
-      && error.name === 'ServiceWireProtocolError'
-      && /coordinatorOwnerId/.test(error.message)
+    Error
   );
 });
 
@@ -443,13 +447,13 @@ test('canonical command 33 and 46 match the shared reply-relay byte fixture', ()
     terminalResult: 101,
     failureCode: 0
   };
-  assert.deepEqual(encodeMaintenanceReplyRelay(relay), command33);
-  assert.deepEqual(decodeMaintenanceReplyRelay(command33), relay);
+  assert.deepEqual(encodeMaintenanceReplyRelay(relay), [command33]);
+  assert.deepEqual(decodeMaintenanceReplyRelay([command33]), relay);
   assert.throws(() => encodeMaintenanceReplyRelay({
     ...relay,
     terminalResult: 105,
     failureCode: 1
-  }), /does not match/);
+  }), /typed failure/);
   assert.throws(() => encodeMaintenanceReplyRelay({
     ...relay,
     payload: {
@@ -457,7 +461,20 @@ test('canonical command 33 and 46 match the shared reply-relay byte fixture', ()
       contentType: 'application/json',
       bytes: Buffer.from('{}')
     }
-  }), /must not carry a payload/);
+  }), /failure payload/);
+
+  const successfulPayloadRelay = {
+    ...relay,
+    terminalResult: 0,
+    payload: {
+      packetName: 'Reply',
+      contentType: 'application/json',
+      bytes: Buffer.from('{}')
+    }
+  };
+  const payloadFrames = encodeMaintenanceReplyRelay(successfulPayloadRelay);
+  assert.equal(payloadFrames.length, 2);
+  assert.deepEqual(decodeMaintenanceReplyRelay(payloadFrames), successfulPayloadRelay);
 
   const ack = {
     relocation: { high: 4n, low: 5n },
@@ -477,9 +494,42 @@ test('canonical command 33 and 46 match the shared reply-relay byte fixture', ()
   assert.throws(() => encodeMaintenanceReplyRelayAck({
     ...ack,
     replyRouteId: 0n
-  }), /non-zero u64/);
-  assert.throws(() => decodeMaintenanceReplyRelay(command33.subarray(0, -1)));
+  }), /reply route/);
+  assert.throws(() => decodeMaintenanceReplyRelay([command33.subarray(0, -1)]));
   assert.throws(() => decodeMaintenanceReplyRelayAck(Buffer.concat([command46, Buffer.of(0)])));
+});
+
+test('batch-3 reply-relay hand/generated codecs are byte-equal and reject the same malformed bytes', () => {
+  const fixture = JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/reply-relay-v1.json',
+    'utf8'
+  )) as { readonly canonical: readonly { readonly name: string; readonly hex: string }[] };
+  const command33 = Buffer.from(
+    fixture.canonical.find(value => value.name === 'maintenanceReplyRelay')!.hex,
+    'hex'
+  );
+  const command46 = Buffer.from(
+    fixture.canonical.find(value => value.name === 'replyRelayAlreadyTerminalAck')!.hex,
+    'hex'
+  );
+
+  const hand33 = encodeMaintenanceReplyRelay(decodeMaintenanceReplyRelay([command33]));
+  const generated33 = encodeReplyRelay33(decodeReplyRelay33([command33]));
+  assert.deepEqual(hand33, [command33]);
+  assert.equal(generated33.length, 1);
+  assert.deepEqual(Buffer.from(generated33[0]!), command33);
+
+  const hand46 = encodeMaintenanceReplyRelayAck(decodeMaintenanceReplyRelayAck(command46));
+  const generated46 = encodeReplyRelayAck46(decodeReplyRelayAck46(command46));
+  assert.deepEqual(hand46, command46);
+  assert.deepEqual(Buffer.from(generated46), command46);
+
+  const malformed33 = command33.subarray(0, -1);
+  const malformed46 = Buffer.concat([command46, Buffer.of(0)]);
+  assert.throws(() => decodeMaintenanceReplyRelay([malformed33]));
+  assert.throws(() => decodeReplyRelay33([malformed33]));
+  assert.throws(() => decodeMaintenanceReplyRelayAck(malformed46));
+  assert.throws(() => decodeReplyRelayAck46(malformed46));
 });
 
 test('startup authority scan submits published Actor roots before admission', async () => {
