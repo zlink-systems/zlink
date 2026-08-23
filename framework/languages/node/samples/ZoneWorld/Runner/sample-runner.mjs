@@ -218,16 +218,43 @@ export async function runSample(ctx) {
   await transition.waitFor('scenario ZW-B4 passed');
   await transition.waitFor('scenario ZW-C2 passed');
   await transition.waitFor('scenario ZW-C3 passed');
+  await transition.waitFor('crash-boundary=Unavailable');
   await transition.complete();
   process.stdout.write(transition.output());
   collectVerdicts(verdicts, transition.output());
   const targetAfterFailure = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-failure', {
     disableBots: true,
-    waitForPlacementPeer: true
+    waitForPlacementPeer: true,
+    bootstrapZones: false
   });
   await ctx.start('target-after-failure', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterFailure.path]);
-  await ctx.waitLog('target-after-failure', 'topology=ready');
+  await waitForExactLogLine(
+    ctx,
+    'target-after-failure',
+    `topology=ready node=${targetNode.nodeId} zones=`
+  );
   await ctx.waitLog('target-after-failure', `mesh status node=${targetNode.nodeId} state=1`);
+  const crashRecreation = startScenarioClient(
+    ctx,
+    specialClientConfig(
+      ctx,
+      shared,
+      gateway,
+      ops,
+      'G4',
+      targetNode.nodeId
+    ),
+    'crash-recreation'
+  );
+  await crashRecreation.complete();
+  process.stdout.write(crashRecreation.output());
+  const crashProof = assertFreshReplacementProof(
+    parseFreshActorProofs(crashRecreation.output(), 'G4'),
+    targetNode.nodeId,
+    layout.pair.sourceOwnerNodeRid,
+    layout.pair.targetOwnerNodeRid
+  );
+  recordVerdict(verdicts, 'ZW-G4');
   const maintenanceArm = startScenarioClient(
     ctx,
     specialClientConfig(ctx, shared, gateway, ops, 'E5-arm', targetNode.nodeId),
@@ -237,14 +264,19 @@ export async function runSample(ctx) {
   await stopAndWaitForLocationLease(
     ctx,
     'target-after-failure',
-    targetAfterFailure.value.zoneNode,
-    shared
+    'SIGTERM'
   );
   const targetAfterMaintenance = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-maintenance', {
     disableBots: true,
-    waitForPlacementPeer: true
+    waitForPlacementPeer: true,
+    bootstrapZones: false
   });
   await ctx.start('target-after-maintenance', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterMaintenance.path]);
+  await waitForExactLogLine(
+    ctx,
+    'target-after-maintenance',
+    `topology=ready node=${targetNode.nodeId} zones=`
+  );
   await ctx.waitLog('target-after-maintenance', `maintenance restored node=${targetNode.nodeId} enabled=true`);
   const maintenanceRestore = startScenarioClient(
     ctx,
@@ -255,14 +287,34 @@ export async function runSample(ctx) {
   process.stdout.write(maintenanceRestore.output());
   collectVerdicts(verdicts, maintenanceRestore.output());
 
+  const normalRecreation = startScenarioClient(
+    ctx,
+    specialClientConfig(
+      ctx,
+      shared,
+      gateway,
+      ops,
+      'G3',
+      targetNode.nodeId
+    ),
+    'normal-recreation'
+  );
+  await normalRecreation.complete();
+  process.stdout.write(normalRecreation.output());
+  assertFreshReplacementProof(
+    parseFreshActorProofs(normalRecreation.output(), 'G3'),
+    targetNode.nodeId,
+    layout.pair.sourceOwnerNodeRid,
+    crashProof.nodeRid
+  );
+  recordVerdict(verdicts, 'ZW-G3');
+
   await stopAndWaitForLocationLease(
     ctx,
     'target-after-maintenance',
-    targetAfterMaintenance.value.zoneNode,
-    shared
+    'SIGTERM'
   );
   await stopNormalTopology(ctx);
-  await runRoutingProbes(ctx, shared, targetNode.nodeId, verdicts);
   recordVerdict(verdicts, 'ZW-G5');
   assertCompleteVerdicts(verdicts);
   console.log('topology=ready');
@@ -300,46 +352,6 @@ async function stopNormalTopology(ctx) {
   ]) {
     await ctx.stop(name, 'SIGKILL');
   }
-}
-
-async function runRoutingProbes(ctx, shared, nodeId, verdicts) {
-  // Replacement probes use an isolated Location Store and run after the normal
-  // topology has stopped. Ready-owner crash failover is intentionally outside
-  // the common sample contract.
-  const probeShared = {
-    ...shared,
-    redisKeyPrefix: `${shared.redisKeyPrefix}routing-probe:`
-  };
-  const probe = await zoneNodeConfig(ctx, probeShared, nodeId, 'target-probe', {
-    disableBots: true,
-    waitForPlacementPeer: false,
-    bootstrapZones: false
-  });
-  const replacement = await zoneNodeConfig(ctx, probeShared, nodeId, 'target-replacement', {
-    disableBots: true,
-    waitForPlacementPeer: false,
-    bootstrapZones: false
-  });
-  const crashReplacement = await zoneNodeConfig(ctx, probeShared, nodeId, 'target-crash-replacement', {
-    disableBots: true,
-    waitForPlacementPeer: false,
-    bootstrapZones: false
-  });
-  await ctx.start('zone-node-2-probe', 'dist/Server/ZoneNode/main.js', ['--config', probe.path]);
-  await ctx.waitTcp(probe.value.zoneNode.spotRouterEndpoint);
-  await ctx.start('zone-node-2-replacement', 'dist/Server/ZoneNode/main.js', ['--config', replacement.path]);
-  await ctx.waitTcp(replacement.value.zoneNode.spotRouterEndpoint);
-  recordVerdict(verdicts, 'ZW-G3');
-  ctx.signal('zone-node-2-probe', 'SIGKILL');
-  ctx.signal('zone-node-2-replacement', 'SIGKILL');
-  await ctx.start(
-    'zone-node-2-crash-replacement',
-    'dist/Server/ZoneNode/main.js',
-    ['--config', crashReplacement.path]
-  );
-  await ctx.waitTcp(crashReplacement.value.zoneNode.spotRouterEndpoint);
-  recordVerdict(verdicts, 'ZW-G4');
-  ctx.signal('zone-node-2-crash-replacement', 'SIGKILL');
 }
 
 function specialClientConfig(ctx, shared, gateway, ops, scenarios, targetNodeId) {
@@ -387,8 +399,8 @@ function startScenarioClient(ctx, configPath, name, relativeExecutable = 'dist/C
 }
 
 
-async function stopAndWaitForLocationLease(ctx, name, _node, _shared) {
-  await ctx.stop(name, 'SIGKILL');
+async function stopAndWaitForLocationLease(ctx, name, signal) {
+  await ctx.stop(name, signal);
   // The sample config fixes ownerLeaseTtlMs at 3 seconds.
   await delay(3_100);
 }
@@ -425,6 +437,31 @@ function parseOpsLayout(output) {
   const match = output.match(/^ops-layout=(\[.+\])$/m);
   if (match === null) throw new Error(`ZoneWorld initial Ops layout output was missing.\n${output}`);
   return JSON.parse(match[1]);
+}
+
+function parseFreshActorProofs(output, expectedScenario) {
+  const proofs = [...output.matchAll(/^fresh-actor-proof=(\{.+\})$/gm)]
+    .map((match) => JSON.parse(match[1]));
+  const matching = proofs.filter((candidate) => candidate.scenario === expectedScenario);
+  if (matching.length === 0) {
+    throw new Error(`ZoneWorld ${expectedScenario} fresh Actor proofs were missing.\n${output}`);
+  }
+  return matching;
+}
+
+function assertFreshReplacementProof(proofs, expectedNodeId, sourceNodeRid, previousNodeRid) {
+  const canonical = /^zn-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const proof = proofs.find((candidate) => candidate.nodeId === expectedNodeId
+    && canonical.test(candidate.nodeRid)
+    && candidate.nodeRid !== sourceNodeRid
+    && candidate.nodeRid !== previousNodeRid
+    && /^[1-9][0-9]*$/.test(candidate.objectGeneration));
+  if (proof === undefined) {
+    throw new Error(
+      `Replacement '${expectedNodeId}' did not accept a fresh Actor on a new RID: ${JSON.stringify(proofs)}.`
+    );
+  }
+  return proof;
 }
 
 function assertZoneLayout(layout) {
@@ -531,4 +568,17 @@ async function waitForFile(target, timeoutMs) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for '${target}'.`);
     await delay(50);
   }
+}
+
+async function waitForExactLogLine(ctx, name, expected) {
+  const target = path.join(ctx.logDir, `${name}.log`);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(target)) {
+      const lines = fs.readFileSync(target, 'utf8').split(/\r?\n/);
+      if (lines.includes(expected)) return;
+    }
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for exact ${name} log line '${expected}'.`);
 }

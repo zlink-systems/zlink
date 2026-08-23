@@ -79,7 +79,7 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
   assert.ok(botTransferProof >= 0, 'ZW-F2 must wait for an Ops-discovered cross-owner bot transition.');
   assert.ok(botTransferProof < botClientStart, 'ZW-F2 must be proven before the F scenario client connects.');
   assert.match(runner, /assertGeneratedRoutingIds\(layout\.pair\.sourceOwnerNodeRid, layout\.pair\.targetOwnerNodeRid\)/);
-  assert.match(runner, /await ctx\.start\('zone-node-2-replacement'/);
+  assert.match(runner, /await ctx\.start\('target-after-failure'/);
   assert.doesNotMatch(runner, /WaitingForSlot|listRoutingIdSlots|slot=|routing allocation/);
   assert.match(
     zoneSpot,
@@ -123,6 +123,45 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
     /await spawnBots\(app, zones\);[\s\S]*?bot-start=ready[\s\S]*?waitForBotStart\(node\.botStartSignalPath\)[\s\S]*?state\.enableBotTicks\(\)/
   );
   assert.match(runner, /waitLog\('zone-node-1', 'bot-start=ready'\)[\s\S]*?writeFileSync\(botStartSignalPath/);
+});
+
+test('ZoneWorld replacements start empty and prove on-demand creation after the crash boundary', () => {
+  const runner = read('samples/ZoneWorld/Runner/sample-runner.mjs');
+  const specialClient = read('samples/ZoneWorld/Client/special.ts');
+  const zoneNodeMain = read('samples/ZoneWorld/Server/ZoneNode/main.ts');
+  const gatewayProbes = read('samples/ZoneWorld/Server/Gateway/relocation-probe-handlers.ts');
+
+  assert.match(
+    runner,
+    /target-after-failure'[\s\S]*?bootstrapZones:\s*false[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
+  );
+  assert.match(
+    runner,
+    /target-after-maintenance'[\s\S]*?bootstrapZones:\s*false[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
+  );
+  assert.match(runner, /specialClientConfig\([\s\S]*?'G4',[\s\S]*?targetNode\.nodeId/);
+  assert.match(runner, /specialClientConfig\([\s\S]*?'G3',[\s\S]*?targetNode\.nodeId/);
+  assert.match(runner, /assertFreshReplacementProof\([\s\S]*?layout\.pair\.targetOwnerNodeRid/);
+  assert.match(runner, /assertFreshReplacementProof\([\s\S]*?crashProof\.nodeRid/);
+  assert.match(runner, /stopAndWaitForLocationLease\([\s\S]*?'target-after-failure',[\s\S]*?'SIGTERM'/);
+  assert.doesNotMatch(runner, /runRoutingProbes|recordVerdict\(verdicts, 'ZW-G[34]'\);\s*ctx\.signal/);
+
+  assert.match(
+    specialClient,
+    /MessageFollowProbeReq\(targetJoin\.playerId, 'zw-g4-crashed-owner'[\s\S]*?actorUnavailable/
+  );
+  assert.match(specialClient, /node\.zones\.length === 0/);
+  assert.match(
+    specialClient,
+    /CreateFreshActorProbeReq\(actorId\)[\s\S]*?created\.error === null[\s\S]*?ActorLocationProbeReq\(actorId\)[\s\S]*?fresh-actor-proof=/
+  );
+  assert.match(specialClient, /node\.registered && node\.connected && node\.zones\.length === 0/);
+  assert.match(
+    gatewayProbes,
+    /class CreateFreshActorProbeHandler[\s\S]*?\.getOrCreate\(request\.actorId, ZoneWorldNames\.playerActorType\)[\s\S]*?\.inMesh\(ZoneWorldNames\.zoneMesh\)[\s\S]*?\.submit\(\)/
+  );
+  assert.match(zoneNodeMain, /new ReportNodeStatusMsg\([\s\S]*?\[\.\.\.state\.zones\(\)\]/);
+  assert.match(runner, /zoneCapacity:\s*2/);
 });
 
 test('ZoneWorld applies the Node sample configuration policy without environment settings', () => {

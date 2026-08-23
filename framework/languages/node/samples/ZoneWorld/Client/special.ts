@@ -7,8 +7,11 @@ import {
 } from '@zlink-systems/stream-connector';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import {
+  ActorLocationProbeReq,
   AnnounceWorldReq,
+  CreateFreshActorProbeReq,
   JoinWorldReq,
+  MessageFollowProbeReq,
   MoveMsg,
   NodeDiagnosticsReq,
   PacketNames,
@@ -17,8 +20,11 @@ import {
   WatchNodesReq
 } from '../Shared/contracts';
 import type {
+  ActorLocationProbeRes,
   AnnounceWorldRes,
+  CreateFreshActorProbeRes,
   JoinWorldRes,
+  MessageFollowProbeRes,
   MoveRejectedNotify,
   NodeAlertNotify,
   NodeDiagnosticsRes,
@@ -63,6 +69,12 @@ async function main(): Promise<void> {
     config.client.opsEndpoint,
     config.client.targetNodeId ?? NodeIds.east
   );
+  else if (scenario === 'G3' || scenario === 'G4') await runReplacementCreation(
+    config.client.gatewayEndpoint,
+    config.client.opsEndpoint,
+    scenario,
+    config.client.targetNodeId ?? NodeIds.east
+  );
   else if (scenario === 'F') await runBots(config.client.gatewayEndpoint, config.client.opsEndpoint);
   else throw new Error(`Unknown special scenario '${scenario}'.`);
 }
@@ -102,6 +114,15 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
       withScenarioContext('ZW-C2 runtime disconnected status', disconnected),
       withScenarioContext('ZW-C3 report TTL expired status', unregistered)
     ]);
+    const previousOwnerTerminal = await target
+      .request(new MessageFollowProbeReq(targetJoin.playerId, 'zw-g4-crashed-owner', 'crash-boundary'))
+      .packetName(PacketNames.messageFollowProbeReq)
+      .submit<MessageFollowProbeRes>();
+    zlinkStreamAssert.ensure(
+      previousOwnerTerminal.error === ZoneWorldErrors.actorUnavailable,
+      'ZW-G4 previous-owner operation did not end at the Unavailable boundary.'
+    );
+    console.log(`crash-boundary=${previousOwnerTerminal.error} actor=${targetJoin.playerId}`);
     console.log('scenario ZW-B4 passed');
     console.log('scenario ZW-C2 passed');
     console.log('scenario ZW-C3 passed');
@@ -296,6 +317,70 @@ async function runMaintenanceRestore(opsEndpoint: string, targetNodeId: string):
   } finally {
     await closeAll(ops);
   }
+}
+
+async function runReplacementCreation(
+  gatewayEndpoint: string,
+  opsEndpoint: string,
+  scenario: 'G3' | 'G4',
+  targetNodeId: string
+): Promise<void> {
+  const game = connector(gatewayEndpoint);
+  const ops = connector(opsEndpoint);
+  try {
+    await Promise.all([game.connect(), ops.connect()]);
+    const emptyReport = await waitForNodeReport(
+      ops,
+      targetNodeId,
+      (node) => node.registered && node.connected && node.zones.length === 0
+    );
+    zlinkStreamAssert.ensure(
+      emptyReport.zones.length === 0,
+      `ZW-${scenario} replacement did not start with zero local zones.`
+    );
+    for (let index = 0; index < 16; index += 1) {
+      const actorId = `player-${scenario.toLowerCase()}-fresh-${index}`;
+      const created = await game
+        .request(new CreateFreshActorProbeReq(actorId))
+        .packetName(PacketNames.createFreshActorProbeReq)
+        .submit<CreateFreshActorProbeRes>();
+      zlinkStreamAssert.ensure(created.error === null, `ZW-${scenario} fresh Actor creation failed.`);
+      const located = await game
+        .request(new ActorLocationProbeReq(actorId))
+        .packetName(PacketNames.actorLocationProbeReq)
+        .submit<ActorLocationProbeRes>();
+      zlinkStreamAssert.ensure(
+        located.error === null
+          && located.actorId === created.actorId
+          && located.objectGeneration === created.objectGeneration
+          && located.nodeRid === created.nodeRid,
+        `ZW-${scenario} fresh Actor routing probe did not match creation.`
+      );
+      console.log(`fresh-actor-proof=${JSON.stringify({
+        scenario,
+        nodeId: emptyReport.nodeId,
+        actorId: created.actorId,
+        objectGeneration: created.objectGeneration,
+        nodeRid: created.nodeRid
+      })}`);
+    }
+  } finally {
+    await closeAll(game, ops);
+  }
+}
+
+async function waitForNodeReport(
+  ops: ZlinkStreamConnector,
+  nodeId: string,
+  predicate: (node: WatchNodesRes['nodes'][number]) => boolean
+): Promise<WatchNodesRes['nodes'][number]> {
+  const current = (await watch(ops)).nodes.find((node) => node.nodeId === nodeId);
+  if (current !== undefined && predicate(current)) return current;
+  const observed = await ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+    .where((message) => message.payload.nodeId === nodeId && predicate(message.payload))
+    .timeout(20_000)
+    .submit();
+  return observed.payload;
 }
 
 async function runBots(gatewayEndpoint: string, opsEndpoint: string): Promise<void> {

@@ -4,18 +4,52 @@ import { ZLinkPacket } from '@zlink-systems/framework';
 import {
   ActorLocationProbeReq,
   ActorLocationProbeRes,
+  CreateFreshActorProbeReq,
+  CreateFreshActorProbeRes,
   MessageFollowProbeMsg,
   MessageFollowProbeReq,
   MessageFollowProbeRes,
-  PacketNames
+  PacketNames,
+  PlayerActorCreateReq
 } from '../../Shared/contracts';
-import { ZoneWorldErrors } from '../../Shared/spec';
+import { ZoneWorldErrors, ZoneWorldNames } from '../../Shared/spec';
 import type {
   ZLinkActorManager,
   ZLinkMessage,
   ZLinkSessionContext,
   ZLinkSessionDispatchContext
 } from '@zlink-systems/framework';
+
+/**
+ * Performs the explicit new-object operation used by ZW-G3/G4. Capacity
+ * placement selects an owner; the returned NodeRid is evidence only and is
+ * never supplied as placement input.
+ */
+@Injectable()
+@ZLinkPacket(PacketNames.createFreshActorProbeReq)
+class CreateFreshActorProbeHandler {
+  constructor(@Inject(ZLINK_ACTOR_MANAGER) private readonly actors: ZLinkActorManager) {}
+
+  async handle(
+    context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
+    const request = payload.decode(CreateFreshActorProbeReq);
+    const result = await this.actors
+      .getOrCreate(request.actorId, ZoneWorldNames.playerActorType)
+      .inMesh(ZoneWorldNames.zoneMesh)
+      .request(new PlayerActorCreateReq(request.actorId))
+      .submit();
+    context.client.reply(result.status === 'rejected'
+      ? new CreateFreshActorProbeRes(request.actorId, '', '', ZoneWorldErrors.actorUnavailable)
+      : new CreateFreshActorProbeRes(
+        result.actor.actorId,
+        result.actor.objectGeneration.toString(),
+        String(result.actor.nodeRid)
+      )).submit();
+  }
+}
 
 /**
  * Serves runner-only relocation probes through the Gateway's existing Object
@@ -102,6 +136,7 @@ class MessageFollowProbeSendSessionHandler {
 
 export {
   ActorLocationProbeHandler,
+  CreateFreshActorProbeHandler,
   MessageFollowProbeRequestSessionHandler,
   MessageFollowProbeSendSessionHandler
 };

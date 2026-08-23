@@ -37,6 +37,15 @@ class ActorLocationProbeRes {
     readonly error: string | null = null
   ) {}
 }
+class CreateFreshActorProbeReq { constructor(readonly actorId: string) {} }
+class CreateFreshActorProbeRes {
+  constructor(
+    readonly actorId: string,
+    readonly objectGeneration: string,
+    readonly nodeRid: string,
+    readonly error: string | null = null
+  ) {}
+}
 class MessageFollowProbeReq {
   constructor(readonly actorId: string, readonly probeId: string, readonly payload: string) {}
 }
@@ -157,6 +166,7 @@ class EnterZoneRes {
 
 const PacketNames = {
   actorLocationProbeReq: 'ActorLocationProbeReq', actorLocationProbeRes: 'ActorLocationProbeRes',
+  createFreshActorProbeReq: 'CreateFreshActorProbeReq', createFreshActorProbeRes: 'CreateFreshActorProbeRes',
   messageFollowProbeReq: 'MessageFollowProbeReq', messageFollowProbeRes: 'MessageFollowProbeRes',
   messageFollowProbeMsg: 'MessageFollowProbeMsg',
   joinWorldReq: 'JoinWorldReq', joinWorldRes: 'JoinWorldRes', moveMsg: 'MoveMsg', zoneStateNotify: 'ZoneStateNotify',
@@ -180,6 +190,7 @@ const PacketNames = {
 export {
   ActorLocationProbeReq, ActorLocationProbeRes,
   AnnounceWorldReq, AnnounceWorldRes, ApplyNodeMaintenanceReq, ApplyNodeMaintenanceRes, BotTickMsg,
+  CreateFreshActorProbeReq, CreateFreshActorProbeRes,
   DeliverAnnounceMsg, PlayerActorCreateReq, EnterWorldReq, EnterWorldRes,
   EnterZoneReq, EnterZoneRes, GetNodeDiagnosticsReq, GetNodeDiagnosticsRes, JoinWorldReq, JoinWorldRes,
   MessageFollowProbeMsg, MessageFollowProbeReq, MessageFollowProbeRes,

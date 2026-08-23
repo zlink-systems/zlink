@@ -27,11 +27,11 @@ import type { ZoneWorldConfiguration } from '../Configuration/configuration';
 import { closeRuntime, waitForShutdown } from '../runtime-support';
 import { ZoneIds, ZoneWorldNames, ZoneWorldSpec } from '../../Shared/spec';
 import { createZoneNodeModule } from './zone-node-module';
-import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
 import { EnterWorldReq, EnterWorldRes, ReportNodeStatusMsg } from '../../Shared/contracts';
 import { MaintenanceStore } from '../Configuration/maintenance-store';
 import { NodeRuntimeState } from './Domain/node-runtime-state';
 import { botRoutes } from './Domain/bot-patrol';
+import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
 
 let statusTimer: NodeJS.Timeout | undefined;
 
@@ -90,7 +90,7 @@ async function bootstrap(): Promise<void> {
           ZoneWorldNames.reportChannel,
           new ReportNodeStatusMsg(
             node.nodeId,
-            [...zones],
+            [...state.zones()],
             state.playerCount(),
             state.ownMaintenance()
           )
