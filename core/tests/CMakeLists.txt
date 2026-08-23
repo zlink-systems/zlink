@@ -116,6 +116,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_flow_state_paired
   ${INTEGRATION_TEST_ROOT}/test_flow_state_c_api
   ${INTEGRATION_TEST_ROOT}/test_routed_submit_target
+  ${INTEGRATION_TEST_ROOT}/test_send_async_multipart
   ${INTEGRATION_TEST_ROOT}/test_zmp_metadata
   ${INTEGRATION_TEST_ROOT}/test_stream_socket
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe

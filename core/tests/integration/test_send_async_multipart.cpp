@@ -1,0 +1,523 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+
+#include "testutil.hpp"
+#include "testutil_unity.hpp"
+
+#include <chrono>
+#include <condition_variable>
+#include <cstring>
+#include <functional>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+SETUP_TEARDOWN_TESTCONTEXT
+
+namespace
+{
+struct completion_snapshot_t
+{
+    zlink_send_complete_result_t result;
+    int terminal_errno;
+};
+
+struct completion_probe_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<completion_snapshot_t> events;
+};
+
+void capture_completion (void *, const zlink_send_complete_event_t *event_, void *userdata_)
+{
+    completion_probe_t *probe = static_cast<completion_probe_t *> (userdata_);
+    if (!probe || !event_)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        completion_snapshot_t snapshot;
+        snapshot.result = event_->result;
+        snapshot.terminal_errno = event_->terminal_errno;
+        probe->events.push_back (snapshot);
+    }
+    probe->changed.notify_all ();
+}
+
+bool wait_for_completion_count (completion_probe_t *probe_, size_t count_, int timeout_ms_ = 3000)
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
+    std::unique_lock<std::mutex> lock (probe_->mutex);
+    return probe_->changed.wait_until (
+             lock, deadline,
+             [probe_, count_] { return probe_->events.size () >= count_; });
+}
+
+size_t completion_count (completion_probe_t *probe_)
+{
+    std::lock_guard<std::mutex> lock (probe_->mutex);
+    return probe_->events.size ();
+}
+
+completion_snapshot_t completion_at (completion_probe_t *probe_, size_t index_)
+{
+    std::lock_guard<std::mutex> lock (probe_->mutex);
+    return probe_->events[index_];
+}
+
+zlink_routing_id_t make_rid (const char *text_)
+{
+    zlink_routing_id_t rid;
+    memset (&rid, 0, sizeof (rid));
+    const size_t size = strlen (text_);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT8 (sizeof (rid.data), size);
+    rid.size = static_cast<uint8_t> (size);
+    memcpy (rid.data, text_, size);
+    return rid;
+}
+
+void init_part (zlink_msg_t *part_, const std::string &payload_)
+{
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_init_size (part_, payload_.size ()));
+    if (!payload_.empty ())
+        memcpy (zlink_msg_data (part_), payload_.data (), payload_.size ());
+}
+
+zlink_submit_result_t submit_record (void *socket_,
+                                      const std::vector<std::string> &payloads_,
+                                      const zlink_send_async_options_t *options_)
+{
+    std::vector<zlink_msg_t> parts (payloads_.size ());
+    for (size_t i = 0; i != payloads_.size (); ++i)
+        init_part (&parts[i], payloads_[i]);
+
+    zlink_send_op_id_t op_id = 0;
+    const zlink_submit_result_t result =
+      zlink_send_async (socket_, parts.data (), parts.size (), options_, &op_id);
+    if (result != ZLINK_SUBMIT_OK)
+        zlink_multipart_close (parts.data (), parts.size ());
+    else
+        TEST_ASSERT_TRUE (op_id != 0);
+    return result;
+}
+
+zlink_routed_submit_target_t select_router_target_eventually (
+  void *router_, const zlink_routing_id_t *peer_rid_)
+{
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    for (int i = 0; i != 3000; ++i) {
+        const zlink_submit_result_t result =
+          zlink_select_routed_submit_target (router_, peer_rid_, &target);
+        if (result == ZLINK_SUBMIT_OK)
+            return target;
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_CONNECTED, result);
+        msleep (1);
+    }
+    TEST_FAIL_MESSAGE ("ROUTER target did not become selectable");
+    return target;
+}
+
+zlink_routed_submit_target_t select_dealer_target_eventually (void *dealer_)
+{
+    zlink_routed_submit_target_t target;
+    memset (&target, 0, sizeof (target));
+    for (int i = 0; i != 3000; ++i) {
+        const zlink_submit_result_t result =
+          zlink_select_routed_submit_target (dealer_, NULL, &target);
+        if (result == ZLINK_SUBMIT_OK)
+            return target;
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_CONNECTED, result);
+        msleep (1);
+    }
+    TEST_FAIL_MESSAGE ("DEALER target did not become selectable");
+    return target;
+}
+
+bool recv_dealer_record_eventually (void *dealer_,
+                                    const std::vector<std::string> &expected_,
+                                    int timeout_ms_ = 3000)
+{
+    std::vector<std::string> actual;
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
+    while (std::chrono::steady_clock::now () < deadline) {
+        uint8_t message_type = 0;
+        uint64_t request_seq = 0;
+        zlink_msg_t part;
+        zlink_msg_init (&part);
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        const zlink_recv_result_t result = zlink_dealer_recv_part (
+          dealer_, &message_type, &request_seq, &part, &has_more,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_NO_DATA) {
+            zlink_msg_close (&part);
+            msleep (1);
+            continue;
+        }
+        if (result != ZLINK_RECV_OK) {
+            zlink_msg_close (&part);
+            return false;
+        }
+
+        actual.push_back (std::string (
+          static_cast<const char *> (zlink_msg_data (&part)),
+          zlink_msg_size (&part)));
+        const bool final = has_more == ZLINK_PART_FINAL;
+        zlink_msg_close (&part);
+        if (final)
+            break;
+    }
+    return actual == expected_;
+}
+
+int drain_dealer_parts (void *dealer_, int timeout_ms_ = 300)
+{
+    int count = 0;
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
+    while (std::chrono::steady_clock::now () < deadline) {
+        uint8_t message_type = 0;
+        uint64_t request_seq = 0;
+        zlink_msg_t part;
+        zlink_msg_init (&part);
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        const zlink_recv_result_t result = zlink_dealer_recv_part (
+          dealer_, &message_type, &request_seq, &part, &has_more,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_NO_DATA) {
+            zlink_msg_close (&part);
+            msleep (1);
+            continue;
+        }
+        if (result != ZLINK_RECV_OK) {
+            zlink_msg_close (&part);
+            break;
+        }
+        ++count;
+        zlink_msg_close (&part);
+    }
+    return count;
+}
+
+bool dealer_has_no_part (void *dealer_, int timeout_ms_ = 100)
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
+    while (std::chrono::steady_clock::now () < deadline) {
+        uint8_t message_type = 0;
+        uint64_t request_seq = 0;
+        zlink_msg_t part;
+        zlink_msg_init (&part);
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        const zlink_recv_result_t result = zlink_dealer_recv_part (
+          dealer_, &message_type, &request_seq, &part, &has_more,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_OK) {
+            zlink_msg_close (&part);
+            return false;
+        }
+        zlink_msg_close (&part);
+        if (result != ZLINK_RECV_NO_DATA)
+            return false;
+        msleep (1);
+    }
+    return true;
+}
+
+zlink_submit_result_t send_router_filler (
+  void *router_, const zlink_routed_submit_target_t &target_, size_t size_)
+{
+    zlink_msg_t part;
+    zlink_msg_init_size (&part, size_);
+    memset (zlink_msg_data (&part), 0x4f, size_);
+    //  The part helper consumes the message on both success and failure.
+    return zlink_send_part_transport_pair (
+      router_, &target_.peer_rid, target_.transport_pair_id,
+      target_.transport_pair_generation, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+      ZLINK_PART_FINAL);
+}
+
+struct sync_sequence_probe_t
+{
+    sync_sequence_probe_t () : first (ZLINK_SUBMIT_INTERNAL_ERROR),
+                               second (ZLINK_SUBMIT_INTERNAL_ERROR),
+                               first_errno (0), second_errno (0), first_done (false),
+                               release (false)
+    {
+    }
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    zlink_submit_result_t first;
+    zlink_submit_result_t second;
+    int first_errno;
+    int second_errno;
+    bool first_done;
+    bool release;
+};
+
+void run_sync_multipart_sequence (void *router_,
+                                  const zlink_routed_submit_target_t &target_,
+                                  sync_sequence_probe_t *probe_)
+{
+    zlink_msg_t first_part;
+    init_part (&first_part, "sync-head");
+    errno = 0;
+    const zlink_submit_result_t first = zlink_send_part_transport_pair (
+      router_, &target_.peer_rid, target_.transport_pair_id,
+      target_.transport_pair_generation, &first_part,
+      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_MORE);
+    const int first_errno = errno;
+    {
+        std::lock_guard<std::mutex> lock (probe_->mutex);
+        probe_->first = first;
+        probe_->first_errno = first_errno;
+        probe_->first_done = true;
+    }
+    probe_->changed.notify_all ();
+    if (first != ZLINK_SUBMIT_OK)
+        return;
+
+    {
+        std::unique_lock<std::mutex> lock (probe_->mutex);
+        probe_->changed.wait (lock, [probe_] { return probe_->release; });
+    }
+
+    zlink_msg_t second_part;
+    init_part (&second_part, "sync-tail");
+    errno = 0;
+    const zlink_submit_result_t second = zlink_send_part_transport_pair (
+      router_, &target_.peer_rid, target_.transport_pair_id,
+      target_.transport_pair_generation, &second_part,
+      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+    const int second_errno = errno;
+    {
+        std::lock_guard<std::mutex> lock (probe_->mutex);
+        probe_->second = second;
+        probe_->second_errno = second_errno;
+    }
+    probe_->changed.notify_all ();
+}
+}
+
+void test_router_send_async_admits_and_delivers_two_and_three_part_records ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "async-router-peer", 17));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, "inproc://send-async-router-multipart"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, "inproc://send-async-router-multipart"));
+
+    zlink_routing_id_t dealer_rid;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_get_routing_id (dealer, &dealer_rid));
+    const zlink_routed_submit_target_t target =
+      select_router_target_eventually (router, &dealer_rid);
+
+    completion_probe_t probe;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (router, &capture_completion, &probe));
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = &target;
+
+    const std::vector<std::vector<std::string>> records = {
+      {"router-two-head", "router-two-tail"},
+      {"router-three-head", "router-three-middle", "router-three-tail"}};
+    for (size_t i = 0; i != records.size (); ++i) {
+        const size_t before = completion_count (&probe);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK, submit_record (router, records[i], &options));
+        TEST_ASSERT_TRUE (wait_for_completion_count (&probe, before + 1));
+        const completion_snapshot_t completion = completion_at (&probe, before);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.result);
+        TEST_ASSERT_EQUAL_INT (0, completion.terminal_errno);
+        TEST_ASSERT_TRUE (recv_dealer_record_eventually (dealer, records[i]));
+    }
+}
+
+void test_dealer_generic_target_admits_multipart_after_connect ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *receiver = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, "inproc://send-async-dealer-generic"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, "inproc://send-async-dealer-generic"));
+
+    //  Selecting only to wait for the application lane makes the test's
+    //  target=NULL submit happen on a known connected socket state.
+    (void) select_dealer_target_eventually (sender);
+
+    completion_probe_t probe;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (sender, &capture_completion, &probe));
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = NULL;
+
+    const std::vector<std::string> record = {
+      "dealer-generic-head", "dealer-generic-middle", "dealer-generic-tail"};
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           submit_record (sender, record, &options));
+    TEST_ASSERT_TRUE (wait_for_completion_count (&probe, 1));
+    const completion_snapshot_t completion = completion_at (&probe, 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.result);
+    TEST_ASSERT_EQUAL_INT (0, completion.terminal_errno);
+    TEST_ASSERT_TRUE (recv_dealer_record_eventually (receiver, record));
+}
+
+void test_routed_multipart_async_rolls_back_when_later_part_hits_hwm ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const uint64_t hwm = 1024;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "atomic-peer", 11));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, "inproc://send-async-atomic"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, "inproc://send-async-atomic"));
+
+    const zlink_routing_id_t dealer_rid = make_rid ("atomic-peer");
+    const zlink_routed_submit_target_t target =
+      select_router_target_eventually (router, &dealer_rid);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK, send_router_filler (router, target, 256));
+
+    completion_probe_t probe;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (router, &capture_completion, &probe));
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = &target;
+
+    const std::vector<std::string> record = {
+      std::string (128, 'a'), std::string (700, 'b')};
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           submit_record (router, record, &options));
+    TEST_ASSERT_TRUE (wait_for_completion_count (&probe, 1));
+    const completion_snapshot_t completion = completion_at (&probe, 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, completion.result);
+    TEST_ASSERT_NOT_EQUAL (0, completion.terminal_errno);
+
+    TEST_ASSERT_TRUE (recv_dealer_record_eventually (
+      dealer, std::vector<std::string> (1, std::string (256, 'O'))));
+    TEST_ASSERT_TRUE_MESSAGE (
+      dealer_has_no_part (dealer),
+      "a failed async multipart record leaked a partial part");
+}
+
+void test_pending_multipart_admission_waits_for_sync_sequence_gate ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer_a = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *dealer_b = test_context_socket (ZLINK_SOCKET_DEALER);
+    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_a, "gate-a", 6));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_b, "gate-b", 6));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer_a, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer_b, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, "inproc://send-async-gate"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_a, "inproc://send-async-gate"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_b, "inproc://send-async-gate"));
+
+    const zlink_routing_id_t rid_a = make_rid ("gate-a");
+    const zlink_routing_id_t rid_b = make_rid ("gate-b");
+    const zlink_routed_submit_target_t target_a =
+      select_router_target_eventually (router, &rid_a);
+    const zlink_routed_submit_target_t target_b =
+      select_router_target_eventually (router, &rid_b);
+
+    bool reached_backpressure = false;
+    for (int i = 0; i != 32 && !reached_backpressure; ++i) {
+        const zlink_submit_result_t result = send_router_filler (
+          router, target_a, 65536);
+        if (result == ZLINK_SUBMIT_BACKPRESSURED)
+            reached_backpressure = true;
+        else
+            TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
+    }
+    TEST_ASSERT_TRUE (reached_backpressure);
+
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (router, &capture_completion, &completion));
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = &target_a;
+    const std::vector<std::string> pending_record = {"async-gate-head", "async-gate-tail"};
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK, submit_record (router, pending_record, &options));
+    //  It must still be pending on the full A pipe. The sync sequence below
+    //  is deliberately started after this reservation.
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_count (&completion));
+
+    sync_sequence_probe_t sync_probe;
+    std::thread sync_thread (
+      run_sync_multipart_sequence, router, std::cref (target_b), &sync_probe);
+    {
+        std::unique_lock<std::mutex> lock (sync_probe.mutex);
+        TEST_ASSERT_TRUE (sync_probe.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&sync_probe] { return sync_probe.first_done; }));
+    }
+
+    //  Returning A's credit wakes the async admit loop while the B sequence
+    //  still owns the per-handle sync gate. The pending record must wait for
+    //  that gate, not be converted into an EINVAL terminal.
+    const int drained = drain_dealer_parts (dealer_a);
+    TEST_ASSERT_TRUE (drained > 0);
+    msleep (25);
+    const bool completion_before_gate_release = completion_count (&completion) != 0;
+
+    {
+        std::lock_guard<std::mutex> lock (sync_probe.mutex);
+        sync_probe.release = true;
+    }
+    sync_probe.changed.notify_all ();
+    sync_thread.join ();
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, sync_probe.first);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, sync_probe.second);
+    TEST_ASSERT_EQUAL_INT (0, sync_probe.first_errno);
+    TEST_ASSERT_EQUAL_INT (0, sync_probe.second_errno);
+    TEST_ASSERT_FALSE_MESSAGE (
+      completion_before_gate_release,
+      "pending multipart admitted while another multipart held the send gate");
+
+    TEST_ASSERT_TRUE (wait_for_completion_count (&completion, 1));
+    const completion_snapshot_t async_completion = completion_at (&completion, 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, async_completion.result);
+    TEST_ASSERT_EQUAL_INT (0, async_completion.terminal_errno);
+    TEST_ASSERT_TRUE (recv_dealer_record_eventually (
+      dealer_b, {"sync-head", "sync-tail"}));
+    TEST_ASSERT_TRUE (recv_dealer_record_eventually (dealer_a, pending_record));
+}
+
+int main ()
+{
+    setup_test_environment (60);
+
+    UNITY_BEGIN ();
+    RUN_TEST (test_router_send_async_admits_and_delivers_two_and_three_part_records);
+    RUN_TEST (test_dealer_generic_target_admits_multipart_after_connect);
+    RUN_TEST (test_routed_multipart_async_rolls_back_when_later_part_hits_hwm);
+    RUN_TEST (test_pending_multipart_admission_waits_for_sync_sequence_gate);
+    return UNITY_END ();
+}

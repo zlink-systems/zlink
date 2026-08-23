@@ -262,8 +262,17 @@ int zlink::socket_base_t::try_admit_send_pending (
         const int flags =
           ZLINK_DONTWAIT | (i + 1 < count ? ZLINK_SNDMORE : 0);
         msg_t *msg = reinterpret_cast<msg_t *> (&record_->parts[i]);
+        //  A routed target selects and pins the application pipe at the
+        //  beginning of a logical record.  The socket's xsend path owns the
+        //  continuation state after that first part: ROUTER keeps
+        //  `_current_out`/`_more_out`, while DEALER keeps the load-balancer's
+        //  multipart pipe.  Calling xsend_routed again for a continuation
+        //  would either trip ROUTER's message-start assertion or make
+        //  DEALER reject the part as EFSM.  Continue through the ordinary
+        //  xsend path so the whole record remains one gated sequence.
+        const bool routed_start = record_->has_target && i == 0;
         const int rc =
-          record_->has_target
+          routed_start
             ? send_direct_with_retry (&rid, msg, flags, *scope, NULL, 0, false,
                                       NULL, record_->target.transport_pair_id,
                                       record_->target
