@@ -13,8 +13,8 @@ public final class NodeMaintenanceState {
         return states.getOrDefault(nodeId, false);
     }
 
-    public boolean rejectsArrival(String targetNodeId, String sourceNodeId) {
-        return isUnderMaintenance(targetNodeId)
-            && !targetNodeId.equals(sourceNodeId);
+    public boolean rejectsArrival(String ownNodeId, String targetZoneId, String sourceZoneId) {
+        return isUnderMaintenance(ownNodeId)
+            && !targetZoneId.equals(sourceZoneId);
     }
 }

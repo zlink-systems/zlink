@@ -15,6 +15,8 @@ public final class ZoneWorldSpec {
     public static final int BOT_TICK_PERIOD_MS = 500;
     public static final int BOT_STEP = 3;
     public static final int BORDER_EXPIRY_TICKS = 3;
+    public static final int NODE_STATUS_REPORT_PERIOD_MS = 5_000;
+    public static final int NODE_STATUS_REPORT_TTL_MS = NODE_STATUS_REPORT_PERIOD_MS * 3;
     public static final Comparator<String> UTF8_ORDER = ZoneWorldSpec::compareUtf8;
 
     private ZoneWorldSpec() {
@@ -63,20 +65,8 @@ public final class ZoneWorldSpec {
         return Math.abs(distance) < BORDER_BAND;
     }
 
-    public static String nodeOf(String zone) {
-        return switch (zone) {
-            case "zone-nw", "zone-sw" -> "zone-node-1";
-            case "zone-ne", "zone-se" -> "zone-node-2";
-            default -> throw new IllegalArgumentException("unknown zone: " + zone);
-        };
-    }
-
-    public static List<String> zonesOf(String nodeId) {
-        return switch (nodeId) {
-            case "zone-node-1" -> List.of("zone-nw", "zone-sw");
-            case "zone-node-2" -> List.of("zone-ne", "zone-se");
-            default -> List.of();
-        };
+    public static List<String> zones() {
+        return List.of("zone-nw", "zone-ne", "zone-sw", "zone-se");
     }
 
     public static MoveDecision validateMove(int fromX, int fromY, int toX, int toY) {

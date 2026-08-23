@@ -36,6 +36,7 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
     @Override
     public void start() {
         synchronized (lifecycleLock) {
+            if (topology.isSubscriberOnly()) return;
             if (running) {
                 return;
             }
@@ -45,7 +46,8 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
                 return thread;
             });
             running = true;
-            scheduler.scheduleAtFixedRate(this::report, 0, 1, TimeUnit.SECONDS);
+            scheduler.scheduleAtFixedRate(this::report, 0,
+                ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -54,7 +56,7 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
             if (!running) {
                 return;
             }
-            List<String> zones = ZoneWorldSpec.zonesOf(topology.nodeId());
+            List<String> zones = census.zoneIds();
             try {
                 routes.sendToChannel(
                         ZoneWorldNames.REPORT_CHANNEL,
@@ -68,6 +70,9 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
                         if (error != null) {
                             System.out.println("report failed node=" + topology.nodeId()
                                 + " detail=" + error.getMessage());
+                        } else {
+                            System.out.println("node status report submitted. node="
+                                + topology.nodeId());
                         }
                     });
             } catch (RuntimeException error) {

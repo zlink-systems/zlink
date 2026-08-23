@@ -26,6 +26,9 @@ public final class ZoneEntrySpot implements ZLinkEntrySpot<PlayerActor> {
     public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
         PlayerActor actor,
         ZLinkMessage createRequest) {
+        if (createRequest.isEmpty()) {
+            return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
+        }
         Messages.EnterWorldReq request = createRequest.decode(Messages.EnterWorldReq.class);
         if (!ZoneWorldSpec.inRange(request.x(), request.y())) {
             return CompletableFuture.completedFuture(
@@ -43,7 +46,8 @@ public final class ZoneEntrySpot implements ZLinkEntrySpot<PlayerActor> {
                     request.y(),
                     true,
                     true,
-                    ""))
+                    "",
+                    false))
                 .timeout(Duration.ofSeconds(10))
                 .defer();
         }

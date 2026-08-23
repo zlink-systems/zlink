@@ -56,6 +56,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
+        census.record(context.spotId(), 0);
         return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
     }
 
@@ -70,10 +71,15 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                 ZLinkSpotActorJoinResult.reject(
                     new Messages.EnterZoneRes(zone, "InvalidZone")));
         }
-        if (maintenance.rejectsArrival(ZoneWorldSpec.nodeOf(zone), join.fromNodeId())) {
+        if (maintenance.rejectsArrival(topology.nodeId(), zone, join.fromZoneId())) {
             return CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.reject(
                     new Messages.EnterZoneRes(zone, "ZoneMaintenance")));
+        }
+        if (join.crashBoundaryProbe()) {
+            System.out.println("crash-boundary join pending zone=" + zone
+                + " actor=" + actorId);
+            return new CompletableFuture<>();
         }
         pendingJoins.put(actorId, join);
         return CompletableFuture.completedFuture(
@@ -89,14 +95,15 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
         actor.applyAtZone(join.x(), join.y(), context.spotId(), join.isBot());
         residents.put(actor.actorId(), actor);
         census.record(context.spotId(), residents.size());
-        if (!actor.isBot()) {
-            actorClient.sendToActor(
-                    actor.actorId(),
-                    new Messages.DeliverZoneStateMsg(context.spotId(), tick, statePlayers()))
-                .submit();
-        }
         System.out.println("zone actor joined zone=" + context.spotId()
-            + " actor=" + actor.actorId() + " generation=" + actor.context().objectGeneration());
+            + " actor=" + actor.actorId() + " generation=" + actor.context().objectGeneration()
+            + " player=" + actor.actorId() + ", bot=" + actor.isBot()
+            + ", initial=" + join.initialEntry());
+        if (actor.isBot()) return CompletableFuture.completedFuture(null);
+        if (!join.initialEntry()) {
+            return actor.send(new Messages.ZoneChangedNotify(
+                actor.actorId(), context.spotId()));
+        }
         return CompletableFuture.completedFuture(null);
     }
 
@@ -110,6 +117,8 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onDisconnectActor(PlayerActor actor) {
+        residents.remove(actor.actorId());
+        census.record(context.spotId(), residents.size());
         System.out.println("zone actor disconnected zone=" + context.spotId()
             + " actor=" + actor.actorId());
         return CompletableFuture.completedFuture(null);
@@ -191,10 +200,8 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                 new Messages.UpdatePositionMsg(actor.actorId(), targetX, targetY, actor.isBot()))
                 .submit();
             if (actor.isBot()) return CompletableFuture.completedFuture(null);
-            return actorClient.sendToActor(
-                    actor.actorId(),
-                    new Messages.DeliverZoneStateMsg(context.spotId(), tick, statePlayers()))
-                .submit();
+            return actor.send(new Messages.ZoneStateNotify(
+                context.spotId(), tick, statePlayers()));
         }
 
         actor.prepareMove(targetX, targetY, targetZone);
@@ -206,12 +213,29 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
                     targetY,
                     actor.isBot(),
                     false,
-                    topology.nodeId()))
+                    actor.zoneId(),
+                    false))
             .timeout(Duration.ofSeconds(10))
             .defer();
         System.out.println("zone transfer requested actor=" + actor.actorId()
             + " from=" + context.spotId() + " to=" + targetZone
             + " node=" + topology.nodeId());
+        return CompletableFuture.completedFuture(null);
+    }
+
+    public CompletionStage<Void> crashProbe(PlayerActor actor, int targetX, int targetY) {
+        ZoneWorldSpec.MoveDecision decision = ZoneWorldSpec.validateMove(
+            actor.x(), actor.y(), targetX, targetY);
+        if (!decision.accepted() || !decision.zoneChanged()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("Crash probe requires one legal cross-zone move"));
+        }
+        String targetZone = ZoneWorldSpec.zoneOf(targetX, targetY);
+        actor.prepareCrashProbe(targetX, targetY, targetZone);
+        actor.context().joinSpot(targetZone, new Messages.EnterZoneReq(
+                actor.actorId(), targetX, targetY, actor.isBot(), false,
+                actor.zoneId(), true))
+            .timeout(Duration.ofSeconds(30)).defer();
         return CompletableFuture.completedFuture(null);
     }
 
@@ -242,6 +266,8 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     }
 
     public void deliverAnnouncement(Messages.DeliverAnnounceMsg message) {
+        System.out.println("zone spot: announcement delivered zone=" + context.spotId()
+            + " id=" + message.announcementId());
         for (PlayerActor actor : List.copyOf(residents.values())) {
             if (!actor.isBot()) actor.send(new Messages.WorldAnnounceNotify(
                 message.announcementId(), message.text()));

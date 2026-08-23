@@ -14,11 +14,20 @@ public record SampleTopology(
     String meshEndpoint,
     String streamEndpoint,
     String redisEndpoint,
-    String redisKeyPrefix) {
+    String redisKeyPrefix,
+    Boolean subscriberOnly,
+    Boolean disableBots,
+    Boolean allowEmptyZoneSet,
+    String faultTickZone,
+    String meshAdvertiseHost) {
 
     public boolean is(String expected) {
         return expected.equalsIgnoreCase(role);
     }
+
+    public boolean isSubscriberOnly() { return Boolean.TRUE.equals(subscriberOnly); }
+    public boolean botsDisabled() { return Boolean.TRUE.equals(disableBots); }
+    public boolean allowsEmptyZoneSet() { return Boolean.TRUE.equals(allowEmptyZoneSet); }
 
     public static String configPath(String[] args) {
         if (args.length != 2 || !"--config".equals(args[0]) || args[1].isBlank()) {
