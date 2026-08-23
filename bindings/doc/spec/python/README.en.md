@@ -136,40 +136,73 @@ state.
 
 Core FFI's `zlink_recv_handler()` is a private implementation primitive the
 Python package does not expose directly. Python's public
-callback surface is fixed to `on_packet` for a STREAM packet,
-`on_send_ready` for send readiness, and `on_event` for a monitor event. It
-provides no separate public method to register a raw receive or routed request
-completion callback.
+callback surface is fixed to `on_packet` for a STREAM packet and `on_event`
+for a monitor event. It provides no separate public method to register a raw
+receive or routed request completion callback. `send_ready` readiness-hint
+semantics is abolished
+(`bindings/doc/spec/async-coroutine-policy.ko.md`, 2nd revision) — there is
+no `on_send_ready`. HWM-managed send completion is delivered only through the
+awaitable `submit()` already returns (Core's `zlink_send_complete_handler`
+notification), never through a separate readiness callback.
 
 ## Send/receive and no-data
 
-- Unrelated synchronous builders such as PAIR, PUB, and STREAM sends and a
+The bindings own zero threads, queues, or retry anywhere in this surface
+(`bindings/doc/spec/async-coroutine-policy.ko.md`, 3rd revision;
+`doc/plan/core-send-completion-design.ko.md`).
+
+- Unrelated synchronous builders such as PUB and STREAM sends and a
   ROUTER reply add message parts, then call `submit()`. Raw ROUTER/`Received`
   reply `submit()` is a synchronous one-shot returning `None` and submits a
   terminal reply or error reply to the HWM-free completion lane with one native
   call. HWM backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`, and other non-HWM submit failures immediately raise
-  `SubmitError`. A blocking operation follows the socket option and Core's
-  timeout contract.
-- The sole terminal on DEALER and ROUTER routed send and request builders is
-  `submit()`. Use `await dealer.send().message(message).submit()` and
-  `reply = await dealer.request().message(request).submit()`. `submit()` immediately
-  returns an awaitable coroutine object and does not perform a native
-  blocking submit before returning. Before accepting an operation, the socket
-  runtime registers Core's long-lived routed-target readiness handler. Before
-  its first attempt, the operation places its exact `(socket, RID, transport
-  pair ID, generation)` key, coroutine completion, and complete record in
-  pending state, then attempts `DONTWAIT` on that target. The callback marks
-  only that key ready; a pump outside the callback performs native retry. An
-  event for another pair generation is a stale wake and is ignored. Outbound
-  paths on one native handle share a short gate for one attempt from the first
-  part through `FINAL`, then release it before readiness waiting. Coroutine
-  cancellation terminally resolves that pending operation and request
-  correlation exactly once. Waiting blocks neither another RID's submit nor the Python event loop. A request
-  timeout is one absolute deadline spanning admission and reply wait;
-  retries do not extend it. The same
-  routed operation exposes no flags, callback, blocking terminal, or
-  `submit_async()` compatibility terminal.
+  `SubmitError`. `publish()` (PUB/XPUB) is likewise synchronous-only: PUB
+  semantics are lossy by default (a full subscriber queue silently drops that
+  subscriber's copy; the publisher never waits), `ZLINK_PUB_OPT_NODROP`
+  surfaces an immediate `SubmitError`/`BACKPRESSURED` instead, and
+  `zlink_send_async` returns `ENOTSUP` for PUB/XPUB — there is no publish
+  awaitable.
+- HWM-managed send — PAIR `send()` and DEALER/ROUTER routed `send()` — and
+  `request()` are ASYNC because both can pass through Core's HWM admission
+  queue. The sole terminal on these builders is `submit()`. Use
+  `await pair.send().message(message).submit()`,
+  `await dealer.send().message(message).submit()`, and
+  `reply = await dealer.request().message(request).submit()`. `submit()`
+  immediately returns an awaitable coroutine object and does not perform a
+  native blocking submit before returning.
+  - **send** hands the complete record to Core in one
+    `zlink_send_async(socket, parts, count, options, &op_id)` call
+    (`core/include/zlink/socket/api.h`). Completion is exactly-once, driven
+    by the single `zlink_send_complete_handler` the socket installs at
+    construction, and can run inline (Core admitted immediately, so the
+    awaitable is already resolved and the awaiter never suspends), on Core's
+    own async mailbox thread, on Core's deadline thread on timeout, or on the
+    closing thread during close. The binding correlates a completion to its
+    awaitable through an opaque token carried in
+    `zlink_send_async_options_t.userdata` — not through the Core-assigned
+    `op_id`, which is only known after the call returns and may arrive too
+    late for an inline completion. There is no per-op Python timer; the
+    deadline is the Core-side `zlink_send_async_options_t.timeout_ms` field
+    (the same pattern `_runtime/eventing/timer.py` already uses for
+    Core-owned timing). Cancelling the awaitable maps to
+    `zlink_send_async_cancel`.
+  - **request** submits once through Core's routed request entry point
+    (`zlink_dealer_request_transport_pair_part` /
+    `zlink_router_request_transport_pair_part`) and is completed purely by
+    Core's reply callback — there is no admission ticket and no
+    binding-owned polling thread driving completion. A submit that Core
+    cannot admit immediately (e.g. `BACKPRESSURED`) raises `SubmitError`
+    right away instead of being queued and retried by the binding; a reply
+    timeout is Core's own `ZLINK_REQUEST_TIMED_OUT` deadline. ROUTER resolves
+    an exact transport-pair target via `zlink_select_routed_submit_target`
+    before submitting; DEALER lets Core commit one selection at submit time.
+  - Coroutine cancellation terminally resolves the pending operation exactly
+    once. Waiting on one target's send or request blocks neither another
+    target's submit nor the Python event loop — Core's own per-target queue
+    orders admission, not a Python-side wait. The same routed operation
+    exposes no flags, callback, blocking terminal, or `submit_async()`
+    compatibility terminal.
 - A caller-provided receive using `RecvFlags.DONT_WAIT` returns `False` when there is no message.
 - A direct-return control API such as a timer or monitor returns `None` when there is no pending value.
 - An actual native failure is delivered as its matching error type, never hidden as no-data.

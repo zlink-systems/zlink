@@ -1,7 +1,6 @@
 import asyncio
 import sys
 import threading
-from collections import deque
 
 import zlink
 
@@ -13,7 +12,6 @@ from perf_multi_common import (
     perf_server_context,
     recv_nonblocking,
     safe_poll,
-    send_routed,
 )
 
 
@@ -21,68 +19,73 @@ async def main(argv=None):
     args = parse_server_args(argv or sys.argv[1:])
     endpoint = benchmark_endpoint(args.transport, "multi-router-router")
     stop = threading.Event()
-    pending = deque()
+    # ROUTER routed send is HWM-managed and ASYNC-classified (Core
+    # `zlink_send_async`, bindings/doc/spec/async-coroutine-policy.ko.md):
+    # `submit()` returns an awaitable completed by Core's send-completion
+    # notification. The binding owns no retry queue or POLLOUT
+    # readiness-hint (`send_ready` semantics is abolished), so each reply is
+    # a fire-and-forget task instead of a manually-queued DONTWAIT retry
+    # driven by POLLOUT.
+    pending_tasks = set()
+    send_errors = []
+
+    def _on_send_done(task):
+        pending_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            send_errors.append(exc)
 
     def wait_stop():
         for line in sys.stdin:
             if line.strip().upper() in {"STOP", "QUIT"}:
                 stop.set()
                 return
+        # stdin EOF (parent closed pipe) is also a STOP signal.
         stop.set()
 
     threading.Thread(target=wait_stop, daemon=True).start()
 
     with perf_server_context() as ctx:
         with zlink.create_router_socket(ctx) as router:
-            router.set_routing_id(b"SERVER")
             configure_multi_tls_server(router, args.transport)
             apply_multi_socket_options(router)
+            router.set_routing_id(b"SERVER")
             router.bind(endpoint)
             print(f"READY,{endpoint}", flush=True)
             with zlink.create_poller() as poller:
                 poller.add_socket(router, zlink.PollEventFlag.POLLIN, 0)
                 poll_events = zlink.create_poll_events(1)
                 recv_storage = zlink.create_received()
-                poll_interest = zlink.PollEventFlag.POLLIN
-                # Match the C relay server: observe POLLOUT only while a
-                # backpressured reply is queued, and bound the idle wait so
-                # the stdin stop event is observed.
-                aux_wait_ms = 100
+                # Small bounded wait: lets the stdin stop event terminate an
+                # otherwise idle server and keeps the event loop responsive
+                # to Core's send-completion notifications for pending reply
+                # tasks.
+                aux_wait_ms = 5
                 while not stop.is_set():
-                    while pending:
-                        routing_id, payload = pending[0]
-                        if not await send_routed(
-                            router, payload, routing_id=routing_id
-                        ):
-                            break
-                        pending.popleft()
+                    if send_errors:
+                        raise send_errors[0]
                     while True:
                         received = recv_nonblocking(router, storage=recv_storage)
                         if received is None:
                             break
                         with received:
-                            payload = received.parts[0].data
-                            routing_id = None
-                            sent = False
-                            if not pending:
-                                sent = (
-                                    received.send()
-                                    .message(payload)
-                                    .flags(zlink.SendFlags.DONT_WAIT)
-                                    .submit()
-                                )
-                            if not sent:
-                                routing_id = bytes(received.routing_id)
-                                payload = bytes(payload)
-                        if not sent:
-                            pending.append((routing_id, payload))
-                    next_interest = zlink.PollEventFlag.POLLIN
-                    if pending:
-                        next_interest |= zlink.PollEventFlag.POLLOUT
-                    if next_interest != poll_interest:
-                        poller.modify_socket(router, next_interest)
-                        poll_interest = next_interest
+                            payload = bytes(received.parts[0].data)
+                            routing_id = bytes(received.routing_id)
+                        task = asyncio.create_task(
+                            router.send(routing_id).message(payload).submit()
+                        )
+                        pending_tasks.add(task)
+                        task.add_done_callback(_on_send_done)
                     safe_poll(poller, poll_events, aux_wait_ms)
+                    await asyncio.sleep(0)
+                if send_errors:
+                    raise send_errors[0]
+                if pending_tasks:
+                    await asyncio.gather(*pending_tasks, return_exceptions=True)
+                if send_errors:
+                    raise send_errors[0]
 
 
 if __name__ == "__main__":

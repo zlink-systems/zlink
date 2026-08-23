@@ -32,17 +32,52 @@ ownership and error handling. The public contract is:
 - resource-owning types support sync and async context manager cleanup
 - `*_READY_CHANGED` monitor events do not expose aggregate ready counts
 - monitor snapshots are state/queue inspection surfaces, not ready-count gates
-- callback registration uses canonical names `on_packet`, `on_send_ready`,
-  and monitor `on_event`; topic subscription uses `subscribe_into()` and
+- callback registration uses canonical names `on_packet` and monitor
+  `on_event`; topic subscription uses `subscribe_into()` and
   `receive_subscription_event_into()`.
 - callback removal by passing `None` is not part of the public contract;
   callback lifecycle ends with socket close
+- `send_ready` readiness-hint semantics is abolished
+  (`bindings/doc/spec/async-coroutine-policy.ko.md`, 2nd revision). There is
+  no `on_send_ready` handler; HWM-managed send completion is Core's
+  `zlink_send_complete_handler` notification, delivered through the
+  awaitable `submit()` already returns.
 
 The raw FFI declaration `zlink_recv_handler()` is a private implementation
 primitive. The public Python surface uses `on_packet` for STREAM packets,
-`on_send_ready` for send readiness, `on_event` for monitor events, and the
-`request(...)` asynchronous terminal for routed request completion. Python
-does not add a separate direct raw-receive registration method.
+`on_event` for monitor events, and the `request(...)` asynchronous terminal
+for routed request completion. Python does not add a separate direct
+raw-receive registration method.
+
+## Send, Publish, Request, Raw Reply Completion
+
+Per `bindings/doc/spec/async-coroutine-policy.ko.md` (3rd revision) and
+`doc/plan/core-send-completion-design.ko.md`, bindings are pure Core
+wrappers: **zero binding-owned threads, queues, or retry** anywhere in the
+send/request completion surface.
+
+- **HWM-managed send** — PAIR `send()` and DEALER/ROUTER routed `send()` —
+  is ASYNC because it can pass through Core's HWM admission queue.
+  `submit()` returns an awaitable coroutine object completed by Core's
+  `zlink_send_complete_handler` notification (`zlink_send_async` /
+  `zlink_send_async_cancel`, `core/include/zlink/socket/api.h`). Cancelling
+  the awaitable maps to `zlink_send_async_cancel`. There is no per-op
+  Python timer; the deadline is the Core-side
+  `zlink_send_async_options_t.timeout_ms` field (the same pattern
+  `_runtime/eventing/timer.py` already uses for Core-owned timing).
+- **`publish`** (PUB/XPUB) is synchronous-only: `submit()` returns `None` or
+  raises `SubmitError` immediately. PUB semantics are lossy by default — a
+  full subscriber queue silently drops that subscriber's copy and the
+  publisher never waits; `ZLINK_PUB_OPT_NODROP` surfaces an immediate
+  `SubmitError` instead. `zlink_send_async` returns `ENOTSUP` for PUB/XPUB,
+  so there is no publish awaitable.
+- **`request`** is ASYNC; `submit()` returns an awaitable coroutine object
+  completed purely by Core's reply callback (`ZLINK_REQUEST_TIMED_OUT` on
+  expiry). There is no admission ticket and no polling thread driving
+  completion.
+- **Raw `reply()`** (on `Received`, ROUTER only) is HWM-free and
+  synchronous: `submit()` returns `None` or raises `SubmitError`
+  immediately.
 
 ## Surface Summary
 

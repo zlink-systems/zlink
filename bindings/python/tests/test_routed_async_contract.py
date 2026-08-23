@@ -1,5 +1,17 @@
+"""HWM-managed send and request completion under the 0.13.0 contract.
+
+Bindings own zero threads, queues, or retry
+(bindings/doc/spec/async-coroutine-policy.ko.md, 2nd/3rd revision;
+doc/plan/core-send-completion-design.ko.md). PAIR send and DEALER/ROUTER
+routed send are admitted by `zlink_send_async` and completed by Core's
+`zlink_send_complete_handler` — never by a binding-owned park queue,
+WRITABLE-callback retry, deadline timer, or dispatcher thread. request
+completion is purely the Core reply callback resolving the awaitable; a
+backpressured submit surfaces immediately instead of being queued and
+retried by the binding.
+"""
+
 import asyncio
-import errno
 import threading
 import time
 import uuid
@@ -11,6 +23,10 @@ def _endpoint(label):
     return f"inproc://python-routed-async-{label}-{uuid.uuid4()}"
 
 
+def _thread_names():
+    return {thread.name for thread in threading.enumerate()}
+
+
 async def _send_when_connected(socket, payload, routing_id=None):
     for _ in range(200):
         try:
@@ -20,13 +36,14 @@ async def _send_when_connected(socket, payload, routing_id=None):
             if error.result not in (
                 zlink.SubmitResult.NOT_CONNECTED,
                 zlink.SubmitResult.NOT_FOUND,
+                zlink.SubmitResult.BACKPRESSURED,
             ):
                 raise
             await asyncio.sleep(0.001)
     raise AssertionError("routed target did not connect")
 
 
-def test_hwm_send_wait_is_a_coroutine_and_does_not_occupy_a_worker():
+def test_hwm_send_wait_is_a_coroutine_and_owns_no_binding_thread():
     async def scenario():
         with zlink.create_context() as context:
             with zlink.create_dealer_socket(context) as dealer:
@@ -34,17 +51,14 @@ def test_hwm_send_wait_is_a_coroutine_and_does_not_occupy_a_worker():
                     dealer.options.linger_ms = 0
                     router.options.linger_ms = 0
                     dealer.options.send_high_water_mark = 2048
-                    dealer.options.send_timeout_ms = 3000
                     endpoint = _endpoint("event-loop")
                     router.bind(endpoint)
                     dealer.connect(endpoint)
 
                     payload = b"x" * 65536
                     await _send_when_connected(dealer, payload)
-                    completion_workers = sum(
-                        thread.name == "zlink-request-completion"
-                        for thread in threading.enumerate()
-                    )
+                    before = _thread_names()
+
                     pending = asyncio.create_task(
                         dealer.send().message(payload).submit()
                     )
@@ -59,10 +73,10 @@ def test_hwm_send_wait_is_a_coroutine_and_does_not_occupy_a_worker():
                     await tick()
                     assert heartbeat
                     assert not pending.done()
-                    assert sum(
-                        thread.name == "zlink-request-completion"
-                        for thread in threading.enumerate()
-                    ) == completion_workers
+                    # No binding-owned thread appears while a send waits on
+                    # Core admission — completion is Core's send-completion
+                    # notification, not a park queue this binding services.
+                    assert _thread_names() == before
 
                     received = zlink.create_received()
                     assert router.recv_into(received)
@@ -80,6 +94,53 @@ def test_hwm_send_wait_is_a_coroutine_and_does_not_occupy_a_worker():
     asyncio.run(scenario())
 
 
+def test_pair_send_is_also_hwm_managed_and_coroutine_driven():
+    """PAIR send is ASYNC-classified exactly like DEALER/ROUTER routed send
+    (분류 원칙, async-coroutine-policy.ko.md) — same `zlink_send_async` +
+    `zlink_send_complete_handler` completion surface, no binding thread."""
+
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_pair_socket(context) as left:
+                with zlink.create_pair_socket(context) as right:
+                    left.options.linger_ms = 0
+                    right.options.linger_ms = 0
+                    left.options.send_high_water_mark = 2048
+                    endpoint = _endpoint("pair-hwm")
+                    right.bind(endpoint)
+                    left.connect(endpoint)
+
+                    payload = b"y" * 65536
+                    for _ in range(200):
+                        try:
+                            await left.send().message(payload).submit()
+                            break
+                        except zlink.SubmitError as error:
+                            if error.result not in (
+                                zlink.SubmitResult.NOT_CONNECTED,
+                                zlink.SubmitResult.BACKPRESSURED,
+                            ):
+                                raise
+                            await asyncio.sleep(0.001)
+
+                    before = _thread_names()
+                    pending = asyncio.create_task(
+                        left.send().message(payload).submit()
+                    )
+                    await asyncio.sleep(0.03)
+                    assert not pending.done()
+                    assert _thread_names() == before
+
+                    received = zlink.create_received()
+                    assert right.recv_into(received)
+                    received.close()
+                    assert await asyncio.wait_for(pending, 2) is None
+                    assert right.recv_into(received)
+                    received.close()
+
+    asyncio.run(scenario())
+
+
 def test_exact_target_wait_does_not_block_an_unrelated_routing_id():
     async def scenario():
         with zlink.create_context() as context:
@@ -92,7 +153,6 @@ def test_exact_target_wait_does_not_block_an_unrelated_routing_id():
                         dealer_a.set_routing_id(b"A")
                         dealer_b.set_routing_id(b"B")
                         router.options.send_high_water_mark = 2048
-                        router.options.send_timeout_ms = 3000
                         endpoint = _endpoint("target-isolation")
                         router.bind(endpoint)
                         dealer_a.connect(endpoint)
@@ -135,7 +195,6 @@ def test_exact_target_terminal_event_finishes_a_pending_send_once():
                 dealer.options.linger_ms = 0
                 router.options.linger_ms = 0
                 dealer.options.send_high_water_mark = 2048
-                dealer.options.send_timeout_ms = 3000
                 endpoint = _endpoint("target-terminal")
                 router.bind(endpoint)
                 dealer.connect(endpoint)
@@ -162,7 +221,7 @@ def test_exact_target_terminal_event_finishes_a_pending_send_once():
     asyncio.run(scenario())
 
 
-def test_router_request_uses_the_same_exact_target_coroutine_path():
+def test_router_request_uses_the_same_exact_target_reply_driven_path():
     async def scenario():
         with zlink.create_context() as context:
             with zlink.create_router_socket(context) as requester:
@@ -206,21 +265,27 @@ def test_router_request_uses_the_same_exact_target_coroutine_path():
     asyncio.run(scenario())
 
 
-def test_request_admission_deadline_and_send_cancellation_are_terminal_once():
+def test_request_reply_timeout_is_core_driven_with_no_binding_thread():
+    """The request timeout is `ZLINK_REQUEST_TIMED_OUT` — a Core deadline,
+    not a Python timer (`_runtime/eventing/timer.py` is the existing
+    Core-timer precedent this mirrors)."""
+
     async def scenario():
         with zlink.create_context() as context:
             with zlink.create_dealer_socket(context) as dealer:
                 with zlink.create_router_socket(context) as router:
                     dealer.options.linger_ms = 0
                     router.options.linger_ms = 0
-                    dealer.options.send_high_water_mark = 2048
-                    dealer.options.send_timeout_ms = 3000
-                    endpoint = _endpoint("deadline-cancel")
+                    endpoint = _endpoint("request-timeout")
                     router.bind(endpoint)
                     dealer.connect(endpoint)
 
-                    payload = b"x" * 65536
-                    await _send_when_connected(dealer, payload)
+                    await _send_when_connected(dealer, b"probe")
+                    received = zlink.create_received()
+                    assert router.recv_into(received)
+                    received.close()
+
+                    before = _thread_names()
                     started = time.monotonic()
                     try:
                         await (
@@ -231,10 +296,28 @@ def test_request_admission_deadline_and_send_cancellation_are_terminal_once():
                         )
                     except zlink.RequestError as error:
                         assert error.result == zlink.RequestResult.TIMED_OUT
-                        assert error.native_errno == errno.ETIMEDOUT
                     else:
-                        raise AssertionError("request admission did not time out")
+                        raise AssertionError("request did not time out")
                     assert time.monotonic() - started < 1
+                    assert _thread_names() == before
+
+    asyncio.run(scenario())
+
+
+def test_send_cancellation_is_terminal_exactly_once():
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    dealer.options.send_high_water_mark = 2048
+                    endpoint = _endpoint("send-cancel")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    payload = b"x" * 65536
+                    await _send_when_connected(dealer, payload)
 
                     cancelled = asyncio.create_task(
                         dealer.send().message(payload).submit()
@@ -257,6 +340,25 @@ def test_request_admission_deadline_and_send_cancellation_are_terminal_once():
                         received, flags=zlink.RecvFlags.DONT_WAIT
                     )
 
+    asyncio.run(scenario())
+
+
+def test_request_cancellation_is_preserved_and_a_late_reply_is_dropped():
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    endpoint = _endpoint("request-cancel")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    await _send_when_connected(dealer, b"probe")
+                    received = zlink.create_received()
+                    assert router.recv_into(received)
+                    received.close()
+
                     request_task = asyncio.create_task(
                         dealer.request().message(b"cancel-request").submit()
                     )
@@ -269,13 +371,10 @@ def test_request_admission_deadline_and_send_cancellation_are_terminal_once():
                         pass
                     else:
                         raise AssertionError("request cancellation was not preserved")
+                    # A reply that arrives after cancellation finds no armed
+                    # completion and is dropped rather than raising.
                     received.reply().message(b"late-reply").submit()
                     received.close()
-                    for _ in range(200):
-                        if not dealer._routed_admission.has_request_completions():
-                            break
-                        await asyncio.sleep(0.001)
-                    assert not dealer._routed_admission.has_request_completions()
 
                     request = dealer.request().message(b"surface")
                     assert not hasattr(request, "flags")

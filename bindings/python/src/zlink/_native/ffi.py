@@ -19,21 +19,42 @@ class ZlinkRoutingId(ctypes.Structure):
     _fields_ = [("size", ctypes.c_uint8), ("data", ctypes.c_uint8 * 255)]
 
 
-class ZlinkRoutedSendReadyEvent(ctypes.Structure):
-    _fields_ = [
-        ("peer_rid", ZlinkRoutingId),
-        ("transport_pair_id", ctypes.c_uint64),
-        ("transport_pair_generation", ctypes.c_uint64),
-        ("state", ctypes.c_int),
-        ("terminal_errno", ctypes.c_int),
-    ]
-
-
 class ZlinkRoutedSubmitTarget(ctypes.Structure):
     _fields_ = [
         ("peer_rid", ZlinkRoutingId),
         ("transport_pair_id", ctypes.c_uint64),
         ("transport_pair_generation", ctypes.c_uint64),
+    ]
+
+
+# `zlink_send_complete_result_t` (core/include/zlink/socket/api.h).
+ZLINK_SEND_ADMITTED = 0
+ZLINK_SEND_TIMED_OUT = 201
+ZLINK_SEND_TERMINAL = 202
+
+
+class ZlinkSendCompleteEvent(ctypes.Structure):
+    """`zlink_send_complete_event_t` — one Core send completion."""
+
+    _fields_ = [
+        ("op_id", ctypes.c_uint64),
+        ("userdata", ctypes.c_void_p),
+        ("peer_rid", ZlinkRoutingId),
+        ("transport_pair_id", ctypes.c_uint64),
+        ("transport_pair_generation", ctypes.c_uint64),
+        ("result", ctypes.c_int),
+        ("terminal_errno", ctypes.c_int),
+    ]
+
+
+class ZlinkSendAsyncOptions(ctypes.Structure):
+    """`zlink_send_async_options_t` — submit options for one async send."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("timeout_ms", ctypes.c_uint32),
+        ("userdata", ctypes.c_void_p),
+        ("target", ctypes.POINTER(ZlinkRoutedSubmitTarget)),
     ]
 
 
@@ -200,6 +221,8 @@ class _Lib:
         p_int = ctypes.POINTER(ctypes.c_int)
         p_size = ctypes.POINTER(ctypes.c_size_t)
         p_hwm_budget_lease = ctypes.POINTER(ctypes.c_void_p)
+        p_send_async_options = ctypes.POINTER(ZlinkSendAsyncOptions)
+        p_send_op_id = ctypes.POINTER(ctypes.c_uint64)
 
         specs = [
             ("zlink_version", [p_int, p_int, p_int], None),
@@ -245,8 +268,9 @@ class _Lib:
             ("zlink_socket_set_receive_flow_state", [ctypes.c_void_p, ctypes.c_int], ctypes.c_int),
             ("zlink_recv_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_stream_packet_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_send_ready_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_routed_send_ready_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_send_async", [ctypes.c_void_p, p_msg, ctypes.c_size_t, p_send_async_options, p_send_op_id], ctypes.c_int),
+            ("zlink_send_complete_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_send_async_cancel", [ctypes.c_void_p, ctypes.c_uint64], ctypes.c_int),
             ("zlink_select_routed_submit_target", [ctypes.c_void_p, p_rid, p_routed_target], ctypes.c_int),
             ("zlink_close", [ctypes.c_void_p], ctypes.c_int),
             ("zlink_set_option", [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t], ctypes.c_int),

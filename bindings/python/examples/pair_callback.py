@@ -1,6 +1,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import asyncio
 import zlink
 from sample_common import tcp_endpoint, wait_connected
 
@@ -16,7 +17,7 @@ def main():
                         client.connect(endpoint)
                         wait_connected(srv_mon, cli_mon)
 
-                client.send().message(b"hello-pair").submit()
+                asyncio.run(client.send().message(b"hello-pair").submit())
                 received = zlink.create_received()
                 if not server.recv_into(received):
                     raise RuntimeError("expected pair payload")

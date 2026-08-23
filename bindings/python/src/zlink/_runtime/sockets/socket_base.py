@@ -55,7 +55,6 @@ from ..messaging.message_materializer import (
 from ..messaging.native_parts import _materialize_native_parts, _payload_parts
 from ..handles.native_support import (
     _SOCKET_RECV_HANDLER,
-    _SOCKET_SEND_READY_HANDLER,
     _BytesReceivedPartsOwner,
     _ReceivedPartsOwner,
     _as_bytes_view,
@@ -255,8 +254,6 @@ class _BaseSocket:
         self._socket_type = socket_type
         self._recv_handler = None
         self._recv_handler_cb = None
-        self._send_ready_handler = None
-        self._send_ready_handler_cb = None
         self._packet_handler = None
         self._packet_handler_cb = None
         # Part-based outbound paths on one native handle share this only for
@@ -557,13 +554,11 @@ class _BaseSocket:
         # the caller can retry without losing callback state.
         self._socket_handle.close()
         self._recv_handler = None
-        self._send_ready_handler = None
         self._packet_handler = None
         dispatcher = self._dispatcher
         if dispatcher is not None:
             dispatcher.close()
         self._recv_handler_cb = None
-        self._send_ready_handler_cb = None
         self._packet_handler_cb = None
 
     def __enter__(self):
@@ -632,33 +627,6 @@ class _Socket(_BaseSocket):
         rc = lib().zlink_socket_set_receive_flow_state(self._handle, int(state))
         if rc != 0:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-
-
-class _SendReadySocket:
-    def on_send_ready(self, handler):
-        if handler is None:
-            raise ValueError("handler must not be None")
-        if self._send_ready_handler is not None:
-            raise RuntimeError("handler is already attached")
-
-        self._send_ready_handler = handler
-        dispatcher = self._dispatcher
-
-        def _invoke():
-            try:
-                handler(self)
-            except Exception:
-                _report_unhandled_callback_exception(handler)
-
-        def _callback(_, __):
-            dispatcher.submit(_invoke)
-
-        callback = _SOCKET_SEND_READY_HANDLER(_callback)
-        rc = lib().zlink_send_ready_handler(self._handle, callback, None)
-        if rc != 0:
-            self._send_ready_handler = None
-            _raise_result_error(HandlerError, HandlerResult, rc, lib().zlink_errno())
-        self._send_ready_handler_cb = callback
 
 
 class _BindSocket(_Socket):

@@ -39,7 +39,7 @@ from ..messaging.request_reply import (
     _ensure_reply_flags_supported,
     _timeout_to_ms,
 )
-from ..messaging.routed_async import RoutedAdmissionOwner
+from ..messaging.routed_async import RoutedSendOwner, SendCompletionOwner
 from .socket_base import (
     _BindSocket,
     _DealerOptionSocket,
@@ -50,7 +50,6 @@ from .socket_base import (
     _RoutingIdSocket,
     _RoutedMessageSocket,
     _RouterOptionSocket,
-    _SendReadySocket,
     _Socket,
     _STREAM_PACKET_HANDLER,
     _StreamOptionSocket,
@@ -230,6 +229,68 @@ class _RoutedSocketSendOp(_SocketSendOp):
             if (self._flags & 1) and ex.result == SubmitResult.BACKPRESSURED:
                 return False
             raise
+
+
+class _ManagedSendOp:
+    """Canonical coroutine builder for PAIR's HWM-managed send.
+
+    Admission is `zlink_send_async`; completion is the single
+    `zlink_send_complete_handler` the socket installs at construction (see
+    `RoutedSendOwner`/`SendCompletionOwner` in `_runtime/messaging/routed_async.py`).
+    """
+
+    __slots__ = ("_socket", "_payload", "_parts", "_submitted")
+
+    def __init__(self, socket):
+        self._socket = socket
+        self._payload = _NO_PAYLOAD
+        self._parts = None
+        self._submitted = False
+
+    def message(self, payload):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        if self._parts is not None:
+            self._parts.append(payload)
+        elif self._payload is _NO_PAYLOAD:
+            self._payload = payload
+        else:
+            self._parts = [self._payload, payload]
+            self._payload = _NO_PAYLOAD
+        return self
+
+    def messages(self, *payloads):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        if not payloads:
+            return self
+        if self._parts is not None:
+            self._parts.extend(payloads)
+        elif self._payload is _NO_PAYLOAD:
+            if len(payloads) == 1:
+                self._payload = payloads[0]
+            else:
+                self._parts = list(payloads)
+        else:
+            self._parts = [self._payload, *payloads]
+            self._payload = _NO_PAYLOAD
+        return self
+
+    def _payload_or_raise(self):
+        if self._parts is not None:
+            if not self._parts:
+                raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
+            return self._parts
+        if self._payload is _NO_PAYLOAD:
+            raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
+        return self._payload
+
+    def submit(self):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        payload = self._payload_or_raise()
+        self._submitted = True
+        return self._socket._send_completion.submit(payload)
 
 
 class _ManagedRoutedSendOp:
@@ -517,11 +578,10 @@ class _RoutedAsyncSocket:
         else:
             read_request_timeout = lambda: self.router_options.request_timeout_ms
         try:
-            admission = RoutedAdmissionOwner(
+            admission = RoutedSendOwner(
                 self,
                 role,
                 self._outbound_record_attempt_gate,
-                lambda: self.options.send_timeout_ms,
                 read_request_timeout,
             )
         except Exception:
@@ -542,16 +602,23 @@ class _RoutedAsyncSocket:
         admission.finish_close()
 
 
-class PairSocket(_SendReadySocket, _EndpointSocket, _MessageSocket):
+class PairSocket(_EndpointSocket, _MessageSocket):
     _socket_type_value = SocketType.PAIR
 
+    def __init__(self, context):
+        super().__init__(context)
+        try:
+            self._send_completion = SendCompletionOwner(self)
+        except Exception:
+            super().close()
+            raise
+
     def send(self):
-        return _native_socket_send_op(self) or _SocketSendOp(self)
+        return _ManagedSendOp(self)
 
 
 class DealerSocket(
     _RoutedAsyncSocket,
-    _SendReadySocket,
     _EndpointSocket,
     _DealerOptionSocket,
     _RoutingIdSocket,
@@ -628,7 +695,6 @@ class DealerSocket(
 
 class RouterSocket(
     _RoutedAsyncSocket,
-    _SendReadySocket,
     _EndpointSocket,
     _RouterOptionSocket,
     _RoutingIdSocket,
@@ -838,7 +904,6 @@ class RouterSocket(
         return True
 
 class StreamSocket(
-    _SendReadySocket,
     _BindSocket,
     _StreamOptionSocket,
     _RoutingIdSocket,
@@ -922,7 +987,6 @@ class StreamSocket(
 
 
 class PubSocket(
-    _SendReadySocket,
     _EndpointSocket,
     _PublisherOptionSocket,
     _PublisherSocket,
@@ -949,7 +1013,6 @@ class SubSocket(
 
 
 class XPubSocket(
-    _SendReadySocket,
     _EndpointSocket,
     _PublisherOptionSocket,
     _PublisherSocket,

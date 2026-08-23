@@ -1,3 +1,4 @@
+import asyncio
 import zlink
 from sample_support import tcp_endpoint, wait_connected
 
@@ -15,7 +16,7 @@ def main():
                         client.connect(endpoint)
                         wait_connected(server_monitor, client_monitor)
 
-                client.send().message(b"hello-pair").submit()
+                asyncio.run(client.send().message(b"hello-pair").submit())
                 received = zlink.create_received()
                 if not server.recv_into(received):
                     raise AssertionError("expected pair payload")

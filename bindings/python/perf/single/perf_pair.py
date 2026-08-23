@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import threading
 import time
@@ -16,7 +17,7 @@ from perf_common import (
     poll_idle_ms,
     print_result_lines,
     run_one_way_receiver_public_recv,
-    send_nonblocking,
+    send_routed,
     result_metrics,
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
@@ -25,12 +26,18 @@ from perf_common import (
 )
 
 
-def _send_stop_token(sock):
-    """PERF_SINGLE_TEST_POLICY § 1.4 wire-level shutdown signal."""
+async def _send_stop_token(sock):
+    """PERF_SINGLE_TEST_POLICY § 1.4 wire-level shutdown signal.
+
+    PAIR send is HWM-managed and ASYNC-classified (Core `zlink_send_async`,
+    bindings/doc/spec/async-coroutine-policy.ko.md) — `submit()` returns an
+    awaitable coroutine object completed by Core's send-completion
+    notification, the same terminal DEALER/ROUTER routed send uses.
+    """
 
     for _ in range(100):
         try:
-            sock.send().message(STOP_TOKEN).submit()
+            await sock.send().message(STOP_TOKEN).submit()
             return
         except zlink.SubmitError as exc:
             if exc.result != zlink.SubmitResult.BACKPRESSURED:
@@ -48,22 +55,20 @@ def main(argv=None):
     run_id = benchmark_run_id()
     latencies = []
     received = 0
-    sender_errors = []
 
-    def send_loop(client, active_end):
-        try:
-            # C perf_single_one_way.hpp send_active_samples: DONTWAIT send,
-            # re-stamp the payload (fresh now_ns) on every retry, busy-loop
-            # through transient backpressure (no blocking submit).
-            while time.perf_counter() < active_end:
-                send_nonblocking(
-                    client, stamp_payload(payload, phase=1, run_id=run_id)
-                )
-            # PERF_SINGLE_TEST_POLICY § 1.4: wire stop token instead of
-            # threading.Event coordination.
-            _send_stop_token(client)
-        except BaseException as exc:  # pragma: no cover - surfaced on main thread
-            sender_errors.append(exc)
+    async def send_loop(client, active_end):
+        # C perf_single_one_way.hpp send_active_samples: DONTWAIT-equivalent
+        # send, re-stamp the payload (fresh now_ns) on every retry, busy-loop
+        # through transient backpressure. `submit()` suspends this coroutine
+        # only until Core's send-completion notification admits or rejects
+        # the record — no binding-owned retry/park queue.
+        while time.perf_counter() < active_end:
+            await send_routed(
+                client, stamp_payload(payload, phase=1, run_id=run_id)
+            )
+        # PERF_SINGLE_TEST_POLICY § 1.4: wire stop token instead of
+        # threading.Event coordination.
+        await _send_stop_token(client)
 
     with perf_context() as ctx:
         with zlink.create_pair_socket(ctx) as server:
@@ -90,8 +95,16 @@ def main(argv=None):
                     run_id=run_id,
                 )
                 if metrics is None:
+                    sender_errors = []
+
+                    def run_sender():
+                        try:
+                            asyncio.run(send_loop(client, active_end))
+                        except BaseException as exc:  # pragma: no cover - surfaced on main thread
+                            sender_errors.append(exc)
+
                     sender = threading.Thread(
-                        target=send_loop, args=(client, active_end), daemon=True
+                        target=run_sender, daemon=True
                     )
                     sender.start()
                     # C perf_single_one_way.hpp run_active_phase receiver.

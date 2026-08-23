@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 import re
 import unittest
@@ -33,7 +34,9 @@ class VersionTests(unittest.TestCase):
                     s1.bind(endpoint)
                     s2.connect(endpoint)
                     payload = b"ping"
-                    s1.send().message(payload).submit()
+                    # PAIR send is HWM-managed and ASYNC-classified (Core
+                    # `zlink_send_async`); `submit()` returns an awaitable.
+                    asyncio.run(s1.send().message(payload).submit())
                     received = zlink.create_received()
                     self.assertTrue(s2.recv_into(received))
                     with received:
@@ -48,7 +51,7 @@ class VersionTests(unittest.TestCase):
                     s1.bind(endpoint)
                     s2.connect(endpoint)
                     payload = b"header-and-body-payload"
-                    s1.send().message(payload).submit()
+                    asyncio.run(s1.send().message(payload).submit())
                     received = zlink.create_received()
                     self.assertTrue(s2.recv_into(received))
                     with received:

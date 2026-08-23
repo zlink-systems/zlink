@@ -8,9 +8,10 @@ from zlink._native.ffi import (
     ZlinkMsg,
     ZlinkPollItem,
     ZlinkPollerEvent,
-    ZlinkRoutedSendReadyEvent,
     ZlinkRoutedSubmitTarget,
     ZlinkRoutingId,
+    ZlinkSendAsyncOptions,
+    ZlinkSendCompleteEvent,
     ZlinkSocketMonitorOpenOptions,
     lib,
 )
@@ -20,28 +21,47 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
 
 
-def test_ffi_layouts_are_the_core_0_11_1_layouts():
+def test_ffi_layouts_are_the_core_0_13_0_layouts():
+    """Byte parity with `core/include/zlink/socket/api.h` (Core 0.13.0).
+
+    Expected sizes are cross-checked against a C translation unit that
+    includes the real header (see the async-coroutine-policy realignment
+    log) — this test only pins the ctypes side so a future header drift is
+    caught here first.
+    """
     assert (ctypes.sizeof(ZlinkMsg), ctypes.alignment(ZlinkMsg)) == (64, 8)
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
-    assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (192, 8)
+    # Grew from 192 to 232 bytes with the ABI v4 flow-control fields
+    # (core-byte-hwm-flow-control-plan.ko.md §6); unrelated to this
+    # realignment but caught here since the pin was stale.
+    assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (232, 8)
     assert (ctypes.sizeof(ZlinkSocketMonitorOpenOptions), ctypes.alignment(ZlinkSocketMonitorOpenOptions)) == (16, 8)
     expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)
     assert (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)) == expected_poll_item
     assert (ctypes.sizeof(ZlinkPollerEvent), ctypes.alignment(ZlinkPollerEvent)) == (48, 8)
     assert (
-        ctypes.sizeof(ZlinkRoutedSendReadyEvent),
-        ctypes.alignment(ZlinkRoutedSendReadyEvent),
-    ) == (280, 8)
-    assert (
         ctypes.sizeof(ZlinkRoutedSubmitTarget),
         ctypes.alignment(ZlinkRoutedSubmitTarget),
     ) == (272, 8)
+    # `zlink_send_complete_event_t` / `zlink_send_async_options_t`
+    # (core/include/zlink/socket/api.h) — replace the removed
+    # `zlink_routed_send_ready_event_t` layout pin.
+    assert (
+        ctypes.sizeof(ZlinkSendCompleteEvent),
+        ctypes.alignment(ZlinkSendCompleteEvent),
+    ) == (296, 8)
+    assert (
+        ctypes.sizeof(ZlinkSendAsyncOptions),
+        ctypes.alignment(ZlinkSendAsyncOptions),
+    ) == (24, 8)
 
 
-def test_exact_routed_admission_symbols_are_bound_directly():
+def test_exact_routed_send_and_send_complete_symbols_are_bound_directly():
     native = lib()
     for name in (
-        "zlink_routed_send_ready_handler",
+        "zlink_send_async",
+        "zlink_send_complete_handler",
+        "zlink_send_async_cancel",
         "zlink_select_routed_submit_target",
         "zlink_send_part_transport_pair",
         "zlink_dealer_send_transport_pair_part",
@@ -49,6 +69,15 @@ def test_exact_routed_admission_symbols_are_bound_directly():
         "zlink_router_request_transport_pair_part",
     ):
         assert callable(getattr(native, name))
+
+
+def test_send_ready_symbols_are_removed():
+    """`send_ready` readiness-hint semantics is abolished (2026-08-23, 2nd
+    revision, `bindings/doc/spec/async-coroutine-policy.ko.md`) — completion
+    is Core's `zlink_send_complete_handler` only."""
+    native = lib()
+    for name in ("zlink_send_ready_handler", "zlink_routed_send_ready_handler"):
+        assert not hasattr(native, name), name
 
 
 def test_native_extension_exposes_only_raw_bridge_operations():

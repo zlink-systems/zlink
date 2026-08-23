@@ -19,7 +19,7 @@ from ...contracts.errors.errors import (
     ZlinkError,
     _TypedZlinkError,
 )
-from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
+from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, ZlinkSendCompleteEvent, lib
 
 
 def _request_result_from_code(code):
@@ -166,9 +166,10 @@ _SOCKET_RECV_HANDLER = ctypes.CFUNCTYPE(
     ctypes.c_size_t,
     ctypes.c_void_p,
 )
-_SOCKET_SEND_READY_HANDLER = ctypes.CFUNCTYPE(
+_SEND_COMPLETE_HANDLER = ctypes.CFUNCTYPE(
     None,
     ctypes.c_void_p,
+    ctypes.POINTER(ZlinkSendCompleteEvent),
     ctypes.c_void_p,
 )
 _REPLY_HANDLER = ctypes.CFUNCTYPE(

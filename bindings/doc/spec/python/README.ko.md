@@ -125,32 +125,64 @@ capacity, allowance나 중복 accounting 상태를 노출하지 않는다.
 
 Core FFI의 `zlink_recv_handler()`는 Python package가 직접 노출하지 않는 private 구현
 primitive다. Python의 공개 callback 표면은 STREAM packet의 `on_packet`,
-send readiness의 `on_send_ready`, monitor event의 `on_event`로 고정한다. Raw receive나
+monitor event의 `on_event`로 고정한다. Raw receive나
 routed request completion callback을 등록하는 별도 public method는 제공하지 않는다.
+`send_ready` readiness-hint semantics는 폐지되었다
+(`bindings/doc/spec/async-coroutine-policy.ko.md`, 2차 개정) — `on_send_ready`는
+없다. HWM-managed send 완료는 `submit()`이 이미 반환하는 awaitable로만 전달된다
+(Core `zlink_send_complete_handler` 통지), 별도 readiness callback으로 전달되지 않는다.
 
 ## 송수신과 no-data
 
-- PAIR·PUB·STREAM 송신과 ROUTER reply 같은 unrelated 동기 builder는 message part를 추가한 뒤
+바인딩은 이 표면 전체에서 스레드, 대기열, 재시도를 하나도 소유하지 않는다
+(`bindings/doc/spec/async-coroutine-policy.ko.md`, 3차 개정;
+`doc/plan/core-send-completion-design.ko.md`).
+
+- PUB·STREAM 송신과 ROUTER reply 같은 unrelated 동기 builder는 message part를 추가한 뒤
   `submit()`한다. Raw ROUTER/`Received` reply의 `submit()`은 `None`을 반환하는 동기
   one-shot이며 terminal reply 또는 error reply를 HWM 없는 completion lane에 native 호출
   한 번으로 제출한다. HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`,
   `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `SubmitError`로
-  발생시킨다. Blocking operation은 socket option과 Core timeout 계약을 따른다.
-- DEALER·ROUTER routed send와 request builder의 유일한 terminal은 `submit()`이다.
-  `await dealer.send().message(message).submit()`과
-  `reply = await dealer.request().message(request).submit()`처럼 사용하며, `submit()`은 await 가능한
-  coroutine object를 즉시 반환한다. 이 메서드는 반환 전에 native blocking submit을 실행하지 않는다.
-  Socket runtime은 operation을 받기 전에 Core routed-target readiness handler를 장기 등록한다.
-  Operation은 최초 시도 전에 정확한 `(socket, RID, transport pair ID, generation)` key,
-  coroutine completion과 complete record를 pending에 넣고 같은 target에 `DONTWAIT`로
-  시도한다. Callback은 그 key만 ready로 표시하며 native retry는 callback 밖의 pump가
-  수행한다. Pair generation이 다른 event는 stale wake로 무시한다. 같은 native handle의
-  outbound 경로는 첫 part부터 `FINAL`까지 한 attempt만 보호하는 짧은 gate를 공유하고
-  readiness 대기 전에 반환한다. Coroutine cancellation은 pending operation과 request
-  correlation을 정확히 한 번 종료한다. 다른 RID의 submit과 Python event loop는 이 대기
-  때문에 막히지 않는다.
-  Request timeout은 최초 admission 대기와 reply 대기를 포함하는 하나의 absolute deadline이며 retry로 연장하지 않는다.
-  같은 routed operation에 flags, callback, blocking terminal이나 `submit_async()`를 함께 제공하지 않는다.
+  발생시킨다. `publish()`(PUB/XPUB)도 동기 전용이다 — 기본 PUB semantics는 lossy이므로
+  (가득 찬 subscriber queue는 그 subscriber의 copy를 조용히 drop하고 publisher는 절대
+  대기하지 않는다) `ZLINK_PUB_OPT_NODROP`은 즉시 `SubmitError`/`BACKPRESSURED`를
+  표면화하며, Core의 `zlink_send_async`는 PUB/XPUB에서 `ENOTSUP`을 반환하므로 publish
+  awaitable은 없다.
+- HWM-managed send — PAIR `send()`와 DEALER/ROUTER routed `send()` — 와 `request()`는
+  둘 다 Core HWM admission queue를 지날 수 있으므로 ASYNC다. 이 builder들의 유일한
+  terminal은 `submit()`이다.
+  `await pair.send().message(message).submit()`,
+  `await dealer.send().message(message).submit()`,
+  `reply = await dealer.request().message(request).submit()`처럼 사용하며, `submit()`은
+  await 가능한 coroutine object를 즉시 반환한다. 이 메서드는 반환 전에 native blocking
+  submit을 실행하지 않는다.
+  - **send**는 complete record 전체를 `zlink_send_async(socket, parts, count, options,
+    &op_id)` 한 번으로 Core에 넘긴다(`core/include/zlink/socket/api.h`). 완료는
+    정확히 한 번이며 socket 생성 시 설치하는 단일 `zlink_send_complete_handler`가
+    구동한다. Core가 즉시 admit하면 callback은 inline으로 실행되어 awaitable이 이미
+    resolve된 상태이므로 awaiter는 suspend하지 않는다. 그 외에는 Core의 async mailbox
+    thread, timeout 시 Core의 deadline thread, close 중에는 closing thread에서 실행될
+    수 있다. Binding은 completion을 awaitable에 연결할 때 Core가 할당하는 `op_id`가
+    아니라 `zlink_send_async_options_t.userdata`로 전달하는 opaque token을 사용한다 —
+    `op_id`는 호출이 반환된 뒤에만 알 수 있어 inline completion에는 너무 늦게 도착할 수
+    있기 때문이다. 별도 Python timer는 없다: deadline은 Core-side
+    `zlink_send_async_options_t.timeout_ms` 필드다(`_runtime/eventing/timer.py`가 이미
+    Core-owned timing에 쓰는 것과 같은 패턴). Awaitable cancellation은
+    `zlink_send_async_cancel`로 매핑한다.
+  - **request**는 Core의 routed request entry point
+    (`zlink_dealer_request_transport_pair_part` /
+    `zlink_router_request_transport_pair_part`)로 한 번만 submit하고, 완료는 순수하게
+    Core의 reply callback이 구동한다 — admission ticket도, completion을 구동하는
+    binding-owned polling thread도 없다. Core가 즉시 admit할 수 없는 submit(예:
+    `BACKPRESSURED`)은 binding이 큐에 넣고 재시도하는 대신 즉시 `SubmitError`를
+    발생시킨다. reply timeout은 Core 자신의 `ZLINK_REQUEST_TIMED_OUT` deadline이다.
+    ROUTER는 submit 전에 `zlink_select_routed_submit_target`으로 정확한 transport-pair
+    target을 선택하고, DEALER는 Core가 submit 시점에 하나를 직접 선택하게 한다.
+  - Coroutine cancellation은 pending operation을 정확히 한 번 종료한다. 한 target의
+    send나 request 대기는 다른 target의 submit도 Python event loop도 막지 않는다 —
+    admission 순서는 Python 쪽 대기가 아니라 Core 자신의 target별 queue가 정한다. 같은
+    routed operation에 flags, callback, blocking terminal이나 `submit_async()`를 함께
+    제공하지 않는다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
 - timer, monitor와 같은 직접 반환 control API는 pending value가 없을 때 `None`을 반환한다.
 - 실제 native failure는 해당 error type으로 전달하며 no-data로 숨기지 않는다.

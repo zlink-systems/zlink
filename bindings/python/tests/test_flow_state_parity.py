@@ -5,6 +5,7 @@ The C ABI mirror lives in bindings/c/include; Core owns
 zlink_socket_set_receive_flow_state() and zlink_receive_flow_state_t.
 """
 
+import asyncio
 import socket
 import threading
 import time as _time
@@ -99,7 +100,11 @@ class ReceiveFlowStateUnsupportedSocketTests(unittest.TestCase):
                         raised.exception.result, zlink.ConfigResult.NOT_SUPPORTED
                     )
                     # Existing send/recv behavior is unchanged by the rejected call.
-                    self.assertTrue(left.send().message(b"still-works").submit())
+                    # PAIR send is HWM-managed and ASYNC-classified; `submit()`
+                    # returns an awaitable (Core `zlink_send_async`).
+                    self.assertIsNone(
+                        asyncio.run(left.send().message(b"still-works").submit())
+                    )
                     received = zlink.create_received()
                     self.assertTrue(right.recv_into(received))
                     with received:

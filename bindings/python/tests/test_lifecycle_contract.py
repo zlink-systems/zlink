@@ -48,8 +48,6 @@ def _socket_with_lifecycle_state(socket_cls, handle):
     owner._socket_handle = handle
     owner._recv_handler = object()
     owner._recv_handler_cb = object()
-    owner._send_ready_handler = object()
-    owner._send_ready_handler_cb = object()
     owner._packet_handler = object()
     owner._packet_handler_cb = object()
     owner._dispatcher = Mock()
@@ -78,8 +76,6 @@ def test_socket_close_keeps_callback_state_when_native_close_fails():
     callback_refs = (
         socket._recv_handler,
         socket._recv_handler_cb,
-        socket._send_ready_handler,
-        socket._send_ready_handler_cb,
         socket._packet_handler,
         socket._packet_handler_cb,
     )
@@ -90,8 +86,6 @@ def test_socket_close_keeps_callback_state_when_native_close_fails():
     assert (
         socket._recv_handler,
         socket._recv_handler_cb,
-        socket._send_ready_handler,
-        socket._send_ready_handler_cb,
         socket._packet_handler,
         socket._packet_handler_cb,
     ) == callback_refs
@@ -104,8 +98,6 @@ def test_socket_close_keeps_callback_state_when_native_close_fails():
         for value in (
             socket._recv_handler,
             socket._recv_handler_cb,
-            socket._send_ready_handler,
-            socket._send_ready_handler_cb,
             socket._packet_handler,
             socket._packet_handler_cb,
         )
@@ -125,8 +117,6 @@ def test_socket_resource_exit_retries_native_busy_until_close_succeeds():
         for value in (
             socket._recv_handler,
             socket._recv_handler_cb,
-            socket._send_ready_handler,
-            socket._send_ready_handler_cb,
             socket._packet_handler,
             socket._packet_handler_cb,
         )

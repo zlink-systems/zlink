@@ -34,10 +34,10 @@ class SendOp(_FlaggedFluentMessageOp, Protocol):
 
 @runtime_checkable
 class RoutedSendOp(_FluentMessageOp, Protocol):
-    """Build an HWM-managed DEALER or ROUTER send."""
+    """Build an HWM-managed send (PAIR send, DEALER/ROUTER routed send)."""
 
     def submit(self) -> Awaitable[None]:
-        """Return the coroutine that completes after exact-target admission."""
+        """Return the coroutine Core's send-completion notification resolves."""
         ...
 
 
