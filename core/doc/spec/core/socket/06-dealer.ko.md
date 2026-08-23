@@ -280,9 +280,9 @@ submit은 `zlink_submit_result_t`, receive는 `zlink_recv_result_t`, option은
 [errno map](../04-errno-map.ko.md)을 따른다.
 
 DEALER의 `ZLINK_POLLIN`은 raw 또는 request/reply record를 수신할 수 있음을 뜻한다. Ordinary send와
-request에서 `ZLINK_POLLOUT`과 `zlink_send_ready_handler()`는 backpressure 뒤 submit을 다시 시도할
-가치가 있음을 나타내지만 다음 submit 성공을 보장하지 않는다. 이 readiness 계약은 raw reply에
-적용하지 않는다.
+request에서 `ZLINK_POLLOUT`은 backpressure 뒤 submit을 다시 시도할 가치가 있음을 나타내지만
+다음 submit 성공을 보장하지 않는다. operation별 확정 답이 필요한 앱은 `zlink_send_async`와 그
+완료 통지를 쓴다. 이 readiness 계약은 raw reply에 적용하지 않는다.
 
 ## 9. Receive flow state
 
@@ -311,8 +311,8 @@ Remote PAUSE는 그 peer로 보내는 전송을 막는다. 이는 기존 차단 
 차단 요인이다. Byte HWM, transport wait와 termination도 각각 그대로 전송을 막으며, 어느
 것도 해당하지 않을 때만 send가 수락된다. 따라서 remote pause를 해제해도 그것만으로 다음
 send가 성공하지는 않는다. Send 결과와 readiness는 그대로다. 차단된 non-blocking send는
-계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고하고, `ZLINK_POLLOUT`과
-`zlink_send_ready_handler()`는 8절이 정의한 의미를 유지한다.
+계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고하고,
+`ZLINK_POLLOUT`은 8절이 정의한 의미를 유지한다.
 
 Remote PAUSE는 다음 message 경계에서 적용되며 message를 쪼개지 않는다. 첫 byte가 이미
 pipe에 도달한 message와 socket이 첫 part를 이미 수락한 message는 남은 part를 끝까지 보내고,

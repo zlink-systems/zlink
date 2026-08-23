@@ -28,8 +28,8 @@ void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
     lifecycle_coordinator ().complete_deferred_close_handoff (static_cast<mailbox_t *> (_mailbox),
                                                               handoff_timeout_ms_);
 
-    enqueue_all_routed_send_terminals (_ctx_terminated ? ETERM : ECANCELED);
-    dispatch_routed_send_ready_events (true);
+    fail_all_send_pending (_ctx_terminated ? ETERM : ECANCELED);
+    dispatch_send_completions (true);
     static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
 
     _tag = 0xdeadbeef;
@@ -83,8 +83,7 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
         return -1;
     }
 
-    (void) enqueue_routed_send_ready (
-      match, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+    fail_send_pending_for_pipe (match, ENOTCONN);
     match->terminate (false);
     return 0;
 }
@@ -108,8 +107,7 @@ int zlink::socket_base_t::xterm_transport_pair (
             if (it->second.transport_pair_state)
                 it->second.transport_pair_state->disable_reconnect ();
         }
-        (void) enqueue_routed_send_ready (
-          pipe, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+        fail_send_pending_for_pipe (pipe, ENOTCONN);
         pipe->terminate (false);
         ++match_count;
     }
@@ -294,8 +292,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         // the Application/Completion pair becomes Ready. HWM recovery emits
         // its own edge from write_activated(), but releasing the pair hold is
         // a distinct admission transition and must wake that exact target too.
-        (void) enqueue_routed_send_ready (
-          ready_application, ZLINK_ROUTED_SEND_WRITABLE, 0);
+        notify_send_pending_writable (ready_application);
     }
     if (ready_application && socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
         // A Router may still be waiting for RID adoption after pair
@@ -481,6 +478,10 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
         bool completion_notified = false;
         int drained_completions = 0;
         if (events_ & ZLINK_POLLCOMPLETION) {
+            //  Admit outside the completion owner gate: admission takes the
+            //  public send scope, and nesting that inside the owner gate would
+            //  invert the lock order the poller registration path uses.
+            drive_send_pending ();
             scoped_lock_t owner_lock (_completion_owner_sync);
             const completion_drain_scope_t drain_scope (this);
             completion_notified =
@@ -489,6 +490,10 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
             drained_completions = drain_request_completions ();
             if (drained_completions < 0)
                 return -1;
+            //  The poller thread owns send completion dispatch for as long as
+            //  its POLLCOMPLETION registration exists, so it drains what the
+            //  admit pass above resolved.
+            drained_completions += drain_send_completions ();
         }
 
         uint32_t events = 0;
@@ -525,6 +530,7 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
     if (events_ & ZLINK_POLLCOMPLETION) {
         zlink_assert (_completion_poller_refs.load (std::memory_order_acquire)
                       != 0);
+        drive_send_pending ();
         scoped_lock_t owner_lock (_completion_owner_sync);
         const completion_drain_scope_t drain_scope (this);
         completion_notified =
@@ -533,6 +539,7 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
         drained_completions = drain_request_completions ();
         if (drained_completions < 0)
             return -1;
+        drained_completions += drain_send_completions ();
     }
 
     uint32_t events = 0;
@@ -772,15 +779,13 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
             flow_recovery = pipe_->take_flow_resume_recovery ();
         }
         if (credit_recovery || flow_recovery)
-            (void) enqueue_routed_send_ready (
-              pipe_, ZLINK_ROUTED_SEND_WRITABLE, 0);
+            notify_send_pending_writable (pipe_);
     }
     if (dispatch_runtime ().send_recovery_pending ()
         && !dispatch_runtime ().send_recovery_ready ()) {
         dispatch_runtime ().mark_send_recovery_ready ();
         static_cast<mailbox_t *> (_mailbox)->signal ();
     }
-    notify_send_ready_if_armed ();
 }
 
 void zlink::socket_base_t::hiccuped (pipe_t *pipe_)
@@ -858,8 +863,7 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         flow_pause_released_on_termination (pipe_);
 
     if (!completion && application_attached) {
-        (void) enqueue_routed_send_ready (
-          pipe_, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+        fail_send_pending_for_pipe (pipe_, ENOTCONN);
         receive_runtime_t &receive = receive_runtime ();
         scoped_lock_t receive_lock (receive.sync);
         xpipe_terminated (pipe_);

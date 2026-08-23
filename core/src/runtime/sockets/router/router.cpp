@@ -271,10 +271,9 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
         // Handover gives a standby pipe an internal routing id. Its terminal
         // edge must still close admission parked on the public RID capability
         // that selected this exact pair.
-        (void) enqueue_routed_send_ready_exact (
-          &public_rid, pipe_->get_transport_pair_id (),
-          pipe_->get_transport_pair_generation (),
-          ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+        fail_send_pending_for_target (
+           &public_rid, pipe_->get_transport_pair_id (),
+           pipe_->get_transport_pair_generation (), ENOTCONN);
         _standby_pipes.erase (terminated_standby);
     }
     pipe_t *standby_to_promote = NULL;

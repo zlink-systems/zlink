@@ -10,7 +10,7 @@ This package must stay aligned with:
 - `doc/perf/PERF_SINGLE_TEST_POLICY.md`
 - `doc/perf/PERF_MULTI_TEST_POLICY.md`
 
-The Python surface is the Core 0.12.0 raw messaging contract with typed Python
+The Python surface is the Core 0.13.0 raw messaging contract with typed Python
 ownership and error handling. The public contract is:
 
 - multipart-only send and subscribe/receive
@@ -96,7 +96,7 @@ the topic and subscription state returned by the Core socket.
 ## Native Library Loading
 
 The Python binding loads the native zlink runtime through `ctypes`. A wheel
-loads the native payload bundled in that wheel. The current Core 0.12.0 package
+loads the native payload bundled in that wheel. The current Core 0.13.0 package
 target is Linux x86_64 only. Source builds use the same target policy and
 require an explicit `ZLINK_LIBRARY_PATH` or `ZLINK_CORE_PREFIX`; the loader does
 not search the repository build directory or an arbitrary system library.

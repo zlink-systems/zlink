@@ -85,7 +85,7 @@ void zlink::object_t::process_command (const command_t &cmd_)
                                 cmd_.args.flow_state.epoch);
             break;
 
-        case command_t::routed_send_ready:
+        case command_t::send_pending:
         case command_t::request_completion:
             break;
 

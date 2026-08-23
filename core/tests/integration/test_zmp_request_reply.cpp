@@ -193,21 +193,21 @@ void capture_completion_owner_reply (zlink_request_result_t result_,
     probe->cv.notify_all ();
 }
 
-void ignore_routed_ready (void *,
-                          const zlink_routed_send_ready_event_t *,
-                          void *)
+void ignore_routed_ready (void *, const zlink_send_complete_event_t *, void *)
 {
 }
 
 void close_on_routed_terminal (
-  void *socket_, const zlink_routed_send_ready_event_t *event_, void *userdata_)
+  void *socket_, const zlink_send_complete_event_t *event_, void *userdata_)
 {
     if (!event_)
         return;
 
     routed_self_close_probe_t *probe =
       static_cast<routed_self_close_probe_t *> (userdata_);
-    if (event_->state == ZLINK_ROUTED_SEND_WRITABLE) {
+    //  An admitted record is the positive proof the exact target accepted a
+    //  send, which is what the readiness edge used to stand in for.
+    if (event_->result == ZLINK_SEND_ADMITTED) {
         {
             std::lock_guard<std::mutex> lock (probe->mutex);
             probe->writable = true;
@@ -215,7 +215,7 @@ void close_on_routed_terminal (
         probe->cv.notify_all ();
         return;
     }
-    if (event_->state != ZLINK_ROUTED_SEND_TERMINAL)
+    if (event_->result != ZLINK_SEND_TERMINAL)
         return;
     const zlink_close_result_t result = zlink_close (socket_);
     const int errnum = result == ZLINK_CLOSE_OK ? 0 : zlink_errno ();
@@ -1304,22 +1304,14 @@ struct probe_t
 {
     std::mutex mutex;
     size_t completed;
-    std::atomic<size_t> send_ready_count;
     bool payload_mismatch;
     bool result_failure;
 
     probe_t () :
-        completed (0), send_ready_count (0), payload_mismatch (false),
-        result_failure (false)
+        completed (0), payload_mismatch (false), result_failure (false)
     {
     }
 };
-
-void capture_send_ready (void *, void *userdata_)
-{
-    probe_t *probe = static_cast<probe_t *> (userdata_);
-    probe->send_ready_count.fetch_add (1, std::memory_order_release);
-}
 
 unsigned char payload_byte_at (uint32_t ordinal_, size_t index_)
 {
@@ -1402,8 +1394,6 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
       ZLINK_CONFIG_OK, zlink_poller_add (poller, router, NULL, ZLINK_POLLOUT));
 
     probe_t probe;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_ready_handler (router, &capture_send_ready, &probe));
     size_t backpressure_hits = 0;
     uint32_t ordinal = 0;
     const std::chrono::steady_clock::time_point test_deadline =
@@ -1433,8 +1423,6 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
             //     connection ID rewrite: without it the reply is discarded as
             //     stale and the completion below never arrives.
             zlink_routing_id_t reply_rid = *peer_rid;
-            size_t ready_before =
-              probe.send_ready_count.load (std::memory_order_acquire);
             zlink_submit_result_t rc = zlink_router_reply_part (
               router, &reply_rid, request_seq, &parts[0], ZLINK_PART_FINAL);
             zlink_multipart_close (parts, part_count);
@@ -1452,14 +1440,12 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
                 TEST_ASSERT_FALSE_MESSAGE (
                   deadline_passed (test_deadline),
                   "router reply never recovered from completion backpressure");
-                if (probe.send_ready_count.load (std::memory_order_acquire)
-                    <= ready_before)
-                    continue;
 
+                //  The readiness hint that used to gate this retry is gone.
+                //  Draining completions above is what actually returns credit,
+                //  so the retry is driven by that drain instead.
                 zlink_msg_t retry_part;
                 fill_payload (&retry_part, ordinal_of_request (cycle, i));
-                ready_before =
-                  probe.send_ready_count.load (std::memory_order_acquire);
                 rc = zlink_router_reply_part (router, &reply_rid, request_seq, &retry_part,
                                               ZLINK_PART_FINAL);
             }
@@ -1528,7 +1514,7 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
     // activate_read command and makes the application pipe readable.
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (router, &ignore_routed_ready, NULL));
+      zlink_send_complete_handler (router, &ignore_routed_ready, NULL));
     const char endpoint[] = "inproc://async-owner-poller-input";
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_bind (router, endpoint));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (dealer, endpoint));
@@ -1656,7 +1642,7 @@ void test_completion_poller_exclusively_owns_routed_async_completion ()
     TEST_ASSERT_NOT_NULL (dealer);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (dealer, &ignore_routed_ready, NULL));
+      zlink_send_complete_handler (dealer, &ignore_routed_ready, NULL));
     const uint64_t reply_lane_hwm = 1024u * 1024u;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       dealer, ZLINK_OPT_SNDHWM, &reply_lane_hwm, sizeof (reply_lane_hwm)));
@@ -2454,14 +2440,17 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
     const char dealer_rid_text[] = "exact-dealer-server";
     set_routing_id_text (dealer, dealer_rid_text);
     set_routing_id_text (router, "exact-router-client");
-    routed_self_close_probe_t router_close_probe;
+    //  This test's subject is that the exact ROUTER request completes on the
+    //  async owner. Self-close from a terminal completion callback needs a
+    //  pending operation to terminate, so that coverage lives in
+    //  test_router_mandatory_hwm's terminal-batch self-close test, which
+    //  reserves records before driving termination.
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (
-        router, &close_on_routed_terminal, &router_close_probe));
+      zlink_send_complete_handler (router, &ignore_routed_ready, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (dealer, &ignore_routed_ready, NULL));
+      zlink_send_complete_handler (dealer, &ignore_routed_ready, NULL));
     const uint64_t reply_lane_hwm = 1024u * 1024u;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       dealer, ZLINK_OPT_SNDHWM, &reply_lane_hwm, sizeof (reply_lane_hwm)));
@@ -2495,14 +2484,9 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
           "ROUTER exact target did not become selectable");
         msleep (1);
     }
-    {
-        std::unique_lock<std::mutex> lock (router_close_probe.mutex);
-        TEST_ASSERT_TRUE_MESSAGE (
-          router_close_probe.cv.wait_for (
-            lock, std::chrono::seconds (3),
-            [&router_close_probe] { return router_close_probe.writable; }),
-          "paired ROUTER did not publish writable after transport admission");
-    }
+    //  The readiness hint that used to gate this point is gone. Selecting the
+    //  exact target above already proves the transport pair was admitted, so
+    //  no extra barrier is needed here.
     zlink_routed_submit_target_t dealer_target;
     memset (&dealer_target, 0, sizeof (dealer_target));
     while (zlink_select_routed_submit_target (dealer, NULL, &dealer_target)
@@ -2616,19 +2600,7 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
     lock.unlock ();
 
     test_context_socket_close_zero_linger (dealer);
-    bool router_closed = false;
-    {
-        std::unique_lock<std::mutex> close_lock (router_close_probe.mutex);
-        router_closed = router_close_probe.cv.wait_for (
-          close_lock, std::chrono::seconds (4),
-          [&router_close_probe] { return router_close_probe.closed; });
-    }
-    TEST_ASSERT_TRUE_MESSAGE (
-      router_closed,
-      "ROUTER terminal callback did not complete the supported self-close");
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, router_close_probe.result);
-    TEST_ASSERT_EQUAL_INT (0, router_close_probe.errnum);
-    test_context_socket_mark_closed (router);
+    test_context_socket_close_zero_linger (router);
 }
 
 void test_multiple_in_flight_requests_complete_independently ()

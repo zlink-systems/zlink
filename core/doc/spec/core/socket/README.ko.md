@@ -107,15 +107,50 @@ raw `STREAM`의 packet 단위 수신 콜백 타입입니다. `source_rid_`는 pa
 두 `msg_t`의 소유권은 콜백으로 이전됩니다. `zlink_stream_packet_handler()`
 와 함께 사용합니다.
 
-### zlink_send_ready_handler_fn
+### 송신 완료 타입
 
 ```c
-typedef void (*zlink_send_ready_handler_fn) (void *subject_, void *userdata_);
+typedef enum zlink_send_complete_result_t {
+  ZLINK_SEND_ADMITTED = 0,
+  ZLINK_SEND_TIMED_OUT = 201,
+  ZLINK_SEND_TERMINAL = 202
+} zlink_send_complete_result_t;
+
+typedef uint64_t zlink_send_op_id_t;
+
+typedef struct zlink_send_complete_event_t {
+  zlink_send_op_id_t op_id;
+  void *userdata;
+  zlink_routing_id_t peer_rid;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+  zlink_send_complete_result_t result;
+  int terminal_errno;
+} zlink_send_complete_event_t;
+
+typedef void (*zlink_send_complete_handler_fn) (
+  void *subject_, const zlink_send_complete_event_t *event_,
+  void *userdata_);
+
+typedef struct zlink_send_async_options_t {
+  uint32_t struct_size;
+  uint32_t timeout_ms;
+  void *userdata;
+  const zlink_routed_submit_target_t *target;
+} zlink_send_async_options_t;
 ```
 
-해당 handle이 backpressure 상태에서 벗어나 송신 재시도를 시도할 가치가
-있는 시점에 호출되는 콜백입니다. `ZLINK_POLLOUT`과 같은 send-recovery
-readiness 축을 공유하며, 콜백 자체는 재시도 성공을 보장하지 않습니다.
+`ZLINK_SEND_ADMITTED`는 레코드가 Core 송신 큐에 admit됐다는 뜻입니다. peer가
+받았다는 뜻이 아니므로 전달 확인이 필요하면 request/reply를 사용합니다.
+`ZLINK_SEND_TIMED_OUT`은 operation별 `timeout_ms` 만료입니다.
+`ZLINK_SEND_TERMINAL`은 최종 실패이며 사유는 `terminal_errno`에 담깁니다.
+취소와 socket close는 `ECANCELED`, context 종료는 `ETERM`, 그 밖에는 route
+실패 errno입니다.
+
+`op_id`는 Core가 부여하는 socket 로컬 단조 증가 값이고 `0`은 유효한 id가 아니며
+submit 실패 시 out 파라미터에 남는 값입니다. `userdata`는 submit option에 넘긴
+값을 그대로 돌려줍니다. target identity 필드는 항상 채워지며 routed target이
+없는 socket에서는 0입니다.
 
 ### zlink_reply_handler_fn
 
@@ -986,78 +1021,115 @@ identity를 지정하면 `ZLINK_CONNECT_NOT_FOUND`를 반환한다.
 
 ---
 
-### zlink_send_ready_handler
+### 비동기 송신 admission
 
-send-ready 콜백을 설정하거나 교체합니다.
+완전한 멀티파트 레코드 하나를 Core에 인계하고 그에 대한 완료 통지를 정확히
+한 번 받습니다.
 
 ```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  const zlink_send_async_options_t *options_,
+  zlink_send_op_id_t *op_id_out_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
+  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
+  void *s_, zlink_send_op_id_t op_id_);
 ```
 
-핸들러는 교체 전용입니다. NULL 전달은 유효하지 않습니다. 교체 성공 시 다음 쓰기
-가능 전환부터 반영됩니다. 동일 핸들의 send-ready 콜백 내에서 재진입 호출하면
+`zlink_send_async` 지원 대상은 raw `PAIR`, `DEALER`, `ROUTER`, `STREAM`입니다.
+그 밖의 socket 타입은 `ZLINK_SUBMIT_NOT_SUPPORTED`입니다. STREAM은 프레임
+경계가 없는 raw 바이트를 나르므로 STREAM 레코드는 항상 정확히 1 part입니다.
+
+`ZLINK_SUBMIT_OK`이면 `parts_[0 .. part_count_)` 전부의 소유권이 Core로
+넘어가고 호출자는 이후 close를 포함해 그 메시지를 만지지 않습니다. 그 밖의
+결과에서는 소유권이 호출자에게 남습니다.
+
+이 호출은 블로킹하지 않습니다. target에 여유가 있으면 호출 스레드에서 그대로
+admit되며 완료 콜백이 이 함수가 반환하기 전에 인라인으로 실행될 수 있습니다.
+target이 backpressure 상태면 레코드는 pending operation으로 예약되고 완료는
+나중에 도착합니다. byte HWM 회계는 동기 멀티파트 send와 동일하게 레코드
+하나를 메시지 하나로 계산합니다.
+
+Pending operation은 socket 단위로 `ZLINK_OPT_SEND_PENDING_MAX_MSGS`와
+`ZLINK_OPT_SEND_PENDING_MAX_BYTES`에 의해 유한합니다. 둘 중 하나를 넘기면
+`ZLINK_SUBMIT_BACKPRESSURED`를 반환하고 part 소유권은 호출자에게 남습니다 —
+여기가 앱이 정책을 소유하는 지점입니다. 두 옵션 모두 `0`을 무제한으로 받지
+않습니다. 무제한 예약 큐는 HWM 우회이기 때문입니다.
+
+같은 target의 pending operation은 제출 순서대로 admit되고 그 순서대로
+완료됩니다. target 내부의 head-of-line 차단은 의도된 동작입니다. 그 target
+큐가 하나의 논리 스트림이기 때문입니다. 서로 다른 target 사이에는 순서
+보장이 없고, 동기 send는 같은 HWM을 두고 동등하게 경쟁합니다. 동기 send를
+pending 앞뒤로 재배치하는 특례는 없습니다.
+
+ROUTER는 `options_->target`이 필요합니다. DEALER는 `NULL`을 넘길 수 있으며 이
+경우 Core가 제출 시점에 선택을 확정합니다. 선택을 완료 시점까지 미루면
+target별 순서를 정의할 수 없기 때문입니다. PAIR는 이 필드를 무시합니다.
+
+`zlink_send_complete_handler`는 교체 전용이고 `NULL`은 유효하지 않습니다. 첫
+`zlink_send_async` 이전에 반드시 설치해야 하며, 그렇지 않으면 submit이
+`errno=EINVAL`로 실패합니다. 결과를 보고할 곳이 없는 operation이 되기
+때문입니다. 이 socket 자신의 완료 콜백 안에서 핸들러를 교체하면
 `errno=EDEADLK`로 실패합니다.
 
-지원 대상은 raw `PAIR`, `PUB`, `XPUB`, `DEALER`, `ROUTER`, `STREAM`입니다.
-send-ready는 수신 모드와 독립적입니다.
+콜백 계약은 다음과 같습니다.
 
-이 콜백과 `ZLINK_POLLOUT`은 같은 send-recovery readiness 축을 가리킵니다.
-`BACKPRESSURED` 결과를 본 호출자가 재시도할 가치가 있는 시점을 알립니다.
-readiness 신호 자체는 재시도 성공을 보장하지 않으며, 알림 뒤 첫 재시도가
-다시 `BACKPRESSURED`로 실패할 수 있습니다. 지원하지 않는 subject는
-`ENOTSUP`를 반환합니다.
+- `ZLINK_SUBMIT_OK`을 반환한 operation마다 완료가 정확히 한 번 실행됩니다.
+- 같은 target의 완료는 제출 순서대로 실행됩니다.
+- 한 socket의 완료끼리는 절대 동시에 실행되지 않습니다.
+- 고정된 스레드를 약속하지 않습니다. 콜백은 `zlink_send_async` 안에서
+  인라인으로, backpressure가 풀린 뒤에는 Core async mailbox 스레드에서,
+  timeout에서는 Core deadline 스레드에서, close나 context 종료에서는 그것을
+  호출한 스레드에서, 그리고 이 socket에 `ZLINK_POLLCOMPLETION` 등록이 있으면
+  `zlink_poller_wait`를 호출한 스레드에서 실행될 수 있습니다.
+- 콜백은 완료를 앱 상태에 전달하는 일만 해야 합니다. 콜백 안에서 send,
+  publish, request 계열 진입점을 호출하면 `errno=EDEADLK`로 실패합니다.
 
-**반환값:** 성공 시 `ZLINK_HANDLER_OK`, 실패 시 `zlink_handler_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지합니다.
+`ZLINK_POLLCOMPLETION`으로 socket을 poller에 등록하면 이 콜백의 디스패치
+소유권이 Core async mailbox 스레드에서 `zlink_poller_wait` 호출 스레드로
+넘어갑니다. 디스패치 위치만 달라질 뿐 등록 API도, 콜백도, 이벤트도, 보장도
+같습니다. 두 디스패치 소유자는 socket 단위로 상호 배타적입니다. pending
+상한이 콜백을 기다릴 수 있는 operation 수를 제한하므로 완료가 유실되는 일은
+없습니다.
 
-**참고:** `zlink_send_part`, `zlink_send_part_rid`, `zlink_publish_part`
+`zlink_send_async_cancel`은 요청입니다. `ZLINK_SUBMIT_OK`은 취소가 접수됐고
+완료가 `ZLINK_SEND_TERMINAL` + `ECANCELED`로 온다는 뜻입니다.
+`ZLINK_SUBMIT_NOT_FOUND`는 그 id의 pending operation이 없다는 뜻입니다.
+`ZLINK_SUBMIT_INVALID_STATE`는 admit이 이미 커밋되어 완료가
+`ZLINK_SEND_ADMITTED`로 온다는 뜻입니다. 취소된 operation도 완료는 정확히 한
+번 발생합니다. 통지가 없으면 호출자의 suspension이 영원히 매달리기 때문입니다.
+
+`zlink_close`와 `zlink_ctx_term`은 반환 전에 모든 pending operation을 각각
+`ECANCELED`와 `ETERM`으로 즉시 실패시킵니다. `ZLINK_OPT_LINGER`는 적용되지
+않습니다. linger는 이미 pipe에 admit된 바이트를 다루고 pending operation은
+아직 admit되지 않았기 때문입니다.
+
+**반환값:** `zlink_send_async`와 `zlink_send_async_cancel`은 성공 시
+`ZLINK_SUBMIT_OK`, `zlink_send_complete_handler`는 `ZLINK_HANDLER_OK`를
+반환합니다. `zlink_errno()`는 진단용 내부 errno를 그대로 유지합니다.
+
+**참고:** `zlink_send_part`, `zlink_send_part_rid`,
+`zlink_select_routed_submit_target`
 
 ---
 
-### Routed target 송신 readiness
+### Routed submit target 선택
 
 ```c
-typedef enum zlink_routed_send_ready_state_t {
-  ZLINK_ROUTED_SEND_WRITABLE = 1,
-  ZLINK_ROUTED_SEND_TERMINAL = 2
-} zlink_routed_send_ready_state_t;
-
-typedef struct zlink_routed_send_ready_event_t {
-  zlink_routing_id_t peer_rid;
-  uint64_t transport_pair_id;
-  uint64_t transport_pair_generation;
-  zlink_routed_send_ready_state_t state;
-  int terminal_errno;
-} zlink_routed_send_ready_event_t;
-
 typedef struct zlink_routed_submit_target_t {
   zlink_routing_id_t peer_rid;
   uint64_t transport_pair_id;
   uint64_t transport_pair_generation;
 } zlink_routed_submit_target_t;
 
-typedef void (*zlink_routed_send_ready_handler_fn) (
-  void *subject_, const zlink_routed_send_ready_event_t *event_,
-  void *userdata_);
-
-ZLINK_EXPORT zlink_handler_result_t zlink_routed_send_ready_handler (
-  void *socket_, zlink_routed_send_ready_handler_fn handler_,
-  void *userdata_);
-
 ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target (
   void *socket_, const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_);
 
 ```
-
-Binding은 routed 비동기 operation을 받기 전에 이 handler를 socket에 장기 등록한다.
-`peer_rid`는 callback 동안만 유효한 borrowed 값이다. HWM에 막혔던 application pipe의
-credit이 회복되면 Core는 그 pipe의 exact RID·transport pair identity로 `WRITABLE`을
-전달한다. Pipe detach, socket close와 context 종료는 같은 identity로 `TERMINAL`과
-원인 errno를 전달한다. 다른 RID나 stale generation event를 현재 target의 wake로 사용할
-수 없다. Event는 재시도 시점일 뿐 성공 보장이 아니므로 callback은 blocking submit을
-실행하지 않고 binding scheduler가 같은 key로 `DONTWAIT` 재시도하게 한다. 기존
-socket-wide send-ready는 routed 비동기 admission에 사용하지 않는다.
 
 `zlink_select_routed_submit_target()`은 binding이 pending operation을 등록하기 전에 사용할
 exact value identity를 반환한다. ROUTER에서는 `router_rid_or_null_`에 non-NULL RID를 전달하고,
@@ -1067,25 +1139,22 @@ DEALER는 연결됐고 가중치가 양수인 application pipe 전체를 대상�
 선택 자체가 B로 우회되지 않으며, A를 선택한 operation은 A의 exact readiness만 기다린다.
 
 반환값은 pipe lifetime, HWM credit 또는 Core resource를 점유하는 lease가 아니다. 선택 직후에도
-연결 상태나 credit은 바뀔 수 있으므로 exact `DONTWAIT` submit은 `BACKPRESSURED` 또는 terminal
-route 결과를 반환할 수 있다. Binding은 handler를 먼저 등록하고, 선택값으로 pending operation을
-먼저 등록한 뒤 exact submit을 호출한다. Stale pair generation은 다른 연결로 retarget하지 않는다.
-지원 대상은 DEALER와 ROUTER뿐이며 다른 socket은 `ZLINK_SUBMIT_NOT_SUPPORTED`다.
+연결 상태나 credit은 바뀔 수 있으므로 이후의 exact submit은 `BACKPRESSURED` 또는 terminal
+route 결과를 반환할 수 있다. 이 값은 이후 exact submit이 가리킬 target을 지정하며
+`zlink_send_async_options_t`의 `target` 필드가 그중 하나다. 그 target의 pending 상태는 Core가
+소유한다. Stale pair generation은 다른 연결로 retarget하지 않는다.
 
-Binding은 socket 내부의 짧은 complete-record attempt gate 아래에서 기존 exact-target part
-API를 `DONTWAIT`로 첫 part부터 FINAL까지 한 번 시도한다. Gate는 한 번의 시도 동안만
-유지하고 `BACKPRESSURED` 뒤 readiness를 기다릴 때는 즉시 해제한다. Core part sequence는
-첫 part가 선택한 exact pair fence를 FINAL까지 유지하고 중간 실패를 전체 rollback하므로
-peer에 prefix가 보이지 않는다. 이 binding 내부 gate는 공개 FIFO, 별도 queue capacity 또는
-새 multipart Core ABI가 아니다.
+Core part sequence는 첫 part가 선택한 exact pair fence를 FINAL까지 유지하고 중간 실패를
+전체 rollback하므로 peer에 prefix가 보이지 않는다. `zlink_send_async`는 완전한 레코드를 한
+번의 호출로 제출하므로 이 sequence를 앱 코드 구간에 걸쳐 점유하는 일이 없다.
 
 Request part API는 첫 frame이 wire에 보이기 전에 reply correlation과 timeout lifecycle을
 등록하며, submit 실패 시 이를 제거하고 handler를 호출하지 않는다. `ZLINK_SUBMIT_OK` 뒤에는
 handler가 reply 또는 terminal 결과로 정확히 한 번 호출된다.
 
-`WRITABLE` event의 `terminal_errno`는 `0`이다. `TERMINAL`은 application pipe
-detach·disconnect에 `ENOTCONN`, socket close에 `ECANCELED`, context 종료에 `ETERM`을
-전달한다. 여러 종료 원인이 경합하면 처음 확정된 terminal event 하나만 전달한다.
+`ZLINK_SEND_TERMINAL` 완료는 application pipe detach·disconnect에 `ENOTCONN`, 취소와
+socket close에 `ECANCELED`, context 종료에 `ETERM`을 전달한다. 여러 종료 원인이
+경합하면 처음 확정된 원인을 싣고, operation은 그래도 정확히 한 번 완료된다.
 
 ### Retained-credit receive
 

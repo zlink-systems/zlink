@@ -163,17 +163,29 @@ packet mode는 각 client byte stream에서 다음 frame을 순서대로 조립�
 유효한 borrowed view입니다. `header_`와 `body_`의 소유권은 callback으로
 이전되므로 각각 정확히 한 번 소비하거나 닫아야 합니다.
 
-## 8. Send readiness와 thread safety
+## 8. 비동기 송신 admission과 thread safety
 
 ```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  const zlink_send_async_options_t *options_,
+  zlink_send_op_id_t *op_id_out_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
+  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
+  void *s_, zlink_send_op_id_t op_id_);
 ```
 
-send-ready는 이전 submit이 backpressure였을 때 다시 시도할 가치가 있음을
-알리지만 다음 submit의 성공을 보장하지 않습니다. handler는 교체할 수 있지만
-`NULL`로 제거할 수 없습니다. 같은 send-ready callback 안에서 재등록하면
-`ZLINK_HANDLER_DEADLOCK`, `errno == EDEADLK`입니다.
+STREAM은 프레임 경계가 없는 raw 바이트를 나르므로 STREAM 레코드는 항상 정확히
+1 part입니다. `part_count_`가 1이 아니면 `ZLINK_SUBMIT_NOT_SUPPORTED`입니다.
+`options_->target`은 하나의 exact peer를 지정하며 그 identity는
+`zlink_select_routed_submit_target()`에서 얻습니다.
+
+완료는 Core 송신 큐로의 admission을 뜻하며 peer 전달이 아닙니다. 소유권 이전,
+target별 FIFO 순서, socket 단위 pending 상한, operation별 timeout, 취소, close
+fail-fast, 콜백 규칙 등 계약 전체는 [소켓 공통](README.ko.md)이 소유합니다.
 
 공개 socket handle의 thread-safety와 close 계약은 [소켓 공통](README.ko.md)을
 따릅니다. 같은 `zlink_msg_t`를 여러 스레드가 동시에 사용할 수 없습니다.

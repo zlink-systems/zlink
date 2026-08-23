@@ -788,7 +788,7 @@ int send_completion_frames (zlink::socket_base_t *socket_,
         ? socket_->completion_pipe_for_application (application_pipe_)
         : socket_->completion_pipe_for_peer (peer_rid_);
     if (!completion) {
-        socket_->arm_send_ready_after_backpressure ();
+        socket_->arm_send_recovery_after_backpressure ();
         zlink::request_reply::consume_send_frames_from (
           parts_, 0, part_count_);
         errno = EAGAIN;
@@ -808,7 +808,7 @@ int send_completion_frames (zlink::socket_base_t *socket_,
         if (!written) {
             const int saved_errno = errno ? errno : EAGAIN;
             completion->rollback ();
-            socket_->arm_send_ready_after_backpressure ();
+            socket_->arm_send_recovery_after_backpressure ();
             zlink::request_reply::consume_send_frames_from (
               parts_, i, part_count_);
             errno = saved_errno;
@@ -845,7 +845,7 @@ int send_completion_frames_for_transport_pair (
     zlink::pipe_t *completion = socket_->completion_pipe_for_transport_pair (
       transport_pair_id_, transport_pair_generation_);
     if (!completion) {
-        socket_->arm_send_ready_after_backpressure ();
+        socket_->arm_send_recovery_after_backpressure ();
         zlink::request_reply::consume_send_frames_from (parts_, 0, part_count_);
         errno = EAGAIN;
         return -1;
@@ -862,7 +862,7 @@ int send_completion_frames_for_transport_pair (
         if (!written) {
             const int saved_errno = errno ? errno : EAGAIN;
             completion->rollback ();
-            socket_->arm_send_ready_after_backpressure ();
+            socket_->arm_send_recovery_after_backpressure ();
             zlink::request_reply::consume_send_frames_from (parts_, i, part_count_);
             errno = saved_errno;
             return -1;

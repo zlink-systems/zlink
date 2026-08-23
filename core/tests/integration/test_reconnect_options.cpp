@@ -30,7 +30,7 @@ void make_rid (const char *value_, zlink_routing_id_t *out_)
     memcpy (out_->data, value_, out_->size);
 }
 
-void wait_router_send_ready (void *router_, const zlink_routing_id_t *rid_, void *receiver_)
+void wait_router_route_ready (void *router_, const zlink_routing_id_t *rid_, void *receiver_)
 {
     for (int i = 0; i < 100; ++i) {
         if (test_stream_send_bytes (router_, rid_, "ready", 5, ZLINK_DONTWAIT) == 5) {
@@ -73,20 +73,6 @@ void init_string_msg (zlink_msg_t *msg_, const char *value_)
     const size_t size = strlen (value_);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (msg_, size));
     memcpy (zlink_msg_data (msg_), value_, size);
-}
-
-struct send_ready_probe_t
-{
-    send_ready_probe_t () : count (0) {}
-
-    std::atomic<int> count;
-};
-
-void capture_send_ready (void *, void *userdata_)
-{
-    send_ready_probe_t *probe = static_cast<send_ready_probe_t *> (userdata_);
-    if (probe)
-        probe->count.fetch_add (1, std::memory_order_release);
 }
 
 }
@@ -341,7 +327,7 @@ void submit_retry_does_not_wait_for_passive_router_route ()
 
     zlink_routing_id_t rid;
     make_rid ("D", &rid);
-    wait_router_send_ready (router, &rid, dealer);
+    wait_router_route_ready (router, &rid, dealer);
 
     test_context_socket_close_zero_linger (dealer);
     msleep (SETTLE_TIME * 2);
@@ -412,10 +398,6 @@ void dontwait_local_admission_wakes_when_first_target_attaches ()
     int one = 1;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_IMMEDIATE, &one, sizeof (one)));
-    send_ready_probe_t probe;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_HANDLER_OK,
-      zlink_send_ready_handler (dealer, &capture_send_ready, &probe));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
     zlink_test_set_submit_retry_fault (1, ECONNREFUSED);
@@ -425,13 +407,11 @@ void dontwait_local_admission_wakes_when_first_target_attaches ()
     TEST_ASSERT_EQUAL_INT (ECONNREFUSED, errno);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
-    for (int i = 0; i < 300
-                    && probe.count.load (std::memory_order_acquire) == 0;
-         ++i)
-        msleep (10);
-    TEST_ASSERT_GREATER_THAN (
-      0, probe.count.load (std::memory_order_acquire));
 
+    //  The readiness hint that used to be observed here is gone. The
+    //  observable that actually mattered survives unchanged: once the first
+    //  target attaches, the armed local-admission recovery lets a DONTWAIT
+    //  submit through instead of pinning ECONNREFUSED forever.
     bool submitted = false;
     for (int i = 0; i < 100 && !submitted; ++i) {
         submitted = zlink_send (dealer, "after", 5, ZLINK_DONTWAIT) == 5;

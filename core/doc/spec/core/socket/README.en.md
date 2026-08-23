@@ -101,16 +101,50 @@ valid `zlink_msg_t` objects even when length is zero (never `NULL`), and
 ownership of both is transferred to the callback. Used with
 `zlink_stream_packet_handler()`.
 
-### zlink_send_ready_handler_fn
+### Send completion types
 
 ```c
-typedef void (*zlink_send_ready_handler_fn) (void *subject_, void *userdata_);
+typedef enum zlink_send_complete_result_t {
+  ZLINK_SEND_ADMITTED = 0,
+  ZLINK_SEND_TIMED_OUT = 201,
+  ZLINK_SEND_TERMINAL = 202
+} zlink_send_complete_result_t;
+
+typedef uint64_t zlink_send_op_id_t;
+
+typedef struct zlink_send_complete_event_t {
+  zlink_send_op_id_t op_id;
+  void *userdata;
+  zlink_routing_id_t peer_rid;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+  zlink_send_complete_result_t result;
+  int terminal_errno;
+} zlink_send_complete_event_t;
+
+typedef void (*zlink_send_complete_handler_fn) (
+  void *subject_, const zlink_send_complete_event_t *event_,
+  void *userdata_);
+
+typedef struct zlink_send_async_options_t {
+  uint32_t struct_size;
+  uint32_t timeout_ms;
+  void *userdata;
+  const zlink_routed_submit_target_t *target;
+} zlink_send_async_options_t;
 ```
 
-Callback invoked when a send-capable handle leaves backpressure and a
-send retry is worth attempting. Shares the same send-recovery readiness
-axis as `ZLINK_POLLOUT`; the callback itself does not guarantee that the
-retry will succeed.
+`ZLINK_SEND_ADMITTED` means the record entered the Core send queue. It does
+not mean the peer received it; use request/reply when delivery confirmation is
+required. `ZLINK_SEND_TIMED_OUT` reports expiry of the per-operation
+`timeout_ms`. `ZLINK_SEND_TERMINAL` reports final failure and puts the cause in
+`terminal_errno`: `ECANCELED` for cancel or socket close, `ETERM` for context
+termination, otherwise the route failure errno.
+
+`op_id` is Core-assigned, socket-local, and monotonic; `0` is never a valid id
+and is what an out parameter holds after a failed submit. `userdata` is
+returned unchanged from the submit options. The target identity fields are
+always populated, with zeros where the socket has no routed target.
 
 ### zlink_reply_handler_fn
 
@@ -1006,80 +1040,120 @@ the detailed internal errno for diagnostics.
 
 ---
 
-### zlink_send_ready_handler
+### Asynchronous send admission
 
-Install or replace the send-ready callback.
+Hand one complete multipart record to Core and receive exactly one completion
+for it.
 
 ```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  const zlink_send_async_options_t *options_,
+  zlink_send_op_id_t *op_id_out_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
+  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
+  void *s_, zlink_send_op_id_t op_id_);
 ```
 
-The handler is replace-only. Passing NULL is invalid. A successful replace is
-visible from the next writable transition. If called reentrantly from the
-same handle's send-ready callback, the call fails with `errno=EDEADLK`.
+`zlink_send_async` supported subjects: raw `PAIR`, `DEALER`, `ROUTER`, and
+`STREAM`. Other socket types return `ZLINK_SUBMIT_NOT_SUPPORTED`. STREAM
+carries raw bytes with no frame boundaries, so a STREAM record is exactly one
+part.
 
-Supported subjects: raw `PAIR`, `PUB`, `XPUB`, `DEALER`, `ROUTER`, and
-`STREAM`. Send-ready is independent from receive mode.
+On `ZLINK_SUBMIT_OK` ownership of every entry in `parts_[0 .. part_count_)`
+transfers to Core and the caller must not touch those messages again, close
+included. On any other result ownership stays with the caller.
 
-This callback and `ZLINK_POLLOUT` share the same send-recovery readiness
-axis. After a `BACKPRESSURED` result, the signal tells the caller it is
-worth retrying; the signal itself does not guarantee the retry will
-succeed, and the first retry after the notification may still fail with
-`BACKPRESSURED`. Unsupported subjects return `ENOTSUP`.
+The call never blocks. When the target has room the record is admitted on the
+calling thread and the completion callback may run inline before the call
+returns. When the target is backpressured the record is reserved as a pending
+operation and its completion arrives later. The byte high-water mark accounts
+the record as one message, exactly as a synchronous multipart send does.
 
-**Returns:** `ZLINK_HANDLER_OK` on success; otherwise a `zlink_handler_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
+Pending operations are bounded per socket by `ZLINK_OPT_SEND_PENDING_MAX_MSGS`
+and `ZLINK_OPT_SEND_PENDING_MAX_BYTES`. Exceeding either bound returns
+`ZLINK_SUBMIT_BACKPRESSURED` and leaves part ownership with the caller: that is
+where the application owns policy. Neither bound accepts `0` as unlimited - an
+unbounded reservation queue would be a high-water mark bypass.
 
-**See also:** `zlink_send_part`, `zlink_send_part_rid`, `zlink_publish_part`
+Pending operations for one target are admitted, and completed, in submit
+order. Head-of-line blocking within a target is intentional, because the target
+queue is one logical stream. There is no ordering guarantee between different
+targets, and a synchronous send competes for the same high-water mark on equal
+terms; no special case reorders it around pending operations.
+
+ROUTER requires `options_->target`. DEALER may pass `NULL`, in which case Core
+commits one selection at submit time - deferring the choice to completion time
+would make per-target order impossible to state. PAIR ignores the field.
+
+`zlink_send_complete_handler` is replace-only and `NULL` is invalid. It must be
+installed before the first `zlink_send_async`; otherwise the submit fails with
+`errno=EINVAL`, because the operation would have no way to report its outcome.
+Replacing the handler from inside this socket's own completion callback fails
+with `errno=EDEADLK`.
+
+The callback contract is:
+
+- Exactly one completion runs per operation that returned `ZLINK_SUBMIT_OK`.
+- Completions for the same target run in submit order.
+- Completions for one socket never run concurrently with each other.
+- No fixed thread is promised. The callback can run inline inside
+  `zlink_send_async`, on the Core async mailbox thread after backpressure
+  clears, on the Core deadline thread on timeout, on the closing thread during
+  close or context termination, or on the thread that called
+  `zlink_poller_wait` while a `ZLINK_POLLCOMPLETION` registration owns
+  completion dispatch for this socket.
+- The callback must only hand the completion to application state. Calling any
+  send, publish, or request entry point from inside it fails with
+  `errno=EDEADLK`.
+
+Registering the socket on a poller with `ZLINK_POLLCOMPLETION` transfers
+dispatch ownership of this callback from the Core async mailbox thread to the
+thread that calls `zlink_poller_wait`. That is a change of dispatch location
+only: the same registration, the same callback, the same event, the same
+guarantees. The two dispatch owners are mutually exclusive per socket. No
+completion is ever lost, because the pending bound caps the number of
+operations that can be awaiting a callback.
+
+`zlink_send_async_cancel` is a request. `ZLINK_SUBMIT_OK` means the cancel was
+accepted and the completion reports `ZLINK_SEND_TERMINAL` with `ECANCELED`.
+`ZLINK_SUBMIT_NOT_FOUND` means no pending operation carries that id.
+`ZLINK_SUBMIT_INVALID_STATE` means admission is already committed and the
+completion reports `ZLINK_SEND_ADMITTED`. A cancelled operation still completes
+exactly once; silence would strand the caller's suspension forever.
+
+`zlink_close` and `zlink_ctx_term` fail every pending operation immediately,
+with `ECANCELED` and `ETERM` respectively, before returning. `ZLINK_OPT_LINGER`
+does not apply: linger covers bytes already admitted to a pipe, and a pending
+operation has not been admitted.
+
+**Returns:** `zlink_send_async` and `zlink_send_async_cancel` return
+`ZLINK_SUBMIT_OK` on success; `zlink_send_complete_handler` returns
+`ZLINK_HANDLER_OK`. `zlink_errno()` retains the detailed internal errno for
+diagnostics.
+
+**See also:** `zlink_send_part`, `zlink_send_part_rid`,
+`zlink_select_routed_submit_target`
 
 ---
 
-### Routed-target send readiness
+### Routed submit target selection
 
 ```c
-typedef enum zlink_routed_send_ready_state_t {
-  ZLINK_ROUTED_SEND_WRITABLE = 1,
-  ZLINK_ROUTED_SEND_TERMINAL = 2
-} zlink_routed_send_ready_state_t;
-
-typedef struct zlink_routed_send_ready_event_t {
-  zlink_routing_id_t peer_rid;
-  uint64_t transport_pair_id;
-  uint64_t transport_pair_generation;
-  zlink_routed_send_ready_state_t state;
-  int terminal_errno;
-} zlink_routed_send_ready_event_t;
-
 typedef struct zlink_routed_submit_target_t {
   zlink_routing_id_t peer_rid;
   uint64_t transport_pair_id;
   uint64_t transport_pair_generation;
 } zlink_routed_submit_target_t;
 
-typedef void (*zlink_routed_send_ready_handler_fn) (
-  void *subject_, const zlink_routed_send_ready_event_t *event_,
-  void *userdata_);
-
-ZLINK_EXPORT zlink_handler_result_t zlink_routed_send_ready_handler (
-  void *socket_, zlink_routed_send_ready_handler_fn handler_,
-  void *userdata_);
-
 ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target (
   void *socket_, const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_);
 
 ```
-
-The binding registers this long-lived handler before accepting asynchronous
-routed operations on the socket. `peer_rid` is borrowed for the callback only.
-When an HWM-blocked application pipe regains credit, Core emits `WRITABLE` with
-that pipe's exact RID and transport-pair identity. Pipe detach, socket close,
-and context termination emit `TERMINAL` for the same identity with the cause in
-`terminal_errno`. An event for another RID or a stale generation cannot wake
-the current target. The event only indicates that a retry is worthwhile, so
-the callback never performs a blocking submit; the binding scheduler retries
-the same key with `DONTWAIT`. Socket-wide send-ready is not used for routed
-asynchronous admission.
 
 `zlink_select_routed_submit_target()` returns the exact value identity a
 binding uses before registering a pending operation. ROUTER requires a non-null
@@ -1090,31 +1164,27 @@ temporarily inactive because of HWM. A blocked A therefore is not silently
 rerouted to B; an operation that selected A waits only for A's exact readiness.
 
 The returned value is not a pipe-lifetime, HWM-credit, or Core-resource lease.
-Connection state and credit may change immediately after selection, so the
-exact `DONTWAIT` submit may still return `BACKPRESSURED` or a terminal route
-result. A binding registers the handler first, inserts pending state for the
-selected value, and only then performs the exact submit. A stale pair
-generation never retargets to another connection. Only DEALER and ROUTER are
-supported; other socket types return `ZLINK_SUBMIT_NOT_SUPPORTED`.
+Connection state and credit may change immediately after selection, so a later
+exact submit may still return `BACKPRESSURED` or a terminal route result. The
+value names an exact target for that later submit, including the `target` field
+of `zlink_send_async_options_t`; any pending state for it belongs to Core. A
+stale pair generation never retargets to another connection.
 
-A binding makes one first-part-through-FINAL `DONTWAIT` attempt with the
-existing exact-target part APIs while holding a short socket-local
-complete-record attempt gate. It releases that gate immediately before waiting
-for readiness after `BACKPRESSURED`. The Core part sequence keeps the exact
-pair fence selected by the first part through FINAL and rolls back the whole
-record on an intermediate failure, so no prefix becomes visible to the peer.
-The private binding gate is not a public FIFO, a separate queue capacity, or a
-new multipart Core ABI.
+The Core part sequence keeps the exact pair fence selected by the first part
+through FINAL and rolls back the whole record on an intermediate failure, so no
+prefix becomes visible to the peer. `zlink_send_async` submits the complete
+record in one call, so a caller that uses it never holds that sequence across
+its own code.
 
 The request part API installs reply correlation and its timeout lifecycle
 before the first frame can become visible on the wire; a failed submit removes
 both and does not invoke the handler. After `ZLINK_SUBMIT_OK`, the handler runs
 exactly once with a reply or terminal result.
 
-For `WRITABLE`, `terminal_errno` is zero. A `TERMINAL` event reports
-`ENOTCONN` for application-pipe detach or disconnect, `ECANCELED` for socket
-close, and `ETERM` for context termination. When terminal causes race, only
-the first terminal event that becomes final is delivered.
+A `ZLINK_SEND_TERMINAL` completion reports `ENOTCONN` for application-pipe
+detach or disconnect, `ECANCELED` for cancel or socket close, and `ETERM` for
+context termination. When terminal causes race, the completion carries the
+first cause that became final; the operation still completes exactly once.
 
 ### Retained-credit receive
 

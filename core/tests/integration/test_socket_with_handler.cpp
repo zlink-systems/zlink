@@ -32,7 +32,8 @@ void discard_stream_packet_message (
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (body_));
 }
 
-void noop_send_ready_handler (void *, void *)
+void noop_send_complete_handler (void *, const zlink_send_complete_event_t *,
+                                 void *)
 {
 }
 
@@ -139,7 +140,7 @@ void test_raw_socket_receive_callback_contracts ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }
 
-void test_raw_socket_send_ready_contracts ()
+void test_raw_socket_send_complete_contracts ()
 {
     void *ctx = zlink_ctx_new ();
     TEST_ASSERT_NOT_NULL (ctx);
@@ -162,15 +163,27 @@ void test_raw_socket_send_ready_contracts ()
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (sub);
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send_ready_handler (pair, &noop_send_ready_handler, NULL));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send_ready_handler (pub, &noop_send_ready_handler, NULL));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send_ready_handler (xpub, &noop_send_ready_handler, NULL));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send_ready_handler (dealer, &noop_send_ready_handler, NULL));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send_ready_handler (router, &noop_send_ready_handler, NULL));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send_ready_handler (stream, &noop_send_ready_handler, NULL));
+    //  The completion channel exists exactly where zlink_send_async does.
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_send_complete_handler (pair, &noop_send_complete_handler, NULL));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_send_complete_handler (dealer, &noop_send_complete_handler, NULL));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_send_complete_handler (router, &noop_send_complete_handler, NULL));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_send_complete_handler (stream, &noop_send_complete_handler, NULL));
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_HANDLER_NOT_SUPPORTED,
-                           zlink_send_ready_handler (sub, &noop_send_ready_handler, NULL));
+    //  PUB/XPUB publish and SUB have no asynchronous send admission surface,
+    //  so they have no completion channel either.
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_NOT_SUPPORTED,
+      zlink_send_complete_handler (pub, &noop_send_complete_handler, NULL));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_NOT_SUPPORTED,
+      zlink_send_complete_handler (xpub, &noop_send_complete_handler, NULL));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_NOT_SUPPORTED,
+      zlink_send_complete_handler (sub, &noop_send_complete_handler, NULL));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_poller_add (poller, pair, pair, ZLINK_POLLOUT));
@@ -344,7 +357,7 @@ int main ()
 
     UNITY_BEGIN ();
     RUN_TEST (test_raw_socket_receive_callback_contracts);
-    RUN_TEST (test_raw_socket_send_ready_contracts);
+    RUN_TEST (test_raw_socket_send_complete_contracts);
     RUN_TEST (test_raw_subscribe_recv_returns_topic_and_payload);
     RUN_TEST (test_pubsub_generic_surface_accepts_raw_prefix_filters_and_raw_publish);
     RUN_TEST (test_xpub_direct_recv_returns_source_rid_and_topic);

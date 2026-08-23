@@ -118,6 +118,28 @@ int zlink::options_setsockopt_core_socket (
             }
             break;
 
+        case ZLINK_INTERNAL_OPT_SEND_PENDING_MAX_MSGS:
+            if (optvallen_ == sizeof (uint64_t)) {
+                uint64_t value = 0;
+                memcpy (&value, optval_, sizeof (value));
+                if (value == 0)
+                    break;
+                self_->send_pending_max_msgs = value;
+                return 0;
+            }
+            break;
+
+        case ZLINK_INTERNAL_OPT_SEND_PENDING_MAX_BYTES:
+            if (optvallen_ == sizeof (uint64_t)) {
+                uint64_t value = 0;
+                memcpy (&value, optval_, sizeof (value));
+                if (value == 0)
+                    break;
+                self_->send_pending_max_bytes = value;
+                return 0;
+            }
+            break;
+
         case ZLINK_INTERNAL_OPT_STREAM_NOTIFY:
             return do_setsockopt_int_as_bool_strict (optval_, optvallen_, &self_->stream_notify);
 
@@ -255,6 +277,22 @@ int zlink::options_getsockopt_core_socket (
         case ZLINK_INTERNAL_OPT_SUBMIT_RETRY_ATTEMPTS:
             if (is_int_) {
                 *value_ = self_->submit_retry_attempts;
+                return 0;
+            }
+            break;
+        case ZLINK_INTERNAL_OPT_SEND_PENDING_MAX_MSGS:
+            if (*optvallen_ == sizeof (uint64_t)) {
+                memcpy (optval_, &self_->send_pending_max_msgs,
+                        sizeof (self_->send_pending_max_msgs));
+                *optvallen_ = sizeof (self_->send_pending_max_msgs);
+                return 0;
+            }
+            break;
+        case ZLINK_INTERNAL_OPT_SEND_PENDING_MAX_BYTES:
+            if (*optvallen_ == sizeof (uint64_t)) {
+                memcpy (optval_, &self_->send_pending_max_bytes,
+                        sizeof (self_->send_pending_max_bytes));
+                *optvallen_ = sizeof (self_->send_pending_max_bytes);
                 return 0;
             }
             break;

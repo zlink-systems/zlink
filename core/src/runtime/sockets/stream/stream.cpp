@@ -281,10 +281,8 @@ void zlink::stream_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     // A routed admission handler may already be installed when a STREAM
     // transport arrives. Emit its first writable edge after identity is
     // assigned; there may be no later HWM recovery to wake an async submit.
-    if (routed_send_ready_handler_active ()
-        && pipe_->check_write_admission () == pipe_message_admission_ready)
-        (void) enqueue_routed_send_ready (
-          pipe_, ZLINK_ROUTED_SEND_WRITABLE, 0);
+    if (pipe_->check_write_admission () == pipe_message_admission_ready)
+        notify_send_pending_writable (pipe_);
     maybe_emit_connect_event (pipe_);
     notify_session_observer (pipe_->get_server_socket_routing_id (), true);
 }
@@ -322,9 +320,9 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
                 memset (&rid, 0, sizeof (rid));
                 rid.size = sizeof (uint32_t);
                 put_uint32 (rid.data, server_routing_id);
-                (void) enqueue_routed_send_ready_exact (
-                  &rid, identity.pair_id, identity.pair_generation,
-                  ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+                fail_send_pending_for_target (&rid, identity.pair_id,
+                                               identity.pair_generation,
+                                               ENOTCONN);
             }
             shard.routes.erase (it);
         }
@@ -758,10 +756,8 @@ int zlink::stream_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)
     // the engine reaches dispatch. If a routed admission handler was armed
     // before that point, publish its initial writable edge now rather than
     // requiring an artificial HWM recovery.
-    if (routed_send_ready_handler_active ()
-        && pipe_->check_write_admission () == pipe_message_admission_ready)
-        (void) enqueue_routed_send_ready (
-          pipe_, ZLINK_ROUTED_SEND_WRITABLE, 0);
+    if (pipe_->check_write_admission () == pipe_message_admission_ready)
+        notify_send_pending_writable (pipe_);
 
     zlink_routing_id_t rid;
     rid.size = 4;

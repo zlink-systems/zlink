@@ -35,12 +35,14 @@ struct routed_terminal_probe_t
     int terminal_errno;
 };
 
+//  A terminal completion is now tied to a concrete pending operation: the
+//  record reserved for that exact target is what fails when the target ends.
 void capture_routed_terminal (
-  void *, const zlink_routed_send_ready_event_t *event_, void *userdata_)
+  void *, const zlink_send_complete_event_t *event_, void *userdata_)
 {
     routed_terminal_probe_t *probe =
       static_cast<routed_terminal_probe_t *> (userdata_);
-    if (!probe || !event_ || event_->state != ZLINK_ROUTED_SEND_TERMINAL)
+    if (!probe || !event_ || event_->result != ZLINK_SEND_TERMINAL)
         return;
     {
         std::lock_guard<std::mutex> lock (probe->mutex);
@@ -570,8 +572,8 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
     routed_terminal_probe_t terminal;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (
-        router, &capture_routed_terminal, &terminal));
+      zlink_send_complete_handler (router, &capture_routed_terminal,
+                                   &terminal));
     const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
@@ -616,6 +618,23 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
       old_target_backpressured,
       "old exact target did not reach backpressure before handover");
 
+    //  Reserve one record against the now-backpressured exact target. It
+    //  cannot be admitted, so it is still pending when the same-RID handover
+    //  supersedes that pair - which is exactly the failure this test wants to
+    //  observe.
+    zlink_msg_t pending_part;
+    init_part (&pending_part, "parked-on-old-pair", 18);
+    zlink_send_async_options_t pending_options;
+    memset (&pending_options, 0, sizeof (pending_options));
+    pending_options.struct_size = sizeof (pending_options);
+    pending_options.target = &target_a;
+    zlink_send_op_id_t pending_op = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_async (router, &pending_part, 1, &pending_options,
+                        &pending_op));
+    TEST_ASSERT_TRUE (pending_op != 0);
+
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_connect (dealer_b, "inproc://routed-submit-same-rid-handover"));
     zlink_routed_submit_target_t target_b;
@@ -650,7 +669,11 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
                                   terminal.pair_id);
         TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_generation,
                                   terminal.pair_generation);
-        TEST_ASSERT_EQUAL_INT (ENOTCONN, terminal.terminal_errno);
+        //  Whether the admit attempt or pipe termination notices the
+        //  superseded pair first decides the cause; both mean "this exact
+        //  route is gone".
+        TEST_ASSERT_TRUE (terminal.terminal_errno == ENOTCONN
+                          || terminal.terminal_errno == EHOSTUNREACH);
     }
 
     TEST_ASSERT_EQUAL_INT (

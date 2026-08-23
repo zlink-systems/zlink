@@ -61,6 +61,12 @@ namespace zlink
 {
 class address_t;
 struct multipart_send_facade_t;
+
+//  Socket types that own an asynchronous send completion channel. This is the
+//  same set zlink_send_async accepts, and it is what widens the
+//  ZLINK_POLLCOMPLETION registration check beyond reply completions.
+bool socket_type_supports_send_completion (int type_);
+
 typedef void (*sub_io_handler_fn) (const zlink_routing_id_t *source_rid_,
                                    const char *topic_,
                                    size_t topic_len_,
@@ -353,16 +359,22 @@ class socket_base_t : public own_t,
     int peer_command_from_io (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     int socket_msg_dispatch_stop ();
     void socket_msg_dispatch_drain_pending ();
-    int socket_set_send_ready_handler (zlink_send_ready_handler_fn handler_);
-    int socket_set_send_ready_handler_ex (zlink_send_ready_handler_fn handler_, void *subject_);
-    int socket_set_send_ready_handler_with_userdata (zlink_send_ready_handler_fn handler_,
-                                                     void *subject_,
-                                                     void *userdata_);
-    int socket_set_routed_send_ready_handler_with_userdata (
-      zlink_routed_send_ready_handler_fn handler_, void *userdata_);
+    //  Asynchronous send admission (zlink_send_async family).
+    int socket_set_send_complete_handler (zlink_send_complete_handler_fn handler_,
+                                          void *userdata_);
+    int send_async_submit (zlink_msg_t *parts_,
+                           size_t part_count_,
+                           const zlink_send_async_options_t *options_,
+                           zlink_send_op_id_t *op_id_out_);
+    int send_async_cancel (zlink_send_op_id_t op_id_);
+    bool send_complete_handler_active () const;
+    //  Admit whatever the current pipe state allows, then hand resolved
+    //  completions to the callback. Called by the async mailbox loop and by
+    //  the POLLCOMPLETION drain owner.
+    void drive_send_pending ();
+    int drain_send_completions ();
+    bool has_send_pending () const;
     bool socket_msg_dispatch_active () const;
-    bool send_ready_handler_active () const;
-    bool routed_send_ready_handler_active () const;
     int ensure_async_command_processing ();
     int ensure_completion_processing ();
     void acquire_completion_poller ();
@@ -388,12 +400,11 @@ class socket_base_t : public own_t,
     int drain_request_completions ();
     void acknowledge_request_completion_notification ();
     static socket_base_t *current_socket_msg_dispatch_socket ();
-    static socket_base_t *current_send_ready_dispatch_socket ();
+    static socket_base_t *current_send_complete_dispatch_socket ();
     static zlink::pipe_t *current_socket_msg_dispatch_pipe ();
     static void *current_socket_msg_dispatch_subject ();
     static bool current_socket_msg_dispatch_source_rid (zlink_routing_id_t *out_);
     bool recv_source_rid_capture_requested () const;
-    void invoke_send_ready_handler ();
     int stream_dispatch_msg_from_io (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual int sub_dispatch_start (sub_io_handler_fn callback_, void *userdata_);
     virtual int sub_dispatch_stop ();
@@ -697,7 +708,7 @@ class socket_base_t : public own_t,
     void clear_last_recv_source_rid ();
     bool copy_last_recv_source_rid (zlink_routing_id_t *out_) const;
     socket_base_t *detach_monitor_socket (bool send_monitor_stopped_event_ = true);
-    void arm_send_ready_after_backpressure ();
+    void arm_send_recovery_after_backpressure ();
 
   protected:
     // Transfer a monitor-started command executor lease to a longer-lived
@@ -724,15 +735,14 @@ class socket_base_t : public own_t,
             lock.lock ();
         return lock;
     }
-    void arm_send_ready_notification ();
-    void notify_send_ready_if_armed ();
-    bool enqueue_routed_send_ready (pipe_t *pipe_,
-                                    zlink_routed_send_ready_state_t state_,
-                                    int terminal_errno_);
-    bool enqueue_routed_send_ready_exact (
-      const zlink_routing_id_t *peer_rid_, uint64_t transport_pair_id_,
-      uint64_t transport_pair_generation_,
-      zlink_routed_send_ready_state_t state_, int terminal_errno_);
+    //  A pipe became writable again: nudge the admit loop for that target.
+    void notify_send_pending_writable (pipe_t *pipe_);
+    //  A route ended: fail every pending record bound to that exact target.
+    void fail_send_pending_for_pipe (pipe_t *pipe_, int terminal_errno_);
+    void fail_send_pending_for_target (const zlink_routing_id_t *peer_rid_,
+                                       uint64_t transport_pair_id_,
+                                       uint64_t transport_pair_generation_,
+                                       int terminal_errno_);
     void emit_socket_monitor_value_event (uint64_t event_,
                                           uint64_t value_,
                                           const endpoint_uri_pair_t &endpoint_uri_pair_);
@@ -791,6 +801,14 @@ class socket_base_t : public own_t,
     const monitor_runtime_t &monitor_runtime () const { return _runtime.monitor_runtime; }
     dispatch_bridge_t &dispatch_runtime () { return _runtime.dispatch_bridge; }
     const dispatch_bridge_t &dispatch_runtime () const { return _runtime.dispatch_bridge; }
+    socket_send_pending_runtime_t &send_pending_runtime ()
+    {
+        return _runtime.send_pending_runtime;
+    }
+    const socket_send_pending_runtime_t &send_pending_runtime () const
+    {
+        return _runtime.send_pending_runtime;
+    }
     lifecycle_coordinator_t &lifecycle_coordinator () { return _runtime.lifecycle_coordinator; }
     lifecycle_coordinator_t &lifecycle_coordinator () const
     {
@@ -809,11 +827,10 @@ class socket_base_t : public own_t,
                  uint64_t transport_pair_id_ = 0,
                  uint64_t transport_pair_generation_ = 0);
 
-    zlink_send_ready_handler_fn socket_send_ready_handler () const;
+
     void *socket_msg_handler_subject () const;
     void *socket_msg_handler_userdata () const;
-    void *socket_send_ready_handler_subject () const;
-    void *socket_send_ready_handler_userdata () const;
+
 
     // Socket event data dispatch
     static void monitor_task_main (void *arg_);
@@ -903,8 +920,21 @@ class socket_base_t : public own_t,
                                      void *userdata_);
   private:
 #endif
-    void enqueue_all_routed_send_terminals (int terminal_errno_);
-    void dispatch_routed_send_ready_events (bool closing_ = false);
+    //  close / ctx term: fail every pending record fast. LINGER does not
+    //  apply - it covers bytes already admitted, and a pending record is by
+    //  definition not admitted yet.
+    void fail_all_send_pending (int terminal_errno_);
+    void dispatch_send_completions (bool closing_ = false);
+    void dispatch_send_completions_if_local ();
+    //  Claim/finish helpers used by the admit loop.
+    bool claim_send_pending_head (send_pending_record_t **out_);
+    int try_admit_send_pending (send_pending_record_t *record_);
+    void finish_send_pending (send_pending_record_t *record_,
+                              zlink_send_complete_result_t result_,
+                              int terminal_errno_);
+    void destroy_send_pending_record (send_pending_record_t *record_);
+    void on_send_pending_deadline (zlink_send_op_id_t op_id_);
+    static void send_pending_deadline_trampoline (void *userdata_);
     static void reaper_mailbox_handler (void *arg_);
     static void reaper_mailbox_pre_post (void *arg_);
     static void async_mailbox_handler (void *arg_);

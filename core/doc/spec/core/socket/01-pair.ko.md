@@ -50,7 +50,7 @@ peer에는 그 record의 어떤 파트도 보이지 않습니다. 실패한 호�
 `zlink_submit_result_t` 값. 전체 대응은 [errno map](../04-errno-map.ko.md)을
 따릅니다.
 
-**참고:** `zlink_recv_part`, `zlink_send_ready_handler`
+**참고:** `zlink_recv_part`, `zlink_send_async`
 
 ---
 
@@ -85,24 +85,31 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
 
 ---
 
-### zlink_send_ready_handler
-
-send-ready 콜백을 설정하거나 교체합니다.
+### 비동기 송신 admission
 
 ```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  const zlink_send_async_options_t *options_,
+  zlink_send_op_id_t *op_id_out_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
+  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
+  void *s_, zlink_send_op_id_t op_id_);
 ```
 
-핸들러는 교체 전용이며 `NULL`은 유효하지 않습니다. 교체 성공은 다음 쓰기
-가능 전환부터 반영됩니다. 같은 핸들의 send-ready 콜백 안에서 재진입하면
-`ZLINK_HANDLER_DEADLOCK`, `errno == EDEADLK`로 실패합니다.
+PAIR는 비동기 송신 admission 표면 전체를 지원합니다. `options_->target`은
+무시됩니다. PAIR socket은 peer가 정확히 하나이므로 모든 pending operation이
+하나의 target 큐를 공유하고 제출 순서대로 admit됩니다.
 
-이 콜백과 `ZLINK_POLLOUT`은 같은 send-recovery readiness 축을 나타냅니다.
-신호는 송신 재시도를 시도할 가치가 있다는 뜻이며 다음 재시도의 성공을
-보장하지 않습니다.
+완료는 Core 송신 큐로의 admission을 뜻하며 peer 전달이 아닙니다. 소유권 이전,
+socket 단위 pending 상한, operation별 timeout, 취소, close fail-fast, 콜백
+규칙 등 계약 전체는 [Socket Common](README.ko.md)이 소유합니다.
 
-**반환값:** 성공 시 `ZLINK_HANDLER_OK`, 실패 시 `zlink_handler_result_t` 값.
+**반환값:** 성공 시 `ZLINK_SUBMIT_OK` / `ZLINK_HANDLER_OK`, 실패 시
+`zlink_submit_result_t` 또는 `zlink_handler_result_t` 값.
 
 **참고:** `zlink_send_part`
 

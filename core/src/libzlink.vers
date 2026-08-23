@@ -82,9 +82,10 @@
     zlink_send_part;
     zlink_send_part_rid;
     zlink_send_part_transport_pair;
-    zlink_send_ready_handler;
+    zlink_send_async;
+    zlink_send_async_cancel;
+    zlink_send_complete_handler;
     zlink_select_routed_submit_target;
-    zlink_routed_send_ready_handler;
     zlink_set_dealer_option;
     zlink_set_option;
     zlink_set_pub_option;

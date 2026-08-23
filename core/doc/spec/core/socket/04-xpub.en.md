@@ -133,7 +133,7 @@ Applicable types are raw `PUB` and raw `XPUB`. Other types return
 `ZLINK_SUBMIT_NOT_SUPPORTED` with `errno == ENOTSUP`. See the
 [errno map](../04-errno-map.en.md) for the full result mapping.
 
-**See also:** `zlink_xpub_recv_part`, `zlink_send_ready_handler`
+**See also:** `zlink_xpub_recv_part`, `zlink_publish_part`
 
 ---
 
@@ -175,29 +175,6 @@ was set and no event is available. `EMSGSIZE` if the topic is longer than
 **See also:** `zlink_publish_part`
 
 ---
-
-### zlink_send_ready_handler
-
-Install or replace the send-ready callback.
-
-```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
-```
-
-The handler is replace-only. Passing NULL is invalid. A successful replace is
-visible from the next writable transition. If called reentrantly from the
-same handle's send-ready callback, the call fails with `errno=EDEADLK`.
-
-Supported subjects: raw `PAIR`, `PUB`, `XPUB`, `DEALER`, `ROUTER`, and
-`STREAM`. Send-ready is independent from receive mode. This
-callback and `ZLINK_POLLOUT` expose the same send-recovery readiness axis: a
-readiness signal means it is worth retrying send, not that the retry is
-guaranteed to succeed. Unsupported subjects return `ENOTSUP`.
-
-**Returns:** `ZLINK_HANDLER_OK` on success; otherwise a `zlink_handler_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
-
-**See also:** `zlink_publish_part`
 
 ## Receive flow state
 

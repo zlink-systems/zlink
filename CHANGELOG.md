@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed (breaking, Core 0.13.0)
+
+- The `send_ready` readiness-hint surface is gone: `zlink_send_ready_handler`,
+  `zlink_routed_send_ready_handler`, `zlink_send_ready_handler_fn`,
+  `zlink_routed_send_ready_handler_fn`, `zlink_routed_send_ready_event_t`,
+  `zlink_routed_send_ready_state_t`, `ZLINK_ROUTED_SEND_WRITABLE` and
+  `ZLINK_ROUTED_SEND_TERMINAL`. A readiness signal only ever meant "a retry is
+  worth attempting", which is not something a caller can build a correct
+  admission policy on. Removing symbols breaks SONAME compatibility.
+
+### Added (Core 0.13.0)
+
+- Core-owned asynchronous send admission: `zlink_send_async`,
+  `zlink_send_complete_handler`, `zlink_send_async_cancel`, with
+  `zlink_send_complete_result_t`, `zlink_send_op_id_t`,
+  `zlink_send_complete_event_t`, `zlink_send_complete_handler_fn` and
+  `zlink_send_async_options_t`. One call hands a complete multipart record to
+  Core; Core owns the reservation, the retry and the deadline, and reports the
+  outcome exactly once. A completion means admission into the Core send queue,
+  not peer delivery.
+- `ZLINK_OPT_SEND_PENDING_MAX_MSGS` and `ZLINK_OPT_SEND_PENDING_MAX_BYTES`
+  bound the per-socket pending reservation queue. Neither accepts `0` as
+  unlimited.
+- `ZLINK_POLLCOMPLETION` registration is accepted on every socket that owns a
+  completion channel, not only DEALER and ROUTER, and now transfers dispatch
+  ownership of send completions along with reply completions.
+
+### Fixed
+
+- Single-part exact-transport-pair ROUTER submits no longer fail with
+  `EHOSTUNREACH`. Resolving the exact pair clears the routing-table lookup on
+  purpose, and a single-part record leaves the multipart flag unset, so the
+  combination fell through to the "no route" branch.
+
+### Changed
+
+- Auto-HWM profiles are retuned and the context budget is now clamped by an
+  effective cap: `min(percent x resolved_memory, max(fixed_cap,
+  active_directional_queue_count x per_queue_minimum))`. Compact 2%/64 MiB,
+  LowLatency 3%/256 MiB, Balanced 5%/512 MiB, Throughput 8%/1024 MiB.
+
 ## 10.1.0
 
 ### Fixed

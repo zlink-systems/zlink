@@ -277,9 +277,11 @@ Submit APIs return `zlink_submit_result_t`, receive APIs return
 `zlink_errno()`.
 
 ROUTER `ZLINK_POLLIN` means that a complete raw record can be received. For ordinary sends
-and requests, `ZLINK_POLLOUT` and `zlink_send_ready_handler()` indicate that retrying a
-backpressured submit is worthwhile; they do not guarantee that the next submit will succeed.
-This readiness contract does not apply to raw replies.
+and requests, `ZLINK_POLLOUT` indicates that retrying a backpressured submit is
+worthwhile; it does not guarantee that the next submit will succeed. An
+application that wants a definitive per-operation answer uses `zlink_send_async`
+and its completion instead. This readiness contract does not apply to raw
+replies.
 
 ## 11. Receive flow state
 

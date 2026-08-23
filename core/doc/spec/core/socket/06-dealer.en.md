@@ -308,9 +308,11 @@ Submit APIs return `zlink_submit_result_t`, receive APIs return
 `zlink_errno()`.
 
 DEALER `ZLINK_POLLIN` means that a raw or request/reply record can be received. For ordinary
-sends and requests, `ZLINK_POLLOUT` and `zlink_send_ready_handler()` indicate that retrying a
-backpressured submit is worthwhile; they do not guarantee that the next submit will succeed.
-This readiness contract does not apply to raw replies.
+sends and requests, `ZLINK_POLLOUT` indicates that retrying a backpressured
+submit is worthwhile; it does not guarantee that the next submit will succeed.
+An application that wants a definitive per-operation answer uses
+`zlink_send_async` and its completion instead. This readiness contract does not
+apply to raw replies.
 
 ## 9. Receive flow state
 
@@ -346,8 +348,7 @@ each still block on their own, and a send is admitted only when none of them
 applies. Clearing the remote pause therefore does not by itself make the next
 send succeed. Send results and readiness are unchanged: a blocked non-blocking
 send still reports `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and
-`ZLINK_POLLOUT` and `zlink_send_ready_handler()` keep the meaning defined in
-section 8.
+`ZLINK_POLLOUT` keeps the meaning defined in section 8.
 
 A remote PAUSE takes effect at the next message boundary and never splits a
 message. A message whose first bytes already reached the pipe, and a message

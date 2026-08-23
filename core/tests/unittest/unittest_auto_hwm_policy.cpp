@@ -30,16 +30,113 @@ void test_budget_input_priority_and_profile_ratio ()
     zlink::auto_hwm_context_plan_t plan;
     zlink::auto_hwm_context_plan_make (input, &plan);
     TEST_ASSERT_EQUAL_UINT64 (600, plan.resolved_memory_limit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (120, plan.effective_core_budget_bytes);
+    //  Balanced is 5%; the fixed cap (512 MiB) is far above the share.
+    TEST_ASSERT_EQUAL_UINT64 (30, plan.effective_core_budget_bytes);
 
     input.configured_memory_limit_bytes = 700;
     zlink::auto_hwm_context_plan_make (input, &plan);
     TEST_ASSERT_EQUAL_UINT64 (700, plan.resolved_memory_limit_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (140, plan.effective_core_budget_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (35, plan.effective_core_budget_bytes);
 
     input.configured_core_budget_bytes = 333;
     zlink::auto_hwm_context_plan_make (input, &plan);
     TEST_ASSERT_EQUAL_UINT64 (333, plan.effective_core_budget_bytes);
+}
+
+void test_profile_percent_and_fixed_caps ()
+{
+    const uint64_t mib = 1024ull * 1024ull;
+
+    TEST_ASSERT_EQUAL_UINT64 (
+      2, zlink::auto_hwm_profile_percent (ZLINK_AUTO_HWM_PROFILE_COMPACT));
+    TEST_ASSERT_EQUAL_UINT64 (
+      3, zlink::auto_hwm_profile_percent (ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY));
+    TEST_ASSERT_EQUAL_UINT64 (
+      5, zlink::auto_hwm_profile_percent (ZLINK_AUTO_HWM_PROFILE_BALANCED));
+    TEST_ASSERT_EQUAL_UINT64 (
+      8, zlink::auto_hwm_profile_percent (ZLINK_AUTO_HWM_PROFILE_THROUGHPUT));
+
+    TEST_ASSERT_EQUAL_UINT64 (
+      64 * mib,
+      zlink::auto_hwm_profile_fixed_cap_bytes (
+        ZLINK_AUTO_HWM_PROFILE_COMPACT));
+    TEST_ASSERT_EQUAL_UINT64 (
+      256 * mib,
+      zlink::auto_hwm_profile_fixed_cap_bytes (
+        ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY));
+    TEST_ASSERT_EQUAL_UINT64 (
+      512 * mib,
+      zlink::auto_hwm_profile_fixed_cap_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED));
+    TEST_ASSERT_EQUAL_UINT64 (
+      1024 * mib,
+      zlink::auto_hwm_profile_fixed_cap_bytes (
+        ZLINK_AUTO_HWM_PROFILE_THROUGHPUT));
+}
+
+void test_effective_budget_is_percent_clamped_by_cap_and_queue_floor ()
+{
+    const uint64_t mib = 1024ull * 1024ull;
+    const uint64_t gib = 1024ull * mib;
+
+    //  Small host: the percent share is well under the fixed cap and wins.
+    TEST_ASSERT_EQUAL_UINT64 (
+      50 * mib,
+      zlink::auto_hwm_effective_budget_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED, 1000 * mib, 4));
+
+    //  Large host: 5% of 64 GiB is 3.2 GiB, so the 512 MiB fixed cap clamps.
+    TEST_ASSERT_EQUAL_UINT64 (
+      512 * mib,
+      zlink::auto_hwm_effective_budget_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED, 64 * gib, 4));
+
+    //  Many queues raise the effective cap to the floor they need:
+    //  16384 * 64 KiB = 1 GiB > the 512 MiB fixed cap, and 5% of 64 GiB
+    //  (3.2 GiB) still exceeds that, so the queue floor becomes the budget.
+    TEST_ASSERT_EQUAL_UINT64 (
+      1 * gib,
+      zlink::auto_hwm_effective_budget_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED, 64 * gib, 16384));
+
+    //  The queue floor never lifts the budget above the percent share.
+    TEST_ASSERT_EQUAL_UINT64 (
+      512 * mib,
+      zlink::auto_hwm_effective_budget_bytes (
+        ZLINK_AUTO_HWM_PROFILE_BALANCED, 10 * gib, 16384));
+}
+
+void test_finalize_recomputes_budget_from_queue_count ()
+{
+    const uint64_t kib = 1024ull;
+    const uint64_t mib = 1024ull * kib;
+    const uint64_t gib = 1024ull * mib;
+
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = true;
+    input.profile = ZLINK_AUTO_HWM_PROFILE_BALANCED;
+    input.configured_memory_limit_bytes = 64 * gib;
+
+    zlink::auto_hwm_context_plan_t context;
+    zlink::auto_hwm_context_plan_make (input, &context);
+    //  plan_make cannot know the queue count yet: the fixed cap applies.
+    TEST_ASSERT_EQUAL_UINT64 (512 * mib, context.effective_core_budget_bytes);
+
+    //  16384 directional queues need 16384 * 64 KiB = 1 GiB of role minima,
+    //  which raises the effective cap above the fixed cap at finalize time.
+    std::vector<zlink::auto_hwm_socket_plan_t> plans (8192);
+    for (size_t i = 0; i != plans.size (); ++i)
+        zlink::auto_hwm_socket_plan_prepare (zlink::auto_hwm_role_routed, 1, 1,
+                                             false, 0, false, 0, true,
+                                             &plans[i]);
+    zlink::auto_hwm_context_finalize (&context, &plans[0], plans.size ());
+
+    TEST_ASSERT_EQUAL_UINT64 (16384, context.active_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (1 * gib, context.effective_core_budget_bytes);
+    TEST_ASSERT_FALSE (context.budget_insufficient);
+    //  Every queue sits exactly on its 64 KiB role minimum.
+    TEST_ASSERT_EQUAL_UINT64 (64 * kib, plans[0].sndhwm);
+    TEST_ASSERT_EQUAL_UINT64 (1 * gib, context.total_planned_hwm_bytes);
 }
 
 void test_profile_byte_boundaries ()
@@ -49,9 +146,21 @@ void test_profile_byte_boundaries ()
       zlink::auto_hwm_profile_minimum_bytes (
         ZLINK_AUTO_HWM_PROFILE_COMPACT, zlink::auto_hwm_role_routed));
     TEST_ASSERT_EQUAL_UINT64 (
-      1024ull * 1024ull,
+      512ull * 1024ull,
       zlink::auto_hwm_profile_maximum_bytes (
         ZLINK_AUTO_HWM_PROFILE_COMPACT, zlink::auto_hwm_role_routed));
+    TEST_ASSERT_EQUAL_UINT64 (
+      32ull * 1024ull,
+      zlink::auto_hwm_profile_minimum_bytes (
+        ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY, zlink::auto_hwm_role_routed));
+    TEST_ASSERT_EQUAL_UINT64 (
+      2ull * 1024ull * 1024ull,
+      zlink::auto_hwm_profile_maximum_bytes (
+        ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY, zlink::auto_hwm_role_routed));
+    TEST_ASSERT_EQUAL_UINT64 (
+      8ull * 1024ull * 1024ull,
+      zlink::auto_hwm_profile_maximum_bytes (
+        ZLINK_AUTO_HWM_PROFILE_THROUGHPUT, zlink::auto_hwm_role_routed));
     TEST_ASSERT_EQUAL_UINT64 (
       64ull * 1024ull,
       zlink::auto_hwm_profile_minimum_bytes (
@@ -556,6 +665,9 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_budget_input_priority_and_profile_ratio);
     RUN_TEST (test_profile_byte_boundaries);
+    RUN_TEST (test_profile_percent_and_fixed_caps);
+    RUN_TEST (test_effective_budget_is_percent_clamped_by_cap_and_queue_floor);
+    RUN_TEST (test_finalize_recomputes_budget_from_queue_count);
     RUN_TEST (test_mixed_queue_water_filling_respects_budget_and_caps);
     RUN_TEST (test_water_filling_remainder_is_stable);
     RUN_TEST (test_insufficient_budget_keeps_role_minima_visible);

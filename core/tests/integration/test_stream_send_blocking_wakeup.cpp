@@ -44,21 +44,12 @@ struct stream_route_probe_t
 
 stream_route_probe_t *g_stream_route_probe = NULL;
 
-struct stream_send_ready_probe_t
-{
-    stream_send_ready_probe_t () : ready_count (0) {}
-
-    std::atomic<int> ready_count;
-};
-
-static stream_send_ready_probe_t *g_stream_send_ready_probe = NULL;
-
 struct stream_routed_ready_event_t
 {
     zlink_routing_id_t rid;
     uint64_t pair_id;
     uint64_t pair_generation;
-    zlink_routed_send_ready_state_t state;
+    zlink_send_complete_result_t result;
 };
 
 struct stream_routed_ready_probe_t
@@ -69,7 +60,7 @@ struct stream_routed_ready_probe_t
 };
 
 void capture_stream_routed_ready (void *,
-                                  const zlink_routed_send_ready_event_t *event_,
+                                  const zlink_send_complete_event_t *event_,
                                   void *userdata_)
 {
     stream_routed_ready_probe_t *probe =
@@ -82,7 +73,7 @@ void capture_stream_routed_ready (void *,
     copy.rid = event_->peer_rid;
     copy.pair_id = event_->transport_pair_id;
     copy.pair_generation = event_->transport_pair_generation;
-    copy.state = event_->state;
+    copy.result = event_->result;
     {
         std::lock_guard<std::mutex> lock (probe->sync);
         probe->events.push_back (copy);
@@ -92,7 +83,7 @@ void capture_stream_routed_ready (void *,
 
 bool wait_stream_routed_ready (stream_routed_ready_probe_t *probe_,
                                const zlink_routing_id_t *rid_,
-                               zlink_routed_send_ready_state_t state_,
+                               zlink_send_complete_result_t result_,
                                int timeout_ms_ = 3000)
 {
     const std::chrono::steady_clock::time_point deadline =
@@ -101,7 +92,7 @@ bool wait_stream_routed_ready (stream_routed_ready_probe_t *probe_,
     while (true) {
         for (size_t i = 0; i < probe_->events.size (); ++i) {
             const stream_routed_ready_event_t &event = probe_->events[i];
-            if (event.state == state_ && event.rid.size == rid_->size
+            if (event.result == result_ && event.rid.size == rid_->size
                 && memcmp (event.rid.data, rid_->data, rid_->size) == 0)
                 return true;
         }
@@ -309,28 +300,27 @@ int capture_stream_route_raw_callback (const zlink_routing_id_t *rid_, zlink_msg
     return capture_stream_route_callback (rid_, msg_, NULL);
 }
 
-void capture_stream_send_ready_callback (void *, void *)
+//  Reserve one record against an exact STREAM target.
+zlink_submit_result_t park_stream_record (
+  void *server_, const zlink_routed_submit_target_t *target_,
+  const char *text_, zlink_send_op_id_t *op_id_out_)
 {
-    if (g_stream_send_ready_probe) {
-        g_stream_send_ready_probe->ready_count.fetch_add (1, std::memory_order_acq_rel);
-    }
-}
+    zlink_msg_t part;
+    const size_t size = strlen (text_);
+    if (zlink_msg_init_size (&part, size) != 0)
+        return ZLINK_SUBMIT_INTERNAL_ERROR;
+    memcpy (zlink_msg_data (&part), text_, size);
 
-bool wait_stream_send_ready_count_at_least (stream_send_ready_probe_t *probe_,
-                                            int expected_,
-                                            int timeout_ms_)
-{
-    if (!probe_)
-        return false;
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = target_;
 
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
-    while (std::chrono::steady_clock::now () < deadline) {
-        if (probe_->ready_count.load (std::memory_order_acquire) >= expected_)
-            return true;
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    }
-    return probe_->ready_count.load (std::memory_order_acquire) >= expected_;
+    const zlink_submit_result_t rc =
+      zlink_send_async (server_, &part, 1, &options, op_id_out_);
+    if (rc != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&part);
+    return rc;
 }
 
 bool wait_stream_poller_no_event (void *poller_,
@@ -486,8 +476,8 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     stream_routed_ready_probe_t before_attach_probe;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (
-        server, &capture_stream_routed_ready, &before_attach_probe));
+      zlink_send_complete_handler (server, &capture_stream_routed_ready,
+                                   &before_attach_probe));
 
     char endpoint[MAX_SOCKET_STRING];
     memset (endpoint, 0, sizeof (endpoint));
@@ -498,13 +488,24 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
 
     zlink_routing_id_t rid;
     establish_stream_route (server, raw_fd, &rid);
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_stream_routed_ready (
-        &before_attach_probe, &rid, ZLINK_ROUTED_SEND_WRITABLE),
-      "STREAM handler registered before attach did not receive writable target");
 
     const zlink_routed_submit_target_t target =
       select_stream_target_eventually (server, &rid);
+    //  A handler registered before the transport attached still completes the
+    //  first record submitted to that exact target.
+    zlink_send_op_id_t admitted_op = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      park_stream_record (server, &target, "attach", &admitted_op));
+    TEST_ASSERT_TRUE_MESSAGE (
+      wait_stream_routed_ready (&before_attach_probe, &rid,
+                                ZLINK_SEND_ADMITTED),
+      "STREAM handler registered before attach did not complete its record");
+    {
+        unsigned char attach_received[6];
+        TEST_ASSERT_TRUE (
+          recv_raw_exact (raw_fd, attach_received, sizeof (attach_received)));
+    }
     TEST_ASSERT_EQUAL_UINT64 (4, target.peer_rid.size);
     TEST_ASSERT_TRUE (target.transport_pair_id != 0);
     TEST_ASSERT_TRUE (target.transport_pair_generation != 0);
@@ -539,11 +540,17 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&stale_message));
 
+    //  Back the queue up so the next record stays reserved, then end the
+    //  route: the reserved record is what reports the terminal failure.
+    fill_stream_send_queue_until_backpressured_once (server, &rid);
+    zlink_send_op_id_t parked_op = 0;
+    (void) park_stream_record (server, &target, "parked", &parked_op);
+
     close_raw_fd (raw_fd);
     TEST_ASSERT_TRUE_MESSAGE (
-      wait_stream_routed_ready (
-        &before_attach_probe, &rid, ZLINK_ROUTED_SEND_TERMINAL),
-      "STREAM detach did not terminate the exact target");
+      wait_stream_routed_ready (&before_attach_probe, &rid,
+                                ZLINK_SEND_TERMINAL),
+      "STREAM detach did not fail the reserved record for the exact target");
     test_context_socket_close (server);
 
     void *late_server = test_context_socket (ZLINK_SOCKET_STREAM);
@@ -560,12 +567,18 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     stream_routed_ready_probe_t after_attach_probe;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_HANDLER_OK,
-      zlink_routed_send_ready_handler (
-        late_server, &capture_stream_routed_ready, &after_attach_probe));
+      zlink_send_complete_handler (late_server, &capture_stream_routed_ready,
+                                   &after_attach_probe));
+    const zlink_routed_submit_target_t late_target =
+      select_stream_target_eventually (late_server, &late_rid);
+    zlink_send_op_id_t late_op = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      park_stream_record (late_server, &late_target, "late", &late_op));
     TEST_ASSERT_TRUE_MESSAGE (
-      wait_stream_routed_ready (
-        &after_attach_probe, &late_rid, ZLINK_ROUTED_SEND_WRITABLE),
-      "STREAM handler registered after attach missed initial writable target");
+      wait_stream_routed_ready (&after_attach_probe, &late_rid,
+                                ZLINK_SEND_ADMITTED),
+      "STREAM handler registered after attach did not complete its record");
 
     close_raw_fd (late_raw_fd);
     test_context_socket_close (late_server);
@@ -632,7 +645,7 @@ void test_stream_queue_reopens_after_peer_reads ()
 #endif
 }
 
-void test_stream_send_ready_pollout_share_recovery_axis ()
+void test_stream_pollout_tracks_send_recovery_axis ()
 {
 #if defined(ZLINK_HAVE_WINDOWS)
     TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
@@ -652,11 +665,6 @@ void test_stream_send_ready_pollout_share_recovery_axis ()
     zlink_routing_id_t rid;
     establish_stream_route (server, raw_fd, &rid);
 
-    stream_send_ready_probe_t probe;
-    g_stream_send_ready_probe = &probe;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_ready_handler (server, &capture_stream_send_ready_callback, NULL));
-
     fill_stream_send_queue_until_backpressured_once (server, &rid);
 
     void *poller = zlink_poller_new ();
@@ -666,11 +674,10 @@ void test_stream_send_ready_pollout_share_recovery_axis ()
     unsigned char drain_buf[64 * 1024];
     const auto drain_deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (1000);
-    while (std::chrono::steady_clock::now () < drain_deadline
-           && probe.ready_count.load (std::memory_order_acquire) == 0) {
+    while (std::chrono::steady_clock::now () < drain_deadline) {
         const int n = recv_raw (raw_fd, drain_buf, sizeof (drain_buf));
-        if (n > 0)
-            continue;
+        if (n <= 0)
+            break;
     }
 
     bool pollout_ready = false;
@@ -688,8 +695,6 @@ void test_stream_send_ready_pollout_share_recovery_axis ()
     }
     TEST_ASSERT_TRUE (pollout_ready);
 
-    TEST_ASSERT_TRUE (wait_stream_send_ready_count_at_least (&probe, 1, 3000));
-
     uint32_t ready_events = 0;
     size_t ready_events_size = sizeof (ready_events);
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -704,7 +709,6 @@ void test_stream_send_ready_pollout_share_recovery_axis ()
         TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     }
 
-    g_stream_send_ready_probe = NULL;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_poller_destroy (&poller));
     close_raw_fd (raw_fd);
     test_context_socket_close (server);
@@ -929,7 +933,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_stream_routed_admission_is_exact_and_initial_wake_is_lossless);
     RUN_TEST (test_stream_queue_reopens_after_peer_reads);
-    RUN_TEST (test_stream_send_ready_pollout_share_recovery_axis);
+    RUN_TEST (test_stream_pollout_tracks_send_recovery_axis);
     RUN_TEST (test_stream_pollout_only_observes_recovery_readiness);
     RUN_TEST (test_stream_blocking_send_times_out_without_peer_reads);
     RUN_TEST (test_stream_nonblocking_send_preserves_message_for_retry);

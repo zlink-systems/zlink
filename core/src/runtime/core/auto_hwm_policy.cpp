@@ -16,6 +16,10 @@ const uint64_t mib = 1024ull * kib;
 struct profile_budget_t
 {
     uint32_t percent;
+    //  Absolute ceiling of the context budget. The percent share of resolved
+    //  memory is only ever spent up to this cap, so a large host does not turn
+    //  a small deployment into a multi-gigabyte queue reservation.
+    uint64_t fixed_cap;
     uint64_t data_minimum;
     uint64_t data_maximum;
     uint64_t stream_minimum;
@@ -39,14 +43,18 @@ profile_budget_t profile_budget (zlink_auto_hwm_profile_t profile_)
 {
     switch (normalize_profile (profile_)) {
         case ZLINK_AUTO_HWM_PROFILE_COMPACT:
-            return profile_budget_t{2, 32 * kib, 1 * mib, 8 * kib, 32 * kib};
+            return profile_budget_t{2,        64 * mib, 32 * kib,
+                                    512 * kib, 8 * kib, 32 * kib};
         case ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY:
-            return profile_budget_t{5, 32 * kib, 2 * mib, 16 * kib, 64 * kib};
+            return profile_budget_t{3,      256 * mib, 32 * kib,
+                                    2 * mib, 16 * kib, 64 * kib};
         case ZLINK_AUTO_HWM_PROFILE_THROUGHPUT:
-            return profile_budget_t{20, 128 * kib, 16 * mib, 256 * kib, 512 * kib};
+            return profile_budget_t{8,       1024 * mib, 128 * kib,
+                                    8 * mib, 256 * kib,  512 * kib};
         case ZLINK_AUTO_HWM_PROFILE_BALANCED:
         default:
-            return profile_budget_t{20, 64 * kib, 1 * mib, 64 * kib, 128 * kib};
+            return profile_budget_t{5,      512 * mib, 64 * kib,
+                                    1 * mib, 64 * kib, 128 * kib};
     }
 }
 
@@ -79,6 +87,26 @@ uint64_t apply_profile_percent (uint64_t memory_bytes_, uint32_t percent_)
 {
     return (memory_bytes_ / 100u) * percent_
            + ((memory_bytes_ % 100u) * percent_) / 100u;
+}
+
+//  Budget = min (percent share of resolved memory, effective cap), where the
+//  effective cap is the profile's fixed cap raised to the floor every active
+//  directional queue needs to reach its role minimum. Without the queue-count
+//  term a large deployment would be pushed under its own minima by the fixed
+//  cap; without the fixed cap a large host would reserve gigabytes for a
+//  handful of queues.
+uint64_t profile_effective_budget (zlink_auto_hwm_profile_t profile_,
+                                   uint64_t resolved_memory_bytes_,
+                                   uint64_t queue_count_)
+{
+    const profile_budget_t budget = profile_budget (profile_);
+    bool overflow = false;
+    const uint64_t queue_floor =
+      saturating_multiply (queue_count_, budget.data_minimum, &overflow);
+    const uint64_t effective_cap = std::max (budget.fixed_cap, queue_floor);
+    const uint64_t percent_share =
+      apply_profile_percent (resolved_memory_bytes_, budget.percent);
+    return std::min (percent_share, effective_cap);
 }
 
 uint64_t resolved_memory_limit (const zlink::auto_hwm_budget_input_t &input_)
@@ -191,6 +219,25 @@ uint64_t zlink::auto_hwm_profile_maximum_bytes (zlink_auto_hwm_profile_t profile
     return stream_role (role_) ? budget.stream_maximum : budget.data_maximum;
 }
 
+uint64_t zlink::auto_hwm_profile_percent (zlink_auto_hwm_profile_t profile_)
+{
+    return profile_budget (profile_).percent;
+}
+
+uint64_t zlink::auto_hwm_profile_fixed_cap_bytes (
+  zlink_auto_hwm_profile_t profile_)
+{
+    return profile_budget (profile_).fixed_cap;
+}
+
+uint64_t zlink::auto_hwm_effective_budget_bytes (
+  zlink_auto_hwm_profile_t profile_, uint64_t resolved_memory_bytes_,
+  uint64_t active_directional_queue_count_)
+{
+    return profile_effective_budget (profile_, resolved_memory_bytes_,
+                                     active_directional_queue_count_);
+}
+
 zlink::auto_hwm_role_t zlink::auto_hwm_default_role_for_socket_type (int socket_type_)
 {
     switch (socket_type_) {
@@ -255,11 +302,17 @@ void zlink::auto_hwm_context_plan_make (const auto_hwm_budget_input_t &input_,
     out_->runtime_memory_limit_bytes = input_.runtime_memory_limit_bytes;
     out_->configured_core_budget_bytes = input_.configured_core_budget_bytes;
     out_->resolved_memory_limit_bytes = resolved_memory_limit (input_);
+    //  The active directional queue count is only known once the physical
+    //  queue registry has resolved every plannable direction, which happens in
+    //  auto_hwm_context_finalize(). Seed the budget here with the queue-count
+    //  term at zero (= the profile's fixed cap) so a plan that is never
+    //  finalized still carries a sane value, and let finalize() recompute it
+    //  with the real count.
     out_->effective_core_budget_bytes =
       input_.configured_core_budget_bytes > 0
         ? input_.configured_core_budget_bytes
-        : apply_profile_percent (out_->resolved_memory_limit_bytes,
-                                 profile_budget (out_->profile).percent);
+        : profile_effective_budget (out_->profile,
+                                    out_->resolved_memory_limit_bytes, 0);
 }
 
 void zlink::auto_hwm_socket_plan_prepare (auto_hwm_role_t role_,
@@ -381,6 +434,14 @@ void zlink::auto_hwm_context_finalize (auto_hwm_context_plan_t *context_,
             }
         }
     }
+
+    //  The queue count is complete only now. Re-resolve the budget with it so
+    //  the effective cap can rise to the floor those queues need. An explicit
+    //  ZLINK_CTX_OPT core budget always wins and is never recomputed.
+    if (context_->configured_core_budget_bytes == 0)
+        context_->effective_core_budget_bytes = profile_effective_budget (
+          context_->profile, context_->resolved_memory_limit_bytes,
+          context_->active_directional_queue_count);
 
     const uint64_t data_budget =
       context_->manual_reserved_hwm_bytes >= context_->effective_core_budget_bytes

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "coreVersion": "0.12.0",
+  "coreVersion": "0.13.0",
   "headers": [
     {"path": "include/zlink.h", "sha256": "a9426f34c1a4a79110a562a6a0a43b0d8b20acdc89a3da7da06d244b984c4315"},
     {"path": "include/zlink/common.h", "sha256": "648e8150f2af07a70455b296518b75adf4647d1ff3f06d32165029fbea9ff199"},

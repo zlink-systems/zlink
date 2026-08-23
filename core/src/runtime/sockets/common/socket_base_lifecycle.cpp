@@ -62,8 +62,8 @@ void zlink::socket_base_t::finish_deferred_close_after_async_quiesced ()
     if (!lifecycle_coordinator ().take_deferred_close ())
         return;
 
-    enqueue_all_routed_send_terminals (_ctx_terminated ? ETERM : ECANCELED);
-    dispatch_routed_send_ready_events (true);
+    fail_all_send_pending (_ctx_terminated ? ETERM : ECANCELED);
+    dispatch_send_completions (true);
     static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
     _tag = 0xdeadbeef;
     send_reap (this);
@@ -313,7 +313,7 @@ void zlink::socket_base_t::process_stop ()
     //  responsible for calling zlink_close on the socket though!
     _ctx_terminated = true;
     notify_receive_progress ();
-    enqueue_all_routed_send_terminals (ETERM);
+    fail_all_send_pending (ETERM);
 
     scoped_lock_t lock (monitor_runtime ().sync);
     stop_monitor ();
@@ -412,7 +412,7 @@ void zlink::socket_base_t::process_async_mailbox ()
     lifecycle_coordinator ().mark_async_processing_started ();
     do {
         process_commands (0, false);
-        dispatch_routed_send_ready_events ();
+        drive_send_pending ();
         {
             // A public POLLCOMPLETION registration is the sole completion
             // owner while it exists. The gate also fences a 0 -> 1 owner
@@ -423,6 +423,11 @@ void zlink::socket_base_t::process_async_mailbox ()
                 acknowledge_request_completion_notification ();
                 process_ready_completion_pipes ();
                 (void) drain_request_completions ();
+                //  Send completions share the reply completion's dispatch
+                //  owner. A POLLCOMPLETION registration moves both at once,
+                //  which is what makes "same callback, different dispatch
+                //  location" true rather than a second channel.
+                dispatch_send_completions (false);
             }
         }
         if (lifecycle_coordinator ().is_destroyed ()) {

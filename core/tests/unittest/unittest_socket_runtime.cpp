@@ -16,12 +16,6 @@ void tearDown ()
 
 namespace
 {
-void noop_send_ready_handler (void *subject_, void *userdata_)
-{
-    LIBZLINK_UNUSED (subject_);
-    LIBZLINK_UNUSED (userdata_);
-}
-
 zlink::endpoint_uri_pair_t make_bind_endpoint (const char *local_, const char *remote_)
 {
     return zlink::endpoint_uri_pair_t (local_, remote_, zlink::endpoint_type_bind);
@@ -392,34 +386,38 @@ void test_socket_callback_scope_tracks_callback_depth_and_inflight_state ()
     TEST_ASSERT_FALSE (coordinator.public_close_requested ());
 }
 
-void test_socket_send_ready_dispatch_scope_restores_previous_socket ()
+void test_socket_send_complete_dispatch_scope_restores_previous_socket ()
 {
     zlink::socket_base_t *outer = reinterpret_cast<zlink::socket_base_t *> (0x1);
     zlink::socket_base_t *inner = reinterpret_cast<zlink::socket_base_t *> (0x2);
 
-    TEST_ASSERT_NULL (zlink::socket_send_ready_dispatch_scope_t::current_socket ());
-    TEST_ASSERT_FALSE (zlink::socket_send_ready_dispatch_scope_t::dispatching_socket (outer));
+    TEST_ASSERT_NULL (zlink::socket_send_complete_dispatch_scope_t::current_socket ());
+    TEST_ASSERT_FALSE (zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
 
     {
-        zlink::socket_send_ready_dispatch_scope_t outer_scope (outer);
-        TEST_ASSERT_EQUAL_PTR (outer, zlink::socket_send_ready_dispatch_scope_t::current_socket ());
-        TEST_ASSERT_TRUE (zlink::socket_send_ready_dispatch_scope_t::dispatching_socket (outer));
+        zlink::socket_send_complete_dispatch_scope_t outer_scope (outer);
+        TEST_ASSERT_TRUE (
+          zlink::socket_send_complete_dispatch_scope_t::dispatching_any ());
+        TEST_ASSERT_EQUAL_PTR (outer, zlink::socket_send_complete_dispatch_scope_t::current_socket ());
+        TEST_ASSERT_TRUE (zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
 
         {
-            zlink::socket_send_ready_dispatch_scope_t inner_scope (inner);
+            zlink::socket_send_complete_dispatch_scope_t inner_scope (inner);
             TEST_ASSERT_EQUAL_PTR (inner,
-                                   zlink::socket_send_ready_dispatch_scope_t::current_socket ());
+                                   zlink::socket_send_complete_dispatch_scope_t::current_socket ());
             TEST_ASSERT_TRUE (
-              zlink::socket_send_ready_dispatch_scope_t::dispatching_socket (inner));
+              zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (inner));
             TEST_ASSERT_FALSE (
-              zlink::socket_send_ready_dispatch_scope_t::dispatching_socket (outer));
+              zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
         }
 
-        TEST_ASSERT_EQUAL_PTR (outer, zlink::socket_send_ready_dispatch_scope_t::current_socket ());
-        TEST_ASSERT_TRUE (zlink::socket_send_ready_dispatch_scope_t::dispatching_socket (outer));
+        TEST_ASSERT_EQUAL_PTR (outer, zlink::socket_send_complete_dispatch_scope_t::current_socket ());
+        TEST_ASSERT_TRUE (zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
     }
 
-    TEST_ASSERT_NULL (zlink::socket_send_ready_dispatch_scope_t::current_socket ());
+    TEST_ASSERT_NULL (zlink::socket_send_complete_dispatch_scope_t::current_socket ());
+    TEST_ASSERT_FALSE (
+      zlink::socket_send_complete_dispatch_scope_t::dispatching_any ());
 }
 
 void test_socket_command_runtime_throttles_command_polls_by_tsc_window ()
@@ -449,41 +447,48 @@ void test_socket_command_runtime_tracks_recv_ticks_until_reset ()
     TEST_ASSERT_FALSE (runtime.should_poll_commands_after_recv (zlink::inbound_poll_rate));
 }
 
-void test_socket_dispatch_bridge_reads_send_ready_triplet_consistently ()
+void test_socket_dispatch_bridge_tracks_send_recovery_edges ()
 {
     zlink::socket_dispatch_bridge_t bridge;
-    zlink_send_ready_handler_fn handler = NULL;
-    void *subject = NULL;
-    void *userdata = NULL;
 
-    TEST_ASSERT_FALSE (bridge.load_send_ready_handler (&handler, &subject, &userdata));
-    TEST_ASSERT_NULL (handler);
-    TEST_ASSERT_NULL (subject);
-    TEST_ASSERT_NULL (userdata);
+    //  Ready is meaningless until something is actually waiting on recovery,
+    //  which is what keeps has_out() from reporting a stale edge.
+    TEST_ASSERT_FALSE (bridge.send_recovery_pending ());
+    TEST_ASSERT_FALSE (bridge.send_recovery_ready ());
+    bridge.mark_send_recovery_ready ();
+    TEST_ASSERT_FALSE (bridge.send_recovery_ready ());
 
-    int subject_value = 7;
-    int userdata_value = 11;
-    bridge.store_send_ready_handler (&noop_send_ready_handler, &subject_value, &userdata_value);
+    bridge.mark_send_recovery_pending ();
+    TEST_ASSERT_TRUE (bridge.send_recovery_pending ());
+    TEST_ASSERT_FALSE (bridge.send_recovery_ready ());
 
-    TEST_ASSERT_TRUE (bridge.load_send_ready_handler (&handler, &subject, &userdata));
-    TEST_ASSERT_EQUAL_PTR (&noop_send_ready_handler, handler);
-    TEST_ASSERT_EQUAL_PTR (&subject_value, subject);
-    TEST_ASSERT_EQUAL_PTR (&userdata_value, userdata);
+    bridge.mark_send_recovery_ready ();
+    TEST_ASSERT_TRUE (bridge.send_recovery_ready ());
+
+    bridge.clear_send_recovery_ready ();
+    TEST_ASSERT_TRUE (bridge.send_recovery_pending ());
+    TEST_ASSERT_FALSE (bridge.send_recovery_ready ());
+
+    bridge.mark_send_recovery_ready ();
+    bridge.clear_send_recovery_pending ();
+    TEST_ASSERT_FALSE (bridge.send_recovery_pending ());
+    TEST_ASSERT_FALSE (bridge.send_recovery_ready ());
 }
 
-void test_socket_dispatch_bridge_arms_send_ready_only_with_handler ()
+void test_socket_send_pending_runtime_starts_empty ()
 {
-    zlink::socket_dispatch_bridge_t bridge;
+    zlink::socket_send_pending_runtime_t pending;
 
-    TEST_ASSERT_FALSE (bridge.arm_send_ready_notification ());
-    TEST_ASSERT_FALSE (bridge.consume_send_ready_notification ());
-
-    int subject_value = 13;
-    bridge.store_send_ready_handler (&noop_send_ready_handler, &subject_value, NULL);
-
-    TEST_ASSERT_TRUE (bridge.arm_send_ready_notification ());
-    TEST_ASSERT_TRUE (bridge.consume_send_ready_notification ());
-    TEST_ASSERT_FALSE (bridge.consume_send_ready_notification ());
+    //  op id 0 is reserved as "no operation", so the first assigned id is 1.
+    TEST_ASSERT_EQUAL_UINT64 (1, pending.next_op_id);
+    TEST_ASSERT_NULL (pending.handler);
+    TEST_ASSERT_FALSE (pending.handler_installed.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (pending.queues.empty ());
+    TEST_ASSERT_TRUE (pending.by_op.empty ());
+    TEST_ASSERT_TRUE (pending.completions.empty ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_msgs);
+    TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_bytes);
+    TEST_ASSERT_FALSE (pending.failing);
 }
 
 void test_socket_public_send_scope_combines_initial_admission_and_sync ()
@@ -576,11 +581,11 @@ int main (int argc, char **argv)
     RUN_TEST (test_socket_self_close_rejects_another_inflight_callback);
     RUN_TEST (test_socket_public_api_lock_scope_releases_sync_bit_on_exit);
     RUN_TEST (test_socket_callback_scope_tracks_callback_depth_and_inflight_state);
-    RUN_TEST (test_socket_send_ready_dispatch_scope_restores_previous_socket);
+    RUN_TEST (test_socket_send_complete_dispatch_scope_restores_previous_socket);
     RUN_TEST (test_socket_command_runtime_throttles_command_polls_by_tsc_window);
     RUN_TEST (test_socket_command_runtime_tracks_recv_ticks_until_reset);
-    RUN_TEST (test_socket_dispatch_bridge_reads_send_ready_triplet_consistently);
-    RUN_TEST (test_socket_dispatch_bridge_arms_send_ready_only_with_handler);
+    RUN_TEST (test_socket_dispatch_bridge_tracks_send_recovery_edges);
+    RUN_TEST (test_socket_send_pending_runtime_starts_empty);
     RUN_TEST (test_socket_public_send_scope_combines_initial_admission_and_sync);
     RUN_TEST (test_socket_public_send_scope_unlocks_sync_but_keeps_inflight_admission);
     RUN_TEST (test_socket_public_send_scope_without_sync_keeps_inflight_admission);

@@ -8,7 +8,9 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "core/endpoint.hpp"
 #include "core/mailbox.hpp"
@@ -23,6 +25,11 @@
 
 namespace zlink
 {
+namespace request_timeout
+{
+struct task_t;
+}
+
 class io_thread_t;
 class mailbox_t;
 class socket_base_t;
@@ -341,21 +348,86 @@ struct routed_send_target_key_t
     uint64_t transport_pair_generation;
 };
 
-struct routed_send_ready_record_t
+//  One pending asynchronous send record. Core owns every part in `parts`
+//  from the moment zlink_send_async() returned ZLINK_SUBMIT_OK.
+struct send_pending_record_t
 {
-    routed_send_ready_record_t () : state (ZLINK_ROUTED_SEND_WRITABLE), terminal_errno (0) {}
-    routed_send_ready_record_t (const routed_send_target_key_t &key_,
-                                zlink_routed_send_ready_state_t state_,
-                                int terminal_errno_) :
-        key (key_),
-        state (state_),
-        terminal_errno (terminal_errno_)
+    send_pending_record_t () :
+        op_id (0),
+        userdata (NULL),
+        has_target (false),
+        charge_bytes (0),
+        timeout_ms (0),
+        claimed (false)
     {
     }
 
-    routed_send_target_key_t key;
-    zlink_routed_send_ready_state_t state;
+    zlink_send_op_id_t op_id;
+    void *userdata;
+    routed_send_target_key_t target;
+    bool has_target;
+    std::vector<zlink_msg_t> parts;
+    uint64_t charge_bytes;
+    uint32_t timeout_ms;
+    //  Set while the admit loop owns this record outside the pending mutex.
+    //  A cancel that arrives in that window reports INVALID_STATE instead of
+    //  racing the physical submit.
+    bool claimed;
+    std::shared_ptr<zlink::request_timeout::task_t> deadline;
+};
+
+//  One resolved completion waiting for dispatch. Completions are never
+//  coalesced: exactly one record exists per operation.
+struct send_complete_record_t
+{
+    send_complete_record_t () :
+        op_id (0), userdata (NULL), result (ZLINK_SEND_ADMITTED),
+        terminal_errno (0)
+    {
+    }
+
+    zlink_send_op_id_t op_id;
+    void *userdata;
+    routed_send_target_key_t target;
+    zlink_send_complete_result_t result;
     int terminal_errno;
+};
+
+//  Per-socket asynchronous send admission state.
+//
+//  Ordering: records for one target form a FIFO. The admit loop only ever
+//  looks at the head of each target queue, so head-of-line blocking within a
+//  target is intentional - reordering would rearrange one logical stream on
+//  the wire. Different targets are independent.
+struct socket_send_pending_runtime_t
+{
+    socket_send_pending_runtime_t () :
+        handler (NULL),
+        handler_userdata (NULL),
+        handler_installed (false),
+        next_op_id (1),
+        pending_msgs (0),
+        pending_bytes (0),
+        failing (false)
+    {
+    }
+
+    mutable mutex_t sync;
+    zlink_send_complete_handler_fn handler;
+    void *handler_userdata;
+    std::atomic<bool> handler_installed;
+    zlink_send_op_id_t next_op_id;
+    //  Plain sockets use the default-constructed key; routed sockets key by
+    //  peer rid + transport pair identity + generation.
+    std::map<routed_send_target_key_t, std::deque<send_pending_record_t *> >
+      queues;
+    std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
+    uint64_t pending_msgs;
+    uint64_t pending_bytes;
+    std::deque<send_complete_record_t> completions;
+    //  Set once close or context termination has failed every pending record.
+    //  New submits are refused from that point on.
+    bool failing;
 };
 
 struct socket_dispatch_bridge_t
@@ -364,59 +436,23 @@ struct socket_dispatch_bridge_t
         socket_msg_handler (NULL),
         socket_msg_handler_subject (NULL),
         socket_msg_handler_userdata (NULL),
-        send_ready_handler (NULL),
-        send_ready_handler_subject (NULL),
-        send_ready_handler_userdata (NULL),
-        send_ready_seq (0),
-        send_ready_armed (false),
-        send_ready_recovery_pending (false),
-        send_ready_recovery_ready (false),
-        routed_send_ready_handler (NULL),
-        routed_send_ready_userdata (NULL)
+        send_recovery_pending_flag (false),
+        send_recovery_ready_flag (false)
     {
     }
 
-    bool load_send_ready_handler (zlink_send_ready_handler_fn *handler_out_,
-                                  void **subject_out_,
-                                  void **userdata_out_) const;
-    void store_send_ready_handler (zlink_send_ready_handler_fn handler_,
-                                   void *subject_,
-                                   void *userdata_);
-    bool arm_send_ready_notification ();
-    bool consume_send_ready_notification ();
     void mark_send_recovery_pending ();
     void clear_send_recovery_pending ();
     void mark_send_recovery_ready ();
     void clear_send_recovery_ready ();
     bool send_recovery_pending () const;
     bool send_recovery_ready () const;
-    bool routed_send_ready_handler_active () const;
-    void store_routed_send_ready_handler (zlink_routed_send_ready_handler_fn handler_,
-                                          void *userdata_);
-    bool load_routed_send_ready_handler (zlink_routed_send_ready_handler_fn *handler_out_,
-                                         void **userdata_out_) const;
-    bool enqueue_routed_send_ready (const routed_send_target_key_t &key_,
-                                    zlink_routed_send_ready_state_t state_,
-                                    int terminal_errno_);
-    bool take_routed_send_ready (routed_send_ready_record_t *out_);
 
     std::atomic<zlink_socket_msg_handler_fn> socket_msg_handler;
     std::atomic<void *> socket_msg_handler_subject;
     std::atomic<void *> socket_msg_handler_userdata;
-    std::atomic<zlink_send_ready_handler_fn> send_ready_handler;
-    std::atomic<void *> send_ready_handler_subject;
-    std::atomic<void *> send_ready_handler_userdata;
-    std::atomic<uint32_t> send_ready_seq;
-    mutex_t send_ready_writer_sync;
-    std::atomic<bool> send_ready_armed;
-    std::atomic<bool> send_ready_recovery_pending;
-    std::atomic<bool> send_ready_recovery_ready;
-    mutable mutex_t routed_send_ready_sync;
-    zlink_routed_send_ready_handler_fn routed_send_ready_handler;
-    void *routed_send_ready_userdata;
-    std::map<routed_send_target_key_t, routed_send_ready_record_t>
-      routed_send_ready_pending;
-    std::set<routed_send_target_key_t> routed_send_ready_terminal;
+    std::atomic<bool> send_recovery_pending_flag;
+    std::atomic<bool> send_recovery_ready_flag;
     std::recursive_mutex socket_msg_dispatch_sync;
 };
 
@@ -574,14 +610,18 @@ class socket_public_send_scope_t
     bool _sync_locked;
 };
 
-class socket_send_ready_dispatch_scope_t
+//  Marks the calling thread as running inside a send-completion callback for
+//  one socket. Send entry points consult it to reject re-entrant submits with
+//  EDEADLK, the same mechanism completion_drain_scope_t uses for replies.
+class socket_send_complete_dispatch_scope_t
 {
   public:
-    explicit socket_send_ready_dispatch_scope_t (socket_base_t *socket_);
-    ~socket_send_ready_dispatch_scope_t ();
+    explicit socket_send_complete_dispatch_scope_t (socket_base_t *socket_);
+    ~socket_send_complete_dispatch_scope_t ();
 
     static socket_base_t *current_socket ();
     static bool dispatching_socket (const socket_base_t *socket_);
+    static bool dispatching_any ();
 
   private:
     socket_base_t *_previous;
@@ -594,6 +634,7 @@ struct socket_runtime_t
     socket_receive_runtime_t receive_runtime;
     socket_monitor_runtime_t monitor_runtime;
     socket_dispatch_bridge_t dispatch_bridge;
+    socket_send_pending_runtime_t send_pending_runtime;
     socket_lifecycle_coordinator_t lifecycle_coordinator;
 };
 }

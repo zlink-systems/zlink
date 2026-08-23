@@ -93,6 +93,15 @@ uint64_t auto_hwm_profile_minimum_bytes (zlink_auto_hwm_profile_t profile_,
                                          auto_hwm_role_t role_);
 uint64_t auto_hwm_profile_maximum_bytes (zlink_auto_hwm_profile_t profile_,
                                          auto_hwm_role_t role_);
+uint64_t auto_hwm_profile_percent (zlink_auto_hwm_profile_t profile_);
+//  Absolute ceiling the percent share is clamped to before the queue-count
+//  floor is applied.
+uint64_t auto_hwm_profile_fixed_cap_bytes (zlink_auto_hwm_profile_t profile_);
+//  budget = min (percent * resolved_memory,
+//                max (fixed_cap, queue_count * per_queue_minimum))
+uint64_t auto_hwm_effective_budget_bytes (
+  zlink_auto_hwm_profile_t profile_, uint64_t resolved_memory_bytes_,
+  uint64_t active_directional_queue_count_);
 auto_hwm_role_t auto_hwm_default_role_for_socket_type (int socket_type_);
 auto_hwm_policy_class_t auto_hwm_policy_class_for_role (auto_hwm_role_t role_, int socket_type_);
 void auto_hwm_context_plan_make (const auto_hwm_budget_input_t &input_,

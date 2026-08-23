@@ -246,11 +246,16 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
     }
     socket_handle_t handle = make_socket_handle (target.socket);
     const int type = socket_type (handle);
-    if ((events_ & ZLINK_POLLCOMPLETION) != 0) {
-        if (type != ZLINK_CORE_SOCKET_DEALER && type != ZLINK_CORE_SOCKET_ROUTER) {
-            errno = EINVAL;
-            return ZLINK_CONFIG_INVALID_ARGUMENT;
-        }
+    //  A completion registration is valid on any socket that owns a
+    //  completion channel: reply completions (DEALER/ROUTER) or send
+    //  completions (the zlink_send_async socket set). Registering transfers
+    //  dispatch ownership of both to the poller wait thread.
+    const bool has_completion_channel =
+      type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
+      || zlink::socket_type_supports_send_completion (type);
+    if ((events_ & ZLINK_POLLCOMPLETION) != 0 && !has_completion_channel) {
+        errno = EINVAL;
+        return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
     if (validate_socket_callback_poller_events (handle, events_) != 0)
         return ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -259,9 +264,7 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
         != 0) {
         return zlink::config_result_internal::from_errno (errno);
     }
-    if ((events_ & ZLINK_POLLCOMPLETION) != 0
-        && (type == ZLINK_CORE_SOCKET_DEALER
-            || type == ZLINK_CORE_SOCKET_ROUTER)) {
+    if ((events_ & ZLINK_POLLCOMPLETION) != 0 && has_completion_channel) {
         handle.socket->acquire_completion_poller ();
         poller->registrations.back ().owns_completion_processing = true;
     }

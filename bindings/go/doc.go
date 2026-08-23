@@ -2,12 +2,12 @@
 
 // Package zlink provides idiomatic Go bindings for the zlink messaging library.
 //
-// The public surface follows the Core 0.12.0 raw-socket contract:
+// The public surface follows the Core 0.13.0 raw-socket contract:
 //   - multipart-only public send/receive APIs
 //   - blocking methods use direct names and non-blocking methods use Try*
 //   - non-blocking submit returns `(false, nil)` only for temporary backpressure
 //   - non-blocking receive reports only "no data" via the ok result
-//   - message diagnostics expose only the properties provided by the Core 0.12.0 raw API
+//   - message diagnostics expose only the properties provided by the Core 0.13.0 raw API
 //   - context options are exposed through Context.Options() as ContextOptions
 //   - socket capabilities are split by concrete socket type
 //   - typed domain objects model routing IDs, aggregate receive results, topic

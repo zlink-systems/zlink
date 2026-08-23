@@ -301,7 +301,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             if (remaining <= 0)
                 break;
 
-            arm_send_ready_notification ();
             const int wait_ms = submit_retry_wait_ms (remaining);
             const uint64_t attempt_at =
               now + static_cast<uint64_t> (wait_ms);
@@ -361,14 +360,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             // caller, but keep the recovery edge armed until an application
             // pipe attaches or becomes writable.  Clearing the pending bit
             // here loses the first-target wake after ECONNREFUSED.
-            arm_send_ready_after_backpressure ();
+            arm_send_recovery_after_backpressure ();
         } else {
             dispatch_runtime ().clear_send_recovery_pending ();
-            if ((flags_ & ZLINK_DONTWAIT) || options.sndtimeo == 0) {
-                if (failure_errno == ENOTCONN || failure_errno == EHOSTUNREACH
-                    || failure_errno == ETIMEDOUT)
-                    arm_send_ready_notification ();
-            }
         }
         errno = failure_errno;
         return -1;
@@ -378,7 +372,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         dispatch_runtime ().mark_send_recovery_pending ();
         if (!was_pending)
             static_cast<mailbox_t *> (_mailbox)->signal ();
-        arm_send_ready_notification ();
         return -1;
     }
 
@@ -389,7 +382,7 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
     // otherwise a blocking public send can prevent the command that makes it
     // writable from running.
     const bool retry_progress_owner_active =
-      send_ready_handler_active () || async_mailbox_owns_commands ();
+      send_complete_handler_active () || async_mailbox_owns_commands ();
     const bool hold_sync_during_retry =
       send_scope.should_hold_sync_during_retry (retry_progress_owner_active);
 

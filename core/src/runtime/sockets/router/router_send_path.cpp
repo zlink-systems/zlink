@@ -338,7 +338,12 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 return -1;
             }
         }
-    } else if (_mandatory) {
+    } else if (!scoped_pipe && _mandatory) {
+        //  Only a lookup that found no route at all is unreachable. An exact
+        //  transport-pair submit clears `out_pipe` on purpose after resolving
+        //  `scoped_pipe`, and a single-part record leaves `_more_out` false;
+        //  without this guard that combination fell through to "no out pipe"
+        //  and every single-part exact ROUTER submit failed with EHOSTUNREACH.
         _more_out = false;
         errno = EHOSTUNREACH;
         if (router_debug_enabled ()) {

@@ -313,7 +313,8 @@ static void test_sleep_ms (int delay_ms_)
 #endif
 }
 
-static void noop_stream_send_ready_handler (void *, void *)
+static void noop_stream_send_complete_handler (
+  void *, const zlink_send_complete_event_t *, void *)
 {
 }
 
@@ -1783,7 +1784,7 @@ void test_stream_raw_multiclient_load_integrity ()
     test_context_socket_close_zero_linger (server);
 }
 
-void test_stream_raw_multiclient_load_integrity_with_send_ready_handler ()
+void test_stream_raw_multiclient_load_integrity_with_send_complete_handler ()
 {
     const int client_count = 48;
     const int phases = 2;
@@ -1797,7 +1798,8 @@ void test_stream_raw_multiclient_load_integrity_with_send_ready_handler ()
     const int zero = 0;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_ready_handler (server, &noop_stream_send_ready_handler, NULL));
+      zlink_send_complete_handler (server, &noop_stream_send_complete_handler,
+                                   NULL));
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
@@ -2315,8 +2317,8 @@ int main (void)
     if (should_run_stream_socket_test ("test_stream_raw_multiclient_load_integrity"))
         RUN_TEST (test_stream_raw_multiclient_load_integrity);
     if (should_run_stream_socket_test (
-          "test_stream_raw_multiclient_load_integrity_with_send_ready_handler"))
-        RUN_TEST (test_stream_raw_multiclient_load_integrity_with_send_ready_handler);
+          "test_stream_raw_multiclient_load_integrity_with_send_complete_handler"))
+        RUN_TEST (test_stream_raw_multiclient_load_integrity_with_send_complete_handler);
 #endif
     if (should_run_stream_socket_test ("test_stream_connect_rejected"))
         RUN_TEST (test_stream_connect_rejected);

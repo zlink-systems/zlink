@@ -34,7 +34,7 @@ struct command_t
         activate_write,
         retained_credit,
         flow_state,
-        routed_send_ready,
+        send_pending,
         request_completion,
         hiccup,
         pipe_term,
@@ -119,11 +119,12 @@ struct command_t
             unsigned char state;
         } flow_state;
 
-        //  Schedules delivery of coalesced routed-target readiness records on
-        //  the socket's async mailbox owner.
+        //  Wakes the socket's async mailbox owner so it re-runs the
+        //  asynchronous send admit loop. The command carries no payload; the
+        //  socket-owned pending queues are the authoritative state.
         struct
         {
-        } routed_send_ready;
+        } send_pending;
 
         //  Schedules completion-pipe/control processing on the socket mailbox
         //  owner. The command carries no payload; the socket-owned queues are

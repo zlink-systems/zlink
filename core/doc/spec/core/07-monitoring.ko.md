@@ -236,7 +236,7 @@ message-unit, slot, size-cap과 connection-bucket 진단 field를 제거한다. 
 끝에 receive-flow field 5개를 덧붙이고 다른 변경은 없다. 이전 layout을
 호환 layout으로 받지 않는다.
 
-`zlink_socket_monitor_open`, open options와 status 구조체는 0.12.0의 현재 layout으로 기존
+`zlink_socket_monitor_open`, open options와 status 구조체는 0.13.0의 현재 layout으로 기존
 이름에서 교체한다. Caller size/version 협상이나 병렬 versioned entrypoint를 추가하지 않는다.
 `abi_version`과 `struct_size`는 Core가 반환한 현재 layout의 진단값이며 caller 입력이나 호환성
 협상값이 아니다. HWM 범위·계산 또는 allocation 때문에 monitor를 열 수 없으면 open은 `NULL`과
@@ -312,7 +312,7 @@ pair id와 generation마다 ready edge를 정확히 한 번만 발생시키고 `
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`는 receive-flow event 3개에만 적용한다.
 발생 조건과 각 event의 `value` 의미는 [Events](05-events.ko.md)가 소유한다.
 
-`zlink_socket_monitor_recv`는 현재 0.12.0 `zlink_socket_monitor_event_t` layout 전체를 기록한다.
+`zlink_socket_monitor_recv`는 현재 0.13.0 `zlink_socket_monitor_event_t` layout 전체를 기록한다.
 호출자는 현재 layout 크기의 output buffer를 제공해야 하며, 이전 event prefix를 위한 별도 receive
 entry point나 version 협상 경로는 제공하지 않는다.
 

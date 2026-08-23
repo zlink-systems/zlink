@@ -188,6 +188,12 @@ struct options_t
     int submit_retry_timeout;
     int submit_retry_attempts;
 
+    //  Bound on Core-owned asynchronous send reservations. Unbounded pending
+    //  would be a high-water mark bypass, so 0 is not accepted as
+    //  "unlimited" on the message axis.
+    uint64_t send_pending_max_msgs;
+    uint64_t send_pending_max_bytes;
+
     //  If true, IPv6 is enabled (as well as IPv4)
     bool ipv6;
 

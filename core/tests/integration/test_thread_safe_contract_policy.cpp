@@ -141,12 +141,12 @@ void test_public_header_omits_selectable_thread_mode_contract ()
     assert_text_absent (header, "same-handle operational APIs");
 }
 
-void test_public_header_retains_send_ready_and_monitor_surface ()
+void test_public_header_retains_send_complete_and_monitor_surface ()
 {
     const std::string header = read_public_header_contract_text ();
     TEST_ASSERT_FALSE (header.empty ());
 
-    assert_text_present (header, "zlink_send_ready_handler");
+    assert_text_present (header, "zlink_send_complete_handler");
     assert_text_present (header, "zlink_socket_monitor_open");
     assert_text_present (header, "zlink_socket_monitor_handler");
     assert_text_absent (header, "zlink_service_monitor_open");
@@ -189,7 +189,7 @@ int main ()
 
     UNITY_BEGIN ();
     RUN_TEST (test_public_header_omits_selectable_thread_mode_contract);
-    RUN_TEST (test_public_header_retains_send_ready_and_monitor_surface);
+    RUN_TEST (test_public_header_retains_send_complete_and_monitor_surface);
     RUN_TEST (test_docs_reflect_tiered_thread_safe_contract);
     return UNITY_END ();
 }

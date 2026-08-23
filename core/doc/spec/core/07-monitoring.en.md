@@ -236,7 +236,7 @@ fields at the end of the structure and adds no other change. Older layouts are
 not accepted as compatibility layouts.
 
 `zlink_socket_monitor_open`, its open-options structure, and its status
-structure replace the existing names in place with the current 0.12.0 layout.
+structure replace the existing names in place with the current 0.13.0 layout.
 There is no caller size/version negotiation or parallel versioned entrypoint.
 `abi_version` and `struct_size` diagnose the current layout returned by Core;
 they are neither caller inputs nor compatibility-negotiation values. If an HWM
@@ -330,7 +330,7 @@ a count snapshot, not a new connection-ready edge.
 receive-flow events. [Events](05-events.en.md) owns their emission conditions
 and the meaning of `value` for each one.
 
-`zlink_socket_monitor_recv` writes the complete current 0.12.0
+`zlink_socket_monitor_recv` writes the complete current 0.13.0
 `zlink_socket_monitor_event_t` layout. The caller must provide an output buffer
 for that current layout. Core exposes neither a separate receive entry point
 for the previous event prefix nor a version-negotiation path.

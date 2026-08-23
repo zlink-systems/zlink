@@ -43,7 +43,7 @@ the entire record from its first part using copies retained before the calls.
 `zlink_submit_result_t` value. See the [errno map](../04-errno-map.en.md) for the
 full mapping.
 
-**See also:** `zlink_recv_part`, `zlink_send_ready_handler`
+**See also:** `zlink_recv_part`, `zlink_send_async`
 
 ---
 
@@ -79,26 +79,32 @@ available data returns `ZLINK_RECV_NO_DATA`.
 
 ---
 
-### zlink_send_ready_handler
-
-Install or replace the send-ready callback.
+### Asynchronous send admission
 
 ```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  const zlink_send_async_options_t *options_,
+  zlink_send_op_id_t *op_id_out_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
+  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
+  void *s_, zlink_send_op_id_t op_id_);
 ```
 
-The handler is replace-only and `NULL` is invalid. A successful replacement is
-visible from the next writable transition. Reentrant registration from the
-same handle's send-ready callback fails with `ZLINK_HANDLER_DEADLOCK` and
-`errno == EDEADLK`.
+PAIR supports the full asynchronous send admission surface. `options_->target`
+is ignored: a PAIR socket has exactly one peer, so all pending operations share
+one target queue and are admitted in submit order.
 
-This callback and `ZLINK_POLLOUT` expose the same send-recovery readiness axis.
-The signal means a send retry is worth attempting; it does not guarantee that
-the next retry succeeds.
+A completion reports admission into the Core send queue, not peer delivery.
+[Socket Common](README.en.md) owns the complete contract: ownership transfer,
+the per-socket pending bound, per-operation timeout, cancel, close fail-fast,
+and the callback rules.
 
-**Returns:** `ZLINK_HANDLER_OK` on success; otherwise a
-`zlink_handler_result_t` value.
+**Returns:** `ZLINK_SUBMIT_OK` / `ZLINK_HANDLER_OK` on success; otherwise a
+`zlink_submit_result_t` or `zlink_handler_result_t` value.
 
 **See also:** `zlink_send_part`
 

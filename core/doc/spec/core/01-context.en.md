@@ -122,7 +122,8 @@ Core selects the first available input in this order:
 5. Physical memory detected by Core
 
 A manual Core budget is used unchanged. For every other memory input, Core
-applies the selected profile percentage exactly once.
+applies the selected profile percentage exactly once and then clamps the result
+to the effective cap defined below.
 
 This budget is the normal-state distribution basis for application directional
 pipe HWMs, not a hard cap enforced against context-wide actual usage. Each pipe
@@ -130,22 +131,42 @@ checks only its own HWM together with retained-credit leases originating from
 that pipe. A pipe that reaches its HWM or uses its empty-pipe oversize exception
 does not reduce another pipe's HWM or stop that pipe's admission.
 
-| Profile | Percentage | General-data minimum | General-data maximum | STREAM minimum | STREAM maximum |
-|---|---:|---:|---:|---:|---:|
-| Compact | 2% | 32 KiB | 1 MiB | 8 KiB | 32 KiB |
-| LowLatency | 5% | 32 KiB | 2 MiB | 16 KiB | 64 KiB |
-| Balanced | 10% | 64 KiB | 4 MiB | 64 KiB | 128 KiB |
-| Throughput | 20% | 128 KiB | 16 MiB | 256 KiB | 512 KiB |
+| Profile | Percentage | Fixed cap | General-data minimum | General-data maximum | STREAM minimum | STREAM maximum |
+|---|---:|---:|---:|---:|---:|---:|
+| Compact | 2% | 64 MiB | 32 KiB | 512 KiB | 8 KiB | 32 KiB |
+| LowLatency | 3% | 256 MiB | 32 KiB | 2 MiB | 16 KiB | 64 KiB |
+| Balanced | 5% | 512 MiB | 64 KiB | 1 MiB | 64 KiB | 128 KiB |
+| Throughput | 8% | 1024 MiB | 128 KiB | 8 MiB | 256 KiB | 512 KiB |
 
 Only the STREAM role uses the STREAM bounds. The `none` role is excluded from
-planning; every other current role uses the general-data bounds. The percentage
-calculation uses the following overflow-avoiding expression:
+planning; every other current role uses the general-data bounds, with one
+exception: under the Balanced profile the `recv_ingress` role (SUB/XSUB) uses
+2 MiB instead of the general-data maximum.
+
+The percentage alone does not determine the budget. The budget is the
+percentage share clamped to an **effective cap**, which is the larger of the
+profile's fixed cap and the floor every active application directional queue
+needs in order to reach its own role minimum. A fixed cap alone would push a
+queue-heavy deployment below its own minima; a queue floor alone would let a
+large host reserve gigabytes for a handful of queues.
 
 ```text
-effectiveCoreBudgetBytes =
+percentShareBytes =
     (resolvedMemoryLimitBytes / 100) * profilePercent
   + ((resolvedMemoryLimitBytes % 100) * profilePercent) / 100
+
+effectiveCapBytes =
+    max (profileFixedCapBytes,
+         activeDirectionalQueueCount * perQueueMinimumBytes)
+
+effectiveCoreBudgetBytes = min (percentShareBytes, effectiveCapBytes)
 ```
+
+`perQueueMinimumBytes` is that profile's general-data role minimum.
+`activeDirectionalQueueCount` is known only once the physical queue registry has
+resolved every plannable application direction, so the budget is settled at that
+point (context finalize). Setting a manual Core budget skips this calculation
+entirely.
 
 When Core detects a finite hard limit, an explicit memory limit or manual Core
 budget above that limit fails with `EINVAL`. A runtime memory hint may be set

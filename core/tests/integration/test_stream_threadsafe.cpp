@@ -628,9 +628,11 @@ void worker_send_msg_run (worker_probe_t *probe_)
     probe_->cv.notify_one ();
 }
 
-void queued_send_ready_handler (void *subject_, void *)
+void queued_send_complete_handler (void *, const zlink_send_complete_event_t *,
+                                   void *userdata_)
 {
-    queued_worker_probe_t *probe = static_cast<queued_worker_probe_t *> (subject_);
+    queued_worker_probe_t *probe =
+      static_cast<queued_worker_probe_t *> (userdata_);
     if (!probe)
         return;
 
@@ -1120,7 +1122,7 @@ void test_stream_callback_handoff_to_worker_thread_send_msg_is_safe ()
 #endif
 }
 
-void test_stream_callback_queue_handoff_with_send_ready_under_load_is_safe ()
+void test_stream_callback_queue_handoff_with_send_complete_under_load_is_safe ()
 {
 #if defined(ZLINK_HAVE_WINDOWS)
     TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
@@ -1146,7 +1148,8 @@ void test_stream_callback_queue_handoff_with_send_ready_under_load_is_safe ()
     probe.expected_messages = expected_messages;
     g_queued_worker_probe = &probe;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_ready_handler (server, &queued_send_ready_handler, &probe));
+      zlink_send_complete_handler (server, &queued_send_complete_handler,
+                                   &probe));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_stream_attach_raw (server, queue_handoff_callback));
 
     std::thread worker (queued_worker_send_run, &probe);
@@ -1186,7 +1189,7 @@ void test_stream_callback_queue_handoff_with_send_ready_under_load_is_safe ()
 #endif
 }
 
-void test_stream_recv_handler_queue_handoff_with_send_ready_under_load_is_safe ()
+void test_stream_recv_handler_queue_handoff_with_send_complete_under_load_is_safe ()
 {
 #if defined(ZLINK_HAVE_WINDOWS)
     TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
@@ -1212,7 +1215,8 @@ void test_stream_recv_handler_queue_handoff_with_send_ready_under_load_is_safe (
     probe.expected_messages = expected_messages;
     g_queued_worker_probe = &probe;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_ready_handler (server, &queued_send_ready_handler, &probe));
+      zlink_send_complete_handler (server, &queued_send_complete_handler,
+                                   &probe));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_recv_handler (server, &queue_handoff_msg_handler, NULL));
 
     std::thread worker (queued_worker_send_run, &probe);
@@ -1251,7 +1255,7 @@ void test_stream_recv_handler_queue_handoff_with_send_ready_under_load_is_safe (
 #endif
 }
 
-void test_stream_recv_handler_queue_handoff_with_send_ready_timed_window_drains_cleanly ()
+void test_stream_recv_handler_queue_handoff_with_send_complete_timed_window_drains_cleanly ()
 {
 #if defined(ZLINK_HAVE_WINDOWS)
     TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
@@ -1276,7 +1280,8 @@ void test_stream_recv_handler_queue_handoff_with_send_ready_timed_window_drains_
     probe.expected_messages = INT_MAX / 2;
     g_queued_worker_probe = &probe;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_ready_handler (server, &queued_send_ready_handler, &probe));
+      zlink_send_complete_handler (server, &queued_send_complete_handler,
+                                   &probe));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_recv_handler (server, &queue_handoff_msg_handler, NULL));
 
     std::thread worker (queued_worker_send_run, &probe);
@@ -1629,15 +1634,15 @@ int main ()
           "test_stream_callback_handoff_to_worker_thread_send_msg_is_safe"))
         RUN_TEST (test_stream_callback_handoff_to_worker_thread_send_msg_is_safe);
     if (should_run_stream_threadsafe_test (
-          "test_stream_callback_queue_handoff_with_send_ready_under_load_is_safe"))
-        RUN_TEST (test_stream_callback_queue_handoff_with_send_ready_under_load_is_safe);
+          "test_stream_callback_queue_handoff_with_send_complete_under_load_is_safe"))
+        RUN_TEST (test_stream_callback_queue_handoff_with_send_complete_under_load_is_safe);
     if (should_run_stream_threadsafe_test (
-          "test_stream_recv_handler_queue_handoff_with_send_ready_under_load_is_safe"))
-        RUN_TEST (test_stream_recv_handler_queue_handoff_with_send_ready_under_load_is_safe);
+          "test_stream_recv_handler_queue_handoff_with_send_complete_under_load_is_safe"))
+        RUN_TEST (test_stream_recv_handler_queue_handoff_with_send_complete_under_load_is_safe);
     if (should_run_stream_threadsafe_test (
-          "test_stream_recv_handler_queue_handoff_with_send_ready_timed_window_drains_cleanly"))
+          "test_stream_recv_handler_queue_handoff_with_send_complete_timed_window_drains_cleanly"))
         RUN_TEST (
-          test_stream_recv_handler_queue_handoff_with_send_ready_timed_window_drains_cleanly);
+          test_stream_recv_handler_queue_handoff_with_send_complete_timed_window_drains_cleanly);
     if (should_run_stream_threadsafe_test ("test_stream_send_msg_is_thread_safe"))
         RUN_TEST (test_stream_send_msg_is_thread_safe);
     if (should_run_stream_threadsafe_test ("test_stream_runtime_reads_are_safe_during_send"))

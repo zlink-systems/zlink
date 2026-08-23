@@ -157,18 +157,30 @@ is a borrowed view valid only for the callback. Ownership of `header_` and
 `body_` transfers to the callback, which must consume or close each message
 exactly once.
 
-## 8. Send readiness and thread safety
+## 8. Asynchronous send admission and thread safety
 
 ```c
-ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (
-  void *s_, zlink_send_ready_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
+  void *s_, zlink_msg_t *parts_, size_t part_count_,
+  const zlink_send_async_options_t *options_,
+  zlink_send_op_id_t *op_id_out_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
+  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
+  void *s_, zlink_send_op_id_t op_id_);
 ```
 
-Send readiness means that retrying a previously backpressured submit is
-worthwhile; it does not guarantee success of the next submit. A handler can
-be replaced but cannot be removed with `NULL`. Reentrant registration from
-the same send-ready callback returns `ZLINK_HANDLER_DEADLOCK` with
-`errno == EDEADLK`.
+STREAM carries raw bytes with no frame boundaries, so a STREAM record is
+exactly one part; `part_count_` other than 1 returns
+`ZLINK_SUBMIT_NOT_SUPPORTED`. `options_->target` names one exact peer, whose
+identity comes from `zlink_select_routed_submit_target()`.
+
+A completion reports admission into the Core send queue, not peer delivery.
+[Socket Common](README.en.md) owns the complete contract: ownership transfer,
+per-target FIFO order, the per-socket pending bound, per-operation timeout,
+cancel, close fail-fast, and the callback rules.
 
 The [Socket Common](README.en.md) contract defines public socket-handle thread
 safety and close behavior. The same `zlink_msg_t` cannot be used concurrently

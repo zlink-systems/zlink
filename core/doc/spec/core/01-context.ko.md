@@ -129,30 +129,48 @@ Core는 다음 순서에서 처음 사용할 수 있는 입력을 선택합니�
 4. Core가 감지한 finite hard limit
 5. Core가 감지한 physical memory
 
-수동 Core budget은 profile 비율을 적용하지 않고 그대로 사용합니다. 그 밖의 memory
-입력에는 선택한 profile 비율을 한 번 적용합니다.
+수동 Core budget은 profile 비율과 effective cap을 적용하지 않고 그대로 사용합니다.
+그 밖의 memory 입력에는 선택한 profile 비율을 한 번 적용한 뒤 아래의 effective cap으로
+잘라냅니다.
 
 이 budget은 application directional pipe의 정상 상태 HWM을 나누는 기준이며 context
 전체의 실제 사용량을 비교하는 hard cap이 아닙니다. 각 pipe는 자신의 HWM과 그 pipe에서
 Framework로 이전된 retained-credit lease만 함께 검사합니다. 한 pipe가 HWM에 도달하거나
 빈 pipe oversize 예외를 사용해도 다른 pipe의 HWM을 줄이거나 admission을 중단하지 않습니다.
 
-| Profile | 비율 | 일반 data 역할 하한 | 일반 data 역할 상한 | STREAM 하한 | STREAM 상한 |
-|---|---:|---:|---:|---:|---:|
-| Compact | 2% | 32 KiB | 1 MiB | 8 KiB | 32 KiB |
-| LowLatency | 5% | 32 KiB | 2 MiB | 16 KiB | 64 KiB |
-| Balanced | 10% | 64 KiB | 4 MiB | 64 KiB | 128 KiB |
-| Throughput | 20% | 128 KiB | 16 MiB | 256 KiB | 512 KiB |
+| Profile | 비율 | 고정 cap | 일반 data 역할 하한 | 일반 data 역할 상한 | STREAM 하한 | STREAM 상한 |
+|---|---:|---:|---:|---:|---:|---:|
+| Compact | 2% | 64 MiB | 32 KiB | 512 KiB | 8 KiB | 32 KiB |
+| LowLatency | 3% | 256 MiB | 32 KiB | 2 MiB | 16 KiB | 64 KiB |
+| Balanced | 5% | 512 MiB | 64 KiB | 1 MiB | 64 KiB | 128 KiB |
+| Throughput | 8% | 1024 MiB | 128 KiB | 8 MiB | 256 KiB | 512 KiB |
 
 STREAM 역할만 STREAM 경계를 사용합니다. `none` 역할은 계획에서 제외하며, 그 밖의
-현재 역할은 일반 data 경계를 사용합니다. 비율 계산은 overflow를 피하도록 다음 식을
-사용합니다.
+현재 역할은 일반 data 경계를 사용합니다. 예외는 하나입니다. Balanced profile의
+`recv_ingress` 역할(SUB/XSUB)은 일반 data 상한 대신 2 MiB를 사용합니다.
+
+Budget은 profile 비율만으로 정해지지 않습니다. 비율로 계산한 값을 **effective cap**으로
+자른 값이 budget입니다. Effective cap은 profile의 고정 cap과, 활성 application
+directional queue 전부가 자기 역할 하한에 도달하는 데 필요한 바닥값 중 큰 쪽입니다.
+고정 cap만 두면 queue가 많은 배치가 자기 하한 아래로 밀리고, queue 바닥값만 두면
+큰 호스트가 몇 개 안 되는 queue에 수 GiB를 예약하게 됩니다.
 
 ```text
-effectiveCoreBudgetBytes =
+percentShareBytes =
     (resolvedMemoryLimitBytes / 100) * profilePercent
   + ((resolvedMemoryLimitBytes % 100) * profilePercent) / 100
+
+effectiveCapBytes =
+    max (profileFixedCapBytes,
+         activeDirectionalQueueCount * perQueueMinimumBytes)
+
+effectiveCoreBudgetBytes = min (percentShareBytes, effectiveCapBytes)
 ```
+
+`perQueueMinimumBytes`는 해당 profile의 일반 data 역할 하한입니다.
+`activeDirectionalQueueCount`는 physical queue registry가 계획 가능한 application
+direction을 전부 확정한 뒤에야 알 수 있으므로, budget은 그 시점(context finalize)에
+확정됩니다. 수동 Core budget을 설정하면 이 계산 전체를 건너뜁니다.
 
 Core가 finite hard limit을 감지한 경우, 그보다 큰 명시적 memory limit이나 수동 Core
 budget 설정은 `EINVAL`로 실패합니다. Runtime memory hint는 설정할 수 있으며 실제

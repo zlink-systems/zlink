@@ -100,8 +100,8 @@ void zlink::socket_base_t::acquire_completion_poller ()
           previous == 0
           && lifecycle_coordinator ().is_async_mailbox_active ()
           && current_async_mailbox_dispatch_socket () != this
-          && !socket_msg_dispatch_active () && !send_ready_handler_active ()
-          && !routed_send_ready_handler_active ();
+          && !socket_msg_dispatch_active ()
+          && !send_complete_handler_active ();
         if (quiesce_async_owner)
             stop_async_mailbox_processing ();
     }
@@ -170,8 +170,7 @@ int zlink::socket_base_t::socket_msg_dispatch_stop ()
     }
 
     if (lifecycle_coordinator ().is_async_mailbox_active ()
-        && !send_ready_handler_active ()
-        && !routed_send_ready_handler_active ()) {
+        && !send_complete_handler_active ()) {
         stop_async_mailbox_processing ();
         if (current_async_mailbox_dispatch_socket () != this)
             wait_async_quiesced (10000);
@@ -197,214 +196,9 @@ void zlink::socket_base_t::socket_msg_dispatch_drain_pending ()
     }
 }
 
-int zlink::socket_base_t::socket_set_send_ready_handler (zlink_send_ready_handler_fn handler_)
-{
-    return socket_set_send_ready_handler_ex (handler_, NULL);
-}
-
-int zlink::socket_base_t::socket_set_send_ready_handler_ex (zlink_send_ready_handler_fn handler_,
-                                                            void *subject_)
-{
-    return socket_set_send_ready_handler_with_userdata (handler_, subject_, NULL);
-}
-
-int zlink::socket_base_t::socket_set_send_ready_handler_with_userdata (
-  zlink_send_ready_handler_fn handler_, void *subject_, void *userdata_)
-{
-    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
-    socket_public_api_scope_t admission (lifecycle);
-    if (!admission.acquired ())
-        return -1;
-    if (!handler_) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (socket_send_ready_dispatch_scope_t::dispatching_socket (this)) {
-        errno = EDEADLK;
-        return -1;
-    }
-
-    dispatch_bridge_t &dispatch = dispatch_runtime ();
-    retain_async_command_processing ();
-    if (!lifecycle.is_async_mailbox_active ()) {
-        io_thread_t *io_thread = choose_io_thread (options.affinity);
-        if (!io_thread || start_async_mailbox_processing (io_thread) != 0) {
-            if (!io_thread)
-                errno = EAGAIN;
-            return -1;
-        }
-        lifecycle.wait_async_started (1000);
-    }
-    dispatch.store_send_ready_handler (handler_, subject_, userdata_);
-    return 0;
-}
-
-int zlink::socket_base_t::socket_set_routed_send_ready_handler_with_userdata (
-  zlink_routed_send_ready_handler_fn handler_, void *userdata_)
-{
-    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
-    socket_public_api_scope_t admission (lifecycle);
-    if (!admission.acquired ())
-        return -1;
-    if (!handler_) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (socket_send_ready_dispatch_scope_t::dispatching_socket (this)) {
-        errno = EDEADLK;
-        return -1;
-    }
-    if (unlikely (_ctx_terminated)) {
-        errno = ETERM;
-        return -1;
-    }
-
-    dispatch_bridge_t &dispatch = dispatch_runtime ();
-    retain_async_command_processing ();
-    if (!lifecycle.is_async_mailbox_active ()) {
-        io_thread_t *io_thread = choose_io_thread (options.affinity);
-        if (!io_thread || start_async_mailbox_processing (io_thread) != 0) {
-            if (!io_thread)
-                errno = EAGAIN;
-            return -1;
-        }
-        lifecycle.wait_async_started (1000);
-    }
-    dispatch.store_routed_send_ready_handler (handler_, userdata_);
-
-    // A handler can be installed after an application pipe is already
-    // writable. Publish that initial edge as well as later HWM recoveries;
-    // otherwise an async binding may park forever waiting for a transition
-    // that happened before registration. The exact target is still selected
-    // again under the socket route lock before every DONTWAIT submit.
-    std::vector<pipe_t *> pipes;
-    snapshot_attached_pipes (&pipes);
-    for (size_t i = 0; i < pipes.size (); ++i) {
-        if (pipes[i]
-            && pipes[i]->check_write_admission ()
-                 == pipe_message_admission_ready)
-            (void) enqueue_routed_send_ready (
-              pipes[i], ZLINK_ROUTED_SEND_WRITABLE, 0);
-    }
-    return 0;
-}
-
 bool zlink::socket_base_t::socket_msg_dispatch_active () const
 {
     return dispatch_runtime ().socket_msg_handler.load (std::memory_order_acquire) != NULL;
-}
-
-bool zlink::socket_base_t::send_ready_handler_active () const
-{
-    return dispatch_runtime ().send_ready_handler.load (std::memory_order_acquire) != NULL;
-}
-
-bool zlink::socket_base_t::routed_send_ready_handler_active () const
-{
-    return dispatch_runtime ().routed_send_ready_handler_active ();
-}
-
-bool zlink::socket_base_t::enqueue_routed_send_ready (
-  pipe_t *pipe_, zlink_routed_send_ready_state_t state_, int terminal_errno_)
-{
-    if (!pipe_ || pipe_->get_transport_lane () == transport_lane_completion)
-        return false;
-
-    const blob_t &routing_id = pipe_->get_routing_id ();
-    if (routing_id.size () == 0)
-        return false;
-
-    uint64_t pair_id = pipe_->get_transport_pair_id ();
-    uint64_t pair_generation = pipe_->get_transport_pair_generation ();
-    // STREAM accepts raw TCP peers, which do not negotiate the DEALER/ROUTER
-    // completion lane. Their stable transport connection id is therefore the
-    // exact target identity. It remains distinct across a replacement with
-    // the same public routing id and is used consistently by STREAM select
-    // and exact DONTWAIT send below.
-    if (options.type == ZLINK_CORE_SOCKET_STREAM && pair_id == 0) {
-        pair_id = pipe_->get_transport_connection_id ();
-        pair_generation = pair_id == 0 ? 0 : 1;
-    }
-    zlink_routing_id_t peer_rid;
-    copy_routing_id_from_bytes (
-      routing_id.data (), routing_id.size (), &peer_rid);
-    return enqueue_routed_send_ready_exact (
-      &peer_rid, pair_id, pair_generation, state_, terminal_errno_);
-}
-
-bool zlink::socket_base_t::enqueue_routed_send_ready_exact (
-  const zlink_routing_id_t *peer_rid_, uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_, zlink_routed_send_ready_state_t state_,
-  int terminal_errno_)
-{
-    if (!valid_routing_id (peer_rid_) || transport_pair_id_ == 0
-        || transport_pair_generation_ == 0)
-        return false;
-
-    const routed_send_target_key_t key (
-      peer_rid_->data, peer_rid_->size, transport_pair_id_,
-      transport_pair_generation_);
-    if (!dispatch_runtime ().enqueue_routed_send_ready (
-          key, state_, terminal_errno_))
-        return false;
-
-    command_t wake;
-    memset (&wake, 0, sizeof (wake));
-    wake.destination = this;
-    wake.type = command_t::routed_send_ready;
-    static_cast<mailbox_t *> (_mailbox)->send (wake);
-    return true;
-}
-
-void zlink::socket_base_t::enqueue_all_routed_send_terminals (
-  int terminal_errno_)
-{
-    std::vector<pipe_t *> pipes;
-    snapshot_attached_pipes (&pipes);
-    for (size_t i = 0; i < pipes.size (); ++i)
-        (void) enqueue_routed_send_ready (
-          pipes[i], ZLINK_ROUTED_SEND_TERMINAL, terminal_errno_);
-}
-
-void zlink::socket_base_t::dispatch_routed_send_ready_events (bool closing_)
-{
-    routed_send_ready_record_t record;
-    while (dispatch_runtime ().take_routed_send_ready (&record)) {
-        zlink_routed_send_ready_handler_fn handler = NULL;
-        void *userdata = NULL;
-        if (!dispatch_runtime ().load_routed_send_ready_handler (
-              &handler, &userdata))
-            return;
-
-        zlink_routed_send_ready_event_t event;
-        memset (&event, 0, sizeof (event));
-        zlink::copy_routing_id_from_bytes (
-          record.key.peer_rid.data (), record.key.peer_rid.size (),
-          &event.peer_rid);
-        event.transport_pair_id = record.key.transport_pair_id;
-        event.transport_pair_generation =
-          record.key.transport_pair_generation;
-        event.state = record.state;
-        event.terminal_errno = record.terminal_errno;
-
-        if (closing_) {
-            socket_send_ready_dispatch_scope_t dispatch_scope (this);
-            handler (this, &event, userdata);
-            continue;
-        }
-
-        bool close_requested = false;
-        {
-            socket_callback_scope_t callback_scope (this);
-            if (!callback_scope.acquired ())
-                return;
-            socket_send_ready_dispatch_scope_t dispatch_scope (this);
-            handler (this, &event, userdata);
-            close_requested = lifecycle_coordinator ().public_close_requested ();
-        }
-        if (close_requested)
-            return;
-    }
 }
 
 zlink::socket_base_t *zlink::socket_base_t::current_socket_msg_dispatch_socket ()
@@ -412,9 +206,9 @@ zlink::socket_base_t *zlink::socket_base_t::current_socket_msg_dispatch_socket (
     return socket_msg_dispatch_context_t::current_socket ();
 }
 
-zlink::socket_base_t *zlink::socket_base_t::current_send_ready_dispatch_socket ()
+zlink::socket_base_t *zlink::socket_base_t::current_send_complete_dispatch_socket ()
 {
-    return socket_send_ready_dispatch_scope_t::current_socket ();
+    return socket_send_complete_dispatch_scope_t::current_socket ();
 }
 
 zlink::pipe_t *zlink::socket_base_t::current_socket_msg_dispatch_pipe ()
@@ -432,35 +226,9 @@ bool zlink::socket_base_t::current_socket_msg_dispatch_source_rid (zlink_routing
     return socket_msg_dispatch_context_t::current_source_rid (out_);
 }
 
-void zlink::socket_base_t::invoke_send_ready_handler ()
-{
-    zlink_send_ready_handler_fn handler = NULL;
-    void *subject = NULL;
-    void *userdata = NULL;
-    if (!dispatch_runtime ().load_send_ready_handler (&handler, &subject, &userdata))
-        return;
-
-    socket_callback_scope_t callback_scope (this);
-    if (!callback_scope.acquired ())
-        return;
-
-    socket_send_ready_dispatch_scope_t dispatch_scope (this);
-    handler (subject ? subject : this, userdata);
-}
-
 zlink_socket_msg_handler_fn zlink::socket_base_t::socket_msg_handler () const
 {
     return dispatch_runtime ().socket_msg_handler.load (std::memory_order_acquire);
-}
-
-zlink_send_ready_handler_fn zlink::socket_base_t::socket_send_ready_handler () const
-{
-    zlink_send_ready_handler_fn handler = NULL;
-    void *subject = NULL;
-    void *userdata = NULL;
-    if (!dispatch_runtime ().load_send_ready_handler (&handler, &subject, &userdata))
-        return NULL;
-    return handler;
 }
 
 void *zlink::socket_base_t::socket_msg_handler_subject () const
@@ -471,26 +239,6 @@ void *zlink::socket_base_t::socket_msg_handler_subject () const
 void *zlink::socket_base_t::socket_msg_handler_userdata () const
 {
     return dispatch_runtime ().socket_msg_handler_userdata.load (std::memory_order_acquire);
-}
-
-void *zlink::socket_base_t::socket_send_ready_handler_subject () const
-{
-    zlink_send_ready_handler_fn handler = NULL;
-    void *subject = NULL;
-    void *userdata = NULL;
-    if (!dispatch_runtime ().load_send_ready_handler (&handler, &subject, &userdata))
-        return NULL;
-    return subject;
-}
-
-void *zlink::socket_base_t::socket_send_ready_handler_userdata () const
-{
-    zlink_send_ready_handler_fn handler = NULL;
-    void *subject = NULL;
-    void *userdata = NULL;
-    if (!dispatch_runtime ().load_send_ready_handler (&handler, &subject, &userdata))
-        return NULL;
-    return userdata;
 }
 
 void zlink::socket_base_t::invoke_socket_msg_handler (zlink_socket_msg_handler_fn handler_,
@@ -567,33 +315,12 @@ bool zlink::socket_base_t::copy_last_recv_source_rid (zlink_routing_id_t *out_) 
     return endpoint_runtime ().copy_last_recv_source_rid (out_);
 }
 
-void zlink::socket_base_t::arm_send_ready_notification ()
-{
-    dispatch_runtime ().arm_send_ready_notification ();
-    notify_send_ready_if_armed ();
-}
-
-void zlink::socket_base_t::arm_send_ready_after_backpressure ()
+void zlink::socket_base_t::arm_send_recovery_after_backpressure ()
 {
     const bool was_pending = dispatch_runtime ().send_recovery_pending ();
     dispatch_runtime ().mark_send_recovery_pending ();
     if (!was_pending)
         static_cast<mailbox_t *> (_mailbox)->signal ();
-    arm_send_ready_notification ();
-}
-
-void zlink::socket_base_t::notify_send_ready_if_armed ()
-{
-    if (!has_out ())
-        return;
-
-    if (!dispatch_runtime ().consume_send_ready_notification ())
-        return;
-
-    zlink_send_ready_handler_fn handler = socket_send_ready_handler ();
-    if (handler) {
-        invoke_send_ready_handler ();
-    }
 }
 
 int zlink::socket_base_t::sub_dispatch_start (sub_io_handler_fn callback_, void *userdata_)
