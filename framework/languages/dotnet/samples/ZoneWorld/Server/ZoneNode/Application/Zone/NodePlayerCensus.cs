@@ -13,6 +13,8 @@ public sealed class NodePlayerCensus
 {
     private readonly ConcurrentDictionary<string, int> _byZone = new(StringComparer.Ordinal);
 
+    public void RegisterZone(string zoneId) => _byZone.TryAdd(zoneId, 0);
+
     public void Record(string zoneId, int playerCount) => _byZone[zoneId] = playerCount;
 
     public int TotalPlayers => _byZone.Values.Sum();

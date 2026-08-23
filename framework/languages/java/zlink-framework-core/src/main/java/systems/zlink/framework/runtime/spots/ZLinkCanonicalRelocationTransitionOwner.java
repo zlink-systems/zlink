@@ -27,19 +27,27 @@ final class ZLinkCanonicalRelocationTransitionOwner {
             .setCanonicalRelocationControlHandler(this::handle);
     }
 
-    CompletionStage<Void> handle(
+    CompletionStage<byte[]> handle(
         RoutingId transportSource,
+        Long requestSequence,
         byte[] encoded) {
         Objects.requireNonNull(transportSource, "transportSource");
         byte[] record = Objects.requireNonNull(encoded, "encoded").clone();
         int command = command(record);
         try {
             return Objects.requireNonNull(
-                stateMachine.apply(transportSource, command, record),
+                stateMachine.apply(
+                    transportSource, requestSequence, command, record),
                 "canonical relocation state machine returned null");
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
+    }
+
+    CompletionStage<byte[]> handle(
+        RoutingId transportSource,
+        byte[] encoded) {
+        return handle(transportSource, null, encoded);
     }
 
     /**
@@ -47,7 +55,8 @@ final class ZLinkCanonicalRelocationTransitionOwner {
      * corresponding decoded state.
      */
     static StateMachine unavailable() {
-        return (source, command, encoded) -> CompletableFuture.failedFuture(
+        return (source, requestSequence, command, encoded) ->
+            CompletableFuture.failedFuture(
             new IllegalStateException(
                 "canonical relocation command "
                     + command
@@ -80,8 +89,9 @@ final class ZLinkCanonicalRelocationTransitionOwner {
 
     @FunctionalInterface
     interface StateMachine {
-        CompletionStage<Void> apply(
+        CompletionStage<byte[]> apply(
             RoutingId transportSource,
+            Long requestSequence,
             int command,
             byte[] encoded);
     }

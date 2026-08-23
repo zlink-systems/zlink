@@ -3,6 +3,7 @@ using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Server.Configuration;
 using ZoneWorld.Server.ZoneNode.Application.Node;
+using ZoneWorld.Server.ZoneNode.Application.Zone;
 using ZoneWorld.Shared.Contracts;
 
 namespace ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Handlers;
@@ -19,6 +20,7 @@ namespace ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Handlers;
 internal sealed class WorldAnnounceSubscriber(
     IZLinkSpotClient routes,
     NodeMaintenancePolicy maintenance,
+    NodePlayerCensus census,
     ILogger<WorldAnnounceSubscriber> logger)
     : IZLinkFanoutHandler<WorldAnnounceEvent>
 {
@@ -26,7 +28,7 @@ internal sealed class WorldAnnounceSubscriber(
         WorldAnnounceEvent message,
         CancellationToken cancellationToken)
     {
-        var zones = ZoneTopology.ZonesOf(maintenance.OwnNodeId);
+        var zones = census.ZoneIds;
         logger.LogInformation(
             "fanout subscriber received announcement. node={NodeId}, announcement={AnnouncementId}, zones={ZoneCount}",
             maintenance.OwnNodeId,

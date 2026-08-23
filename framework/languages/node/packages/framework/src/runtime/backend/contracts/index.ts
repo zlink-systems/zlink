@@ -38,6 +38,7 @@ import type {
   ServiceUserSpotOperationHandler,
   ServiceUserSpotOperationResult
 } from '../../foundation/service-stateful-runtime';
+import type { ServiceApplicationPayload } from '../../foundation/service-wire-m6a-codec';
 import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
@@ -197,6 +198,16 @@ export interface ZLinkBackendMeshNode {
     targetRid: unknown,
     frames: readonly Uint8Array[]
   ): Promise<SubmitResult>;
+  /**
+   * Sends a service-wire infrastructure request directly through Core and
+   * returns the raw reply frames. Relocation Prepare uses this leg so Ready
+   * remains the reply to the same native request sequence.
+   */
+  requestInfrastructureControlFrames?(
+    targetRid: unknown,
+    frames: readonly Uint8Array[],
+    options?: { readonly timeoutMs?: number }
+  ): Promise<readonly Uint8Array[]>;
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
@@ -290,13 +301,39 @@ export interface ZLinkBackendMeshNode {
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
+    timeoutMs?: number
+  ): MeshOperationId;
+  joinActorSpotCanonical(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    targetSpotId: unknown,
+    targetSpotGeneration: bigint,
+    request: ServiceApplicationPayload,
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
     timeoutMs?: number
   ): MeshOperationId;
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
+    timeoutMs?: number
+  ): MeshOperationId;
+  joinActorEntrySpotCanonical(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    request: ServiceApplicationPayload,
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
     timeoutMs?: number
   ): MeshOperationId;
   sendToActor(

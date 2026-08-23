@@ -221,7 +221,10 @@ public sealed class DeferredActorJoinDurabilityTests
                     (byte)ZLinkStandaloneActorCanonicalPhase.Completed,
                     stored.Root.Reference,
                     stored.Root.ChecksumCrc32c,
-                    0),
+                    0)
+                {
+                    AggregateGeneration = root.AggregateGeneration
+                },
                 root);
         authority.ReplacePayload(canonicalPayload);
         Assert.True(

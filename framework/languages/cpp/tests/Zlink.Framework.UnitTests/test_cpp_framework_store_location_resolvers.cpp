@@ -91,15 +91,15 @@ std::vector<std::byte> user_spot_authority_payload (
   std::string_view spot_id,
   std::uint64_t generation)
 {
-    const auto value = "zlink:user-spot:ready:v1\nplay\n"
-                       + std::string (spot_id) + "\n"
-                       + std::to_string (generation) + "\n1";
-    std::vector<std::byte> payload;
-    payload.reserve (value.size ());
-    for (const auto character : value)
-        payload.push_back (static_cast<std::byte> (
-          static_cast<unsigned char> (character)));
-    return payload;
+    return zlink::framework::runtime::encode_user_spot_authority_payload ({
+      .state = zlink::framework::runtime::user_spot_authority_state_t::ready,
+      .stable_type = "play",
+      .spot_id = std::string (spot_id),
+      .owner_id = "owner-a",
+      .owner_lease_generation = 1,
+      .mesh_name = "mesh-a",
+      .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
+      .node_generation = generation});
 }
 
 void seed_mesh_node (
@@ -2328,7 +2328,21 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
                round_trip (framework_runtime_state_t::error));
     EXPECT_EQ (framework_runtime_state_t::relocating,
                client_server_framework_state (
-                 service_node_state_t::retiring));
+               service_node_state_t::retiring));
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      StoreTransportIdentityMapsToServiceWireAdmissionIdentity)
+{
+    using zlink::framework::runtime::location_auto_connect_detail::
+      to_service_wire_admission_identity;
+
+    EXPECT_EQ ("default",
+               to_service_wire_admission_identity ("plaintext"));
+    EXPECT_EQ ("default",
+               to_service_wire_admission_identity ("default"));
+    EXPECT_EQ ("tls:cluster-a",
+               to_service_wire_admission_identity ("tls:cluster-a"));
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,

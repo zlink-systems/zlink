@@ -12,11 +12,32 @@ import {
   encodeSessionRelocationSeal,
   encodeSessionRelocationSealed,
   encodeStatefulReply,
+  serviceSessionRelocationIdentityKey,
   type ServiceMaintenanceRelocationControl,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import {
+  decodeRelocationCutover34,
+  decodeRelocationData31,
+  decodeRelocationFailed53,
+  decodeRelocationPrepare40,
+  decodeRelocationReady30,
+  decodeRelocationState52,
+  decodeSessionRelocationRoute44,
+  decodeSessionRelocationSeal42,
+  decodeSessionRelocationSealed43,
+  encodeRelocationCutover34,
+  encodeRelocationData31,
+  encodeRelocationFailed53,
+  encodeRelocationPrepare40,
+  encodeRelocationReady30,
+  encodeRelocationState52,
+  encodeSessionRelocationRoute44,
+  encodeSessionRelocationSeal42,
+  encodeSessionRelocationSealed43
+} from '../../packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated';
 import {
   restoreRelocationAdapterState,
   type ZLinkRelocationStateAdapterLike
@@ -125,6 +146,58 @@ function assertGoldenRoundTrip<T>(
   forbiddenFlag[4] = 1;
   assert.throws(() => decode(forbiddenFlag));
 }
+
+function generatedRelocationRoundTrip(entry: GoldenEntry): Buffer {
+  const encoded = Buffer.from(entry.hex, 'hex');
+  switch (entry.command) {
+    case 30:
+      return Buffer.from(encodeRelocationReady30(decodeRelocationReady30(encoded)));
+    case 31:
+      return Buffer.from(encodeRelocationData31(decodeRelocationData31(encoded)));
+    case 34:
+      return Buffer.from(encodeRelocationCutover34(decodeRelocationCutover34(encoded)));
+    case 40:
+      return Buffer.from(encodeRelocationPrepare40(decodeRelocationPrepare40(encoded)));
+    case 52:
+      return Buffer.from(encodeRelocationState52(decodeRelocationState52(encoded)));
+    case 53:
+      return Buffer.from(encodeRelocationFailed53(decodeRelocationFailed53(encoded)));
+    default:
+      throw new Error(`Unexpected relocation command '${entry.command}'.`);
+  }
+}
+
+function generatedRelocationDecode(entry: GoldenEntry): void {
+  const encoded = Buffer.from(entry.hex, 'hex');
+  switch (entry.command) {
+    case 30: decodeRelocationReady30(encoded); return;
+    case 31: decodeRelocationData31(encoded); return;
+    case 34: decodeRelocationCutover34(encoded); return;
+    case 40: decodeRelocationPrepare40(encoded); return;
+    case 52: decodeRelocationState52(encoded); return;
+    case 53: decodeRelocationFailed53(encoded); return;
+    default: throw new Error(`Unexpected relocation command '${entry.command}'.`);
+  }
+}
+
+test('batch-3 relocation hand/generated codecs are byte-equal on canonical goldens and reject the same malformed goldens', () => {
+  const golden = relocationGolden();
+  for (const entry of golden.canonical) {
+    const encoded = Buffer.from(entry.hex, 'hex');
+    const hand = encodeMaintenanceRelocationControl(
+      decodeMaintenanceRelocationControl(encoded)
+    );
+    assert.equal(hand.toString('hex'), entry.hex, `hand:${entry.name}`);
+    assert.equal(generatedRelocationRoundTrip(entry).toString('hex'), entry.hex,
+      `generated:${entry.name}`);
+    assert.deepEqual(hand, generatedRelocationRoundTrip(entry), entry.name);
+  }
+  for (const entry of golden.malformed) {
+    assert.throws(() => decodeMaintenanceRelocationControl(Buffer.from(entry.hex, 'hex')),
+      Error, `hand:${entry.name}`);
+    assert.throws(() => generatedRelocationDecode(entry), Error, `generated:${entry.name}`);
+  }
+});
 
 test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors', () => {
   const golden = relocationGolden();
@@ -307,6 +380,79 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
     ...seal,
     senderRole: 'target'
   } as never), /sender role/);
+});
+
+test('batch-3 Session barrier hand/generated codecs are byte-equal and reject the same malformed bytes', () => {
+  for (const entry of sessionGolden()) {
+    const encoded = Buffer.from(entry.hex, 'hex');
+    const hand = entry.command === 42
+      ? encodeSessionRelocationSeal(decodeSessionRelocationSeal(encoded))
+      : entry.command === 43
+        ? encodeSessionRelocationSealed(decodeSessionRelocationSealed(encoded))
+        : encodeSessionRelocationRoute(decodeSessionRelocationRoute(encoded));
+    const generated = entry.command === 42
+      ? encodeSessionRelocationSeal42(decodeSessionRelocationSeal42(encoded))
+      : entry.command === 43
+        ? encodeSessionRelocationSealed43(decodeSessionRelocationSealed43(encoded))
+        : encodeSessionRelocationRoute44(decodeSessionRelocationRoute44(encoded));
+    assert.equal(hand.toString('hex'), entry.hex, `hand:${entry.name}`);
+    assert.equal(Buffer.from(generated).toString('hex'), entry.hex, `generated:${entry.name}`);
+
+    const truncated = encoded.subarray(0, -1);
+    assert.throws(() => entry.command === 42
+      ? decodeSessionRelocationSeal(truncated)
+      : entry.command === 43
+        ? decodeSessionRelocationSealed(truncated)
+        : decodeSessionRelocationRoute(truncated), Error, `hand:${entry.name}:truncated`);
+    assert.throws(() => entry.command === 42
+      ? decodeSessionRelocationSeal42(truncated)
+      : entry.command === 43
+        ? decodeSessionRelocationSealed43(truncated)
+        : decodeSessionRelocationRoute44(truncated), Error, `generated:${entry.name}:truncated`);
+  }
+});
+
+test('Session relocation retain identity includes every coordinator fence field', () => {
+  const base: ServiceSessionRelocationSeal = {
+    relocation: { high: 7n, low: 9n },
+    coordinator: {
+      ownerId: 'coordinator',
+      leaseGeneration: 3n,
+      nodeRid: 'source',
+      nodeGeneration: 2n,
+      expectedAuthorityStoreVersion: 'store-v17'
+    },
+    senderRole: 'source',
+    actor: {
+      actor: { nodeRid: 'source', actorId: 'actor-1', generation: 5n },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 13n
+    },
+    session: {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
+      sessionRid: 'session',
+      bindingGeneration: 6n
+    }
+  };
+  const key = serviceSessionRelocationIdentityKey(base);
+  const changed = [
+    { ...base.coordinator, ownerId: 'other-owner' },
+    { ...base.coordinator, leaseGeneration: 4n },
+    { ...base.coordinator, nodeRid: 'other-source' },
+    { ...base.coordinator, nodeGeneration: 3n },
+    { ...base.coordinator, expectedAuthorityStoreVersion: 'store-v18' }
+  ];
+
+  for (const coordinatorFence of changed) {
+    assert.notEqual(
+      serviceSessionRelocationIdentityKey({ ...base, coordinator: coordinatorFence }),
+      key
+    );
+  }
 });
 
 test('actorJoin reply tail (command 20, actor-join-reply-tail) matches the shared golden vectors', () => {

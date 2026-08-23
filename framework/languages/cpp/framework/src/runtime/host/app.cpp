@@ -178,7 +178,9 @@ class store_actor_directory_t final : public actor_directory_t
         }
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
         const auto projection =
-          snapshot ? runtime::decode_actor_authority_payload (snapshot->payload) : std::nullopt;
+          snapshot ? runtime::decode_actor_authority_payload (
+                       snapshot->payload, snapshot->object_generation)
+                   : std::nullopt;
         if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
             || snapshot->allocation.object_kind != placement_object_kind_t::actor || !projection
             || projection->actor.actor_id ().value () != actor_id) {
@@ -2157,6 +2159,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
            spot_locations = &_state->services.build_provider ()
                                .get_required<runtime::spot_address_resolver_t> ()] (
             const actor_ref_t &actor, spot_id_t target_spot, const zlink::message_t &request,
+            std::string packet_name, std::string content_type,
             std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
               auto located = co_await spot_locations->resolve_spot_address ({}, target_spot);
               if (!located) {
@@ -2169,11 +2172,18 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     framework_error_kind_t::not_found,
                     "target Spot lifecycle generation was not published");
               }
+              if (target.owner.lease_generation > 0) {
+                  application_mesh->observe_spot_authority (
+                    target.node_rid, target.spot_id, target.object_generation,
+                    target.node_generation, target.authority_owner_generation,
+                    static_cast<std::uint64_t> (target.owner.lease_generation));
+              }
               const auto bound_session = actor_gateway_runtime.bound_session_route (actor);
               co_return co_await application_mesh->join_application_actor_to_spot (
                 actor, target, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
-                bound_session ? bound_session->session_rid : std::nullopt);
+                bound_session ? bound_session->session_rid : std::nullopt,
+                std::move (packet_name), std::move (content_type));
           });
         actor_gateway_runtime.on_join_barrier ([application_mesh] (const actor_ref_t &actor) {
             return application_mesh->reserve_application_actor_join_barrier (actor);
@@ -2590,6 +2600,30 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               const runtime::stateful::stream_binding_t &target) mutable {
                 return actor_gateway_runtime.commit_session_relocation_route (
                   route, previous, target);
+            },
+            [actor_gateway_runtime] (
+              const runtime::protocol::session_relocation_route_t &route,
+              std::uint64_t target_owner_lease_generation) mutable {
+                const auto actor = detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (
+                    zlink::routing_id_t::from (
+                      route.route.target_node_routing_id).to_string ()),
+                  {}, route.actor.actor_id,
+                  route.actor.object_generation);
+                const auto staged =
+                  actor_gateway_runtime.record_bound_session_route (
+                    actor,
+                    zlink::routing_id_t::from (
+                      route.session_owner_node_routing_id),
+                    zlink::routing_id_t::from (
+                      route.session_routing_id),
+                    route.session_owner_node_generation,
+                    route.route.target_authority_owner_generation,
+                    target_owner_lease_generation,
+                    route.binding_generation, 0,
+                    /*session_sequence=*/0,
+                    /*session_sequence_baseline_unknown=*/true);
+                return static_cast<bool> (staged);
             },
             [actor_gateway_runtime, stream_runtime] (
               const runtime::protocol::bound_session_send_t &send) mutable

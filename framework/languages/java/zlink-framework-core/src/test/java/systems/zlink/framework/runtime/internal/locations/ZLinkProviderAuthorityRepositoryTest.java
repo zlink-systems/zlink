@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
@@ -110,6 +111,295 @@ final class ZLinkProviderAuthorityRepositoryTest {
             ZLinkObjectReserved.class,
             repository.reserve(second, () -> false)
                 .toCompletableFuture().get());
+    }
+
+    @Test
+    void replacementReclaimsAuthorityOwnedByExpiredPreviousNode()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var oldOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-old", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var oldDescriptor = capacityDescriptor(
+            oldOwner, "mesh", RoutingId.from("zone-rid-old"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        String authorityKey = ZLinkAuthorityKeyCodec.spot("zone-nw");
+        var oldReservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(authorityKey, oldDescriptor, oldOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            repository.commit(
+                    oldReservation, new byte[] {2}, null, () -> false)
+                .toCompletableFuture().get());
+        assertEquals(
+            ZLinkOwnerLeaseReleaseResult.RELEASED,
+            owners.release(oldOwner).toCompletableFuture().get());
+
+        var replacementOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-replacement", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var replacementDescriptor = capacityDescriptor(
+            replacementOwner,
+            "mesh",
+            RoutingId.from("zone-rid-replacement"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        var replacementReservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(
+                        authorityKey,
+                        replacementDescriptor,
+                        replacementOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+
+        assertTrue(
+            replacementReservation.objectGeneration()
+                > oldReservation.objectGeneration());
+        assertEquals(
+            replacementOwner,
+            replacementReservation.targetOwner());
+    }
+
+    @Test
+    void replacementReclaimsStaleAuthorityAfterOldCapacityRowWasRemoved()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var oldOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-old", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var oldDescriptor = capacityDescriptor(
+            oldOwner, "mesh", RoutingId.from("zone-rid-old"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        String authorityKey = ZLinkAuthorityKeyCodec.actor("bot-se-y");
+        var oldReservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(authorityKey, oldDescriptor, oldOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            repository.commit(
+                    oldReservation, new byte[] {2}, null, () -> false)
+                .toCompletableFuture().get());
+        assertEquals(
+            ZLinkOwnerLeaseReleaseResult.RELEASED,
+            owners.release(oldOwner).toCompletableFuture().get());
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.removeMeshNode(
+                    new ZLinkMeshNodeDescriptorKey(
+                        oldDescriptor.meshName(), oldDescriptor.rid()),
+                    oldOwner)
+                .toCompletableFuture().get());
+        provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(),
+                    List.of(new ZLinkStoreDelete(new ZLinkStoreKey(
+                        "zlink:v11:capacity:mesh:zone-rid-old")))),
+                () -> false)
+            .toCompletableFuture().get();
+
+        var replacementOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-replacement", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var replacementDescriptor = capacityDescriptor(
+            replacementOwner,
+            "mesh",
+            RoutingId.from("zone-rid-replacement"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        var replacementReservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(
+                        authorityKey,
+                        replacementDescriptor,
+                        replacementOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+
+        assertTrue(
+            replacementReservation.objectGeneration()
+                > oldReservation.objectGeneration());
+        assertEquals(
+            replacementOwner,
+            replacementReservation.targetOwner());
+    }
+
+    @Test
+    void replacementReclaimsStaleAuthorityWhenCapacityRowNoLongerAccountsForIt()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        String authorityKey = ZLinkAuthorityKeyCodec.actor("bot-se-x");
+        var oldOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-old", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var oldDescriptor = capacityDescriptor(
+            oldOwner, "mesh", RoutingId.from("zone-rid-old"));
+        var oldReservation = commitStaleAuthority(
+            repository, descriptors, oldDescriptor, oldOwner, authorityKey);
+        // The dead owner's capacity row was recreated from zero by the
+        // replacement, so it no longer accounts for the committed allocation.
+        // Decrementing it would underflow, which used to abort the reclaim.
+        zeroCapacityRow(provider, "zlink:v11:capacity:mesh:zone-rid-old");
+        assertEquals(
+            ZLinkOwnerLeaseReleaseResult.RELEASED,
+            owners.release(oldOwner).toCompletableFuture().get());
+
+        var replacementOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-replacement", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var replacementDescriptor = capacityDescriptor(
+            replacementOwner,
+            "mesh",
+            RoutingId.from("zone-rid-replacement"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    replacementDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        var replacementReservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(
+                        authorityKey,
+                        replacementDescriptor,
+                        replacementOwner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+
+        assertTrue(
+            replacementReservation.objectGeneration()
+                > oldReservation.objectGeneration());
+        assertEquals(
+            replacementOwner, replacementReservation.targetOwner());
+    }
+
+    @Test
+    void underflowingCapacityRowNeverReclaimsAuthorityFromALiveOwner()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        String authorityKey = ZLinkAuthorityKeyCodec.actor("bot-se-x");
+        var liveOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-live", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var liveDescriptor = capacityDescriptor(
+            liveOwner, "mesh", RoutingId.from("zone-rid-live"));
+        commitStaleAuthority(
+            repository, descriptors, liveDescriptor, liveOwner, authorityKey);
+        zeroCapacityRow(provider, "zlink:v11:capacity:mesh:zone-rid-live");
+
+        var otherOwner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "zone-node-other", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var otherDescriptor = capacityDescriptor(
+            otherOwner, "mesh", RoutingId.from("zone-rid-other"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    otherDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        // The owner lease is still current, so the row is not an orphan and the
+        // authority must stay exactly where it is.
+        var existing = assertInstanceOf(
+            ZLinkObjectAlreadyExists.class,
+            repository.reserve(
+                    capacityRequest(
+                        authorityKey, otherDescriptor, otherOwner),
+                    () -> false)
+                .toCompletableFuture().get()).current();
+        assertEquals(
+            liveDescriptor.rid(),
+            existing.allocation().descriptor().rid());
+    }
+
+    @Test
+    void capacityRowsUseTheNodeCppCanonicalKeyAndJsonShape()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owner = ((ZLinkOwnerLeaseClaimed)
+            new ZLinkProviderOwnerLeaseRepository(provider).claim(
+                "owner-canonical-capacity", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(
+            owner, "mesh /한", RoutingId.from("node /#?"));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        var reservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(
+                        ZLinkAuthorityKeyCodec.spot("spot-canonical"),
+                        descriptor,
+                        owner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+        String key = "zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F";
+        assertCapacityRow(
+            provider,
+            key,
+            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
+                + "\"pending\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
+                + "\"user_spot\\u0000room\":1}}}");
+
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            repository.commit(reservation, new byte[] {2}, null, () -> false)
+                .toCompletableFuture().get());
+        assertCapacityRow(
+            provider,
+            key,
+            "{\"active\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
+                + "\"user_spot\\u0000room\":1}},\"pending\":{\"actors\":0,"
+                + "\"spots\":0,\"spotTypes\":{}}}");
     }
 
     @Test
@@ -503,6 +793,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         var relocationRequest = new ZLinkAggregateRelocationCoordinator.Request(
             new UUID(0, 9),
             1,
+            2,
             List.of(new ZLinkAggregateRelocationCoordinator.Participant(
                 authorityAContractKey,
                 ZLinkPlacementObjectKind.ACTOR,
@@ -516,7 +807,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
             new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
             1,
             ZLinkPlacementCapacityBundle.actor(1),
-            owner.token());
+            owner.token(),
+            version);
         byte[] canonicalPayload =
             ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 basePayload,
@@ -628,11 +920,75 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    private static void assertCapacityRow(
+        ZLinkLocationStore provider,
+        String key,
+        String expected) throws Exception {
+        var found = assertInstanceOf(
+            ZLinkStoreReadFound.class,
+            provider.read(new ZLinkStoreKey(key), () -> false)
+                .toCompletableFuture().get());
+        assertEquals(
+            expected,
+            new String(
+                found.value().bytes(),
+                java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private static ZLinkObjectReservation commitStaleAuthority(
+        ZLinkProviderAuthorityRepository repository,
+        ZLinkProviderDescriptorRepository descriptors,
+        ZLinkMeshNodeDescriptor descriptor,
+        ZLinkLocationOwnerToken owner,
+        String authorityKey) throws Exception {
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        var reservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(
+                    capacityRequest(authorityKey, descriptor, owner),
+                    () -> false)
+                .toCompletableFuture().get()).reservation();
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            repository.commit(
+                    reservation, new byte[] {2}, null, () -> false)
+                .toCompletableFuture().get());
+        return reservation;
+    }
+
+    private static void zeroCapacityRow(
+        ZLinkLocationStore provider,
+        String key) throws Exception {
+        provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(),
+                    List.of(new ZLinkStorePut(
+                        new ZLinkStoreKey(key),
+                        ("{\"active\":{\"actors\":0,\"spots\":0,"
+                            + "\"spotTypes\":{}},\"pending\":{\"actors\":0,"
+                            + "\"spots\":0,\"spotTypes\":{}}}")
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        null))),
+                () -> false)
+            .toCompletableFuture().get();
+    }
+
     private static ZLinkMeshNodeDescriptor capacityDescriptor(
         ZLinkLocationOwnerToken owner) {
+        return capacityDescriptor(owner, "game", RoutingId.from("capacity-node"));
+    }
+
+    private static ZLinkMeshNodeDescriptor capacityDescriptor(
+        ZLinkLocationOwnerToken owner,
+        String meshName,
+        RoutingId nodeRid) {
         return new ZLinkMeshNodeDescriptor(
-            "game",
-            RoutingId.from("capacity-node"),
+            meshName,
+            nodeRid,
             1,
             1,
             "tcp://127.0.0.1:7100",

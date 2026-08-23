@@ -27,16 +27,18 @@ public sealed class RelocationRuntimeTests
     public void Target_observation_accepts_only_byte_exact_steady_authority()
     {
         var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
-        var participant = Assert.Single(stage.Envelope.Participants);
+        var participant = Assert.Single(stage.Envelope.Participants) with
+        {
+            RecoveryPayload = CanonicalFixtureRecovery()
+        };
         var target = new ZLinkMeshNodeDescriptorKey(
             "mesh",
             RoutingId.From("target"));
         var owner = new ZLinkLocationOwnerToken("target-owner", 1);
-        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            participant.RecoveryPayload.Span);
+        var authorityPayload = CanonicalFixtureAuthorityPayload();
         var payload = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
             participant.ObjectKind,
-            recovery.AuthorityPayload,
+            authorityPayload,
             target.Rid,
             1,
             owner,
@@ -51,7 +53,7 @@ public sealed class RelocationRuntimeTests
             new ZLinkPlacementAllocation(
                 ZLinkPlacementAllocationState.Active,
                 participant.ObjectKind,
-                recovery.StableType,
+                "Game.Room",
                 target,
                 1,
                 new ZLinkCapacityVector(0, 1, null)),
@@ -73,16 +75,18 @@ public sealed class RelocationRuntimeTests
     public void Target_observation_rejects_corrupt_steady_authority()
     {
         var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
-        var participant = Assert.Single(stage.Envelope.Participants);
+        var participant = Assert.Single(stage.Envelope.Participants) with
+        {
+            RecoveryPayload = CanonicalFixtureRecovery()
+        };
         var target = new ZLinkMeshNodeDescriptorKey(
             "mesh",
             RoutingId.From("target"));
         var owner = new ZLinkLocationOwnerToken("target-owner", 1);
-        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            participant.RecoveryPayload.Span);
+        var authorityPayload = CanonicalFixtureAuthorityPayload();
         var payload = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
                 participant.ObjectKind,
-                recovery.AuthorityPayload,
+                authorityPayload,
                 target.Rid,
                 1,
                 owner,
@@ -99,7 +103,7 @@ public sealed class RelocationRuntimeTests
             new ZLinkPlacementAllocation(
                 ZLinkPlacementAllocationState.Active,
                 participant.ObjectKind,
-                recovery.StableType,
+                "Game.Room",
                 target,
                 1,
                 new ZLinkCapacityVector(0, 1, null)),
@@ -453,11 +457,7 @@ public sealed class RelocationRuntimeTests
         Assert.Equal("Ping", request.ApplicationPayload.PacketName);
         Assert.Equal(new byte[] { 1 }, restored.Participants[0]
             .ApplicationState.ToArray());
-        var restoredRecovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-            restored.Participants[0].RecoveryPayload.Span);
-        Assert.Equal("42", restoredRecovery.ExpectedStoreVersion);
-        Assert.Equal("SpotType", restoredRecovery.StableType);
-        Assert.Equal(new byte[] { 9 }, restoredRecovery.AuthorityPayload.ToArray());
+        Assert.True(restored.Participants[0].RecoveryPayload.IsEmpty);
     }
 
     [Fact]
@@ -574,7 +574,7 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public void CanonicalV2ParticipantStateRejectsInvalidRecoveryRecord()
+    public void CanonicalEnvelopeDoesNotSerializePrivateParticipantRecovery()
     {
         var recovery = ZLinkCanonicalParticipantRecoveryCodec.Encode(
             new ZLinkCanonicalParticipantRecovery(
@@ -601,9 +601,12 @@ public sealed class RelocationRuntimeTests
                 [],
                 RecoveryPayload: recovery)]);
 
-        Assert.Throws<InvalidDataException>(() =>
-            ZLinkCanonicalSpotRelocationWriter.CreateInitial(
-                source, "spot", "SpotType", RoutingId.From("target"), 12));
+        var canonical = ZLinkCanonicalSpotRelocationWriter.CreateInitial(
+            source, "spot", "SpotType", RoutingId.From("target"), 12);
+        var restored = ZLinkRelocationEnvelopeCodec.Decode(
+            ZLinkRelocationEnvelopeCodec.Encode(canonical));
+
+        Assert.True(Assert.Single(restored.Participants).RecoveryPayload.IsEmpty);
     }
 
     [Fact]
@@ -3442,6 +3445,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3495,6 +3499,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3536,6 +3541,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3618,6 +3624,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3668,6 +3675,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3739,6 +3747,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             canonical.AggregateId,
             canonical.AggregateGeneration,
+            1,
             participants,
             new ZLinkMeshNodeDescriptorKey(
                 "mesh",
@@ -3783,6 +3792,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -4780,6 +4790,7 @@ public sealed class RelocationRuntimeTests
         ZLinkRelocationEnvelope envelope) => new(
         envelope.AggregateId,
         envelope.AggregateGeneration,
+        1,
         envelope.Participants.Select(participant =>
                 new ZLinkAggregateRelocationParticipant(
                     participant,
@@ -4828,26 +4839,7 @@ public sealed class RelocationRuntimeTests
         var sourceRid = RoutingId.From("source");
         var targetRid = RoutingId.From("target");
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("room");
-        var authorityPayload = ZLinkUserSpotAuthorityPayloadCodec.Encode(
-            new ZLinkUserSpotAuthorityPayload(
-                ZLinkUserSpotAuthorityState.Ready,
-                "Game.Room",
-                "room",
-                "source-owner",
-                1,
-                "mesh",
-                sourceRid,
-                1));
-        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Encode(
-            new ZLinkCanonicalParticipantRecovery(
-                key,
-                ZLinkPlacementObjectKind.UserSpot,
-                5,
-                11,
-                "v-source",
-                "Game.Room",
-                authorityPayload,
-                ReadOnlyMemory<byte>.Empty));
+        var authorityPayload = CanonicalFixtureAuthorityPayload();
         var participant = new ZLinkRelocationParticipantEnvelope(
             key,
             ZLinkPlacementObjectKind.UserSpot,
@@ -4855,8 +4847,7 @@ public sealed class RelocationRuntimeTests
             11,
             new byte[] { 1 },
             [],
-            [],
-            recovery);
+            []);
         var relocationParticipant = new ZLinkAggregateRelocationParticipant(
             participant,
             "v-source",
@@ -4915,7 +4906,10 @@ public sealed class RelocationRuntimeTests
                         5,
                         "published-root",
                         37,
-                        canonical.CanonicalApplicationVersion),
+                        canonical.CanonicalApplicationVersion)
+                    {
+                        AggregateGeneration = decoded.AggregateGeneration
+                    },
                     decoded);
         var allocation = new ZLinkPlacementAllocation(
             ZLinkPlacementAllocationState.Active,
@@ -4965,5 +4959,29 @@ public sealed class RelocationRuntimeTests
             [authority]);
         return (stage, candidate);
     }
+
+    private static byte[] CanonicalFixtureAuthorityPayload() =>
+        ZLinkUserSpotAuthorityPayloadCodec.Encode(
+            new ZLinkUserSpotAuthorityPayload(
+                ZLinkUserSpotAuthorityState.Ready,
+                "Game.Room",
+                "room",
+                "source-owner",
+                1,
+                "mesh",
+                RoutingId.From("source"),
+                1));
+
+    private static byte[] CanonicalFixtureRecovery() =>
+        ZLinkCanonicalParticipantRecoveryCodec.Encode(
+            new ZLinkCanonicalParticipantRecovery(
+                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("room"),
+                ZLinkPlacementObjectKind.UserSpot,
+                5,
+                11,
+                "v-source",
+                "Game.Room",
+                CanonicalFixtureAuthorityPayload(),
+                ReadOnlyMemory<byte>.Empty));
 
 }

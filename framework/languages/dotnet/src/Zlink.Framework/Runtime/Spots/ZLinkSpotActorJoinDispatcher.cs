@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -35,6 +37,24 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             payload.FlowOrigin,
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
+        if (joinRequest.Canonical is { } canonical)
+        {
+            try
+            {
+                var canonicalAdmission = await runtime.AdmitCanonicalActorJoinAsync(
+                        joinRequest.TargetSpotId,
+                        canonical.Request.Request,
+                        canonical.Payload,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                ReplyCanonicalAdmission(joinRequest, canonicalAdmission);
+            }
+            catch (Exception ex)
+            {
+                ReplyCanonicalTerminal(joinRequest, ex);
+            }
+            return;
+        }
         var hasHandler = actorJoins.TryResolve(out var descriptor)
                          && descriptor is not null;
         if (!hasHandler && !acceptActorJoinWithoutHandler)
@@ -108,6 +128,30 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             }
         }
 
+        if (joinRequest.Canonical is not null)
+        {
+            if (result.Reply is null)
+            {
+                nativeSpot.ReplyActorJoin(
+                    joinRequest,
+                    result.Accepted ? 0 : 1,
+                    Array.Empty<Message>());
+                return;
+            }
+
+            var encoded = result.Reply.Encode(runtime.Registration.Codecs);
+            var application = ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                ZLinkMessageNameResolver.ResolveFromMessage(result.Reply),
+                encoded.ContentType,
+                encoded.Payload.Bytes.Span);
+            using var reply = Message.From(application);
+            nativeSpot.ReplyActorJoin(
+                joinRequest,
+                result.Accepted ? 0 : 1,
+                reply);
+            return;
+        }
+
         if (!payload.UsesEnvelope)
         {
             if (result.Reply is { } reply)
@@ -150,6 +194,41 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
 
     private JoinPayload DecodeJoinPayload(ZLinkBackendActorJoinRequest joinRequest)
     {
+        if (joinRequest.Canonical is { } canonical)
+        {
+            if (canonical.Payload is not { } application)
+                return new JoinPayload(
+                    false,
+                    typeof(ZLinkMessage).Name,
+                    ZLinkMessage.Empty,
+                    null,
+                    null,
+                    null);
+            try
+            {
+                using var request = Message.From(application.Payload);
+                return new JoinPayload(
+                    false,
+                    application.PacketName,
+                    ZLinkMessage.FromEnvelopePayload(
+                        application.ContentType,
+                        request,
+                        runtime.Registration.Codecs),
+                    null,
+                    null,
+                    null);
+            }
+            catch (Exception ex)
+            {
+                return new JoinPayload(
+                    false,
+                    application.PacketName,
+                    ZLinkMessage.Empty,
+                    ex,
+                    null,
+                    null);
+            }
+        }
         if (joinRequest.Parts.Count == 1)
         {
             try
@@ -243,6 +322,72 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 Exception: exception));
         using var emptyReply = Message.From(ReadOnlySpan<byte>.Empty);
         nativeSpot.ReplyActorJoin(joinRequest, 1, emptyReply);
+    }
+
+    private void ReplyCanonicalAdmission(
+        ZLinkBackendActorJoinRequest joinRequest,
+        ZLinkRemoteActorAdmissionReply admission)
+    {
+        if (admission.Reply.Length == 0)
+        {
+            nativeSpot.ReplyActorJoin(
+                joinRequest,
+                admission.Accepted ? 0 : 1,
+                Array.Empty<Message>());
+            return;
+        }
+
+        // service-wire-v1 ActorJoin(28): spec 51 fixes the reply framing as
+        // multipart wrap + sole raw part — the part preserves the handler's
+        // packet name/content type only insofar as the transport carries no
+        // per-part metadata channel; it must never be reinterpreted as a
+        // nested application envelope (see spec 51's Framework multipart
+        // application profile note on actorJoin(28)).
+        using var reply = Message.From(admission.Reply);
+        nativeSpot.ReplyActorJoin(
+            joinRequest,
+            admission.Accepted ? 0 : 1,
+            reply);
+    }
+
+    private static void ReplyCanonicalTerminal(
+        ZLinkBackendActorJoinRequest joinRequest,
+        Exception exception)
+    {
+        if (joinRequest is not ZLinkMeshActorJoinRequest meshRequest)
+            return;
+        var terminal = exception is ZLinkFrameworkException framework
+            ? framework.Kind switch
+            {
+                ZLinkFrameworkErrorKind.TypeMismatch => (
+                    RequestResult.Conflict,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch),
+                ZLinkFrameworkErrorKind.CapacityExceeded => (
+                    RequestResult.Backpressured,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.None),
+                ZLinkFrameworkErrorKind.ProtocolError => (
+                    RequestResult.ProtocolError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),
+                ZLinkFrameworkErrorKind.InvalidOperation => (
+                    RequestResult.Conflict,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale),
+                ZLinkFrameworkErrorKind.NotFound => (
+                    RequestResult.NotFound,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound),
+                ZLinkFrameworkErrorKind.Unavailable => (
+                    RequestResult.InternalError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed),
+                ZLinkFrameworkErrorKind.Rejected => (
+                    RequestResult.Rejected,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestRejected),
+                _ => (
+                    RequestResult.InternalError,
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed)
+            }
+            : (
+                RequestResult.InternalError,
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed);
+        meshRequest.ReplyTerminal(terminal.Item1, terminal.Item2);
     }
 
     private readonly record struct JoinPayload(

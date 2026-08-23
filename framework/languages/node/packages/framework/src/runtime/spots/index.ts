@@ -64,7 +64,8 @@ import {
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  internalFrameworkWireReply
 } from '../framework-errors-internal';
 import type {
   ZLinkBackendSpot,
@@ -81,9 +82,9 @@ import type { ZLinkLocationLifecycle } from '../locations';
 import {
   encodeFrameworkPayload,
   encodeFrameworkPayloadMessage,
+  frameworkPayloadContentType,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
-import { decodeFrameworkActorJoinPayload } from '../messaging/actor-join-payload-codec';
 import {
   decodeChannelEnvelope,
   decodeChannelPayload,
@@ -110,7 +111,11 @@ import {
   decodeRemoteActorRef,
   decodeRemoteBoundSessionTarget
 } from './spot-remote-codec';
-import { decodeRoutingId } from '../routing-id';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
+import type {
+  CanonicalActorJoinRecovery
+} from '../foundation/actor-join-recovery-codec';
+import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../foundation/service-wire-constants.generated';
 
 export { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 export {
@@ -280,6 +285,14 @@ export interface ZLinkSpotManagerOptions {
   readonly createTopicMessage?: () => import('../backend').ZLinkBackendTopicMessage;
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;
+  readonly canonicalActorJoinResolver?: (fence: {
+    readonly actorId: string;
+    readonly actorNodeRid: string;
+    readonly actorGeneration: bigint;
+    readonly actorNodeGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  }) => Promise<{ readonly actorType: string }>;
   readonly actorLifecycleResolver?: (actorId: string) => ZLinkActor | undefined;
   readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
   readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
@@ -1833,11 +1846,52 @@ export class DefaultZLinkSpotManager {
     let admissionRecord = transferRequest !== undefined
       ? this.formalRemoteActorAdmissions.get(transferRequest.transferId)
       : undefined;
+    let canonicalAdmissionCreated = false;
     let pendingAdmission = isRemoteCommit ? admissionRecord : undefined;
     let commitAdmissionMissing = isRemoteCommit && admissionRecord === undefined;
     const applicationClaim = transferRequest === undefined
       ? this.options.admission?.claim(meshName, 'Actor join dispatch')
       : undefined;
+    let canonicalActorType: string | undefined;
+    if (control.canonicalActorJoin !== undefined) {
+      const resolver = this.options.canonicalActorJoinResolver;
+      if (resolver === undefined) {
+        throw new ZLinkConfigurationException(
+          'Canonical Actor Join dispatch requires the Location Store admission resolver.'
+        );
+      }
+      const rawActorRef = control.previousActor ?? control.currentActor;
+      const rawRequest = record.parts[0]!;
+      if (rawActorRef === null) {
+        throw new ZLinkConfigurationException(
+          `Actor '${actorId}' canonical admission is missing its ActorRef or request.`
+        );
+      }
+      const actorRef = toFrameworkRemoteAdmissionActorRef(rawActorRef, meshName);
+      const provisional = this.formalRemoteActorAdmissions.beginProvisional({
+        actorId,
+        actorRef,
+        spotId,
+        targetSpotGeneration: control.currentSpotGeneration,
+        expectedMembershipEpoch: control.currentMembershipEpoch,
+        requestFingerprint: rawRequest.data().toString('base64'),
+        transferId: control.canonicalActorJoin.handoffId,
+        sourceActorNodeRid: control.canonicalActorJoin.actorNodeRid as RoutingId
+      });
+      admissionRecord = provisional.record;
+      canonicalAdmissionCreated = provisional.created;
+      try {
+        canonicalActorType = (await resolver({ actorId, ...control.canonicalActorJoin })).actorType;
+      } catch (error) {
+        this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);
+        if (error instanceof ZLinkFrameworkException && record.replyFailure !== undefined) {
+          const terminal = internalFrameworkWireReply(error);
+          requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
+          return;
+        }
+        throw error;
+      }
+    }
     const resolvedActor = this.options.actorResolver?.(actorId);
     const lifecycleActor = targetsEntrySpot
       ? this.options.actorLifecycleResolver?.(actorId)
@@ -1893,13 +1947,90 @@ export class DefaultZLinkSpotManager {
         );
         callbackRequest = ownedCallbackRequest;
       } else if (callbackRequest !== undefined) {
-        const decodedRequest = decodeFrameworkActorJoinPayload(
-          callbackRequest.data(),
-          requestContentType
+        ownedCallbackRequest = RuntimeMessage.from(
+          callbackRequest.data()
         );
-        ownedCallbackRequest = RuntimeMessage.from(decodedRequest.payload);
         callbackRequest = ownedCallbackRequest;
-        requestContentType = decodedRequest.contentType;
+      }
+      if (control.canonicalActorJoin !== undefined) {
+        if (callbackRequest === undefined) {
+          throw new ZLinkConfigurationException(
+            `Actor '${actorId}' canonical admission could not resolve its request.`
+          );
+        }
+        const actorType = canonicalActorType;
+        if (actorType === undefined) {
+          throw new ZLinkConfigurationException(
+            `Actor '${actorId}' canonical admission has no Store-resolved Actor type.`
+          );
+        }
+        const actorRef = toFrameworkRemoteAdmissionActorRef(
+          control.previousActor ?? control.currentActor!,
+          meshName
+        );
+        admissionRecord = this.formalRemoteActorAdmissions.finalizeProvisional(
+          control.canonicalActorJoin.handoffId,
+          {
+          actorId,
+          actorType,
+          actorRef,
+          spotId,
+          targetSpotGeneration: control.currentSpotGeneration,
+          expectedMembershipEpoch: control.currentMembershipEpoch,
+          requestFingerprint: callbackRequest.data().toString('base64'),
+          transferId: control.canonicalActorJoin.handoffId,
+          sourceActorNodeRid: control.canonicalActorJoin.actorNodeRid as RoutingId
+          }
+        );
+        if (canonicalAdmissionCreated) {
+          if (targetsEntrySpot) {
+            admissionOutcome = {
+              accepted: this.options.dispatchEntryActorJoin !== undefined,
+              actorRef
+            };
+          } else if (activation === undefined) {
+            admissionOutcome = { accepted: false, actorRef };
+          } else {
+            const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
+              activation.spot.onActorJoin(
+                actorRef.actorId,
+                wrapFrameworkPayloadMessage(
+                  callbackRequest!,
+                  this.options.messageSerializers,
+                  requestContentType
+                )
+              )
+            );
+            let encodedReply: Message | undefined;
+            try {
+              encodedReply = response.reply === undefined
+                ? undefined
+                : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers);
+              admissionOutcome = {
+                accepted: response.accepted,
+                actorRef,
+                ...(encodedReply === undefined
+                  ? {}
+                  : {
+                      reply: Buffer.from(encodedReply.data()),
+                      replyContentType: frameworkPayloadContentType(encodedReply)
+                    })
+              };
+            } finally {
+              encodedReply?.close();
+            }
+          }
+          this.formalRemoteActorAdmissions.complete(
+            control.canonicalActorJoin.handoffId,
+            admissionOutcome
+          );
+        }
+        admissionOutcome = admissionRecord.result ?? await admissionRecord.resultTask;
+        if ('error' in admissionOutcome) throw admissionOutcome.error;
+        accepted = admissionOutcome.accepted;
+        reply = admissionOutcome.reply === undefined
+          ? undefined
+          : RuntimeMessage.from(admissionOutcome.reply);
       }
       if (
         transferRequest !== undefined
@@ -1984,7 +2115,10 @@ export class DefaultZLinkSpotManager {
                       actorId,
                       transferRequest.completionOperationId,
                       actorRef,
-                      encodedReply?.data() ?? Buffer.alloc(0)
+                      encodedReply?.data() ?? Buffer.alloc(0),
+                      encodedReply === undefined
+                        ? undefined
+                        : frameworkPayloadContentType(encodedReply)
                     );
                   this.options.runtimeEventPublisher?.publish({
                     sourceName: 'zlink.framework.actor-handoff',
@@ -1999,7 +2133,10 @@ export class DefaultZLinkSpotManager {
                   ...(deferredJoinRoot === undefined ? {} : { deferredJoinRoot }),
                   ...(encodedReply === undefined
                     ? {}
-                    : { reply: Buffer.from(encodedReply.data()) })
+                    : {
+                        reply: Buffer.from(encodedReply.data()),
+                        replyContentType: frameworkPayloadContentType(encodedReply)
+                      })
                 };
               } finally {
                 encodedReply?.close();
@@ -2074,6 +2211,7 @@ export class DefaultZLinkSpotManager {
           || (transferRequest !== undefined && this.options.actorTransferRuntime !== undefined);
       } else if (
         !isRemoteAdmission
+        && control.canonicalActorJoin === undefined
         &&
         activation !== undefined
         && callbackRequest !== undefined
@@ -2118,7 +2256,8 @@ export class DefaultZLinkSpotManager {
               actorId,
               transferRequest.completionOperationId,
               actorRef,
-              reply?.data() ?? Buffer.alloc(0)
+              reply?.data() ?? Buffer.alloc(0),
+              reply === undefined ? undefined : frameworkPayloadContentType(reply)
             );
           this.options.runtimeEventPublisher?.publish({
             sourceName: 'zlink.framework.actor-handoff',
@@ -2216,7 +2355,11 @@ export class DefaultZLinkSpotManager {
         if (!actorJoinIsCurrent()) return false;
         const joinReplyResult = record.replyActorJoin(
           accepted ? 0 : 1,
-          reply === undefined ? [] : [reply.data()]
+          reply === undefined ? [] : [reply.data()],
+          undefined,
+          admissionOutcome === undefined || 'error' in admissionOutcome
+            ? undefined
+            : admissionOutcome.replyContentType
         );
         if (accepted && !isRemoteAdmission && joinReplyResult === SubmitResult.Ok) {
           // Core commits the target membership while it accepts this reply.
@@ -2227,6 +2370,10 @@ export class DefaultZLinkSpotManager {
         requireMeshSpotReply(joinReplyResult);
         return true;
       };
+      if (control.canonicalActorJoin !== undefined) {
+        replyActorJoin();
+        return;
+      }
       if (accepted && targetsEntrySpot && actor !== undefined) {
         const entryActor = actor;
         const pendingTransfer = transferRequest === undefined
@@ -2304,6 +2451,12 @@ export class DefaultZLinkSpotManager {
         if (!replyActorJoin()) return;
       }
     } catch (error) {
+      if (control.canonicalActorJoin !== undefined) {
+        this.formalRemoteActorAdmissions.fail(
+          control.canonicalActorJoin.handoffId,
+          error
+        );
+      }
       if (deferredJoinRoot !== undefined && targetCommitPublished !== true) {
         await this.options.actorTransferRuntime?.discardDeferredJoinAccepted(
           deferredJoinRoot
@@ -2562,7 +2715,7 @@ export class DefaultZLinkSpotManager {
     if (admission.admission.actorId !== actor.context.actorId) {
       throw new Error(`Actor Join relocation '${relocationId}' changed its admitted Actor.`);
     }
-    const outcome = await admission.resultTask;
+    const outcome = admission.result ?? await admission.resultTask;
     if ('error' in outcome) throw outcome.error;
     if (!outcome.accepted || admission.state !== 'admitted') {
       throw new Error(`Actor Join relocation '${relocationId}' has no accepted admission.`);
@@ -2600,6 +2753,95 @@ export class DefaultZLinkSpotManager {
     }
     this.formalRemoteActorAdmissions.markCommitted(relocationId, actor);
     return true;
+  }
+
+  async restoreCanonicalActorJoinRecovery(
+    recovery: CanonicalActorJoinRecovery,
+    signal?: AbortSignal,
+    canonicalInventoryDigest?: string
+  ): Promise<ZLinkDeferredJoinAcceptedRoot | undefined> {
+    throwIfAborted(signal);
+    const admission = this.formalRemoteActorAdmissions.get(recovery.request.handoffId);
+    if (admission === undefined) {
+      throw new Error(
+        `Actor Join recovery '${recovery.request.handoffId}' has no canonical command-28 admission.`
+      );
+    }
+    const outcome = admission.result ?? await admission.resultTask;
+    if ('error' in outcome || !outcome.accepted || admission.state !== 'admitted') {
+      throw new Error(
+        `Actor Join recovery '${recovery.request.handoffId}' has no accepted admission.`
+      );
+    }
+    const admitted = admission.admission;
+    if (admitted.sourceActorNodeRid === undefined) {
+      throw new Error(
+        `Actor Join recovery '${recovery.request.handoffId}' lost its command-28 source route.`
+      );
+    }
+    const admittedNodeBytes = Buffer.from(
+      encodeRoutingIdStorageHex(admitted.sourceActorNodeRid),
+      'hex'
+    );
+    if (
+      admitted.actorId !== recovery.request.actorId
+      || admitted.actorType !== recovery.request.actorType
+      || admitted.requestFingerprint !== recovery.request.request.toString('base64')
+      || String(admitted.spotId) !== recovery.targetSpotId
+      || admitted.targetSpotGeneration !== recovery.targetSpotGeneration
+      || admitted.actorRef.objectGeneration !== recovery.request.actorGeneration
+      || !admittedNodeBytes.equals(recovery.request.sourceNodeRid)
+    ) {
+      throw new Error(
+        `Actor Join recovery '${recovery.request.handoffId}' changed its command-28 identity.`
+      );
+    }
+    const admittedReply = outcome.reply ?? Buffer.alloc(0);
+    if (!admittedReply.equals(recovery.reply)) {
+      throw new Error(
+        `Actor Join recovery '${recovery.request.handoffId}' changed its admission reply.`
+      );
+    }
+    if (recovery.operationId === undefined) {
+      if (recovery.replyContentType !== undefined || recovery.reply.byteLength !== 0) {
+        throw new Error(
+          `Actor Join recovery '${recovery.request.handoffId}' has a reply without an OperationId.`
+        );
+      }
+      return;
+    }
+    const outerReplyContentType = admittedReply.byteLength === 0
+      ? recovery.replyContentType
+      : SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
+    if (recovery.replyContentType !== outerReplyContentType) {
+      throw new Error(
+        `Actor Join recovery '${recovery.request.handoffId}' changed its reply content type.`
+      );
+    }
+    // Command 28 carries a present reply in one outer framework-multipart
+    // part. The accepted target admission still owns the inner typed content
+    // type, which the durable completion must retain for application decode.
+    const admittedContentType = admittedReply.byteLength === 0
+      ? recovery.replyContentType
+      : outcome.replyContentType;
+    const transfer = this.options.actorTransferRuntime;
+    if (transfer === undefined) {
+      throw new Error('Canonical Actor Join recovery requires the Actor transfer runtime.');
+    }
+    const deferred = await transfer.prepareDeferredJoinAccepted(
+      recovery.request.actorId,
+      recovery.operationId,
+      admitted.actorRef,
+      recovery.reply,
+      admittedContentType,
+      signal,
+      canonicalInventoryDigest
+    );
+    this.formalRemoteActorAdmissions.attachDeferredJoinRoot(
+      recovery.request.handoffId,
+      deferred
+    );
+    return deferred;
   }
 
   private encodeMeshActorReply(

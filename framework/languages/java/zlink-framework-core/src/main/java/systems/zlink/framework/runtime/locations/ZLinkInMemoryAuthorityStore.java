@@ -235,6 +235,33 @@ final class ZLinkInMemoryAuthorityStore {
             }
             Instant now = clock.instant();
             Row current = rows.get(request.authorityKey());
+            if (current != null
+                && !ownerLeaseIsLive.test(current.owner)
+                && !participantIsPrepared(request.authorityKey())
+                && Arrays.equals(
+                    current.payload,
+                    ZLinkCanonicalRelocationAuthorityStateCodec
+                        .applicationPayloadOrOriginal(current.payload))) {
+                if (current.allocation.state()
+                    == ZLinkPlacementAllocationState.ACTIVE) {
+                    adjustActive(
+                        current.allocation,
+                        current.allocation.capacityBundle(),
+                        -1);
+                } else {
+                    adjustPending(
+                        current.allocation,
+                        current.allocation.capacityBundle(),
+                        -1);
+                    ReservationState abandoned = reservations.remove(
+                        request.authorityKey());
+                    if (abandoned != null) {
+                        abandoned.state = State.ABORTED;
+                    }
+                }
+                rows.remove(request.authorityKey());
+                current = null;
+            }
             if (current != null) {
                 if (!current.allocation.stableType()
                     .equals(request.stableType())) {

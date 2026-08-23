@@ -77,6 +77,7 @@ public final class ZLinkServiceFrozenRecordCodec {
             replyRoute,
             metadata.encoded(),
             payload.packetName(),
+            payload.contentType(),
             payload.payload(),
             targetSpotId,
             objectGeneration);
@@ -216,9 +217,9 @@ public final class ZLinkServiceFrozenRecordCodec {
             : metadataFrame.clone();
         byte[] replyRoute = encodeSection(output -> {
             if (replyRouteId != null) {
-                if (replyRouteId <= 0) {
+                if (replyRouteId == 0) {
                     throw new IllegalArgumentException(
-                        "replyRouteId must be positive");
+                        "replyRouteId must be non-zero");
                 }
                 output.writeLong(replyRouteId);
             }
@@ -349,6 +350,7 @@ public final class ZLinkServiceFrozenRecordCodec {
         Optional<Long> replyRouteId,
         byte[] metadataFrame,
         String packetName,
+        String contentType,
         byte[] payload,
         String targetSpotId,
         long objectGeneration) {

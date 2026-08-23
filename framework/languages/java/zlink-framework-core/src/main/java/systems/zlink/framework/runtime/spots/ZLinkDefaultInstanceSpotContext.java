@@ -162,6 +162,17 @@ final class DefaultInstanceSpotContext
     }
 
     @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return CompletableFuture.failedFuture(new IllegalStateException(
+            "Instance Spot does not own Actor dispatch"));
+    }
+
+    @Override
     public <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work) {
         return new DefaultZLinkWorkerCall<>(workerPool, Objects.requireNonNull(work, "work"));
     }

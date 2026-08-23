@@ -363,6 +363,35 @@
         "relocationManifestDigest": "must-equal-location-authority-inventory-digest",
         "manifestAuthority": "forbidden"
       },
+      "authoritySlotProjection": {
+        "format": "authority-relocation-state",
+        "aggregateIdField": "relocation",
+        "aggregateGenerationField": "aggregateGeneration",
+        "preRootPhase": "preparing",
+        "preRootValue": "zero-only",
+        "rootExistsPhases": [
+          "captured",
+          "prepared",
+          "committed",
+          "activating",
+          "activated",
+          "cleaning",
+          "completed",
+          "aborted"
+        ],
+        "issuedRange": {
+          "minimum": "1",
+          "maximum": "9223372036854775806",
+          "exhaustedSentinel": "9223372036854775807",
+          "sentinelIssued": "forbidden"
+        },
+        "rootAgreement": "must-equal-maintenance-aggregate-v1.aggregateGeneration-when-root-exists",
+        "participantAgreement": "all-authority-slots-in-one-aggregate-must-agree",
+        "coordinatorExpectedStoreVersion": {
+          "presence": "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
+          "comparison": "opaque-token-exact-equality-only-never-ordered-or-derived"
+        }
+      },
       "replacement": "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
       "orphanCleanup": "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
       "deleteOrder": "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
@@ -6090,8 +6119,21 @@
               "$ref": "relocation-id"
             },
             {
+              "name": "aggregateGeneration",
+              "$ref": "ordinal-or-zero",
+              "maximum": "9223372036854775806"
+            },
+            {
               "name": "targetAttemptGeneration",
               "$ref": "ordinal-or-zero"
+            },
+            {
+              "name": "relocationReference",
+              "$ref": "relocation-reference"
+            },
+            {
+              "name": "relocationChecksumCrc32c",
+              "$ref": "u32"
             },
             {
               "name": "sourceNodeRid",
@@ -6140,6 +6182,10 @@
             {
               "name": "coordinatorNodeGeneration",
               "$ref": "nonzero-u64"
+            },
+            {
+              "name": "coordinatorExpectedStoreVersion",
+              "$ref": "optional-text8"
             },
             {
               "name": "phase",

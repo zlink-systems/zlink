@@ -113,6 +113,19 @@ export interface ActorControlPayload {
   readonly previousMembershipEpoch: bigint;
   readonly currentMembershipEpoch: bigint;
   readonly resultCode: number;
+  /**
+   * Command 28 arrived as the canonical service-wire multipart form.  The
+   * raw transport owns decoding; the framework uses this retained fence only
+   * to run the spec 51 Store-backed type admission before dispatch.
+   */
+  readonly canonicalActorJoin?: {
+    readonly handoffId: string;
+    readonly actorNodeRid: string;
+    readonly actorGeneration: bigint;
+    readonly actorNodeGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  };
 }
 
 export interface ActorJoinCompletionPayload {
@@ -122,6 +135,10 @@ export interface ActorJoinCompletionPayload {
   readonly location: ActorLocation;
   /** Target's advertised relocation state chunk cap from the accepted admission reply. 0/undefined = not advertised. */
   readonly receiveChunkLimitBytes?: number;
+  /** Exact application payload content type retained for canonical recovery. */
+  readonly replyContentType?: string;
+  /** Present only when this operation was emitted as canonical command 28. */
+  readonly canonicalHandoffId?: string;
 }
 
 export interface ActorLookupCompletionPayload {
@@ -220,8 +237,11 @@ export interface ReceiveRecord {
   replyActorJoin(
     joinResult: number,
     parts: MessageLike | readonly MessageLike[],
-    flags?: number
+    flags?: number,
+    replyContentType?: string
   ): SubmitResult;
+  /** Emits a typed command-20 terminal for a lifecycle request before admission. */
+  replyFailure?(terminalResult: number, failureCode: number): SubmitResult;
 }
 
 export interface ClaimReceiveResult {

@@ -1,5 +1,8 @@
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Spots;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
@@ -7,10 +10,17 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // the actor/lifecycle/join plane already consumes.
 internal static class ZLinkMeshRecordAdapters
 {
+    // Command 28's generated codec owns its wire body.  These adapters only
+    // translate between its generated DTO and the framework's admission DTO.
+    internal static byte[] EncodeCanonicalActorJoinHead(ActorJoinRequest request) =>
+        ServiceWirePilotCodec.EncodeActorJoin28(ToGeneratedActorJoin(request))[0];
+
     public static ZLinkBackendActorJoinRequest ToActorJoinRequest(
         MeshReceiveBatch batch, int index, MeshReceiveRecord record)
     {
         IReadOnlyList<Message> parts = batch.RetainMessage(index);
+        var canonical = TryDecodeCanonicalActorJoin(
+            parts, record.ActorControl?.CurrentActor.MeshName ?? string.Empty);
         var message = parts.Count > 0 ? parts[0] : Message.From(ReadOnlySpan<byte>.Empty);
         var epoch = record.ActorControl?.CurrentMembershipEpoch ?? 0;
         // Locally submitted joins leave the record's SourceActor zero-filled;
@@ -26,8 +36,81 @@ internal static class ZLinkMeshRecordAdapters
             epoch,
             message,
             parts,
-            record);
+            record,
+            canonical);
     }
+
+    internal static ZLinkCanonicalActorJoin? TryDecodeCanonicalActorJoin(
+        IReadOnlyList<Message> parts,
+        string meshName)
+    {
+        if (parts.Count is < 1 or > 2)
+            return null;
+
+        try
+        {
+            // Only the generated multipart decoder recognizes canonical
+            // command 28 traffic.
+            var decoded = ServiceWirePilotCodec.DecodeActorJoin28(
+                parts.Select(static part => part.AsReadOnlyMemory().ToArray()).ToArray());
+            var request = ToActorJoinRequestRecord(decoded, meshName);
+            ZLinkApplicationPayloadEnvelope? payload = decoded.Payload is { } value
+                ? new ZLinkApplicationPayloadEnvelope(
+                    value.PacketName,
+                    value.ContentType,
+                    value.Payload)
+                : null;
+            return new ZLinkCanonicalActorJoin(request, payload);
+        }
+        catch (Exception error) when (error is InvalidDataException
+                                      or EndOfStreamException
+                                      or ArgumentException
+                                      or OverflowException)
+        {
+            return null;
+        }
+    }
+
+    private static ServiceWirePilotCodec.ActorJoin28 ToGeneratedActorJoin(
+        ActorJoinRequest request) => new(
+        request.Correlation,
+        new ServiceWirePilotCodec.Fence(
+            request.Actor.ActorId,
+            request.Actor.ObjectGeneration,
+            request.Actor.NodeRid.ToBytes().ToArray(),
+            request.ActorNodeGeneration,
+            request.ActorAuthorityOwnerGeneration,
+            request.ActorOwnerLeaseGeneration),
+        request.Entry,
+        new ServiceWirePilotCodec.Fence(
+            request.TargetSpotId,
+            request.TargetSpotGeneration,
+            request.TargetNodeRid.ToBytes().ToArray(),
+            request.TargetNodeGeneration,
+            request.TargetAuthorityOwnerGeneration,
+            request.TargetOwnerLeaseGeneration));
+
+    private static ZLinkServiceWireCodec.ActorJoinRequestRecord
+        ToActorJoinRequestRecord(
+            ServiceWirePilotCodec.ActorJoin28 decoded,
+            string meshName) =>
+        new(new ActorJoinRequest(
+            decoded.Correlation,
+            new ActorRef(
+                decoded.Actor.Id,
+                decoded.Actor.Generation,
+                meshName,
+                RoutingId.From(decoded.Actor.TargetNodeRid)),
+            decoded.Actor.TargetNodeGeneration,
+            decoded.Actor.ExpectedAuthorityOwnerGeneration,
+            decoded.Actor.ExpectedOwnerLeaseGeneration,
+            decoded.Entry,
+            decoded.TargetSpot.Id,
+            decoded.TargetSpot.Generation,
+            RoutingId.From(decoded.TargetSpot.TargetNodeRid),
+            decoded.TargetSpot.TargetNodeGeneration,
+            decoded.TargetSpot.ExpectedAuthorityOwnerGeneration,
+            decoded.TargetSpot.ExpectedOwnerLeaseGeneration));
 
     public static ZLinkBackendSpotActorLifecycleEvent? ToLifecycleEvent(
         ActorControlRecord control)
@@ -134,7 +217,8 @@ internal sealed class ZLinkMeshActorJoinRequest(
     ulong joinEpoch,
     Message message,
     IReadOnlyList<Message> parts,
-    MeshReceiveRecord record)
+    MeshReceiveRecord record,
+    ZLinkCanonicalActorJoin? canonical)
     : ZLinkBackendActorJoinRequest(
         sourceActor,
         targetActor,
@@ -142,7 +226,8 @@ internal sealed class ZLinkMeshActorJoinRequest(
         targetSpotId,
         joinEpoch,
         message,
-        parts)
+        parts,
+        canonical)
 {
     private readonly MeshReceiveRecord _record = record;
 
@@ -153,4 +238,7 @@ internal sealed class ZLinkMeshActorJoinRequest(
             : ActorJoinResult.Rejected;
         return _record.ReplyJoin(result, parts);
     }
+
+    public SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
+        _record.ReplyTerminal(result, failureCode);
 }

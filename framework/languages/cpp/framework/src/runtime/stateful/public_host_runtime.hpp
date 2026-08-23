@@ -419,6 +419,9 @@ struct bound_session_operations_t
       const protocol::session_relocation_route_t &,
       const stateful::stream_binding_t &,
       const stateful::stream_binding_t &)> commit_relocation_route;
+    std::function<bool (
+      const protocol::session_relocation_route_t &,
+      std::uint64_t)> prepare_relocation_target_route;
     std::function<std::optional<delivery_capability_t> (
       const protocol::bound_session_send_t &)> capture_send;
 };
@@ -453,11 +456,16 @@ using actor_create_operation_completion_t = std::function<void (
 // _transport->reply_actor_join.
 struct actor_join_operation_result_t
 {
+    // A Store/fence/type failure is a command-20 typed terminal, distinct
+    // from the application-level accepted/rejected actorJoin tail.
+    std::uint32_t terminal_result = 0;
+    std::uint32_t failure_code = 0;
     protocol::actor_join_result_t join_result =
       protocol::actor_join_result_t::rejected;
     std::optional<protocol::actor_join_reply_spot_ref_t> spot;
     std::uint64_t membership_epoch = 0;
     std::uint32_t receive_chunk_limit_bytes = 0;
+    std::optional<protocol::application_payload_t> application_reply;
 };
 
 using actor_join_operation_target_completion_t = std::function<void (
@@ -741,6 +749,21 @@ class public_host_runtime_t :
       actor_create_operation_target_t target);
     void configure_actor_join_operations (
       actor_join_operation_target_t target);
+    using actor_join_relocation_prepare_validator_t =
+      std::function<std::optional<bool> (
+        const protocol::relocation_prepare_t &)>;
+    using actor_join_recovery_consumer_t =
+      std::function<bool (stateful::frozen_object_state_t &,
+                          const stateful::object_ref_t &,
+                          const protocol::relocation_prepare_t &)>;
+    using actor_join_authority_spot_resolver_t =
+      std::function<std::optional<std::tuple<std::string, std::string,
+                                             std::uint64_t>> (
+        const stateful::object_ref_t &)>;
+    void configure_actor_join_relocation (
+      actor_join_relocation_prepare_validator_t prepare_validator,
+      actor_join_recovery_consumer_t recovery_consumer,
+      actor_join_authority_spot_resolver_t authority_spot_resolver);
     void configure_instance_spot_operations (
       std::shared_ptr<zlink::framework::location_repository_t> store,
       std::shared_ptr<stateful::relocation_store_port_t> relocations,
@@ -1020,6 +1043,11 @@ class public_host_runtime_t :
     std::map<std::string, cached_spot_route_fence_t> _spot_route_fences;
     actor_create_operation_target_t _actor_create_target;
     actor_join_operation_target_t _actor_join_target;
+    actor_join_relocation_prepare_validator_t
+      _actor_join_relocation_prepare_validator;
+    actor_join_recovery_consumer_t _actor_join_recovery_consumer;
+    actor_join_authority_spot_resolver_t
+      _actor_join_authority_spot_resolver;
     instance_spot_activation_materializer_t
       _instance_spot_materializer;
     std::shared_ptr<stateful::relocation_store_port_t>

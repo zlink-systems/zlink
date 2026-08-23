@@ -40,6 +40,7 @@ import {
 import {
   decodeApplicationPayloadView,
   encodeMultipartApplicationPayload,
+  type ServiceApplicationPayload,
   ServiceWireProtocolError
 } from '../../foundation/service-wire-m6a-codec';
 import {
@@ -612,6 +613,18 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
+  async requestInfrastructureControlFrames(
+    targetRid: unknown,
+    frames: readonly Uint8Array[],
+    options?: { readonly timeoutMs?: number }
+  ): Promise<readonly Uint8Array[]> {
+    return await this.requireRuntime().requestService(
+      String(targetRid),
+      frames.map(frame => Buffer.from(frame)),
+      options?.timeoutMs ?? 30_000
+    );
+  }
+
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
@@ -1152,7 +1165,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
     timeoutMs = 30_000
   ): MeshOperationId {
     return this.observeStateful(
@@ -1162,7 +1175,36 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         String(targetNodeRid),
         { spotId: String(targetSpotId), generation: targetSpotGeneration },
         targetSpotGeneration,
-        parts === undefined ? undefined : encodeMultipart(parts),
+        request,
+        timeoutMs
+      )
+    );
+  }
+
+  joinActorSpotCanonical(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    targetSpotId: unknown,
+    targetSpotGeneration: bigint,
+    request: ServiceApplicationPayload,
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
+    timeoutMs = 30_000
+  ): MeshOperationId {
+    return this.observeStateful(
+      OperationKind.ActorJoin,
+      this.requireStateful().joinActorCanonical(
+        actor,
+        String(targetNodeRid),
+        { spotId: String(targetSpotId), generation: targetSpotGeneration },
+        targetSpotGeneration,
+        request,
+        actorFence,
+        local,
         timeoutMs
       )
     );
@@ -1171,7 +1213,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
     targetNodeRid: unknown,
-    parts?: MessageLike | readonly MessageLike[],
+    request: ServiceApplicationPayload,
     timeoutMs = 30_000
   ): MeshOperationId {
     const target = String(targetNodeRid);
@@ -1180,7 +1222,33 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       this.requireStateful().joinActorEntrySpot(
         actor,
         target,
-        parts === undefined ? undefined : encodeMultipart(parts),
+        request,
+        timeoutMs
+      )
+    );
+  }
+
+  joinActorEntrySpotCanonical(
+    actor: ZLinkBackendActorRef,
+    targetNodeRid: unknown,
+    request: ServiceApplicationPayload,
+    actorFence: {
+      readonly targetNodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    },
+    local: { readonly phase: 'admission'; readonly transferId: string },
+    timeoutMs = 30_000
+  ): MeshOperationId {
+    const target = String(targetNodeRid);
+    return this.observeStateful(
+      OperationKind.ActorJoin,
+      this.requireStateful().joinActorEntrySpotCanonical(
+        actor,
+        target,
+        request,
+        actorFence,
+        local,
         timeoutMs
       )
     );
@@ -2060,7 +2128,11 @@ class CompletionClaim implements RawClaim {
           : null,
         terminalResult: this.completion.result.terminalResult,
         failureErrno: this.completion.result.failureCode,
-        parts: payload === undefined ? [] : decodeMultipart(payload.payload),
+        parts: payload === undefined
+          ? []
+          : payload.contentType === MULTIPART_CONTENT_TYPE
+            ? decodeMultipart(payload.payload)
+            : [Message.from(payload.payload)],
         reply: () => SubmitResult.InvalidState,
         replyActorJoin: () => SubmitResult.NotSupported
       }]
@@ -2091,15 +2163,17 @@ function decodeMultipartRecord(
   // multi-frame infrastructure control (Prepare + sideband) from being
   // misread as a 2-frame application envelope and dropped as invalid_frame.
   if (record.parts.length === 1 || record.domain === 'infrastructure') {
+    const request = record.requestSequence !== undefined
+      && record.sourceRoutingId !== undefined;
     return {
-      kind: ReceiveKind.NodeSend,
+      kind: request ? ReceiveKind.NodeRequest : ReceiveKind.NodeSend,
       domain: readyDomain(record.domain),
       sourceNodeRid: record.sourceRoutingId as RoutingId | undefined ?? null,
       sourceSpotId: null,
       sourceBindingGeneration: 0n,
       sourceActor: null,
-      operationId: { high: 0n, low: 0n },
-      operationKind: 0,
+      operationId: { high: 0n, low: record.requestSequence ?? 0n },
+      operationKind: request ? OperationKind.NodeRequest : 0,
       channelName: null,
       topic: null,
       applicationMetadata: null,
@@ -2110,7 +2184,18 @@ function decodeMultipartRecord(
       failureErrno: 0,
       ...receiveIngressLifecycle(record),
       parts: record.parts.map(part => Message.from(part)),
-      reply: () => SubmitResult.InvalidState,
+      reply(parts) {
+        if (!request) return SubmitResult.InvalidState;
+        const values = Array.isArray(parts) ? parts : [parts];
+        if (values.length === 0) return SubmitResult.InvalidState;
+        runtime.replyService({
+          sourceRoutingId: record.sourceRoutingId!,
+          ...(record.sourceRoute === undefined ? {} : { sourceRoute: record.sourceRoute }),
+          requestSequence: record.requestSequence!,
+          ...(record.reply === undefined ? {} : { reply: record.reply })
+        }, values.map(value => Buffer.from(messageBytesView(value))));
+        return SubmitResult.Ok;
+      },
       replyActorJoin: () => SubmitResult.NotSupported
     };
   }
@@ -2168,9 +2253,13 @@ function decodeStatefulRecord(
   stateful: ServiceStatefulMailboxData
 ): ReceiveRecord {
   const payloadFrame = record.parts.length < 2 ? undefined : record.parts[1];
-  const application = payloadFrame === undefined
-    ? undefined
-    : decodeApplicationEnvelope(payloadFrame);
+  const canonicalActorJoin = stateful.kindData?.kind === 'actorControl'
+    && stateful.kindData.canonicalActorJoin !== undefined;
+  const canonicalActorJoinPayload = stateful.operationKind === OperationKind.ActorJoin
+    && stateful.canonicalApplicationPayload !== undefined;
+  const application = canonicalActorJoinPayload
+    ? stateful.canonicalApplicationPayload
+    : (payloadFrame === undefined ? undefined : decodeApplicationEnvelope(payloadFrame));
   const operationId = record.correlation === undefined
     ? { high: 0n, low: 0n }
     : { high: 2n, low: record.correlation };
@@ -2197,7 +2286,11 @@ function decodeStatefulRecord(
     terminalResult: 0,
     failureErrno: 0,
     ...ingressLifecycle,
-    parts: application === undefined ? [] : decodeMultipart(application.payload),
+    parts: application === undefined
+      ? []
+      : canonicalActorJoinPayload
+        ? [Message.from(application.payload)]
+        : decodeMultipart(application.payload),
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
     ...(stateful.messageFollowOrigin === undefined
@@ -2214,7 +2307,7 @@ function decodeStatefulRecord(
         encodeMultipart(parts)
       ) ? SubmitResult.Ok : SubmitResult.InvalidState;
     },
-    replyActorJoin(joinResult, parts) {
+    replyActorJoin(joinResult, parts, _flags, _replyContentType) {
       if (stateful.reply === undefined || stateful.targetSpot === undefined) {
         return SubmitResult.InvalidState;
       }
@@ -2225,10 +2318,16 @@ function decodeStatefulRecord(
         return SubmitResult.InvalidState;
       }
       const replyParts = Array.isArray(parts) ? parts : [parts];
+      if (canonicalActorJoin && replyParts.length > 1) {
+        return SubmitResult.InvalidState;
+      }
+      const replyPayload = replyParts.length === 0
+        ? undefined
+        : encodeMultipart(replyParts);
       const accepted = stateful.reply(
         RequestResult.Ok,
         0,
-        replyParts.length === 0 ? undefined : encodeMultipart(replyParts),
+        replyPayload,
         {
           kind: 'actorJoin',
           joinResult: joinResult === 0 ? 0 : 1,
@@ -2243,6 +2342,12 @@ function decodeStatefulRecord(
         }
       );
       return accepted ? SubmitResult.Ok : SubmitResult.InvalidState;
+    },
+    replyFailure(terminalResult, failureCode) {
+      if (stateful.reply === undefined) return SubmitResult.InvalidState;
+      return stateful.reply(terminalResult, failureCode)
+        ? SubmitResult.Ok
+        : SubmitResult.InvalidState;
     }
   };
 }

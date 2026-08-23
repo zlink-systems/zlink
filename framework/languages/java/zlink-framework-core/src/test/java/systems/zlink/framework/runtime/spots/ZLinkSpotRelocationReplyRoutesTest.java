@@ -20,6 +20,16 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 
 final class ZLinkSpotRelocationReplyRoutesTest {
     @Test
+    void highBitReplyRouteIdIsAnOpaqueU64() {
+        long highBit = Long.MIN_VALUE;
+        var relay = new ZLinkSpotRelocationReplyRoutes.Relay(
+            new ZLinkSpotRelocationReplyRoutes.OperationId(1, 2),
+            highBit, "room-1", 1, "journal-owner", 1,
+            RoutingId.from("journal-node"), 1, 7, 9, 0, List.of());
+        assertEquals(highBit, relay.replyRouteId());
+    }
+
+    @Test
     void capturedReplySurvivesReceiveReleaseAndAcknowledgesExactlyOnce() {
         byte[] accepted = ZLinkAcceptedJournalTestRecords.spot(
             "source-spot",

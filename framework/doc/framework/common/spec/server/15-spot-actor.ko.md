@@ -434,8 +434,11 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    target의 `OnActorJoin`에 `ActorId`와 join request를 전달한다. Target은 이 승인 request를
    처리하면서 `Accepted`를 반환하기 전에 해당 ActorId와 `ObjectGeneration`의
    [relocation temporary queue](01-glossary.ko.md#relocation-temporary-queue) 등록과 factory
-   실행 준비를 함께 끝낸다. 이후 Restore 요청에서 이 준비를 반복하지 않으므로 왕복 수는
-   그대로이고 seal 뒤 처리 시간만 줄어든다. 승인 reply에는 relocation payload를 나눠 보내는
+   실행 준비를 함께 끝낸다. factory의 stable type은 wire로 받은 type이 아니라 Actor의 Location
+   Store Authority row(`allocation.stableType`, `ActorId`로 키잉)에서 해석하고 join request의 actor
+   route fence와 대조한다 — 교차 언어 wire 형식은 Actor stable type을 싣지 않는다
+   ([51 §9](51-internal-service-wire-protocol.ko.md) 참조). 이후 Restore 요청에서 이 준비를 반복하지
+   않으므로 왕복 수는 그대로이고 seal 뒤 처리 시간만 줄어든다. 승인 reply에는 relocation payload를 나눠 보내는
    단위인 [relocation state chunk](01-glossary.ko.md#relocation-state-chunk)의 target 유효
    수신 상한을 함께 싣는다 — 이 값은 재계산에도 낮아지지 않는 안정 하한 기반의 보수값이다.
    `Accepted`이면 계속하고, `Rejected`이면 target이 같은 처리 안에서 등록한 temporary

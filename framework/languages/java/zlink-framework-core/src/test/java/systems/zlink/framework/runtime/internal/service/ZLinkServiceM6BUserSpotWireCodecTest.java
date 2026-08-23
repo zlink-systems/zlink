@@ -63,6 +63,36 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
     }
 
     @Test
+    void highBitOpaqueTokensRoundTripAcrossUserSpotCommandsAndReplies() {
+        long highBit = Long.MIN_VALUE;
+        var reservation = new ZLinkServiceM6BWireCodec.ReservationFence(
+            "reservation", "store-version", 15, 16,
+            RoutingId.from("target"), highBit, "owner", 18, 1);
+        var create = new ZLinkServiceM6BWireCodec.UserSpotCreate(
+            highBit, highBit, 13, RoutingId.from("source"), highBit,
+            "room", "room-v1", reservation, 1_900_000_000_000L);
+        assertEquals(
+            create,
+            codec.decodeUserSpotCreateHeader(
+                codec.encodeUserSpotCreateHeader(create)));
+        var close = new ZLinkServiceM6BWireCodec.UserSpotClose(
+            highBit, highBit, 23, RoutingId.from("source"), highBit,
+            new ZLinkServiceM6BWireCodec.UserSpotCloseFence(
+                "room", 25, RoutingId.from("target"), highBit, 27,
+                "store-28"),
+            1_900_000_000_100L);
+        assertEquals(
+            close,
+            codec.decodeUserSpotCloseHeader(
+                codec.encodeUserSpotCloseHeader(close)));
+        assertEquals(
+            highBit,
+            codec.decodeUserSpotCreateReply(
+                codec.encodeUserSpotCreateReply(highBit, 107, 33, null))
+                .correlation());
+    }
+
+    @Test
     void userSpotReplyTailIsPresentOnlyForSuccessfulMatchingOperation() {
         var created = new ZLinkServiceM6BWireCodec.UserSpotCreateTerminal(
             ZLinkServiceM6BWireCodec.UserSpotCreateResult.CREATED,

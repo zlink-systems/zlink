@@ -21,6 +21,7 @@ import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.locations
@@ -268,6 +269,59 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         ? admission.target().lifecycleGeneration()
                         : directJoin.targetSpotGeneration();
                     int targetSpotKind = directJoin == null ? 1 : 2;
+                    byte[] actorJoinRecovery = null;
+                    if (directJoin != null) {
+                        String relocationContentType =
+                            admission.owned().snapshotPolicy()
+                                ? ZLinkActorJoinRecoveryCodec
+                                    .SNAPSHOT_CONTENT_TYPE
+                                : ZLinkActorJoinRecoveryCodec
+                                    .RECREATE_CONTENT_TYPE;
+                        actorJoinRecovery = ZLinkActorJoinRecoveryCodec
+                            .encodeSavedWork(
+                                new ZLinkActorJoinRecoveryCodec.Recovery(
+                                    admission.owned().actorId(),
+                                    admission.owned().stableType(),
+                                    relocationId,
+                                    // The durable Location snapshot owns the
+                                    // source membership identity. Never infer
+                                    // it from the live Actor context, which may
+                                    // already project an Entry fallback.
+                                    admission.owned().authority()
+                                        .currentSpotId(),
+                                    localNodeRid,
+                                    admission.owned().snapshot()
+                                        .objectGeneration(),
+                                    admission.owned().snapshot()
+                                        .authorityOwnerGeneration(),
+                                    localNodeGeneration,
+                                    admission.owned().snapshot()
+                                        .ownerLeaseGeneration(),
+                                    relocationContentType,
+                                    directJoin.requestContentType(),
+                                    directJoin.rawRequest(),
+                                    targetSpotId,
+                                    directJoin.targetNodeRid(),
+                                    directJoin.targetNodeGeneration(),
+                                    directJoin.targetSpotGeneration(),
+                                    Math.addExact(
+                                        admission.owned().snapshot()
+                                            .authorityOwnerGeneration(),
+                                        1L),
+                                    directJoin
+                                        .targetSpotAuthorityOwnerGeneration(),
+                                    new ZLinkActorJoinRecoveryCodec.Coordinator(
+                                        admission.owned().snapshot().ownerId(),
+                                        admission.owned().snapshot()
+                                            .ownerLeaseGeneration(),
+                                        localNodeRid,
+                                        localNodeGeneration,
+                                        admission.owned().snapshot()
+                                            .storeVersion()),
+                                    directJoin.operationId(),
+                                    directJoin.replyContentType(),
+                                    directJoin.rawReply()));
+                    }
                     byte[] initialRoot =
                         ZLinkCanonicalActorRelocationEnvelope.encode(
                             relocationId,
@@ -275,10 +329,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             admission.owned().snapshot().objectGeneration(),
                             admission.owned().snapshot()
                                 .authorityOwnerGeneration(),
+                            admission.target().applicationVersion(),
                             admission.owned().snapshotPolicy(),
                             applicationState,
                             seal.captured(),
-                            timerEnvelope);
+                            timerEnvelope,
+                            actorJoinRecovery);
                     Optional<ZLinkSpotRetireControl.SessionRouteFence>
                         capturedRoute = admission.sessionRoute().or(() ->
                             capturedSessionRoute(
@@ -603,7 +659,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         Owned actor = admission.owned();
         ZLinkMeshNodeDescriptor target = admission.target();
         return new ZLinkSpotRetireControl.StageRequest(
-            new ZLinkSpotRetireControl.Fence(relocationId, 1),
+            new ZLinkSpotRetireControl.Fence(
+                relocationId, 1),
             localNodeRid,
             localNodeGeneration,
             actor.snapshot().ownerId(),
@@ -872,33 +929,46 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return owned.authority().currentSpotGeneration();
         }
 
-        long expectedTargetAuthorityOwnerGeneration() {
-            return Math.addExact(
-                owned.snapshot().authorityOwnerGeneration(), 1L);
+        long sourceAuthorityOwnerGeneration() {
+            return owned.snapshot().authorityOwnerGeneration();
         }
 
-        CompletionStage<Boolean> authorityMovedToTarget() {
+        CompletionStage<Optional<Long>> committedTargetAuthorityOwnerGeneration() {
             return locations.read(owned.authorityKey(), () -> false)
                 .thenApply(read -> {
                     if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                         || snapshot.authorityOwnerGeneration()
-                            != expectedTargetAuthorityOwnerGeneration()
+                            <= sourceAuthorityOwnerGeneration()
                         || !snapshot.allocation().descriptor().equals(
                             new ZLinkMeshNodeDescriptorKey(
                                 target.meshName(), target.rid()))
                         || snapshot.allocation()
                             .descriptorLifecycleGeneration()
                             != target.lifecycleGeneration()) {
-                        return false;
+                        return Optional.empty();
                     }
-                    return new ZLinkActorAuthorityPayloadCodec()
+                    boolean targetPayload = new ZLinkActorAuthorityPayloadCodec()
                         .decode(snapshot.payload())
                         .filter(value -> value.nodeRid().equals(target.rid())
                             && value.nodeGeneration()
                                 == target.lifecycleGeneration()
                             && value.currentSpotId().equals(targetSpotId))
                         .isPresent();
+                    return targetPayload
+                        ? Optional.of(snapshot.authorityOwnerGeneration())
+                        : Optional.empty();
                 });
+        }
+
+        synchronized void acceptTargetAuthorityOwnerGeneration(
+            long targetAuthorityOwnerGeneration) {
+            if (!committed
+                || targetAuthorityOwnerGeneration
+                    <= sourceAuthorityOwnerGeneration()) {
+                throw new IllegalStateException(
+                    "Actor relocation target owner generation is invalid");
+            }
+            installRelocationForward(targetAuthorityOwnerGeneration);
         }
 
         CompletionStage<Void> relayCapturedIngress(
@@ -1006,9 +1076,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     new ZLinkSpotRelocationReplyRoutes.CommittedFence(
                         participant.authorityKey(),
                         1L,
-                        targetOwnerGeneration(
-                            targetOwnerGenerations,
-                            participant.authorityKey()))));
+                        stageRequest.fence().aggregateGeneration())));
         }
 
         synchronized void completeSourceQueueCommit() {

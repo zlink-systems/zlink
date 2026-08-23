@@ -1,5 +1,8 @@
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -8,6 +11,42 @@ namespace Zlink.Framework.UnitTests;
 //  language runtimes at framework/runtime/protocol/golden/actor-join-reply-v1.json.
 public sealed class ServiceWireActorJoinReplyCodecTests
 {
+    [Fact]
+    public void Generated_request_codec_matches_the_golden_and_rejects_malformed_vectors()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(RequestGoldenPath()));
+        var root = document.RootElement;
+
+        foreach (var vector in root.GetProperty("valid").EnumerateArray())
+        {
+            var expected = vector.GetProperty("framesHex").EnumerateArray()
+                .Select(static frame => Convert.FromHexString(frame.GetString()!))
+                .ToArray();
+            var encoded = ServiceWirePilotCodec.EncodeActorJoin28(
+                ReadGeneratedRequest(vector.GetProperty("input")));
+
+            Assert.Equal(expected, encoded);
+            var decoded = ServiceWirePilotCodec.DecodeActorJoin28(expected);
+            Assert.Equal(encoded, ServiceWirePilotCodec.EncodeActorJoin28(decoded));
+        }
+
+        foreach (var vector in root.GetProperty("invalid").EnumerateArray())
+        {
+            var malformed = vector.GetProperty("framesHex").EnumerateArray()
+                .Select(static frame => Convert.FromHexString(frame.GetString()!))
+                .ToArray();
+            Assert.Throws<InvalidDataException>(() =>
+                ServiceWirePilotCodec.DecodeActorJoin28(malformed));
+        }
+
+        var nulInActorId = Convert.FromHexString(root.GetProperty("valid")[0]
+            .GetProperty("framesHex")[0].GetString()!);
+        // Prefix (5), correlation (8), then text8 length (1).
+        nulInActorId[14] = 0;
+        Assert.Throws<InvalidDataException>(() =>
+            ServiceWirePilotCodec.DecodeActorJoin28([nulInActorId]));
+    }
+
     [Fact]
     public void Request_round_trips_the_schema_actor_and_spot_route_fences()
     {
@@ -27,18 +66,90 @@ public sealed class ServiceWireActorJoinReplyCodecTests
             13,
             14);
 
-        var encoded = ZLinkServiceWireCodec.EncodeActorJoinRequest(request);
+        var frames = new[]
+        {
+            Message.From(ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request))
+        };
+        try
+        {
+            var decoded = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
+                frames, "mesh");
 
-        Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
-            encoded, "mesh", out var decoded, out var error));
-        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
-        Assert.Equal(request, decoded.Request);
+            Assert.NotNull(decoded);
+            Assert.Equal(request, decoded!.Request.Request);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(frames);
+        }
+    }
+
+    [Fact]
+    public void Canonical_sender_uses_the_direct_application_payload_frame()
+    {
+        var actorNode = RoutingId.From(new byte[] { 1, 2, 3 });
+        var request = new ActorJoinRequest(
+            42,
+            new ActorRef("actor-1", 7, "mesh", actorNode),
+            8, 9, 10, false,
+            "spot-1", 11, RoutingId.From(new byte[] { 4, 5, 6 }), 12, 13, 14);
+        var application = ZLinkApplicationPayloadEnvelopeCodec.Encode(
+            "ZLinkFrameworkActorJoinRequest",
+            "application/json",
+            "{\"request\":true}"u8);
+        var frames = new[]
+        {
+            Message.From(ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request)),
+            Message.From(application)
+        };
+
+        try
+        {
+            var decoded = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
+                frames, "mesh");
+
+            Assert.NotNull(decoded);
+            Assert.Equal(request, decoded!.Request.Request);
+            Assert.Equal("ZLinkFrameworkActorJoinRequest", decoded.Payload!.Value.PacketName);
+            Assert.Equal("application/json", decoded.Payload!.Value.ContentType);
+            Assert.Equal("{\"request\":true}"u8.ToArray(),
+                decoded.Payload!.Value.Payload.ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(frames);
+        }
+    }
+
+    [Fact]
+    public void Canonical_handoff_identity_is_deterministic_local_bookkeeping()
+    {
+        var source = RoutingId.From(new byte[] { 1, 2, 3 });
+        var handoff = ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+            source, "actor-1", 7, 8, 42);
+
+        Assert.Equal(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 7, 8, 42));
+        Assert.True(Guid.TryParseExact(handoff, "N", out _));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 7, 8, 43));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-2", 7, 8, 42));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 8, 8, 42));
+        Assert.NotEqual(handoff,
+            ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                source, "actor-1", 7, 9, 42));
     }
 
     [Fact]
     public void Request_rejects_a_non_bool_entry_discriminant()
     {
-        var encoded = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+        var encoded = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(
             new ActorJoinRequest(
                 1,
                 new ActorRef("actor", 1, "mesh", RoutingId.From(new byte[] { 1 })),
@@ -47,9 +158,52 @@ public sealed class ServiceWireActorJoinReplyCodecTests
         // Prefix (5), correlation (8), actor text/ref/fence (1+5+8+2+8+8+8).
         encoded[53] = 2;
 
-        Assert.False(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
-            encoded, "mesh", out _, out var error));
-        Assert.Equal(ZLinkServiceWireCodec.DecodeError.InvalidField, error);
+        Assert.Throws<InvalidDataException>(() =>
+            ServiceWirePilotCodec.DecodeActorJoin28([encoded]));
+    }
+
+    [Theory]
+    [InlineData((byte)' ')]
+    [InlineData((byte)0)]
+    public void Request_applies_schema_text_boundary_for_actor_id(byte actorIdByte)
+    {
+        var encoded = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(
+            new ActorJoinRequest(
+                1,
+                new ActorRef("x", 1, "mesh", RoutingId.From(new byte[] { 1 })),
+                1, 1, 1, false, "spot", 1,
+                RoutingId.From(new byte[] { 2 }), 1, 1, 1));
+        // Prefix (5), correlation (8), then text8 length (1).
+        encoded[14] = actorIdByte;
+
+        if (actorIdByte == 0)
+            Assert.Throws<InvalidDataException>(() =>
+                ServiceWirePilotCodec.DecodeActorJoin28([encoded]));
+        else
+            Assert.Equal(" ", ServiceWirePilotCodec.DecodeActorJoin28([encoded]).Actor.Id);
+    }
+
+    [Theory]
+    [InlineData((byte)' ')]
+    [InlineData((byte)0)]
+    public void Request_applies_schema_text_boundary_for_target_spot_id(byte targetSpotIdByte)
+    {
+        var encoded = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(
+            new ActorJoinRequest(
+                1,
+                new ActorRef("actor", 1, "mesh", RoutingId.From(new byte[] { 1 })),
+                1, 1, 1, false, "target", 1,
+                RoutingId.From(new byte[] { 2 }), 1, 1, 1));
+        var targetOffset = encoded.AsSpan().IndexOf("target"u8);
+        Assert.True(targetOffset >= 0);
+        encoded.AsSpan(targetOffset, "target"u8.Length).Fill(targetSpotIdByte);
+
+        if (targetSpotIdByte == 0)
+            Assert.Throws<InvalidDataException>(() =>
+                ServiceWirePilotCodec.DecodeActorJoin28([encoded]));
+        else
+            Assert.Equal(new string(' ', "target".Length),
+                ServiceWirePilotCodec.DecodeActorJoin28([encoded]).TargetSpot.Id);
     }
 
     [Fact]
@@ -234,6 +388,39 @@ public sealed class ServiceWireActorJoinReplyCodecTests
 
     private static byte[] ReadGolden(string name) =>
         ReadGolden("canonical", name);
+
+    private static string RequestGoldenPath()
+    {
+        var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
+        return Path.GetFullPath(
+            "../../runtime/protocol/golden/actor-join-request-v1.json",
+            frameworkRoot);
+    }
+
+    private static ServiceWirePilotCodec.ActorJoin28 ReadGeneratedRequest(
+        JsonElement input)
+    {
+        var payload = input.TryGetProperty("payload", out var payloadElement)
+            ? new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
+                payloadElement.GetProperty("packetName").GetString()!,
+                payloadElement.GetProperty("contentType").GetString()!,
+                Convert.FromHexString(payloadElement.GetProperty("payloadHex").GetString()!))
+            : null;
+        return new ServiceWirePilotCodec.ActorJoin28(
+            ulong.Parse(input.GetProperty("correlation").GetString()!),
+            ReadFence(input.GetProperty("actor")),
+            input.GetProperty("entry").GetBoolean(),
+            ReadFence(input.GetProperty("targetSpot")),
+            payload);
+    }
+
+    private static ServiceWirePilotCodec.Fence ReadFence(JsonElement input) => new(
+        input.GetProperty("id").GetString()!,
+        ulong.Parse(input.GetProperty("generation").GetString()!),
+        Convert.FromHexString(input.GetProperty("targetNodeRidHex").GetString()!),
+        ulong.Parse(input.GetProperty("targetNodeGeneration").GetString()!),
+        ulong.Parse(input.GetProperty("expectedAuthorityOwnerGeneration").GetString()!),
+        ulong.Parse(input.GetProperty("expectedOwnerLeaseGeneration").GetString()!));
 
     private static byte[] ReadMalformedGolden(string name) =>
         ReadGolden("malformed", name);

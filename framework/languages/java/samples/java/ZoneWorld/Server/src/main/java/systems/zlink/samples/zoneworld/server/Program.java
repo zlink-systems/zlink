@@ -11,6 +11,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.framework.channels.ZLinkFanoutClient;
@@ -37,6 +38,7 @@ import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
 import systems.zlink.samples.zoneworld.server.gateway.GameSession;
 import systems.zlink.samples.zoneworld.server.ops.NodeLivenessObserver;
 import systems.zlink.samples.zoneworld.server.ops.OpsSession;
+import systems.zlink.samples.zoneworld.server.ops.OpsConsoleRegistry;
 import systems.zlink.samples.zoneworld.server.zone.ZoneBootstrap;
 import systems.zlink.samples.zoneworld.server.zone.ZoneStatusReporter;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
@@ -105,6 +107,16 @@ public final class Program {
     }
 
     @Bean
+    OpsConsoleRegistry opsConsoleRegistry(NodeRegistry registry) {
+        OpsConsoleRegistry consoles = new OpsConsoleRegistry();
+        registry.onChanged(node -> consoles.broadcast(new systems.zlink.samples.zoneworld.shared.Messages.NodeStatusNotify(
+            node.nodeId(), node.registered(), node.connected(), node.maintenance(),
+            node.zones(), node.playerCount())));
+        registry.onAlert(alert -> { consoles.record(alert); consoles.broadcast(alert); });
+        return consoles;
+    }
+
+    @Bean
     ZLinkFrameworkConfigurer zoneWorldFramework(
         SampleTopology topology,
         ZLinkRedisLocationStore locations,
@@ -120,10 +132,21 @@ public final class Program {
             // A zone node names its application identity in the routing id prefix; the
             // framework appends a per-process UUID, so a replacement started for the same
             // node id still publishes a routing id no earlier process ever held.
+            if (topology.is("zone") && topology.isSubscriberOnly()) {
+                options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL)
+                    .enableSubscriber()
+                    .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP);
+                return;
+            }
+
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(ZoneWorldNames.MESH)
                 .listen(topology.meshEndpoint())
-                .setRoutingIdPrefix(ZoneWorldNames.routingIdPrefix(
-                    topology.is("zone") ? topology.nodeId() : topology.role()));
+                .setRoutingIdPrefix(topology.is("zone")
+                    ? ZoneWorldNames.ZONE_ROUTING_ID_PREFIX
+                    : "zoneworld-" + topology.role());
+            if (topology.meshAdvertiseHost() != null && !topology.meshAdvertiseHost().isBlank()) {
+                mesh.setAdvertiseHost(topology.meshAdvertiseHost());
+            }
 
             if (topology.is("gateway")) {
                 mesh.objects().client();
@@ -181,6 +204,10 @@ public final class Program {
                 System.out.println("framework lifecycle role=" + topology.role()
                     + " state=" + framework.status().state());
             }
+            if (topology.isSubscriberOnly()) {
+                System.out.println("topology=ready node=" + topology.nodeId() + " zones=");
+                return;
+            }
             ZLinkRouteMeshRuntime runtime = runtimeProvider.getIfAvailable();
             if (runtime == null) return;
             runtime.observe(ZoneWorldNames.MESH, 32).subscribe(
@@ -220,18 +247,21 @@ public final class Program {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "sample", name = "role", havingValue = "zone")
+    @ConditionalOnExpression("'${sample.role:}' == 'zone' && !${sample.subscriber-only:false}")
     ZoneBootstrap zoneBootstrap(
         SampleTopology topology,
         ZLinkSpotManager spots,
         ZLinkActorManager actors,
+        systems.zlink.framework.actors.ZLinkActorClient actorClient,
         NodeMaintenanceState maintenance,
-        MaintenanceStore store) {
-        return new ZoneBootstrap(topology, spots, actors, maintenance, store);
+        MaintenanceStore store,
+        NodeCensus census) {
+        return new ZoneBootstrap(
+            topology, spots, actors, actorClient, maintenance, store, census);
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "sample", name = "role", havingValue = "zone")
+    @ConditionalOnExpression("'${sample.role:}' == 'zone' && !${sample.subscriber-only:false}")
     ZoneStatusReporter zoneStatusReporter(
         SampleTopology topology,
         ZLinkRouteClient routes,

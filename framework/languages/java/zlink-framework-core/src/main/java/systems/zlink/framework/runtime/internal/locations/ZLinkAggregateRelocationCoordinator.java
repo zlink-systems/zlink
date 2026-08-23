@@ -25,6 +25,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.zip.CRC32C;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -552,19 +553,23 @@ public final class ZLinkAggregateRelocationCoordinator {
     public record Request(
         UUID aggregateId,
         long aggregateGeneration,
+        long targetAttemptGeneration,
         List<Participant> participants,
         byte[] root,
         ZLinkMeshNodeDescriptorKey targetDescriptor,
         long targetDescriptorLifecycleGeneration,
         ZLinkPlacementCapacityBundle capacityBundle,
-        ZLinkLocationOwnerToken targetOwner) {
+        ZLinkLocationOwnerToken targetOwner,
+        String coordinatorExpectedStoreVersion) {
         public Request {
             Objects.requireNonNull(aggregateId, "aggregateId");
             if (aggregateId.equals(new UUID(0, 0))
                 || aggregateGeneration <= 0
-                || targetDescriptorLifecycleGeneration <= 0) {
+                || aggregateGeneration == Long.MAX_VALUE
+                || targetAttemptGeneration <= 0
+                || targetDescriptorLifecycleGeneration == 0) {
                 throw new IllegalArgumentException(
-                    "aggregate and lifecycle generations must be positive");
+                    "aggregate, attempt, and lifecycle generations are invalid");
             }
             participants = List.copyOf(
                 Objects.requireNonNull(participants, "participants"));
@@ -586,6 +591,9 @@ public final class ZLinkAggregateRelocationCoordinator {
             Objects.requireNonNull(targetDescriptor, "targetDescriptor");
             Objects.requireNonNull(capacityBundle, "capacityBundle");
             Objects.requireNonNull(targetOwner, "targetOwner");
+            Objects.requireNonNull(
+                coordinatorExpectedStoreVersion,
+                "coordinatorExpectedStoreVersion");
             if (targetOwner.ownerId() == null
                 || targetOwner.ownerId().isBlank()
                 || targetOwner.leaseGeneration() <= 0) {
@@ -597,6 +605,17 @@ public final class ZLinkAggregateRelocationCoordinator {
         @Override
         public byte[] root() {
             return root.clone();
+        }
+
+        /** Framework-issued identity for the immutable canonical root. */
+        public String relocationReference() {
+            return aggregateId.toString();
+        }
+
+        public long relocationChecksumCrc32c() {
+            CRC32C checksum = new CRC32C();
+            checksum.update(root, 0, root.length);
+            return checksum.getValue();
         }
     }
 

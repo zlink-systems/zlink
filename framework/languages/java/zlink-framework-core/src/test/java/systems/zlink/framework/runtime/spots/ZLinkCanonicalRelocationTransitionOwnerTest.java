@@ -46,7 +46,7 @@ final class ZLinkCanonicalRelocationTransitionOwnerTest {
     void malformedCommandNeverReachesSemanticOwner() {
         int[] calls = {0};
         var owner = new ZLinkCanonicalRelocationTransitionOwner(
-            (source, command, encoded) -> {
+            (source, requestSequence, command, encoded) -> {
                 calls[0]++;
                 return CompletableFuture
                     .completedFuture(null);

@@ -1,10 +1,5 @@
-import type { RoutingId, SpotId, ZLinkActorJoinOperationId } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkBackendActorRef } from '../backend/contracts';
-import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
-import type { ZLinkActorHandoffPacket } from './actor-handoff';
-import { decodeRoutingId, routingIdWireHex } from '../routing-id';
-import { frameworkPayloadContentType } from '../messaging/payload-codec';
+import type { RoutingId, SpotId } from '../../contracts';
+import { decodeRoutingId } from '../routing-id';
 
 export const ZLINK_REMOTE_ACTOR_JOIN_PACKET = '__zlink.actor.join_spot.request';
 export const ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL =
@@ -55,6 +50,9 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly actorNodeRid?: unknown;
   readonly actorNodeRidHex?: unknown;
   readonly actorGeneration?: unknown;
+  readonly actorNodeGeneration?: unknown;
+  readonly expectedAuthorityOwnerGeneration?: unknown;
+  readonly expectedOwnerLeaseGeneration?: unknown;
   readonly expectedMembershipEpoch?: unknown;
   readonly actorEntryNodeRid?: unknown;
   readonly actorEntryNodeRidHex?: unknown;
@@ -85,164 +83,15 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly completionOperationLow?: unknown;
 }
 
-export interface ZLinkRemoteActorJoinRequestPayload {
-  readonly packetName: typeof REMOTE_ACTOR_JOIN_PACKET;
-  readonly spotId?: string;
-  readonly actorId?: string;
-  readonly actorType: string;
-  readonly actorNodeRid?: string;
-  readonly actorNodeRidHex?: string;
-  readonly actorGeneration?: string;
-  readonly expectedMembershipEpoch?: string;
-  readonly actorEntryNodeRid?: string;
-  readonly actorEntryNodeRidHex?: string;
-  readonly actorCreateRequest?: string;
-  readonly phase?: ZLinkRemoteActorJoinPhase;
-  readonly transferId?: string;
-  readonly transferAdapterKey?: string;
-  readonly transferState?: string;
-  readonly sourceSpotId?: string;
-  readonly routerChannelId?: string;
-  readonly boundSessionRouterChannelId?: string;
-  readonly boundSessionTargetNodeRid?: string;
-  readonly boundSessionTargetNodeRidHex?: string;
-  readonly boundSessionSpotId?: string;
-  readonly boundSessionNodeRid?: string;
-  readonly boundSessionNodeRidHex?: string;
-  readonly boundSessionRid?: string;
-  readonly boundSessionRidHex?: string;
-  readonly boundSessionBindingGeneration?: string;
-  readonly boundSessionPreviousAuthorityOwnerGeneration?: string;
-  readonly boundSessionPreviousOwnerLeaseGeneration?: string;
-  readonly boundSessionRelocationSealId?: string;
-  readonly boundSessionServiceWireRelocation?: {
-    readonly relocationHigh: string;
-    readonly relocationLow: string;
-    readonly coordinatorOwnerId: string;
-    readonly coordinatorLeaseGeneration: string;
-    readonly coordinatorNodeRid: string;
-    readonly coordinatorNodeGeneration: string;
-    readonly coordinatorExpectedAuthorityStoreVersion: string;
-    readonly sessionOwnerNodeRid: string;
-    readonly sessionOwnerNodeGeneration: string;
-    readonly sessionOwnerId: string;
-    readonly sessionOwnerLeaseGeneration: string;
-    readonly sessionRid: string;
-    readonly bindingGeneration: string;
-  };
-  readonly request?: string;
-  readonly requestContentType?: string;
-  readonly handoffBacklog?: readonly ZLinkActorHandoffPacket[];
-  readonly completionOperationHigh?: string;
-  readonly completionOperationLow?: string;
-}
-
-interface ZLinkRemoteActorJoinRequestPayloadOptions {
-  readonly actorId?: string;
-  readonly actorType: string;
-  readonly actorRef?: ZLinkBackendActorRef;
-  readonly expectedMembershipEpoch?: bigint;
-  readonly actorEntryNodeRid?: RoutingId;
-  readonly actorCreateRequest?: Buffer;
-  readonly request?: Message;
-  readonly requestContentType?: string;
-  readonly targetSpotId?: SpotId;
-  readonly routerChannelId?: string;
-  readonly sourceSpotId?: SpotId;
-  readonly boundSessionTarget?: ZLinkRemoteBoundSessionTarget;
-  readonly phase?: ZLinkRemoteActorJoinPhase;
-  readonly transferId?: string;
-  readonly transferAdapterKey?: string;
-  readonly transferState?: Buffer;
-  readonly handoffBacklog?: readonly ZLinkActorHandoffPacket[];
-  readonly completionOperationId?: ZLinkActorJoinOperationId;
-}
-
-export function buildRemoteActorJoinRequestPayload(
-  options: ZLinkRemoteActorJoinRequestPayloadOptions
-): ZLinkRemoteActorJoinRequestPayload {
-  const actorRef = options.actorRef;
-  const sourceSpotId = options.sourceSpotId;
-  const boundSessionTarget = options.boundSessionTarget;
-  return {
-    packetName: REMOTE_ACTOR_JOIN_PACKET,
-    spotId: options.targetSpotId === undefined ? undefined : String(options.targetSpotId),
-    actorId: options.actorId,
-    actorType: options.actorType,
-    actorNodeRid: actorRef === undefined ? undefined : String(actorRef.nodeRid),
-    actorNodeRidHex: actorRef === undefined ? undefined : encodeRoutingIdHex(actorRef.nodeRid),
-    actorGeneration: actorRef === undefined ? undefined : actorRef.generation.toString(),
-    expectedMembershipEpoch: options.expectedMembershipEpoch?.toString(),
-    actorEntryNodeRid: options.actorEntryNodeRid === undefined ? undefined : String(options.actorEntryNodeRid),
-    actorEntryNodeRidHex: options.actorEntryNodeRid === undefined ? undefined : encodeRoutingIdHex(options.actorEntryNodeRid),
-    actorCreateRequest: options.actorCreateRequest?.toString('base64'),
-    phase: options.phase,
-    transferId: options.transferId,
-    transferAdapterKey: options.transferAdapterKey,
-    transferState: options.transferState?.toString('base64'),
-    handoffBacklog: options.handoffBacklog,
-    completionOperationHigh: options.completionOperationId?.high.toString(),
-    completionOperationLow: options.completionOperationId?.low.toString(),
-    sourceSpotId: sourceSpotId === undefined ? undefined : String(sourceSpotId),
-    routerChannelId: options.routerChannelId,
-    boundSessionRouterChannelId: boundSessionTarget?.routerChannelId,
-    boundSessionTargetNodeRid: boundSessionTarget === undefined ? undefined : String(boundSessionTarget.targetNodeRid),
-    boundSessionTargetNodeRidHex: boundSessionTarget === undefined ? undefined : encodeRoutingIdHex(boundSessionTarget.targetNodeRid),
-    boundSessionSpotId: boundSessionTarget === undefined ? undefined : String(boundSessionTarget.spotId),
-    boundSessionNodeRid: boundSessionTarget?.sessionNodeRid === undefined
-      ? undefined
-      : String(boundSessionTarget.sessionNodeRid),
-    boundSessionNodeRidHex: boundSessionTarget?.sessionNodeRid === undefined
-      ? undefined
-      : encodeRoutingIdHex(boundSessionTarget.sessionNodeRid),
-    boundSessionRid: boundSessionTarget?.sessionRid === undefined
-      ? undefined
-      : String(boundSessionTarget.sessionRid),
-    boundSessionRidHex: boundSessionTarget?.sessionRid === undefined
-      ? undefined
-      : encodeRoutingIdHex(boundSessionTarget.sessionRid),
-    boundSessionBindingGeneration: boundSessionTarget?.bindingGeneration?.toString(),
-    boundSessionPreviousAuthorityOwnerGeneration:
-      boundSessionTarget?.previousAuthorityOwnerGeneration?.toString(),
-    boundSessionPreviousOwnerLeaseGeneration:
-      boundSessionTarget?.previousOwnerLeaseGeneration?.toString(),
-    boundSessionRelocationSealId: boundSessionTarget?.relocationSealId,
-    boundSessionServiceWireRelocation: boundSessionTarget?.serviceWireRelocation === undefined
-      ? undefined
-      : {
-          relocationHigh: boundSessionTarget.serviceWireRelocation.relocation.high.toString(),
-          relocationLow: boundSessionTarget.serviceWireRelocation.relocation.low.toString(),
-          coordinatorOwnerId: boundSessionTarget.serviceWireRelocation.coordinator.ownerId,
-          coordinatorLeaseGeneration:
-            boundSessionTarget.serviceWireRelocation.coordinator.leaseGeneration.toString(),
-          coordinatorNodeRid: boundSessionTarget.serviceWireRelocation.coordinator.nodeRid,
-          coordinatorNodeGeneration:
-            boundSessionTarget.serviceWireRelocation.coordinator.nodeGeneration.toString(),
-          coordinatorExpectedAuthorityStoreVersion:
-            boundSessionTarget.serviceWireRelocation.coordinator.expectedAuthorityStoreVersion,
-          sessionOwnerNodeRid: boundSessionTarget.serviceWireRelocation.session.sessionOwnerNodeRid,
-          sessionOwnerNodeGeneration:
-            boundSessionTarget.serviceWireRelocation.session.sessionOwnerNodeGeneration.toString(),
-          sessionOwnerId: boundSessionTarget.serviceWireRelocation.session.sessionOwnerId,
-          sessionOwnerLeaseGeneration:
-            boundSessionTarget.serviceWireRelocation.session.sessionOwnerLeaseGeneration.toString(),
-          sessionRid: boundSessionTarget.serviceWireRelocation.session.sessionRid,
-          bindingGeneration:
-            boundSessionTarget.serviceWireRelocation.session.bindingGeneration.toString()
-        },
-    request: options.request === undefined ? undefined : options.request.data().toString('base64'),
-    requestContentType: options.request === undefined
-      ? undefined
-      : options.requestContentType ?? frameworkPayloadContentType(options.request)
-  };
-}
-
 export function decodeRemoteActorJoinPayload(payload: unknown): {
   readonly spotId: SpotId;
   readonly actorId: string;
   readonly actorType: string;
   readonly actorNodeRid: RoutingId;
   readonly actorGeneration: string;
+  readonly actorNodeGeneration: string;
+  readonly expectedAuthorityOwnerGeneration: string;
+  readonly expectedOwnerLeaseGeneration: string;
   readonly sourceSpotId?: SpotId;
   readonly routerChannelId?: string;
   readonly boundSessionRouterChannelId?: string;
@@ -260,6 +109,9 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
     typeof (payload as { actorType?: unknown }).actorType !== 'string' ||
     typeof (payload as { actorNodeRid?: unknown }).actorNodeRid !== 'string' ||
     typeof (payload as { actorGeneration?: unknown }).actorGeneration !== 'string' ||
+    typeof (payload as { actorNodeGeneration?: unknown }).actorNodeGeneration !== 'string' ||
+    typeof (payload as { expectedAuthorityOwnerGeneration?: unknown }).expectedAuthorityOwnerGeneration !== 'string' ||
+    typeof (payload as { expectedOwnerLeaseGeneration?: unknown }).expectedOwnerLeaseGeneration !== 'string' ||
     typeof (payload as { request?: unknown }).request !== 'string'
   ) {
     throw new Error('Remote actor join payload is invalid.');
@@ -273,6 +125,11 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
       optionalString(payload, 'actorNodeRidHex')
     ),
     actorGeneration: (payload as { actorGeneration: string }).actorGeneration,
+    actorNodeGeneration: (payload as { actorNodeGeneration: string }).actorNodeGeneration,
+    expectedAuthorityOwnerGeneration:
+      (payload as { expectedAuthorityOwnerGeneration: string }).expectedAuthorityOwnerGeneration,
+    expectedOwnerLeaseGeneration:
+      (payload as { expectedOwnerLeaseGeneration: string }).expectedOwnerLeaseGeneration,
     sourceSpotId: optionalSpotId(payload, 'sourceSpotId'),
     routerChannelId: optionalString(payload, 'routerChannelId'),
     boundSessionRouterChannelId: optionalString(payload, 'boundSessionRouterChannelId'),
@@ -285,10 +142,6 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
     request: (payload as { request: string }).request,
     requestContentType: optionalString(payload, 'requestContentType') ?? 'application/json'
   };
-}
-
-function encodeRoutingIdHex(routingId: RoutingId): string | undefined {
-  return routingIdWireHex(routingId);
 }
 
 export function decodeWireRoutingId(text: string, hex: string | undefined): RoutingId {

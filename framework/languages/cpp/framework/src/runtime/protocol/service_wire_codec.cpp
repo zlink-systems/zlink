@@ -2301,11 +2301,13 @@ frozen_body_validation_t read_frozen_body (
     frozen_body_validation_t validation;
     const auto wire_kind = static_cast<std::uint8_t> (kind);
     if (wire_kind == 1 || wire_kind == 2) {
-        read_application_payload_envelope (bytes, offset, capture_flow);
+        validation.application =
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 3 || wire_kind == 4) {
         (void) read_text8 (bytes, offset, "channel name");
-        read_application_payload_envelope (bytes, offset, capture_flow);
+        validation.application =
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 5 || wire_kind == 6) {
         validation.target = read_spot_route (bytes, offset);
@@ -2315,7 +2317,8 @@ frozen_body_validation_t read_frozen_body (
     else if (wire_kind == 7) {
         (void) read_text8 (bytes, offset, "channel name");
         (void) read_text8 (bytes, offset, "topic");
-        read_application_payload_envelope (bytes, offset, capture_flow);
+        validation.application =
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 8) {
         read_actor_control (bytes, offset);
@@ -4374,74 +4377,6 @@ actor_join_reply_tail_t decode_actor_join_reply (
           "Actor join reply has trailing bytes");
     }
     return reply;
-}
-
-std::vector<std::uint8_t> encode_actor_join_request (
-  const actor_join_request_t &request)
-{
-    const auto valid_fence = [] (const auto &fence) {
-        return !fence.target_node_routing_id.empty ()
-               && fence.object_generation != 0
-               && fence.target_node_generation != 0
-               && fence.authority_owner_generation != 0
-               && fence.owner_lease_generation != 0;
-    };
-    if (request.correlation == 0 || request.actor.actor_id.empty ()
-        || request.target_spot.spot_id.empty () || !valid_fence (request.actor)
-        || !valid_fence (request.target_spot))
-        throw service_wire_error_t ("invalid Actor join request");
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::actorJoin), 0};
-    append_u64 (bytes, request.correlation);
-    append_text8 (bytes, request.actor.actor_id, "Actor join Actor ID");
-    append_u64 (bytes, request.actor.object_generation);
-    append_bytes8 (bytes, request.actor.target_node_routing_id,
-                   "Actor join Actor node RID");
-    append_u64 (bytes, request.actor.target_node_generation);
-    append_u64 (bytes, request.actor.authority_owner_generation);
-    append_u64 (bytes, request.actor.owner_lease_generation);
-    bytes.push_back (request.entry ? 1 : 0);
-    append_text8 (bytes, request.target_spot.spot_id, "Actor join Spot ID");
-    append_u64 (bytes, request.target_spot.object_generation);
-    append_bytes8 (bytes, request.target_spot.target_node_routing_id,
-                   "Actor join Spot node RID");
-    append_u64 (bytes, request.target_spot.target_node_generation);
-    append_u64 (bytes, request.target_spot.authority_owner_generation);
-    append_u64 (bytes, request.target_spot.owner_lease_generation);
-    return bytes;
-}
-
-actor_join_request_t decode_actor_join_request (
-  std::span<const std::uint8_t> bytes)
-{
-    const auto header = decode_header (bytes);
-    if (header.kind != command::actorJoin || header.flags != 0)
-        throw service_wire_error_t ("invalid Actor join request header");
-    std::size_t offset = prefix_size;
-    actor_join_request_t request;
-    request.correlation = read_nonzero_u64 (bytes, offset,
-                                            "Actor join correlation");
-    request.actor.actor_id = read_text8 (bytes, offset, "Actor join Actor ID");
-    request.actor.object_generation = read_nonzero_u64 (bytes, offset, "Actor join Actor generation");
-    request.actor.target_node_routing_id = read_bytes8 (bytes, offset, "Actor join Actor node RID");
-    request.actor.target_node_generation = read_nonzero_u64 (bytes, offset, "Actor join Actor node generation");
-    request.actor.authority_owner_generation = read_nonzero_u64 (bytes, offset, "Actor join Actor authority generation");
-    request.actor.owner_lease_generation = read_nonzero_u64 (bytes, offset, "Actor join Actor lease generation");
-    if (offset == bytes.size () || bytes[offset] > 1)
-        throw service_wire_error_t ("invalid Actor join entry flag");
-    request.entry = bytes[offset++] == 1;
-    request.target_spot.spot_id = read_text8 (bytes, offset, "Actor join Spot ID");
-    request.target_spot.object_generation = read_nonzero_u64 (bytes, offset, "Actor join Spot generation");
-    request.target_spot.target_node_routing_id = read_bytes8 (bytes, offset, "Actor join Spot node RID");
-    request.target_spot.target_node_generation = read_nonzero_u64 (bytes, offset, "Actor join Spot node generation");
-    request.target_spot.authority_owner_generation = read_nonzero_u64 (bytes, offset, "Actor join Spot authority generation");
-    request.target_spot.owner_lease_generation = read_nonzero_u64 (bytes, offset, "Actor join Spot lease generation");
-    if (request.actor.actor_id.empty () || request.actor.target_node_routing_id.empty ()
-        || request.target_spot.spot_id.empty ()
-        || request.target_spot.target_node_routing_id.empty () || offset != bytes.size ())
-        throw service_wire_error_t ("invalid or trailing Actor join request");
-    return request;
 }
 
 std::vector<std::uint8_t> encode_liveness (command kind, std::uint64_t probe_id)

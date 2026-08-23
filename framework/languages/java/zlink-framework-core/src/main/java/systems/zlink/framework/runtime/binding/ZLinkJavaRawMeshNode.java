@@ -88,6 +88,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -99,6 +100,8 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWi
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
+import systems.zlink.framework.runtime.internal.service.ZLinkCanonicalActorJoinReplyCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -111,7 +114,8 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
  * Raw-binding RouteMesh owner. Service topology and application dispatch are
  * implemented in Framework code; the binding only owns ROUTER transport.
  */
-final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
+final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
+    ZLinkInternalMeshNode.CanonicalRelocationPrepareRequestReplySupport {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private static final Logger LOGGER =
@@ -227,6 +231,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         userSpotOperationHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler
         actorCreateOperationHandler;
+    private volatile ZLinkInternalMeshNode.CanonicalActorJoinHandler
+        canonicalActorJoinHandler;
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver
         peerAuthorityResolver;
     private volatile ZLinkInternalMeshNode.PeerAuthorityFence
@@ -1291,6 +1297,169 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 admissionControlReadyConnections.get(peerRoutingId))
             && hasSelectedApplicationTransportPair(peer)
             && liveness.isReady(peerRoutingId, peer.connectionId());
+    }
+
+    @Override
+    public boolean canRequestCanonicalActorJoin(
+        ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (!hasCompleteCanonicalActorJoinFence(request)) {
+            return false;
+        }
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer = topology == null
+            ? Optional.empty()
+            : topology.peer(request.targetNodeRid());
+        if (peer.isEmpty()
+            || !isReadyPeer(peer.orElseThrow())
+            || peer.orElseThrow().descriptor().lifecycleGeneration()
+                != request.targetNodeGeneration()
+            || !peer.orElseThrow().descriptor().protocolCapabilities()
+                .contains(ServiceWireConstants.REQUIRED_CAPABILITY)) {
+            return false;
+        }
+        // The caller's Location resolver supplied this exact route fence.
+        // Require it to still be the observed route remembered by the raw
+        // Spot boundary; capability alone must not promote an unobserved
+        // target into canonical command 28.
+        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
+        return spots.spotAuthorityOwnerGeneration(
+                request.targetNodeRid(), request.targetSpotId(),
+                request.targetSpotGeneration())
+                == request.targetAuthorityOwnerGeneration()
+            && spots.spotAuthorityOwnerLeaseGeneration(
+                request.targetNodeRid(), request.targetSpotId(),
+                request.targetSpotGeneration())
+                == request.targetOwnerLeaseGeneration();
+    }
+
+    @Override
+    public CompletionStage<ZLinkInternalMeshNode.CanonicalActorJoinReply>
+        requestCanonicalActorJoin(
+            ZLinkInternalMeshNode.CanonicalActorJoinRequest request,
+            Duration timeout) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(timeout, "timeout");
+        if (!canRequestCanonicalActorJoin(request)) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "canonical actorJoin target is not authority-observed and admitted"));
+        }
+        final long correlation = allocateCorrelation();
+        final List<byte[]> frames;
+        try {
+            frames = ServiceWirePilotCodec.encodeActorJoin28(
+                new ServiceWirePilotCodec.ActorJoin28(
+                    correlation,
+                    new ServiceWirePilotCodec.Fence(
+                        request.actor().actorId(),
+                        request.actor().generation(),
+                        request.actor().nodeRid().toBytes(),
+                        request.actorNodeGeneration(),
+                        request.actorAuthorityOwnerGeneration(),
+                        request.actorOwnerLeaseGeneration()),
+                    request.entry(),
+                    new ServiceWirePilotCodec.Fence(
+                        request.targetSpotId(),
+                        request.targetSpotGeneration(),
+                        request.targetNodeRid().toBytes(),
+                        request.targetNodeGeneration(),
+                        request.targetAuthorityOwnerGeneration(),
+                        request.targetOwnerLeaseGeneration()),
+                    new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
+                        request.packetName(), request.contentType(),
+                        request.applicationPayload())));
+        } catch (IOException invalid) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin request is invalid", invalid));
+        }
+        return requestApplication(request.targetNodeRid(), frames, timeout)
+            .thenApply(reply -> decodeCanonicalActorJoinReply(
+                correlation,
+                request,
+                reply));
+    }
+
+    private static boolean hasCompleteCanonicalActorJoinFence(
+        ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
+        // Object/authority/lease generations are bounded counters. Lifecycle
+        // generations are opaque full-range tokens, where only zero is absent.
+        return request.actor().generation() > 0
+            && request.actorNodeGeneration() != 0
+            && request.actorAuthorityOwnerGeneration() > 0
+            && request.actorOwnerLeaseGeneration() > 0
+            && request.targetSpotGeneration() > 0
+            && request.targetNodeGeneration() != 0
+            && request.targetAuthorityOwnerGeneration() > 0
+            && request.targetOwnerLeaseGeneration() > 0;
+    }
+
+    private ZLinkInternalMeshNode.CanonicalActorJoinReply
+        decodeCanonicalActorJoinReply(
+            long correlation,
+            ZLinkInternalMeshNode.CanonicalActorJoinRequest request,
+            List<byte[]> frames) {
+        if (frames.isEmpty() || frames.size() > 2) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin reply frame count is invalid");
+        }
+        // A rejected Store admission is still a command-20 typed terminal.
+        // Preserve its established framework mapping instead of mistaking the
+        // shorter no-tail failure reply for malformed canonical success.
+        if (frames.getFirst().length == 21) {
+            ZLinkServiceM6AWireCodec.Reply terminal = wire.decodeReplyHeader(
+                frames.getFirst());
+            if (terminal.correlation() != correlation
+                || terminal.terminalResult() == 0
+                || frames.size() != 1) {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "canonical actorJoin terminal reply is invalid");
+            }
+            ZLinkBackendRequestResult result = backendResult(
+                terminal.terminalResult());
+            throw new ZLinkFrameworkException(
+                result.toFrameworkErrorKind(terminal.failureCode()),
+                "canonical actorJoin rejected by target terminal="
+                    + terminal.terminalResult()
+                    + " failureCode=" + terminal.failureCode());
+        }
+        final ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply reply;
+        try {
+            reply = new ZLinkCanonicalActorJoinReplyCodec().decode(frames.getFirst());
+        } catch (RuntimeException invalid) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin reply is invalid", invalid);
+        }
+        if (reply.correlation() != correlation) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "canonical actorJoin reply correlation does not match");
+        }
+        ZLinkServiceM6AWireCodec.ApplicationPayload application =
+            frames.size() == 2
+                ? wire.decodeApplicationPayload(frames.get(1))
+                : null;
+        List<Message> applicationReply = application == null
+            ? List.of()
+            : decodeApplicationMessages(application);
+        return new ZLinkInternalMeshNode.CanonicalActorJoinReply(
+            reply.accepted(),
+            reply.receiveChunkLimitBytes() == null
+                ? 0L
+                : reply.receiveChunkLimitBytes(),
+            applicationReply,
+            ZLinkActorJoinRecoveryCodec.canonicalHandoffId(
+                request.actor().nodeRid().toBytes(),
+                request.actor().actorId(),
+                request.actor().generation(),
+                request.actorNodeGeneration(),
+                correlation),
+            application == null
+                ? "application/json"
+                : application.contentType());
     }
 
     private boolean hasSelectedApplicationTransportPair(
@@ -2687,6 +2856,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setCanonicalActorJoinHandler(
+        ZLinkInternalMeshNode.CanonicalActorJoinHandler handler) {
+        canonicalActorJoinHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
     public void setApplicationStreamCodecResolver(
         Function<String, Optional<ZLinkStreamCodec>> resolver) {
         applicationStreamCodecResolver =
@@ -2777,8 +2952,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             try {
                 return Objects.requireNonNull(
-                    handler.handle(routingId, record),
-                    "canonical relocation handler returned null");
+                    handler.handle(routingId, null, record),
+                    "canonical relocation handler returned null")
+                    .thenApply(ignored -> null);
             } catch (RuntimeException failure) {
                 return CompletableFuture.failedFuture(failure);
             }
@@ -2788,6 +2964,47 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             requireStarted(),
             targetNodeRid,
             List.of(record));
+    }
+
+    @Override
+    public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+        RoutingId targetNodeRid,
+        byte[] command,
+        Duration timeout) {
+        Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+        byte[] record = Objects.requireNonNull(command, "command").clone();
+        Objects.requireNonNull(timeout, "timeout");
+        validateCanonicalRelocationControl(record);
+        if (Byte.toUnsignedInt(record[3])
+            != ServiceWireConstants.COMMAND_RELOCATION_PREPARE) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                "only canonical relocation prepare is request/reply"));
+        }
+        if (targetNodeRid.equals(routingId)) {
+            var handler = canonicalRelocationControlHandler;
+            if (handler == null) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "local canonical relocation handler is unavailable"));
+            }
+            try {
+                return Objects.requireNonNull(
+                    handler.handle(routingId, 1L, record),
+                    "canonical relocation handler returned null")
+                    .thenApply(ZLinkJavaRawMeshNode::canonicalPrepareReply);
+            } catch (RuntimeException failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
+        RouterSocket router = requireStarted();
+        return port.request(router, targetNodeRid, List.of(record), timeout)
+            .thenApply(parts -> {
+                if (parts.size() != 1) {
+                    throw new IllegalStateException(
+                        "canonical relocation prepare reply is invalid");
+                }
+                return canonicalPrepareReply(parts.getFirst());
+            });
     }
 
     @Override
@@ -4281,6 +4498,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             handedOff = dispatchActor(inbound, flags);
             return;
         }
+        if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
+            dispatchCanonicalActorJoin(inbound);
+            return;
+        }
         if (command == ServiceWireConstants.COMMAND_INSTANCE_SPOT) {
             dispatchInstanceSpot(inbound, flags);
             return;
@@ -4548,15 +4769,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         byte[] command = inbound.frames().getFirst().clone();
         try {
             validateCanonicalRelocationControl(command);
-            CompletionStage<Void> completion =
+            int code = Byte.toUnsignedInt(command[3]);
+            if (inbound.requestSequence() != null
+                && code != ServiceWireConstants.COMMAND_RELOCATION_PREPARE) {
+                return;
+            }
+            CompletionStage<byte[]> completion =
                 Objects.requireNonNull(
-                    handler.handle(inbound.source(), command),
+                    handler.handle(
+                        inbound.source(), inbound.requestSequence(), command),
                     "canonical relocation handler returned null");
-            completion.exceptionally(failure -> {
-                streamTrace(STREAM_TRACE ? "canonical-relocation-control-failed source="
-                    + inbound.source()
-                    + " failure=" + failure : null);
-                return null;
+            completion.whenComplete((reply, failure) -> {
+                if (failure != null) {
+                    streamTrace(STREAM_TRACE
+                        ? "canonical-relocation-control-failed source="
+                            + inbound.source() + " failure=" + failure
+                        : null);
+                    return;
+                }
+                if (inbound.requestSequence() == null) {
+                    return;
+                }
+                try {
+                    port.reply(
+                        requireStarted(),
+                        inbound.source(),
+                        inbound.requestSequence(),
+                        List.of(canonicalPrepareReply(reply)));
+                } catch (RuntimeException rejected) {
+                    streamTrace(STREAM_TRACE
+                        ? "canonical-relocation-reply-rejected source="
+                            + inbound.source() + " failure=" + rejected
+                        : null);
+                }
             });
         } catch (RuntimeException failure) {
             // Invalid or rejected maintenance records never enter an
@@ -5622,6 +5867,141 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 header.replyRouteId(),
                 terminalResult,
                 failureCode)));
+    }
+
+    private void dispatchCanonicalActorJoin(ZLinkJavaRawServicePort.Inbound inbound) {
+        List<byte[]> frames = inbound.frames();
+        if (inbound.requestSequence() == null || frames.isEmpty()) {
+            return;
+        }
+        if (frames.size() > 2) {
+            replyCanonicalActorJoinProtocolFailure(inbound, frames);
+            return;
+        }
+        final ServiceWirePilotCodec.ActorJoin28 join;
+        try {
+            join = ServiceWirePilotCodec.decodeActorJoin28(frames);
+        } catch (Exception invalidCanonical) {
+            replyCanonicalActorJoinProtocolFailure(inbound, frames);
+            return;
+        }
+        RoutingId targetNode = RoutingId.from(
+            join.targetSpot().targetNodeRid());
+        if (localDescriptor == null || !targetNode.equals(routingId)
+            || join.targetSpot().targetNodeGeneration()
+                != localDescriptor.lifecycleGeneration()) {
+            replyCanonicalActorJoinFailure(inbound, join.correlation(), 102, 14);
+            return;
+        }
+        ZLinkInternalMeshNode.CanonicalActorJoinHandler handler =
+            canonicalActorJoinHandler;
+        if (handler == null) {
+            replyCanonicalActorJoinFailure(inbound, join.correlation(), 105, 17);
+            return;
+        }
+        try {
+            handler.admit(inbound.source(), join).whenComplete((response, failure) -> {
+                if (failure != null || response == null) {
+                    int[] terminal = canonicalActorJoinFailurePair(unwrap(failure));
+                    replyCanonicalActorJoinFailure(
+                        inbound, join.correlation(), terminal[0], terminal[1]);
+                    return;
+                }
+                List<Message> applicationReply = response.applicationReply();
+                try {
+                    ZLinkCanonicalActorJoinReplyCodec.Tail tail =
+                        response.accepted()
+                            ? new ZLinkCanonicalActorJoinReplyCodec.Tail(
+                                ZLinkCanonicalActorJoinReplyCodec.JOIN_RESULT_ACCEPTED,
+                                new ZLinkCanonicalActorJoinReplyCodec.SpotRef(
+                                    join.targetSpot().id(),
+                                    join.targetSpot().generation()),
+                                response.membershipEpoch(),
+                                32_768L)
+                            : new ZLinkCanonicalActorJoinReplyCodec.Tail(
+                                ZLinkCanonicalActorJoinReplyCodec.JOIN_RESULT_REJECTED,
+                                null, null, null);
+                    List<byte[]> reply = new ArrayList<>();
+                    reply.add(new ZLinkCanonicalActorJoinReplyCodec().encode(
+                        new ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply(
+                            join.correlation(), 0, 0, tail.joinResult(),
+                            tail.spot(), tail.membershipEpoch(),
+                            tail.receiveChunkLimitBytes())));
+                    if (!applicationReply.isEmpty()) {
+                        reply.add(wire.encodeApplicationPayload(
+                            applicationPayload(applicationReply)));
+                    }
+                    port.reply(requireStarted(), inbound.source(),
+                        inbound.requestSequence(), reply);
+                } catch (RuntimeException invalidReply) {
+                    replyCanonicalActorJoinFailure(
+                        inbound, join.correlation(), 105, 2);
+                } finally {
+                    applicationReply.forEach(Message::close);
+                }
+            });
+        } catch (RuntimeException failure) {
+            int[] terminal = canonicalActorJoinFailurePair(failure);
+            replyCanonicalActorJoinFailure(
+                inbound, join.correlation(), terminal[0], terminal[1]);
+        }
+    }
+
+    private void replyCanonicalActorJoinProtocolFailure(
+        ZLinkJavaRawServicePort.Inbound inbound,
+        List<byte[]> frames) {
+        if (inbound.requestSequence() == null || frames.isEmpty()
+            || frames.getFirst().length < PREFIX_BYTES + Long.BYTES) {
+            return;
+        }
+        long correlation = ByteBuffer.wrap(frames.getFirst())
+            .getLong(PREFIX_BYTES);
+        if (correlation != 0) {
+            replyCanonicalActorJoinFailure(inbound, correlation, 104, 16);
+        }
+    }
+
+    /**
+     * The Store admission owner reports framework kinds, which must retain
+     * their command-20 terminal rather than being collapsed into a generic
+     * transport failure.  These pairs are the schema's exact typed-terminal
+     * mappings used by the other service-wire receivers.
+     */
+    static int[] canonicalActorJoinFailurePair(Throwable failure) {
+        if (failure instanceof ZLinkFrameworkException framework) {
+            if (isSupersededCanonicalActorJoin(framework)) {
+                return new int[] {107, 21};
+            }
+            return switch (framework.kind()) {
+                case NOT_FOUND -> new int[] {102, 14};
+                case PROTOCOL_ERROR -> new int[] {104, 16};
+                case TYPE_MISMATCH -> new int[] {107, 4};
+                case REJECTED -> new int[] {106, 15};
+                default -> new int[] {105, 17};
+            };
+        }
+        return relayedFailurePair(failure);
+    }
+
+    private static boolean isSupersededCanonicalActorJoin(
+        ZLinkFrameworkException failure) {
+        return "true".equals(failure.metadata().get(
+            "zlink.actorJoin.superseded"));
+    }
+
+    private void replyCanonicalActorJoinFailure(
+        ZLinkJavaRawServicePort.Inbound inbound,
+        long correlation,
+        int terminalResult,
+        int failureCode) {
+        if (inbound.requestSequence() == null
+            || !ServiceWireConstants.validTerminalFailure(
+                terminalResult, failureCode)) {
+            return;
+        }
+        port.reply(requireStarted(), inbound.source(), inbound.requestSequence(),
+            List.of(wire.encodeReplyHeader(
+                correlation, terminalResult, failureCode)));
     }
 
     private boolean dispatchActor(
@@ -6723,6 +7103,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             throw new IllegalArgumentException(
                 "record is not a canonical relocation control command");
         }
+    }
+
+    private static byte[] canonicalPrepareReply(byte[] record) {
+        byte[] reply = Objects.requireNonNull(record, "record").clone();
+        validateCanonicalRelocationControl(reply);
+        int command = Byte.toUnsignedInt(reply[3]);
+        if (command != ServiceWireConstants.COMMAND_RELOCATION_READY
+            && command != ServiceWireConstants.COMMAND_RELOCATION_FAILED) {
+            throw new IllegalArgumentException(
+                "canonical relocation prepare reply must be READY or FAILED");
+        }
+        return reply;
     }
 
     private static boolean isCanonicalRelocationControl(int command) {

@@ -37,6 +37,13 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal ZLinkActorRuntimeState[] SnapshotStates() => _actorSessions.Snapshot();
 
+    internal bool IsCurrentLocalActorRef(ZLinkBackendActorRef actor) =>
+        _actorSessions.TryGet(
+            ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor)),
+            out var state)
+        && state.Actor is not null
+        && state.NativeActorRef == actor;
+
     public async ValueTask<CreateActorResult> CreateAndBindActorAsync(
         string actorId,
         string actorType,
@@ -132,6 +139,28 @@ internal sealed partial class ZLinkActorSessionManager(
                 actorId,
                 actorType,
                 createRequest,
+                objectGeneration,
+                authorityOwnerGeneration,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async ValueTask<CreateActorResult> EnsureProvisionalActorAsync(
+        string actorId,
+        string actorType,
+        ulong objectGeneration,
+        ulong authorityOwnerGeneration,
+        CancellationToken cancellationToken)
+    {
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        if (state.Actor is null && state.RetiredLocalActorRef is not null)
+            await PrepareForTransferredActivationAsync(state, cancellationToken)
+                .ConfigureAwait(false);
+        return await ActorCreation.EnsureProvisionalActorAsync(
+                state,
+                actorId,
+                actorType,
                 objectGeneration,
                 authorityOwnerGeneration,
                 cancellationToken)

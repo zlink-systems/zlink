@@ -1268,9 +1268,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     new ZLinkSpotRelocationReplyRoutes.CommittedFence(
                         participant.authorityKey(),
                         index + 1L,
-                        targetOwnerGeneration(
-                            targetOwnerGenerations,
-                            participant.authorityKey())));
+                        stageRequest.fence().aggregateGeneration()));
             }
             if (relocationReplies == null) {
                 throw new IllegalStateException(

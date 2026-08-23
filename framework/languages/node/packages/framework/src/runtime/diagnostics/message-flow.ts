@@ -404,6 +404,11 @@ function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
     origin: record.flowOrigin,
     outcome: record.outcome,
     reason: record.reason,
+    command: record.commandId,
+    error_type: record.errorType,
+    error_message: record.errorMessage,
+    error_cause_type: record.errorCauseType,
+    error_cause_message: record.errorCauseMessage,
     size: record.messageSizeBytes
   });
 }

@@ -50,6 +50,25 @@ final class ZLinkServiceFrozenRecordCodecTest {
     }
 
     @Test
+    void highBitReplyRouteRoundTripsAsAnOpaqueU64() {
+        long highBit = Long.MIN_VALUE;
+        RoutingId sourceRid = RoutingId.from("frozen-source");
+        RoutingId targetRid = RoutingId.from("frozen-target");
+        var operation = new ZLinkServiceM6BWireCodec.SpotMessage(
+            true, 0, highBit, 73, 79, 0, "source-spot",
+            new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                "target-spot", 83, targetRid, 89, 97, 101));
+        var decoded = ZLinkServiceFrozenRecordCodec.decodeSpot(
+            ZLinkServiceFrozenRecordCodec.encodeSpot(
+                fence(sourceRid, 11, "source-owner", 13),
+                fence(targetRid, 89, "target-owner", 101), operation,
+                new byte[0], application.encodeApplicationPayload(
+                    new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        "packet", "application/json", new byte[0]))));
+        assertEquals(highBit, decoded.replyRouteId().orElseThrow());
+    }
+
+    @Test
     void boundActorRecordPreservesSessionIdentityAndCanonicalPayload() {
         RoutingId sourceRid = RoutingId.from("session-owner");
         RoutingId targetRid = RoutingId.from("actor-owner");

@@ -6,12 +6,13 @@ const world = require('../../samples/ZoneWorld/dist/Server/ZoneNode/Domain/world
 const { validateMove } = require('../../samples/ZoneWorld/dist/Server/ZoneNode/Domain/move-policy');
 const { ZoneState } = require('../../samples/ZoneWorld/dist/Server/ZoneNode/Domain/zone-state');
 
-test('ZoneWorld maps quadrants, nodes, adjacency, and edge-only border bands', () => {
+test('ZoneWorld maps quadrants, adjacency, and edge-only border bands without fixed placement', () => {
   assert.equal(spec.zoneOf(25, 25), 'zone-nw');
   assert.equal(spec.zoneOf(50, 25), 'zone-ne');
   assert.equal(spec.zoneOf(25, 50), 'zone-sw');
   assert.equal(spec.zoneOf(50, 50), 'zone-se');
-  assert.equal(spec.nodeOf('zone-nw'), 'zone-node-1');
+  assert.equal(spec.nodeOf, undefined);
+  assert.equal(spec.zonesOf, undefined);
   assert.deepEqual(world.adjacentZones('zone-nw'), ['zone-ne', 'zone-sw']);
   assert.equal(world.inBorderBand(45, 45, 'zone-nw', 'zone-ne'), true);
   assert.equal(world.inBorderBand(45, 45, 'zone-nw', 'zone-se'), false);

@@ -36,6 +36,10 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         RoutingId nodeRid();
         long nodeGeneration();
 
+        default Optional<ActivationRecoveryState> activationRecoveryState() {
+            return Optional.empty();
+        }
+
         default Optional<UserSpotAuthority> user() {
             return Optional.empty();
         }
@@ -68,10 +72,54 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         long ownerLeaseGeneration,
         String meshName,
         RoutingId nodeRid,
-        long nodeGeneration) implements SpotAuthority {
+        long nodeGeneration,
+        Optional<ActivationRecoveryState> activationRecoveryState)
+        implements SpotAuthority {
+        public InstanceSpotAuthority {
+            activationRecoveryState = Objects.requireNonNull(
+                activationRecoveryState, "activationRecoveryState");
+        }
+
+        public InstanceSpotAuthority(
+            State state,
+            String stableType,
+            String spotId,
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration) {
+            this(
+                state, stableType, spotId, ownerId, ownerLeaseGeneration,
+                meshName, nodeRid, nodeGeneration, Optional.empty());
+        }
+
         @Override
         public Optional<InstanceSpotAuthority> instance() {
             return Optional.of(this);
+        }
+    }
+
+    public record ActivationRecoveryState(
+        String reference,
+        byte[] sha256,
+        long encodedSize,
+        long inboxSequence) {
+        public ActivationRecoveryState {
+            byte[] digest = Objects.requireNonNull(sha256, "sha256").clone();
+            if (digest.length != 32
+                || encodedSize < 0 || encodedSize > 1024 * 1024
+                || inboxSequence <= 0) {
+                throw new IllegalArgumentException(
+                    "invalid activation recovery state");
+            }
+            validateText8(reference);
+            sha256 = digest;
+        }
+
+        @Override
+        public byte[] sha256() {
+            return sha256.clone();
         }
     }
 
@@ -146,7 +194,8 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             if (!emptyConditional32(body)) {
                 return Optional.empty();
             }
-            decodedSpot.skipActivationRecovery(body, operationKind);
+            Optional<ActivationRecoveryState> activationRecoveryState =
+                decodedSpot.activationRecoveryState(body, operationKind);
             if (!body.end()) {
                 return Optional.empty();
             }
@@ -155,7 +204,8 @@ public final class ZLinkServiceAuthorityPayloadCodec {
                 ownerLeaseGeneration,
                 meshName,
                 nodeRid,
-                nodeGeneration));
+                nodeGeneration,
+                activationRecoveryState));
         } catch (RuntimeException invalid) {
             return Optional.empty();
         }
@@ -216,6 +266,27 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         String meshName,
         RoutingId nodeRid,
         long nodeGeneration) {
+        return encodeInstance(
+            state, stableType, spotId, ownerId, ownerLeaseGeneration,
+            meshName, nodeRid, nodeGeneration, Optional.empty());
+    }
+
+    public byte[] encodeInstance(
+        State state,
+        String stableType,
+        String spotId,
+        String ownerId,
+        long ownerLeaseGeneration,
+        String meshName,
+        RoutingId nodeRid,
+        long nodeGeneration,
+        Optional<ActivationRecoveryState> activationRecoveryState) {
+        activationRecoveryState = Objects.requireNonNull(
+            activationRecoveryState, "activationRecoveryState");
+        if (activationRecoveryState.isPresent() && state != State.READY) {
+            throw new IllegalArgumentException(
+                "activation recovery requires a ready instance authority");
+        }
         Writer instance = new Writer();
         instance.text8(stableType);
         instance.text8(systems.zlink.framework.runtime.internal.spots
@@ -243,7 +314,11 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         body.rid(nodeRid);
         body.nonzeroU64(nodeGeneration);
         body.conditional32(0, new byte[0]);
-        body.conditional32(0, new byte[0]);
+        body.conditional32(
+            activationRecoveryState.isPresent() ? 1 : 0,
+            activationRecoveryState.map(
+                ZLinkServiceAuthorityPayloadCodec::encodeActivationRecovery)
+                .orElseGet(() -> new byte[0]));
         Writer envelope = new Writer();
         envelope.raw(MAGIC);
         envelope.u8(1);
@@ -254,6 +329,24 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         envelope.u32(crc32c(
             withoutChecksum, withoutChecksum.length));
         return envelope.bytes();
+    }
+
+    public byte[] encode(SpotAuthority authority) {
+        Objects.requireNonNull(authority, "authority");
+        if (authority instanceof UserSpotAuthority user) {
+            return encodeUser(
+                user.state(), user.stableType(), user.spotId(), user.ownerId(),
+                user.ownerLeaseGeneration(), user.meshName(), user.nodeRid(),
+                user.nodeGeneration());
+        }
+        if (authority instanceof InstanceSpotAuthority instance) {
+            return encodeInstance(
+                instance.state(), instance.stableType(), instance.spotId(),
+                instance.ownerId(), instance.ownerLeaseGeneration(),
+                instance.meshName(), instance.nodeRid(), instance.nodeGeneration(),
+                instance.activationRecoveryState());
+        }
+        throw new IllegalArgumentException("unsupported spot authority");
     }
 
     private static boolean emptyConditional32(Reader reader) {
@@ -271,7 +364,7 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         }
     }
 
-    private static void skipInstanceActivationRecovery(
+    private static Optional<ActivationRecoveryState> readInstanceActivationRecovery(
         Reader body,
         State state,
         int operationKind) {
@@ -283,28 +376,36 @@ public final class ZLinkServiceAuthorityPayloadCodec {
                 throw new IllegalArgumentException(
                     "invalid empty activation recovery");
             }
-            return;
+            return Optional.empty();
         }
         if (present != 1 || state != State.READY || operationKind != 0) {
             throw new IllegalArgumentException(
                 "invalid activation recovery discriminator");
         }
-        recovery.text16();
-        int digestLength = recovery.u8();
-        if (digestLength != 32) {
-            throw new IllegalArgumentException(
-                "invalid activation recovery digest");
-        }
-        recovery.skip(digestLength);
+        String reference = recovery.text8();
+        byte[] sha256 = recovery.bytes(32);
         long encodedSize = recovery.unsignedU32();
         long inboxSequence = recovery.nonzeroU64();
-        long replayCursor = recovery.u64();
-        if (encodedSize > 1024 * 1024
-            || replayCursor > inboxSequence
-            || !recovery.end()) {
+        if (!recovery.end()) {
             throw new IllegalArgumentException(
                 "invalid activation recovery");
         }
+        return Optional.of(new ActivationRecoveryState(
+            reference, sha256, encodedSize, inboxSequence));
+    }
+
+    private static byte[] encodeActivationRecovery(
+        ActivationRecoveryState recovery) {
+        Writer writer = new Writer();
+        writer.text8(recovery.reference());
+        writer.raw(recovery.sha256());
+        writer.u32(recovery.encodedSize());
+        writer.nonzeroU64(recovery.inboxSequence());
+        return writer.bytes();
+    }
+
+    private static void validateText8(String value) {
+        Writer.bounded(value);
     }
 
     private sealed interface DecodedSpot
@@ -312,13 +413,16 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         State state();
         String stableType();
         String spotId();
-        void skipActivationRecovery(Reader body, int operationKind);
+        Optional<ActivationRecoveryState> activationRecoveryState(
+            Reader body,
+            int operationKind);
         SpotAuthority authority(
             String ownerId,
             long ownerLeaseGeneration,
             String meshName,
             RoutingId nodeRid,
-            long nodeGeneration);
+            long nodeGeneration,
+            Optional<ActivationRecoveryState> activationRecoveryState);
     }
 
     private record DecodedUserSpot(
@@ -326,8 +430,11 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         String stableType,
         String spotId) implements DecodedSpot {
         @Override
-        public void skipActivationRecovery(Reader body, int operationKind) {
+        public Optional<ActivationRecoveryState> activationRecoveryState(
+            Reader body,
+            int operationKind) {
             skipEmptyActivationRecovery(body);
+            return Optional.empty();
         }
 
         @Override
@@ -336,7 +443,8 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             long ownerLeaseGeneration,
             String meshName,
             RoutingId nodeRid,
-            long nodeGeneration) {
+            long nodeGeneration,
+            Optional<ActivationRecoveryState> activationRecoveryState) {
             return new UserSpotAuthority(
                 state, stableType, spotId, ownerId, ownerLeaseGeneration,
                 meshName, nodeRid, nodeGeneration);
@@ -348,8 +456,10 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         String stableType,
         String spotId) implements DecodedSpot {
         @Override
-        public void skipActivationRecovery(Reader body, int operationKind) {
-            skipInstanceActivationRecovery(body, state, operationKind);
+        public Optional<ActivationRecoveryState> activationRecoveryState(
+            Reader body,
+            int operationKind) {
+            return readInstanceActivationRecovery(body, state, operationKind);
         }
 
         @Override
@@ -358,10 +468,11 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             long ownerLeaseGeneration,
             String meshName,
             RoutingId nodeRid,
-            long nodeGeneration) {
+            long nodeGeneration,
+            Optional<ActivationRecoveryState> activationRecoveryState) {
             return new InstanceSpotAuthority(
                 state, stableType, spotId, ownerId, ownerLeaseGeneration,
-                meshName, nodeRid, nodeGeneration);
+                meshName, nodeRid, nodeGeneration, activationRecoveryState);
         }
     }
 
@@ -548,6 +659,14 @@ public final class ZLinkServiceAuthorityPayloadCodec {
 
         String text16() {
             return text(u16());
+        }
+
+        byte[] bytes(int length) {
+            require(length);
+            byte[] value = Arrays.copyOfRange(
+                bytes, offset, offset + length);
+            offset += length;
+            return value;
         }
 
         String text(int length) {

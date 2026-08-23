@@ -165,8 +165,9 @@ Service messaging commands that carry several Framework message parts as a
 single application payload use a common profile for the outer application
 envelope. This envelope's packet name is fixed as `ZLinkFrameworkMultipart`
 and its content type as `application/x-zlink-multipart`. The actual
-application message's packet name and bytes are preserved by part order
-inside the envelope's payload.
+application message's bytes are preserved verbatim by part order inside the
+envelope's payload. Parts are opaque bytes; this profile does not carry a
+per-part packet name or content type on the wire.
 
 Operations where the command itself defines a separate
 application-payload envelope, such as Actor creation, are not subject to
@@ -509,16 +510,69 @@ Both operations return their results in the command 20 reply envelope.
 
 ### Actor Join Request Envelope
 
-`actorJoin`(28)'s request body — correlation, the actor route fence, the `entry` flag,
+`actorJoin`(28) is sent as `[request]`, and its result returns only on the command 20
+reply — this request's `[reply]` leg. `actorJoin`(28)'s request body — correlation, the actor route fence, the `entry` flag,
 and the target spot route fence — is the complete cross-language contract for this
 operation. No other field travels on the wire for it. In particular, per-transfer
 bookkeeping identifiers a runtime uses internally to track an in-flight move (for
 example, a transfer id) are language-internal only and never appear in this body; a
 runtime that needs such an id generates and keeps it locally, not on the wire.
+Sending or receiving command 28 as a one-way record instead of a request/reply pair is
+outside this operation's contract; the receiver rejects it as a protocol error before
+application dispatch, per the rules in
+[2. Record Framing and Decode](#2-record-framing-and-decode).
 Receiver-side admission semantics — parking behind an existing preparation and the
 later-attempt-wins rule described in
 [15. Spot And Actor Model §4.2](15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
 key on the actor identity carried in this body, not on any language-internal id.
+
+When the join-accepted reply carries an application reply, the target wraps it in the
+[Framework multipart application profile](#framework-multipart-application-profile) on the
+reply leg. There is exactly one part, and that part carries the bytes of the application
+reply message the handler produced, verbatim. This profile does not carry a per-part
+packet name or content type on the wire — the envelope's packet name and content type are
+the profile's fixed values, and interpreting the part bytes belongs to the application
+layer under the per-layer normative-format principle. When there is no application
+reply, no multipart envelope is carried at all. The source unwraps this profile and
+delivers the sole part as the application reply, without interpreting the part bytes as
+another envelope. The only reply metadata the source exposes to the caller is the
+profile's fixed outer content type, or none — it must not reconstruct another value, such
+as the request's content type. Framing other than this profile — nesting the part in an
+additional envelope, or exposing un-unwrapped inner bytes directly — is outside this
+operation's contract.
+
+#### Receiver Stable-Type Resolution
+
+Because the `actorJoin`(28) body deliberately carries no Actor stable type, the receiver
+resolves the factory type from the canonical Location Store, not from any wire field or a
+prior local record. The Actor's Authority row is the single per-Actor source of truth (its
+canonical key is `authority\0actor\0{ActorId}`; see
+[21. Location Runtime §2.4](21-location-runtime.en.md)) and already carries
+`allocation.stableType`. On admission the receiver MUST read that row for the `ActorId` in
+the body and accept the join only when the row exactly matches the actor route fence:
+
+- `allocation.state == active` and `allocation.objectKind == actor`;
+- the row's `objectGeneration` equals the fence's `ObjectGeneration`;
+- the row's owner node RID and descriptor lifecycle generation equal the fence's target
+  node RID and node generation;
+- the row's `authorityOwnerGeneration` equals the fence's `expectedAuthorityOwnerGeneration`;
+- the row's `ownerLeaseGeneration` equals the fence's `expectedOwnerLeaseGeneration`.
+
+The factory is then resolved from the row's `allocation.stableType` against the local
+factory registry. This is the same Authority-derived stable-type verification the
+relocation path already performs on `relocationState`(52) (which likewise omits the type
+from its wire object); the 28 admission path extends it to the first target preparation
+step rather than trusting a sender-supplied type. Every failure is a typed terminal on the
+command 20 reply, never a silent drop: a missing or unreadable row is `Unavailable`
+(Store unavailable) or `NotFound` (never created / already retired); any fence field that
+does not match is a stale/mismatch protocol terminal; an unknown `stableType` (no local
+factory) is a typed rejection. A generation compared here is a bounded generation and is
+matched by exact equality, never by numeric ordering (§12).
+
+The lease value the source places in the fence's `expectedOwnerLeaseGeneration` is the
+Actor's current Location owner lease, not a bound-Session token; an unbound Actor still
+carries its owner lease, and a bound Session adds only the seal/route-update legs, so a
+receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 
 ### Session Seal And Source Relay
 
@@ -603,11 +657,15 @@ key on the actor identity carried in this body, not on any language-internal id.
   32 KiB — the general Compact data lower bound. This shape and its bounds are pinned by
   the `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`), which all four runtimes
-  (cpp, dotnet, java, node) decode identically. Java and Node wire
-  `receiveChunkLimitBytes` into their live cross-node `actorJoin` admission reply today;
-  C++ and .NET carry the same conformant wire codec for this reply tail but do not
-  originate a cross-node `actorJoin` operation, so the field is decoded and validated by
-  their codecs without being produced on a live admission path in those two runtimes.
+  (cpp, dotnet, java, node) decode identically. **All four runtimes** originate a canonical
+  `actorJoin`(28) as `[request]` — wiring `receiveChunkLimitBytes` into the command 20
+  reply, this request's `[reply]` leg — once the
+  target's canonical capability is observed (an authority fence plus a peer admitted at
+  that generation); when it is not, each runtime keeps its language-internal admission path
+  (a transitional fallback). The receiver resolves the stable type from the Store Actor
+  Authority row per §9, never from the wire. (An earlier revision stated C++ and .NET did
+  not originate; now that the Store-backed canonical receiver exists in all four runtimes,
+  origination is unified across all four.)
 
 ### Target CAS And Retained Store Roles
 

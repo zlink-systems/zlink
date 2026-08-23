@@ -215,6 +215,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
                 .Request(
                     relocationId,
                     1,
+                    1,
                     List.of(new ZLinkAggregateRelocationCoordinator
                         .Participant(
                             actorAuthorityKey,
@@ -229,7 +230,8 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     new ZLinkMeshNodeDescriptorKey(MESH, TARGET_RID),
                     TARGET_NODE_GENERATION,
                     new ZLinkPlacementCapacityBundle(1, 0, Optional.empty()),
-                    new ZLinkLocationOwnerToken("target-owner", 23));
+                    new ZLinkLocationOwnerToken("target-owner", 23),
+                    "seed-1");
             var prepared = coordinator.prepare(storeRequest, OPEN)
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
 

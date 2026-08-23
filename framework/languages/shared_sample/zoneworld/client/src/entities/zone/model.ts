@@ -1,7 +1,5 @@
 import {
   BORDER_BAND,
-  NODE_EAST,
-  NODE_WEST,
   WORLD_SIZE,
   ZONE_NE,
   ZONE_NW,
@@ -18,10 +16,6 @@ export function zoneOf(x: number, y: number): zoneId {
   if (east && !south) return ZONE_NE;
   if (!east) return ZONE_SW;
   return ZONE_SE;
-}
-
-export function nodeOf(zoneId: string): string {
-  return zoneId === ZONE_NE || zoneId === ZONE_SE ? NODE_EAST : NODE_WEST;
 }
 
 export function isBorderBand(x: number, y: number): boolean {

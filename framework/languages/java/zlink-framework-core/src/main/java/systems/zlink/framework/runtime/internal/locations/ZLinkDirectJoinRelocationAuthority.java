@@ -169,6 +169,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
                             new ZLinkAggregateRelocationCoordinator.Request(
                                 relocationId,
                                 1,
+                                1,
                                 List.of(participant),
                                 root,
                                 new ZLinkMeshNodeDescriptorKey(
@@ -178,7 +179,8 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                 ZLinkPlacementCapacityBundle.actor(1),
                                 new ZLinkLocationOwnerToken(
                                     descriptor.ownerId(),
-                                    descriptor.leaseGeneration()));
+                                    descriptor.leaseGeneration()),
+                                actorSnapshot.storeVersion());
                         return coordinator.prepare(request, NEVER)
                             .thenApply(prepared -> new PreparedPublication(
                                 root,

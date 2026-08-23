@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
  * Pins the relocation-forward relay failure classification
@@ -54,5 +56,25 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
             new int[] {105, 17},
             ZLinkJavaRawMeshNode.relayedFailurePair(
                 new IllegalStateException("unexpected relay failure")));
+    }
+
+    @Test
+    void canonicalActorJoinKeepsStoreFailureTerminalKinds() {
+        assertArrayEquals(new int[] {102, 14},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NOT_FOUND, "missing")));
+        assertArrayEquals(new int[] {104, 16},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "fence")));
+        assertArrayEquals(new int[] {107, 4},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.TYPE_MISMATCH, "type")));
+        assertArrayEquals(new int[] {106, 15},
+            ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.REJECTED, "rejected")));
     }
 }

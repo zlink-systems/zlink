@@ -350,9 +350,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         out ZLinkSerialWorkItem item)
     {
         ArgumentNullException.ThrowIfNull(callback);
+        // The terminal closes admission, but it must remain behind every
+        // application turn that was already accepted. Placing it in the
+        // lifecycle lane would let lifecycle priority overtake and dispose
+        // those accepted turns.
         var candidate = new ZLinkSerialWorkItem(
             callback,
-            lane: ZLinkSerialWorkLane.Lifecycle);
+            lane: ZLinkSerialWorkLane.Application);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0)
@@ -363,9 +367,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
             AbortRelocationUnderLock();
             CommitWorkItemUnderLock(
-                _lifecycleQueue,
+                _applicationQueue,
                 candidate,
-                ZLinkSerialWorkLane.Lifecycle);
+                ZLinkSerialWorkLane.Application);
             Volatile.Write(ref _completed, 1);
             item = candidate;
         }

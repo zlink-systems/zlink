@@ -6,6 +6,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -24,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -70,6 +72,21 @@ struct test_context_t
         std::cerr << "V11-M6C-CPP: " << message << '\n';
     }
 };
+
+std::vector<std::uint8_t> decode_hex_vector (std::string_view value)
+{
+    const auto nibble = [] (char ch) -> std::uint8_t {
+        if (ch >= '0' && ch <= '9') return static_cast<std::uint8_t> (ch - '0');
+        if (ch >= 'a' && ch <= 'f') return static_cast<std::uint8_t> (ch - 'a' + 10);
+        return static_cast<std::uint8_t> (ch - 'A' + 10);
+    };
+    std::vector<std::uint8_t> result;
+    result.reserve (value.size () / 2);
+    for (std::size_t index = 0; index != value.size (); index += 2)
+        result.push_back (static_cast<std::uint8_t> (
+          (nibble (value[index]) << 4u) | nibble (value[index + 1])));
+    return result;
+}
 
 void test_spot_lifecycle_domain_rejects_invalid_kind_combinations (
   test_context_t &test)
@@ -1317,6 +1334,17 @@ class public_memory_authority_store_t final :
                       : zlink::framework::authority_read_result_t{
                           zlink::framework::authority_missing_t{
                             std::chrono::system_clock::now ()}}}});
+        if (remaining_auxiliary_conflicts != 0) {
+            --remaining_auxiliary_conflicts;
+            snapshot->store_version =
+              std::to_string (
+                std::stoull (snapshot->store_version) + 1);
+            snapshot->store_now = std::chrono::system_clock::now ();
+            return completed (
+              zlink::framework::authority_compare_exchange_result_t{
+                zlink::framework::authority_conflict_t{
+                  zlink::framework::authority_read_result_t{*snapshot}}});
+        }
         if (retarget) {
             observed_target_owner = retarget->target.owner;
             observed_target_placement = retarget->target;
@@ -1355,6 +1383,7 @@ class public_memory_authority_store_t final :
     std::optional<zlink::framework::object_creation_target_t>
       observed_target_placement;
     std::vector<std::string> observed_keys;
+    int remaining_auxiliary_conflicts = 0;
 
   private:
     template <typename T>
@@ -2090,6 +2119,141 @@ void test_envelope_round_trip (test_context_t &test)
                   "CRC32C must be computed for the retained payload");
 }
 
+void test_actor_join_recovery_round_trip (test_context_t &test)
+{
+    namespace protocol = zlink::framework::runtime::protocol;
+    const std::string handoff_id =
+      "00112233445566778899aabbccddeeff";
+    const auto relocation = protocol::actor_join_relocation_id (
+      handoff_id);
+    protocol::actor_join_recovery_t recovery{
+      .actor_id = "actor-a",
+      .actor_type = "sample.Actor",
+      .handoff_id = handoff_id,
+      .source_spot_id = "source-spot",
+      .source_node_routing_id = {'s', 'r', 'c'},
+      .actor_generation = 7,
+      .actor_authority_owner_generation = 11,
+      .actor_node_generation = 13,
+      .expected_owner_lease_generation = 17,
+      .relocation = relocation,
+      .relocation_content_type =
+        std::string (protocol::actor_join_snapshot_content_type),
+      .request_content_type = "application/json",
+      .request = {'{', '}'},
+      .reservation_token = handoff_id,
+      .reserved_payload_bytes =
+        protocol::actor_join_reserved_payload_bytes (
+          2, protocol::actor_join_snapshot_content_type),
+      .target_spot_id = "target-spot",
+      .target_node_routing_id = {'d', 's', 't'},
+      .target_node_generation = 19,
+      .target_spot_generation = 23,
+      .target_authority_owner_generation = 12,
+      .target_spot_authority_owner_generation = 29,
+      .coordinator = {"owner-a", 17, {'s', 'r', 'c'}, 13, "store-v1"},
+      .operation = {31, 37},
+      .reply_content_type = "application/json",
+      .reply = {'[', ']'}};
+    const auto frozen =
+      protocol::encode_actor_join_recovery_saved_work (recovery);
+    /* Fixed Node vector from encodeCanonicalActorJoinRecoverySavedWork in
+     * actor-join-recovery-codec.ts, using this test's recovery fields.  This
+     * is intentionally not a C++ encode/decode round trip: changing JSON
+     * property order must fail before persisted ZLJR records diverge. */
+    constexpr std::string_view node_zljr_frozen_hex =
+      "0101001f06373337323633000000000000000d076f776e65722d61000000000000001100000000000000000000000000000000000000000000000100"
+      "000767225f5f7a6c696e6b2e6163746f722e726f757465645f6a6f696e2e7265636f76657279316170706c69636174696f6e2f782d7a6c696e6b2d61"
+      "63746f722d726f757465642d6a6f696e2d7265636f766572792d76310000070e5a4c4a5201000006f900000002000000027b2252657175657374223a"
+      "7b224163746f724964223a226163746f722d61222c224163746f7254797065223a2273616d706c652e4163746f72222c2248616e646f66664964223a"
+      "223030313132323333343435353636373738383939616162626363646465656666222c22426f756e6453657373696f6e4e6f6465526964223a6e756c"
+      "6c2c22426f756e6453657373696f6e526964223a6e756c6c2c2252656c6f636174696f6e436f6e74656e7454797065223a226170706c69636174696f"
+      "6e2f766e642e7a6c696e6b2e6163746f722d72656c6f636174696f6e2e736e617073686f74222c2252656c6f636174696f6e5265666572656e636522"
+      "3a2270656e64696e67222c2252656c6f636174696f6e436865636b73756d437263333263223a302c2252656c6f636174696f6e416767726567617465"
+      "4964223a2230303131323233332d343435352d363637372d383839392d616162626363646465656666222c2252656c6f636174696f6e416767726567"
+      "61746547656e65726174696f6e223a312c2252656c6f636174696f6e496e76656e746f7279446967657374223a224141414141414141414141414141"
+      "41414141414141414141414141414141414141414141414141414141413d222c2252657175657374436f6e74656e7454797065223a226170706c6963"
+      "6174696f6e2f6a736f6e222c2252657175657374223a22222c2248616e646f66664672616d6573223a5b5d2c22536f7572636553706f744964223a22"
+      "736f757263652d73706f74222c22536f757263654e6f6465526964223a2263334a6a222c224163746f7247656e65726174696f6e223a372c22416374"
+      "6f72417574686f726974794f776e657247656e65726174696f6e223a31312c22426f756e6453657373696f6e42696e64696e67546f6b656e223a6e75"
+      "6c6c2c22426f756e6453657373696f6e42696e64696e6747656e65726174696f6e223a302c22426f756e6453657373696f6e4f626a65637447656e65"
+      "726174696f6e223a302c22426f756e6453657373696f6e417574686f726974794f776e657247656e65726174696f6e223a302c22426f756e64536573"
+      "73696f6e4d6573684e616d65223a6e756c6c2c22426f756e6453657373696f6e5461726765744e6f646547656e65726174696f6e223a302c22426f75"
+      "6e6453657373696f6e4f776e65724c6561736547656e65726174696f6e223a302c22426f756e6453657373696f6e4f776e65724e6f646547656e6572"
+      "6174696f6e223a302c22426f756e6453657373696f6e4163636570746564486967685761746572223a302c22426f756e6453657373696f6e53657373"
+      "696f6e4f776e65724964223a6e756c6c2c22426f756e6453657373696f6e53657373696f6e4f776e65724c6561736547656e65726174696f6e223a30"
+      "2c225265736572766174696f6e546f6b656e223a223030313132323333343435353636373738383939616162626363646465656666222c2252657365"
+      "727665645061796c6f61644279746573223a38333935313631382c225461726765744e6f6465526964223a225a484e30222c225461726765744e6f64"
+      "6547656e65726174696f6e223a31392c2254617267657453706f7447656e65726174696f6e223a32332c22546172676574417574686f726974794f77"
+      "6e657247656e65726174696f6e223a31322c2254617267657453706f74417574686f726974794f776e657247656e65726174696f6e223a32392c2252"
+      "656c6f636174696f6e436f6f7264696e61746f724f776e65724964223a226f776e65722d61222c2252656c6f636174696f6e436f6f7264696e61746f"
+      "724c6561736547656e65726174696f6e223a31372c2252656c6f636174696f6e436f6f7264696e61746f724e6f6465526964223a2263334a6a222c22"
+      "52656c6f636174696f6e436f6f7264696e61746f724e6f646547656e65726174696f6e223a31332c2252656c6f636174696f6e436f6f7264696e6174"
+      "6f724578706563746564417574686f7269747953746f726556657273696f6e223a2273746f72652d7631222c224163746f724e6f646547656e657261"
+      "74696f6e223a31332c2245787065637465644f776e65724c6561736547656e65726174696f6e223a31377d2c2254617267657453706f744964223a22"
+      "7461726765742d73706f74222c225461726765744e6f6465526964223a225a484e30222c225461726765744e6f646547656e65726174696f6e223a31"
+      "392c2254617267657453706f7447656e65726174696f6e223a32332c22546172676574417574686f726974794f776e657247656e65726174696f6e22"
+      "3a31322c224f7065726174696f6e496448696768223a33312c224f7065726174696f6e49644c6f77223a33372c225265706c79436f6e74656e745479"
+      "7065223a226170706c69636174696f6e2f6a736f6e222c225265706c79223a22227d7b7d5b5d";
+    test.require (
+      frozen.canonical_bytes == decode_hex_vector (node_zljr_frozen_hex),
+      "ZLJR saved-work must match the fixed Node byte vector");
+    const auto decoded =
+      protocol::decode_actor_join_recovery_saved_work (frozen);
+    test.require (
+      decoded && decoded->actor_id == recovery.actor_id
+        && decoded->actor_type == recovery.actor_type
+        && decoded->handoff_id == handoff_id
+        && decoded->relocation == relocation
+        && decoded->source_spot_id == recovery.source_spot_id
+        && decoded->source_node_routing_id
+             == recovery.source_node_routing_id
+        && decoded->target_spot_id == recovery.target_spot_id
+        && decoded->target_node_routing_id
+             == recovery.target_node_routing_id
+        && decoded->coordinator == recovery.coordinator
+        && decoded->request == recovery.request
+        && decoded->reply == recovery.reply,
+      "ZLJR saved-work must preserve the Node/.NET byte contract and identity fields");
+
+    auto independent_recovery = recovery;
+    independent_recovery.handoff_id = "source-issued-handoff";
+    independent_recovery.reservation_token = "target-issued-reservation";
+    independent_recovery.reserved_payload_bytes = 97;
+    const auto independently_issued =
+      protocol::decode_actor_join_recovery_saved_work (
+        protocol::encode_actor_join_recovery_saved_work (independent_recovery));
+    test.require (
+      independently_issued
+        && independently_issued->relocation == independent_recovery.relocation
+        && independently_issued->handoff_id == independent_recovery.handoff_id
+        && independently_issued->reservation_token
+             == independent_recovery.reservation_token
+        && independently_issued->reserved_payload_bytes
+             == independent_recovery.reserved_payload_bytes,
+      "ZLJR must preserve independently issued handoff and admission values");
+
+    frozen_object_state_t actor{
+      .owner = {object_kind_t::actor, "actor-a", 7, 11, "mesh", "src"},
+      .stable_type = "sample.Actor",
+      .application_state = {1, 2, 3},
+      .pending_application = {
+        turn_record_t{1, frozen.canonical_bytes, std::nullopt,
+                      std::nullopt, frozen}},
+      .timers = {}};
+    const auto envelope_bytes = maintenance_runtime_t::encode_envelope (
+      {actor}, relocation, 42);
+    const auto envelope =
+      maintenance_runtime_t::decode_envelope (envelope_bytes);
+    test.require (
+      envelope && envelope->application_version == 42
+        && envelope->saved_work.size () == 1
+        && protocol::decode_actor_join_recovery_saved_work (
+             envelope->saved_work.front ().record)
+             .has_value (),
+      "Join relocation must carry descriptor applicationVersion and one canonical ZLJR record");
+}
+
 void test_spot_restore_stages_before_publication (
   test_context_t &test)
 {
@@ -2654,10 +2818,23 @@ void test_public_relocation_store_adapter (test_context_t &test)
 void test_public_authority_store_adapter (test_context_t &test)
 {
     public_memory_authority_store_t store;
+    const auto source_application_payload =
+      zlink::framework::runtime::encode_actor_authority_payload ({
+        .state = zlink::framework::runtime::actor_authority_state_t::ready,
+        .stable_type = "player",
+        .actor_id = "actor-public",
+        .current_spot_id = "source-spot",
+        .current_spot_generation = 11,
+        .current_spot_kind = zlink::framework::runtime::actor_authority_spot_kind_t::user,
+        .owner_id = "owner-a",
+        .owner_lease_generation = 3,
+        .mesh_name = "mesh",
+        .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
+        .node_generation = 16});
     store.snapshot =
       zlink::framework::authority_snapshot_t{
         "1",
-        {std::byte{0x01}},
+        source_application_payload,
         7,
         11,
         {"owner-a", 3},
@@ -2681,8 +2858,24 @@ void test_public_authority_store_adapter (test_context_t &test)
     target.mesh_name = "mesh-b";
     target.node_id = "node-b";
     ++target.authority_owner_generation;
-    const std::vector<std::byte> relocated_application_payload{
-      std::byte{0x21}, std::byte{0x22}};
+    const auto relocated_application_payload =
+      zlink::framework::runtime::encode_actor_authority_payload ({
+        .state = zlink::framework::runtime::actor_authority_state_t::ready,
+        .stable_type = "player",
+        .actor_id = "actor-public",
+        .current_spot_id = "target-spot",
+        .current_spot_generation = 12,
+        .current_spot_kind = zlink::framework::runtime::actor_authority_spot_kind_t::user,
+        .owner_id = "owner-b",
+        .owner_lease_generation = 5,
+        .mesh_name = "mesh-b",
+        .node_rid = zlink::framework::node_rid_t::from_string ("node-b"),
+        .node_generation = 17});
+    /* A foreign source can preserve its relocating envelope between the
+     * target's read and owner-changing CAS.  That advances only storeVersion,
+     * not either logical fence, so the target must refresh through the same
+     * bounded retry window used by the other runtime implementations. */
+    store.remaining_auxiliary_conflicts = 7;
     const auto published = adapter.publish (
       source, target, target_owner, target_placement,
       "root-public", 42,
@@ -2695,8 +2888,29 @@ void test_public_authority_store_adapter (test_context_t &test)
         && published.current->target.node_id == "node-b"
         && published.current->target.authority_owner_generation == 12
         && published.current->application_payload
-             == relocated_application_payload,
-      "public authority adapter must publish exact NewOwner generation");
+             == relocated_application_payload
+        && store.remaining_auxiliary_conflicts == 0,
+      "public authority adapter must refresh through bounded auxiliary store-version conflicts");
+    const auto stored_projection = store.snapshot
+      ? zlink::framework::runtime::decode_actor_authority_payload (
+          store.snapshot->payload, store.snapshot->object_generation)
+      : std::nullopt;
+    const auto begins_with_zlra3 = [] (const std::vector<std::byte> &bytes) {
+        constexpr std::string_view magic{"ZLRA3"};
+        return bytes.size () >= magic.size ()
+          && std::equal (magic.begin (), magic.end (), bytes.begin (),
+                         [] (char expected, std::byte actual) {
+                             return static_cast<unsigned char> (expected)
+                                    == std::to_integer<unsigned char> (actual);
+                         });
+    };
+    test.require (
+      store.snapshot && !begins_with_zlra3 (store.snapshot->payload)
+        && stored_projection
+        && stored_projection->actor.object_generation () == 7
+        && stored_projection->actor.actor_id ().value () == "actor-public"
+        && stored_projection->actor.node_rid ().value () == "node-b",
+      "remote actor commit must store a canonical authority row resolvable by actor_directory_t::find");
     test.require (
       store.observed_target_owner
         && store.observed_target_owner->owner_id == "owner-b"
@@ -2716,11 +2930,11 @@ void test_public_authority_store_adapter (test_context_t &test)
     const auto read =
       adapter.read (object_kind_t::actor, "actor-public");
     test.require (
-      read && read->relocation_reference == "root-public"
-        && read->checksum_crc32c == 42
-        && read->inventory_digest == digest_with (9)
+      read && read->target.key == "actor-public"
+        && read->target.object_generation == 7
+        && read->target.node_id == "node-b"
         && read->target_owner.lease_generation == 5,
-      "public authority adapter must decode only its Framework-owned payload");
+      "public authority adapter must decode its canonical actor authority row");
 
     const std::vector<std::byte> application_payload{
       std::byte{0x31}, std::byte{0x32}};
@@ -2785,6 +2999,81 @@ void test_public_authority_store_adapter (test_context_t &test)
 }
 
 } // namespace
+
+void test_source_relocation_failure_stops_state_chunks_and_unseals (
+  test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    stateful_object_runtime_t objects;
+    objects.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t> (256, 0x5a);
+      },
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) { return true; });
+    const auto actor = create_actor (objects, "live-failure-actor");
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    maintenance_runtime_t relocation (objects, authority, roots);
+
+    auto target_terminal = std::make_shared<framework::detail::
+      task_completion_source_t<relocation_reason_t>> ();
+    std::uint32_t planned_chunks = 0;
+    std::uint32_t sent_chunks = 0;
+    eligible_relocation_unit_t::canonical_wire_context_t wire{
+      .relocation = {0x51, 0x52},
+      .target_attempt_generation = 7,
+      .coordinator =
+        {"source-owner", 1, {'s', 'r', 'c'}, 3, "authority-v1"},
+      .target_node_routing_id = {'d', 's', 't'},
+      .target_node_generation = 7,
+      .application_version = 1,
+      .prepare_target =
+        [&] (const std::vector<frozen_object_state_t> &,
+             const relocation_payload_manifest_t &manifest,
+             const std::vector<protocol::session_relocation_route_t> &)
+          -> framework::task_t<relocation_reason_t> {
+          planned_chunks = manifest.chunk_count;
+          co_return co_await target_terminal->task ();
+      },
+      .send_state_chunk =
+        [&] (const protocol::relocation_state_t &)
+          -> framework::task_t<bool> {
+          ++sent_chunks;
+          if (sent_chunks == 1) {
+              target_terminal->complete (
+                framework::result_t<relocation_reason_t>::success (
+                  relocation_reason_t::checksum_mismatch));
+          }
+          co_return true;
+      },
+      .send_relocation_data =
+        [] (const std::vector<protocol::relocation_data_t> &,
+            const relocation_ingress_batch_t &)
+          -> framework::task_t<bool> { co_return true; },
+      .send_cutover =
+        [] (const protocol::relocation_cutover_t &)
+          -> framework::task_t<eligible_relocation_unit_t::
+            canonical_wire_context_t::cutover_enqueue_t> {
+          co_return eligible_relocation_unit_t::canonical_wire_context_t::
+            cutover_enqueue_t::enqueued;
+      },
+      .abort_target_before_cutover = [] { return true; }};
+
+    const auto result = await_task (relocation.relocate (
+      actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+      digest_with (0x31), wire, {}, 16));
+    const auto source_resumed =
+      objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
+    test.require (
+      planned_chunks > 1 && sent_chunks == 1
+        && result.terminal == relocation_terminal_t::blocked
+        && result.reason == relocation_reason_t::checksum_mismatch
+        && source_resumed == stateful_error_t::none,
+      "an explicit target relocation failure must stop remaining state chunks, preserve its reason, and unseal the source");
+}
 
 void test_application_relocation_remote_production_path (
   test_context_t &test)
@@ -5357,18 +5646,20 @@ void test_advertised_receive_chunk_limit_wiring (test_context_t &test)
       "an advertised cap smaller than the local budget must split the same payload into more chunks");
 }
 
-// C-5 increment 2b (updated for the cross-language actorJoin(28) fix): the
+// C-5 increment 2b (originate opt-in reverted b/49b6c-follow-up): the
 // actorJoin(28) originate fence-gate (mesh_node_runtime_t::
 // observe_spot_authority / admit_remote_application_actor_join_via_wire's
-// caller in join_application_actor_to_spot) is now populated by
-// join_application_actor_to_spot's remote branch itself: the freshly
-// resolved target (spot_address_resolver_t / actor_address_resolver_t)
-// already carries the exact peer + authority fence, so that branch calls
-// observe_spot_authority with it before checking the gate. The gate then
-// opens the canonical binary actorJoin(28) wire path only when that
-// observation is present AND the target peer is admitted at exactly that
-// lifecycle generation (has_admitted_peer); otherwise it still falls
-// through to the JSON path. This test does not exercise
+// caller in join_application_actor_to_spot) is a dormant mechanism. C++ does
+// NOT originate a live cross-node actorJoin(28) per spec 51 §9 ("C++ and .NET
+// ... do not originate a cross-node actorJoin operation"); the production
+// join_application_actor_to_spot remote branch does NOT call
+// observe_spot_authority, so observed_spot_authority always returns nullopt
+// there and the branch falls through to the JSON admission path. Activating
+// the opt-in (1b3b21b2e3, reverted) took an incomplete canonical receiver and
+// broke ST-B1; completing that receiver is H-12/H-15/H-4a. This test still
+// proves the gate MECHANISM is real (not dead code) "for whichever future
+// caller opts a peer in": it directly calls observe_spot_authority and reads
+// the observation back. It does not exercise
 // join_application_actor_to_spot directly (the full remote-join call chain
 // fails deep inside completion delivery for a synthetic, never-locally-
 // created Actor regardless of which path is taken, and so cannot
@@ -5431,6 +5722,7 @@ int main ()
     test_accepted_message_payload_is_deserialized_once (test);
     test_close_barrier_waits_and_abort_restores_ingress (test);
     test_envelope_round_trip (test);
+    test_actor_join_recovery_round_trip (test);
     test_spot_restore_stages_before_publication (test);
     test_concurrent_spot_restore_owns_one_reservation (test);
     test_restore_validates_generation_before_spot_publication (test);
@@ -5439,6 +5731,7 @@ int main ()
     test_shutdown_wins_during_retire_preflight (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
+    test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_application_relocation_remote_production_path (test);
     test_application_user_spot_aggregate_remote_production_path (
       test);

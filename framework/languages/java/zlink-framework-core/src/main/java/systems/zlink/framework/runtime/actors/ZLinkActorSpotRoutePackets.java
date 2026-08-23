@@ -60,37 +60,6 @@ public final class ZLinkActorSpotRoutePackets {
             Message.from(joinPayload));
     }
 
-    static List<Message> createCanonicalAdmissionRequestParts(
-        String transferId,
-        Duration timeout,
-        String actorId,
-        String actorType,
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceEntrySpotNodeRid,
-        String sourceEntrySpotId,
-        String sourceEntryRouterChannelId,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Message joinPayload,
-        ZLinkActorJoinOperationId operationId) {
-        return List.of(
-            Message.from(JOIN_SPOT_PACKET_NAME.getBytes(StandardCharsets.UTF_8)),
-            encodeTransferRequest(
-                ADMISSION_PHASE,
-                transferId,
-                timeout,
-                actorId,
-                actorType,
-                actorRef,
-                sourceEntrySpotNodeRid,
-                sourceEntrySpotId,
-                sourceEntryRouterChannelId,
-                sourceNodeRid,
-                sourceSessionRid,
-                ZLinkActorJoinAdmissionProfileCodec.encode(operationId)),
-            Message.from(joinPayload));
-    }
-
     private static Message encodeTransferRequest(
         String phase,
         String transferId,
@@ -129,7 +98,7 @@ public final class ZLinkActorSpotRoutePackets {
             phase, transferId, timeout, actorId, actorType, actorRef,
             sourceEntrySpotNodeRid, sourceEntrySpotId, sourceEntryRouterChannelId,
             sourceNodeRid, sourceSessionRid, adapterKey, backlogCount, coreTransfer,
-            null, new byte[0]);
+            null, new byte[0], 0L, 0L, 0L);
     }
 
     private static Message encodeTransferRequest(
@@ -164,7 +133,7 @@ public final class ZLinkActorSpotRoutePackets {
             backlogCount,
             coreTransfer,
             relocationManifest,
-            new byte[0]);
+            new byte[0], 0L, 0L, 0L);
     }
 
     private static Message encodeTransferRequest(
@@ -183,7 +152,10 @@ public final class ZLinkActorSpotRoutePackets {
         int backlogCount,
         CoreTransfer coreTransfer,
         ZLinkDirectJoinRelocation.Manifest relocationManifest,
-        byte[] sessionRouteCommand44) {
+        byte[] sessionRouteCommand44,
+        long actorNodeGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
         long timeoutMillis = timeout == null ? 30_000L : Math.max(1L, timeout.toMillis());
         CoreTransfer core = coreTransfer == null
             ? new CoreTransfer(false, 0L, 0L, 0L, 0L, 0L, 0L)
@@ -231,13 +203,16 @@ public final class ZLinkActorSpotRoutePackets {
                 : Long.toUnsignedString(relocationManifest.aggregateGeneration()),
             sessionRouteCommand44 == null || sessionRouteCommand44.length == 0
                 ? ""
-                : Base64.getEncoder().encodeToString(sessionRouteCommand44))
+                : Base64.getEncoder().encodeToString(sessionRouteCommand44),
+            Long.toUnsignedString(actorNodeGeneration),
+            Long.toUnsignedString(authorityOwnerGeneration),
+            Long.toUnsignedString(ownerLeaseGeneration))
             .getBytes(StandardCharsets.UTF_8));
     }
 
     public static TransferRequest decodeTransferRequest(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length != 30
+        if (fields.length != 33
             || (!ADMISSION_PHASE.equals(fields[0]) && !COMMIT_PHASE.equals(fields[0]))
             || fields[1].isBlank()
             || fields[3].isBlank()
@@ -250,7 +225,8 @@ public final class ZLinkActorSpotRoutePackets {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot transfer request");
         }
-        return new TransferRequest(
+        try {
+            return new TransferRequest(
             fields[0],
             fields[1],
             Long.parseLong(fields[2]),
@@ -287,7 +263,15 @@ public final class ZLinkActorSpotRoutePackets {
                 : null,
             !fields[29].isBlank()
                 ? Base64.getDecoder().decode(fields[29])
-                : new byte[0]);
+                : new byte[0],
+            Long.parseUnsignedLong(fields[30]),
+            Long.parseUnsignedLong(fields[31]),
+            Long.parseUnsignedLong(fields[32]));
+        } catch (IllegalArgumentException error) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "invalid actor Spot transfer request", error);
+        }
     }
 
     public static List<WireHandoffPacket> decodeHandoffPackets(
@@ -560,7 +544,44 @@ public final class ZLinkActorSpotRoutePackets {
         long coreReserveMessageCount,
         long coreReserveByteCount,
         ZLinkDirectJoinRelocation.Manifest relocationManifest,
-        byte[] sessionRouteCommand44) {
+        byte[] sessionRouteCommand44,
+        long actorNodeGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
+        public TransferRequest(
+            String phase,
+            String transferId,
+            long timeoutMillis,
+            String actorId,
+            String actorType,
+            RoutingId actorNodeRid,
+            long actorGeneration,
+            RoutingId sourceEntrySpotNodeRid,
+            String sourceEntrySpotId,
+            String sourceEntryRouterChannelId,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            String adapterKey,
+            int backlogCount,
+            boolean coreTransfer,
+            long coreTransferIdHigh,
+            long coreTransferIdLow,
+            long coreMembershipEpoch,
+            long coreFinalSequence,
+            long coreReserveMessageCount,
+            long coreReserveByteCount,
+            ZLinkDirectJoinRelocation.Manifest relocationManifest,
+            byte[] sessionRouteCommand44) {
+            this(
+                phase, transferId, timeoutMillis, actorId, actorType,
+                actorNodeRid, actorGeneration, sourceEntrySpotNodeRid,
+                sourceEntrySpotId, sourceEntryRouterChannelId, sourceNodeRid,
+                sourceSessionRid, adapterKey, backlogCount, coreTransfer,
+                coreTransferIdHigh, coreTransferIdLow, coreMembershipEpoch,
+                coreFinalSequence, coreReserveMessageCount, coreReserveByteCount,
+                relocationManifest, sessionRouteCommand44, 0L, 0L, 0L);
+        }
+
         public TransferRequest(
             String phase,
             String transferId,
@@ -607,7 +628,10 @@ public final class ZLinkActorSpotRoutePackets {
                 coreReserveMessageCount,
                 coreReserveByteCount,
                 relocationManifest,
-                new byte[0]);
+                new byte[0],
+                0L,
+                0L,
+                0L);
         }
 
         public TransferRequest {
@@ -618,6 +642,18 @@ public final class ZLinkActorSpotRoutePackets {
 
         @Override public byte[] sessionRouteCommand44() {
             return sessionRouteCommand44.clone();
+        }
+
+        public TransferRequest withActorType(String stableType) {
+            return new TransferRequest(
+                phase, transferId, timeoutMillis, actorId, stableType,
+                actorNodeRid, actorGeneration, sourceEntrySpotNodeRid,
+                sourceEntrySpotId, sourceEntryRouterChannelId, sourceNodeRid,
+                sourceSessionRid, adapterKey, backlogCount, coreTransfer,
+                coreTransferIdHigh, coreTransferIdLow, coreMembershipEpoch,
+                coreFinalSequence, coreReserveMessageCount, coreReserveByteCount,
+                relocationManifest, sessionRouteCommand44,
+                actorNodeGeneration, authorityOwnerGeneration, ownerLeaseGeneration);
         }
 
         public ZLinkBackendActorRef actorRef() {

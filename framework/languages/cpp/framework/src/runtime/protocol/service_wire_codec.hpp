@@ -1018,10 +1018,6 @@ std::vector<std::uint8_t> encode_actor_join_reply (
   std::uint32_t receive_chunk_limit_bytes);
 actor_join_reply_tail_t decode_actor_join_reply (
   std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_actor_join_request (
-  const actor_join_request_t &request);
-actor_join_request_t decode_actor_join_request (
-  std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_liveness (command kind, std::uint64_t probe_id);
 liveness_record_t decode_liveness (std::span<const std::uint8_t> bytes);
 

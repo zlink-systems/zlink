@@ -1,12 +1,14 @@
 import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
 import type {
-  ZLinkAuthorityKey,
-  ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken,
   ZLinkBlobReference,
   ZLinkRelocationStore
 } from '../../contracts/Locations';
+import type {
+  ZLinkAuthorityKey,
+  ZLinkAuthoritySnapshot
+} from '../locations/internal-location-contracts';
 import type { ZLinkAuthorityStore, ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
 import {
   ZLinkFrameworkException

@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -10,8 +10,6 @@ namespace Zlink.Framework.Runtime.Actors;
 /// </summary>
 internal static class ZLinkCanonicalActorRelocationWriter
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-
     internal static ZLinkRelocationEnvelope CreateInitial(
         ZLinkRelocationEnvelope inventory,
         long applicationVersion)
@@ -51,52 +49,36 @@ internal static class ZLinkCanonicalActorRelocationWriter
                 source,
                 remote));
         }
-        using var stream = new MemoryStream();
-        stream.Write(inventory.AggregateId.ToByteArray(bigEndian: true));
-        stream.WriteByte((byte)ZLinkPlacementObjectKind.Actor);
-        using (var identity = new MemoryStream())
-        {
-            // Spec 28 section 4.2 carries the Actor object ID here. The
-            // authority key remains inventory-only; serializing it changes
-            // the root object identity across language boundaries.
-            Text8(identity, actorId);
-            U64(identity, participant.ObjectGeneration);
-            U64(identity, participant.AuthorityOwnerGeneration);
-            U16(stream, checked((ushort)identity.Length));
-            identity.Position = 0;
-            identity.CopyTo(stream);
-        }
-        I64(stream, applicationVersion);
-
-        U32(stream, 1);
-        U64(stream, 1);
-        // Discriminator 1 is always raw application state. Recovery is frozen
-        // saved-work, so ZLRP is never part of the canonical wire body.
-        stream.WriteByte(1);
-        using (var state = new MemoryStream())
-        {
-            U64(state, checked((ulong)participant.ApplicationState.Length));
-            state.Write(participant.ApplicationState.Span);
-            U64(stream, checked((ulong)state.Length));
-            state.Position = 0;
-            state.CopyTo(stream);
-        }
-
-        U32(stream, checked((uint)accepted.Count));
+        var savedWork = new List<ServiceWirePilotCodec.RelocationSavedWork>(
+            accepted.Count);
         foreach (var job in accepted)
         {
             if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
                     job.Payload.Span))
                 throw new ZLinkRelocationDataLostException(
                     "Standalone Actor saved work contains a malformed frozen record.");
-            U64(stream, 1);
-            U64(stream, job.AcceptedSequence);
-            stream.Write(job.Payload.Span);
+            savedWork.Add(new ServiceWirePilotCodec.RelocationSavedWork(
+                ParticipantId: 1,
+                job.AcceptedSequence,
+                job.Payload.ToArray()));
         }
-        U32(stream, 0); // logical timers
-        U32(stream, 0); // pending timer ticks
-
-        stream.Position = 0;
+        var aggregateId = inventory.AggregateId.ToByteArray(bigEndian: true);
+        var encoded = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(new(
+            BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(0, 8)),
+            BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(8, 8)),
+            new ServiceWirePilotCodec.RelocationActorIdentity(
+                actorId,
+                participant.ObjectGeneration,
+                participant.AuthorityOwnerGeneration),
+            applicationVersion,
+            [new ServiceWirePilotCodec.RelocationApplicationState(
+                ParticipantId: 1,
+                HasState: true,
+                participant.ApplicationState.ToArray())],
+            savedWork,
+            [],
+            []));
+        using var stream = new MemoryStream(encoded, writable: false);
         var canonical = ZLinkRelocationEnvelopeCodec.Decode(
             stream,
             inventory.InventoryDigest);
@@ -115,39 +97,6 @@ internal static class ZLinkCanonicalActorRelocationWriter
             CanonicalApplicationVersion = canonical.CanonicalApplicationVersion
         };
     }
-
-    private static void Text8(Stream stream, string value)
-    {
-        var bytes = StrictUtf8.GetBytes(value);
-        if (bytes.Length is < 1 or > byte.MaxValue || bytes.AsSpan().Contains((byte)0))
-            throw new ArgumentOutOfRangeException(nameof(value));
-        stream.WriteByte(checked((byte)bytes.Length));
-        stream.Write(bytes);
-    }
-
-    private static void U16(Stream stream, ushort value)
-    {
-        Span<byte> bytes = stackalloc byte[sizeof(ushort)];
-        BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
-        stream.Write(bytes);
-    }
-
-    private static void U32(Stream stream, uint value)
-    {
-        Span<byte> bytes = stackalloc byte[sizeof(uint)];
-        BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
-        stream.Write(bytes);
-    }
-
-    private static void U64(Stream stream, ulong value)
-    {
-        Span<byte> bytes = stackalloc byte[sizeof(ulong)];
-        BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
-        stream.Write(bytes);
-    }
-
-    private static void I64(Stream stream, long value) =>
-        U64(stream, checked((ulong)value));
 
     private static bool TryReadLegacyRemoteJoinRecovery(
         ReadOnlySpan<byte> encoded,

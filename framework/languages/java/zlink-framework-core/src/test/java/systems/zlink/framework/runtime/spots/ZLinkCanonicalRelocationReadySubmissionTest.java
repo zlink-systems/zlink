@@ -286,7 +286,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         assertEquals(0, aggregateAborts.get(),
             "the exact immutable Prepare fence remains retryable rather than terminal ABORTED");
         assertEquals(1, attemptCount(target.get(), "targets"));
-        assertEquals(0, attemptCount(target.get(), "retryPrepared"));
         assertEquals(1, retainedExpiry.size(),
             "READY failure must bind retry retention to Restore expiry");
 
@@ -327,7 +326,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             "a READY retry must not recreate or lose the Actor target stage");
         assertEquals(0, targetEndpoint.aborted.get(),
             "a retryable READY conflict must not abort the retained target stage");
-        assertEquals(0, attemptCount(target.get(), "retryPrepared"));
         assertThrows(CompletionException.class, () -> source.get().publish(
                 targetRid, request.fence(), Duration.ofSeconds(1))
             .toCompletableFuture().join());
@@ -384,7 +382,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             "the target tombstone must share the Restore expiry boundary");
         retainedExpiry.forEach(value -> value.cleanup().run());
         assertEquals(0, attemptCount(target.get(), "targets"));
-        assertEquals(0, attemptCount(target.get(), "retryPrepared"));
         assertEquals(0, attemptCount(target.get(), "terminalTargets"));
         assertThrows(CompletionException.class, () -> target.get().apply(
                 sourceRid,

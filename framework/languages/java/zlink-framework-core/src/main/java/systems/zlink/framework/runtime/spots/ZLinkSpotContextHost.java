@@ -67,4 +67,11 @@ abstract class ZLinkSpotContextHost {
         String actorId,
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation);
+
+    abstract CompletionStage<Void> enqueueActorDispatch(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease);
 }

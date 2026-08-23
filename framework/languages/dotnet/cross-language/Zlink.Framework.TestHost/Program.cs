@@ -223,6 +223,7 @@ internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
     public void Configure()
     {
         Context.Handlers.AddHandler<RelocationProbeHandler>();
+        Context.Handlers.AddHandler<BeginUserSpotJoinHandler>();
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
@@ -267,6 +268,307 @@ internal sealed class RelocationProbeHandler(TestHostEventSink sink)
         return ValueTask.FromResult(new CrossLangProbeRes(
             nodeRid, actor.StateVersion, actor.ApplicationState.Length, request.Marker));
     }
+}
+
+internal sealed record UserSpotCreateReq(string Marker);
+
+internal sealed record BeginUserSpotJoinReq(string TargetSpotId, string Marker);
+
+internal sealed record UserSpotJoinReq(string Marker);
+
+internal sealed record UserSpotJoinRes(
+    bool Accepted, string ActorId, string SpotId, string NodeRid, string Marker);
+
+internal sealed record UserSpotProbeReq(string Marker);
+
+internal sealed record UserSpotProbeRes(
+    string ActorId, string SpotId, string NodeRid, int StateVersion, string Marker);
+
+internal sealed record UserSpotDiscoveryProbeReq(string Marker);
+
+internal sealed record UserSpotDiscoveryProbeRes(string Marker, string NodeRid);
+
+internal sealed class BeginUserSpotJoinHandler
+    : IZLinkEntrySpotActorRequestHandler<
+        RelocationEntrySpot,
+        RelocationActor,
+        BeginUserSpotJoinReq,
+        UserSpotJoinRes>
+{
+    public ValueTask<UserSpotJoinRes> HandleAsync(
+        RelocationEntrySpot entrySpot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        BeginUserSpotJoinReq request,
+        CancellationToken cancellationToken)
+    {
+        _ = context;
+        cancellationToken.ThrowIfCancellationRequested();
+        actor.Context.JoinSpot(request.TargetSpotId, new UserSpotJoinReq(request.Marker))
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Defer();
+        return ValueTask.FromResult(new UserSpotJoinRes(
+            true,
+            actor.ActorId,
+            request.TargetSpotId,
+            entrySpot.Context.NodeRid.ToString(),
+            request.Marker));
+    }
+}
+
+internal sealed class UserSpotJoinObserver
+{
+    private readonly TaskCompletionSource _joined = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task Joined => _joined.Task;
+
+    public void Complete() => _joined.TrySetResult();
+}
+
+internal sealed class RelocationUserSpot(
+    IZLinkSpotContext context,
+    TestHostEventSink sink,
+    UserSpotJoinObserver observer) : IZLinkSpot<RelocationActor>
+{
+    public const string SpotType = "cross-lang-relocation-user-spot-type";
+
+    public IZLinkSpotContext Context { get; } = context;
+
+    public void Configure()
+    {
+        Context.Handlers.AddHandler<UserSpotProbeHandler>();
+    }
+
+    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+        ZLinkMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = request.IsEmpty ? null : request.Decode<UserSpotCreateReq>();
+        return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+    }
+
+    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+        string actorId,
+        ZLinkMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var join = request.Decode<UserSpotJoinReq>();
+        var nodeRid = Context.NodeRid.ToString();
+        sink.Append($"user-spot-admission|accepted=true|actor={actorId}|spot={Context.SpotId}");
+        return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(new UserSpotJoinRes(
+            true, actorId, Context.SpotId, nodeRid, join.Marker)));
+    }
+
+    public ValueTask OnJoinedActorAsync(
+        RelocationActor actor,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        sink.Append(
+            $"user-spot-joined|actor={actor.ActorId}|spot={Context.SpotId}|nodeRid={Context.NodeRid}");
+        observer.Complete();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask OnLeaveActorAsync(
+        RelocationActor actor,
+        CancellationToken cancellationToken)
+    {
+        _ = actor;
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class UserSpotProbeHandler(TestHostEventSink sink)
+    : IZLinkSpotActorRequestHandler<
+        RelocationUserSpot,
+        RelocationActor,
+        UserSpotProbeReq,
+        UserSpotProbeRes>
+{
+    public ValueTask<UserSpotProbeRes> HandleAsync(
+        RelocationUserSpot spot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        UserSpotProbeReq request,
+        CancellationToken cancellationToken)
+    {
+        _ = context;
+        cancellationToken.ThrowIfCancellationRequested();
+        var nodeRid = spot.Context.NodeRid.ToString();
+        sink.Append($"user-spot-probe-served|nodeRid={nodeRid}|actor={actor.ActorId}");
+        return ValueTask.FromResult(new UserSpotProbeRes(
+            actor.ActorId,
+            spot.Context.SpotId,
+            nodeRid,
+            actor.StateVersion,
+            request.Marker));
+    }
+}
+
+internal sealed class UserSpotTargetHostedService(
+    IZLinkSpotManager spots,
+    IZLinkActorClient actors,
+    IZLinkRouteClient routes,
+    IZLinkRouteMeshRuntime routeMesh,
+    IZLinkRouteMeshRuntimeOptions runtimeOptions,
+    UserSpotJoinObserver observer,
+    TestHostEventSink sink,
+    string spotId,
+    string actorId,
+    string meshName,
+    string sourceNodeRid) : IHostedService
+{
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var created = await spots
+            .GetOrCreate(spotId, RelocationUserSpot.SpotType)
+            .InMesh(meshName)
+            .Request(new UserSpotCreateReq("cross-language-user-spot"))
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Async(cancellationToken);
+        var targetNodeRid = created.Spot.NodeRid.ToString();
+        // The fixed target Spot now exists locally. Exclude this node from the
+        // source Actor's subsequent Entry-Spot placement; this mode
+        // intentionally registers no Entry Spot.
+        runtimeOptions.Mesh(meshName).PlacementWeight = 0;
+        sink.Append(
+            $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}");
+        _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
+        _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
+    }
+
+    private async Task ObserveSourcePeerAsync(
+        IZLinkRouteClient routes,
+        IZLinkRouteMeshRuntime routeMesh,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var status = routeMesh.GetStatus(meshName);
+            if (status.ReadyPeerCount > 0)
+            {
+                try
+                {
+                    var reply = await routes
+                        .RequestToNode(
+                            meshName,
+                            RoutingId.From(sourceNodeRid),
+                            new UserSpotDiscoveryProbeReq("reciprocal-discovery"))
+                        .Timeout(TimeSpan.FromSeconds(2))
+                        .Async<UserSpotDiscoveryProbeRes>(cancellationToken);
+                    if (StringComparer.Ordinal.Equals(reply.NodeRid, sourceNodeRid))
+                    {
+                        sink.Append(
+                            $"user-spot-source-peer-ready|ready=true|peers={status.ReadyPeerCount}");
+                        return;
+                    }
+                }
+                catch (ZLinkFrameworkException)
+                {
+                }
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+    }
+
+    private async Task ProbeAsync(
+        string targetNodeRid,
+        UserSpotJoinObserver observer,
+        CancellationToken cancellationToken)
+    {
+        await observer.Joined.WaitAsync(TimeSpan.FromSeconds(75), cancellationToken);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(90);
+        string? lastFailure = null;
+        while (DateTimeOffset.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var reply = await actors
+                    .RequestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<UserSpotProbeRes>(cancellationToken);
+                if (StringComparer.Ordinal.Equals(reply.NodeRid, targetNodeRid))
+                {
+                    sink.Append(
+                        $"user-spot-probe|nodeRid={reply.NodeRid}|targetRid={targetNodeRid}"
+                        + $"|actor={reply.ActorId}|stateVersion={reply.StateVersion}");
+                    return;
+                }
+                lastFailure = $"unexpected-owner:{reply.NodeRid}";
+            }
+            catch (ZLinkFrameworkException failure)
+            {
+                lastFailure = $"{failure.Kind}:{failure.Message}";
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        }
+        sink.Append($"user-spot-probe-timeout|targetRid={targetNodeRid}|failure={lastFailure ?? "none"}");
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+internal sealed class UserSpotSourceHostedService(
+    IZLinkActorManager actors,
+    IZLinkActorClient actorClient,
+    IZLinkRouteMeshRuntime routeMesh,
+    TestHostEventSink sink,
+    string actorId,
+    string spotId,
+    string meshName) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _ = RunAsync(cancellationToken);
+        return Task.CompletedTask;
+    }
+
+    private async Task RunAsync(CancellationToken cancellationToken)
+    {
+        var discoveryDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
+        while (routeMesh.GetStatus(meshName).ReadyPeerCount == 0)
+        {
+            if (DateTimeOffset.UtcNow >= discoveryDeadline)
+                throw new TimeoutException("automatic RouteMesh discovery did not admit the Node target");
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+        sink.Append("user-spot-source-peer-ready|ready=true");
+
+        var created = await actors
+            .GetOrCreate(actorId, RelocationEntrySpot.ActorType)
+            .Request(new CrossLangActorCreateReq(7, 4))
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Async(cancellationToken);
+        var status = created switch
+        {
+            ZLinkActorCreateResult.Created => "created",
+            ZLinkActorCreateResult.Existing => "existing",
+            ZLinkActorCreateResult.Rejected => "rejected",
+            _ => "unknown"
+        };
+        var nodeRid = created switch
+        {
+            ZLinkActorCreateResult.Created value => value.Actor.NodeRid.ToString(),
+            ZLinkActorCreateResult.Existing value => value.Actor.NodeRid.ToString(),
+            _ => "none"
+        };
+        sink.Append($"user-spot-source-actor-created|status={status}|node={nodeRid}");
+
+        var reply = await actorClient
+            .RequestToActor(actorId, new BeginUserSpotJoinReq(spotId, "canonical-28"))
+            .Timeout(TimeSpan.FromSeconds(45))
+            .Async<UserSpotJoinRes>(cancellationToken);
+        sink.Append(
+            $"user-spot-join-request-reply|accepted={reply.Accepted.ToString().ToLowerInvariant()}"
+            + $"|actor={reply.ActorId}|spot={reply.SpotId}");
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 internal sealed class EntryRelocationSourceHostedService(

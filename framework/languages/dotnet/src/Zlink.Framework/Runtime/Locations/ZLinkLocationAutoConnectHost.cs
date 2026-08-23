@@ -593,6 +593,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     private static ulong CreateLifecycleNonce()
     {
+        // Bounded to [1, long.MaxValue] to satisfy the wire schema's
+        // nonzero-u64 range (frozen at 2^63-1 for signed-language interop).
         Span<byte> bytes = stackalloc byte[sizeof(ulong)];
         ulong value;
         do
@@ -600,7 +602,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
             value = System.Buffers.Binary.BinaryPrimitives
                 .ReadUInt64BigEndian(bytes);
-        } while (value == 0);
+        } while (value is 0 or > long.MaxValue);
         return value;
     }
 

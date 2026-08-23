@@ -245,7 +245,13 @@ struct eligible_relocation_unit_t
         protocol::relocation_coordinator_fence_t coordinator;
         std::vector<std::uint8_t> target_node_routing_id;
         std::uint64_t target_node_generation = 0;
+        std::uint64_t application_version = 0;
         std::vector<protocol::session_relocation_route_t> session_routes;
+        /* Join relocation appends its canonical ZLJR saved-work record to
+         * the sealed Actor snapshot before the immutable envelope is
+         * encoded. Ordinary relocation leaves this callback empty. */
+        std::function<bool (std::vector<frozen_object_state_t> &)>
+          augment_frozen;
         std::function<task_t<std::optional<
           std::vector<protocol::session_relocation_route_t>>> ()>
           capture_session_routes;
@@ -501,7 +507,8 @@ class maintenance_runtime_t
      * object model and the stream. */
     static std::vector<std::uint8_t> encode_envelope (
       const std::vector<frozen_object_state_t> &participants,
-      const protocol::relocation_id_t &relocation);
+      const protocol::relocation_id_t &relocation,
+      std::uint64_t application_version = 1);
     static std::optional<protocol::relocation_envelope_t> decode_envelope (
       const std::vector<std::uint8_t> &payload) noexcept;
     /* Target-side model mapping: the caller supplies the store-derived
@@ -550,7 +557,8 @@ class maintenance_runtime_t
     task_t<bool> relocate_prepare_target (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (
-      std::shared_ptr<relocation_terminal_state_t> state);
+      std::shared_ptr<relocation_terminal_state_t> state,
+      std::function<bool ()> target_failed = {});
     task_t<bool> relocate_boundary_and_send (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_cutover (

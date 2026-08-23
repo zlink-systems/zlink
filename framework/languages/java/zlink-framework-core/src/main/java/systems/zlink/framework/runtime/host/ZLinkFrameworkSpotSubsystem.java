@@ -5,6 +5,7 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -47,6 +48,7 @@ final class ZLinkFrameworkSpotSubsystem {
         ZLinkLocationRepository locationStore,
         ZLinkLocationRuntime
             locationRuntime,
+        ZLinkStoreLocationResolvers locationResolvers,
         SpotTransportAddressResolver locationTransportResolver,
         Map<String, ZLinkInternalMeshNode>
             meshNodes) {
@@ -84,7 +86,8 @@ final class ZLinkFrameworkSpotSubsystem {
             spots.installUserSpotOperationHandlers(
                 authorityStore,
                 locationStore,
-                locationRuntime);
+                locationRuntime,
+                locationResolvers);
         }
         CompletionStage<Void> startup = spots.claimEntrySpotLocations();
         runtimeHandlers.add(ZLinkSpotManager.class, spots);

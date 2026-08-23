@@ -118,7 +118,7 @@ class public_authority_store_adapter_t final :
         // renewal rewrites the same record without changing the fence. A
         // version-only conflict therefore re-reads and retries; only a fence
         // change is a genuine conflict.
-        constexpr int max_attempts = 4;
+        constexpr int max_attempts = 8;
         for (int attempt = 0; attempt != max_attempts; ++attempt) {
             const auto read =
               _store->read_authority (key).result ().value ();
@@ -150,6 +150,7 @@ class public_authority_store_adapter_t final :
                 || target_placement.node_rid.value () != target.node_id
                 || !same_owner (target_placement.owner, target_owner))
                 return {authority_publish_status_t::failed, std::nullopt};
+            std::vector<std::byte> application_payload = target_application_payload;
             authority_relocation_reference_t reference{
               source,
               source,
@@ -157,22 +158,44 @@ class public_authority_store_adapter_t final :
               checksum_crc32c,
               inventory_digest,
               target_owner,
-              target_application_payload.empty ()
+              application_payload.empty ()
                 ? snapshot->payload
-                : target_application_payload};
+                : std::move (application_payload)};
             reference.target = target;
+            if (source.kind == object_kind_t::actor) {
+                const auto projection =
+                  runtime::decode_actor_authority_payload (
+                    reference.application_payload,
+                    snapshot->object_generation);
+                if (!projection
+                    || projection->actor.actor_id ().value () != source.key
+                    || projection->actor.node_rid ().value () != target.node_id
+                    || projection->actor.mesh_name () != target.mesh_name
+                    || projection->actor.object_generation ()
+                         != target.object_generation)
+                    return {authority_publish_status_t::failed, std::nullopt};
+            }
             const auto exchanged =
               _store
                 ->compare_exchange_authority (
                   key,
                   snapshot->store_version,
                   authority_retarget_t{
-                    encode (reference),
+                    source.kind == object_kind_t::actor
+                      ? reference.application_payload
+                      : encode (reference),
                     target_placement})
                 .result ()
                 .value ();
             if (const auto *stored =
                   std::get_if<authority_stored_t> (&exchanged)) {
+                if (source.kind == object_kind_t::actor) {
+                    reference.application_payload = stored->snapshot.payload;
+                    if (!same_owner (stored->snapshot.owner, target_owner))
+                        return {authority_publish_status_t::failed, std::nullopt};
+                    return {authority_publish_status_t::published,
+                            std::move (reference)};
+                }
                 auto current = decode (stored->snapshot);
                 if (!current
                     || !same_owner (
@@ -239,9 +262,8 @@ class public_authority_store_adapter_t final :
                       snapshot.allocation.stable_type;
                     if (decoded_key->kind == 'a') {
                         identity.owner.kind = object_kind_t::actor;
-                        const auto projection =
-                          runtime::decode_actor_authority_payload (
-                            snapshot.payload);
+                        const auto projection = runtime::decode_actor_authority_payload (
+                          snapshot.payload, snapshot.object_generation);
                         if (projection) {
                             identity.spot_membership = std::pair{
                               std::string (projection->spot_id),
@@ -545,11 +567,9 @@ class public_authority_store_adapter_t final :
                     return std::nullopt;
             }
             const auto version = read_byte ();
-            return version == static_cast<std::uint8_t> ('2')
-                     ? std::optional<std::uint8_t>{2}
-                     : (version == static_cast<std::uint8_t> ('3')
-                          ? std::optional<std::uint8_t>{3}
-                          : std::nullopt);
+            return version == static_cast<std::uint8_t> ('3')
+                     ? std::optional<std::uint8_t>{3}
+                     : std::nullopt;
         }
 
         std::optional<std::uint8_t> byte ()
@@ -615,6 +635,22 @@ class public_authority_store_adapter_t final :
     static std::optional<authority_relocation_reference_t>
     decode (const authority_snapshot_t &snapshot)
     {
+        if (const auto projection = runtime::decode_actor_authority_payload (
+              snapshot.payload, snapshot.object_generation)) {
+            object_ref_t target{
+              object_kind_t::actor,
+              std::string (projection->actor.actor_id ().value ()),
+              snapshot.object_generation,
+              snapshot.authority_owner_generation,
+              std::string (projection->actor.mesh_name ()),
+              std::string (projection->actor.node_rid ().value ())};
+            auto source = target;
+            if (source.authority_owner_generation != 0)
+                --source.authority_owner_generation;
+            return authority_relocation_reference_t{
+              std::move (source), std::move (target), {}, 0, {}, snapshot.owner,
+              snapshot.payload};
+        }
         reader_t reader (snapshot.payload);
         const auto version = reader.consume_version ();
         if (!version)

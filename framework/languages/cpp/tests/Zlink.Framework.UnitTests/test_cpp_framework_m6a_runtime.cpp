@@ -13,6 +13,8 @@
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <service_wire_pilot_codec.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -2493,9 +2495,31 @@ void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
     const auto claim = claim_actor_join (target);
     assert (claim && claim->records.size () == 1);
     const auto &record = claim->records.front ();
-    const auto decoded =
-      protocol::decode_actor_join_request (record.parts.front ());
-    assert (decoded == request);
+    const auto decoded = protocol::decode_actor_join_28 (record.parts);
+    assert (decoded.correlation == request.correlation);
+    assert (decoded.actor.id == request.actor.actor_id);
+    assert (decoded.actor.generation == request.actor.object_generation);
+    assert (decoded.actor.target_node_rid
+            == request.actor.target_node_routing_id);
+    assert (decoded.actor.target_node_generation
+            == request.actor.target_node_generation);
+    assert (decoded.actor.expected_authority_owner_generation
+            == request.actor.authority_owner_generation);
+    assert (decoded.actor.expected_owner_lease_generation
+            == request.actor.owner_lease_generation);
+    assert (decoded.entry == request.entry);
+    assert (decoded.target_spot.id == request.target_spot.spot_id);
+    assert (decoded.target_spot.generation
+            == request.target_spot.object_generation);
+    assert (decoded.target_spot.target_node_rid
+            == request.target_spot.target_node_routing_id);
+    assert (decoded.target_spot.target_node_generation
+            == request.target_spot.target_node_generation);
+    assert (decoded.target_spot.expected_authority_owner_generation
+            == request.target_spot.authority_owner_generation);
+    assert (decoded.target_spot.expected_owner_lease_generation
+            == request.target_spot.owner_lease_generation);
+    assert (!decoded.payload);
     assert (record.correlation && *record.correlation == request.correlation);
 
     assert (target.reply_actor_join (
@@ -2553,8 +2577,19 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
     const auto claim = claim_actor_join (target);
     assert (claim && claim->records.size () == 1);
     const auto &record = claim->records.front ();
-    assert (target.reply_actor_join (
-      record, protocol::actor_join_result_t::rejected, std::nullopt, 0, 0));
+    const protocol::application_payload_t application_reply{
+      "actor-join-rejected", "application/octet-stream", bytes ("not-approved")};
+    bool terminal_payload_rejected = false;
+    try {
+        (void) target.reply_actor_join (record, protocol::actor_join_result_t::rejected,
+                                        std::nullopt, 0, 0, 105, 17, application_reply);
+    }
+    catch (const std::invalid_argument &) {
+        terminal_payload_rejected = true;
+    }
+    assert (terminal_payload_rejected);
+    assert (target.reply_actor_join (record, protocol::actor_join_result_t::rejected, std::nullopt,
+                                     0, 0, 0, 0, application_reply));
     assert (target.mailbox ().release (*claim));
 
     const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
@@ -2571,6 +2606,7 @@ void verify_actor_join_rejected_reply_completes_typed_failure ()
     assert (response);
     assert (response->join_result == protocol::actor_join_result_t::rejected);
     assert (!response->spot);
+    assert (outcome.application_reply == application_reply);
 
     source.close ();
     target.close ();
@@ -2697,6 +2733,58 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     target.close ();
 }
 
+// Canonical actorJoin(28)'s target Spot fence is intentionally not a
+// transport decision. Once the source peer and its execution generation are
+// authenticated, raw ingress routes this frame to the Store-backed admission,
+// which owns the target/owner fence terminal.
+void verify_actor_join_target_fence_reaches_admission ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-thin-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("actor-join-thin-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    auto request = actor_join_request (
+      source_descriptor, target_descriptor, 4646, "actor-5", "spot-5");
+    request.target_spot.target_node_routing_id = bytes ("stale-target");
+    request.target_spot.target_node_generation = 99;
+
+    mesh::actor_join_wire_outcome_t outcome;
+    std::atomic_bool settled{false};
+    std::thread join_thread ([&] {
+        outcome = await_task (source.request_actor_join (
+          target_descriptor.node_routing_id, request, std::nullopt, 5s));
+        settled.store (true, std::memory_order_release);
+    });
+    const auto claim = claim_actor_join (target);
+    assert (claim && claim->records.size () == 1);
+    assert (claim->records.front ().correlation
+            && *claim->records.front ().correlation == request.correlation);
+    assert (target.reply_actor_join (
+      claim->records.front (), protocol::actor_join_result_t::rejected,
+      std::nullopt, 0, 0));
+    assert (target.mailbox ().release (*claim));
+
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    join_thread.join ();
+    assert (settled.load (std::memory_order_acquire));
+    assert (outcome.reply
+            && outcome.reply->join_result == protocol::actor_join_result_t::rejected);
+    source.close ();
+    target.close ();
+}
+
 // The same exact-identity fencing that already protects relocation_ready_t
 // must also protect relocation_failed_t: a reply whose identity does not
 // match the sent prepare (a stale or wrong-attempt reply) must resolve
@@ -2815,5 +2903,6 @@ int main ()
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();
     verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
+    verify_actor_join_target_fence_reaches_admission ();
     return 0;
 }

@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
@@ -14,7 +15,6 @@ import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.actors.ZLinkActorClientRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorEntrySpotRoutePackets;
-import systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkStoreActorDirectory;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
@@ -230,6 +230,7 @@ final class ZLinkFrameworkActorSubsystem {
             var meshNode = meshNodes.get(meshActorNode.meshName());
             if (meshNode != null) {
                 actors.setMessageFollowNoticeSender(meshNode::sendMessageFollow);
+                actors.setActorJoinCanonicalMeshNode(meshNode);
                 try {
                     meshNode.spotNode().setMessageFollowRelayHandler(
                         actors::relayMessageFollow);
@@ -259,12 +260,15 @@ final class ZLinkFrameworkActorSubsystem {
             actors.setRemoteAddressResolver(remoteAddressResolver);
         }
         spots.attachActorRuntime(actors);
+        // Canonical service-wire actorJoin(28) is decoded by the raw mesh
+        // boundary, while admission remains in the Spot runtime so it shares
+        // the S3 Location Store fence/type resolution with routed joins.
+        meshNodes.values().forEach(node -> node.setCanonicalActorJoinHandler(
+            (sourceNodeRid, join) -> spots.admitCanonicalActorJoinForServiceWire(
+                join, sourceNodeRid)));
         channels.registerRouteInternalRequestHandler(
             ZLinkActorEntrySpotRoutePackets.JOIN_ENTRY_SPOT_PACKET_NAME,
             actors::handleEntrySpotRouteJoin);
-        channels.registerRouteInternalRequestHandler(
-            ZLinkActorEntryTransferEnvelope.PACKET_NAME,
-            spots::handleEntryActorTransferRoute);
     }
 
     static boolean acceptsMessageFollowNotice(

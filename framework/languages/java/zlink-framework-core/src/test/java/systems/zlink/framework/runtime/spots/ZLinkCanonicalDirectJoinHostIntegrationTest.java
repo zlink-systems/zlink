@@ -52,9 +52,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
@@ -154,6 +156,17 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 repository.read(
                     ZLinkAuthorityKeyCodec.actor(ACTOR_ID), OPEN)
                     .toCompletableFuture().get());
+            // Authority owner generations are provider-wide monotonic
+            // allocations, not per-object source + 1 values. Advance the
+            // provider sequence before this Actor commits at the target so
+            // command 29 must carry and accept a non-adjacent generation.
+            for (int index = 0; index < 3; index++) {
+                assertInstanceOf(
+                    ZLinkActorCreateResult.Created.class,
+                    sourceHost.actorManager()
+                        .create("generation-gap-" + index, ACTOR_TYPE)
+                        .submit().toCompletableFuture().get());
+            }
 
             var sourceRegistration =
                 sourceOptions.registration().meshNodes().getFirst();
@@ -358,18 +371,94 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertNotEquals(
                 relocationId,
                 new UUID(operationId.high(), operationId.low()));
-            var admission = new ZLinkActorJoinRelocationPort.Admission(
+            ZLinkMessage admissionReply = ZLinkMessage.fromEncoded(
+                systems.zlink.framework.ZLinkEncodedPayload.from(
+                    new byte[] {9, 4}),
+                targetSpots.serializerForSpot());
+            var admission = new ZLinkActorJoinRelocationPort.CanonicalAdmission(
                 relocationId,
-                operationId,
                 ACTOR_ID,
                 ACTOR_TYPE,
                 sourceRef.generation(),
+                SOURCE_RID,
+                sourceDescriptor.lifecycleGeneration(),
+                sourceAuthority.authorityOwnerGeneration(),
+                sourceAuthority.ownerLeaseGeneration(),
                 TARGET_SPOT_ID,
+                targetSpotAuthority.objectGeneration(),
+                TARGET_RID,
+                targetDescriptor.lifecycleGeneration(),
+                targetSpotAuthority.authorityOwnerGeneration(),
+                targetDescriptor.leaseGeneration(),
                 targetSpot,
                 actor -> ((TrackingSpot) targetSpot).onJoinedActor(actor),
-                ZLinkMessage.of("accepted"),
+                admissionReply,
+                "application/json",
+                new byte[0],
                 TIMEOUT);
-            targetJoin.admit(admission);
+            targetJoin.admitCanonical(admission);
+            byte[] missingRecoveryRoot =
+                ZLinkCanonicalActorRelocationEnvelope.encode(
+                    relocationId,
+                    ACTOR_ID,
+                    sourceRef.generation(),
+                    sourceAuthority.authorityOwnerGeneration(),
+                    true,
+                    new byte[] {7, 2, 6},
+                    List.of());
+            var missingRecoveryRequest = new ZLinkSpotRetireControl.StageRequest(
+                new ZLinkSpotRetireControl.Fence(relocationId, 1),
+                SOURCE_RID,
+                sourceDescriptor.lifecycleGeneration(),
+                sourceAuthority.ownerId(),
+                sourceAuthority.ownerLeaseGeneration(),
+                TARGET_RID,
+                targetDescriptor.lifecycleGeneration(),
+                targetDescriptor.ownerId(),
+                targetDescriptor.leaseGeneration(),
+                MESH,
+                TARGET_SPOT_ID,
+                ACTOR_TYPE,
+                false,
+                true,
+                missingRecoveryRoot,
+                List.of(new ZLinkSpotRetireControl.ParticipantFence(
+                    ZLinkAuthorityKeyCodec.actor(ACTOR_ID),
+                    systems.zlink.framework.locations
+                        .ZLinkPlacementObjectKind.ACTOR.value(),
+                    ACTOR_ID,
+                    ACTOR_TYPE,
+                    true,
+                    sourceRef.generation(),
+                    sourceAuthority.authorityOwnerGeneration())),
+                List.of());
+            var missing = assertThrows(
+                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                () -> targetJoin.claimRecovery(missingRecoveryRequest));
+            assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
+                missing.kind());
+            assertTrue(missing.getMessage().contains("missing ZLJR"));
+            assertFalse(targetJoin.claimRecovery(
+                new ZLinkSpotRetireControl.StageRequest(
+                    new ZLinkSpotRetireControl.Fence(UUID.randomUUID(), 1),
+                    missingRecoveryRequest.sourceNodeRid(),
+                    missingRecoveryRequest.sourceNodeGeneration(),
+                    missingRecoveryRequest.sourceOwnerId(),
+                    missingRecoveryRequest.sourceOwnerLeaseGeneration(),
+                    missingRecoveryRequest.targetNodeRid(),
+                    missingRecoveryRequest.targetNodeGeneration(),
+                    missingRecoveryRequest.targetOwnerId(),
+                    missingRecoveryRequest.targetOwnerLeaseGeneration(),
+                    missingRecoveryRequest.meshName(),
+                    missingRecoveryRequest.spotId(),
+                    missingRecoveryRequest.stableType(),
+                    missingRecoveryRequest.instanceSpot(),
+                    missingRecoveryRequest.restoreSpotSnapshot(),
+                    missingRecoveryRequest.relocationPayload(),
+                    missingRecoveryRequest.participants(),
+                    missingRecoveryRequest.sessionRoutes())),
+                "ordinary relocation without a command-28 admission must stay generic");
             var goal = new ZLinkActorJoinRelocationPort.Goal(
                 relocationId,
                 operationId,
@@ -382,7 +471,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 targetSpotAuthority.authorityOwnerGeneration(),
                 targetDescriptor.leaseGeneration(),
                 new byte[] {9, 4},
-                null);
+                null,
+                0L,
+                "application/json",
+                new byte[0],
+                "application/x-zlink-multipart");
 
             link.readyHook.set(() -> {
                 CompletionStage<Void> b2 = sourceQueue.enqueueRelocatable(
@@ -416,6 +509,39 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 return;
             }
             assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+            assertTrue(
+                link.lastLeft.currentAuthorityOwnerGeneration()
+                    > sourceAuthority.authorityOwnerGeneration() + 1,
+                "command 29 must preserve the Store-issued owner generation");
+            var savedWork = ZLinkServiceRelocationEnvelopeCodec.decode(
+                link.targetRequest.get().relocationPayload()).savedWork();
+            assertEquals(List.of(3L, 4L), savedWork.stream()
+                .map(value -> value.sequence())
+                .toList(),
+                "captured journal sequence must remain unshifted before ZLJR");
+            assertTrue(ZLinkActorJoinRecoveryCodec.isRecoverySavedWork(
+                savedWork.getLast().frozenRecord()),
+                "ZLJR must append after the captured journal");
+            assertEquals(List.of(3L),
+                ZLinkCanonicalActorRelocationEnvelope.decode(
+                    link.targetRequest.get().relocationPayload(), relocationId,
+                    ACTOR_ID, true).journal().stream()
+                    .map(ZLinkAsyncSerialQueue.QueuedRecord::sequence)
+                    .toList(),
+                "envelope decode must return the unshifted journal sequence");
+            var recovery = ZLinkActorJoinRecoveryCodec.decodeFromEnvelope(
+                    link.targetRequest.get().relocationPayload())
+                .orElseThrow();
+            assertEquals(relocationId, recovery.relocationId());
+            assertEquals(
+                new systems.zlink.framework.runtime.locations
+                    .ZLinkActorAuthorityPayloadCodec()
+                    .decode(sourceAuthority.payload()).orElseThrow()
+                    .currentSpotId(),
+                recovery.sourceSpotId(),
+                "ZLJR SourceSpotId must come from the Store authority snapshot");
+            assertEquals(operationId, recovery.operationId());
+            assertArrayEquals(new byte[] {9, 4}, recovery.reply());
             assertEquals(operationId,
                 ACCEPTED_STAGE.get().get(4, TimeUnit.SECONDS));
             assertEquals(operationId, ACCEPTED.get());

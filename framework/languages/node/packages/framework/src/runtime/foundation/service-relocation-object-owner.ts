@@ -1,4 +1,4 @@
-import type { ZLinkAuthorityKey, ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthorityKey, ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type {
   ServiceRelocationRestoreOwner,
   ServiceRelocationStaging

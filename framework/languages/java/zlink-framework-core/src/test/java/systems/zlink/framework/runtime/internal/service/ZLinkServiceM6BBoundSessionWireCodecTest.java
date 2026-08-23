@@ -34,6 +34,38 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
     }
 
     @Test
+    void highBitCorrelationRoundTripsAcrossSpotActorAndBoundSessionHeaders() {
+        long highBit = Long.MIN_VALUE;
+        var spotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
+            "room", 2, RoutingId.from("target"), highBit, 4, 5);
+        assertEquals(
+            highBit,
+            codec.decodeSpotHeader(codec.encodeSpotHeader(
+                true, 0, highBit, highBit, 12, 0, "source", spotRoute))
+                .correlation());
+        assertEquals(
+            highBit,
+            codec.decodeSpotHeader(codec.encodeSpotHeader(
+                true, 0, highBit, highBit, 12, 0, "source", spotRoute))
+                .operationHigh());
+        assertEquals(
+            highBit,
+            codec.decodeActorHeader(codec.encodeActorHeader(
+                true, 0, highBit, highBit, 22, 0, null,
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                    new ZLinkBackendActorRef(
+                        RoutingId.from("target"), "actor", 2),
+                    highBit, 4, 5)))
+                .correlation());
+        var bind = new ZLinkServiceM6BWireCodec.BoundSessionBind(
+            highBit, route(), RoutingId.from("session"), true, 23);
+        assertEquals(
+            bind,
+            codec.decodeBoundSessionBindHeader(
+                codec.encodeBoundSessionBindHeader(bind)));
+    }
+
+    @Test
     void command36RoundTripsTheCompleteActorAndBindingFence() {
         var route = route();
         byte[] encoded =

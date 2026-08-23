@@ -2,13 +2,23 @@ import { createHash, randomBytes } from 'node:crypto';
 import type {
   ActorRef
 } from '../../contracts';
-import type {
-  ZLinkAuthoritySnapshot,
-  ZLinkLocationOwnerToken
-} from '../../contracts/Locations';
+import { ZLinkSpotKind } from '../../contracts';
+import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
+import {
+  actorRelocationAuthorityApplicationPayload,
+  decodeActorAuthorityPayload,
+  encodeActorAuthorityPayload,
+  relocatingActorAuthorityApplicationPayload,
+  replaceActorRelocationAuthorityApplicationPayload,
+  type ZLinkActorAuthorityState
+} from './actor-authority-payload-codec';
+import {
+  replaceServiceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
 
-const ACTOR_AUTHORITY_VERSION = 1;
 const CREATION_OPERATION_TIMEOUT_MS = 30_000;
 
 export interface ZLinkActorAuthorityIdentity {
@@ -17,8 +27,10 @@ export interface ZLinkActorAuthorityIdentity {
   readonly meshName: string;
   readonly ownerNodeGeneration: bigint;
   readonly owner: ZLinkLocationOwnerToken;
-  readonly spotId?: string;
-  readonly spotGeneration?: bigint;
+  readonly state?: ZLinkActorAuthorityState;
+  readonly spotId: string;
+  readonly spotGeneration: bigint;
+  readonly spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
 }
 
 /**
@@ -30,7 +42,8 @@ export async function publishInitialActorAuthority(
   identity: ZLinkActorAuthorityIdentity,
   signal?: AbortSignal
 ): Promise<ZLinkAuthoritySnapshot> {
-  const readyPayload = encodeActorAuthorityIdentity(identity);
+  const creatingPayload = encodeActorAuthorityIdentity({ ...identity, state: 'creating' });
+  const readyPayload = encodeActorAuthorityIdentity({ ...identity, state: 'ready' });
   const digest = createHash('sha256').update(readyPayload).digest();
   const target = {
     meshName: identity.meshName,
@@ -47,7 +60,7 @@ export async function publishInitialActorAuthority(
       requestEncodedSize: BigInt(readyPayload.byteLength)
     },
     target,
-    creatingPayload: readyPayload,
+    creatingPayload,
     capacity: { actors: 1, spots: 0 }
   }, signal);
   if (reserved.kind === 'alreadyExists') {
@@ -115,85 +128,66 @@ export async function publishInitialActorAuthority(
 export function encodeActorAuthorityIdentity(
   identity: ZLinkActorAuthorityIdentity
 ): Buffer {
-  return Buffer.from(JSON.stringify({
-    version: ACTOR_AUTHORITY_VERSION,
-    actorType: identity.actorType,
+  return encodeActorAuthorityPayload({
+    state: identity.state ?? 'ready',
+    stableType: identity.actorType,
     actorId: identity.actor.actorId,
-    actorNodeRid: String(identity.actor.nodeRid),
-    actorGeneration: identity.actor.objectGeneration.toString(),
-    meshName: identity.meshName,
-    ownerNodeGeneration: identity.ownerNodeGeneration.toString(),
+    currentSpotId: identity.spotId,
+    currentSpotGeneration: identity.spotGeneration,
+    currentSpotKind: identity.spotKind,
     ownerId: identity.owner.ownerId,
-    ownerLeaseGeneration: identity.owner.leaseGeneration.toString(),
-    spotId: identity.spotId,
-    spotGeneration: identity.spotGeneration?.toString()
-  }), 'utf8');
+    ownerLeaseGeneration: identity.owner.leaseGeneration,
+    meshName: identity.meshName,
+    nodeRid: identity.actor.nodeRid,
+    nodeGeneration: identity.ownerNodeGeneration
+  });
 }
 
 export function decodeActorAuthorityIdentity(
-  payload: Uint8Array
+  payload: Uint8Array,
+  objectGeneration: bigint
 ): ZLinkActorAuthorityIdentity | undefined {
-  let value: Record<string, unknown>;
-  try {
-    value = JSON.parse(Buffer.from(payload).toString('utf8')) as Record<string, unknown>;
-    for (let depth = 0; depth < 4; depth += 1) {
-      const nested = (
-        (value.magic === 'ZLAP' || value.magic === 'ZLAR')
-        && value.version === 1
-        && typeof value.base === 'string'
-      )
-        ? value.base
-        : typeof value.applicationPayload === 'string'
-          ? value.applicationPayload
-          : undefined;
-      if (nested === undefined) break;
-      value = JSON.parse(Buffer.from(nested, 'base64').toString('utf8')) as Record<string, unknown>;
-    }
-  } catch {
-    return undefined;
-  }
-  if (
-    value.version !== ACTOR_AUTHORITY_VERSION
-    || typeof value.actorType !== 'string'
-    || typeof value.actorId !== 'string'
-    || typeof value.actorNodeRid !== 'string'
-    || typeof value.actorGeneration !== 'string'
-    || typeof value.meshName !== 'string'
-    || typeof value.ownerNodeGeneration !== 'string'
-    || typeof value.ownerId !== 'string'
-    || typeof value.ownerLeaseGeneration !== 'string'
-  ) {
-    return undefined;
-  }
-  const actorGeneration = BigInt(value.actorGeneration);
-  const ownerNodeGeneration = BigInt(value.ownerNodeGeneration);
-  const ownerLeaseGeneration = BigInt(value.ownerLeaseGeneration);
-  if (
-    value.actorId.length === 0
-    || actorGeneration <= 0n
-    || ownerNodeGeneration <= 0n
-    || ownerLeaseGeneration <= 0n
-  ) {
-    return undefined;
-  }
+  return decodeActorAuthorityIdentityCore(payload, objectGeneration, false);
+}
+
+export function decodeRelocatingActorAuthorityIdentity(
+  payload: Uint8Array,
+  objectGeneration: bigint
+): ZLinkActorAuthorityIdentity | undefined {
+  return decodeActorAuthorityIdentityCore(payload, objectGeneration, true);
+}
+
+function decodeActorAuthorityIdentityCore(
+  payload: Uint8Array,
+  objectGeneration: bigint,
+  relocating: boolean
+): ZLinkActorAuthorityIdentity | undefined {
+  if (objectGeneration <= 0n) return undefined;
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  const actorApplication = relocating
+    ? relocatingActorAuthorityApplicationPayload(outerApplication)
+    : actorRelocationAuthorityApplicationPayload(outerApplication);
+  if (actorApplication === undefined) return undefined;
+  const value = decodeActorAuthorityPayload(actorApplication);
+  if (value === undefined) return undefined;
   return {
-    actorType: value.actorType,
+    actorType: value.stableType,
     actor: {
       actorId: value.actorId,
-      objectGeneration: actorGeneration,
+      objectGeneration,
       meshName: value.meshName,
-      nodeRid: value.actorNodeRid as ActorRef['nodeRid']
+      nodeRid: value.nodeRid
     },
     meshName: value.meshName,
-    ownerNodeGeneration,
+    ownerNodeGeneration: value.nodeGeneration,
     owner: {
       ownerId: value.ownerId,
-      leaseGeneration: ownerLeaseGeneration
+      leaseGeneration: value.ownerLeaseGeneration
     },
-    spotId: typeof value.spotId === 'string' ? value.spotId : undefined,
-    spotGeneration: typeof value.spotGeneration === 'string'
-      ? BigInt(value.spotGeneration)
-      : undefined
+    state: value.state,
+    spotId: value.currentSpotId,
+    spotGeneration: value.currentSpotGeneration,
+    spotKind: value.currentSpotKind
   };
 }
 
@@ -201,90 +195,68 @@ export function rewriteActorAuthorityRoute(
   payload: Uint8Array,
   actor: ActorRef,
   spotId: string,
-  spotGeneration: bigint | undefined,
+  spotGeneration: bigint,
+  spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User,
   ownerNodeGeneration?: bigint,
   owner?: ZLinkLocationOwnerToken
 ): Buffer {
-  const rewrite = (encoded: Buffer, depth: number): Buffer => {
-    if (depth > 4) throw new Error('Actor authority payload nesting exceeds the supported bound.');
-    const value = JSON.parse(encoded.toString('utf8')) as Record<string, unknown>;
-    const nestedKey = (
-      (value.magic === 'ZLAP' || value.magic === 'ZLAR')
-      && value.version === 1
-      && typeof value.base === 'string'
-    )
-      ? 'base'
-      : typeof value.applicationPayload === 'string'
-        ? 'applicationPayload'
-        : undefined;
-    if (nestedKey !== undefined) {
-      value[nestedKey] = rewrite(
-        Buffer.from(value[nestedKey] as string, 'base64'),
-        depth + 1
-      ).toString('base64');
-      return Buffer.from(JSON.stringify(value));
-    }
-    if (value.version !== ACTOR_AUTHORITY_VERSION || value.actorId !== actor.actorId) {
+  return rewriteActorAuthorityPayload(payload, value => {
+    if (value.actorId !== actor.actorId) {
       throw new Error(`Actor '${actor.actorId}' authority identity is invalid.`);
     }
-    value.actorNodeRid = String(actor.nodeRid);
-    value.actorGeneration = actor.objectGeneration.toString();
-    value.spotId = spotId;
-    value.spotGeneration = spotGeneration?.toString();
-    if (ownerNodeGeneration !== undefined) {
-      value.ownerNodeGeneration = ownerNodeGeneration.toString();
-    }
-    if (owner !== undefined) {
-      value.ownerId = owner.ownerId;
-      value.ownerLeaseGeneration = owner.leaseGeneration.toString();
-    }
-    return Buffer.from(JSON.stringify(value));
-  };
-  return rewrite(Buffer.from(payload), 0);
+    return encodeActorAuthorityPayload({
+      ...value,
+      currentSpotId: spotId,
+      currentSpotGeneration: spotGeneration,
+      currentSpotKind: spotKind,
+      nodeRid: actor.nodeRid,
+      nodeGeneration: ownerNodeGeneration ?? value.nodeGeneration,
+      ownerId: owner?.ownerId ?? value.ownerId,
+      ownerLeaseGeneration: owner?.leaseGeneration ?? value.ownerLeaseGeneration,
+      meshName: actor.meshName ?? value.meshName
+    });
+  });
 }
 
 export function rewriteActorAuthorityOwner(
   payload: Uint8Array,
   owner: ZLinkLocationOwnerToken
 ): Buffer {
-  const rewrite = (encoded: Buffer, depth: number): Buffer => {
-    if (depth > 4) throw new Error('Actor authority payload nesting exceeds the supported bound.');
-    const value = JSON.parse(encoded.toString('utf8')) as Record<string, unknown>;
-    const nestedKey = (
-      (value.magic === 'ZLAP' || value.magic === 'ZLAR')
-      && value.version === 1
-      && typeof value.base === 'string'
-    )
-      ? 'base'
-      : typeof value.applicationPayload === 'string'
-        ? 'applicationPayload'
-        : undefined;
-    if (nestedKey !== undefined) {
-      value[nestedKey] = rewrite(
-        Buffer.from(value[nestedKey] as string, 'base64'),
-        depth + 1
-      ).toString('base64');
-      return Buffer.from(JSON.stringify(value));
-    }
-    if (
-      value.version !== ACTOR_AUTHORITY_VERSION
-      || typeof value.ownerId !== 'string'
-      || typeof value.ownerLeaseGeneration !== 'string'
-    ) {
-      throw new Error('Actor authority payload identity is invalid.');
-    }
-    value.ownerId = owner.ownerId;
-    value.ownerLeaseGeneration = owner.leaseGeneration.toString();
-    return Buffer.from(JSON.stringify(value));
-  };
-  return rewrite(Buffer.from(payload), 0);
+  return rewriteActorAuthorityPayload(payload, value => encodeActorAuthorityPayload({
+    ...value,
+    ownerId: owner.ownerId,
+    ownerLeaseGeneration: owner.leaseGeneration
+  }));
+}
+
+export function isActorAuthorityPayload(payload: Uint8Array): boolean {
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  return decodeActorAuthorityPayload(
+    relocatingActorAuthorityApplicationPayload(outerApplication)
+  ) !== undefined;
+}
+
+function rewriteActorAuthorityPayload(
+  payload: Uint8Array,
+  rewrite: (value: NonNullable<ReturnType<typeof decodeActorAuthorityPayload>>) => Buffer
+): Buffer {
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  const actorApplication = relocatingActorAuthorityApplicationPayload(outerApplication);
+  const value = decodeActorAuthorityPayload(actorApplication);
+  if (value === undefined) throw new Error('Actor authority payload identity is invalid.');
+  const rewrittenActor = rewrite(value);
+  const rewrittenPhase = replaceActorRelocationAuthorityApplicationPayload(
+    outerApplication,
+    rewrittenActor
+  );
+  return replaceServiceRelocationAuthorityApplicationPayload(payload, rewrittenPhase);
 }
 
 function requireActorAuthority(
   snapshot: ZLinkAuthoritySnapshot,
   expected: ZLinkActorAuthorityIdentity
 ): void {
-  const actual = decodeActorAuthorityIdentity(snapshot.payload);
+  const actual = decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration);
   if (
     snapshot.allocation.state !== 'active'
     || snapshot.allocation.objectKind !== 'actor'

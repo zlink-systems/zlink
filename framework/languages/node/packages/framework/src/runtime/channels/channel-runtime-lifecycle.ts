@@ -202,7 +202,9 @@ export class ZLinkChannelRuntimeLifecycle {
           handler: this.options.dispatchServices.routeRequestHandler(registration.handlerType)
         })),
         ...[...this.options.internalRouteSendHandlers?.entries() ?? []].map(
-          ([packetName, handler]): ZLinkRouteHandlerRegistration => ({ kind: 'send', packetName, handler })
+          ([packetName, handler]): ZLinkRouteHandlerRegistration => ({
+            kind: 'send', packetName, handler
+          })
         ),
         ...[...this.options.internalRouteRequestHandlers?.entries() ?? []].map(
           ([packetName, handler]): ZLinkRouteHandlerRegistration => ({ kind: 'request', packetName, handler })
@@ -751,7 +753,9 @@ export class ZLinkChannelRuntimeLifecycle {
       const handlers = [
         ...collectRouteChannelHandlers(routeChannel),
         ...[...this.options.internalRouteSendHandlers?.entries() ?? []].map(
-          ([packetName, handler]): ZLinkRouteHandlerRegistration => ({ kind: 'send', packetName, handler })
+          ([packetName, handler]): ZLinkRouteHandlerRegistration => ({
+            kind: 'send', packetName, handler
+          })
         ),
         ...[...this.options.internalRouteRequestHandlers?.entries() ?? []].map(
           ([packetName, handler]): ZLinkRouteHandlerRegistration => ({ kind: 'request', packetName, handler })

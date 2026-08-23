@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <map>
 #include <condition_variable>
 #include <deque>
@@ -23,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -34,6 +36,18 @@ class zlink_builder_t;
 
 namespace zlink::framework::detail
 {
+
+std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &source_actor_node_rid,
+                                             std::string_view actor_id,
+                                             std::uint64_t actor_generation,
+                                             std::uint64_t source_actor_node_generation,
+                                             std::uint64_t correlation);
+
+std::optional<runtime::protocol::application_payload_t> canonical_actor_join_application_payload (
+  const std::string &packet_name, const std::string &content_type, const zlink::message_t &payload);
+
+std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply (
+  const runtime::protocol::application_payload_t &payload);
 
 enum class application_actor_session_bind_outcome_t : std::uint8_t
 {
@@ -361,7 +375,9 @@ class mesh_node_runtime_t
       const zlink::message_t &request,
       std::chrono::milliseconds timeout,
       std::optional<zlink::routing_id_t> bound_session_node_rid = std::nullopt,
-      std::optional<zlink::routing_id_t> bound_session_rid = std::nullopt);
+      std::optional<zlink::routing_id_t> bound_session_rid = std::nullopt,
+      std::string application_packet_name = {},
+      std::string application_content_type = {});
     result_t<std::shared_ptr<deferred_barrier_t>>
     reserve_application_actor_join_barrier (const actor_ref_t &actor);
     task_t<std::optional<zlink::message_t>>
@@ -441,12 +457,9 @@ class mesh_node_runtime_t
         std::uint64_t owner_lease_generation = 0;
     };
     // actorJoin(28) originate fence-gate (cpp analog of dotnet's
-    // _observedSpotAuthorities / ObserveSpotAuthority): defaults closed --
-    // nothing in this codebase calls this yet, so join_application_actor_to_
-    // spot's remote branch always takes the existing JSON admission path
-    // until some caller explicitly observes a peer's Spot authority fence
-    // (e.g. after a trust-establishing exchange with that peer). Observing
-    // an authority is not sufficient on its own to select the wire path --
+    // _observedSpotAuthorities / ObserveSpotAuthority). The production
+    // relocation-driven join records the Store-resolved target fence before
+    // testing this gate. Observing an authority is not sufficient on its own --
     // the target peer must also be admitted at exactly the observed
     // lifecycle generation (checked at the call site, not here).
     void observe_spot_authority (
@@ -462,12 +475,7 @@ class mesh_node_runtime_t
       const std::string &target_spot_id,
       std::uint64_t object_generation) const;
     // Negotiated receive chunk limit from an accepted actorJoin(28)
-    // admission reply (spec 51 §9), keyed by actor identity. The relocation
-    // direct-transfer capture (maintenance_runtime's
-    // advertised_receive_chunk_limit_bytes consumer) reads it when it
-    // begins the transfer that admission approved; threading it into that
-    // consumer's call site is still deferred, but the negotiated value is
-    // no longer dropped at decode.
+    // admission reply (spec 51 §9), keyed by actor identity.
     std::optional<std::uint32_t> negotiated_receive_chunk_limit_bytes (
       const actor_ref_t &actor) const;
     std::string mesh_name () const;
@@ -618,6 +626,8 @@ class mesh_node_runtime_t
     std::map<std::string, observed_spot_authority_t> _observed_spot_authorities;
     void record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
                                                 std::uint32_t limit_bytes);
+    std::uint64_t negotiated_receive_chunk_limit_bytes (
+      const std::vector<runtime::stateful::object_ref_t> &sources) const;
     mutable std::mutex _negotiated_receive_chunk_limit_mutex;
     std::map<std::string, std::uint32_t> _negotiated_receive_chunk_limits;
     host::instance_spot_activation_materializer_t _instance_spot_materializer;
@@ -702,10 +712,11 @@ class mesh_node_runtime_t
 // attempt (later-attempt-wins, spec 15 §4.2). JoinEntrySpot has no
 // approval preparation: entry admission approves without registering a
 // temporary queue; its preparation rides the later Restore request.
-host::actor_join_operation_result_t admit_wire_actor_join (
-  const std::shared_ptr<spot_node_builder_state_t> &spot_state,
-  const zlink::routing_id_t &local_node_rid,
-  const runtime::protocol::actor_join_request_t &request,
-  const std::optional<runtime::protocol::application_payload_t> &payload);
+host::actor_join_operation_result_t
+admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_state,
+                       const zlink::routing_id_t &local_node_rid,
+                       const runtime::protocol::actor_join_request_t &request,
+                       const std::optional<runtime::protocol::application_payload_t> &payload,
+                       serializer_registry_t *serializers);
 
 } // namespace zlink::framework::detail

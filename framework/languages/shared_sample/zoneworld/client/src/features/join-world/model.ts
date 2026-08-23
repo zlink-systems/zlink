@@ -27,7 +27,9 @@ export class GameController {
   async join(playerId: string): Promise<void> {
     if (playerId.trim().length === 0) throw new Error('Player ID is required.');
     await this.stream.connect();
-    const reply = await this.stream.request<JoinWorldRes>(Packets.JoinWorldReq, { playerId: playerId.trim() });
+    const joined = this.stream.waitFor<JoinWorldRes>(Packets.JoinWorldRes);
+    await this.stream.send(Packets.JoinWorldReq, { playerId: playerId.trim() });
+    const reply = await joined;
     this.player.applyJoin(reply);
   }
 

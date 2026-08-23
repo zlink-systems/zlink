@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Locations;
@@ -10,68 +11,40 @@ namespace Zlink.Framework.UnitTests;
 public sealed class CanonicalAuthorityAggregateGenerationTests
 {
     [Fact]
-    public void Consecutive_publications_preserve_takeover_generation_boundary()
+    public void Maximum_issued_generation_is_accepted_and_exhausted_sentinel_is_rejected()
     {
         var steady = UserSpotAuthority();
-        var firstRoot = Root(long.MaxValue - 1);
-        var first = ZLinkCanonicalRelocationAuthorityStateCodec
+        var issuedRoot = Root((ulong)long.MaxValue - 1);
+        var issued = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(
                 steady,
-                State(firstRoot),
-                firstRoot);
+                State(issuedRoot),
+                issuedRoot);
 
         Assert.True(
             ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                first,
-                out var firstPublication));
-        Assert.Equal(long.MaxValue - 1UL, firstPublication.AggregateGeneration);
+                issued,
+                out var publication));
+        Assert.Equal((ulong)long.MaxValue - 1, publication.AggregateGeneration);
 
-        var secondRoot = Root(checked(firstPublication.AggregateGeneration + 1));
-        var second = ZLinkCanonicalRelocationAuthorityStateCodec
-            .ReplaceRelocationState(
-                first,
-                State(secondRoot),
-                secondRoot);
-
-        Assert.True(
-            ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                second,
-                out var secondPublication));
-        Assert.Equal((ulong)long.MaxValue, secondPublication.AggregateGeneration);
-        Assert.Equal(secondRoot.AggregateId, secondPublication.AggregateId);
+        var exhaustedRoot = Root((ulong)long.MaxValue);
+        Assert.Throws<ArgumentException>(() =>
+            ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
+                issued,
+                State(exhaustedRoot),
+                exhaustedRoot));
     }
 
     [Fact]
-    public void Legacy_user_spot_payload_reports_unknown_generation()
+    public void Golden_legacy_dotnet_node_slot_is_rejected()
     {
-        var root = Root(29);
-        var current = ZLinkCanonicalRelocationAuthorityStateCodec
-            .ReplaceRelocationState(UserSpotAuthority(), State(root), root);
-        var legacy = RemoveAggregateGenerationExtension(current);
-
-        Assert.True(
-            ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                legacy,
-                out var publication));
-        Assert.Equal(0UL, publication.AggregateGeneration);
+        AssertGoldenRejected("legacyDotnetNodeTrailingTagU64");
     }
 
     [Fact]
-    public void Legacy_standalone_actor_payload_recovers_known_generation()
+    public void Golden_legacy_java_slot_is_rejected()
     {
-        var root = Root(1, ZLinkPlacementObjectKind.Actor);
-        var current = ZLinkCanonicalRelocationAuthorityStateCodec
-            .ReplaceRelocationState(
-                ActorAuthorityAtEntrySpot(),
-                State(root),
-                root);
-        var legacy = RemoveAggregateGenerationExtension(current);
-
-        Assert.True(
-            ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                legacy,
-                out var publication));
-        Assert.Equal(1UL, publication.AggregateGeneration);
+        AssertGoldenRejected("legacyJavaThirdU64Layout");
     }
 
     private static byte[] UserSpotAuthority() =>
@@ -80,21 +53,6 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
                 ZLinkUserSpotAuthorityState.Ready,
                 "Game.Room",
                 "room-1",
-                "source-owner",
-                7,
-                "mesh",
-                RoutingId.From("source-node"),
-                11));
-
-    private static byte[] ActorAuthorityAtEntrySpot() =>
-        ZLinkActorAuthorityPayloadCodec.Encode(
-            new ZLinkActorAuthorityPayload(
-                ZLinkActorAuthorityState.Ready,
-                "Game.Player",
-                "player-1",
-                "source-entry",
-                11,
-                ZLinkSpotKind.Entry,
                 "source-owner",
                 7,
                 "mesh",
@@ -136,62 +94,39 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             BinaryPrimitives.ReadUInt64BigEndian(id),
             BinaryPrimitives.ReadUInt64BigEndian(id[8..]),
             TargetAttemptGeneration: 1,
-            "source-node",
+            RoutingId.From("source-node").ToHex(),
             SourceNodeGeneration: 11,
             "source-owner",
             SourceOwnerLeaseGeneration: 7,
-            "target-node",
+            RoutingId.From("target-node").ToHex(),
             TargetNodeGeneration: 13,
             "target-owner",
             TargetOwnerLeaseGeneration: 9,
             "target-owner",
             CoordinatorLeaseGeneration: 9,
-            "target-node",
+            RoutingId.From("target-node").ToHex(),
             CoordinatorNodeGeneration: 13,
             Phase: 4,
             ApplicationVersion: 3)
         {
+            AggregateGeneration = root.AggregateGeneration,
             RelocationReference = "root-reference",
             RelocationChecksumCrc32c = 17
         };
     }
 
-    private static byte[] RemoveAggregateGenerationExtension(
-        ReadOnlySpan<byte> current)
+    private static void AssertGoldenRejected(string name)
     {
-        var bodyLength = checked((int)BinaryPrimitives.ReadUInt32BigEndian(
-            current.Slice(7, 4)));
-        var bodyStart = 11;
-        var offset = bodyStart;
-        offset += 2;
-        var identityLength = BinaryPrimitives.ReadUInt16BigEndian(
-            current.Slice(offset, 2));
-        offset += 2 + identityLength;
-        offset += 1 + current[offset];
-        offset += 8;
-        offset += 1 + current[offset];
-        offset += 1 + current[offset];
-        offset += 8;
-        Assert.Equal(1, current[offset]);
-        var slotLengthOffset = offset + 1;
-        var slotLength = checked((int)BinaryPrimitives.ReadUInt32BigEndian(
-            current.Slice(slotLengthOffset, 4)));
-        var slotStart = slotLengthOffset + 4;
-        var extensionStart = slotStart + slotLength - 9;
-
-        var legacy = new byte[current.Length - 9];
-        current[..extensionStart].CopyTo(legacy);
-        current[(extensionStart + 9)..^sizeof(uint)]
-            .CopyTo(legacy.AsSpan(extensionStart));
-        BinaryPrimitives.WriteUInt32BigEndian(
-            legacy.AsSpan(7, 4),
-            checked((uint)(bodyLength - 9)));
-        BinaryPrimitives.WriteUInt32BigEndian(
-            legacy.AsSpan(slotLengthOffset, 4),
-            checked((uint)(slotLength - 9)));
-        BinaryPrimitives.WriteUInt32BigEndian(
-            legacy.AsSpan(legacy.Length - sizeof(uint)),
-            ZLinkCrc32C.Compute(legacy.AsSpan(0, legacy.Length - sizeof(uint))));
-        return legacy;
+        var path = Path.Combine(
+            Common.FrameworkTestEnvironment.GetRepoRoot(),
+            "framework/runtime/protocol/golden/authority-relocation-state-v1.json");
+        using var fixture = JsonDocument.Parse(File.ReadAllText(path));
+        var vector = fixture.RootElement.GetProperty("invalid")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == name);
+        Assert.False(ZLinkCanonicalRelocationAuthorityStateCodec.TryReadSlot(
+            Convert.FromHexString(vector.GetProperty("hex").GetString()!),
+            ulong.Parse(vector.GetProperty("rootAggregateGeneration").GetString()!),
+            out _));
     }
 }

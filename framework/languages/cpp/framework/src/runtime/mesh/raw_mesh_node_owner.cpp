@@ -5,6 +5,8 @@
 
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <service_wire_pilot_codec.hpp>
+
 #include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
@@ -18,6 +20,8 @@
 
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/system_executor.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -1927,15 +1931,35 @@ raw_mesh_node_owner_t::request_actor_join (
         co_return outcome;
     }
     if (request.correlation == 0) {
-        //  encode_actor_join_request would reject this anyway: a request
-        //  this call cannot fence is a wire-contract violation.
+        // The generated actorJoin codec rejects an unfenced request as a
+        // wire-contract violation.
         outcome.failure = actor_join_wire_failure_t::protocol_error;
         co_return outcome;
     }
-    detail::backend::raw_message_t parts{
-      protocol::encode_actor_join_request (request)};
-    if (payload)
-        parts.push_back (protocol::encode_application_payload (*payload));
+    detail::backend::raw_message_t parts;
+    try {
+        parts = protocol::encode_actor_join_28 ({
+          request.correlation,
+          {request.actor.actor_id, request.actor.object_generation,
+           request.actor.target_node_routing_id,
+           request.actor.target_node_generation,
+           request.actor.authority_owner_generation,
+           request.actor.owner_lease_generation},
+          request.entry,
+          {request.target_spot.spot_id, request.target_spot.object_generation,
+           request.target_spot.target_node_routing_id,
+           request.target_spot.target_node_generation,
+           request.target_spot.authority_owner_generation,
+           request.target_spot.owner_lease_generation},
+          payload
+            ? std::optional<
+                protocol::service_wire_pilot_application_payload_envelope_v1>{
+                {payload->packet_name, payload->content_type, payload->payload}}
+            : std::nullopt});
+    }
+    catch (const std::invalid_argument &) {
+        throw protocol::service_wire_error_t ("invalid Actor join request");
+    }
     auto pending = port->request (target_routing_id, parts, timeout);
     const auto completed = co_await pending;
     if (completed.result != detail::backend::raw_request_result_t::ok) {
@@ -2348,11 +2372,17 @@ bool raw_mesh_node_owner_t::reply_actor_join (
   const protocol::actor_join_result_t &join_result,
   const std::optional<protocol::actor_join_reply_spot_ref_t> &spot,
   std::uint64_t membership_epoch,
-  std::uint32_t receive_chunk_limit_bytes)
+  std::uint32_t receive_chunk_limit_bytes,
+  std::uint32_t terminal_result,
+  std::uint32_t failure_code,
+  std::optional<protocol::application_payload_t> application_reply)
 {
     if (!request.correlation || request.source_routing_id.empty ()
         || !request.request_sequence)
         return false;
+    if (terminal_result != 0 && application_reply) {
+        throw std::invalid_argument ("failed Actor join reply cannot carry a payload");
+    }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2362,8 +2392,11 @@ bool raw_mesh_node_owner_t::reply_actor_join (
         return false;
     detail::backend::raw_message_t parts{
       protocol::encode_actor_join_reply (
-        *request.correlation, 0, 0, join_result, spot, membership_epoch,
+        *request.correlation, terminal_result, failure_code, join_result, spot, membership_epoch,
         receive_chunk_limit_bytes)};
+    if (application_reply) {
+        parts.push_back (protocol::encode_application_payload (*application_reply));
+    }
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.request_sequence, {},
@@ -3084,28 +3117,39 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 || !received->request_sequence) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto request = protocol::decode_actor_join_request (
-              received->parts.front ());
-            if (received->parts.size () == 2)
-                (void) protocol::decode_application_payload (
-                  received->parts.back (), false);
+            const auto decoded_canonical = [&] {
+                try {
+                    return protocol::decode_actor_join_28 (received->parts);
+                }
+                catch (const std::invalid_argument &) {
+                    throw protocol::service_wire_error_t (
+                      "invalid Actor join request");
+                }
+            } ();
+            const protocol::actor_join_request_t request{
+              decoded_canonical.correlation,
+              {decoded_canonical.actor.id, decoded_canonical.actor.generation,
+               decoded_canonical.actor.target_node_rid,
+               decoded_canonical.actor.target_node_generation,
+               decoded_canonical.actor.expected_authority_owner_generation,
+               decoded_canonical.actor.expected_owner_lease_generation},
+              decoded_canonical.entry,
+              {decoded_canonical.target_spot.id, decoded_canonical.target_spot.generation,
+               decoded_canonical.target_spot.target_node_rid,
+               decoded_canonical.target_spot.target_node_generation,
+               decoded_canonical.target_spot.expected_authority_owner_generation,
+               decoded_canonical.target_spot.expected_owner_lease_generation}};
             const auto local = _topology.local_descriptor ();
-            // request.actor's node fence identifies the sending (source)
-            // node's own identity — the same "actor route fence targets the
-            // node currently reachable at this identity" convention used by
-            // actorSend/actorRequest/actorDestroy — while request.target_spot
-            // must resolve to this node, since that is who is being asked to
-            // admit the actor.
+            // Transport owns only the authenticated peer and its exact node
+            // execution generation. The canonical target Spot/Authority
+            // fences deliberately travel untouched to the target admission;
+            // that Store-backed boundary is their single owner.
             if (request.actor.target_node_routing_id
                   != received->source_routing_id
                 || request.actor.target_node_routing_id
                      != admitted->descriptor.node_routing_id
                 || request.actor.target_node_generation
-                     != admitted->descriptor.lifecycle_generation
-                || request.target_spot.target_node_routing_id
-                     != local.node_routing_id
-                || request.target_spot.target_node_generation
-                     != local.lifecycle_generation) {
+                     != admitted->descriptor.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             co_return enqueue_received_or_retain (

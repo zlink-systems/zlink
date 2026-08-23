@@ -28,7 +28,7 @@ import type {
 import type {
   ServiceUserSpotOperationResult
 } from '../foundation/service-stateful-runtime';
-import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import {
   captureZLinkSpotSerialTurn,
   requireZLinkYieldTurn

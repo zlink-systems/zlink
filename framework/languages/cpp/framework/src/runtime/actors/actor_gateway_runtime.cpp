@@ -119,7 +119,7 @@ bool drain_bound_session_sends (
                       auto task =
                         std::make_shared<task_t<result_t<void>>> (
                           pending.dispatch ());
-                      detail::observe_task_completion (
+                      detail::observe_task_terminal (
                         *task,
                         [state, queue_key, actor_id, task] (
                           const result_t<result_t<void>> &terminal) {
@@ -764,7 +764,9 @@ bound_session_t actor_context_t::bound_session () const
 }
 
 task_t<detail::actor_join_reply_t> actor_context_t::join_spot_erased (
-  spot_id_t spot_id, const zlink::message_t &request, std::chrono::milliseconds timeout)
+  spot_id_t spot_id, const zlink::message_t &request,
+  std::string packet_name, std::string content_type,
+  std::chrono::milliseconds timeout)
 {
     /* Coroutine on a caller-owned context: copy the shared state and actor
      * ref into the frame so resumes after the owner unwinds never touch
@@ -806,7 +808,9 @@ task_t<detail::actor_join_reply_t> actor_context_t::join_spot_erased (
     /* The request reference must not cross the suspension: hand the
      * dispatcher a frame-owned copy (message payloads share their buffer). */
     const zlink::message_t request_frame = request;
-    auto joined = co_await dispatcher (*actor_ref, spot_id, request_frame, timeout);
+    auto joined = co_await dispatcher (
+      *actor_ref, spot_id, request_frame, std::move (packet_name),
+      std::move (content_type), timeout);
     detail::message_flow_tracer_t (state->dispatch)
       .trace (message_flow_outcome_t::reply_received, [&] {
           return message_flow_event_t{message_flow_outcome_t::reply_received,

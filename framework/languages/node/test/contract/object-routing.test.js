@@ -307,7 +307,10 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
           actor: { actorId: 'actor-1', nodeRid: 'node-a', objectGeneration: 7n },
           meshName: 'play',
           ownerNodeGeneration: 11n,
-          owner: { ownerId: 'owner-a', leaseGeneration: 13n }
+          owner: { ownerId: 'owner-a', leaseGeneration: 13n },
+          spotId: 'entry-a',
+          spotGeneration: 11n,
+          spotKind: framework.ZLinkSpotKind.Entry
         })),
         objectGeneration: 7n,
         authorityOwnerGeneration: 17n,
@@ -417,7 +420,10 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
           actor: { actorId: 'actor-follow', nodeRid, objectGeneration: 7n },
           meshName: 'play',
           ownerNodeGeneration: nodeGeneration,
-          owner: { ownerId: 'owner-a', leaseGeneration: ownerLeaseGeneration }
+          owner: { ownerId: 'owner-a', leaseGeneration: ownerLeaseGeneration },
+          spotId: 'entry-a',
+          spotGeneration: nodeGeneration,
+          spotKind: framework.ZLinkSpotKind.Entry
         }),
         objectGeneration: 7n,
         authorityOwnerGeneration,
@@ -1016,4 +1022,132 @@ test('Missing Instance send directly awaits binding admission and submits once',
     { status: ZLinkSubmitStatus.Submitted }
   );
   assert.equal(sendAttempts, 1);
+});
+
+test('old route disconnect after relocation terminal keeps the terminal seal for a late same-seal relay on the successor route', async () => {
+  const bindings = new internal.ZLinkActorSessionBindingRegistry();
+  const actor = {
+    actorId: 'actor-reconnect',
+    ref: {
+      actorId: 'actor-reconnect',
+      nodeRid: 'node-a',
+      objectGeneration: 1n,
+      bindingGeneration: 1n
+    }
+  };
+  const oldContext = {
+    routingId: 'session-old',
+    bindLocal() {},
+    unbindLocal() {}
+  };
+
+  bindings.bind(oldContext, actor, 'binding-old');
+
+  const fence = { objectGeneration: 1n, bindingGeneration: 1n };
+  const claim = {
+    actorId: 'actor-reconnect',
+    actorGeneration: 1n,
+    bindingGeneration: 1n,
+    sessionIdentity: 'session-old',
+    actorNodeRid: 'node-a',
+    actorNodeGeneration: 1n,
+    sealId: 'seal-1'
+  };
+
+  // seal -> apply(commit) -> terminal: the seal reaches the bounded terminal
+  // retention (spec 48 §137) that a late same-seal relay is meant to find.
+  await bindings.sealRelocation(claim, fence);
+  await bindings.applyRelocation('actor-reconnect', 'seal-1', 'fingerprint-1', 'commit', async () => {});
+  bindings.observeRelocationTerminal('actor-reconnect', 'seal-1', 'fingerprint-1');
+  assert.equal(bindings.relocationSnapshot('actor-reconnect', 'seal-1')?.phase, 'terminal');
+
+  // Old physical connection disconnects (unbind). This must retire only
+  // what that exact route owns; it owns nothing open any more (the seal is
+  // already terminal), so the terminal retention must survive.
+  bindings.unbind('actor-reconnect', oldContext, 'binding-old');
+  assert.equal(
+    bindings.relocationSnapshot('actor-reconnect', 'seal-1')?.phase,
+    'terminal',
+    'unbind must not erase an already-terminal relocation seal it does not own'
+  );
+
+  // New physical connection (successor route) binds.
+  const newContext = {
+    routingId: 'session-new',
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  bindings.bind(newContext, actor, 'binding-new');
+
+  // A late relay carrying the exact same (now terminal) seal must still be
+  // accepted on the successor route.
+  let delivered = false;
+  const sameSealResult = bindings.retainRelocationOutbound('actor-reconnect', {
+    deliver: async () => {
+      delivered = true;
+      return true;
+    },
+    fail: () => {
+      throw new Error('same-seal outbound must not be failed after a successor bind.');
+    }
+  }, 'seal-1');
+  assert.equal(sameSealResult, 'retained');
+  // The outbound drain runs on its own microtask/macrotask chain
+  // (startOutboundDrain); give it a real tick to complete delivery.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(delivered, true);
+
+  // A mismatched (unknown) seal must still be rejected.
+  let failedWithMismatch = false;
+  const mismatchedSealResult = bindings.retainRelocationOutbound('actor-reconnect', {
+    deliver: async () => true,
+    fail: () => {
+      failedWithMismatch = true;
+    }
+  }, 'seal-does-not-exist');
+  assert.equal(mismatchedSealResult, 'rejected');
+  assert.equal(failedWithMismatch, true);
+});
+
+test('unbind does not retire a still-open relocation seal whose Session identity differs from the route being unbound', async () => {
+  const bindings = new internal.ZLinkActorSessionBindingRegistry();
+  const actor = {
+    actorId: 'actor-foreign-seal',
+    ref: {
+      actorId: 'actor-foreign-seal',
+      nodeRid: 'node-a',
+      objectGeneration: 1n,
+      bindingGeneration: 1n
+    }
+  };
+  const context = {
+    routingId: 'session-old',
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  bindings.bind(context, actor, 'binding-old');
+
+  // The active seal's own Session identity does not match the currently
+  // bound route's identity (e.g. a relocation source proof recorded under a
+  // different Session than the one about to disconnect).
+  const fence = { objectGeneration: 1n, bindingGeneration: 1n };
+  const claim = {
+    actorId: 'actor-foreign-seal',
+    actorGeneration: 1n,
+    bindingGeneration: 1n,
+    sessionIdentity: 'session-different-owner',
+    actorNodeRid: 'node-a',
+    actorNodeGeneration: 1n,
+    sealId: 'seal-foreign'
+  };
+  await bindings.sealRelocation(claim, fence);
+  assert.equal(bindings.relocationSnapshot('actor-foreign-seal', 'seal-foreign')?.phase, 'sealed');
+
+  bindings.unbind('actor-foreign-seal', context, 'binding-old');
+
+  assert.equal(
+    bindings.relocationSnapshot('actor-foreign-seal', 'seal-foreign')?.phase,
+    'sealed',
+    'a route must not retire a relocation seal whose Session identity differs from its own'
+  );
 });

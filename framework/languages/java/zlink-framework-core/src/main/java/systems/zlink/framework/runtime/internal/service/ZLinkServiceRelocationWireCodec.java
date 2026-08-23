@@ -1,166 +1,159 @@
 package systems.zlink.framework.runtime.internal.service;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 /** Canonical service-wire command 33/46 relocation reply codec. */
 public final class ZLinkServiceRelocationWireCodec {
-    private static final int PREFIX_BYTES = 5;
-    private static final int MAINTENANCE_RELOCATION_CONTEXT = 2;
-
     public byte[] encodeReplyRelay(ReplyRelay value) {
         Objects.requireNonNull(value, "value");
         value.validate();
-        Writer context = new Writer();
-        context.u64(value.relocation().high());
-        context.u64(value.relocation().low());
-        context.u64(value.targetAttemptGeneration());
-        writeCoordinator(context, value.coordinator());
-        context.u64(value.participantId());
-        context.u64(value.sequence());
-        byte[] contextBytes = context.bytes();
-        if (contextBytes.length > 0xffff) {
-            throw new IllegalArgumentException(
-                "reply relay context exceeds uint16");
+        try {
+            List<byte[]> frames = ServiceWirePilotCodec.encodeReplyRelay33(
+                new ServiceWirePilotCodec.ReplyRelay33(
+                    toGenerated(value.operation()),
+                    value.replyRouteId(),
+                    new ServiceWirePilotCodec.MaintenanceRelocationReplyContext(
+                        toGenerated(value.relocation()),
+                        value.targetAttemptGeneration(),
+                        toGenerated(value.coordinator()),
+                        value.participantId(),
+                        value.sequence()),
+                    value.terminalResult(),
+                    value.failureCode(),
+                    null));
+            if (frames.size() != 1) {
+                throw invalid("command 33 frame projection");
+            }
+            return frames.get(0);
+        } catch (IOException failure) {
+            throw invalid("command 33 field", failure);
         }
-        Writer body = new Writer();
-        body.u64(value.operation().high());
-        body.u64(value.operation().low());
-        body.u64(value.replyRouteId());
-        body.u8(MAINTENANCE_RELOCATION_CONTEXT);
-        body.u16(contextBytes.length);
-        body.raw(contextBytes);
-        body.u32(value.terminalResult());
-        body.u32(value.failureCode());
-        return prefixed(ServiceWireConstants.COMMAND_REPLY_RELAY, body.bytes());
     }
 
     public ReplyRelay decodeReplyRelay(byte[] encoded) {
-        Reader body = body(encoded, ServiceWireConstants.COMMAND_REPLY_RELAY);
-        Operation operation = new Operation(body.u64(), body.u64());
-        long replyRoute = body.nonzeroU64("replyRouteId");
-        if (body.u8() != MAINTENANCE_RELOCATION_CONTEXT) {
-            throw invalid("reply relay context kind");
+        Objects.requireNonNull(encoded, "encoded");
+        try {
+            var generated = ServiceWirePilotCodec.decodeReplyRelay33(
+                List.of(encoded));
+            if (!(generated.context() instanceof
+                    ServiceWirePilotCodec.MaintenanceRelocationReplyContext
+                        context)
+                || generated.payload() != null) {
+                throw invalid("command 33 frame projection");
+            }
+            ReplyRelay result = new ReplyRelay(
+                fromGenerated(generated.operation()),
+                generated.replyRouteId(),
+                fromGenerated(context.relocation()),
+                context.targetAttemptGeneration(),
+                fromGenerated(context.coordinator()),
+                context.participantId(),
+                context.sequence(),
+                generated.terminalResult(),
+                generated.failureCode());
+            result.validate();
+            return result;
+        } catch (IOException failure) {
+            throw invalid("command 33 frame", failure);
         }
-        Reader context = body.slice(body.u16());
-        RelocationId relocation = new RelocationId(
-            context.u64(), context.u64());
-        long attempt = context.nonzeroU64("targetAttemptGeneration");
-        CoordinatorFence coordinator = readCoordinator(context);
-        long participant = context.nonzeroU64("participantId");
-        long sequence = context.nonzeroU64("sequence");
-        context.end();
-        int terminal = body.u32();
-        int failure = body.u32();
-        body.end();
-        ReplyRelay result = new ReplyRelay(
-            operation, replyRoute, relocation, attempt, coordinator,
-            participant, sequence, terminal, failure);
-        result.validate();
-        return result;
     }
 
     public byte[] encodeReplyRelayAck(ReplyRelayAck value) {
         Objects.requireNonNull(value, "value");
         value.validate();
-        Writer body = new Writer();
-        body.u64(value.relocation().high());
-        body.u64(value.relocation().low());
-        writeCoordinator(body, value.coordinator());
-        body.u64(value.operation().high());
-        body.u64(value.operation().low());
-        body.u64(value.replyRouteId());
-        writeRequestSource(body, value.requestSource());
-        body.u8(value.status());
-        return prefixed(
-            ServiceWireConstants.COMMAND_REPLY_RELAY_ACK, body.bytes());
+        try {
+            return ServiceWirePilotCodec.encodeReplyRelayAck46(
+                new ServiceWirePilotCodec.ReplyRelayAck46(
+                    toGenerated(value.relocation()),
+                    toGenerated(value.coordinator()),
+                    toGenerated(value.operation()),
+                    value.replyRouteId(),
+                    toGenerated(value.requestSource()),
+                    value.status()));
+        } catch (IOException failure) {
+            throw invalid("command 46 field", failure);
+        }
     }
 
     public ReplyRelayAck decodeReplyRelayAck(byte[] encoded) {
-        Reader body = body(
-            encoded, ServiceWireConstants.COMMAND_REPLY_RELAY_ACK);
-        RelocationId relocation = new RelocationId(
-            body.u64(), body.u64());
-        CoordinatorFence coordinator = readCoordinator(body);
-        Operation operation = new Operation(body.u64(), body.u64());
-        long replyRouteId = body.u64();
-        RequestSourceFence source = readRequestSource(body);
-        int status = body.u8();
-        body.end();
-        ReplyRelayAck result = new ReplyRelayAck(
-            relocation, coordinator, operation, replyRouteId, source, status);
-        result.validate();
-        return result;
-    }
-
-    private static byte[] prefixed(int command, byte[] body) {
-        byte[] result = new byte[PREFIX_BYTES + body.length];
-        result[0] = (byte) ServiceWireConstants.MAGIC_0;
-        result[1] = (byte) ServiceWireConstants.MAGIC_1;
-        result[2] = (byte) ServiceWireConstants.WIRE_MAJOR;
-        result[3] = (byte) command;
-        result[4] = 0;
-        System.arraycopy(body, 0, result, PREFIX_BYTES, body.length);
-        return result;
-    }
-
-    private static Reader body(byte[] encoded, int expectedCommand) {
         Objects.requireNonNull(encoded, "encoded");
-        if (encoded.length < PREFIX_BYTES
-            || Byte.toUnsignedInt(encoded[0]) != ServiceWireConstants.MAGIC_0
-            || Byte.toUnsignedInt(encoded[1]) != ServiceWireConstants.MAGIC_1
-            || Byte.toUnsignedInt(encoded[2])
-                != ServiceWireConstants.WIRE_MAJOR
-            || Byte.toUnsignedInt(encoded[3]) != expectedCommand
-            || encoded[4] != 0) {
-            throw invalid("service reply relay prefix");
+        try {
+            var generated = ServiceWirePilotCodec.decodeReplyRelayAck46(encoded);
+            ReplyRelayAck result = new ReplyRelayAck(
+                fromGenerated(generated.relocation()),
+                fromGenerated(generated.coordinator()),
+                fromGenerated(generated.operation()),
+                generated.replyRouteId(),
+                fromGenerated(generated.requestSource()),
+                generated.status());
+            result.validate();
+            return result;
+        } catch (IOException failure) {
+            throw invalid("command 46 frame", failure);
         }
-        return new Reader(
-            Arrays.copyOfRange(
-                encoded, PREFIX_BYTES, encoded.length));
     }
 
-    private static void writeCoordinator(
-        Writer writer, CoordinatorFence value) {
-        value.validate();
-        writer.text8(value.ownerId());
-        writer.u64(value.leaseGeneration());
-        writer.rid(value.nodeRid());
-        writer.u64(value.nodeGeneration());
-        writer.text16(value.expectedAuthorityStoreVersion());
+    private static ServiceWirePilotCodec.OperationId toGenerated(
+        Operation value) {
+        return new ServiceWirePilotCodec.OperationId(value.high(), value.low());
     }
 
-    private static CoordinatorFence readCoordinator(Reader reader) {
+    private static Operation fromGenerated(
+        ServiceWirePilotCodec.OperationId value) {
+        return new Operation(value.high(), value.low());
+    }
+
+    private static ServiceWirePilotCodec.RelocationId toGenerated(
+        RelocationId value) {
+        return new ServiceWirePilotCodec.RelocationId(value.high(), value.low());
+    }
+
+    private static RelocationId fromGenerated(
+        ServiceWirePilotCodec.RelocationId value) {
+        return new RelocationId(value.high(), value.low());
+    }
+
+    private static ServiceWirePilotCodec.CoordinatorFence toGenerated(
+        CoordinatorFence value) {
+        return new ServiceWirePilotCodec.CoordinatorFence(
+            value.ownerId(),
+            value.leaseGeneration(),
+            value.nodeRid().toBytes(),
+            value.nodeGeneration(),
+            value.expectedAuthorityStoreVersion());
+    }
+
+    private static CoordinatorFence fromGenerated(
+        ServiceWirePilotCodec.CoordinatorFence value) {
         return new CoordinatorFence(
-            reader.text8(),
-            reader.nonzeroU64("coordinator lease generation"),
-            reader.rid(),
-            reader.nonzeroU64("coordinator node generation"),
-            reader.text16());
+            value.coordinatorOwnerId(),
+            value.coordinatorLeaseGeneration(),
+            RoutingId.from(value.coordinatorNodeRid()),
+            value.coordinatorNodeGeneration(),
+            value.expectedAuthorityStoreVersion());
     }
 
-    private static void writeRequestSource(
-        Writer writer, RequestSourceFence value) {
-        value.validate();
-        writer.text8(value.ownerId());
-        writer.u64(value.leaseGeneration());
-        writer.rid(value.nodeRid());
-        writer.u64(value.nodeGeneration());
+    private static ServiceWirePilotCodec.RequestSourceFence toGenerated(
+        RequestSourceFence value) {
+        return new ServiceWirePilotCodec.RequestSourceFence(
+            value.ownerId(),
+            value.leaseGeneration(),
+            value.nodeRid().toBytes(),
+            value.nodeGeneration());
     }
 
-    private static RequestSourceFence readRequestSource(Reader reader) {
+    private static RequestSourceFence fromGenerated(
+        ServiceWirePilotCodec.RequestSourceFence value) {
         return new RequestSourceFence(
-            reader.text8(),
-            reader.nonzeroU64("request source lease generation"),
-            reader.rid(),
-            reader.nonzeroU64("request source node generation"));
+            value.sourceOwnerId(),
+            value.sourceOwnerLeaseGeneration(),
+            RoutingId.from(value.sourceNodeRid()),
+            value.sourceNodeGeneration());
     }
 
     private static boolean validFailureCode(int value) {
@@ -183,6 +176,12 @@ public final class ZLinkServiceRelocationWireCodec {
     private static IllegalArgumentException invalid(String field) {
         return new IllegalArgumentException(
             "invalid canonical reply relay " + field);
+    }
+
+    private static IllegalArgumentException invalid(
+        String field, Throwable cause) {
+        return new IllegalArgumentException(
+            "invalid canonical reply relay " + field, cause);
     }
 
     public record Operation(long high, long low) {
@@ -276,98 +275,4 @@ public final class ZLinkServiceRelocationWireCodec {
         }
     }
 
-    private static final class Writer {
-        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
-        void u8(int value) { output.write(value); }
-        void u16(int value) { u8(value >>> 8); u8(value); }
-        void u32(long value) {
-            u8((int) (value >>> 24)); u8((int) (value >>> 16));
-            u8((int) (value >>> 8)); u8((int) value);
-        }
-        void u64(long value) { u32(value >>> 32); u32(value); }
-        void raw(byte[] value) { output.writeBytes(value); }
-        void text8(String value) {
-            byte[] bytes = text(value);
-            if (bytes.length == 0 || bytes.length > 255) {
-                throw invalid("text8");
-            }
-            u8(bytes.length); raw(bytes);
-        }
-        void text16(String value) {
-            byte[] bytes = text(value);
-            if (bytes.length == 0 || bytes.length > 0xffff) {
-                throw invalid("text16");
-            }
-            u16(bytes.length); raw(bytes);
-        }
-        void rid(RoutingId value) {
-            byte[] bytes = value.toBytes();
-            if (bytes.length == 0 || bytes.length > 255) {
-                throw invalid("RoutingId");
-            }
-            u8(bytes.length); raw(bytes);
-        }
-        byte[] bytes() { return output.toByteArray(); }
-        private static byte[] text(String value) {
-            requireText(value, "text");
-            return value.getBytes(StandardCharsets.UTF_8);
-        }
-    }
-
-    private static final class Reader {
-        private final byte[] bytes;
-        private int offset;
-        Reader(byte[] bytes) { this.bytes = bytes; }
-        int u8() { require(1); return Byte.toUnsignedInt(bytes[offset++]); }
-        int u16() { return u8() << 8 | u8(); }
-        int u32() {
-            return u8() << 24 | u8() << 16 | u8() << 8 | u8();
-        }
-        long u64() {
-            return Integer.toUnsignedLong(u32()) << 32
-                | Integer.toUnsignedLong(u32());
-        }
-        long nonzeroU64(String field) {
-            long value = u64();
-            if (value == 0) throw invalid(field);
-            return value;
-        }
-        String text8() { return text(u8()); }
-        String text16() { return text(u16()); }
-        RoutingId rid() {
-            int length = u8();
-            if (length == 0) throw invalid("RoutingId");
-            return RoutingId.from(raw(length));
-        }
-        Reader slice(int length) { return new Reader(raw(length)); }
-        byte[] raw(int length) {
-            require(length);
-            byte[] result = Arrays.copyOfRange(
-                bytes, offset, offset + length);
-            offset += length;
-            return result;
-        }
-        String text(int length) {
-            if (length == 0) throw invalid("text");
-            try {
-                String value = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(raw(length)))
-                    .toString();
-                requireText(value, "text");
-                return value;
-            } catch (CharacterCodingException failure) {
-                throw invalid("UTF-8 text");
-            }
-        }
-        void end() {
-            if (offset != bytes.length) throw invalid("trailing byte");
-        }
-        void require(int length) {
-            if (length < 0 || bytes.length - offset < length) {
-                throw invalid("truncated field");
-            }
-        }
-    }
 }

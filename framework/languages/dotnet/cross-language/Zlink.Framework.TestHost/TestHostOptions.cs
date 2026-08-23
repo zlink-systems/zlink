@@ -30,6 +30,7 @@ internal sealed record TestHostOptions(
     string? RedisEndpoint,
     string? RedisKeyPrefix,
     string? ActorId,
+    string? SpotId,
     int? PayloadBytes)
 {
     public static TestHostOptions Parse(string[] args)
@@ -91,6 +92,7 @@ internal sealed record TestHostOptions(
         public string? RedisEndpoint { get; set; }
         public string? RedisKeyPrefix { get; set; }
         public string? ActorId { get; set; }
+        public string? SpotId { get; set; }
         public int? PayloadBytes { get; set; }
 
         public void Apply(string argument, Func<string> readValue)
@@ -183,6 +185,9 @@ internal sealed record TestHostOptions(
                 case "--actor-id":
                     ActorId = readValue();
                     break;
+                case "--spot-id":
+                    SpotId = readValue();
+                    break;
                 case "--payload-bytes":
                     PayloadBytes = int.Parse(readValue(), CultureInfo.InvariantCulture);
                     break;
@@ -221,6 +226,7 @@ internal sealed record TestHostOptions(
                 RedisEndpoint,
                 RedisKeyPrefix,
                 ActorId,
+                SpotId,
                 PayloadBytes);
         }
     }

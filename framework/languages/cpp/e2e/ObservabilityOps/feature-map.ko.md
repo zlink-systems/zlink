@@ -11,7 +11,7 @@ standalone `Client`도 별도 실행 대상으로 사용한다. 현재 구현된
 | 시나리오 | 상태 | 비고 |
 |----------|------|------|
 | OBS-A1 | `implemented` | connector 발원 flow를 session 수신→route 송신→원격 spot 수신 순서로 대조한다. |
-| OBS-A2 | `implemented` | 같은 flow의 수신·dispatch error·`phase=error` 순서를 대조한다. |
+| OBS-A2 | `implemented` | 같은 flow의 수신·dispatch error를 `outcome=failed`로 대조한다(스펙 26에 error phase 없음; 실제 assertion은 `dispatch_error`+`outcome=failed`). |
 | OBS-A3 | `implemented` | tracing-off 노드 전후의 같은 flow를 대조하고 off 노드에는 flow 로그가 없음을 확인한다. |
 | OBS-A4 | `implemented` | 한 publish flow가 두 subscriber에 전달되는지 확인하고 timer 발원 flow를 별도로 판별한다. |
 | OBS-B1 | `deferred` | server connection 계기는 확인하지만 C++ connector가 정식 `zlink.stream.reconnects` counter를 reader에 노출하고 자동 재접속 시도마다 증가시키는 증거가 없다. |

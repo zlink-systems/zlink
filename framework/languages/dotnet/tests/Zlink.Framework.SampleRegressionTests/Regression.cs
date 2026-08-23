@@ -450,6 +450,7 @@ public sealed partial class RegressionTests
             frameworkDocRoot,
             "common",
             "spec",
+            "server",
             "11-spot-model.ko.md"));
         var ticTacToeSampleSpec = File.ReadAllText(Path.Combine(
             frameworkDocRoot,

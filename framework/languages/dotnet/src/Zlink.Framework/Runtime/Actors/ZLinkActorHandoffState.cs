@@ -461,8 +461,23 @@ internal sealed class ZLinkActorHandoffState(
                                   $"Actor '{actorId}' handoff '{handoffId}' has no preparation result.");
                 return false;
             }
-            if (_targetPhase is ZLinkActorTargetHandoffPhase.Importing
-                or ZLinkActorTargetHandoffPhase.AuthorityCommitted
+            if (_targetPhase == ZLinkActorTargetHandoffPhase.Importing)
+            {
+                //  Spec 15 §4.2: before the target CAS fixes a winner, a
+                //  later exact identity replaces an importing target. The
+                //  target-stage owner has already released its reservation
+                //  and transferred instance through the normal abort path;
+                //  clear this per-Actor import so Restore can install the
+                //  newer identity instead of reporting an already-active
+                //  handoff. Prepared is post-authority here, so it and every
+                //  later phase remain excluded as committed winners.
+                AbortImportLocked(
+                    _handoffId!,
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        $"Actor '{actorId}' target handoff was superseded by a newer identity."));
+            }
+            else if (_targetPhase is ZLinkActorTargetHandoffPhase.AuthorityCommitted
                 or ZLinkActorTargetHandoffPhase.NotifyingJoined
                 or ZLinkActorTargetHandoffPhase.Prepared
                 or ZLinkActorTargetHandoffPhase.Replaying
@@ -812,28 +827,37 @@ internal sealed class ZLinkActorHandoffState(
         lock (_gate)
         {
             if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)) return;
-            _targetCompletion?.TrySetException(
-                new InvalidOperationException(
-                    $"Actor '{actorId}' target handoff '{handoffId}' was aborted."));
-            _targetReplayCompletion?.TrySetException(
-                new InvalidOperationException(
-                    $"Actor '{actorId}' target handoff '{handoffId}' was aborted."));
-            _deferredJoinAwaitingTarget = false;
-            _sourceIngressAdmission.ReleaseAll();
-            _sourceHoldAdmission.ReleaseAll();
-            _frames.Clear();
-            _sourceHoldFrames.Clear();
-            _importedFrameCount = 0;
-            _sourceTrailingImported = false;
-            _handoffId = null;
-            _joinRequest = null;
-            _targetPhase = ZLinkActorTargetHandoffPhase.RolledBack;
-            _preparation = null;
-            _targetCompletion = null;
-            _targetReplayCompletion = null;
-            _canonicalMaintenanceDrain = null;
-            _canonicalMaintenanceReplayReservations.Clear();
+            AbortImportLocked(handoffId);
         }
+    }
+
+    private void AbortImportLocked(
+        string handoffId,
+        Exception? preparationFailure = null)
+    {
+        if (preparationFailure is not null)
+            _preparation?.TrySetException(preparationFailure);
+        _targetCompletion?.TrySetException(
+            new InvalidOperationException(
+                $"Actor '{actorId}' target handoff '{handoffId}' was aborted."));
+        _targetReplayCompletion?.TrySetException(
+            new InvalidOperationException(
+                $"Actor '{actorId}' target handoff '{handoffId}' was aborted."));
+        _deferredJoinAwaitingTarget = false;
+        _sourceIngressAdmission.ReleaseAll();
+        _sourceHoldAdmission.ReleaseAll();
+        _frames.Clear();
+        _sourceHoldFrames.Clear();
+        _importedFrameCount = 0;
+        _sourceTrailingImported = false;
+        _handoffId = null;
+        _joinRequest = null;
+        _targetPhase = ZLinkActorTargetHandoffPhase.RolledBack;
+        _preparation = null;
+        _targetCompletion = null;
+        _targetReplayCompletion = null;
+        _canonicalMaintenanceDrain = null;
+        _canonicalMaintenanceReplayReservations.Clear();
     }
 
     public void Complete(string handoffId)

@@ -1,0 +1,88 @@
+{
+  "format": "actor-create-v1",
+  "consumers": [
+    "cpp",
+    "dotnet",
+    "jvm",
+    "node"
+  ],
+  "commandId": 49,
+  "notes": {
+    "encoding": "complete service-wire command 49 frame; all integers are big-endian; body follows the schema field order; payload and trailing bytes are forbidden",
+    "offsetConvention": "inclusive zero-based byte offsets",
+    "offsets": [
+      "0..1 magic=ZM",
+      "2 wireMajor=1",
+      "3 commandId=49",
+      "4 flags=0",
+      "5..12 correlation(nonzero-u64)",
+      "13..20 operation.high(u64)",
+      "21..28 operation.low(u64)",
+      "29 sourceNodeRid.length(u8)=3",
+      "30..32 sourceNodeRid bytes",
+      "33..40 sourceNodeGeneration(nonzero-u64)",
+      "41 actorId.length(u8)=7",
+      "42..48 actorId UTF-8 bytes",
+      "49 stableType.length(u8)=6",
+      "50..55 stableType UTF-8 bytes",
+      "56 reservationId.length(u8)=9",
+      "57..65 reservationId UTF-8 bytes",
+      "66..67 expectedStoreVersion.length(u16)=8",
+      "68..75 expectedStoreVersion UTF-8 bytes",
+      "76..83 objectGeneration(nonzero-u64)",
+      "84..91 authorityOwnerGeneration(nonzero-u64)",
+      "92 targetNodeRid.length(u8)=3",
+      "93..95 targetNodeRid bytes",
+      "96..103 targetNodeGeneration(nonzero-u64)",
+      "104 targetOwnerId.length(u8)=7",
+      "105..111 targetOwnerId UTF-8 bytes",
+      "112..119 targetOwnerLeaseGeneration(nonzero-u64)",
+      "120..123 pendingCapacityDelta(nonzero-u32)",
+      "124..131 deadlineUnixMs(nonzero-u64)"
+    ]
+  },
+  "canonical": {
+    "name": "actorCreate",
+    "decoded": {
+      "correlation": "1",
+      "operation": {
+        "high": "2",
+        "low": "3"
+      },
+      "sourceNodeRid": "737263",
+      "sourceNodeGeneration": "4",
+      "actorId": "actor-a",
+      "stableType": "player",
+      "reservation": {
+        "reservationId": "reserve-1",
+        "expectedStoreVersion": "store-v1",
+        "objectGeneration": "5",
+        "authorityOwnerGeneration": "6",
+        "targetNodeRid": "647374",
+        "targetNodeGeneration": "7",
+        "targetOwnerId": "owner-a",
+        "targetOwnerLeaseGeneration": "8",
+        "pendingCapacityDelta": "9"
+      },
+      "deadlineUnixMs": "10"
+    },
+    "hex": "5a4d013100000000000000000100000000000000020000000000000003037372630000000000000004076163746f722d6106706c6179657209726573657276652d31000873746f72652d763100000000000000050000000000000006036473740000000000000007076f776e65722d61000000000000000800000009000000000000000a"
+  },
+  "malformed": [
+    {
+      "name": "zeroOperationId",
+      "hex": "5a4d013100000000000000000100000000000000000000000000000000037372630000000000000004076163746f722d6106706c6179657209726573657276652d31000873746f72652d763100000000000000050000000000000006036473740000000000000007076f776e65722d61000000000000000800000009000000000000000a",
+      "error": "invalid-field"
+    },
+    {
+      "name": "truncatedDeadline",
+      "hex": "5a4d013100000000000000000100000000000000020000000000000003037372630000000000000004076163746f722d6106706c6179657209726573657276652d31000873746f72652d763100000000000000050000000000000006036473740000000000000007076f776e65722d6100000000000000080000000900000000000000",
+      "error": "truncated-field"
+    },
+    {
+      "name": "trailingByte",
+      "hex": "5a4d013100000000000000000100000000000000020000000000000003037372630000000000000004076163746f722d6106706c6179657209726573657276652d31000873746f72652d763100000000000000050000000000000006036473740000000000000007076f776e65722d61000000000000000800000009000000000000000a00",
+      "error": "trailing-byte"
+    }
+  ]
+}

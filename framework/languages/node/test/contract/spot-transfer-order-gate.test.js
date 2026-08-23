@@ -58,7 +58,8 @@ test('committed Actor transfer reports source cleanup after source membership re
       ownerNodeGeneration: 3n,
       owner: { ownerId: 'source-owner', leaseGeneration: 5n },
       spotId: 'source-spot',
-      spotGeneration: 1n
+      spotGeneration: 1n,
+      spotKind: framework.ZLinkSpotKind.User
     }),
     objectGeneration: 9n,
     authorityOwnerGeneration: 3n,

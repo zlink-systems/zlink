@@ -37,6 +37,7 @@ builder.Services.AddSingleton<IMaintenanceStorePort>(services =>
     new MaintenanceStoreRepository(
         services.GetRequiredService<IConnectionMultiplexer>(),
         shared.RedisKeyPrefix));
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<NodeRegistry>();
 builder.Services.AddSingleton<OpsConsoleRegistry>();
 builder.Services.AddSingleton<IWorldOperationsPort, WorldOperationsAdapter>();
@@ -82,5 +83,6 @@ builder.Services.AddZLinkFramework(options =>
 // the framework has started and published its initial runtime state.
 builder.Services.AddHostedService<NodeStatusBroadcaster>();
 builder.Services.AddHostedService<SocketEventHandler>();
+builder.Services.AddHostedService<NodeRegistrationExpiryService>();
 
 await builder.Build().RunAsync();

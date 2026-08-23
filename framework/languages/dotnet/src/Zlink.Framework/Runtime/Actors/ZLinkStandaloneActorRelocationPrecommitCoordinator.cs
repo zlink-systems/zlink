@@ -43,7 +43,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             Phase: 1,
             applicationVersion)
         {
-            CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion
+            CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion,
+            RelocationReference = "pending"
         };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(source.Payload.Span, state, root: null);
@@ -75,7 +76,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         var projection = RequirePhase(preparing, root.AggregateId, 1);
         var state = projection.State with
         {
-            Phase = 2
+            Phase = 2,
+            AggregateGeneration = root.AggregateGeneration
         };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(preparing.Payload.Span, state, root);
@@ -451,7 +453,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         {
             AggregateGeneration = root.AggregateGeneration,
             CoordinatorExpectedAuthorityStoreVersion = prepare.Coordinator
-                .ExpectedAuthorityStoreVersion
+                .ExpectedAuthorityStoreVersion,
+            RelocationReference = "pending"
         };
         return new ZLinkCanonicalRelocationAuthorityProjection(
             high, low, 0, string.Empty, 0, 2,

@@ -146,7 +146,7 @@ public final class ZLinkStoreLocationResolvers
                 !node.channelWeights().isEmpty())).toList());
     }
 
-    private CompletionStage<List<ZLinkMeshNodeDescriptor>> listLiveMeshNodes(
+    public CompletionStage<List<ZLinkMeshNodeDescriptor>> listLiveMeshNodes(
         String meshName) {
         return listMeshNodes(meshName, null, new ArrayList<>())
             .thenCompose(nodes -> {

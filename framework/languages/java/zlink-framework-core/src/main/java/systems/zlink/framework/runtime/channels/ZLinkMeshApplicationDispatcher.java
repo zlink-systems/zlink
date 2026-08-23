@@ -373,7 +373,7 @@ public final class ZLinkMeshApplicationDispatcher
                     packetName);
                 CompletionStage<Void> invocation = route != null
                     ? invoker.executeHandler(() -> invoker.invokeRouteSendHandler(
-                        null,
+                                record.receive().channelName(),
                                 route,
                                 record.receive().sourceNodeRid(),
                                 payload,
@@ -724,6 +724,17 @@ public final class ZLinkMeshApplicationDispatcher
                     handler.messageType(),
                     handler.packetName()));
         }
+        for (ZLinkScannedHandler handler : scannedHandlers.matching(
+            groups,
+            ZLinkScannedHandlerSurface.ROUTE,
+            ZLinkScannedHandlerKind.SEND)) {
+            putUnique(namespace.routeSends, handler.packetName(),
+                new ChannelRouteSendHandlerRegistration(
+                    handler.handlerType(),
+                    handler.handlerMethod(),
+                    handler.messageType(),
+                    handler.packetName()));
+        }
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
             if (handler.request()) {
@@ -732,6 +743,12 @@ public final class ZLinkMeshApplicationDispatcher
                         handler.handlerType(),
                         handler.messageType(),
                         handler.replyType(),
+                        packetName));
+            } else if (handler.routeContext()) {
+                putUnique(namespace.routeSends, packetName,
+                    new ChannelRouteSendHandlerRegistration(
+                        handler.handlerType(),
+                        handler.messageType(),
                         packetName));
             } else {
                 putUnique(namespace.channelSends, packetName,

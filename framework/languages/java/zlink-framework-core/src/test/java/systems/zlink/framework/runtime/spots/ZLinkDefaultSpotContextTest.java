@@ -4,6 +4,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import java.lang.reflect.Proxy;
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -439,6 +441,90 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
+    void relocatingActorWaitYieldsSharedSpotGateBeforeReenqueue()
+        throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            TestHost host = new TestHost(executor);
+            DefaultSpotContext context = host.userContext(
+                ZLinkUserSpotExecutionMode.SPOT_WIDE);
+            CompletableFuture<Void> moveCompleted = new CompletableFuture<>();
+            CompletableFuture<Void> moveWaitStarted = new CompletableFuture<>();
+            CompletableFuture<Void> actorStarted = new CompletableFuture<>();
+
+            CompletionStage<Void> dispatch = context.enqueueDispatch(() -> {
+                moveWaitStarted.complete(null);
+                return ZLinkSpotRuntime.yieldSharedSpotTurnForActorRelocation(
+                    context,
+                    moveCompleted)
+                    .thenCompose(ignored -> context.enqueueActorDispatch(
+                        "relocated-actor",
+                        () -> {
+                            actorStarted.complete(null);
+                            return CompletableFuture.completedFuture(null);
+                        }));
+            });
+
+            moveWaitStarted.get(2, TimeUnit.SECONDS);
+            executor.submit(() -> moveCompleted.complete(null));
+            actorStarted.get(2, TimeUnit.SECONDS);
+            dispatch.toCompletableFuture().get(2, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void acceptedActorPacketBehindDeferredTurnCanBeCapturedForRelocation()
+        throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            TestHost host = new TestHost(executor);
+            DefaultSpotContext context = host.userContext(
+                ZLinkUserSpotExecutionMode.PER_ACTOR);
+            CompletableFuture<Void> activeRelease = new CompletableFuture<>();
+            CompletableFuture<Void> activeStarted = new CompletableFuture<>();
+            AtomicReference<ZLinkAsyncSerialQueue.ActiveTurnSealHandle> handle =
+                new AtomicReference<>();
+            byte[] acceptedRecord = new byte[] {7, 8, 9};
+
+            CompletionStage<Void> active = context.enqueueActorDispatch(
+                "actor-a",
+                () -> {
+                    handle.set(host.actorQueue("actor-a")
+                        .captureActiveTurnSealHandle()
+                        .orElseThrow());
+                    activeStarted.complete(null);
+                    return activeRelease;
+                });
+            activeStarted.get(2, TimeUnit.SECONDS);
+            CompletionStage<Void> pending = context.enqueueActorDispatch(
+                "actor-a",
+                () -> acceptedRecord,
+                acceptedRecord.length,
+                () -> CompletableFuture.completedFuture(null),
+                () -> { });
+
+            ZLinkAsyncSerialQueue queue = host.actorQueue("actor-a");
+            ZLinkAsyncSerialQueue.RelocationSeal seal = queue
+                .trySealRelocation(handle.get())
+                .orElseThrow();
+            assertEquals(1, seal.captured().size());
+            assertArrayEquals(
+                acceptedRecord,
+                seal.captured().getFirst().payload());
+
+            assertTrue(queue.abortRelocation(seal));
+            activeRelease.complete(null);
+            CompletableFuture.allOf(
+                active.toCompletableFuture(),
+                pending.toCompletableFuture()).get(2, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void entrySpotApplicationPayloadUsesActorQueue() {
         TestHost host = new TestHost();
         DefaultEntrySpotContext context = host.entryContext();
@@ -636,10 +722,29 @@ final class ZLinkDefaultSpotContextTest {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation) {
             actorDispatchSubmissions.incrementAndGet();
-            return actorQueues.computeIfAbsent(
-                    actorId,
-                    ignored -> new ZLinkAsyncSerialQueue(executor, false))
+            return actorQueue(actorId)
                 .enqueue(operation);
+        }
+
+        @Override
+        CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease) {
+            actorDispatchSubmissions.incrementAndGet();
+            return actorQueue(actorId).enqueueRelocatableLazyRecord(
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease);
+        }
+
+        private ZLinkAsyncSerialQueue actorQueue(String actorId) {
+            return actorQueues.computeIfAbsent(
+                actorId,
+                ignored -> new ZLinkAsyncSerialQueue(executor, false));
         }
 
         private static ZLinkBackendSpot backendSpot() {

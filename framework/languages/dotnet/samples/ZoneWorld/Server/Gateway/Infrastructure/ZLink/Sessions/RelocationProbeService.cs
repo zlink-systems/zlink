@@ -1,4 +1,5 @@
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Shared.Contracts;
 
@@ -58,5 +59,28 @@ public sealed class RelocationProbeService(
                 actor.Value.ActorId,
                 actor.Value.ObjectGeneration,
                 actor.Value.NodeRid.ToString());
+    }
+
+    public async ValueTask<FreshActorProbeRes> CreateFreshActorAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        var result = await actors
+            .GetOrCreate(actorId, ZoneWorldNames.PlayerActorType)
+            .InMesh(ZoneWorldNames.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Async(cancellationToken);
+        var actor = result switch
+        {
+            ZLinkActorCreateResult.Created created => created.Actor,
+            ZLinkActorCreateResult.Existing existing => existing.Actor,
+            _ => default
+        };
+        return actor == default
+            ? new FreshActorProbeRes(actorId, 0, string.Empty, "ActorCreateRejected")
+            : new FreshActorProbeRes(
+                actor.ActorId,
+                actor.ObjectGeneration,
+                actor.NodeRid.ToString());
     }
 }

@@ -69,19 +69,17 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
     assert.match(runner, new RegExp(gate));
   }
   for (const scenario of ['C4', 'B4-C2-C3', 'D2', 'E', 'E5-arm', 'E5', 'F']) {
-    assert.match(runner, new RegExp(`specialClientConfig\\([^\\n]+[\\s\\S]*?'${scenario}'\\)`));
+    assert.match(runner, new RegExp(`specialClientConfig\\([^\\n]*?'${scenario}'(?:,[^\\n]*)?\\)`));
   }
   assert.match(runner, /faultTickZone:\s*'zone-nw'/);
-  const botTransferProof = runner.indexOf(
-    "zone player entered zone=zone-nw player=bot-ne-x from=zone-node-2"
-  );
+  const botTransferProof = runner.indexOf('await waitForCrossOwnerBot(ctx, layout.nodes)');
   const botClientStart = runner.indexOf(
     "specialClientConfig(ctx, shared, gateway, ops, 'F')"
   );
-  assert.ok(botTransferProof >= 0, 'ZW-F2 must wait for a specific cross-node bot admission.');
+  assert.ok(botTransferProof >= 0, 'ZW-F2 must wait for an Ops-discovered cross-owner bot transition.');
   assert.ok(botTransferProof < botClientStart, 'ZW-F2 must be proven before the F scenario client connects.');
-  assert.match(runner, /generated-routing-id=ready/);
-  assert.match(runner, /rolling-replacement=ready/);
+  assert.match(runner, /assertGeneratedRoutingIds\(layout\.pair\.sourceOwnerNodeRid, layout\.pair\.targetOwnerNodeRid\)/);
+  assert.match(runner, /await ctx\.start\('target-after-failure'/);
   assert.doesNotMatch(runner, /WaitingForSlot|listRoutingIdSlots|slot=|routing allocation/);
   assert.match(
     zoneSpot,
@@ -101,27 +99,69 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
   assert.ok(borderPublish >= 0 && borderPublish < boundClientPush,
     'border synchronization must be admitted before a bound client push');
   const borderObserverReady = client.indexOf('const adjacentViewTask = westObserver');
-  const crossNodeMove = client.indexOf('new MoveMsg(52, 25)');
+  const crossNodeMove = client.indexOf('new MoveMsg(boundary.targetInside.x, boundary.targetInside.y)');
   assert.ok(borderObserverReady >= 0 && borderObserverReady < crossNodeMove,
     'the adjacent-zone observer must be ready before the cross-node move publishes its border event');
   const ownedStateWait = joinReadiness.indexOf('.waitFor<ZoneStateNotify>');
-  const joinRequest = joinReadiness.indexOf('.request(new JoinWorldReq(playerId))');
+  const joinCompletionWait = joinReadiness.indexOf('.waitFor<JoinWorldRes>');
+  const joinRequest = joinReadiness.indexOf('.send(new JoinWorldReq(playerId))');
+  assert.ok(joinCompletionWait >= 0 && joinCompletionWait < joinRequest,
+    'JoinWorldRes must be armed before the one-way JoinWorldReq is submitted');
   assert.ok(ownedStateWait >= 0 && ownedStateWait < joinRequest,
     'accepted joins must arm the owned-state wait before submitting JoinWorldReq');
   for (const playerId of ['player-a1', 'player-a3', 'player-b1-west']) {
     assert.match(client, new RegExp(`joinAndWaitForOwnedState\\([^\\n]+['"]${playerId}['"]`));
   }
-  for (const playerId of ['player-b4-west', 'player-b4-east', 'player-e1', 'player-e2', 'player-e3', 'player-f']) {
+  for (const playerId of ['player-b4-west', 'player-b4-east', 'player-e1', 'player-f']) {
     assert.match(specialClient, new RegExp(`joinAndWaitForOwnedState\\([^\\n]+['"]${playerId}['"]`));
   }
-  assert.match(specialClient, /join\(newcomer, 'player-e6'\)/);
-  assert.match(client, /player\.playerId === joined\.playerId && player\.zoneId === ZoneIds\.northEast/);
+  assert.match(specialClient, /join\(newcomer, 'player-e3'\)/);
+  assert.match(client, /player\.playerId === joined\.playerId && player\.zoneId === pair\.targetZoneId/);
   assert.match(zoneNodeMain, /await spawnBots\(app, zones\);[\s\S]*?state\.enableBotTicks\(\);/);
   assert.match(
     zoneNodeMain,
     /await spawnBots\(app, zones\);[\s\S]*?bot-start=ready[\s\S]*?waitForBotStart\(node\.botStartSignalPath\)[\s\S]*?state\.enableBotTicks\(\)/
   );
   assert.match(runner, /waitLog\('zone-node-1', 'bot-start=ready'\)[\s\S]*?writeFileSync\(botStartSignalPath/);
+});
+
+test('ZoneWorld replacements start empty and prove on-demand creation after the crash boundary', () => {
+  const runner = read('samples/ZoneWorld/Runner/sample-runner.mjs');
+  const specialClient = read('samples/ZoneWorld/Client/special.ts');
+  const zoneNodeMain = read('samples/ZoneWorld/Server/ZoneNode/main.ts');
+  const gatewayProbes = read('samples/ZoneWorld/Server/Gateway/relocation-probe-handlers.ts');
+
+  assert.match(
+    runner,
+    /target-after-failure'[\s\S]*?bootstrapZones:\s*false[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
+  );
+  assert.match(
+    runner,
+    /target-after-maintenance'[\s\S]*?bootstrapZones:\s*false[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
+  );
+  assert.match(runner, /specialClientConfig\([\s\S]*?'G4',[\s\S]*?targetNode\.nodeId/);
+  assert.match(runner, /specialClientConfig\([\s\S]*?'G3',[\s\S]*?targetNode\.nodeId/);
+  assert.match(runner, /assertFreshReplacementProof\([\s\S]*?layout\.pair\.targetOwnerNodeRid/);
+  assert.match(runner, /assertFreshReplacementProof\([\s\S]*?crashProof\.nodeRid/);
+  assert.match(runner, /stopAndWaitForLocationLease\([\s\S]*?'target-after-failure',[\s\S]*?'SIGTERM'/);
+  assert.doesNotMatch(runner, /runRoutingProbes|recordVerdict\(verdicts, 'ZW-G[34]'\);\s*ctx\.signal/);
+
+  assert.match(
+    specialClient,
+    /MessageFollowProbeReq\(targetJoin\.playerId, 'zw-g4-crashed-owner'[\s\S]*?actorUnavailable/
+  );
+  assert.match(specialClient, /node\.zones\.length === 0/);
+  assert.match(
+    specialClient,
+    /CreateFreshActorProbeReq\(actorId\)[\s\S]*?created\.error === null[\s\S]*?ActorLocationProbeReq\(actorId\)[\s\S]*?fresh-actor-proof=/
+  );
+  assert.match(specialClient, /node\.registered && node\.connected && node\.zones\.length === 0/);
+  assert.match(
+    gatewayProbes,
+    /class CreateFreshActorProbeHandler[\s\S]*?\.getOrCreate\(request\.actorId, ZoneWorldNames\.playerActorType\)[\s\S]*?\.inMesh\(ZoneWorldNames\.zoneMesh\)[\s\S]*?\.submit\(\)/
+  );
+  assert.match(zoneNodeMain, /new ReportNodeStatusMsg\([\s\S]*?\[\.\.\.state\.zones\(\)\]/);
+  assert.match(runner, /zoneCapacity:\s*2/);
 });
 
 test('ZoneWorld applies the Node sample configuration policy without environment settings', () => {
@@ -142,22 +182,20 @@ test('ZoneWorld applies the Node sample configuration policy without environment
   assert.doesNotMatch(sampleSources, /process\.env/);
 });
 
-test('ZoneWorld maintenance rejects only arrivals from outside the maintained node', () => {
+test('ZoneWorld maintenance rejects every arrival while allowing same-zone movement', () => {
   const { NodeRuntimeState } = require(path.join(
     nodeRoot,
     'samples/ZoneWorld/dist/Server/ZoneNode/Domain/node-runtime-state.js'
   ));
-  const state = new NodeRuntimeState({ zoneNode: { nodeId: 'zone-node-1' } });
+  const state = new NodeRuntimeState({ zoneNode: { nodeId: 'zone-node-1', zoneCapacity: 2 } });
   state.setMaintenance('zone-node-1', true);
 
-  assert.equal(state.rejectsArrival('zone-nw', null), true);
-  assert.equal(state.rejectsArrival('zone-nw', 'zone-node-2'), true);
-  assert.equal(state.rejectsArrival('zone-sw', 'zone-node-1'), false);
+  assert.equal(state.rejectsArrival(), true);
 
   state.joined('player-1', 'zone-nw');
   state.joined('player-1', 'zone-sw');
   state.left('player-1', 'zone-nw');
-  assert.equal(state.playerCount(), 1, 'same-node transfer must retain the player after source leave');
+  assert.equal(state.playerCount(), 1, 'overlapping membership retains the player after one source leave');
   state.left('player-1', 'zone-sw');
   assert.equal(state.playerCount(), 0);
 });
@@ -187,6 +225,10 @@ test('ZoneWorld node status combines logical identity with live routing status',
     'samples/ZoneWorld/dist/Server/Ops/node-registry.js'
   ));
   const registry = new NodeRegistry();
+  const { ZoneWorldSpec } = require(path.join(
+    nodeRoot,
+    'samples/ZoneWorld/dist/Shared/spec.js'
+  ));
   registry.applyLiveRoutingIds(new Set(['zn-1']));
   registry.report({
     nodeId: 'zone-node-1',
@@ -200,6 +242,11 @@ test('ZoneWorld node status combines logical identity with live routing status',
   ]);
   assert.deepEqual(
     registry.applyLiveRoutingIds(new Set()).map(({ registered, connected }) => ({ registered, connected })),
+    [{ registered: true, connected: false }]
+  );
+  assert.deepEqual(
+    registry.expireReports(Date.now() + ZoneWorldSpec.nodeStatusReportTtlMs)
+      .map(({ registered, connected }) => ({ registered, connected })),
     [{ registered: false, connected: false }]
   );
 });

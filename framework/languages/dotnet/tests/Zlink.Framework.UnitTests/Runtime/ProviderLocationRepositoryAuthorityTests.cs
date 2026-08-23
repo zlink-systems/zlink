@@ -17,6 +17,117 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     private static readonly ZLinkStoreKey AuthorityOwnerCounterKey =
         new("zlink:v11:authority-owner-counter");
 
+    // Capacity-row-canonical-key-json ruling: the capacity row's key and
+    // JSON shape must match Node's capacityKey()/CapacityRecord and Java's
+    // dac9a585d0 byte-for-byte. This mirrors Java's
+    // capacityRowsUseTheNodeCppCanonicalKeyAndJsonShape test exactly (same
+    // mesh/rid/stableType vectors), so the two independently-derived byte
+    // strings act as a cross-language golden vector.
+    [Fact]
+    public async Task CapacityRowsUseTheNodeJavaCanonicalKeyAndJsonShape()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "owner-canonical-capacity");
+        var descriptor = new ZLinkMeshNodeDescriptor(
+            "mesh /한",
+            RoutingId.From("node /#?"),
+            1,
+            1,
+            "tcp://127.0.0.1:7100",
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            string.Empty,
+            owner.OwnerId,
+            owner.LeaseGeneration,
+            default)
+        {
+            ObjectRole = ZLinkMeshNodeObjectRole.Server,
+            ObjectCapabilities =
+            [
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.UserSpot,
+                    "방&<>",
+                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                    false,
+                    0)
+            ],
+            Capacity = new ZLinkPlacementCapacity(
+                new ZLinkPopulationCapacity(0, 0, 0),
+                new ZLinkPopulationCapacity(0, 0, 0),
+                [
+                    new ZLinkSpotTypeCapacity(
+                        ZLinkPlacementObjectKind.UserSpot,
+                        "방&<>",
+                        0,
+                        0,
+                        0)
+                ]),
+            EntrySpotId = null,
+            State = ZLinkFrameworkRuntimeState.Serving
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (await repository.UpdateMeshNodeAsync(
+                descriptor,
+                ZLinkLocationWriteIntent.NewClaim)).Status);
+
+        var reservationIntent = Encoding.UTF8.GetBytes("create:spot-canonical");
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                new ZLinkObjectReservationRequest(
+                    ZLinkPlacementObjectKind.UserSpot,
+                    ZLinkAuthorityKeyCodec.EncodeSpot("spot-canonical"),
+                    "방&<>",
+                    "inline:spot-canonical",
+                    SHA256.HashData(reservationIntent),
+                    reservationIntent.Length,
+                    new ZLinkMeshNodeDescriptorKey(
+                        descriptor.MeshName,
+                        descriptor.Rid),
+                    descriptor.LifecycleGeneration,
+                    owner,
+                    new byte[] { 1 },
+                    new ZLinkCapacityVector(
+                        0,
+                        1,
+                        new ZLinkSpotTypeCapacityDelta(
+                            ZLinkPlacementObjectKind.UserSpot,
+                            "방&<>",
+                            1)))));
+
+        const string key =
+            "zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F";
+        await AssertCapacityRowAsync(
+            provider,
+            key,
+            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
+            + "\"pending\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
+                + "\"user_spot\\u0000방&<>\":1}}}");
+
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                reserved.Reservation,
+                new byte[] { 2 }));
+        await AssertCapacityRowAsync(
+            provider,
+            key,
+            "{\"active\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
+            + "\"user_spot\\u0000방&<>\":1}},\"pending\":{\"actors\":0,"
+            + "\"spots\":0,\"spotTypes\":{}}}");
+    }
+
+    private static async ValueTask AssertCapacityRowAsync(
+        IZLinkLocationStore provider,
+        string key,
+        string expected)
+    {
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await provider.ReadAsync(new ZLinkStoreKey(key)));
+        Assert.Equal(
+            expected,
+            Encoding.UTF8.GetString(found.Value.Bytes.Span));
+    }
+
     [Fact]
     public async Task OwnerClaimResponseLossReconcilesTheAppliedLease()
     {
@@ -2343,9 +2454,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await provider.ReadAsync(capacityKey));
         var capacityJson = JsonNode.Parse(capacity.Value.Bytes.Span)
                            ?? throw new InvalidDataException();
+        // Canonical capacity row shape (capacity-row-canonical-key-json
+        // ruling): active.actors, not a flat actorsActive field.
         SetJsonNumber(
-            capacityJson.AsObject(),
-            "actorsActive",
+            capacityJson["active"]!.AsObject(),
+            "actors",
             (long)participantCount);
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
             await provider.WriteAsync(
@@ -2429,12 +2542,32 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
     private static ZLinkStoreKey CapacityKey(
         ZLinkMeshNodeDescriptor descriptor) =>
-        new($"zlink:v11:capacity:{StoreSegment(descriptor.MeshName)}"
-            + $"{StoreSegment(descriptor.Rid.ToHex())}"
-            + descriptor.LifecycleGeneration);
+        new($"zlink:v11:capacity:{EncodeUriComponent(descriptor.MeshName)}"
+            + $":{EncodeUriComponent(descriptor.Rid.ToString())}");
 
-    private static string StoreSegment(string value) =>
-        $"{Encoding.UTF8.GetByteCount(value)}:{value}:";
+    // Mirrors the production EncodeUriComponent in
+    // ZLinkProviderLocationRepository.Authority.cs: JavaScript's
+    // encodeURIComponent unreserved set (wider than
+    // Uri.EscapeDataString's RFC 3986 set).
+    private static string EncodeUriComponent(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        var builder = new StringBuilder(bytes.Length);
+        foreach (var b in bytes)
+        {
+            if (b is (>= (byte)'A' and <= (byte)'Z')
+                or (>= (byte)'a' and <= (byte)'z')
+                or (>= (byte)'0' and <= (byte)'9')
+                or (byte)'-' or (byte)'_' or (byte)'.' or (byte)'!'
+                or (byte)'~' or (byte)'*' or (byte)'\'' or (byte)'('
+                or (byte)')')
+                builder.Append((char)b);
+            else
+                builder.Append('%').Append(
+                    b.ToString("X2", CultureInfo.InvariantCulture));
+        }
+        return builder.ToString();
+    }
 
     private static async ValueTask<ZLinkLocationOwnerToken> ClaimAsync(
         IZLinkLocationRepository repository,

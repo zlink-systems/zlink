@@ -83,3 +83,14 @@ internal sealed class NodeStatusBroadcaster(NodeRegistry nodes, OpsConsoleRegist
             node.Zones,
             node.PlayerCount), cancellationToken);
 }
+
+/// <summary>Applies the explicit-report 15-second registration TTL (§2.2).</summary>
+internal sealed class NodeRegistrationExpiryService(NodeRegistry nodes) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+            await nodes.ExpireStaleReportsAsync(stoppingToken);
+    }
+}

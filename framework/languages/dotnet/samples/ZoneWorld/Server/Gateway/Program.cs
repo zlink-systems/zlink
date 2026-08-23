@@ -49,6 +49,8 @@ builder.Services.AddZLinkFramework(options =>
     var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
         .SetRoutingIdPrefix("gw0")
         .Listen(gateway.MeshEndpoint);
+    if (!string.IsNullOrWhiteSpace(gateway.MeshAdvertiseHost))
+        mesh.SetAdvertiseHost(gateway.MeshAdvertiseHost);
     mesh.Objects().Client();
 });
 

@@ -150,11 +150,21 @@ export class ZLinkSpotActorMembership {
           signal?: AbortSignal
         ): Promise<boolean>;
     };
-      await context[ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](
+      const joinEntry = context[ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](
         entryNodeRid,
         ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(request.data())),
         signal
       );
+      // An Actor request may leave its Spot before producing its terminal
+      // response.  Rejoining Entry can require control work that is queued
+      // behind this Spot turn, so retain the request's turn identity but yield
+      // the gate while that Framework operation is in flight.
+      const turn = activation.serial.currentTurn;
+      if (turn !== undefined) {
+        await turn.yieldFrameworkPromise(joinEntry);
+      } else {
+        await joinEntry;
+      }
     } finally {
       request.close();
     }

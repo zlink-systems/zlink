@@ -21,16 +21,19 @@ public final class OpsSession implements ZLinkSession {
     private final NodeRegistry registry;
     private final MaintenanceStore maintenance;
     private final ZLinkFanoutClient fanout;
+    private final OpsConsoleRegistry consoles;
 
     public OpsSession(
         ZLinkSessionContext context,
         NodeRegistry registry,
         MaintenanceStore maintenance,
-        ZLinkFanoutClient fanout) {
+        ZLinkFanoutClient fanout,
+        OpsConsoleRegistry consoles) {
         this.context = context;
         this.registry = registry;
         this.maintenance = maintenance;
         this.fanout = fanout;
+        this.consoles = consoles;
     }
 
     @Override
@@ -40,11 +43,13 @@ public final class OpsSession implements ZLinkSession {
 
     @Override
     public CompletionStage<Void> onConnected() {
+        consoles.add(context);
         return CompletableFuture.completedFuture(null);
     }
 
     @Override
     public CompletionStage<Void> onDisconnected() {
+        consoles.remove(context);
         return CompletableFuture.completedFuture(null);
     }
 
@@ -58,7 +63,7 @@ public final class OpsSession implements ZLinkSession {
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
         return switch (dispatch.packetName()) {
-            case "WatchNodesReq" -> reply(new Messages.WatchNodesRes(registry.snapshot()));
+            case "WatchNodesReq" -> watch();
             case "AnnounceWorldReq" -> announce(payload.decode(Messages.AnnounceWorldReq.class));
             case "SetMaintenanceReq" -> setMaintenance(
                 payload.decode(Messages.SetMaintenanceReq.class));
@@ -67,6 +72,12 @@ public final class OpsSession implements ZLinkSession {
             default -> throw new IllegalStateException(
                 "Unknown ZoneWorld Ops packet: " + dispatch.packetName());
         };
+    }
+
+    private CompletionStage<Void> watch() {
+        List<Messages.NodeView> nodes = registry.snapshot();
+        return reply(new Messages.WatchNodesRes(nodes))
+            .thenCompose(ignored -> consoles.replay(context, nodes));
     }
 
     private CompletionStage<Void> announce(Messages.AnnounceWorldReq request) {
@@ -80,7 +91,8 @@ public final class OpsSession implements ZLinkSession {
     }
 
     private CompletionStage<Void> setMaintenance(Messages.SetMaintenanceReq request) {
-        if (ZoneWorldSpec.zonesOf(request.nodeId()).isEmpty()) {
+        Messages.NodeView node = registry.find(request.nodeId());
+        if (node == null) {
             return reply(new Messages.SetMaintenanceRes(
                 request.nodeId(), false, List.of(), "UnknownNode"));
         }
@@ -96,7 +108,7 @@ public final class OpsSession implements ZLinkSession {
             .thenCompose(ignored -> reply(new Messages.SetMaintenanceRes(
                 request.nodeId(),
                 request.enabled(),
-                ZoneWorldSpec.zonesOf(request.nodeId()),
+                node.zones(),
                 null)));
     }
 
@@ -104,7 +116,7 @@ public final class OpsSession implements ZLinkSession {
         Messages.NodeView node = registry.find(request.nodeId());
         if (node == null) {
             return reply(new Messages.NodeDiagnosticsRes(
-                request.nodeId(), ZoneWorldSpec.zonesOf(request.nodeId()),
+                request.nodeId(), List.of(),
                 0, maintenance.get(request.nodeId()), "UnknownNode"));
         }
         return reply(new Messages.NodeDiagnosticsRes(

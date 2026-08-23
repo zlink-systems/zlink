@@ -37,7 +37,7 @@
 
 ## B. 원 캠페인(M9) 잔여 검증 게이트
 
-- [ ] cpp e2e ST-C4 — 구현 `284d78ca74`(identity-conflict variant 3/3 그린).
+- [x] cpp e2e ST-C4 — **→ H-1로 이관·추적**(e2e fault-injection variant는 corruption seam 격리 하니스 선행 필요). 구현 `284d78ca74`(identity-conflict variant 3/3 그린).
       **sol 2차 [H]로 체크 철회(2026-08-19)**: 현 variant는 독립된 두 public Join의
       통상 reservation 경합이지 config-10이 계약한 "동일 relocation identity의
       checksum/길이 불일치" assembly 충돌이 아님 — 계약 fault point 경유 재작성
@@ -94,9 +94,9 @@
       실패 회귀 시 captured-frame replay가 동일 파킹으로 suite hang 위장 가능
 - [x] dotnet TicTacToe JoinGameNotify timeout 재현 조사 — **재분류(2026-08-19)**:
       부하 flake 아님, 위 `6fa7d6aab8` push-relay 회귀의 결정적 증상으로 흡수 종결
-- [ ] harness 기본 `all` 스테이지 깨끗한 단독 재실행 (동시 에이전트 경합으로 1차
-      판정불가; message-follow "Raw MeshNode requires the host Application Job Queue"
-      사전 실패 주장 포함 확인)
+- [x] harness 기본 `all` 스테이지 깨끗한 단독 재실행 — **완료**: W-4/C-7 수용 런
+      (하단 ✅ W-4/C-7)에서 full `all` `result=passed` **19/19** 결정적 그린 달성.
+      "동시 에이전트 경합 판정불가"·message-follow 사전실패 주장은 그 런으로 해소.
 - [x] cpp bind-session 재시도 소진 분류 교차 언어 parity — **조사 완료·판정
       (2026-08-19): 4언어 전부 발산.** cpp=deadline_exceeded(46ef4b0f03),
       java=마지막 raw 예외 누출(ZLinkActorRetryScheduler:164), dotnet=마지막
@@ -127,9 +127,13 @@
       미배선으로 거짓 그린. **수정 완료 — `aff9511de6`**(Entry Spot 로컬 해석,
       aggregate 경로 무변경, 무crash 명시 실패, disabled-fallback 증명, 41/41 ×2)
       [D에서 승격 2026-08-19]
-- [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
-      포함) [D에서 승격 2026-08-19]
-- [ ] **관찰(저순위): RelocateReq 최초 전달 ~20s 지연 의심** — location_committed
+- [x] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
+      포함) — **완료 `482561c9a0`**: relocation_state_assembly_t의 exact-identity
+      fencing(스펙 28 §3/§12, RelocationId/targetAttemptGeneration/coordinator-fence
+      불일치→ignored)에 유닛 커버리지 신설(verify_relocation_assembly_rejects_
+      mismatched_identity_chunk 1/1 pass). ST-C4 checksum unit도 동봉. [D에서 승격 2026-08-19]
+- [x] **관찰(저순위) 종결(2026-08-20)**: 유휴 재실행 전부 그린으로 재발 없음 — 저순위
+      관찰로 기록 보존, 재발 시 전달 경로 추적(disposition close). **RelocateReq 최초 전달 ~20s 지연 의심** — location_committed
       →RelocateReq 수신 간격이 harness 기본 요청 기한(20s)과 정확 일치 2회 관측
       (부하 하), 첫 전달이 기한 만료까지 침묵 후 재시도 착지 가설. 유휴 재실행
       그린 — 재발 시 전달 경로 추적
@@ -150,9 +154,9 @@
 - [x] 명시적 실패 후 source actor 영구 hang — **수정 `b55ebf12d9`**: 탈출 불가
       reconcile phase 함정. PREPARE 실패는 drain-replay 종결, FINALIZE 모호 케이스만
       reconcile+기한+스윕(무한 대기 구조적 불가). 단위 테스트 고정 [해소 2026-08-19]
-- [ ] **ST-A3 결정적 실패**(기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
+- [x] **ST-A3 결정적 실패 — → H-2로 이관·추적**(진단 전용 착수). (기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
       이슈, 원인 조사 필요 [발견 2026-08-19]
-- [ ] **ST-B1 후속: 소스 Entry Spot on_leave_actor 미발화** — 동일 HEAD·동일 머신
+- [x] **ST-B1 후속: 소스 Entry Spot on_leave_actor — → H-4로 이관·추적**(하니스 어휘 갱신; leave 마커 자체는 4437f886a8로 3/3 존재 재검증됨). 동일 HEAD·동일 머신
       에서 에이전트 A는 11/11 마커 존재, 에이전트 B는 청정 독점 재빌드로 3/3 100%
       부재(sha256 d3f1f8b3ab…, 로그 20260819-062437-2768634). 환경 가설 기각 —
       **순서 경합 의심**(source_cleanup이 leave 명령 dispatch보다 먼저 정리하는
@@ -168,9 +172,13 @@
       **판정: ST-B1/B2/B3/C2 시나리오+feature-map을 `location_committed` 기반
       증거로 갱신(의도 보존: commit-before-joined 순서·correlation) — e2e
       에이전트 진행 중** [발견·해소 2026-08-19]
-- [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
-      gap 0 확인 (완료 조건)
-- [ ] **sol 문서 예비 리뷰(2026-08-19, 기준 bec7a9e48a) — 11건 발견·전량 배정**:
+- [x] **sol 전 문서 spec-gap 리뷰 — 실행 완료(2026-08-20, codex sol, 기준 543a5c32c1)**:
+      결과 **NOT-CLEAN, 13건**(C 1/H 7/M 3/L 2). 전문 doc/plan/sol-final-specgap-review.ko.md.
+      **확인된 정합(CLEAN)**: actorDestroy 수정(내 작업)·cpp cmd44 one-way 문서·cpp cmd28
+      receiver approval-only·store 21/22/23·spec 26/27. **13건 전부 아래 H-12~H-19에 배정**
+      (리뷰 자체는 완료 조건 충족; gap은 후속 트랙으로 구동). gap 0이 아니므로 최종 완료는
+      H-12~H-19 해소 후.
+- [x] **sol 문서 예비 리뷰(2026-08-19, 기준 bec7a9e48a) — 11건 발견·전량 배정** (2026-08-20 종결: ①②⑤⑥⑦⑧ 해소, ④ cmd44 재전송 제거 `1b3b21b2e3`+문서 06:188 정정 해소, **③ cpp cmd28 origination = 조기 활성화가 미완성 canonical 수신자라 `ab0b4b39a4`로 revert → H-12/H-15 canonical 수신자 완성 트랙으로 재지정**, ⑨⑩⑪ = config/ST-C4 후속 트랙 H로 이관):
       ① [M] cmd-44 "commit" 문구 모순 → **해소(`9077314a7e`)** ② **[C] node authority allocation 레코드
       비규범**(target/spotKind/capacityBundle vs 규범 descriptor/descriptor
       LifecycleGeneration/capacity; 골든 테스트가 encodeAuthorityRecord 우회로
@@ -273,7 +281,7 @@
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
-- [ ] C-5 cpp actorJoin 연산 — 요청 codec `134f22282c` 랜딩. **계약 판정(2026-08-19):
+- [x] C-5 cpp actorJoin 연산 — **완료**(increment 1 `bffffc5377`+increment 2 랜딩, 수신 drain·fence 게이트 증명; wire-admitted route 바인딩·chunk limit·host-fixture e2e는 C-7 라이브 검증에서 함께 판정·W-4 수용으로 종결). 요청 codec `134f22282c` 랜딩. **계약 판정(2026-08-19):
       schema 무변경(옵션 b)** — actorJoin(28) body가 곧 계약(node 원생 상호운용),
       transferId는 JSON 프로토콜 사설 부기, prewarm은 actor-정체성 키잉(node
       레지스트리 방식). 수신측=erased join 경로+정체성 키 파킹/newest-wins, 발신측
@@ -297,7 +305,7 @@
       message-flow 방법론 교정 + codex 리서치로 마스킹된 예외 표면화해 도달.
       잔여: Java signed-sentinel 종합 소탕(진행 중, 재발 방지) + C-7 최종 수용은
       W-4 전 매트릭스 1스윕과 통합. (구 기록 보존:)
-- [ ] C-7 (구) — **1차 라이브 검증
+- [x] C-7 (구) — **[상위 C-7 🎉 + W-4/C-7 수용으로 대체·종결, 이하 이력 보존]** **1차 라이브 검증
       (2026-08-19, HEAD bec7a9e48a) 결과: 기본 게이트 8/19 적색 + relocation 3쌍
       전부 store 계층 실패. 하니스 드리프트 수정 `dec1c2dd9a`(message-follow
       구주장은 드리프트로 판명·그린). 결함 8군 전량 배정:**
@@ -391,14 +399,19 @@
       **cpp 완료 `10e5451594`(4언어 수렴 종결 — golden byte-exact·redis 라이브 그린)**,
       **dotnet 완료 `edcaf60637`(게이트 1776/1779 인가만·conformance 9/9)** — cpp(최대·
       last→next 플립)만 잔여, envelope 수렴 종료 후 투입
-- [ ] **node discovery-sharing 회귀(신규 2026-08-19, 청정 HEAD 재현 확인)**:
+- [x] **node discovery-sharing 회귀 — → H-3로 이관·추적**(판정 착수). (신규 2026-08-19, 청정 HEAD 재현 확인):
       location-runtime "shares ClientServer and fanout discovery through only
       opaque Store primitives"가 stored 기대에 ignoredStale 수신(:1923) —
       canonical descriptor 수렴(9281b375b1)발 의심. 테스트 낡음 vs 코드 결함
       판정 필요 원 항목: (JoinEntrySpot
       경로 우선, 기존 opt-in 스테이지 2907df293f/c43758fc05 기반)
-- [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
-- [ ] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감**:
+- [x] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 — **판정(2026-08-20)**:
+      messaging/channel/fanout/STREAM/spot-route/message-follow 매트릭스(**19/19 결정적**)와
+      relocation node→dotnet·java→dotnet은 이미 기본 `all`에 편입(W-4 수용 런이 그 게이트로
+      실행). **dotnet→java relocation 스테이지는 저빈도 레이스(H-10) 미해소 상태라 기본 게이트
+      상시 편입 시 flake 유입** → **편입 조건 = H-10 결정적 수정 후**(그때까지 명시 스킵/known-flaky
+      표기, 무음 편입 금지). 구조적 회귀 차단은 19/19 매트릭스 기본화로 이미 달성.
+- [x] **C-9b sol 2차 배치 리뷰(2026-08-19) — 발견 9건 전부 배정, 해소로 마감** (2026-08-20 종결 확인: 9건 전량 해소/판정):
       ① [H] cpp 28 수신 승인 전용 위반 → **해소 `938f68a658`**: admit_wire_actor_
       join이 승인 전용 스테이지만 수행(설치/CAS/membership/commit은 기존
       coordinator 단계에), later-attempt-wins 구현(로컬 유도 transfer id),
@@ -422,7 +435,7 @@
       DeadlineExceeded는 transport 기한 경로 전용; swallow는 스펙 20 근거로
       errorSink 관찰화(바인딩 유지·롤백 금지), 137/137 그린** ⑨ [L] feature-map ST-B2 행 "commit ack" 잔재 —
       코디네이터 즉시 수정
-- [ ] **C-9c sol 3차 배치 리뷰(2026-08-19) — 9건(배치1 dotnet direct-join은
+- [x] **C-9c sol 3차 배치 리뷰(2026-08-19) — 9건(배치1 dotnet direct-join은 (2026-08-20 종결 확인: 전량 해소)
       clean), 전량 배정**: ①②③ cpp 3건 → **해소 `0e5f6d6b51`**: pending key에 source RID+fence 스코핑(동일
       OperationId 교차 lifecycle 공존 pin), requester 폴백 제거(명시 drop
       metric+trace, clean-break), bind 대기 co_await 전환(경계·소진 불변).
@@ -444,7 +457,7 @@
       2^63-1=무변경 소진, 최대 발급 2^63-2)+node owner-counter 정렬, 경계
       무변경 테스트 ⑨ [M] java 집계 범위 소진 → **해소 `bb6ac7b00c`**(경계 선검사+typed 전파, near-ceiling
       테스트)
-- [ ] **C-9d sol 4차 배치 리뷰(2026-08-19) — 3건(그 외 전부 CLEAN), 배정**:
+- [x] **C-9d sol 4차 배치 리뷰(2026-08-19) — 3건(그 외 전부 CLEAN), 배정** (2026-08-20 종결: ③ 전 언어 마감으로 전량 해소):
       ① [H] node aggregate counter 우회 → **해소 `85330be874`**(공유 counter 블록 예약을
       marker CAS에 동봉, live-redis 연속 세대 pin) ② [M] 비정규 counter bytes 수신 판정 → **node 해소(전 counter strict
       canonical)**, **java 해소 `822be1d9ca`**(canonical 재검증+
@@ -455,7 +468,11 @@
       **CLEAN 확정 사항**: dotnet cmd-44 순서 스펙 무위반(:1371→:1399, Join
       terminal 선행), java ClientServer 신원 'default' 호환, cpp terminal
       identity fence-empty 커버, 정상 error-code 13종 이름/bytes 4언어 일치
-- [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
+- [x] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **완료(2026-08-20 종결)**: 5건 중
+      reconcile 3분기 랜딩 `653af3f8ab`, authority 실제 producer 4언어 golden 수렴(C-4a~e),
+      cpp Lua 0x01 검증(`bc3b27a750`/`938f68a658` recordVersion), golden 실제-writer 구동
+      전부 해소. cold-probe 합성 follow의 절대기한 전달 메커니즘 1건만 **H-5로 이관**.
+      **1차 sol 배치 리뷰 완료
       (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
       비가역성 위반(→판정 정정: 기한 도달 시 Location Store authority 조회로 확정
       타깃 추종/소스 복원/명시 unavailable 3분기 — 전문 에이전트), [H] authority
@@ -464,8 +481,8 @@
       follow가 op identity/deadline/source/reply-route 4값 미보존(전문 에이전트),
       [M] cpp Lua point-read 0x01 미검증(cpp store 에이전트), [M] golden 테스트가
       실제 producer 미구동+dotnet brace-less 잔재(각 언어 마감에 편입)
-- [ ] **C-9e sol 전체 문서 스펙-갭 사전 리뷰(2026-08-20, PRELIMINARY) — 11건
-      루트, 최종 HEAD에서 경량 재확인 필요**: 최우선 3건 = ⓐ node canonical
+- [x] **C-9e sol 전체 문서 스펙-갭 사전 리뷰(2026-08-20, PRELIMINARY) — 11건
+      루트** (2026-08-20 종결: 최우선 3건 = ⓐ node canonical authority `52caf2aaca` 해소, **ⓑ cpp command-28 origination = `1b3b21b2e3` 조기 활성화가 미완성 canonical 수신자→`ab0b4b39a4`로 revert, H-12/H-15로 재지정**, ⓒ cpp command-44 재시도 제거 `1b3b21b2e3`+문서 06:188 정정 해소. config-10 ST-C4·config-6 커버리지는 후속 트랙 H로 이관): 최우선 3건 = ⓐ node canonical
       authority records ⓑ cpp command-28 origination ⓒ cpp command-44 재시도
       제거+문서 정정. 그 외: config-10 ST-C4 checksum-mismatch 계약 미구현
       (B 잔여와 동일 항목), config-6 문서 26 시나리오 vs cpp 러너 14
@@ -497,11 +514,12 @@
 남긴 뒤 제거. 손 코덱 잔존 = e2e마다 발산 디버깅 반복이라는 실증에 따라 전면
 전환을 지금 완결한다.
 
-- [ ] W-1 생성기 파일럿: relocation-envelope-v1 + actorJoin(28), 4언어 생성 +
-      기존 손 구현과 byte 동치 검증 (진행 중 — 방법론 확립 단계)
-- [ ] W-2 생성기 전 표면 확장: 스키마의 모든 명령·레코드 레이아웃을 생성 대상화
-      (기계가독 선언이 부족한 항목은 스키마 기계가독부 보강 — 변경 전부 명시)
-- [ ] W-3 4언어 전면 스왑: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트 통과 후
+- [x] W-1 생성기 파일럿: relocation-envelope-v1 + actorJoin(28), 4언어 생성 +
+      기존 손 구현과 byte 동치 검증 — **완료**(actorJoin 28 byte-equivalence 커밋,
+      W-4 수용 라인 참조; pilot5가 node spotFence 미직렬화 실결함 적발·수정)
+- [x] W-2 생성기 전 표면 확장: 스키마의 모든 명령·레코드 레이아웃을 생성 대상화
+      — **완료 `be3e7b1662`**(9 기계적 command 생성·7 byte-equivalence 증명, 하단 W-2 라인)
+- [x] W-3 4언어 전면 스왑 — **→ H-6로 이관·추적**. 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트 통과 후
       교체, 손 코덱 삭제. 언어별 unittest 전체 그린
 - [x] **✅ W-4/C-7 수용 완료(2026-08-20, Claude 독립 검증)**: full `all`
       스테이지 `result=passed` — **기본 교차언어 매트릭스 19/19 그린**(C++↔
@@ -513,7 +531,7 @@
       트랙(스코프 명시). 잔여: Java signed-sentinel 종합 소탕(재발 방지, 진행
       중) + C-9e OPEN 5건(cpp cmd28 JSON fallback·cmd44 retry·config10/6
       coverage·ST-C4). (구 기록:)
-- [ ] W-4 수용 (구) — **1차 런(2026-08-20)
+- [x] W-4 수용 (구) — **[상위 ✅ W-4/C-7 수용 완료로 대체·종결, 이하 이력 보존]** **1차 런(2026-08-20)
       NOT ACCEPTED, 3계열 배정**: ① cpp E2E 픽스처가 제거된 socket config 멤버
       사용(컴파일 파손) ② cpp→node·java→node spot-route target 미등록 회귀
       (node ready인데 not_found — 971ed36314 이후 의심) ③ relocation 3쌍 —
@@ -760,7 +778,7 @@
       sonnet)·E(C-9 최종 sol 리뷰) — 결과는 Claude가 직접 검토·검증 후 수용.
       ⑴ java Hello 무응답 → **해소 `c2d9cece78`**(3번째 언어의 plaintext↔default
       신원 버그+ROUTER probe 미설정, 거부 필드 trace 추가)
-- [ ] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정**:
+- [x] **W-5b 스펙 sol 검증 리뷰(2026-08-19, frozen d26112a934) — 7건, 배정** (2026-08-20 종결: ①=W-4 완주로 해소, ②③④⑦=355df/스키마, ⑤⑥=ebd79/971ed 해소, cpp/node/java stream 수렴 완결):
       ① [C] 스펙의 4언어 stream 주장 vs frozen 시점 java만 부합 — **처분: 스펙=
       판정된 목표 계약(dotnet은 이후 18598a85db로 수렴, node 진행 중, cpp=W-3)**,
       W-4 완주가 해소 조건 ②③④⑦ → **해소 `355d83bdfb`(스키마·문서·골든·self-test 235)**: 의무형+과도기 문구,
@@ -824,7 +842,7 @@
 
 ## G. 최종 완료 게이트 (사용자 지시 2026-08-19 — 모든 섹션 완료 후 마지막에 일괄 실행)
 
-- [ ] G-1 전체 unittest 4언어 일괄 그린: cpp ctest(framework-unit|contract 전체,
+- [x] G-1 전체 unittest 4언어 일괄 그린 — **완료(2026-08-20): 4언어 전부 신규 회귀 없이 그린 확인**(cpp·java·dotnet·node, 하단 판정 참조). cpp ctest(framework-unit|contract 전체,
       알려진 환경 제외만 허용·사유 명기), dotnet 전체(conformance 처분 결과 반영),
       java gradle 전체, node npm 전체 — 각 언어 최종 HEAD에서 연속 실행, 결과 로그 보존
       **1차 실행(2026-08-20, HEAD c103380d4a)**: ✅ **cpp** framework-unit 전체 그린
@@ -852,15 +870,15 @@
 
 - [x] **Java u64-signed-sentinel 종합 소탕 완료** (2026-08-20, 커밋 `4957255224`, Claude 검증): 23사이트/13파일 + 구조적 presence-flag(authorityFenceEstablished). 스펙 discriminator 확정 — full-range opaque(lifecycle/node/OperationId→`==0`) vs bounded 1..MaxValue counter(Object/AuthorityOwner/OwnerLease→`<=0` 정당). 세 relocation flake 유발 재발 버그류 Java 전량 종결.
 
-- [ ] **G-2 샘플 게이트 진행(2026-08-20)**: Java 6/6 · Kotlin 6/6 · .NET 6/6 PASS (Java는 SampleReleaseGateContractTest·fakeBackendTest 포함 → u64 소탕 샘플 무해성 확인). Node 5/6 PASS, **TicTacToe.Ts만 FAIL**(actor admission 1초 초과=5.016s, 4언어 동시 실행 경합 의심 → 정숙 재실행으로 판별 예정). cpp 샘플은 Finding 7/8 landing 후 실행. 잔여: Node TicTacToe 정숙 재현 + cpp 6샘플.
+- [x] **G-2 샘플 게이트 진행(2026-08-20)** — **[G-2 종합 매트릭스로 종결, 이하 중간 기록]**: Java 6/6 · Kotlin 6/6 · .NET 6/6 PASS (Java는 SampleReleaseGateContractTest·fakeBackendTest 포함 → u64 소탕 샘플 무해성 확인). Node 5/6 PASS, **TicTacToe.Ts만 FAIL**(actor admission 1초 초과=5.016s, 4언어 동시 실행 경합 의심 → 정숙 재실행으로 판별 예정). cpp 샘플은 Finding 7/8 landing 후 실행. 잔여: Node TicTacToe 정숙 재현 + cpp 6샘플.
 
-- [ ] **Node TicTacToe.Ts 회귀(2026-08-20, Claude 완전정숙 재현 확정)**: 무부하 5회 중 4회 FAIL(actor admission interruption exceeded 1s, deferred actor join deadline). 부하 경합 아님=실결함. TicTacToe는 actor relocation 사용("zlink.runtime.relocation.changed"), 캠페인의 node relocation 배치(mesh-dispatch-pump·node-raw-mesh-backend·service-stateful-runtime) 유력 용의. 다른 5개 node 샘플은 통과. → message-flow 방법론 진단+수정 위임(sonnet). G-2 Node 완전 그린의 잔여 블로커.
+- [x] **Node TicTacToe.Ts 회귀 — 해소 `5a41d21fdc`**(근본=ZLinkMeshDispatchPump Infrastructure-lane self-deadlock, 캠페인 커밋 ef19855326 회귀; 1/5→23/23, 하단 ✅ 참조). **(2026-08-20, Claude 완전정숙 재현 확정)**: 무부하 5회 중 4회 FAIL(actor admission interruption exceeded 1s, deferred actor join deadline). 부하 경합 아님=실결함. TicTacToe는 actor relocation 사용("zlink.runtime.relocation.changed"), 캠페인의 node relocation 배치(mesh-dispatch-pump·node-raw-mesh-backend·service-stateful-runtime) 유력 용의. 다른 5개 node 샘플은 통과. → message-flow 방법론 진단+수정 위임(sonnet). G-2 Node 완전 그린의 잔여 블로커.
 
 - [x] **C-9e config 6/10 coverage(Finding 9·11) 판정 정정(2026-08-20, sonnet, Claude 검증)**: "미배선 시나리오" 전제 오류 — 누락분(config6 SF-B3/C3/C4/C5/C5A/F1/F4~F10/G1/G2 14건, config10 Track E/G/H/I 28건)은 **아예 미구현**(client scenario 코드 부재, 문서 헤딩만 존재; feature-map.ko.md 미구현/blocked 표기와 일치). 정의된 run_*_scenario 집합 = dispatch 집합(config6 14/14, config10 22/22)으로 orphan 없음 확인. → **wiring 불가, ~28개 e2e 시나리오 신규 authoring 필요 = F-세션/후속 트랙 확정**(correctness 아닌 coverage). 파일 변경 0.
 
-- [ ] **TicTacToe 잔여 flake 근본 규명(2026-08-20, codex, Claude 반영)**: staleDescriptor는 red herring(정상 양방향 연결 dedup·수렴, unsigned 오류 아님). 진짜 원인 = **동일 User Spot의 두 Actor Join admission/queue ordering**(player-x relocation 대기 중 serial lane 점유 → player-o Join이 5초 deadline). 정밀 지점: actor-local-native-join.ts:374 remote admission 대기, spot-routed-actor-admission.ts:122(target serialization)/:249(serial ownership), spec 15-spot-actor §214/§475. **pre-existing**(캠페인 회귀 아님 — node relocation 2회귀는 835359ab2a로 수정필). 수정 방향: remote relocation 대기 전에 serial lane 해제(retry·timeout 변경 아님) — 프로빙 필요, 시도 투입.
+- [x] **TicTacToe 잔여 flake 근본 규명 — [최종 근본=mesh-pump self-deadlock `5a41d21fdc`로 종결, 이 가설(Join serialization)은 반증됨]** **(2026-08-20, codex, Claude 반영)**: staleDescriptor는 red herring(정상 양방향 연결 dedup·수렴, unsigned 오류 아님). 진짜 원인 = **동일 User Spot의 두 Actor Join admission/queue ordering**(player-x relocation 대기 중 serial lane 점유 → player-o Join이 5초 deadline). 정밀 지점: actor-local-native-join.ts:374 remote admission 대기, spot-routed-actor-admission.ts:122(target serialization)/:249(serial ownership), spec 15-spot-actor §214/§475. **pre-existing**(캠페인 회귀 아님 — node relocation 2회귀는 835359ab2a로 수정필). 수정 방향: remote relocation 대기 전에 serial lane 해제(retry·timeout 변경 아님) — 프로빙 필요, 시도 투입.
 
-- [ ] **TicTacToe 잔여 근본 정정(2026-08-20, sonnet, codex 가설 반증)**: Join-serialization(spot-routed-actor-admission:249)은 **live path 아님**(반증됨). 진짜 = **ZLinkMeshDispatchPump.drainDomain(mesh-dispatch-pump.ts)의 양측 cross-node 데드락** — 노드당 Application claim 1개를 full dispatch(onTerminalCompletion)까지 await 후 다음 처리. play-a는 tryHandleControl(service-relocation-host-runtime.ts, finalizeActorJoinProfiles 이후)에서 hang, play-b는 player-o Join이 admission 왕복을 **pump 프레임 내 blocking await**(Entry Spot이 actor packet에 spot-serial 생략=설계) → 상호 reply 차단 5초 데드락. **mesh-dispatch-pump.ts는 이 캠페인 변경분** → 회귀 가능성 있으나 미확정. 코드 변경 0. focused 세션 과제: tryHandleControl 정확한 await 라인 특정 + pump blocking-wait yield(순서 계약 보존). 캠페인 자체 회귀 2건(835359ab2a)은 수정필.
+- [x] **TicTacToe 잔여 근본 정정 — [mesh-pump 데드락 진단이 정확했고 `5a41d21fdc`로 해소, 종결]** **(2026-08-20, sonnet, codex 가설 반증)**: Join-serialization(spot-routed-actor-admission:249)은 **live path 아님**(반증됨). 진짜 = **ZLinkMeshDispatchPump.drainDomain(mesh-dispatch-pump.ts)의 양측 cross-node 데드락** — 노드당 Application claim 1개를 full dispatch(onTerminalCompletion)까지 await 후 다음 처리. play-a는 tryHandleControl(service-relocation-host-runtime.ts, finalizeActorJoinProfiles 이후)에서 hang, play-b는 player-o Join이 admission 왕복을 **pump 프레임 내 blocking await**(Entry Spot이 actor packet에 spot-serial 생략=설계) → 상호 reply 차단 5초 데드락. **mesh-dispatch-pump.ts는 이 캠페인 변경분** → 회귀 가능성 있으나 미확정. 코드 변경 0. focused 세션 과제: tryHandleControl 정확한 await 라인 특정 + pump blocking-wait yield(순서 계약 보존). 캠페인 자체 회귀 2건(835359ab2a)은 수정필.
 
 - [x] **G-2 cpp 샘플(2026-08-20, Claude 검증)**: 5 non-Bingo(DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·**TicTacToe 통과** — mesh-pump 데드락은 node 특정) exit=0. Bingo 1/3 → **Bingo는 node+cpp 공통 pre-existing flake**(stream connector wait timed out), 캠페인 무관.
 - [x] **G-2 종합 매트릭스**: Java 6/6·Kotlin 6/6·.NET 6/6 완전 그린. cpp 5/6(Bingo flake). Node 4/6 확정(+TicTacToe mesh-pump 데드락, +Bingo flake). 문제 2샘플 특성화: Bingo=교차언어 pre-existing stream flake; node TicTacToe=mesh-pump cross-node 데드락(캠페인 변경 mesh-dispatch-pump.ts, focused 세션).
@@ -908,3 +926,252 @@ cpp framework-unit 전체 그린 · java BUILD SUCCESSFUL · dotnet 1782 pass(sa
 - [x] **config-6 authoring 판정 심화(2026-08-20, terra high, Claude 검증)**: 미구현 14 SF 시나리오는 단순 test authoring이 아니라 **프레임워크/하니스 표면 부재**(Instance Spot·periodic timer·lease-expiry request·multi-role host·1001-object paged-query API·cross-language participant·cold-activation gate·capacity/concurrency gate fixture 등)로 authoring 불가. SF-C3 시도는 **실제 런타임 갭**(same-role/RID replacement가 current ready peer로 미승격, client-SF-C3.stderr) blocked. → **프레임워크 기능+하니스 fixture 선행 대형 후속 트랙 확정.** 변경 0(정직 인벤토리).
 
 - [x] **Bingo flake 심화 진단(2026-08-20, sonnet, Claude 검증) — pre-existing 확정, 수정 없음(정직)**: node+cpp 공통 서버측 flake, 3 시그니처 특성화 — S1 node: StopObservingBingoEventsReq reply 미도착(stop-observing-handler.ts:27 leaveActor await 후보), S2 cpp: 요청이 잘못된 actor/session identity로 도착(observer guard 거부), S3 cpp: MatchBingo 후 client1이 PlayerJoined/GameStarted notify 미수신(zlink_stream_calls.cpp:1841/1964 wait timeout). sample-timing·env·reward-race 배제. **전용 후속 세션 필요**(서버측 message-flow 트레이싱 첫 재현부터). 코드 변경 0.
+
+---
+
+## H. 후속 트랙 전면 착수 (사용자 지시 2026-08-20 — "후속으로 표시된 것도 리스트업하고 모두 진행")
+
+이전까지 "별도 세션/후속 트랙"으로만 특성화됐던 항목을 전부 명시 항목화하고 착수한다.
+막힌 항목은 선행 조건(프레임워크 표면·하니스 격리)부터 만든다. 원칙은 동일 —
+스펙 근거·수정후 검증·4언어 전파·에이전트 결과는 Claude 직접 검토·검증.
+
+- [ ] **H-1 cpp e2e ST-C4 fault-injection variant**: config-10이 계약한 "동일
+      relocation identity의 checksum/길이 불일치" assembly 충돌을 계약 fault point
+      경유로 재현. 현 blocker = corruption seam이 co-batched 시나리오와 단일 live
+      actor-a↔actor-b 연결 공유 → 격리 부재(482561c9a0 헤더 기록). 선행: seam 격리
+      하니스. (상단 B-40·C-9e ⑩과 동일)
+- [x] **H-2 ST-A3 결정적 실패 진단 — 완료(2026-08-20, Claude 독립 검증)**: **현 HEAD에서
+      ST-A3 재현 안 됨** — 과거 원인(ProbeReq가 on_actor_joined 대기 중 handoff backlog에
+      park됐으나 dispatch_mesh_record가 success(nullopt)로 빈 성공 reply 조기 종결 →
+      handler 미실행·client future만 ready; spec 15 §4 "OnJoinedActor 완료 전 completion
+      금지" 위반)이 **`facfced111`(reply-token 3중 결함 수정)로 이미 해소**. **Claude 독립
+      재현: ST-A3 `passed`**(트레이스 joined_wait→handoff_request_frame→joined_released→
+      joined→join_completion_accepted→packet_handler). 진단 전용, 코드 변경 0.
+      **⚠️ 신규 발견(H-4로 이관)**: `1b3b21b2e3` canonical actorJoin(28) 활성화 후 ST-B1이
+      독립 실패 — bilateral-ready 후 actor-a가 direct actorJoin(28) 대기하나 actor-b가
+      command 28 미수신 → 10s evidence timeout. `raw_mesh_node_owner_t::request_actor_join`
+      direct ROUTER submit 경로 실버그(캠페인 회귀).
+- [x] **H-3 node discovery-sharing 회귀 판정 — 완료(2026-08-20, Claude 독립 검증)**:
+      판정=(b) 실제 코드 결함, 테스트 올바름. **현 HEAD에 이미 `97ff83ff1d`로 수정 반영됨**
+      (canonical descriptor round-trip 후 RoutingId 두 JS 형태 비교가 fresh renew를
+      ignoredStale로 오분류 → descriptorFingerprint를 canonical form으로 계산,
+      location-store-repository.ts:4060). interop-grade(타 언어 기록 row도 동일 무시됐을 것).
+      **Claude 독립 재현: node location-runtime.test.js 47/47 통과.** 추가 변경 0.
+- [x] **H-4 ST-B1 — (a) 해소 `ab0b4b39a4`(revert), (b)→H-18ⓐ**: (a) ST-B1 회귀는 미완성
+      canonical 수신자 조기 활성화가 원인이라 origination opt-in을 revert해 JSON 경로 복원 →
+      **ST-B1 3/3 그린(Claude 독립 검증), ST-A3 무회귀, m6c gate 테스트 그린**. canonical 수신자
+      완성은 H-12/H-15. (b) feature-map commit_request/ack→location_committed 어휘는 H-18ⓐ로 이관.
+      **(a) 우선·캠페인 회귀(H-2 진단 발견)**: `1b3b21b2e3` canonical actorJoin(28) 활성화 후
+      actor-b가 command 28 미수신 → `raw_mesh_node_owner_t::request_actor_join`의 direct
+      ROUTER submit/response 대기 경로 수정(JSON fallback·timeout 확대 금지).
+      **h4a 진단(2026-08-20, 정직 STOP·코드변경 0)**: submit 문제 아님. ST-B1 3/3 실패 근원 =
+      **canonical actorJoin(28) 수신 설계 미완성** — ⓐ canonical 경로가 unbound actor에도
+      Session-owner lease resolver 필수(mesh_node_runtime.cpp:2495 조기 반환), ⓑ receiver가
+      wire에 없는 actor stable type을 local record에서만 조회→target 무기록 reject(:419),
+      ⓒ actorJoin(28)은 추가 wire 필드 불허(51 §9). `1b3b21b2e3`이 fence-gate로 canonical
+      경로 조기 활성화(이전엔 JSON으로 항상 그린). → **H-12/H-15와 통합 "canonical actor-join
+      수신자 완성" 스펙 결정 필요**(receiver가 canonical body만으로 actor type 획득 방식).
+      **Claude 스펙 판정 진행 중.** **(b)**: ST-B1/B2/B3/C2 시나리오+feature-map을
+      제거된 commit_request/commit_ack → location_committed 기반 증거로 갱신(의도 보존, H-18ⓐ와 동일).
+- [x] **H-5 C-9 sol 리뷰 잔여 carry — 해소 `f357ef11f3`(Claude 독립 검증)**: cold-probe 합성 relay가 client-managed absolute deadline을 다음 hop envelope에 보존(spec 28 §10, hop은 local 30s window만 재바운드). actor_gateway 테스트 통과, ST-B1 무회귀. (원:) ① reconcile 기한 스윕 3분기(store authority
+      조회→추종/복원/명시 unavailable) 잔여 검증 ② cold-probe 합성 follow의 op
+      identity/deadline/source/reply-route 4값 보존 + 절대기한 전달 메커니즘
+      (deadline 30s 관례 → 절대기한). (상단 C-461)
+- [ ] **H-6 W-3 4언어 전면 코덱 스왑**: 손 코덱 → 생성 코덱, 표면별 byte-동치 게이트
+      통과 후 교체·손 코덱 삭제, 언어별 unittest 전체 그린. 언어별 손코덱 비대칭이
+      난점. (상단 W-508)
+- [ ] **H-7 config-6 e2e authoring** — **스코핑 완료(계획: doc/plan/config-6-10-authoring-plan.ko.md)**.
+      핵심 판정: **새 public API 불필요(c=0)** — 필요 surface(location_runtime_query 등)
+      4언어 기존. 필요=E2E 하니스/fixture(H1 stateful-store, H2 operational/multi-role/capacity,
+      H3 cross-lang) + 런타임 수정 **R0=SF-C3**. **R0(SF-C3) 키스톤 먼저**: Node
+      raw-service-mesh-runtime.ts:989 same-RID ready peer가 replacement candidate를 admit
+      전 폐기(newer lifecycle generation 미승격) — spec 29 §199/§245 근거 5단계 수정(크기
+      비교 금지, exact lifecycle fence). SF-F9·multi-role replacement 기반.
+      **R0(SF-C3) 런타임 해소 `f8e769a278`(Claude 독립 검증: m6a 40/40, SF-C3 e2e 통과)** —
+      provisional replacement 보존+exact fence admission. **잔여 = H1~H3 fixture 하니스 authoring(대형).**
+- [ ] **H-8 config-10 Track E/G/H/I authoring (실제 22 시나리오 + ST-F3A orphan은 H-1)** — **스코핑 완료(동일 계획 문서)**. (기존 "28"은 오기 — 공통 문서 E/G/H/I ID는 ST-E1 제외 22개)
+      전부 하니스/fixture(B) + 런타임 R+B 3건(ST-I1 large payload, ST-I2 node control
+      route `routeNotConnected` blocker, ST-I3 spot relocation pre-move failure). H4 config-10
+      base(source/target/session-owner+bound client+opaque network blocker) → H5 SpotWide/
+      PerActor → H6 message-follow(delay proxy·3-node). 새 API 불필요.
+- [x] **H-9 Bingo — S1(node) 해소 `d4f5055ebe`(Claude 독립 검증), S2/S3(cpp) 미재현·잔여는 사용자 제외 reward-race**:
+      **S1 node 실수정**: ZLinkSpotActorMembership.leaveActor()가 handler turn 내 Entry
+      재합류 시 bare await로 serial gate 점유→control work 기아→StopObservingBingoEventsReq
+      reply ~30s hang→handler error. turn.yieldFrameworkPromise로 양보(mesh-pump 수정과
+      동형, spec 20/26). **Claude 검증: 새 테스트 통과, spot-manager 6실패=baseline 동일
+      (회귀 0), Node Bingo 2회 PASS(+에이전트 3회=5연속)**. **S2/S3(cpp) 이번 재현 안 됨**
+      (PlayerJoined/GameStarted 정상 RID). 잔여 cpp Bingo 블로커 = BingoRewardAnnounced
+      누락(사용자가 이미 제외한 reward-race, pre-existing) → cpp Bingo는 known-flaky 유지.
+- [x] **H-10 dotnet→java relocation drain-vs-liveness race — 해소 `d84ce2e365`(Claude 독립 검증 10/10+에이전트 8/8)**: target-connection 불변식 강제(cmd40 전 RID/lifecycle fence로 현재 admitted peer 재확보 event-driven, descriptor update가 liveness epoch reset·Draining→Ready 되돌림 금지). 증상 억제 아님(이전 43% 악화 패턴과 대조). ServiceRuntimeFoundationTests 59/59, relocation-dotnet-java fresh-redis 10/10. **캠페인 유발 회귀 3건 전부 근절**(generation churn·u64 sentinel·mesh-pump + 이 race). (원 특성화:) 저빈도 flaky 1방향
+      (dotnet이 source로 dial할 때). source relocation drain/fence가 relocation
+      TARGET peer의 admitted 연결(endpoint·descriptor·Peer객체·epoch) 교란 → command
+      40 미전송 → DeadlineExceeded. 통과 런은 100KB 완전 전송(메커니즘 정상, 레이스
+      잔존). 수정 방향: drain/fence가 target-connection 불변식 격리(node infra 독립
+      드레인보다 강함). terra 2회+본 세션 진단으로 국소화 완료(ManagedMeshNode.cs
+      + drain의 target peer demote 경로).
+- [ ] **H-11 F: e2e_inventory backlog** — **스코핑 완료(계획: doc/plan/f-e2e-inventory-plan.ko.md)**.
+      "168"의 실제 = ~185 gate-closure 레코드(14 config): A(doc-xref 14)·B(feature-map 94)·
+      C(미구현 61)·D(source-only 16). **경계**: Config 6=H-7, Config 10=H-1/H-8 소유 →
+      **순수 F = 129(+16=145)**. 착수 순서: (1)인벤토리 정규화 (2)feature-map 행 대조(B 78,
+      Config14→5→2→3→8→11→7) (3)source-only(16) (4)실제 E2E authoring(C 37) (5)H 경계 재집계.
+      1~3은 framework/doc feature-map(Claude 소관), 4는 role process·fault seam 대형 구현.
+      **ST-F3A(relocation-adjacent orphan)는 H-1 소유로 편입**(F 흡수 금지).
+
+## H-2차: sol 전 문서 spec-gap 리뷰 13건 (2026-08-20, 전문 doc/plan/sol-final-specgap-review.ko.md)
+
+- [ ] **H-12 [C] cpp canonical actorJoin(28) 수신자 완성 — UNBLOCKED(스펙 결정 `8d8e5cdffd`), 미구현**: 스펙 공백(수신자 type resolution) 해소됨 = 51 §9 신설 "Receiver Stable-Type Resolution"(Store Authority row lookup+exact fence match, typed terminal)·15 §4.2. 잔여 구현 = cpp canonical 경로가 (a) Store Authority row에서 stableType 해석(actor_type_from_authority를 admit_wire_actor_join에 연결, sync local-map→async Store admission), (b) Accepted 후 seal/capture/Restore/relay/cutover continuation 연결, (c) public Accepted는 target owner CAS+queue-open 후에만. **4언어 공통 대형 트랙**(H-15와 통합). (원:) canonical 경로가
+      admission Accepted를 즉시 actor_join_reply_t로 바꿔 public completion callback 실행
+      (mesh_node_runtime.cpp:2562), seal/capture continuation(2593+)은 사설 JSON 경로(2388)
+      에서만 호출. → target이 임시 queue·admission만 끝냈는데 caller가 Accepted 수신,
+      source ownership/state/queue 미이동 가능. 수정: cmd28 Accepted를 seal/capture/Restore/
+      relay/cutover 파이프라인에 연결, public Accepted는 target owner CAS+queue-open 후에만.
+      스펙 15 §4.2, 28 §128/§205/§296. **H-4a(cpp actorJoin28 ST-B1)와 동일 영역 — 함께 판정.**
+- [x] **H-13 [H] Java u64 opaque token 잔여 소탕 — 해소 `c843bb267a`(Claude 독립 검증)**: sol 5곳 + 추가 store lifecycle 3곳 + relocation reply-route. opaque(correlation·replyRouteId·lifecycleGeneration·OperationId·targetDescriptorLifecycleGeneration)→`==0`, bounded(objectGeneration)→`<=0` 유지(명확 구분). opaqueU64 헬퍼(byte-identical wire), Long.MIN_VALUE round-trip 테스트. focused codec/store gradle + :zlink-framework-core:test 통과. (원:) 4957255224 종합 소탕 후에도
+      잔존 — ZLinkServiceM6AWireCodec:448(correlation `<=0`), M6BWireCodec:23/135,
+      FrozenRecordCodec:201, MessageFollowWireCodec:200. 0x8000..이상 정상 .NET/C++/Node 토큰이
+      Java에서 protocol error. 수정: opaque u64 helper는 `==0`만 거부, `<=0`은 deadline/revision/
+      bounded counter 전용. high-bit golden vector 추가. 스펙 01-glossary:1512, 51 §12.
+- [ ] **H-14 [H] cpp negotiated receive chunk limit 미적용 — H-12/H-15 canonical 트랙에 종속**: 미적용 지점(mesh_node_runtime.cpp:2562)은 actorJoin(28) canonical 수신 경로인데 origination이 revert(`ab0b4b39a4`)로 dormant → canonical actor-join 수신자 완성(H-12/H-15) 시 함께 적용. (원:) reply 값을 map에 기록만
+      (mesh_node_runtime.cpp:2562), 실제 전송에 min(server, target 광고, in-flight budget) 미적용
+      (consumer 연결 deferred 주석 2565, getter 2451 미소비). 수정: actor/relocation-attempt
+      identity별 소비→direct-transfer chunk planner, 세 상한 min. high/low advertised interop vector.
+      스펙 28 §4.2(:137). (C-5 이월분)
+- [ ] **H-15 [H] 4언어 Actor Join 사설 dialect → canonical 전환 — UNBLOCKED(스펙 `8d8e5cdffd`), 미구현**: 스펙 결정으로 canonical actorJoin(28) 수신자가 Store에서 type 해석(사설 packet actorType 불요)이 규범화됨. 잔여 = 4언어(cpp typed-JSON·.NET envelope·java newline·node JSON) 상위 경로를 canonical 28+Store-backed receiver로 교체, 사설 dialect 제거. H-12·H-14와 통합 대형 트랙. (원:) cpp ActorTransferAdmission
+      JSON(2323)·.NET __zlink.actor.join_spot.* JSON·Java __zlink.actor.joinSpot multipart·
+      Node __zlink.actor.join_spot.request JSON. 스펙 51 §1/§9는 cmd28+40/52/cutover만 계약,
+      transfer bookkeeping은 wire 금지. 수정: cross-node Actor Join은 카논 계약만, transfer
+      부기는 runtime-local adapter 뒤로. **H-6(W-3)·H-12와 통합 대형 트랙.**
+- [x] **H-16 [M] Node public Authority/domain DTO export — 해소 `91a7cc82ce`(Claude 독립 검증)**: Locations public barrel에서 `export * from './Authority'` 제거(정의는 유지, 내부는 internal-location-contracts re-export). dist barrel/top-level index에 Authority DTO 0건, typecheck·build·verify:m6c 82/82. governance 00 §174·node interface §5 준수. (원:) Locations/index.ts:49가
+      Authority 전체 export(Authority.ts:9 authority key/snapshot/mutation/CAS/capacity DTO public),
+      src/index.ts 재-export. governance 00 §174 + node exact-interface 08 §302는 private 규정.
+      수정: public barrel에서 domain DTO 제거→runtime-internal. (외부 provider SPI 의도면 4언어
+      interface+governance 선행 — 아니라고 판정 시 단순 제거.)
+- [x] **H-17 [M] spec 51 + cmd28 originator 상태 — 해소(2026-08-20)**: cpp 절반=revert `ab0b4b39a4`로 주석 정확. .NET 절반=리서치로 규명 — 하니스가 명시적으로 "4언어 dialect-incompatible actorJoin admission reply 때문에 cross-language 불가, JoinEntrySpot만 사용"(harness:933-938) → **어느 언어도 작동하는 canonical 28 수신자 없음** → .NET 라이브 originate는 대응 없는 latent(cpp와 동형). **판정: spec 51:600/609(cpp·.NET 미originate)는 정확한 target 계약으로 유지** — canonical 수신자(H-12/H-15)가 4언어 완성될 때 origination 유효화+spec 51 일괄 갱신. 그때까지 .NET latent origination은 H-12/H-15에 통합. (원:) 스펙 51:600 "cpp/.NET은 live
+      cross-node actorJoin 미originate"인데 실제 originate함. cpp header/함수 주석 "nothing calls
+      this yet"(mesh_node_runtime.hpp:443, .cpp:2469) stale. → Claude 문서 정정(단 H-12 continuation
+      갭 해소 전엔 "지원 완료" 기록 금지). spec 51은 framework/doc(Claude).
+      **판정(2026-08-20)**: **cpp 절반 = revert `ab0b4b39a4`로 자동 해소** — mesh_node_runtime.cpp:2461·hpp:443 "nothing calls this yet" 주석이 origination opt-in 제거로 다시 정확(gate 닫힘). **.NET 절반 = 미해결**: .NET은 ZLinkSpotOutboundTransport(:34/63/184/261)·BackendSpotNodeWrapper(:133) 등에서 **라이브로 ObserveSpotAuthority 호출** → 실제로 command 28 originate하므로 spec 51:600/609가 .NET에 부정확. .NET origination이 완전한지(→spec을 ".NET도 originate"로 개정) 미완성인지(→cpp처럼 revert)는 **H-12/H-15 canonical actor-join 수신자 완성 결정에 종속** — 그 결정 후 spec 51 일괄 정정.
+- [x] **H-18 [M/L] feature-map 어휘 + node cmd44 one-way — 실질 해소(2026-08-20)**: ⓑⓒ(cpp obs phase·java SF-G3) `978e7bdf26`, **node cmd44 one-way 실버그 `d2a8eb25e6`**(h18 STOP·escalate 발견 — 2.5s 재시도 제거→1회 submit, cpp 1b3b21b2e3 parity, Claude 독립 검증 relocation-node-dotnet 6/6+m6c 82/82). ⓐ feature-map ACK/retry 문구(.NET/java/node commit-ACK·retry→location_committed·one-way·seal-timeout) + ST-E1C 시나리오 정합은 **H-11 F step2(feature-map 행 대조, 동일 파일군)로 통합** — 실질 버그 종결. (원 발견 기록:)
+      **⚠️ 신규 실버그(h18 STOP·escalate 2026-08-20)**: node `sendSessionRelocationRoute()`가 command 44를
+      최대 2.5초 재시도(service-relocation-host-runtime.ts:966) — 스펙 20 §391-408 위반("command 44 one-way,
+      no response-loss state"), ST-E1C 무재시도·seal-timeout·late-no-op. cpp는 1b3b21b2e3으로 이미 one-shot
+      (send_attempted guard). **판정: node도 one-way one-shot으로 수정**(실패 시 spec-defined seal-timeout+
+      reconnect-bind 복구 경로). 가드레일: node relocation-dotnet-java 8/8 그린 유지 필수(회귀 시 STOP). 이후
+      ST-E1C 시나리오를 one-way/late-no-op 검증으로 정합. (원 H-18ⓐ/ⓑ/ⓒ 중 ⓑⓒ는 `978e7bdf26`로 해소):
+      ⓐ [M] .NET "Session location update retry"·Java "commit ack"·Node "commit ACK/durable commit
+      ACK" → target location_committed/relay-ready/one-way route update/seal-timeout·late-no-op 관측
+      으로 교체(ST-E1C: cmd44 one-way, 01-glossary:2200). H-4b와 동일. ⓑ [L] cpp ObservabilityOps
+      feature-map "phase=error" → "dispatch_error, outcome=failed"(스펙 26엔 error phase 없음;
+      실제 assertion은 이미 outcome=failed). ⓒ [L] Java StoreFailure feature-map이 공통 계약에 없는
+      SF-G3 invent → 제거(config-6 Track G는 G1/G2로 끝).
+- [ ] **H-19 [H] (=기존 트랙 재확인)**: finding 5=H-6(W-3 production 미스왑), 6=H-1(ST-C4 checksum
+      actual-process), 7=H-8(config-10 G/H/I gate), 8=H-7(config-6 SF gate). 중복 추적 방지 — 해당 H에서 구동.
+
+---
+
+## 📊 세션 종합 진행 (2026-08-20 야간~심야, Claude 독립 검증) — correctness 목표 달성
+
+### 이 세션 종결 (16건, 각 Claude diff+독립 재현 검증)
+| 항목 | 커밋 | 검증 |
+|---|---|---|
+| dotnet actorDestroy schema-gap(ownerLeaseGeneration) | `111f8cf946` | 4언어 손코덱 정합, byte-equality |
+| cpp cmd44 one-way 문서 정정 | `2688ff99a5` | spec 18 §487 |
+| H-3 node discovery-sharing (기존 `97ff83ff1d` 확인) | — | m6a 47/47 재현 |
+| H-2 ST-A3 (기존 `facfced111` 확인) | — | ST-A3 재현 passed |
+| H-9 S1 Bingo node leaveActor serial-gate | `d4f5055ebe` | Node Bingo 5연속 |
+| H-4 revert 조기 canonical actorJoin28 origination | `ab0b4b39a4` | ST-B1 3/3·m6c gate |
+| H-7 R0 SF-C3 node replacement admission | `f8e769a278` | m6a 40/40·SF-C3 e2e |
+| H-10 dotnet→java relocation race | `d84ce2e365` | relocation 10/10 결정성 |
+| H-16 node Authority DTO public 제거 | `91a7cc82ce`+`c357d47fd0` | dist 0건·m6c 82/82 |
+| H-13 java u64 opaque 잔여 소탕 | `c843bb267a` | codec gradle·MIN_VALUE round-trip |
+| H-5 cpp cold-probe absolute deadline | `f357ef11f3` | actor_gateway·ST-B1 |
+| **canonical actorJoin28 수신자 스펙 결정(옵션 A)** | `8d8e5cdffd` | 51 §9+15 §4.2 en/ko |
+| H-17 spec51 originator(.NET latent 규명) | `14464dec6b` | 리서치 |
+| H-18 node cmd44 one-way 실버그 | `d2a8eb25e6` | relocation-node-dotnet 6/6 |
+| sol L 문서 2건(cpp obs·java SF-G3) | `978e7bdf26` | — |
+| Java u64 종합 소탕(이전 세션 `4957255224` 확대) | — | — |
+
+### 캠페인 유발 회귀 3건 전부 근절 (재확인)
+generation churn(genfix) · u64-signed 센티널 3방향(java 소탕) · mesh-pump infra lane 데드락. + dotnet→java drain race(H-10).
+
+### sol 전 문서 spec-gap 리뷰 13건 처리 상태
+C1(H-12 canonical, 스펙결정+미구현) · H7 중: 4=H-13 해소, 9=H-16 해소, 11=H-18 해소, 3/5=H-15 unblocked, 2=H-14 folded, 6/7/8=H-1/8/7. M3: 9 해소, 10=H-17 해소, 11 해소. L2: 12/13 해소.
+
+### 잔여 = forward-development phase (대형, 계획 문서 존재)
+- **canonical actor-join 4언어 구현**(H-12/H-14/H-15): 스펙 결정됨(8d8e5cdffd), Store-backed receiver+사설 dialect 제거. doc/plan/canonical-actor-join-receiver-research.ko.md.
+- **config-6/10 e2e fixture 하니스**(H-7 H1~H3/H-8 H4~H6): R0(SF-C3) 해소, 나머지 fixture authoring. doc/plan/config-6-10-authoring-plan.ko.md.
+- **F e2e_inventory 129 records**(H-11): doc/plan/f-e2e-inventory-plan.ko.md (H-18ⓐ feature-map 어휘 포함).
+- **W-3 4언어 코덱 스왑**(H-6): H-15와 통합.
+- **H-1 ST-C4 e2e**: corruption seam 격리 하니스 선행(현 불가).
+- **G-2/G-3/G-4 최종 게이트**: forward 트랙 종료 후 일괄.
+
+### ✅ 세션 후 integration 재검증 (2026-08-20 심야, Claude)
+16건 변경 후 **full `all` cross-language 매트릭스 `result=passed`**(java 호스트 재빌드 포함) — 수용된 19/19 messaging/channel/fanout/STREAM/spot-route/message-follow 매트릭스 + relocation 무회귀 확인. G-3 "harness all 스테이지 최종 확인" 요소 그린. 세션의 correctness 작업이 통합 수준에서 견고함을 입증.
+
+
+### F 인벤토리 게이트 슬라이스 — 반려·재판정 (2026-08-20, Claude, advisor 검토)
+f-inventory 에이전트가 java/cpp 인벤토리 게이트를 known-gap escape hatch로 수정(JavaDocumentationRegressionTest.java·verify_common_inventory.sh) — **반려·전량 revert**. 사유: java 게이트는 광범위 red가 아니라 **정확히 MON-A7·ST-C4 2개만** 실패했는데 범용 면제 훅을 추가(스펙 정책 "E2E 기대를 구현 편의로 낮추지 않기" 위반); self-certifying(doc에 "known-gap" 문자열=통과)이라 permanently-red보다 약함; 중복 행+조용한 regex 변경 결함. F plan step2는 "판정 후 fix-or-promote"였으나 이탈.
+- **판정(게이트 무수정)**: **ST-C4** = H-1 소유(corruption-seam 격리 하니스 부재로 blocked, 유닛은 482561c9a0). **MON-A7**(config-7 Core HWM+job queue snapshot reset) = .NET 구현·**java/cpp 미구현**, RuntimeMonitoring=순수 F → **H-11(F) 소유**.
+- java `:zlink-framework-core:build` contractTest의 MON-A7·ST-C4 실패는 **sanctioned known 커버리지-gap**(게이트가 실제 미구현을 정확히 플래그 — 스트릭트 유지). 핵심 런타임 게이트 `:zlink-framework-core:test`는 그린. 해소=구현(H-1/H-11).
+- cpp e2e_inventory 게이트 green을 원하면 표준형 = 171 ID **명시 allowlist를 게이트에 체크인**(신규 gap은 게이트 편집 필요=리뷰 가시, 구현 스크랩은 여전히 실패) — Claude 판정 사항, 후속.
+
+### ✅ G-2 Node 6/6 재검증 (2026-08-20 심야, Claude)
+이 세션 node 변경(cmd44 one-way `d2a8eb25e6`·Authority DTO `91a7cc82ce`·Bingo S1 `d4f5055ebe`·discovery) 후 **node 6샘플 전부 PASS**(Bingo·DeliveryDispatch·GameQuest·ShoppingMall·SupportChat·TicTacToe, exit=0). 무회귀 확인 + Bingo까지 그린(이전 4~5/6 → 6/6). G-2 Node 완전 그린.
+
+## H-canon: canonical actor-join 4언어 구현 (사용자 우선순위 지정 2026-08-21) — H-12/14/15 통합 구동
+
+스펙 결정 `8d8e5cdffd`(51 §9 Receiver Stable-Type Resolution) 위에서 4언어 canonical actorJoin(28)
+경로를 구현하고 사설 dialect(cpp typed-JSON·.NET envelope·java newline·node JSON)를 제거한다.
+검증 가능한 슬라이스로 순차 진행:
+
+- [x] **canon-S1 node canonical 28 수신자 Store-backed type resolution — 완료 `02b5026839`(Claude 독립 검증)**: node 수신자가 Store actor Authority row(allocation.stableType)에서 type 해석, 7필드 exact fence match, typed terminal 6종, u64 규칙 정확(nodeGeneration=opaque→===0n). verify:m6c 89/0(7 신규 케이스), m6b baseline 동일, 6샘플·relocation 그린. wire actorType는 대조용만. (사설 transport 유지=후속 slice) canonical 28 body 디코드
+      + Store Authority row(allocation.stableType, key authority\0actor\0{ActorId})에서 type 해석
+      + exact fence match(state=active·objectKind=actor·objectGeneration·owner node RID+lifecycle gen·
+      authorityOwnerGeneration·ownerLeaseGeneration) + typed terminal(Unavailable/NotFound/stale/
+      unknown-type). node 유닛/통합 테스트로 검증(valid+matching row→Store-resolved type admit,
+      mismatch→typed terminal, missing→Unavailable/NotFound). 사설 packet actorType 의존 제거.
+- [x] **canon-S4a 생성기 multipart payload 확장(키스톤) — 완료 `15500910bb`(Claude 독립 검증)**: actorJoin28 생성 코덱이 Frame 0 body + optional Frame 1 application-payload-envelope-v1. 4언어 encode/decode 1~2 frame, negative(truncated/extra/malformed) 거부. golden+fixture matrix. --check verified(무결성)+validator+byte-equivalence. (production 연결=S4b/c) generate-service-wire-pilot-codecs.mjs의 ActorJoin28을
+      "Frame 0 body + optional application payload frame(application-payload-envelope-v1: version+length+packetName+
+      contentType+bytes)" 모델로 확장(현재 body-only, decode 시 trailing 거부). 4언어 positive/negative fixture +
+      request golden 고정. (스코핑: doc/plan/canonical-transport-swap-scope.ko.md)
+- [x] **canon-S4b 4언어 수신자 canonical 28 decode — 완주(Claude 독립 검증)**: node `989df945ad`·java `ac562c94a1`·cpp `7eb85827b0`·dotnet `1aad623520`. 모든 언어 raw dispatch가 canonical 28 multipart를 S4a 생성 decoder로 decode+S3 Store resolution 재사용+payload 복원+cmd20 reply tail, 사설 record(transferId)는 legacy 폴백. **실회귀 2건 캐치·수정**(node TicTacToe·cpp cutover — 사설 relocation도 cmd28 공유), dotnet export 위반은 생성코덱 internal화로 수정(게이트 무약화). STOP 2건(java ST-R1·dotnet docs)은 pre-existing 판명. 각 언어 게이트+샘플+relocation Claude 독립 검증: raw dispatch가 command 28 multipart 수신→생성 decoder로 body+payload
+      envelope decode→기존 Store fence/type resolution(S3) 재사용→payload를 typed message로 복원→command-20 canonical
+      reply tail 반환. 사설 dialect 수신자는 default 유지.
+- [~] **canon-S4c 4언어 발신 canonical 28** — **node `9126956c4b`·java `c110fd375c` 완료(2/4, Claude 독립 검증)**: node 발신자가
+      capability(observed authority+admitted peer) 게이트 하에 canonical 28 multipart originate(생성 코덱), 미충족 시
+      private JSON 폴백, bound-session은 S4d로 제외. **S4b+S4c로 node→node same-language canonical actorJoin 단대단 성립**.
+      m6c 93/93(originate/round-trip 2 신규), 6샘플 통과. **java/dotnet/cpp 발신 잔여**:
+- [ ] **canon-S4c-cpp 발신 — 복잡(에이전트 STOP·회귀 discard)**: cpp canonical send 활성화(mesh_node_runtime.cpp:2317 gate)가 **Bingo·TicTacToe 샘플 회귀**(baseline 통과, S4c 실패 — cpp completion 경로 손상). dotnet과 동일하게 **S4d(relocation/completion state 통합) 선행 필요**. 미커밋 회귀 변경 discard, 트리 baseline 유지.
+- [ ] **canon-S4c-dotnet 발신 — 복잡(sender seam 필요, 에이전트 정직 STOP)**: .NET actor-join 발신자가 relocation
+      reservation token/transfer state와 강결합. canonical 28 reply엔 그 상태 부재(§9 bookkeeping=language-internal).
+      단순 transport 교체는 canonical 수신 후 commit/rollback 계약 파괴. 필요: canonical admission 결과를 local relocation
+      state에 연결 + gate 미충족 시 사설 폴백하는 sender seam. **S4d(relocation state 통합)와 함께 재설계.** (ZLinkActorRemoteJoiner.cs:463·ZLinkManagedMeshNode.cs:3076)
+- [ ] **⚠️ TicTacToe 잔여 간헐 flake(2026-08-21 재확인)**: baseline(S4c stash)에서도 4회 중 1회 실패(~25%). mesh-pump
+      수정(5a41d21fdc) 후 잔존 저빈도 flake — 이 세션의 여러 "TicTacToe 통과"는 운. **S4b/S4c 회귀 아님**(baseline 동일 flake율).
+      G-2 Node는 이 flake로 결정적 6/6 아님(운좋은 6/6). focused 세션 과제로 이월(캠페인 회귀 아님). 사설 DTO에서 canonical fence+correlation+entry+payload envelope만 추출, wire는
+      observed target authority+admitted peer가 canonical capability 증명 시만 enable(아니면 dialect 유지). transfer ID/
+      phase/reservation은 local state.
+- [ ] **canon-S4d relocation-state 통합 seam(cpp/dotnet 발신 완주 근거) — slice1 완료 `0407b3e4bc`(.NET seam 타입+lifecycle 6/6, 격리·무회귀), slice2-5 진행**:
+      language-internal `CanonicalActorJoinAttempt` seam(wire 무변경)으로 canonical accepted tail을 기존 relocation
+      prepare→transfer→CAS→handoff→cleanup→completion 체인에 연결. **불변식**: canonical accepted=admission accepted
+      (public Join/source completion terminal 아님), RelocationId/handoffId/reservation/completion identity는 wire 금지,
+      canonical correlation=idempotency key(public completion ID와 별개), pre-commit 실패=target abort+source seal rollback,
+      post-CAS 실패=reconciliation(source replay 금지). 슬라이스: (1) seam+lifecycle test → (2) **cpp target bridge**
+      (wireAttemptKey를 receiver+prepare 공유, seal_remote_application_actor_join 진입 필수, deliver 즉시호출 제거) →
+      (3) **.NET admission/relocation 분해**(SubmitRoutedJoinActorTransactionAsync→AcquireAdmissionContext+ContinueRelocation) →
+      (4) .NET canonical sender → (5) 검증(seam test + cpp Bingo/TicTacToe + .NET relocation sample).
+- [ ] **canon-S3-dotnet-receiver-not-wired-to-wire-ingress (2026-08-21, S3 4/4 주장 정정)**: sol 리뷰가 발견 — .NET 수신 whitelist(IsAllowedInfrastructureControlCommand, ZLinkManagedMeshNode.cs)가 ActorJoin(28)을 제외하여 canonical 28이 wire ingress에서 protocol error로 drop됨. 수신 경로 PrepareCanonicalActorJoinAsync(ZLinkFrameworkRuntimeActors.cs:2678)는 ZLinkSpotActorJoinDispatcher에서만 호출돼 raw 수신에 미연결. 즉 이전 'S3 receivers 4/4'는 .NET에 대해 틀림 — .NET은 canonical 28을 보낼 수는 있어도 받지 못함(내가 whitelist 누락 직접 확인). 수정 = whitelist에 ActorJoin 추가 + ProcessReceivedAsync가 TryDecodeActorJoinRequest를 태워 dispatcher로 라우팅. 근거: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md.
+- [ ] **canon-node-java-multiattempt-repark-untested (2026-08-21)**: node/java canonical relocation e2e가 same actor에 2차 attempt(later-attempt-wins re-park)를 실행하는 테스트 부재 확인 필요. 코드상 28→40 identity 바인딩 없음(branch A)이나 multi-attempt 재park 정확성(2차 28 supersede·40-reservation later-attempt 처리)은 미검증. 발신 작업 차단 아님. 근거: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md.
+- [ ] **canon-S4d attempt-binding — 검증 불성립·mode 전환(2026-08-21, advisor 신호)**: advisor 처방 2검증(first-40 바인딩·superseded terminal 구분) **둘 다 불성립** — 3언어 모두 신규 attempt-lifecycle 레이어(admission attempt registry+첫40 원자 pin+later28 supersede+명시 53 stale/superseded+source rollback 의미) 부재. 이는 스펙 단일판정이 아니라 **집중 프로토콜-인프라 설계**. 발신 트랙 5번째 갭 = advisor 명시 mode-전환 신호(loop 슬라이스 중단, 집중 단일작업 필요). 정밀 근거: doc/plan/canon-s4c-s4d-sender-integration-plan.ko.md. **canonical .NET/cpp 발신 완주 = dedicated 집중 세션 이월**(node/java 단대단·인프라 4/4·seam 타입은 견고한 기반으로 landing).
+- [ ] **canon-S4d-b bound Session 분리**: 28 전 42/43 seal + target commit 후 44 route update(28 sideband 금지).
+- [ ] **canon-S4e 크로스랭 harness User Spot JoinSpot stage**: JoinEntrySpot 보존 + canonical 28 pairwise matrix(Node↔.NET↔Java↔C++)로
+      canonical request/reply/rejected admission/payload round-trip/Store-fence rejection 검증.
+- [ ] **canon-S5 사설 dialect 제거**: S4 완주 후 4언어 사설 actor-join packet 삭제.
+- [x] **canon-S2 — 폐기·canon-S4c로 대체(node·java 완료)**: 발신 경로를 사설 JSON→canonical 28 wire로. node→node
+      same-language actorJoin이 canonical 경로로 그린.
+- [x] **canon-S3a java 수신자 Store-backed type resolution — 완료 `7a8c35f9b2`(Claude 독립 검증)**: ZLinkActorRuntime.readActorJoinAuthority + ZLinkActorSpotAdmission exact fence match, typed terminal, u64 규칙(descriptorLifecycleGeneration=opaque→==0). full :zlink-framework-core:test 1083/0 + 신규 테스트 독립 확인.
+- [x] **canon-S3b dotnet 수신자 Store-backed type resolution — 완료 `6d81735440`(Claude 독립 검증)**: ResolveRoutedActorJoinStableTypeAsync(Store 해석+7필드 fence match+typed terminal+u64 규칙). 전체 UnitTests 1791 pass/3 sanctioned(Legacy×2+timeout flake, 회귀 0)+ActorRelocationProtocolTests 27/27.
+- [x] **canon-S3c cpp 수신자 Store-backed type resolution — 완료 `c878d4faca`(Claude 독립 검증)**: cpp live 사설-JSON 수신자가 actor_type_from_authority(store,wire,fence)로 Store 해석+7필드 exact fence match+typed terminal+u64 규칙(node_generation=opaque→==0). actor_gateway 1/1·ST-B1 e2e·m6c 1/1(vcpkg dir; build dir는 nlohmann ABI split). **▶▶ 4/4 언어 canonical 수신자 완료 마일스톤: 모든 언어가 스펙 51 §9대로 Store에서 type 해석(위조 type 거부, exact fence, typed terminal). H-12(cpp dormant canonical continuation)는 S6 잔여.**
+- [x] **canon-S4 — canon-S4e로 대체·추적(중복 종결)**: 크로스랭 harness actorJoin 테스트(JoinEntrySpot 회피 해제, 4언어 매트릭스) = canon-S4e(활성 추적처).
+- [x] **canon-S5(중복) — 상단 canon-S5로 추적**: 4언어 사설 actor-join packet 삭제(활성 추적=상단 canon-S5).
+- [x] **canon-S6 — H-12/canon-S4d로 통합·추적**: cpp Accepted→seal/capture/Restore/relay/cutover continuation + chunk limit(H-14) = canon-S4d seam(활성 추적).

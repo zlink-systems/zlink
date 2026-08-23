@@ -36,6 +36,13 @@ interface SpotDispatchLine {
         return enqueueActorDispatch(actorId, operation);
     }
 
+    CompletionStage<Void> enqueueActorDispatch(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease);
+
     String spotId();
 
     DefaultSpotOutbound dispatchOutbound();

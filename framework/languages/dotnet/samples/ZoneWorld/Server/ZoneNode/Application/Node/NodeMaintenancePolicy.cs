@@ -24,13 +24,13 @@ public sealed class NodeMaintenancePolicy(string ownNodeId)
         _byNode.TryGetValue(nodeId, out var enabled) && enabled;
 
     /// <summary>
-    /// Maintenance blocks a new entry and a move from another logical node. A move between
-    /// zones already hosted by the same node does not introduce new workload and remains
-    /// allowed while that node is being drained.
+    /// Maintenance permits only movement that remains in the same logical zone. Every Actor
+    /// Join is a new admission, including a join from another zone hosted by this process.
+    /// The target Spot calls this method and is the sole terminal decision owner.
     /// </summary>
-    public bool RejectsArrival(string targetNodeId, string? sourceNodeId) =>
-        IsUnderMaintenance(targetNodeId)
-        && !string.Equals(targetNodeId, sourceNodeId, StringComparison.Ordinal);
+    public bool RejectsArrival(string targetZoneId, string? sourceZoneId) =>
+        IsOwnNodeUnderMaintenance
+        && !string.Equals(targetZoneId, sourceZoneId, StringComparison.Ordinal);
 
     public void Apply(string nodeId, bool enabled) => _byNode[nodeId] = enabled;
 

@@ -223,6 +223,9 @@ internal sealed class ZLinkActorOperationTarget(
         if (snapshot.ObjectGeneration != operation.Actor.ObjectGeneration
             || snapshot.AuthorityOwnerGeneration
                 != operation.AuthorityOwnerGeneration
+            || snapshot.OwnerLeaseGeneration <= 0
+            || (ulong)snapshot.OwnerLeaseGeneration
+                != operation.OwnerLeaseGeneration
             || snapshot.Allocation.ObjectKind
                 != ZLinkPlacementObjectKind.Actor)
             throw Stale(

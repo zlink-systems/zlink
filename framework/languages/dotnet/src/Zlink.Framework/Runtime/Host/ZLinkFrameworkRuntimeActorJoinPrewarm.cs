@@ -63,11 +63,12 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// prewarm attempt once that window elapses, mirroring the admission
     /// reservation's own cleanup.
     /// </summary>
-    internal void RegisterActorJoinPrewarm(
+    internal async ValueTask RegisterActorJoinPrewarmAsync(
         string handoffId,
         string actorId,
         ulong actorGeneration,
-        DateTimeOffset deadline)
+        DateTimeOffset deadline,
+        CancellationToken cancellationToken)
     {
         _actorJoinPrewarm.Register(
             handoffId,
@@ -87,6 +88,19 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"actor_join_prewarm_evicted handoff={evictedHandoffId}");
             });
+        //  CompleteMigration removes the temporary queue once PREPARE owns
+        //  the real import. The target relocation runtime remains the owner
+        //  of that installed stage, including its reservation and transferred
+        //  instance, so ask it to run the same abort/rollback path before the
+        //  newer admission returns Accepted. CAS is deliberately excluded by
+        //  the target runtime: after commit the existing winner is final.
+        await StandaloneActorRelocationRuntime
+            .AbortSupersededRoutedActorJoinPreparationAsync(
+                actorId,
+                actorGeneration,
+                handoffId,
+                cancellationToken)
+            .ConfigureAwait(false);
         RunDetached(
             "actor-join-prewarm-expiry",
             async ct =>

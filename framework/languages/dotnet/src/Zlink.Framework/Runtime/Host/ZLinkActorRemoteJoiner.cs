@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -348,7 +349,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         await AbortBoundSessionRouteSealBestEffortAsync(
                                 actor.Context.ActorId,
                                 actorState,
-                                handoffId)
+                                targetReservationRoute?.HandoffId ?? handoffId)
                             .ConfigureAwait(false);
                         await RollbackSourceHandoffAsync(
                                 actor,
@@ -449,7 +450,43 @@ internal sealed class ZLinkActorRemoteJoiner(
         var sourceSpotId = ResolveSourceSpotId(sourceAuthority);
 
         var admissionDeadline = absoluteDeadline;
-        var admission = await ZLinkSpotHandleRequestExecution.ExecuteAsync(
+        var sourceNode = runtime.GetSpotNodeRuntime(actorRef.NodeRid);
+        var canonicalRequest = CreateCanonicalActorJoinRequest(
+            actorRef,
+            sourceAuthority,
+            sourceAuthoritySnapshot,
+            target.Snapshot,
+            request);
+        var canonicalTransport = sourceNode.Node as IZLinkBackendCanonicalActorJoin;
+        if (canonicalTransport is not null
+            && HasCanonicalActorJoinAuthorityFence(canonicalRequest)
+            && sourceNode.Node is IZLinkBackendAuthorityObserver observer)
+        {
+            // Match the existing router-channel path: it records the exact
+            // Location-resolved Spot fence before any service-wire send.
+            observer.ObserveSpotAuthority(
+                canonicalRequest.TargetNodeRid,
+                canonicalRequest.TargetSpotId,
+                canonicalRequest.TargetSpotGeneration,
+                canonicalRequest.TargetNodeGeneration,
+                canonicalRequest.TargetAuthorityOwnerGeneration,
+                canonicalRequest.TargetOwnerLeaseGeneration);
+        }
+
+        var canonicalAdmission = canonicalTransport is not null
+            && canonicalTransport.CanRequestCanonicalActorJoin(canonicalRequest)
+            ? await TryRequestCanonicalAdmissionAsync(
+                    canonicalTransport,
+                    canonicalRequest,
+                    predictedPayloadBytes,
+                    RemainingTimeout(absoluteDeadline),
+                    cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+        handoffId = canonicalAdmission?.HandoffId ?? handoffId;
+        var admission = canonicalAdmission is { } selectedCanonical
+            ? (Snapshot: target.Snapshot, Reply: selectedCanonical.Reply)
+            : await ZLinkSpotHandleRequestExecution.ExecuteAsync(
                 target,
                 snapshot => ZLinkReconciliationRunner.RunAsync(
                     async token =>
@@ -541,8 +578,16 @@ internal sealed class ZLinkActorRemoteJoiner(
                is 0 or > long.MaxValue
             || admissionReply.TargetAuthorityOwnerGeneration
                is 0 or > long.MaxValue
-            || admissionReply.TargetAuthorityOwnerGeneration
-               <= actorAuthorityOwnerGeneration
+            // The canonical path self-composes TargetAuthorityOwnerGeneration
+            // as actorAuthorityOwnerGeneration + 1 (see
+            // TryRequestCanonicalAdmissionAsync); checking it against the same
+            // value here is tautological for that path. The legacy
+            // router-channel admission reply carries the target's own
+            // independently computed value and spec 51 §9 requires exact
+            // equality, not merely "advanced" ordering.
+            || (canonicalAdmission is null
+                && admissionReply.TargetAuthorityOwnerGeneration
+                   != checked(actorAuthorityOwnerGeneration + 1))
             || admissionReply.TargetSpotAuthorityOwnerGeneration
                != admission.Snapshot.AuthorityOwnerGeneration)
             throw new ZLinkFrameworkException(
@@ -586,16 +631,20 @@ internal sealed class ZLinkActorRemoteJoiner(
             $"preflight_done actor={actor.Context.ActorId} has_bound_session={hasBoundSession}");
         if (hasBoundSession && boundSession.SessionNodeRid is null)
             boundSession = boundSession with { SessionNodeRid = actorRef.NodeRid };
-        var sessionRelocationContext = default(ZLinkSessionRelocationContext);
+        //  The relocation coordinator fence (owner/lease/node/store-version)
+        //  is required on every ZLJR request, bound session or not: the
+        //  target's ZLJR decoder rejects an empty/zero fence as malformed
+        //  recovery regardless of whether a session happens to be bound.
+        //  Only session seal/binding stays conditional on hasBoundSession.
+        var sessionRelocationContext = ZLinkSessionRelocationContext.Create(
+            Guid.ParseExact(handoffId, "N"),
+            currentAuthority.Snapshot.OwnerId,
+            checked((ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
+            sourceAuthority.NodeRid,
+            sourceAuthority.NodeGeneration,
+            currentAuthority.Snapshot.StoreVersion);
         if (hasBoundSession)
         {
-            sessionRelocationContext = ZLinkSessionRelocationContext.Create(
-                Guid.ParseExact(handoffId, "N"),
-                currentAuthority.Snapshot.OwnerId,
-                checked((ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
-                sourceAuthority.NodeRid,
-                sourceAuthority.NodeGeneration,
-                currentAuthority.Snapshot.StoreVersion);
             actorState.RememberSourceSessionRelocation(
                 handoffId,
                 sessionRelocationContext);
@@ -692,9 +741,15 @@ internal sealed class ZLinkActorRemoteJoiner(
              registration.Codecs,
 	             hasBoundSession ? boundSession : null,
 	             targetReservation,
-                 hasBoundSession
-                     ? sessionRelocationContext
-                     : default);
+                 sessionRelocationContext,
+                 actorNodeGeneration:
+                     currentAuthority.Snapshot.Allocation
+                         .DescriptorLifecycleGeneration,
+	                 expectedOwnerLeaseGeneration: checked(
+	                     (ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
+                     targetAttemptGeneration:
+                         ZLinkStandaloneActorRelocationRuntime
+                             .InitialTargetAttemptGeneration);
         var recovery = new ZLinkActorRelocationRecoveryRecord(
             requestTemplate,
             targetSpotId,
@@ -704,7 +759,10 @@ internal sealed class ZLinkActorRemoteJoiner(
             targetReservation.TargetAuthorityOwnerGeneration,
             operationId?.High ?? 0,
             operationId?.Low ?? 0,
-            operationId is null ? null : admissionReply.ReplyContentType,
+            operationId is null
+                ? null
+                : admissionReply.RecoveryReplyContentType
+                  ?? admissionReply.ReplyContentType,
             operationId is null ? [] : admissionReply.Reply);
         var targetDescriptor = (await authorityStore.ListAllMeshNodesAsync(
                 sourceAuthority.MeshName,
@@ -732,7 +790,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                         $"Actor '{actor.Context.ActorId}' accepted journal lost its source fence."),
                     targetActor))
             .ToArray();
-        var sourceNode = runtime.GetSpotNodeRuntime(actorRef.NodeRid);
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
             authorityStore);
         var precommitSnapshot = await precommit.BeginPreparingAsync(
@@ -804,8 +861,20 @@ internal sealed class ZLinkActorRemoteJoiner(
         if (sourceNode.Node is not IZLinkBackendCanonicalRelocation canonical)
             throw new ZLinkConfigurationException(
                 "The source MeshNode does not support canonical relocation commands.");
+        //  The Coordinator fence (owner/lease/node/StoreVersion) is a single
+        //  pre-precommit value shared by the durable ZLJR recovery record
+        //  (sessionRelocationContext above) and this command-40 Prepare —
+        //  never the post-BeginPreparing/post-Capture precommitSnapshot,
+        //  whose StoreVersion has already moved past what ZLJR carries. The
+        //  cpp reference source builds exactly one `coordinator` from the
+        //  pre-precommit authority snapshot and reuses it for both wire
+        //  messages (mesh_node_runtime.cpp's relocate_application_actor).
+        //  ObjectGeneration/AuthorityOwnerGeneration/OwnerId/LeaseGeneration
+        //  are unaffected by this swap: BeginPreparingAsync/CaptureAsync
+        //  preserve them (ZLinkAuthorityGenerationTransition.Preserve) and
+        //  only rotate Payload/StoreVersion.
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
-            precommitSnapshot,
+            currentAuthority.Snapshot,
             sourceAuthority,
             targetDescriptor,
             initialEnvelope,
@@ -928,6 +997,166 @@ internal sealed class ZLinkActorRemoteJoiner(
             resultActorRef.ToNative(sourceAuthority.MeshName),
             admissionReplyMessage);
     }
+
+    private ZLinkBackendCanonicalActorJoinRequest CreateCanonicalActorJoinRequest(
+        ZLinkBackendActorRef actor,
+        ZLinkActorAuthorityPayload sourceAuthority,
+        ZLinkAuthoritySnapshot sourceAuthoritySnapshot,
+        ZLinkSpotHandleSnapshot target,
+        ZLinkMessage request)
+    {
+        var encodedRequest = request.Encode(registration.Codecs);
+        return new ZLinkBackendCanonicalActorJoinRequest(
+            actor,
+            sourceAuthority.NodeGeneration,
+            sourceAuthoritySnapshot.AuthorityOwnerGeneration,
+            checked((ulong)sourceAuthoritySnapshot.OwnerLeaseGeneration),
+            target.SpotKind == ZLinkSpotKind.Entry,
+            target.NodeRid,
+            target.SpotId,
+            checked((ulong)target.Generation),
+            target.NodeGeneration,
+            target.AuthorityOwnerGeneration,
+            target.OwnerLeaseGeneration,
+            "ZLinkFrameworkActorJoinRequest",
+            encodedRequest.ContentType,
+            encodedRequest.Payload.ToArray());
+    }
+
+    // internal (not private) so unit tests can exercise the ZLJR
+    // outer-vs-inner ReplyContentType split directly, matching
+    // DecodeCanonicalApplicationReply/ResolveSourceSpotId below.
+    internal static async ValueTask<CanonicalAdmission?>
+        TryRequestCanonicalAdmissionAsync(
+            IZLinkBackendCanonicalActorJoin transport,
+            ZLinkBackendCanonicalActorJoinRequest request,
+            long predictedPayloadBytes,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+    {
+        using var completion =
+            new ZLinkNativeReplyCompletion<ZLinkBackendActorJoinResult>(
+                cancellationToken);
+        if (!transport.RequestCanonicalActorJoin(
+                request,
+                completion.Complete,
+                timeout,
+                out var correlation))
+            return null;
+
+        var (join, replyParts) = await completion.Task.ConfigureAwait(false);
+        if (join.Result != RequestResult.Ok)
+        {
+            ZLinkMessageParts.DisposeAll(replyParts);
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                join.Result,
+                join.FailureErrno,
+                $"Canonical Actor join for '{request.Actor.ActorId}' to SPOT "
+                + $"'{request.TargetSpotId}'");
+        }
+
+        try
+        {
+            if (join.JoinResultCode is not 0 and not 1
+                || join.Actor != request.Actor with { NodeRid = request.TargetNodeRid }
+                || string.IsNullOrEmpty(join.JoinedSpotId)
+                || join.JoinedSpotGeneration == 0)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    "Canonical actorJoin admission reply tail is malformed.");
+
+            if (replyParts.Count > 1)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    "Canonical actorJoin application reply is malformed.");
+
+            var application = DecodeCanonicalApplicationReply(join, replyParts);
+            var handoffId = ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                request.Actor.NodeRid,
+                request.Actor.ActorId,
+                request.Actor.Generation,
+                request.ActorNodeGeneration,
+                correlation);
+            var reply = new ZLinkRemoteActorAdmissionReply(
+                join.JoinResultCode == 0,
+                application.ContentType,
+                application.Payload.ToArray(),
+                ReservationToken: handoffId,
+                ReservedPayloadBytes: predictedPayloadBytes,
+                TargetNodeRid: request.TargetNodeRid.ToBytes().ToArray(),
+                TargetNodeGeneration: request.TargetNodeGeneration,
+                TargetSpotGeneration: join.JoinedSpotGeneration,
+                TargetAuthorityOwnerGeneration: checked(
+                    request.ActorAuthorityOwnerGeneration + 1),
+                TargetSpotAuthorityOwnerGeneration:
+                    request.TargetAuthorityOwnerGeneration,
+                ReceiveChunkLimitBytes: join.Flags,
+                // The ZLJR saved-work row (command 40) fences this as the
+                // fixed outer service-wire profile, not the reply's actual
+                // typed content type — see ZLinkRemoteActorAdmissionReply.
+                RecoveryReplyContentType:
+                    ServiceWireConstants.FrameworkMultipartContentType);
+            return new CanonicalAdmission(reply, handoffId);
+        }
+        catch (ZLinkFrameworkException)
+        {
+            throw;
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Canonical actorJoin admission reply could not be decoded.",
+                innerException: error);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(replyParts);
+        }
+    }
+
+    // service-wire-v1 ActorJoin(28): spec 51 fixes the reply framing as
+    // multipart wrap + sole raw part. The managed mesh has already unwrapped
+    // the framework-multipart reply, so the sole part here is delivered as
+    // the application reply verbatim — it is never reinterpreted as another
+    // (nested) envelope, matching every other target.
+    internal static ZLinkApplicationPayloadEnvelope DecodeCanonicalApplicationReply(
+        ZLinkBackendActorJoinResult join,
+        IReadOnlyList<Message> replyParts)
+    {
+        if (replyParts.Count > 1)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Canonical actorJoin application reply is malformed.");
+
+        if (replyParts.Count == 0)
+            return new ZLinkApplicationPayloadEnvelope(
+                typeof(ZLinkMessage).Name,
+                join.ReplyContentType,
+                ReadOnlyMemory<byte>.Empty);
+
+        return new ZLinkApplicationPayloadEnvelope(
+            typeof(ZLinkMessage).Name,
+            join.ReplyContentType,
+            replyParts[0].AsReadOnlyMemory());
+    }
+
+    internal readonly record struct CanonicalAdmission(
+        ZLinkRemoteActorAdmissionReply Reply,
+        string HandoffId);
+
+    private static bool HasCanonicalActorJoinAuthorityFence(
+        ZLinkBackendCanonicalActorJoinRequest request) =>
+        request.Actor.Generation != 0
+        && request.ActorNodeGeneration != 0
+        && request.ActorAuthorityOwnerGeneration != 0
+        && request.ActorOwnerLeaseGeneration != 0
+        && !request.TargetNodeRid.IsEmpty
+        && !string.IsNullOrWhiteSpace(request.TargetSpotId)
+        && request.TargetSpotGeneration != 0
+        && request.TargetNodeGeneration != 0
+        && request.TargetAuthorityOwnerGeneration != 0
+        && request.TargetOwnerLeaseGeneration != 0;
 
     private bool IsRuntimeShutdown(Exception exception) =>
         runtime.ShutdownToken.IsCancellationRequested

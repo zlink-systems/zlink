@@ -4,6 +4,7 @@ using System.Runtime.ExceptionServices;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -465,19 +466,28 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRemoteActorJoinRequest request,
         CancellationToken cancellationToken = default)
     {
-        var authorityStore = Registration.Locations.ResolveStore()
-                             ?? throw new ZLinkConfigurationException(
-                                 "Cross-node Actor relocation requires an Authority Store.");
-        var relocationStore = Registration.Locations.ResolveRelocationStore()
-                              ?? throw new ZLinkConfigurationException(
-                                  "Cross-node Actor relocation requires a Relocation Store.");
+        var authorityStore = Registration.Locations.ResolveStore();
         var target = ResolveActorHandoffTarget(spotId)
                      ?? throw new InvalidOperationException(
                          $"Actor handoff target '{spotId}' is not active.");
+        var stableType = await ResolveRoutedActorJoinStableTypeAsync(
+                request,
+                authorityStore,
+                type => ZLinkActorRelocationRegistry.TryResolve(
+                    Registration,
+                    type,
+                    target.NodeRid,
+                    out _),
+                cancellationToken)
+            .ConfigureAwait(false);
+        var resolvedAuthorityStore = authorityStore!;
+        var relocationStore = Registration.Locations.ResolveRelocationStore()
+                              ?? throw new ZLinkConfigurationException(
+                                  "Cross-node Actor relocation requires a Relocation Store.");
         await ValidateActorRelocationTargetAsync(
                 request,
                 target,
-                authorityStore,
+                resolvedAuthorityStore,
                 cancellationToken)
             .ConfigureAwait(false);
         // A duplicate commit may arrive after the completed handoff has
@@ -491,7 +501,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             durableEnvelope =
                 await new ZLinkRelocationPublicationCoordinator(
-                        authorityStore,
+                        resolvedAuthorityStore,
                         relocationStore)
                     .ReadPreparedAsync(
                         ZLinkActorRelocationRoot.Reference(request),
@@ -509,7 +519,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         var durable = ZLinkActorRelocationRoot.Load(
             request,
             durableEnvelope);
-        var currentAuthority = await authorityStore.ReadAuthorityAsync(
+        var currentAuthority = await resolvedAuthorityStore.ReadAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.ActorId),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -550,13 +560,13 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         ZLinkActorRelocationRegistry.TryResolve(
             Registration,
-            request.ActorType,
+            stableType,
             target.NodeRid,
             out var relocation);
         if (relocation is null)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
-                $"Actor type '{request.ActorType}' relocation policy is not registered on the target node.");
+                $"Actor Authority stable type '{stableType}' is not registered on the target node.");
         var ownsImport = false;
         var createdTransferredActor = false;
         var authorityCommitted = actorState.Handoff.IsAuthorityCommitted(request.HandoffId);
@@ -592,11 +602,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                 // not a new application-level actor creation.
                 var creation = await _actorSessionManager.RelocateAndBindActorAsync(
                         request.ActorId,
-                        request.ActorType,
+                        stableType,
                         relocation,
                         ZLinkActorRelocationRegistry.ValidateIncomingPayload(
                             relocation,
-                            request.ActorType,
+                            stableType,
                             request.RelocationContentType,
                             durable.Participant.ApplicationState),
                         request.ActorGeneration,
@@ -644,6 +654,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         request.ActorGeneration,
                         ZLinkActorRelocationRoot.Reference(request),
                         durableEnvelope,
+                        request.TargetAttemptGeneration,
                         request.TargetAuthorityOwnerGeneration,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -797,7 +808,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             actorState.Handoff.AbortImport(request.HandoffId);
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
+                // A superseded PREPARE is a transient ownership race, not an
+                // absent Actor. The canonical terminal mapper turns this into
+                // actorLocationStale(21), whose public classification is
+                // Unavailable.
+                ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{request.ActorId}' relocation admission was superseded "
                 + "by a newer identity before PREPARE.");
         }
@@ -1053,7 +1068,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                      $"Actor '{request.ActorId}' has no current reference for Join completion.");
                 var reply = recovery.Reply.Length != 0
                             && recovery.ReplyContentType is { } contentType
-                    ? ZLinkMessage.FromEncoded(
+                    ? ZLinkMessage.FromCanonicalActorJoinReply(
                         contentType,
                         recovery.Reply,
                         Registration.Codecs)
@@ -1366,7 +1381,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                                    $"Actor '{request.ActorId}' has no current reference for Join completion.");
                 var reply = request.Reply is { Length: > 0 } payload
                             && request.ReplyContentType is { } contentType
-                    ? ZLinkMessage.FromEncoded(contentType, payload, Registration.Codecs)
+                    ? ZLinkMessage.FromCanonicalActorJoinReply(
+                        contentType,
+                        payload,
+                        Registration.Codecs)
                     : null;
                 await actorState.ExecuteRelocationCompletionAsync(
                         currentRef.Generation,
@@ -2291,6 +2309,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong sourceObjectGeneration,
         ZLinkRelocationManifestReference relocationReference,
         ZLinkRelocationEnvelope relocationRoot,
+        ulong targetAttemptGeneration,
         ulong targetAuthorityOwnerGeneration,
         CancellationToken cancellationToken)
     {
@@ -2338,6 +2357,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         : default,
                     relocationReference,
                     relocationRoot,
+                    targetAttemptGeneration,
                     targetAuthorityOwnerGeneration,
                     _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
                     cancellationToken)
@@ -2361,6 +2381,93 @@ internal sealed partial class ZLinkFrameworkRuntime
            ?? throw new ZLinkFrameworkException(
                ZLinkFrameworkErrorKind.NotFound,
                $"Actor '{actorId}' relocation cannot publish authority because the Location runtime is unavailable.");
+
+    internal async ValueTask<ZLinkRemoteActorAdmissionReply> AdmitCanonicalActorJoinAsync(
+        string spotId,
+        ActorJoinRequest request,
+        ZLinkApplicationPayloadEnvelope? payload,
+        CancellationToken cancellationToken = default)
+    {
+        var timeout = Registration.DefaultRequestTimeout <= TimeSpan.Zero
+            ? TimeSpan.FromSeconds(30)
+            : Registration.DefaultRequestTimeout;
+        var deadline = TimeProvider.System.GetUtcNow().Add(timeout);
+        var application = payload ?? new ZLinkApplicationPayloadEnvelope(
+            typeof(ZLinkMessage).Name,
+            ZLinkEnvelopeCodec.DefaultContentType,
+            ReadOnlyMemory<byte>.Empty);
+        var authorityStore = Registration.Locations.ResolveStore()
+                             ?? throw new ZLinkFrameworkException(
+                                 ZLinkFrameworkErrorKind.Unavailable,
+                                 "Canonical actorJoin requires an available Authority Store.");
+        var sourceAuthorityRead = await authorityStore.ReadAuthorityAsync(
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.Actor.ActorId),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (sourceAuthorityRead is not ZLinkAuthorityReadResult.Found source
+            || source.Snapshot.ObjectGeneration != request.Actor.ObjectGeneration
+            || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                source.Snapshot.Payload.Span, out var sourceAuthority)
+            || sourceAuthority.NodeRid != request.Actor.NodeRid
+            || sourceAuthority.NodeGeneration != request.ActorNodeGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"Canonical actorJoin source authority for '{request.Actor.ActorId}' changed before admission.");
+        var sourceSpotId = ZLinkActorRemoteJoiner.ResolveSourceSpotId(sourceAuthority);
+        var stableType = await ResolveCanonicalActorJoinStableTypeAsync(
+                request,
+                authorityStore,
+                type => ZLinkActorRelocationRegistry.TryResolve(
+                    Registration, type, request.TargetNodeRid, out _),
+                cancellationToken)
+            .ConfigureAwait(false);
+        ZLinkActorRelocationRegistry.TryResolve(
+            Registration,
+            stableType,
+            request.TargetNodeRid,
+            out var relocation);
+        if (relocation is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                $"Actor type '{stableType}' relocation policy is not registered on the target node.");
+        using var applicationMessage = Message.From(application.Payload);
+        var reservationPayload = ZLinkMessage.FromEnvelopePayload(
+            application.ContentType,
+            applicationMessage,
+            Registration.Codecs);
+        var predictedPayloadBytes =
+            ZLinkRemoteActorJoinPackets.MeasurePredictedRelocationPayloadBytes(
+                reservationPayload,
+                Registration.Codecs,
+                relocation.PolicyKind == 2);
+        var handoffId = ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+            request.Actor.NodeRid,
+            request.Actor.ActorId,
+            request.Actor.ObjectGeneration,
+            request.ActorNodeGeneration,
+            request.Correlation);
+        // The canonical request has no private handoff identifier or type.
+        // This deterministic local reservation key is only the existing
+        // admission/prewarm bookkeeping identity; stable type and every
+        // route fence stay Store-owned in AdmitRoutedActorJoinAsync.
+        var admission = new ZLinkRemoteActorAdmissionRequest(
+            request.Actor.ActorId,
+            stableType,
+            sourceSpotId,
+            request.Actor.NodeRid.ToBytes().ToArray(),
+            application.ContentType,
+            application.Payload.ToArray(),
+            handoffId,
+            deadline.ToUnixTimeMilliseconds(),
+            request.Actor.ObjectGeneration,
+            request.ActorAuthorityOwnerGeneration,
+            predictedPayloadBytes,
+            request.TargetSpotGeneration,
+            request.TargetAuthorityOwnerGeneration,
+            new ZLinkCanonicalActorJoinAdmission(request));
+        return await AdmitRoutedActorJoinAsync(spotId, admission, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     internal async ValueTask<ZLinkRemoteActorAdmissionReply> AdmitRoutedActorJoinAsync(
         string spotId,
@@ -2395,16 +2502,59 @@ internal sealed partial class ZLinkFrameworkRuntime
                             .Node
                             .MeshStatus()
                             .LifecycleGeneration;
-                        var authorityStore = Registration.Locations.ResolveStore()
-                                             ?? throw new ZLinkConfigurationException(
-                                                 "Cross-node Actor relocation requires an Authority Store.");
+                        var canonical = request.Canonical;
+                        var authorityStore = Registration.Locations.ResolveStore();
+                        if (authorityStore is null)
+                        {
+                            if (canonical is not null)
+                                throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.Unavailable,
+                                    "Canonical actorJoin requires an available Authority Store.");
+                            throw new ZLinkConfigurationException(
+                                "Cross-node Actor relocation requires an Authority Store.");
+                        }
                         var authorityKey =
                             ZLinkActorAuthorityPayloadCodec.AuthorityKey(
                                 request.ActorId);
-                        var authorityRead = await authorityStore.ReadAuthorityAsync(
-                                authorityKey,
-                                ct)
-                            .ConfigureAwait(false);
+                        ZLinkAuthorityReadResult authorityRead;
+                        try
+                        {
+                            authorityRead = await authorityStore.ReadAuthorityAsync(
+                                    authorityKey,
+                                    ct)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception error) when (canonical is not null
+                                                      && error is not OperationCanceledException)
+                        {
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.Unavailable,
+                                $"Canonical actorJoin could not read Actor '{request.ActorId}' Authority.",
+                                innerException: error);
+                        }
+                        if (canonical is not null
+                            && authorityRead is ZLinkAuthorityReadResult.Missing)
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.NotFound,
+                                $"Actor '{request.ActorId}' Authority row was not found.");
+                        var canonicalActorFenceValid = canonical is null
+                            || (canonical.Request.Actor.ObjectGeneration != 0
+                                && canonical.Request.ActorNodeGeneration != 0
+                                && canonical.Request.ActorAuthorityOwnerGeneration != 0
+                                && canonical.Request.ActorOwnerLeaseGeneration != 0
+                                && authorityRead is ZLinkAuthorityReadResult.Found
+                                    canonicalAuthority
+                                && canonicalAuthority.Snapshot.Allocation.Descriptor.Rid
+                                   == canonical.Request.Actor.NodeRid
+                                && canonicalAuthority.Snapshot.Allocation
+                                       .DescriptorLifecycleGeneration
+                                   == canonical.Request.ActorNodeGeneration
+                                && canonicalAuthority.Snapshot.Allocation.State
+                                   == ZLinkPlacementAllocationState.Active
+                                && canonicalAuthority.Snapshot.OwnerLeaseGeneration > 0
+                                && (ulong)canonicalAuthority.Snapshot
+                                       .OwnerLeaseGeneration
+                                   == canonical.Request.ActorOwnerLeaseGeneration);
                         if (authorityRead
                                 is not ZLinkAuthorityReadResult.Found authority
                             || authority.Snapshot.ObjectGeneration
@@ -2413,72 +2563,111 @@ internal sealed partial class ZLinkFrameworkRuntime
                                != request.ActorAuthorityOwnerGeneration
                             || authority.Snapshot.Allocation.ObjectKind
                                != ZLinkPlacementObjectKind.Actor
-                            || !StringComparer.Ordinal.Equals(
+                            || !canonicalActorFenceValid
+                            || (canonical is null
+                                && !StringComparer.Ordinal.Equals(
                                 authority.Snapshot.Allocation.StableType,
-                                request.ActorType))
+                                request.ActorType)))
                             throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.InvalidOperation,
                                 $"Actor '{request.ActorId}' authority changed before target reservation.");
-                        _ = (await authorityStore
-                                .ListAllMeshNodesAsync(
-                                    authority.Snapshot.Allocation.Descriptor
-                                        .MeshName,
-                                    ct)
-                                .ConfigureAwait(false))
-                            .SingleOrDefault(candidate =>
-                                candidate.Rid == target.NodeRid
-                                && candidate.LifecycleGeneration
-                                == targetNodeGeneration)
-                            ?? throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.NotFound,
-                                $"Actor '{request.ActorId}' target descriptor is unavailable.");
-                        var targetFenceValid = target.EntrySpot is not null
-                            ? request.TargetSpotAuthorityOwnerGeneration
-                              == targetNodeGeneration
-                            : await HasExactUserSpotAuthorityAsync(
+                        try
+                        {
+                            _ = (await authorityStore
+                                    .ListAllMeshNodesAsync(
+                                        authority.Snapshot.Allocation.Descriptor
+                                            .MeshName,
+                                        ct)
+                                    .ConfigureAwait(false))
+                                .SingleOrDefault(candidate =>
+                                    candidate.Rid == target.NodeRid
+                                    && candidate.LifecycleGeneration
+                                    == targetNodeGeneration)
+                                ?? throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.NotFound,
+                                    $"Actor '{request.ActorId}' target descriptor is unavailable.");
+                        }
+                        catch (Exception error) when (canonical is not null
+                                                      && error is not ZLinkFrameworkException
+                                                      && error is not OperationCanceledException)
+                        {
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.Unavailable,
+                                $"Canonical actorJoin could not read its target node descriptor.",
+                                innerException: error);
+                        }
+                        var canonicalTargetFenceValid = canonical is null
+                            || await HasExactCanonicalTargetSpotAuthorityAsync(
                                     target.TargetRid,
-                                    request.TargetSpotGeneration,
-                                    request.TargetSpotAuthorityOwnerGeneration,
+                                    canonical.Request,
                                     authorityStore,
                                     ct)
                                 .ConfigureAwait(false);
+                        var targetFenceValid = canonical is not null
+                            ? canonicalTargetFenceValid
+                            : target.EntrySpot is not null
+                                ? request.TargetSpotAuthorityOwnerGeneration
+                                  == targetNodeGeneration
+                                : await HasExactUserSpotAuthorityAsync(
+                                        target.TargetRid,
+                                        request.TargetSpotGeneration,
+                                        request.TargetSpotAuthorityOwnerGeneration,
+                                        authorityStore,
+                                        ct)
+                                    .ConfigureAwait(false);
                         if (request.ActorGeneration == 0
                             || request.ActorAuthorityOwnerGeneration == 0
                             || request.PredictedPayloadBytes <= 0
                             || request.TargetSpotGeneration != targetSpotGeneration
+                            || !canonicalTargetFenceValid
                             || !targetFenceValid
                             || targetNodeGeneration == 0)
                             throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.InvalidOperation,
                                 $"Actor '{request.ActorId}' relocation admission target changed.");
+                        var admittedActorType = canonical is not null
+                            ? authority.Snapshot.Allocation.StableType
+                            : request.ActorType;
+                        if (canonical is not null
+                            && TryGetActorState(request.ActorId, out var existing)
+                            && existing.ActorType is { } existingType
+                            && !StringComparer.Ordinal.Equals(
+                                existingType,
+                                admittedActorType))
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.TypeMismatch,
+                                $"Actor '{request.ActorId}' already uses actor type "
+                                + $"'{existingType}', not '{admittedActorType}'.");
                         ZLinkActorRelocationRegistry.TryResolve(
                             Registration,
-                            request.ActorType,
+                            admittedActorType,
                             target.NodeRid,
                             out var relocation);
                         if (relocation is null)
                             throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.Rejected,
-                                $"Actor type '{request.ActorType}' relocation policy is not registered on the target node.");
+                                $"Actor type '{admittedActorType}' relocation policy is not registered on the target node.");
                         if (authority.Snapshot.AuthorityOwnerGeneration
                             >= long.MaxValue)
                             throw new ZLinkAuthorityGenerationExhaustedException(
                                 $"admitting Actor '{request.ActorId}' relocation");
                         var expectedTargetAuthorityOwnerGeneration = checked(
                             authority.Snapshot.AuthorityOwnerGeneration + 1);
+                        var payload =
+                            ZLinkRemoteActorJoinPackets
+                                .DecodeAdmissionRequestPayload(
+                                    request,
+                                    Registration.Codecs);
                         var reservation = new ZLinkActorRelocationReservation(
-                            Guid.NewGuid().ToString("N"),
+                            canonical is null
+                                ? Guid.NewGuid().ToString("N")
+                                : request.HandoffId,
                             request.PredictedPayloadBytes,
                             target.NodeRid,
                             targetNodeGeneration,
                             targetSpotGeneration,
                             expectedTargetAuthorityOwnerGeneration,
                             request.TargetSpotAuthorityOwnerGeneration);
-                        var payload =
-                            ZLinkRemoteActorJoinPackets
-                                .DecodeAdmissionRequestPayload(
-                                    request,
-                                    Registration.Codecs);
                         ZLinkSpotActorJoinResult result;
                         if (target.UserSpot is { } userSpot)
                             result = await userSpot.AdmitRemoteActorJoinAsync(
@@ -2512,12 +2701,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                             //  dropped as NotFound. JoinEntrySpot has no
                             //  admission round trip and is excluded (spec
                             //  15 §4.2 "이 준비 동승이 없다").
-                            RegisterActorJoinPrewarm(
-                                request.HandoffId,
-                                request.ActorId,
-                                request.ActorGeneration,
-                                DateTimeOffset.FromUnixTimeMilliseconds(
-                                    request.DeadlineUnixTimeMilliseconds));
+                            await RegisterActorJoinPrewarmAsync(
+                                    request.HandoffId,
+                                    request.ActorId,
+                                    request.ActorGeneration,
+                                    DateTimeOffset.FromUnixTimeMilliseconds(
+                                        request.DeadlineUnixTimeMilliseconds),
+                                    ct)
+                                .ConfigureAwait(false);
                         return ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
                             true,
                             result.Reply,
@@ -2569,6 +2760,205 @@ internal sealed partial class ZLinkFrameworkRuntime
                 null,
                 entrySpot);
         return null;
+    }
+
+    /// <summary>
+    /// Spec 51 §9: a routed Actor Join resolves its factory type from the
+    /// canonical Actor Authority allocation, never from the private packet's
+    /// legacy ActorType field. The packet type remains an integrity assertion
+    /// until this transport is replaced by canonical service wire.
+    /// </summary>
+    internal static async ValueTask<string> ResolveRoutedActorJoinStableTypeAsync(
+        ZLinkRemoteActorJoinRequest request,
+        IZLinkLocationRepository? authorityStore,
+        Func<string, bool> hasLocalFactory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(hasLocalFactory);
+        if (authorityStore is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{request.ActorId}' Join cannot read its Authority row because Location Store is unavailable.");
+
+        ZLinkAuthorityReadResult read;
+        try
+        {
+            read = await authorityStore.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.ActorId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{request.ActorId}' Join could not read its Authority row.",
+                innerException: error);
+        }
+
+        if (read is not ZLinkAuthorityReadResult.Found found)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{request.ActorId}' has no Authority row for Join admission.");
+
+        RoutingId sourceNodeRid;
+        try
+        {
+            sourceNodeRid = RoutingId.From(request.SourceNodeRid);
+        }
+        catch (Exception error)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"Actor '{request.ActorId}' Join carries an invalid Authority fence.",
+                innerException: error);
+        }
+
+        // Object/owner/lease are bounded counters. ActorNodeGeneration is a
+        // full-range opaque lifecycle token, so only zero means absent.
+        if (request.ActorGeneration == 0
+            || request.ActorNodeGeneration == 0
+            || request.ActorAuthorityOwnerGeneration == 0
+            || request.ExpectedOwnerLeaseGeneration == 0
+            || found.Snapshot.OwnerLeaseGeneration <= 0
+            || found.Snapshot.Allocation.State
+               != ZLinkPlacementAllocationState.Active
+            || found.Snapshot.Allocation.ObjectKind
+               != ZLinkPlacementObjectKind.Actor
+            || found.Snapshot.ObjectGeneration != request.ActorGeneration
+            || found.Snapshot.Allocation.Descriptor.Rid != sourceNodeRid
+            || found.Snapshot.Allocation.DescriptorLifecycleGeneration
+               != request.ActorNodeGeneration
+            || found.Snapshot.AuthorityOwnerGeneration
+               != request.ActorAuthorityOwnerGeneration
+            || (ulong)found.Snapshot.OwnerLeaseGeneration
+               != request.ExpectedOwnerLeaseGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"Actor '{request.ActorId}' Join Authority row does not exactly match its route fence.");
+
+        var stableType = found.Snapshot.Allocation.StableType;
+        if (!StringComparer.Ordinal.Equals(request.ActorType, stableType))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.TypeMismatch,
+                $"Actor '{request.ActorId}' Join stable type does not match its Authority row.");
+        if (!hasLocalFactory(stableType))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                $"Actor '{request.ActorId}' Authority stable type '{stableType}' is not registered on the target node.");
+        return stableType;
+    }
+
+    // Canonical command 28 deliberately has no private ActorType or relocation
+    // transfer id.  Reuse the S3 Authority-row decision before the normal Spot
+    // dispatcher materializes the target Actor.
+    internal async ValueTask PrepareCanonicalActorJoinAsync(
+        ActorJoinRequest request,
+        CancellationToken cancellationToken)
+    {
+        var target = ResolveActorHandoffTarget(request.TargetSpotId)
+                     ?? throw new ZLinkFrameworkException(
+                         ZLinkFrameworkErrorKind.NotFound,
+                         $"Actor '{request.Actor.ActorId}' Join target '{request.TargetSpotId}' is not active.");
+        if (target.NodeRid != request.TargetNodeRid)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"Actor '{request.Actor.ActorId}' Join target node fence does not match.");
+
+        var stableType = await ResolveCanonicalActorJoinStableTypeAsync(
+                request,
+                Registration.Locations.ResolveStore(),
+                type => ZLinkActorRelocationRegistry.TryResolve(
+                    Registration, type, target.NodeRid, out _),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var state = GetOrCreateActorState(request.Actor.ActorId);
+        if (state.Actor is not null)
+            return;
+
+        // This is target-local provisional existence only. Command 40 owns
+        // the relocation reservation, staging queue, and byte budget under
+        // its relocation identity; do not create any of those at command 28.
+        await _actorSessionManager.EnsureProvisionalActorAsync(
+                request.Actor.ActorId,
+                stableType,
+                request.Actor.ObjectGeneration,
+                request.ActorAuthorityOwnerGeneration,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal static async ValueTask<string> ResolveCanonicalActorJoinStableTypeAsync(
+        ActorJoinRequest request,
+        IZLinkLocationRepository? authorityStore,
+        Func<string, bool> hasLocalFactory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(hasLocalFactory);
+        if (authorityStore is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{request.Actor.ActorId}' Join cannot read its Authority row because Location Store is unavailable.");
+
+        ZLinkAuthorityReadResult read;
+        try
+        {
+            read = await authorityStore.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(request.Actor.ActorId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{request.Actor.ActorId}' Join could not read its Authority row.",
+                innerException: error);
+        }
+
+        if (read is not ZLinkAuthorityReadResult.Found found)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{request.Actor.ActorId}' has no Authority row for Join admission.");
+
+        // Object/owner/lease are bounded counters.  The node lifecycle token
+        // is opaque full-range, so only zero is absence and all matching is
+        // exact equality.
+        if (request.Actor.ObjectGeneration == 0
+            || request.ActorNodeGeneration == 0
+            || request.ActorAuthorityOwnerGeneration == 0
+            || request.ActorOwnerLeaseGeneration == 0
+            || found.Snapshot.OwnerLeaseGeneration <= 0
+            || found.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || found.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
+            || found.Snapshot.ObjectGeneration != request.Actor.ObjectGeneration
+            || found.Snapshot.Allocation.Descriptor.Rid != request.Actor.NodeRid
+            || found.Snapshot.Allocation.DescriptorLifecycleGeneration
+               != request.ActorNodeGeneration
+            || found.Snapshot.AuthorityOwnerGeneration
+               != request.ActorAuthorityOwnerGeneration
+            || (ulong)found.Snapshot.OwnerLeaseGeneration
+               != request.ActorOwnerLeaseGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"Actor '{request.Actor.ActorId}' Join Authority row does not exactly match its route fence.");
+
+        var stableType = found.Snapshot.Allocation.StableType;
+        if (!hasLocalFactory(stableType))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                $"Actor '{request.Actor.ActorId}' Authority stable type '{stableType}' is not registered on the target node.");
+        return stableType;
     }
 
     private async ValueTask ValidateActorRelocationTargetAsync(
@@ -2627,6 +3017,44 @@ internal sealed partial class ZLinkFrameworkRuntime
                && found.Snapshot.ObjectGeneration == objectGeneration
                && found.Snapshot.AuthorityOwnerGeneration
                   == authorityOwnerGeneration;
+    }
+
+    private static async ValueTask<bool> HasExactCanonicalTargetSpotAuthorityAsync(
+        string spotId,
+        ActorJoinRequest request,
+        IZLinkLocationRepository authorityStore,
+        CancellationToken cancellationToken)
+    {
+        ZLinkAuthorityReadResult read;
+        try
+        {
+            read = await authorityStore.ReadAuthorityAsync(
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Canonical actorJoin could not read target Spot '{spotId}' Authority.",
+                innerException: error);
+        }
+        return read is ZLinkAuthorityReadResult.Found found
+               && found.Snapshot.ObjectGeneration == request.TargetSpotGeneration
+               && found.Snapshot.AuthorityOwnerGeneration
+                  == request.TargetAuthorityOwnerGeneration
+               && found.Snapshot.OwnerLeaseGeneration > 0
+               && (ulong)found.Snapshot.OwnerLeaseGeneration
+                  == request.TargetOwnerLeaseGeneration
+               && found.Snapshot.Allocation.State
+                  == ZLinkPlacementAllocationState.Active
+               && found.Snapshot.Allocation.ObjectKind
+                  is ZLinkPlacementObjectKind.UserSpot
+               && found.Snapshot.Allocation.Descriptor.Rid
+                  == request.TargetNodeRid
+               && found.Snapshot.Allocation.DescriptorLifecycleGeneration
+                  == request.TargetNodeGeneration;
     }
 
     private async ValueTask PrepareTransferredActorTargetAsync(
@@ -3803,6 +4231,33 @@ internal sealed partial class ZLinkFrameworkRuntime
         string bindingToken)
     {
         _actorBoundSessionCoordinator.UnbindSessionActor(actorId, context, bindingToken);
+    }
+
+    internal bool TrySubmitLocalActorSend(
+        ZLinkBackendActorRef actor,
+        ZlinkStreamHeader header,
+        Message payload)
+    {
+        if (!_actorSessionManager.IsCurrentLocalActorRef(actor)) return false;
+        return TryRunDetached(
+            "local-actor-client-send",
+            async cancellationToken =>
+            {
+                try
+                {
+                    await _actorSessionManager
+                        .SubmitActorByIdAsync(
+                            actor.ActorId,
+                            header,
+                            payload,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    payload.Dispose();
+                }
+            });
     }
 
     /// <summary>Actor-node entry for a relayed session frame whose bound actor

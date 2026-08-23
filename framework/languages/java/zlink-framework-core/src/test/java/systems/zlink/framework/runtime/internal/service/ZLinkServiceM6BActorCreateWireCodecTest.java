@@ -35,6 +35,21 @@ final class ZLinkServiceM6BActorCreateWireCodecTest {
     }
 
     @Test
+    void highBitOpaqueTokensRoundTripAcrossActorCreate() {
+        long highBit = Long.MIN_VALUE;
+        var reservation = new ZLinkServiceM6BWireCodec.ReservationFence(
+            "reservation", "store-version", 9, 10,
+            RoutingId.from("target"), highBit, "owner", 6, 1);
+        var command = new ZLinkServiceM6BWireCodec.ActorCreate(
+            highBit, highBit, 12, RoutingId.from("source"), highBit,
+            "actor-1", "player", reservation, 1_900_000_000_000L);
+        assertEquals(
+            command,
+            codec.decodeActorCreateHeader(codec.encodeActorCreateHeader(
+                command)));
+    }
+
+    @Test
     void durableTerminalIsCorrelationFreeAndReplyUsesCurrentCorrelation() {
         byte[] application = new ZLinkServiceM6AWireCodec()
             .encodeApplicationPayload(

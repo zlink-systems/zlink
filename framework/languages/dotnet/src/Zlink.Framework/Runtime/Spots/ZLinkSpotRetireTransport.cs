@@ -1158,6 +1158,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 new ZLinkAggregateRelocationRequest(
                     stage.Envelope.AggregateId,
                     stage.Envelope.AggregateGeneration,
+                    stage.TargetAttemptGeneration,
                     participants,
                     new ZLinkMeshNodeDescriptorKey(
                         stage.TargetMeshName,

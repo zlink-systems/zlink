@@ -4,6 +4,9 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -39,6 +42,35 @@ zlink::framework::actor_ref_t test_actor_ref (std::string node,
       zlink::framework::node_rid_t::from_string (std::move (node)),
       std::move (actor_type), std::move (actor_id), generation);
 }
+
+class actor_join_authority_store_t final :
+    public zlink::framework::runtime::in_memory_location_repository_t
+{
+  public:
+    std::optional<zlink::framework::authority_snapshot_t> snapshot;
+    bool unreadable = false;
+
+    zlink::framework::task_t<zlink::framework::authority_read_result_t>
+    read_authority (zlink::framework::authority_key_t,
+                    std::stop_token) override
+    {
+        if (unreadable) {
+            return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
+              zlink::framework::result_t<zlink::framework::authority_read_result_t>::failure (
+                zlink::framework::framework_error_kind_t::unavailable,
+                "Location Store is unavailable"));
+        }
+        if (snapshot) {
+            return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
+              zlink::framework::result_t<zlink::framework::authority_read_result_t>::success (
+                zlink::framework::authority_read_result_t{*snapshot}));
+        }
+        return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
+          zlink::framework::result_t<zlink::framework::authority_read_result_t>::success (
+            zlink::framework::authority_read_result_t{
+              zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}));
+    }
+};
 
 template <typename T>
 std::optional<zlink::framework::result_t<T>> finite_task_result (
@@ -2166,13 +2198,14 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     const auto inbound_source_node_rid = zlink::routing_id_t::from ("probing-client");
     const auto inbound_operation = runtime::protocol::wire_operation_id_t{111, 222};
     constexpr std::uint64_t inbound_reply_route_id = 333;
+    const std::string inbound_deadline = "2030-01-02T03:04:05Z";
 
     std::atomic_int relay_calls{0};
     spot_node_runtime_t spots (node);
     spots.on_actor_message_follow (
       [&] (const actor_ref_t &relayed_actor,
            const runtime::messaging::envelope_header_t &header,
-           const zlink::message_t &, std::chrono::milliseconds,
+           const zlink::message_t &, std::chrono::milliseconds relay_timeout,
            const zlink::routing_id_t &source_node,
            const runtime::protocol::actor_route_fence_t &route,
            std::uint8_t hop_count,
@@ -2182,6 +2215,8 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
           if (relayed_actor.actor_id ().value () != "actor-remote-ok"
               || route != source_fence || hop_count != 0
               || header.message_name != "after-transfer"
+              || header.deadline != inbound_deadline
+              || relay_timeout != std::chrono::seconds (30)
               || source_node.to_bytes () != inbound_source_node_rid.to_bytes ()
               || operation.high != inbound_operation.high
               || operation.low != inbound_operation.low
@@ -2204,7 +2239,7 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
       "after-transfer", zlink::message_t::from (std::string ("probe")), provider,
       serializers, std::move (metadata), nullptr, std::function<void ()>{},
       std::function<void ()>{}, inbound_source_node_rid, inbound_operation,
-      inbound_reply_route_id);
+      inbound_reply_route_id, inbound_deadline);
 
     const auto outcome = finite_task_result (std::move (relayed));
     if (!outcome || !*outcome)
@@ -2827,6 +2862,8 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
         .source_actor = actor,
         .source_fence = source_fence,
         .transfer_id = "transfer-leave-notify",
+        .source_spot_id = spot_id_t ("actor-a-entry"),
+        .source_spot_generation = 7,
         .target_spot_id = spot_id_t ("spot-b-target"),
         .not_before = std::chrono::steady_clock::now (),
         .leave_submitted = false,
@@ -3644,6 +3681,132 @@ int same_rid_registration_retains_retired_close_handler ()
     return !gateway.dispatch_bound_session_replaced (replacement) ? 0 : 3;
 }
 
+int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    enum class scenario_t { matching, no_store, fence_mismatch, missing, unreadable, forged, no_factory };
+    const auto run = [] (scenario_t scenario, std::atomic_int &admission_calls)
+      -> result_t<spot_actor_join_result_t> {
+        serializer_registry_t serializers;
+        auto node = std::make_shared<spot_node_builder_state_t> ("actor-join-target");
+        node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+          1, 16, "actor-join-store-resolution");
+        node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+        node->channel_runtime->serializers = &serializers;
+
+        auto spot = std::make_shared<spot_context_state_t> ();
+        spot->node = node;
+        spot->node_rid = node_rid_t::from_string ("actor-join-target");
+        spot->spot_id = spot_id_t ("actor-join-target-spot");
+        spot->spot_name = "actor-join-target";
+        spot->spot_instance = std::make_shared<int> (1);
+        spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+        spot->channel_runtime->serializers = &serializers;
+        spot->serial_executor = node->worker_executor;
+        node->spot_contexts_by_id.emplace (
+          spot->spot_id, spot_context_access_t::create (spot));
+
+        spot_actor_admission_callbacks_t callbacks;
+        callbacks.join = [&admission_calls] (void *, std::string_view,
+                                              const zlink::message_t &,
+                                              serializer_registry_t &) {
+            admission_calls.fetch_add (1, std::memory_order_acq_rel);
+            return spot_actor_join_result_t::accept ();
+        };
+        spot->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
+
+        if (scenario != scenario_t::no_factory) {
+            spot_node_builder_state_t::actor_factory_registration_t factory;
+            factory.actor_type = std::type_index (typeid (int));
+            factory.create_instance = [] (std::string) { return std::make_shared<int> (1); };
+            factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+            node->actor_factories.emplace ("StoreActor", std::move (factory));
+        }
+
+        const auto stored_actor = test_actor_ref (
+          "actor-owner", "StoreActor", "store-resolved-actor", 17);
+        auto store = std::make_shared<actor_join_authority_store_t> ();
+        if (scenario != scenario_t::missing) {
+            store->snapshot = authority_snapshot_t{
+              .store_version = "v1",
+              .payload = runtime::encode_actor_authority_payload (stored_actor, "source-spot", 1),
+              .object_generation = 17,
+              .authority_owner_generation = 23,
+              .owner = location_owner_token_t{"source-owner", 29},
+              .store_now = std::chrono::system_clock::now (),
+              .allocation = {.state = placement_allocation_state_t::active,
+                             .object_kind = placement_object_kind_t::actor,
+                             .stable_type = "StoreActor",
+                             .target = {.mesh_name = "mesh",
+                                        .node_rid = node_rid_t::from_string ("actor-owner"),
+                                        .node_lifecycle_generation = 19,
+                                        .owner = location_owner_token_t{"source-owner", 29}}}};
+            if (scenario == scenario_t::fence_mismatch)
+                store->snapshot->allocation.target.node_lifecycle_generation = 21;
+        }
+        store->unreadable = scenario == scenario_t::unreadable;
+
+        spot_node_runtime_t spots (node);
+        if (scenario != scenario_t::no_store) {
+            service_collection_t services;
+            services.add_factory<runtime::live_location_reader_t> (
+              [store] (service_provider_t &) {
+                  return std::make_unique<runtime::live_location_reader_t> (*store);
+              },
+              service_lifetime_t::singleton);
+            auto provider = services.build_provider ();
+            spots.bind_service_provider (provider);
+        }
+
+        const auto wire_actor = test_actor_ref (
+          "actor-owner", scenario == scenario_t::forged ? "ForgedActor" : "StoreActor",
+          "store-resolved-actor", 17);
+        return spots.admit_remote_actor_to_spot (
+          "store-resolution-" + std::to_string (static_cast<int> (scenario)), wire_actor,
+          spot_id_t ("source-spot"), spot->spot_id, zlink::message_t{}, 1, 2, 23, 19, 29);
+    };
+
+    std::atomic_int admission_calls{0};
+    const auto matching = run (scenario_t::matching, admission_calls);
+    if (!matching || !matching.value ().accepted || admission_calls.load () != 1)
+        return 1;
+
+    const auto expect_terminal = [&run, &admission_calls] (
+                                   scenario_t scenario, framework_error_kind_t expected,
+                                   int failure) {
+        const auto result = run (scenario, admission_calls);
+        return !result && result.error_kind () == expected ? 0 : failure;
+    };
+    if (const auto mismatch = expect_terminal (
+          scenario_t::no_store, framework_error_kind_t::unavailable, 2);
+        mismatch != 0)
+        return mismatch;
+    if (const auto mismatch = expect_terminal (
+          scenario_t::fence_mismatch, framework_error_kind_t::protocol_error, 3);
+        mismatch != 0)
+        return mismatch;
+    if (const auto missing = expect_terminal (
+          scenario_t::missing, framework_error_kind_t::not_found, 4);
+        missing != 0)
+        return missing;
+    if (const auto unreadable = expect_terminal (
+          scenario_t::unreadable, framework_error_kind_t::unavailable, 5);
+        unreadable != 0)
+        return unreadable;
+    if (const auto forged = expect_terminal (
+          scenario_t::forged, framework_error_kind_t::type_mismatch, 6);
+        forged != 0)
+        return forged;
+    if (const auto no_factory = expect_terminal (
+          scenario_t::no_factory, framework_error_kind_t::rejected, 7);
+        no_factory != 0)
+        return no_factory;
+    return admission_calls.load () == 1 ? 0 : 8;
+}
+
 } // namespace
 
 /* async-execution-policy §1.3: the session Actor relay waiter is bounded —
@@ -4095,6 +4258,11 @@ int session_relay_waiter_capacity_is_bounded ()
 
 int main ()
 {
+    if (const auto store_resolution =
+          remote_actor_join_resolves_store_type_and_reports_typed_terminals ();
+        store_resolution != 0) {
+        return 390 + store_resolution;
+    }
     if (const auto parked_reply =
           parked_request_without_route_fence_receives_reply_after_replay ();
         parked_reply != 0) {

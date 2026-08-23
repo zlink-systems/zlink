@@ -9,6 +9,7 @@ public sealed partial class ZLinkMessage
     private readonly Type? _declaredType;
     private readonly ReadOnlyMemory<byte> _payload;
     private readonly object? _value;
+    private readonly bool _resolveSerializerByDeclaredType;
     private object? _decodedValue;
     private ExceptionDispatchInfo? _decodeFailure;
     private int _decodeState;
@@ -23,12 +24,14 @@ public sealed partial class ZLinkMessage
         ReadOnlyMemory<byte> payload,
         string? contentType,
         ZlinkStreamCodec? streamCodec,
-        IZLinkMessageCodecResolver? codecs)
+        IZLinkMessageCodecResolver? codecs,
+        bool resolveSerializerByDeclaredType = false)
     {
         _payload = payload;
         ContentType = contentType;
         StreamCodec = streamCodec;
         _codecs = codecs;
+        _resolveSerializerByDeclaredType = resolveSerializerByDeclaredType;
     }
 
     internal EncodedZLinkMessage Encode(IZLinkMessageCodecRegistry codecs)
@@ -62,6 +65,19 @@ public sealed partial class ZLinkMessage
         IZLinkMessageCodecRegistry codecs)
     {
         return new ZLinkMessage(payload, contentType, null, codecs.Snapshot());
+    }
+
+    internal static ZLinkMessage FromCanonicalActorJoinReply(
+        string contentType,
+        ReadOnlyMemory<byte> payload,
+        IZLinkMessageCodecRegistry codecs)
+    {
+        return new ZLinkMessage(
+            payload,
+            contentType,
+            null,
+            codecs.Snapshot(),
+            resolveSerializerByDeclaredType: true);
     }
 
     internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs)
@@ -170,6 +186,22 @@ public sealed partial class ZLinkMessage
         if (ContentType is not null
             && _codecs is not null
             && _codecs.TryGetSerializer(ContentType, out var serializer))
+            return serializer.Deserialize(
+                ZLinkEncodedPayload.FromOwned(_payload),
+                targetType);
+
+        // Canonical Actor Join recovery retains the frozen outer multipart
+        // profile while the saved sole reply part remains the serializer's
+        // raw payload. Its public completion supplies the declared DTO type,
+        // so select the same registered serializer that normal typed encode
+        // would use instead of interpreting protobuf/messagepack bytes as
+        // framework JSON.
+        if (_resolveSerializerByDeclaredType
+            && _codecs is not null
+            && _codecs.TryResolveSerializer(
+                targetType,
+                out _,
+                out serializer))
             return serializer.Deserialize(
                 ZLinkEncodedPayload.FromOwned(_payload),
                 targetType);

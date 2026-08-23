@@ -1,4 +1,7 @@
-﻿namespace Zlink.Framework.Runtime.Actors;
+﻿using System.Buffers.Binary;
+using System.Security.Cryptography;
+
+namespace Zlink.Framework.Runtime.Actors;
 
 internal static class ZLinkRemoteActorJoinPackets
 {
@@ -22,6 +25,37 @@ internal static class ZLinkRemoteActorJoinPackets
     //  by a target admission accept. 0 (default) means not advertised — the
     //  source then falls back to its own RelocationPayloadChunkLimit only.
     internal const ulong ConservativeReceiveChunkLimitBytes = 32_768;
+
+    // Command 28 deliberately carries no handoff id. Both ends derive this
+    // valid local relocation identity from the authenticated source Actor
+    // route and the command correlation; it is never serialized on the wire.
+    internal static string CreateCanonicalHandoffId(
+        RoutingId sourceActorNodeRid,
+        string actorId,
+        ulong actorGeneration,
+        ulong sourceActorNodeGeneration,
+        ulong correlation)
+    {
+        var source = sourceActorNodeRid.ToBytes();
+        var actor = System.Text.Encoding.UTF8.GetBytes(actorId);
+        var material = new byte[checked(
+            source.Length + sizeof(ushort) + actor.Length + (sizeof(ulong) * 3))];
+        var offset = 0;
+        source.CopyTo(material);
+        offset += source.Length;
+        BinaryPrimitives.WriteUInt16BigEndian(material.AsSpan(offset), checked((ushort)actor.Length));
+        offset += sizeof(ushort);
+        actor.CopyTo(material, offset);
+        offset += actor.Length;
+        BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), actorGeneration);
+        offset += sizeof(ulong);
+        BinaryPrimitives.WriteUInt64BigEndian(
+            material.AsSpan(offset), sourceActorNodeGeneration);
+        offset += sizeof(ulong);
+        BinaryPrimitives.WriteUInt64BigEndian(material.AsSpan(offset), correlation);
+        var hash = SHA256.HashData(material);
+        return new Guid(hash.AsSpan(0, 16)).ToString("N");
+    }
 
     //  Spec 28 direct transfer chunk sizing: the source clamps to the
     //  smaller of its own configured limit and the target's advertised
@@ -92,7 +126,10 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkCodecRegistryBuilder codecs,
         ZLinkActorBoundSession? boundSessionIdentity = null,
         ZLinkActorRelocationReservation? reservation = null,
-        ZLinkSessionRelocationContext sessionRelocationContext = default)
+        ZLinkSessionRelocationContext sessionRelocationContext = default,
+        ulong actorNodeGeneration = 0,
+        ulong expectedOwnerLeaseGeneration = 0,
+        ulong targetAttemptGeneration = 0)
     {
         var payload = CreateJoinRequest(
             actorId,
@@ -110,7 +147,10 @@ internal static class ZLinkRemoteActorJoinPackets
             codecs,
             boundSessionIdentity,
             reservation,
-            sessionRelocationContext);
+            sessionRelocationContext,
+            actorNodeGeneration,
+            expectedOwnerLeaseGeneration,
+            targetAttemptGeneration);
         return EncodeJoinRequest(header, payload);
     }
 
@@ -130,7 +170,10 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkCodecRegistryBuilder codecs,
         ZLinkActorBoundSession? boundSessionIdentity = null,
         ZLinkActorRelocationReservation? reservation = null,
-        ZLinkSessionRelocationContext sessionRelocationContext = default)
+        ZLinkSessionRelocationContext sessionRelocationContext = default,
+        ulong actorNodeGeneration = 0,
+        ulong expectedOwnerLeaseGeneration = 0,
+        ulong targetAttemptGeneration = 0)
     {
         var encodedRequest = request.Encode(codecs);
         return new ZLinkRemoteActorJoinRequest(
@@ -177,7 +220,10 @@ internal static class ZLinkRemoteActorJoinPackets
                 ? null
                 : sessionRelocationContext.Coordinator.NodeRid.ToBytes().ToArray(),
             sessionRelocationContext.Coordinator.NodeGeneration,
-            sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion);
+            sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion,
+            actorNodeGeneration,
+            expectedOwnerLeaseGeneration,
+            targetAttemptGeneration);
     }
 
     internal static IReadOnlyList<Message> EncodeJoinRequest(
@@ -615,7 +661,9 @@ internal sealed record ZLinkRemoteActorAdmissionRequest(
     ulong ActorAuthorityOwnerGeneration = 0,
     long PredictedPayloadBytes = 0,
     ulong TargetSpotGeneration = 0,
-    ulong TargetSpotAuthorityOwnerGeneration = 0);
+    ulong TargetSpotAuthorityOwnerGeneration = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore]
+    ZLinkCanonicalActorJoinAdmission? Canonical = null);
 
 internal sealed record ZLinkRemoteActorAdmissionReply(
     bool Accepted,
@@ -629,7 +677,19 @@ internal sealed record ZLinkRemoteActorAdmissionReply(
     ulong TargetSpotGeneration = 0,
     ulong TargetAuthorityOwnerGeneration = 0,
     ulong TargetSpotAuthorityOwnerGeneration = 0,
-    ulong ReceiveChunkLimitBytes = 0);
+    ulong ReceiveChunkLimitBytes = 0,
+    // service-wire-v1 ActorJoin(28): the ZLJR saved-work `ReplyContentType`
+    // recorded into the durable relocation recovery root (command 40) is the
+    // OUTER service-wire application-payload profile
+    // (ServiceWireConstants.FrameworkMultipartContentType) — every target,
+    // Java included, always frames the sole canonical actorJoin reply part
+    // through the fixed framework-multipart envelope, so that profile is a
+    // structural invariant rather than a per-reply value. This is distinct
+    // from `ReplyContentType` above, which stays the reply's actual typed
+    // content type (e.g. "application/json") used to decode the raw reply
+    // bytes locally. Null preserves legacy router-channel/admission-JSON
+    // behaviour, where the two meanings still coincide.
+    string? RecoveryReplyContentType = null);
 
 internal sealed record ZLinkRemoteActorAdmissionAbortRequest(
     string ActorId,
@@ -679,7 +739,10 @@ string RelocationCoordinatorOwnerId = "",
 ulong RelocationCoordinatorLeaseGeneration = 0,
 byte[]? RelocationCoordinatorNodeRid = null,
 ulong RelocationCoordinatorNodeGeneration = 0,
-string RelocationCoordinatorExpectedAuthorityStoreVersion = "");
+string RelocationCoordinatorExpectedAuthorityStoreVersion = "",
+ulong ActorNodeGeneration = 0,
+ulong ExpectedOwnerLeaseGeneration = 0,
+ulong TargetAttemptGeneration = 0);
 
 internal readonly record struct ZLinkActorRelocationReservation(
     string Token,

@@ -66,7 +66,9 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None);
         var preparingState = Projection(preparing);
         Assert.Equal(1, preparingState.Phase);
-        Assert.Empty(preparingState.RelocationReference);
+        Assert.Equal("pending", preparingState.RelocationReference);
+        Assert.Equal(ready.Snapshot.StoreVersion,
+            preparingState.State.CoordinatorExpectedAuthorityStoreVersion);
         Assert.Equal(0UL, preparingState.TargetAttemptGeneration);
         Assert.Equal(sourceOwner.OwnerId, preparing.OwnerId);
 
@@ -103,7 +105,9 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None);
         var capturedState = Projection(captured);
         Assert.Equal(2, capturedState.Phase);
-        Assert.Equal(string.Empty, capturedState.RelocationReference);
+        Assert.Equal("pending", capturedState.RelocationReference);
+        Assert.Equal(envelope.AggregateGeneration,
+            capturedState.AggregateGeneration);
         Assert.Equal(0UL, capturedState.TargetAttemptGeneration);
 
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
@@ -134,6 +138,127 @@ public sealed class StandaloneActorRelocationPrecommitTests
         Assert.Equal(
             checked(ready.Snapshot.AuthorityOwnerGeneration + 1),
             committed.AuthorityOwnerGeneration);
+    }
+
+    [Fact]
+    public async Task Prepare_coordinator_reuses_the_pre_precommit_baseline_shared_with_zljr()
+    {
+        //  Regression for the StoreVersion split: the durable ZLJR/saved-work
+        //  recovery record and the command-40 Prepare must carry the exact
+        //  same Coordinator fence — a single value sourced from the
+        //  authority snapshot as it stood *before* BeginPreparingAsync's own
+        //  CAS write (the cpp reference builds exactly one `coordinator`
+        //  from that pre-precommit snapshot and reuses it for both wire
+        //  messages: mesh_node_runtime.cpp's relocate_application_actor).
+        //  BeginPreparingAsync/CaptureAsync each mint a fresh StoreVersion
+        //  via their own CAS write, so asserting against the *post-Capture*
+        //  snapshot here would pass accidentally unless the test also pins
+        //  that it differs from the pre-precommit baseline.
+        var store = new ZLinkInMemoryLocationStore();
+        var sourceOwner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await store.ClaimOwnerLeaseAsync(
+                "provenance-source",
+                TimeSpan.FromMinutes(1))).Token;
+        var target = Descriptor(
+            RoutingId.From("provenance-target"),
+            Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await store.ClaimOwnerLeaseAsync(
+                    "provenance-target",
+                    TimeSpan.FromMinutes(1))).Token);
+        var source = Descriptor(
+            RoutingId.From("provenance-source"),
+            sourceOwner);
+        await store.UpdateMeshNodeAsync(
+            source,
+            ZLinkLocationWriteIntent.NewClaim);
+        await store.UpdateMeshNodeAsync(
+            target,
+            ZLinkLocationWriteIntent.NewClaim);
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var reservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await store.ReserveAsync(
+                new ZLinkObjectReservationRequest(
+                    ZLinkPlacementObjectKind.Actor,
+                    key,
+                    "Game.Actor",
+                    $"intent:{actorId}",
+                    SHA256.HashData("intent"u8),
+                    6,
+                    new ZLinkMeshNodeDescriptorKey("mesh", source.Rid),
+                    source.LifecycleGeneration,
+                    sourceOwner,
+                    new byte[] { 1 },
+                    new ZLinkCapacityVector(1, 0, null))));
+        var sourceAuthority = Authority(actorId, source, sourceOwner);
+        //  The pre-precommit baseline (V0) — both ZLJR and Prepare's
+        //  Coordinator must trace back to this exact StoreVersion.
+        var v0 = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await store.CommitAsync(
+                reservation.Reservation,
+                ZLinkActorAuthorityPayloadCodec.Encode(sourceAuthority))).Snapshot;
+        var relocationId = Guid.NewGuid();
+
+        //  Mirrors ZLinkActorRemoteJoiner's sessionRelocationContext, built
+        //  from the same pre-precommit snapshot the production fix now
+        //  passes to CreatePrepare.
+        var sessionRelocationContext = ZLinkSessionRelocationContext.Create(
+            relocationId,
+            v0.OwnerId,
+            checked((ulong)v0.OwnerLeaseGeneration),
+            sourceAuthority.NodeRid,
+            sourceAuthority.NodeGeneration,
+            v0.StoreVersion);
+
+        var coordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            store);
+        var preparing = await coordinator.BeginPreparingAsync(
+            v0,
+            sourceAuthority,
+            relocationId,
+            applicationVersion: 1,
+            CancellationToken.None);
+        var envelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
+            ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
+                preparing,
+                sourceAuthority,
+                target,
+                relocationId,
+                ReadOnlyMemory<byte>.Empty,
+                [],
+                default),
+            applicationVersion: 1);
+        var captured = await coordinator.CaptureAsync(
+            preparing,
+            envelope,
+            CancellationToken.None);
+
+        //  Each CAS write (Preparing, then Captured) mints a new
+        //  StoreVersion — proves this test would catch a regression back to
+        //  the post-Capture snapshot rather than passing by coincidence.
+        Assert.NotEqual(v0.StoreVersion, preparing.StoreVersion);
+        Assert.NotEqual(v0.StoreVersion, captured.StoreVersion);
+
+        var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
+            v0,
+            sourceAuthority,
+            target,
+            envelope,
+            ZLinkRelocationTransferPayload.Create(envelope, 1024),
+            applicationVersion: 1);
+
+        Assert.Equal(
+            sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion,
+            prepare.Coordinator.ExpectedAuthorityStoreVersion);
+        Assert.Equal(v0.StoreVersion, prepare.Coordinator.ExpectedAuthorityStoreVersion);
+        Assert.Equal(sessionRelocationContext.Coordinator.OwnerId, prepare.Coordinator.OwnerId);
+        Assert.Equal(
+            sessionRelocationContext.Coordinator.LeaseGeneration,
+            prepare.Coordinator.LeaseGeneration);
+        Assert.Equal(sessionRelocationContext.Coordinator.NodeRid, prepare.Coordinator.NodeRid);
+        Assert.Equal(
+            sessionRelocationContext.Coordinator.NodeGeneration,
+            prepare.Coordinator.NodeGeneration);
     }
 
     [Fact]

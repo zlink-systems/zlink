@@ -4,19 +4,18 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
+import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
 import systems.zlink.samples.zoneworld.server.zone.spots.ZoneEntrySpot;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldSpec;
 public final class EntryZoneJoinHandler
-    implements ZLinkEntrySpotActorRequestHandler<
+    implements ZLinkEntrySpotActorSendHandler<
         ZoneEntrySpot,
         PlayerActor,
-        Messages.JoinWorldReq,
-        Messages.JoinWorldRes> {
+        Messages.JoinWorldReq> {
     @Override
-    public CompletionStage<Messages.JoinWorldRes> handle(
+    public CompletionStage<Void> handle(
         ZoneEntrySpot spot,
         PlayerActor actor,
         ZLinkMessageContext context,
@@ -25,15 +24,16 @@ public final class EntryZoneJoinHandler
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException("Join player does not match the actor"));
         }
-        String zone = ZoneWorldSpec.zoneOf(actor.x(), actor.y());
+        actor.prepareEntry(
+            ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y, false, 0, 0);
+        String zone = ZoneWorldSpec.zoneOf(ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y);
         actor.context().joinSpot(
             zone,
             new Messages.EnterZoneReq(
-                actor.actorId(), actor.x(), actor.y(), false, true, ""))
+                actor.actorId(), ZoneWorldSpec.SPAWN_X, ZoneWorldSpec.SPAWN_Y,
+                false, true, "", false))
             .timeout(Duration.ofSeconds(10))
             .defer();
-        return CompletableFuture.completedFuture(
-            new Messages.JoinWorldRes(
-                actor.actorId(), zone, actor.x(), actor.y(), null));
+        return CompletableFuture.completedFuture(null);
     }
 }

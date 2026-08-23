@@ -1,31 +1,60 @@
+import { createHash } from 'node:crypto';
 import type {
   ActorRef,
   ZLinkActor,
   ZLinkActorJoinCompletion,
   ZLinkActorJoinOperationId,
   ZLinkBlobReference,
+  ZLinkMessageSerializer,
   ZLinkRelocationStore
 } from '../../contracts';
-import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
-import { ZLinkEncodedPayload, ZLinkMessage } from '../../contracts';
+import {
+  ZLinkEncodedPayload,
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  ZLinkMessage
+} from '../../contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import {
   crc32c,
+  ServiceRelocationAuthorityPayloadCodec,
   replaceServiceRelocationAuthorityApplicationPayload,
-  serviceRelocationAuthorityApplicationPayload
+  serviceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthoritySlotIdentity,
+  type ServiceRelocationPublication
 } from '../foundation/service-relocation-runtime';
 import { putNewRelocationBlob } from '../locations/relocation-blob';
-import { decodeRoutingId, routingIdWireHex } from '../routing-id';
 import {
-  decodeActorAuthorityIdentity,
+  decodeRoutingId,
+  encodeRoutingIdStorageHex,
+  routingIdWireHex
+} from '../routing-id';
+import {
+  decodeRelocatingActorAuthorityIdentity,
   encodeActorAuthorityIdentity
 } from './actor-authority-publication';
+import {
+  replaceActorRelocationAuthorityApplicationPayload
+} from './actor-authority-payload-codec';
+import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
+import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import {
+  decodeRelocationDataChunkV1,
+  decodeRelocationManifestV1,
+  encodeRelocationDataChunkV1,
+  encodeRelocationManifestV1
+} from '../protocol/service_wire_pilot_codec.generated';
 
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
 const ROOT_VERSION = 2;
-const AUTHORITY_VERSION = 1;
+const ROOT_MAGIC = Buffer.from('ZLJR');
 const MAX_ROOT_BYTES = 1024 * 1024;
+const JOURNAL_INVENTORY_DOMAIN = Buffer.from(
+  'zlink-node-deferred-join-authority-v1\0',
+  'utf8'
+);
 
 export type ZLinkDeferredJoinDeliveryCursor =
   | 'prepared'
@@ -39,13 +68,59 @@ export interface ZLinkDeferredJoinAcceptedRoot {
   readonly operationId: ZLinkActorJoinOperationId;
   readonly actor: ActorRef;
   readonly rawReply: Buffer;
+  readonly replyContentType?: string;
   readonly cursor: ZLinkDeferredJoinDeliveryCursor;
+}
+
+export interface ZLinkDeferredJoinRootIdentity {
+  readonly authorityKey: string;
+  readonly objectKind: 'actor' | 'user_spot' | 'instance_spot';
+  readonly objectGeneration: bigint;
+  readonly aggregateId: string;
+  readonly aggregateGeneration: bigint;
+}
+
+/** Identifies whether an authority slot points at a deferred Join journal root. */
+export async function isDeferredJoinAcceptedRootPublication(
+  relocation: ZLinkRelocationStore,
+  reference: string,
+  checksumCrc32c: number,
+  expected: ZLinkDeferredJoinRootIdentity,
+  signal?: AbortSignal
+): Promise<boolean> {
+  if (expected.objectKind !== 'actor' || expected.aggregateGeneration === 0n) return false;
+  const read = await relocation.read({ value: reference } as ZLinkBlobReference, signal);
+  if (read.kind !== 'found' || crc32c(read.bytes) !== checksumCrc32c) return false;
+  if (hasJournalRootMagic(read.bytes)) {
+    try {
+      const root = decodeRoot(read.bytes);
+      return expected.aggregateId === operationAggregateId(root.operationId)
+        && expected.aggregateGeneration === root.actor.objectGeneration
+        && expected.authorityKey === encodeAuthorityKey('actor', root.actor.actorId).value
+        && expected.objectGeneration === root.actor.objectGeneration;
+    } catch {
+      return false;
+    }
+  }
+  const root = await readCanonicalDeferredJoinRoot(relocation, read.bytes, signal);
+  return root !== undefined
+    && root.identity.aggregateId === expected.aggregateId
+    && root.identity.aggregateGeneration === expected.aggregateGeneration
+    && root.identity.authorityKey === expected.authorityKey
+    && root.identity.objectKind === expected.objectKind
+    && root.identity.objectGeneration === expected.objectGeneration;
 }
 
 interface DeferredJoinAuthorityPublication {
   readonly applicationPayload: Buffer;
   readonly reference: ZLinkBlobReference;
   readonly checksumCrc32c: number;
+  readonly aggregateId: string;
+  readonly aggregateGeneration: bigint;
+  readonly targetOwnerId: string;
+  readonly targetOwnerLeaseGeneration: bigint;
+  readonly canonical?: boolean;
+  readonly canonicalPublication?: ServiceRelocationPublication;
 }
 
 /**
@@ -57,7 +132,8 @@ interface DeferredJoinAuthorityPublication {
 export class ZLinkDeferredJoinAcceptedJournal {
   constructor(
     private readonly authority: ZLinkAuthorityStore,
-    private readonly relocation: ZLinkRelocationStore
+    private readonly relocation: ZLinkRelocationStore,
+    private readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>
   ) {}
 
   async prepare(
@@ -65,9 +141,14 @@ export class ZLinkDeferredJoinAcceptedJournal {
     operationId: ZLinkActorJoinOperationId,
     actor: ActorRef,
     rawReply: Uint8Array,
-    signal?: AbortSignal
+    replyContentType?: string,
+    signal?: AbortSignal,
+    canonicalInventoryDigest?: string
   ): Promise<ZLinkDeferredJoinAcceptedRoot> {
     validateIdentity(actorId, operationId, actor);
+    if (replyContentType !== undefined && replyContentType.length === 0) {
+      throw new TypeError('Deferred Join reply content type must be non-empty.');
+    }
     signal?.throwIfAborted();
     const key = encodeAuthorityKey('actor', actorId);
     const read = await this.authority.readAuthority(key, signal);
@@ -85,54 +166,97 @@ export class ZLinkDeferredJoinAcceptedJournal {
       }
     }
 
-    const root = await this.storeRoot({
+    const rootValue = {
       operationId,
       actor,
       rawReply: Buffer.from(rawReply),
+      ...(replyContentType === undefined ? {} : { replyContentType }),
       cursor: 'prepared'
-    }, signal);
-    const currentPublication = decodeAuthorityPublication(read.payload);
-    const publication: DeferredJoinAuthorityPublication = {
-      applicationPayload: Buffer.from(
-        currentPublication?.applicationPayload
-          ?? serviceRelocationAuthorityApplicationPayload(read.payload)
-      ),
-      reference: root.reference,
-      checksumCrc32c: root.checksumCrc32c
-    };
-    const result = await this.authority.compareExchangeAuthority(
-      key,
-      read.storeVersion,
-      {
-        kind: 'put',
-        generationTransition: 'preserve',
-        //  Preserve the outer relocation metadata: only the inner
-        //  application payload belongs to this journal.
-        payload: replaceServiceRelocationAuthorityApplicationPayload(
-          read.payload,
-          encodeAuthorityPublication(publication)
+    } as const;
+    const initialPublication = decodeAuthorityPublication(read.payload);
+    const initialCanonicalIdentity = serviceRelocationAuthoritySlotIdentity(read.payload);
+    const canonicalPublication = initialPublication?.canonical === true
+      ? initialPublication
+      : undefined;
+    const root = canonicalPublication !== undefined
+      && (canonicalInventoryDigest !== undefined
+        || !canonicalPublication.reference.value.startsWith('zlink-direct:'))
+      ? await this.storeCanonicalRoot(
+          rootValue,
+          read,
+          canonicalPublication,
+          signal,
+          canonicalInventoryDigest
         )
-      },
-      signal
-    );
-    if (result.kind !== 'stored') {
-      await this.deleteBestEffort(root.reference);
-      const current = result.kind === 'conflict' && result.current.kind === 'snapshot'
-        ? await this.readPublished(result.current, signal)
-        : undefined;
+      : await this.storeRoot(rootValue, signal);
+    if (initialCanonicalIdentity !== undefined && canonicalInventoryDigest !== undefined) {
+      return {
+        ...root,
+        authority: read
+      };
+    }
+    let expected: ZLinkAuthoritySnapshot = read;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const currentPublication = decodeAuthorityPublication(expected.payload);
+      const canonicalIdentity = serviceRelocationAuthoritySlotIdentity(expected.payload);
+      const publication: DeferredJoinAuthorityPublication = {
+        applicationPayload: Buffer.from(
+          currentPublication?.applicationPayload
+            ?? serviceRelocationAuthorityApplicationPayload(expected.payload)
+        ),
+        reference: root.reference,
+        checksumCrc32c: root.checksumCrc32c,
+        aggregateId: canonicalIdentity !== undefined
+          ? canonicalIdentity.aggregateId
+          : operationAggregateId(operationId),
+        aggregateGeneration: canonicalIdentity === undefined
+          ? actor.objectGeneration
+          : requireCanonicalAggregateGeneration(canonicalIdentity.aggregateGeneration),
+        targetOwnerId: expected.ownerId,
+        targetOwnerLeaseGeneration: expected.ownerLeaseGeneration,
+        ...(currentPublication?.canonicalPublication === undefined
+          ? {}
+          : { canonicalPublication: currentPublication.canonicalPublication })
+      };
+      const result = await this.authority.compareExchangeAuthority(
+        key,
+        expected.storeVersion,
+        {
+          kind: 'put',
+          generationTransition: 'preserve',
+          payload: currentPublication === undefined && canonicalIdentity !== undefined
+            ? new ServiceRelocationAuthorityPayloadCodec().publish(
+                expected.payload,
+                toServiceRelocationPublication(publication)
+              )
+            : replaceDeferredJoinAuthorityPublication(
+                expected.payload,
+                encodeAuthorityPublication(publication)
+              )
+        },
+        signal
+      );
+      if (result.kind === 'stored') {
+        if (existing !== undefined) {
+          await this.deleteBestEffort(existing.reference);
+        }
+        return {
+          ...root,
+          authority: storedSnapshot(result)
+        };
+      }
+      if (result.kind !== 'conflict' || result.current.kind !== 'snapshot') break;
+      const current = await this.readPublished(result.current, signal);
       if (current !== undefined) {
+        await this.deleteBestEffort(root.reference);
         requireSameOperation(current, operationId, actor);
         return current;
       }
-      throw new Error(`Actor '${actorId}' authority rejected Join completion publication.`);
+      requireAuthorityActor(result.current.payload, actor);
+      expected = result.current;
     }
-    if (existing !== undefined) {
-      await this.deleteBestEffort(existing.reference);
-    }
-    return {
-      ...root,
-      authority: storedSnapshot(result)
-    };
+    await this.deleteBestEffort(root.reference);
+    throw new Error(`Actor '${actorId}' authority rejected Join completion publication.`);
   }
 
   async recover(
@@ -184,7 +308,7 @@ export class ZLinkDeferredJoinAcceptedJournal {
         {
           kind: 'put',
           generationTransition: 'preserve',
-          payload: replaceServiceRelocationAuthorityApplicationPayload(
+          payload: replaceDeferredJoinAuthorityPublication(
             read.payload,
             publication.applicationPayload
           )
@@ -227,7 +351,15 @@ export class ZLinkDeferredJoinAcceptedJournal {
         actor: current.actor,
         reply: current.rawReply.byteLength === 0
           ? undefined
-          : ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(current.rawReply))
+          : current.replyContentType === undefined
+            ? ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(current.rawReply))
+            : wrapFrameworkPayloadMessage(
+                RuntimeMessage.from(current.rawReply),
+                this.messageSerializers,
+                current.replyContentType,
+                undefined,
+                'reply'
+              )
       };
       await actor.onJoinCompleted?.(completion);
       let delivered = current;
@@ -268,7 +400,7 @@ export class ZLinkDeferredJoinAcceptedJournal {
         {
           kind: 'put',
           generationTransition: 'preserve',
-          payload: replaceServiceRelocationAuthorityApplicationPayload(
+          payload: replaceDeferredJoinAuthorityPublication(
             read.payload,
             publication.applicationPayload
           )
@@ -303,25 +435,69 @@ export class ZLinkDeferredJoinAcceptedJournal {
     if (read.kind !== 'snapshot') {
       throw new Error(`Actor '${root.actor.actorId}' authority disappeared during Join completion.`);
     }
-    const current = await this.readPublished(read, signal);
+    let current = await this.readPublished(read, signal);
     if (current === undefined) {
-      throw new Error(`Actor '${root.actor.actorId}' no longer references its Join completion root.`);
+      const retainedRoot = await this.relocation.read(root.reference, signal);
+      if (
+        retainedRoot.kind === 'found'
+        && crc32c(retainedRoot.bytes) === root.checksumCrc32c
+      ) {
+        const retained = hasJournalRootMagic(retainedRoot.bytes)
+          ? decodeRoot(retainedRoot.bytes)
+          : (await readCanonicalDeferredJoinRoot(
+              this.relocation,
+              retainedRoot.bytes,
+              signal
+            ))?.completion;
+        if (retained?.cursor === 'delivered' && isSameOperation(
+          { ...root, ...retained },
+          root.operationId,
+          root.actor
+        )) {
+          current = {
+            authority: read,
+            reference: root.reference,
+            checksumCrc32c: root.checksumCrc32c,
+            ...retained
+          };
+        }
+      }
+      if (current === undefined &&
+        next === 'committed'
+          && actor !== undefined
+          && authorityMatchesActor(read.payload, actor)
+      ) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          `Actor '${root.actor.actorId}' Join completion delivery is indeterminate: `
+            + 'the authority no longer references the operation and no matching retained root exists.'
+        );
+      }
+      if (current === undefined) {
+        throw new Error(`Actor '${root.actor.actorId}' no longer references its Join completion root.`);
+      }
     }
     requireSameOperation(current, root.operationId, root.actor);
     if (cursorIndex(current.cursor) >= nextIndex) return current;
 
     const replacement = await this.storeRoot({
       operationId: current.operationId,
-      actor: actor ?? current.actor,
-      rawReply: current.rawReply,
-      cursor: next
+        actor: actor ?? current.actor,
+        rawReply: current.rawReply,
+        ...(current.replyContentType === undefined
+          ? {}
+          : { replyContentType: current.replyContentType }),
+        cursor: next
     }, signal);
     const publication = decodeAuthorityPublication(read.payload);
     if (publication === undefined) {
       await this.deleteBestEffort(replacement.reference);
       throw new Error('Actor authority lost its deferred Join publication.');
     }
-    const identity = decodeActorAuthorityIdentity(publication.applicationPayload);
+    const identity = decodeRelocatingActorAuthorityIdentity(
+      publication.applicationPayload,
+      read.objectGeneration
+    );
     if (identity === undefined) {
       await this.deleteBestEffort(replacement.reference);
       throw new Error('Actor authority identity is invalid.');
@@ -332,12 +508,16 @@ export class ZLinkDeferredJoinAcceptedJournal {
       {
         kind: 'put',
         generationTransition: 'preserve',
-        payload: replaceServiceRelocationAuthorityApplicationPayload(
+        payload: replaceDeferredJoinAuthorityPublication(
           read.payload,
           encodeAuthorityPublication({
+            ...publication,
             applicationPayload: actor === undefined
               ? publication.applicationPayload
-              : encodeActorAuthorityIdentity({ ...identity, actor }),
+              : replaceActorRelocationAuthorityApplicationPayload(
+                  publication.applicationPayload,
+                  encodeActorAuthorityIdentity({ ...identity, actor })
+                ),
             reference: replacement.reference,
             checksumCrc32c: replacement.checksumCrc32c
           })
@@ -367,12 +547,44 @@ export class ZLinkDeferredJoinAcceptedJournal {
   ): Promise<ZLinkDeferredJoinAcceptedRoot | undefined> {
     const publication = decodeAuthorityPublication(authority.payload);
     if (publication === undefined) return undefined;
+    // Preparing has no relocation root, while Captured still names the
+    // source-memory direct-transfer payload. Neither pre-target-publication
+    // phase can contain a Relocation Store backed deferred Join root.
+    const canonicalPhase = publication.canonicalPublication?.canonicalPhase;
+    if (canonicalPhase === 1 || canonicalPhase === 2) return undefined;
     const read = await this.relocation.read(publication.reference, signal);
+    if (read.kind !== 'found' && publication.canonical === true
+      && publication.reference.value.startsWith('zlink-direct:')) {
+      return undefined;
+    }
     if (
       read.kind !== 'found'
       || crc32c(read.bytes) !== publication.checksumCrc32c
     ) {
       throw new Error('Published deferred Join completion root is missing or corrupt.');
+    }
+    if (publication.canonical === true && !hasJournalRootMagic(read.bytes)) {
+      const root = await readCanonicalDeferredJoinRoot(
+        this.relocation,
+        read.bytes,
+        signal
+      );
+      if (root === undefined) {
+        // A canonical relocation root and the post-commit Join journal share
+        // the embedded slot. A root without a completion remains Host-owned.
+        return undefined;
+      }
+      if (root.identity.aggregateId !== publication.aggregateId
+        || root.identity.aggregateGeneration !== publication.aggregateGeneration
+        || root.identity.objectGeneration !== authority.objectGeneration) {
+        throw new Error('Published deferred Join completion root identity does not match its authority slot.');
+      }
+      return {
+        authority,
+        reference: publication.reference,
+        checksumCrc32c: publication.checksumCrc32c,
+        ...root.completion
+      };
     }
     return {
       authority,
@@ -419,6 +631,50 @@ export class ZLinkDeferredJoinAcceptedJournal {
     };
   }
 
+  private async storeCanonicalRoot(
+    value: Omit<
+      ZLinkDeferredJoinAcceptedRoot,
+      'authority' | 'reference' | 'checksumCrc32c'
+    >,
+    authority: ZLinkAuthoritySnapshot,
+    publication: DeferredJoinAuthorityPublication,
+    signal?: AbortSignal,
+    canonicalInventoryDigest?: string
+  ): Promise<Omit<ZLinkDeferredJoinAcceptedRoot, 'authority'>> {
+    let inventory: Buffer;
+    if (canonicalInventoryDigest !== undefined) {
+      if (!/^[0-9a-f]{64}$/u.test(canonicalInventoryDigest)) {
+        throw new Error('Canonical relocation inventory digest is invalid.');
+      }
+      inventory = Buffer.from(canonicalInventoryDigest, 'hex');
+    } else {
+      const current = await this.relocation.read(publication.reference, signal);
+      if (current.kind !== 'found'
+        || crc32c(current.bytes) !== publication.checksumCrc32c) {
+        throw new Error('Canonical relocation manifest is missing or corrupt.');
+      }
+      inventory = decodeCanonicalTreeManifest(current.bytes).inventoryDigest;
+    }
+    const logicalRoot = encodeCanonicalDeferredJoinRoot(
+      value,
+      authority,
+      publication,
+      inventory
+    );
+    const stored = await storeCanonicalTree(
+      this.relocation,
+      logicalRoot,
+      inventory,
+      signal
+    );
+    return {
+      ...value,
+      rawReply: Buffer.from(value.rawReply),
+      reference: stored.reference,
+      checksumCrc32c: stored.checksumCrc32c
+    };
+  }
+
   private async deleteBestEffort(reference: ZLinkBlobReference): Promise<void> {
     try {
       await this.relocation.delete(reference);
@@ -429,19 +685,29 @@ export class ZLinkDeferredJoinAcceptedJournal {
 }
 
 function requireAuthorityActor(payload: Uint8Array, actor: ActorRef): void {
-  const publication = decodeAuthorityPublication(payload);
-  const identity = decodeActorAuthorityIdentity(
-    publication?.applicationPayload
-      ?? serviceRelocationAuthorityApplicationPayload(payload)
-  );
-  if (
-    identity === undefined
-    || identity.actor.actorId !== actor.actorId
-    || identity.actor.objectGeneration !== actor.objectGeneration
-    || String(identity.actor.nodeRid) !== String(actor.nodeRid)
-  ) {
+  if (!authorityMatchesActor(payload, actor)) {
     throw new Error(`Actor '${actor.actorId}' authority fence does not match its ActorRef.`);
   }
+}
+
+function authorityMatchesActor(payload: Uint8Array, actor: ActorRef): boolean {
+  const publication = decodeAuthorityPublication(payload);
+  const applications = publication === undefined
+    ? [serviceRelocationAuthorityApplicationPayload(payload)]
+    : [
+        publication.applicationPayload,
+        serviceRelocationAuthorityApplicationPayload(payload)
+      ];
+  return applications.some(application => {
+    const identity = decodeRelocatingActorAuthorityIdentity(
+      application,
+      actor.objectGeneration
+    );
+    return identity !== undefined
+      && identity.actor.actorId === actor.actorId
+      && identity.actor.objectGeneration === actor.objectGeneration
+      && routingIdWireHex(identity.actor.nodeRid) === routingIdWireHex(actor.nodeRid);
+  });
 }
 
 function encodeRoot(
@@ -451,7 +717,7 @@ function encodeRoot(
   >
 ): Buffer {
   const nodeRidHex = routingIdWireHex(value.actor.nodeRid);
-  const encoded = Buffer.from(JSON.stringify({
+  const encoded = Buffer.concat([ROOT_MAGIC, Buffer.from(JSON.stringify({
     version: ROOT_VERSION,
     operationHigh: value.operationId.high.toString(),
     operationLow: value.operationId.low.toString(),
@@ -461,8 +727,11 @@ function encodeRoot(
     actorNodeRid: String(value.actor.nodeRid),
     actorNodeRidHex: nodeRidHex,
     rawReply: Buffer.from(value.rawReply).toString('base64'),
+    ...(value.replyContentType === undefined
+      ? {}
+      : { replyContentType: value.replyContentType }),
     cursor: value.cursor
-  }), 'utf8');
+  }), 'utf8')]);
   if (encoded.byteLength > MAX_ROOT_BYTES) {
     throw new Error('Deferred Join completion root exceeds 1 MiB.');
   }
@@ -475,7 +744,11 @@ function decodeRoot(
   if (payload.byteLength === 0 || payload.byteLength > MAX_ROOT_BYTES) {
     throw new Error('Deferred Join completion root size is invalid.');
   }
-  const value = JSON.parse(Buffer.from(payload).toString('utf8')) as Record<string, unknown>;
+  const bytes = Buffer.from(payload);
+  const encoded = hasJournalRootMagic(bytes)
+    ? bytes.subarray(ROOT_MAGIC.byteLength)
+    : bytes;
+  const value = JSON.parse(encoded.toString('utf8')) as Record<string, unknown>;
   if (
     value.version !== ROOT_VERSION
     || typeof value.operationHigh !== 'string'
@@ -485,6 +758,8 @@ function decodeRoot(
     || typeof value.actorMeshName !== 'string'
     || typeof value.actorNodeRid !== 'string'
     || typeof value.rawReply !== 'string'
+    || (value.replyContentType !== undefined
+      && (typeof value.replyContentType !== 'string' || value.replyContentType.length === 0))
     || !isCursor(value.cursor)
   ) {
     throw new Error('Deferred Join completion root is invalid.');
@@ -512,61 +787,465 @@ function decodeRoot(
     operationId,
     actor,
     rawReply,
+    ...(typeof value.replyContentType === 'string'
+      ? { replyContentType: value.replyContentType }
+      : {}),
     cursor: value.cursor
   };
 }
 
 function encodeAuthorityPublication(value: DeferredJoinAuthorityPublication): Buffer {
-  return Buffer.from(JSON.stringify({
-    version: AUTHORITY_VERSION,
-    applicationPayload: value.applicationPayload.toString('base64'),
-    deferredJoin: {
-      reference: value.reference.value,
-      checksumCrc32c: value.checksumCrc32c
-    }
-  }), 'utf8');
+  return Buffer.from(new ServiceRelocationAuthorityPayloadCodec().publish(
+    value.applicationPayload,
+    toServiceRelocationPublication(value)
+  ));
+}
+
+function toServiceRelocationPublication(
+  value: DeferredJoinAuthorityPublication
+): ServiceRelocationPublication {
+  return {
+    ...value.canonicalPublication,
+    reference: value.reference.value,
+    checksumCrc32c: value.checksumCrc32c,
+    aggregateId: value.aggregateId,
+    aggregateGeneration: value.aggregateGeneration,
+    inventoryDigest: journalInventoryDigest(value.applicationPayload),
+    targetOwnerId: value.targetOwnerId,
+    targetOwnerLeaseGeneration: value.targetOwnerLeaseGeneration
+  };
 }
 
 function decodeAuthorityPublication(
   payload: Uint8Array
 ): DeferredJoinAuthorityPublication | undefined {
-  let value: {
-    readonly version?: unknown;
-    readonly applicationPayload?: unknown;
-    readonly deferredJoin?: {
-      readonly reference?: unknown;
-      readonly checksumCrc32c?: unknown;
-    };
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  const candidates = Buffer.from(outerApplication).equals(Buffer.from(payload))
+    ? [Buffer.from(payload)]
+    : [Buffer.from(outerApplication), Buffer.from(payload)];
+  for (const candidate of candidates) {
+    const publication = decodeDirectAuthorityPublication(candidate);
+    if (publication !== undefined) return publication;
+  }
+  return undefined;
+}
+
+function replaceDeferredJoinAuthorityPublication(
+  payload: Uint8Array,
+  replacement: Uint8Array
+): Buffer {
+  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const currentPublication = codec.read(payload);
+  const replacementPublication = codec.read(replacement);
+  if (
+    currentPublication?.canonical === true
+    || replacementPublication?.canonical === true
+  ) {
+    // Canonical authority has exactly one embedded relocation slot. A journal
+    // cursor replaces that slot atomically; it must never be wrapped or nested
+    // under an older ZLAR/application layer.
+    return Buffer.from(replacement);
+  }
+  const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
+  if (
+    !Buffer.from(outerApplication).equals(Buffer.from(payload))
+    && decodeDirectAuthorityPublication(outerApplication) !== undefined
+  ) {
+    return replaceServiceRelocationAuthorityApplicationPayload(payload, replacement);
+  }
+  return decodeDirectAuthorityPublication(payload) === undefined
+    ? replaceServiceRelocationAuthorityApplicationPayload(payload, replacement)
+    : Buffer.from(replacement);
+}
+
+function decodeDirectAuthorityPublication(
+  payload: Uint8Array
+): DeferredJoinAuthorityPublication | undefined {
+  const publication = new ServiceRelocationAuthorityPayloadCodec().read(payload);
+  if (publication === undefined) return undefined;
+  const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
+  return publication.canonical === true
+    || publication.inventoryDigest === journalInventoryDigest(applicationPayload)
+    ? deferredJoinPublication(applicationPayload, publication)
+    : undefined;
+}
+
+function deferredJoinPublication(
+  applicationPayload: Buffer,
+  publication: ServiceRelocationPublication
+): DeferredJoinAuthorityPublication {
+  return {
+    applicationPayload,
+    reference: { value: publication.reference } as ZLinkBlobReference,
+    checksumCrc32c: publication.checksumCrc32c,
+    aggregateId: publication.aggregateId,
+    aggregateGeneration: publication.aggregateGeneration,
+    targetOwnerId: publication.targetOwnerId,
+    targetOwnerLeaseGeneration: publication.targetOwnerLeaseGeneration,
+    canonical: publication.canonical,
+    ...(publication.canonical === true ? { canonicalPublication: publication } : {})
   };
-  try {
-    //  A cross-node Join relocation wraps the owner authority payload in the
-    //  relocation envelope (spec 28 §8: the same CAS carries the relocation
-    //  publication). The deferred-Join root lives in the INNER application
-    //  payload; decoding the raw payload here made every cross-node deferred
-    //  Join lose its completion root right after the owner CAS.
-    value = JSON.parse(
-      serviceRelocationAuthorityApplicationPayload(payload).toString('utf8')
+}
+
+function hasJournalRootMagic(payload: Uint8Array): boolean {
+  const bytes = Buffer.from(payload);
+  return bytes.byteLength >= ROOT_MAGIC.byteLength
+    && bytes.subarray(0, ROOT_MAGIC.byteLength).equals(ROOT_MAGIC);
+}
+
+function journalInventoryDigest(applicationPayload: Uint8Array): string {
+  return createHash('sha256')
+    .update(JOURNAL_INVENTORY_DOMAIN)
+    .update(applicationPayload)
+    .digest('hex');
+}
+
+function operationAggregateId(operationId: ZLinkActorJoinOperationId): string {
+  const encoded = [operationId.high, operationId.low]
+    .map(value => BigInt.asUintN(64, value).toString(16).padStart(16, '0'))
+    .join('');
+  return `${encoded.slice(0, 8)}-${encoded.slice(8, 12)}-${encoded.slice(12, 16)}`
+    + `-${encoded.slice(16, 20)}-${encoded.slice(20)}`;
+}
+
+function requireCanonicalAggregateGeneration(value: bigint): bigint {
+  if (value === 0n) {
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.DataLost,
+      'Canonical relocation slot has no aggregate generation.'
     );
+  }
+  return value;
+}
+
+interface CanonicalTreeManifest {
+  readonly inventoryDigest: Buffer;
+  readonly logicalLength: bigint;
+  readonly logicalChecksumCrc32c: number;
+  readonly chunks: readonly {
+    readonly order: number;
+    readonly reference: ZLinkBlobReference;
+    readonly length: bigint;
+    readonly checksumCrc32c: number;
+  }[];
+}
+
+function decodeCanonicalTreeManifest(payload: Uint8Array): CanonicalTreeManifest {
+  const generated = decodeRelocationManifestV1(payload);
+  const chunks = generated.chunks.map((chunk, index) => {
+    if (chunk.order !== index) {
+      throw new Error('Canonical relocation chunk identity is invalid.');
+    }
+    return {
+      order: chunk.order,
+      reference: { value: chunk.reference } as ZLinkBlobReference,
+      length: chunk.length,
+      checksumCrc32c: chunk.checksumCrc32c
+    };
+  });
+  if (chunks.length === 0) {
+    throw new Error('Canonical relocation chunk count is invalid.');
+  }
+  if (chunks.reduce((total, value) => total + value.length, 0n)
+    !== generated.totalLength) {
+    throw new Error('Canonical relocation manifest length is invalid.');
+  }
+  return {
+    inventoryDigest: Buffer.from(generated.inventoryDigestSha256),
+    logicalLength: generated.totalLength,
+    logicalChecksumCrc32c: generated.totalChecksumCrc32c,
+    chunks
+  };
+}
+
+async function storeCanonicalTree(
+  store: ZLinkRelocationStore,
+  logicalRoot: Uint8Array,
+  inventoryDigest: Uint8Array,
+  signal?: AbortSignal
+): Promise<{ readonly reference: ZLinkBlobReference; readonly checksumCrc32c: number }> {
+  const logical = Buffer.from(logicalRoot);
+  const logicalChecksumCrc32c = crc32c(logical);
+  const chunk = Buffer.from(encodeRelocationDataChunkV1({
+    order: 0,
+    data: logical
+  }));
+  const storedChunk = await putAndVerifyCanonicalBlob(store, chunk, signal);
+  const manifest = Buffer.from(encodeRelocationManifestV1({
+    logicalFormatVersion: 1,
+    totalLength: BigInt(logical.byteLength),
+    totalChecksumCrc32c: logicalChecksumCrc32c,
+    inventoryDigestSha256: Buffer.from(inventoryDigest),
+    chunks: [{
+      order: 0,
+      reference: storedChunk.reference.value,
+      length: BigInt(logical.byteLength),
+      checksumCrc32c: logicalChecksumCrc32c
+    }]
+  }));
+  const storedManifest = await putAndVerifyCanonicalBlob(store, manifest, signal);
+  return {
+    reference: storedManifest.reference,
+    checksumCrc32c: crc32c(manifest)
+  };
+}
+
+async function putAndVerifyCanonicalBlob(
+  store: ZLinkRelocationStore,
+  payload: Uint8Array,
+  signal?: AbortSignal
+): Promise<{ readonly reference: ZLinkBlobReference }> {
+  const stored = await putNewRelocationBlob(store, payload, RETENTION_MS, signal);
+  const read = await store.read(stored.reference, signal);
+  if (read.kind !== 'found' || !Buffer.from(read.bytes).equals(Buffer.from(payload))) {
+    await store.delete(stored.reference).catch(() => undefined);
+    throw new Error('Relocation Store failed canonical tree verification.');
+  }
+  return { reference: stored.reference };
+}
+
+async function readCanonicalDeferredJoinRoot(
+  store: ZLinkRelocationStore,
+  manifestPayload: Uint8Array,
+  signal?: AbortSignal
+): Promise<{
+  readonly identity: ZLinkDeferredJoinRootIdentity;
+  readonly completion: Omit<
+    ZLinkDeferredJoinAcceptedRoot,
+    'authority' | 'reference' | 'checksumCrc32c'
+  >;
+} | undefined> {
+  let manifest: CanonicalTreeManifest;
+  try {
+    manifest = decodeCanonicalTreeManifest(manifestPayload);
   } catch {
     return undefined;
   }
-  if (
-    value.version !== AUTHORITY_VERSION
-    || typeof value.applicationPayload !== 'string'
-    || typeof value.deferredJoin?.reference !== 'string'
-    || typeof value.deferredJoin.checksumCrc32c !== 'number'
-  ) {
+  const parts: Buffer[] = [];
+  for (const expected of manifest.chunks) {
+    const read = await store.read(expected.reference, signal);
+    if (read.kind !== 'found') throw new Error('Canonical relocation chunk is missing.');
+    const chunk = decodeRelocationDataChunkV1(read.bytes);
+    if (chunk.order !== expected.order
+      || BigInt(chunk.data.byteLength) !== expected.length) {
+      throw new Error('Canonical relocation chunk identity is invalid.');
+    }
+    const data = Buffer.from(chunk.data);
+    if (crc32c(data) !== expected.checksumCrc32c) {
+      throw new Error('Canonical relocation chunk data checksum is invalid.');
+    }
+    parts.push(data);
+  }
+  const logical = Buffer.concat(parts);
+  if (BigInt(logical.byteLength) !== manifest.logicalLength
+    || crc32c(logical) !== manifest.logicalChecksumCrc32c) {
+    throw new Error('Canonical relocation logical root checksum is invalid.');
+  }
+  return decodeCanonicalDeferredJoinRoot(logical);
+}
+
+function encodeCanonicalDeferredJoinRoot(
+  value: Omit<ZLinkDeferredJoinAcceptedRoot, 'authority' | 'reference' | 'checksumCrc32c'>,
+  authority: ZLinkAuthoritySnapshot,
+  publication: DeferredJoinAuthorityPublication,
+  inventoryDigest: Uint8Array
+): Buffer {
+  const key = encodeAuthorityKey('actor', value.actor.actorId).value;
+  const completion = encodeDotNetDeferredJoinCompletion(value);
+  return Buffer.concat([
+    u32le(0x5a4c5231), u16le(2), dotNetGuidBytes(publication.aggregateId),
+    u64le(publication.aggregateGeneration), bytes32le(inventoryDigest), u32le(1),
+    text16le(key), Buffer.of(1), u64le(authority.objectGeneration),
+    u64le(authority.authorityOwnerGeneration), bytes32le(Buffer.alloc(0)),
+    u32le(0), u32le(0), bytes32le(Buffer.alloc(0)), bytes32le(completion)
+  ]);
+}
+
+function decodeCanonicalDeferredJoinRoot(
+  payload: Uint8Array
+): {
+  readonly identity: ZLinkDeferredJoinRootIdentity;
+  readonly completion: Omit<
+    ZLinkDeferredJoinAcceptedRoot,
+    'authority' | 'reference' | 'checksumCrc32c'
+  >;
+} | undefined {
+  const reader = new LittleEndianReader(payload);
+  if (reader.u32() !== 0x5a4c5231 || reader.u16() !== 2) return undefined;
+  const aggregateId = canonicalUuidFromDotNetBytes(reader.take(16));
+  const aggregateGeneration = reader.u64();
+  reader.bytes32();
+  const count = reader.u32();
+  let completion: ReturnType<typeof decodeDotNetDeferredJoinCompletion> | undefined;
+  let completionIdentity: Pick<
+    ZLinkDeferredJoinRootIdentity,
+    'authorityKey' | 'objectKind' | 'objectGeneration'
+  > | undefined;
+  for (let index = 0; index < count; index++) {
+    const authorityKey = reader.text16();
+    const objectKind = reader.u8();
+    const objectGeneration = reader.u64();
+    reader.u64(); reader.bytes32();
+    const jobs = reader.u32();
+    for (let job = 0; job < jobs; job++) { reader.u64(); reader.bytes32(); }
+    const timers = reader.u32();
+    for (let timer = 0; timer < timers; timer++) {
+      reader.text16(); reader.i64(); reader.i64(); reader.bytes32();
+    }
+    reader.bytes32();
+    const encodedCompletion = reader.bytes32();
+    if (encodedCompletion.byteLength !== 0) {
+      if (completion !== undefined) throw new Error('Canonical relocation root has duplicate completions.');
+      completion = decodeDotNetDeferredJoinCompletion(encodedCompletion);
+      if (objectKind !== 1) return undefined;
+      completionIdentity = {
+        authorityKey,
+        objectKind: 'actor',
+        objectGeneration
+      };
+    }
+  }
+  if (!reader.done) throw new Error('Canonical relocation root has trailing bytes.');
+  if (completion === undefined || completionIdentity === undefined) return undefined;
+  if (completion.actor.objectGeneration !== completionIdentity.objectGeneration
+    || encodeAuthorityKey('actor', completion.actor.actorId).value
+      !== completionIdentity.authorityKey) {
     return undefined;
   }
-  const applicationPayload = Buffer.from(value.applicationPayload, 'base64');
-  if (applicationPayload.toString('base64') !== value.applicationPayload) {
-    throw new Error('Deferred Join authority application payload is invalid.');
-  }
   return {
-    applicationPayload,
-    reference: { value: value.deferredJoin.reference } as ZLinkBlobReference,
-    checksumCrc32c: value.deferredJoin.checksumCrc32c
+    identity: {
+      ...completionIdentity,
+      aggregateId,
+      aggregateGeneration
+    },
+    completion
   };
+}
+
+function encodeDotNetDeferredJoinCompletion(
+  value: Omit<ZLinkDeferredJoinAcceptedRoot, 'authority' | 'reference' | 'checksumCrc32c'>
+): Buffer {
+  const routingId = Buffer.from(encodeRoutingIdStorageHex(value.actor.nodeRid), 'hex');
+  return Buffer.concat([
+    u32le(0x5a4c4a43), Buffer.of(2), text16le(value.actor.actorId),
+    u64le(value.actor.objectGeneration), u64le(value.operationId.high), u64le(value.operationId.low),
+    text16le(value.actor.meshName), Buffer.of(routingId.byteLength), routingId,
+    u64le(value.actor.objectGeneration),
+    Buffer.of(value.replyContentType === undefined ? 0 : 1),
+    ...(value.replyContentType === undefined ? [] : [text16le(value.replyContentType)]),
+    bytes32le(value.rawReply),
+    Buffer.of(cursorIndex(value.cursor) + 1)
+  ]);
+}
+
+function decodeDotNetDeferredJoinCompletion(
+  payload: Uint8Array
+): Omit<ZLinkDeferredJoinAcceptedRoot, 'authority' | 'reference' | 'checksumCrc32c'> {
+  const reader = new LittleEndianReader(payload);
+  if (reader.u32() !== 0x5a4c4a43 || reader.u8() !== 2) {
+    throw new Error('Canonical deferred Join completion header is invalid.');
+  }
+  const actorId = reader.text16();
+  const objectGeneration = reader.u64();
+  const operationId = { high: reader.u64(), low: reader.u64() };
+  const meshName = reader.text16();
+  const nodeBytes = reader.take(reader.u8());
+  const actorGeneration = reader.u64();
+  const contentTypePresence = reader.u8();
+  if (contentTypePresence > 1) {
+    throw new Error('Canonical deferred Join completion content type is invalid.');
+  }
+  const replyContentType = contentTypePresence === 1 ? reader.text16() : undefined;
+  const rawReply = reader.bytes32();
+  const cursorValue = reader.u8();
+  if (!reader.done || actorGeneration !== objectGeneration || cursorValue < 1 || cursorValue > 3) {
+    throw new Error('Canonical deferred Join completion is invalid.');
+  }
+  const actor: ActorRef = {
+    actorId,
+    objectGeneration,
+    meshName,
+    nodeRid: decodeRoutingId('', nodeBytes.toString('hex'))
+  };
+  validateIdentity(actorId, operationId, actor);
+  return {
+    operationId,
+    actor,
+    rawReply,
+    ...(replyContentType === undefined ? {} : { replyContentType }),
+    cursor: (['prepared', 'committed', 'delivered'] as const)[cursorValue - 1]!
+  };
+}
+
+class LittleEndianReader {
+  private offset = 0;
+  private readonly bytes: Buffer;
+  constructor(payload: Uint8Array) { this.bytes = Buffer.from(payload); }
+  get done(): boolean { return this.offset === this.bytes.byteLength; }
+  take(length: number): Buffer {
+    if (length < 0 || this.offset + length > this.bytes.byteLength) {
+      throw new Error('Canonical relocation root is truncated.');
+    }
+    const result = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return result;
+  }
+  u8(): number { return this.take(1)[0]!; }
+  u16(): number { return this.take(2).readUInt16LE(); }
+  u32(): number { return this.take(4).readUInt32LE(); }
+  u64(): bigint { return this.take(8).readBigUInt64LE(); }
+  i64(): bigint { return this.take(8).readBigInt64LE(); }
+  text16(): string {
+    const bytes = this.take(this.u16());
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  }
+  bytes32(): Buffer { return this.take(this.u32()); }
+}
+
+function dotNetGuidBytes(value: string): Buffer {
+  const bytes = Buffer.from(value.replaceAll('-', ''), 'hex');
+  return Buffer.from([
+    bytes[3]!, bytes[2]!, bytes[1]!, bytes[0]!,
+    bytes[5]!, bytes[4]!, bytes[7]!, bytes[6]!,
+    ...bytes.subarray(8)
+  ]);
+}
+
+function canonicalUuidFromDotNetBytes(value: Uint8Array): string {
+  const bytes = Buffer.from(value);
+  if (bytes.byteLength !== 16) {
+    throw new TypeError('Canonical relocation aggregate id is invalid.');
+  }
+  const canonical = Buffer.from([
+    bytes[3]!, bytes[2]!, bytes[1]!, bytes[0]!,
+    bytes[5]!, bytes[4]!,
+    bytes[7]!, bytes[6]!,
+    ...bytes.subarray(8)
+  ]).toString('hex');
+  return `${canonical.slice(0, 8)}-${canonical.slice(8, 12)}-${canonical.slice(12, 16)}`
+    + `-${canonical.slice(16, 20)}-${canonical.slice(20)}`;
+}
+
+function text16le(value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.byteLength === 0 || bytes.byteLength > 0xffff) throw new Error('Text16 is invalid.');
+  return Buffer.concat([u16le(bytes.byteLength), bytes]);
+}
+
+function bytes32le(value: Uint8Array): Buffer {
+  return Buffer.concat([u32le(value.byteLength), Buffer.from(value)]);
+}
+
+function u16le(value: number): Buffer {
+  const result = Buffer.alloc(2); result.writeUInt16LE(value); return result;
+}
+
+function u32le(value: number): Buffer {
+  const result = Buffer.alloc(4); result.writeUInt32LE(value); return result;
+}
+
+function u64le(value: bigint): Buffer {
+  const result = Buffer.alloc(8); result.writeBigUInt64LE(value); return result;
 }
 
 function validateIdentity(

@@ -1186,20 +1186,21 @@ int main ()
                     && st_f3_follow_up < st_f3_join_get,
                   "E2E-CP-53",
                   "ST-F3 sends S3/S4 only after the join caller observes completion");
-    gate.require (mesh_node_runtime.find (".prepare=true") != std::string::npos
-                    && mesh_node_runtime.find (".finalize=true") != std::string::npos
-                    && spot_runtime.find ("prepare_remote_actor_to_spot") != std::string::npos
-                    && spot_runtime.find ("finalize_remote_actor_to_spot") != std::string::npos
-                    && st_f2.find ("assert_evidence_sequence") != std::string::npos
-                    && st_f3.find ("assert_evidence_sequence") != std::string::npos,
-                  "E2E-CP-53",
-                  "remote transfer does not enqueue raced backlog before location publication");
     const auto target_authority_commit =
       spot_route_dispatcher.find ("commit_remote_actor_authority (");
     const auto target_backlog_stage =
       spot_route_dispatcher.find ("stage_remote_actor_commit_backlog (");
     const auto target_finalize =
       spot_route_dispatcher.find ("finalize_remote_actor_to_spot_async (");
+    gate.require (target_backlog_stage != std::string::npos
+                    && target_authority_commit != std::string::npos
+                    && target_backlog_stage < target_authority_commit
+                    && target_finalize != std::string::npos
+                    && target_authority_commit < target_finalize
+                    && st_f2.find ("assert_evidence_sequence") != std::string::npos
+                    && st_f3.find ("assert_evidence_sequence") != std::string::npos,
+                  "E2E-CP-53",
+                  "remote transfer does not enqueue raced backlog before location publication");
     const auto source_finalizer_begin = mesh_node_runtime.find (
       "task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_actor_join (");
     const auto source_finalizer_end = source_finalizer_begin == std::string::npos
@@ -1213,34 +1214,40 @@ int main ()
         ? std::string{}
         : mesh_node_runtime.substr (
             source_finalizer_begin, source_finalizer_end - source_finalizer_begin);
-    const auto source_core_commit =
-      source_finalizer.find ("s->core_token.commit");
-    const auto source_follow_publish =
-      source_finalizer.find ("complete_remote_actor_transfer (", source_core_commit);
-    const auto source_finalize_marker = source_finalizer.find (".finalize=true");
-    const auto source_finalize_command = source_finalizer.find (
-      "runtime::messaging::message_kind_t::command", source_finalize_marker);
-    const auto source_finalize_submit =
-      source_finalizer.find ("send_to_spot(", source_finalize_command);
-    const auto duplicate_source_finalize_submit =
-      source_finalize_submit == std::string::npos
+    const auto source_fence = source_finalizer.find (
+      "const auto source=runtime::protocol::actor_route_fence_t{");
+    const auto target_fence = source_finalizer.find (
+      "const auto target=runtime::protocol::actor_route_fence_t{");
+    const auto source_follow_publish = source_finalizer.find (
+      "co_await spot.complete_remote_actor_transfer(");
+    const auto source_join_completion = source_finalizer.find (
+      "co_return result_t<actor_join_reply_t>::success (", source_follow_publish);
+    const auto duplicate_source_follow_publish =
+      source_follow_publish == std::string::npos
         ? std::string::npos
-        : source_finalizer.find ("send_to_spot(", source_finalize_submit + 1);
+        : source_finalizer.find (
+            "co_await spot.complete_remote_actor_transfer(",
+            source_follow_publish + 1);
+    const auto duplicate_target_finalize =
+      target_finalize == std::string::npos
+        ? std::string::npos
+        : spot_route_dispatcher.find (
+            "finalize_remote_actor_to_spot_async (", target_finalize + 1);
     gate.require (
       target_authority_commit != std::string::npos
         && target_backlog_stage != std::string::npos
         && target_backlog_stage < target_authority_commit
         && target_finalize != std::string::npos
         && target_finalize > target_authority_commit
-        && source_core_commit != std::string::npos
-        && source_finalize_marker != std::string::npos
-        && source_finalize_command > source_finalize_marker
-        && source_finalize_submit < source_core_commit
-        && source_follow_publish > source_core_commit
-        && source_finalize_submit != std::string::npos
-        && duplicate_source_finalize_submit == std::string::npos
+        && source_fence != std::string::npos
+        && target_fence > source_fence
+        && source_follow_publish > target_fence
+        && source_join_completion > source_follow_publish
+        && duplicate_source_follow_publish == std::string::npos
+        && duplicate_target_finalize == std::string::npos
         && source_finalizer.find ("request_actor_join_spot_route")
              == std::string::npos
+        && source_finalizer.find ("send_to_spot (") == std::string::npos
         && spot_route_packets_hpp.find ("__zlink.spot.actor.leave")
              != std::string::npos
         && spot_route_dispatcher.find ("send_actor_leave_notification (")
@@ -1576,7 +1583,7 @@ int main ()
                   "E2E-CP-32", "RL-B2 has no outer deadline longer than its channel deadline");
 
     /* E2E-CP-33 — RL-D4 owns raw error-envelope proof; RL-D5 must not report a burst as soak. */
-    gate.require (messaging_test.find ("\"errorCode\":\"handler_not_found\"")
+    gate.require (messaging_test.find (R"("errorCode":"not_found")")
                     != std::string::npos,
                   "E2E-CP-33", "RL-D4 has no raw camelCase errorCode assertion");
     gate.require (messaging_test.find ("\"errorMessage\":\"missing handler\"")

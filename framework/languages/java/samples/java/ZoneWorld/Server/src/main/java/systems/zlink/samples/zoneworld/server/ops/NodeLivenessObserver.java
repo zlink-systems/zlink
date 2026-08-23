@@ -3,6 +3,9 @@ package systems.zlink.samples.zoneworld.server.ops;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Flow;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
@@ -12,7 +15,6 @@ import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.samples.zoneworld.server.configuration.NodeRegistry;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
-import systems.zlink.samples.zoneworld.shared.ZoneWorldSpec;
 /**
  * Whether a zone node is registered and its link is up. Neither is a question the console
  * can ask: a node that has stopped is not there to answer, so the console learns it from
@@ -25,6 +27,9 @@ public final class NodeLivenessObserver implements ApplicationRunner {
     // stream stops as soon as the publisher is collected. The console watches node
     // lifecycles for as long as it runs, so it keeps the publisher for that long.
     private Flow.Publisher<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> observation;
+    private final ScheduledExecutorService expiry = Executors.newSingleThreadScheduledExecutor(
+        runnable -> { Thread thread = new Thread(runnable, "zoneworld-report-expiry");
+            thread.setDaemon(true); return thread; });
 
     public NodeLivenessObserver(ZLinkRouteMeshRuntime runtime, NodeRegistry registry) {
         this.runtime = runtime;
@@ -43,7 +48,7 @@ public final class NodeLivenessObserver implements ApplicationRunner {
 
                 @Override
                 public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
-                    registry.applyLivePeers(zoneNodes(observed.status()));
+                    registry.applyLiveRoutingIds(readyRoutingIds(observed.status()));
                 }
 
                 @Override
@@ -56,16 +61,15 @@ public final class NodeLivenessObserver implements ApplicationRunner {
                 public void onComplete() {
                 }
             });
+        expiry.scheduleAtFixedRate(registry::expireStaleReports, 1, 1, TimeUnit.SECONDS);
     }
 
-    private static Map<String, String> zoneNodes(ZLinkMeshNodeSnapshot status) {
-        Map<String, String> observed = new LinkedHashMap<>();
+    private static Map<String, Boolean> readyRoutingIds(ZLinkMeshNodeSnapshot status) {
+        Map<String, Boolean> observed = new LinkedHashMap<>();
         for (ZLinkMeshPeerSnapshot peer : status.peers()) {
             if (peer.state() != ZLinkPeerState.READY) continue;
             String routingId = peer.nodeRid().toString();
-            String identity = ZoneWorldNames.identityOfRoutingId(routingId);
-            if (identity == null || ZoneWorldSpec.zonesOf(identity).isEmpty()) continue;
-            observed.put(identity, routingId);
+            observed.put(routingId, true);
         }
         return observed;
     }

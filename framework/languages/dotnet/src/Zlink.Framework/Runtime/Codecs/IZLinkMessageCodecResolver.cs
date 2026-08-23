@@ -9,16 +9,16 @@ internal interface IZLinkMessageCodecResolver
     bool TryResolveStreamContentType(
         ZlinkStreamCodec codec,
         out string contentType);
-}
-
-internal interface IZLinkMessageCodecRegistry : IZLinkMessageCodecResolver
-{
-    (string ContentType, IZLinkMessageSerializer Serializer)? SingleCustomSerializer();
 
     bool TryResolveSerializer(
         Type payloadType,
         out string contentType,
         out IZLinkMessageSerializer serializer);
+}
+
+internal interface IZLinkMessageCodecRegistry : IZLinkMessageCodecResolver
+{
+    (string ContentType, IZLinkMessageSerializer Serializer)? SingleCustomSerializer();
 
     IZLinkMessageCodecResolver Snapshot();
 }

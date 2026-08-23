@@ -207,9 +207,7 @@ final class ZLinkProviderAuthorityRepository {
                         null,
                         null));
                 }
-                ZLinkStoreKey key = capacityKey(
-                    request.targetDescriptor(),
-                    request.targetDescriptorLifecycleGeneration());
+                ZLinkStoreKey key = capacityKey(request.targetDescriptor());
                 return provider.read(key, cancellation)
                     .thenApply(read -> {
                         CapacityRecord current;
@@ -254,9 +252,7 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkPlacementAllocation allocation,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation
             cancellation) {
-        ZLinkStoreKey key = capacityKey(
-            allocation.descriptor(),
-            allocation.descriptorLifecycleGeneration());
+        ZLinkStoreKey key = capacityKey(allocation.descriptor());
         return provider.read(key, cancellation).thenApply(read ->
             read instanceof ZLinkStoreReadFound found
                 ? Optional.of(new CapacitySnapshot(
@@ -392,22 +388,30 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreKey key = authorityKey(request.authorityKey());
         return provider.read(key, opaqueCancellation).thenCompose(read -> {
             if (read instanceof ZLinkStoreReadFound found) {
+                AuthorityRecord record = decode(found.value().bytes());
                 ZLinkAuthoritySnapshot current = snapshot(found.value());
-                if (decode(found.value().bytes()).aggregate() != null) {
+                if (record.aggregate() != null) {
                     return projectRead(read, opaqueCancellation)
                         .thenApply(visible -> new ZLinkObjectConflict(
                             (ZLinkAuthoritySnapshot) visible));
                 }
-                return completed(
-                    current.allocation().stableType().equals(
-                        request.stableType())
-                        && current.allocation().state()
-                            == ZLinkPlacementAllocationState.ACTIVE
-                        ? new ZLinkObjectAlreadyExists(current)
-                        : current.allocation().stableType().equals(
-                            request.stableType())
-                            ? new ZLinkObjectConflict(current)
-                            : new ZLinkObjectTypeMismatch(current));
+                return tryReclaimStaleAuthority(
+                        key, found, record, opaqueCancellation)
+                    .thenCompose(reclaim -> switch (reclaim) {
+                        case RECLAIMED -> reserve(request, cancellation);
+                        case CONFLICT, RECOVERY_REQUIRED -> completed(
+                            new ZLinkObjectConflict(current));
+                        case OWNER_LIVE -> completed(
+                            current.allocation().stableType().equals(
+                                request.stableType())
+                                && current.allocation().state()
+                                    == ZLinkPlacementAllocationState.ACTIVE
+                                ? new ZLinkObjectAlreadyExists(current)
+                                : current.allocation().stableType().equals(
+                                    request.stableType())
+                                    ? new ZLinkObjectConflict(current)
+                                    : new ZLinkObjectTypeMismatch(current));
+                    });
             }
             List<ZLinkStoreCondition> conditions = new ArrayList<>();
             conditions.add(new ZLinkStoreMissingCondition(key));
@@ -502,6 +506,104 @@ final class ZLinkProviderAuthorityRepository {
                         });
                 });
         });
+    }
+
+    private CompletionStage<StaleAuthorityReclaim> tryReclaimStaleAuthority(
+        ZLinkStoreKey authorityKey,
+        ZLinkStoreReadFound authority,
+        AuthorityRecord current,
+        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+            cancellation) {
+        ZLinkStoreKey staleOwnerKey = ownerKey(current.ownerId());
+        return provider.read(staleOwnerKey, cancellation).thenCompose(ownerRead -> {
+            ZLinkStoreCondition ownerCondition;
+            if (ownerRead instanceof ZLinkStoreReadFound ownerFound) {
+                if (ownerGeneration(ownerFound.value().bytes())
+                    == current.ownerLeaseGeneration()) {
+                    return completed(StaleAuthorityReclaim.OWNER_LIVE);
+                }
+                ownerCondition = new ZLinkStoreVersionCondition(
+                    staleOwnerKey, ownerFound.value().version());
+            } else {
+                ownerCondition = new ZLinkStoreMissingCondition(staleOwnerKey);
+            }
+            if (current.aggregate() != null
+                || ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+                    current.payload()) != null) {
+                return completed(StaleAuthorityReclaim.RECOVERY_REQUIRED);
+            }
+            return readCapacity(current.allocation(), cancellation)
+                .thenCompose(capacity -> {
+                    CapacitySnapshot stored = capacity.orElse(null);
+                    CapacityRecord next = stored == null
+                        ? null
+                        : current.allocation().state()
+                            == ZLinkPlacementAllocationState.ACTIVE
+                            ? stored.record().adjustActive(
+                                current.allocation().capacityBundle(), -1)
+                            : stored.record().adjustPending(
+                                current.allocation().capacityBundle(), -1);
+                    if (next == null) {
+                        // Node replacement removes the dead owner's descriptor
+                        // and capacity rows, so by the time the orphan is
+                        // reclaimed the counter is either gone or has been
+                        // recreated from zero by the replacement. Either way it
+                        // no longer accounts for this allocation and there is
+                        // nothing to give back - a decrement would just
+                        // underflow. The exact stale authority version plus the
+                        // owner-lease condition (missing, or pinned to the
+                        // version whose generation already disagrees) still
+                        // fence the delete, so a resurrected owner loses the
+                        // race instead of the row leaking.
+                        return deleteOrphanAuthority(
+                            authorityKey,
+                            authority,
+                            ownerCondition,
+                            cancellation);
+                    }
+                    return provider.write(
+                            new ZLinkStoreWriteRequest(
+                                List.of(
+                                    new ZLinkStoreVersionCondition(
+                                        authorityKey,
+                                        authority.value().version()),
+                                    ownerCondition,
+                                    new ZLinkStoreVersionCondition(
+                                        stored.key(),
+                                        stored.value().version())),
+                                List.of(
+                                    new ZLinkStoreDelete(authorityKey),
+                                    new ZLinkStorePut(
+                                        stored.key(),
+                                        encodeCapacity(next),
+                                        null))),
+                            cancellation)
+                        .thenApply(result -> result
+                            instanceof ZLinkStoreWriteApplied
+                            ? StaleAuthorityReclaim.RECLAIMED
+                            : StaleAuthorityReclaim.CONFLICT);
+                });
+        });
+    }
+
+    private CompletionStage<StaleAuthorityReclaim> deleteOrphanAuthority(
+        ZLinkStoreKey authorityKey,
+        ZLinkStoreReadFound authority,
+        ZLinkStoreCondition ownerCondition,
+        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+            cancellation) {
+        return provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(
+                        new ZLinkStoreVersionCondition(
+                            authorityKey,
+                            authority.value().version()),
+                        ownerCondition),
+                    List.of(new ZLinkStoreDelete(authorityKey))),
+                cancellation)
+            .thenApply(result -> result instanceof ZLinkStoreWriteApplied
+                ? StaleAuthorityReclaim.RECLAIMED
+                : StaleAuthorityReclaim.CONFLICT);
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(
@@ -2133,64 +2235,98 @@ final class ZLinkProviderAuthorityRepository {
 
     private static byte[] encodeCapacity(CapacityRecord value) {
         try {
-            var bytes = new ByteArrayOutputStream();
-            var out = new DataOutputStream(bytes);
-            out.writeInt(1);
-            out.writeInt(value.actorActive());
-            out.writeInt(value.actorPending());
-            out.writeInt(value.spotActive());
-            out.writeInt(value.spotPending());
-            out.writeInt(value.types().size());
-            for (Map.Entry<String, TypeCounter> entry : value.types()
-                .entrySet()) {
-                out.writeUTF(entry.getKey());
-                out.writeInt(entry.getValue().active());
-                out.writeInt(entry.getValue().pending());
-            }
-            out.flush();
-            return bytes.toByteArray();
-        } catch (IOException failure) {
-            throw new IllegalStateException(failure);
+            ObjectNode root = CANONICAL_JSON.createObjectNode();
+            root.set("active", encodeCapacityUsage(value, true));
+            root.set("pending", encodeCapacityUsage(value, false));
+            return CANONICAL_JSON.writeValueAsBytes(root);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException(
+                "Failed to encode Location Store capacity record", failure);
         }
     }
 
     private static CapacityRecord decodeCapacity(byte[] bytes) {
         try {
-            var in = new DataInputStream(new ByteArrayInputStream(bytes));
-            if (in.readInt() != 1) {
-                throw new IOException("unsupported capacity version");
+            JsonNode root = CANONICAL_JSON.readTree(bytes);
+            if (root == null || !root.isObject()) {
+                throw new IllegalStateException(
+                    "Location Store capacity record must be a JSON object");
             }
-            int actorActive = in.readInt();
-            int actorPending = in.readInt();
-            int spotActive = in.readInt();
-            int spotPending = in.readInt();
-            int count = in.readInt();
-            if (count < 0 || count > 4096) {
-                throw new IOException("invalid capacity type count");
-            }
+            DecodedCapacityUsage active = decodeCapacityUsage(root, "active");
+            DecodedCapacityUsage pending = decodeCapacityUsage(root, "pending");
             Map<String, TypeCounter> types = new HashMap<>();
-            for (int index = 0; index < count; index++) {
-                String key = in.readUTF();
-                TypeCounter previous = types.put(
-                    key,
-                    new TypeCounter(in.readInt(), in.readInt()));
-                if (previous != null) {
-                    throw new IOException("duplicate capacity type");
-                }
+            for (Map.Entry<String, Integer> entry : active.spotTypes().entrySet()) {
+                types.put(entry.getKey(), new TypeCounter(
+                    entry.getValue(), pending.spotTypes().getOrDefault(
+                        entry.getKey(), 0)));
             }
-            if (in.available() != 0) {
-                throw new IOException("capacity record has trailing bytes");
+            for (Map.Entry<String, Integer> entry : pending.spotTypes().entrySet()) {
+                types.putIfAbsent(entry.getKey(), new TypeCounter(
+                    0, entry.getValue()));
             }
             return new CapacityRecord(
-                actorActive,
-                actorPending,
-                spotActive,
-                spotPending,
+                active.actors(),
+                pending.actors(),
+                active.spots(),
+                pending.spots(),
                 types);
         } catch (IOException | RuntimeException failure) {
             throw new IllegalStateException(
                 "Location Store capacity record is invalid", failure);
         }
+    }
+
+    private static ObjectNode encodeCapacityUsage(
+        CapacityRecord value,
+        boolean active) {
+        ObjectNode usage = CANONICAL_JSON.createObjectNode();
+        usage.put("actors", active ? value.actorActive() : value.actorPending());
+        usage.put("spots", active ? value.spotActive() : value.spotPending());
+        ObjectNode types = usage.putObject("spotTypes");
+        value.types().entrySet().stream()
+            .sorted(Map.Entry.comparingByKey())
+            .forEach(entry -> {
+                int count = active
+                    ? entry.getValue().active()
+                    : entry.getValue().pending();
+                if (count != 0) {
+                    types.put(entry.getKey(), count);
+                }
+            });
+        return usage;
+    }
+
+    private static DecodedCapacityUsage decodeCapacityUsage(
+        JsonNode root,
+        String name) {
+        JsonNode usage = root.get(name);
+        if (usage == null || !usage.isObject()) {
+            throw new IllegalStateException(
+                "Location Store capacity record is missing " + name);
+        }
+        JsonNode types = usage.get("spotTypes");
+        if (types == null || !types.isObject()) {
+            throw new IllegalStateException(
+                "Location Store capacity record has invalid " + name
+                    + ".spotTypes");
+        }
+        Map<String, Integer> decodedTypes = new HashMap<>();
+        types.fields().forEachRemaining(entry -> decodedTypes.put(
+            entry.getKey(), decodeCapacityCount(
+                entry.getValue(), name + ".spotTypes." + entry.getKey())));
+        return new DecodedCapacityUsage(
+            decodeCapacityCount(usage.get("actors"), name + ".actors"),
+            decodeCapacityCount(usage.get("spots"), name + ".spots"),
+            Map.copyOf(decodedTypes));
+    }
+
+    private static int decodeCapacityCount(JsonNode value, String field) {
+        if (value == null || !value.isIntegralNumber()
+            || !value.canConvertToInt() || value.intValue() < 0) {
+            throw new IllegalStateException(
+                "Location Store capacity record has invalid " + field);
+        }
+        return value.intValue();
     }
 
     private static AuthorityRecord decode(byte[] bytes) {
@@ -2437,14 +2573,33 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     private static ZLinkStoreKey capacityKey(
-        ZLinkMeshNodeDescriptorKey descriptor,
-        long lifecycleGeneration) {
-        String identity = descriptor.meshName()
-            + "\0" + descriptor.rid().toHex()
-            + "\0" + lifecycleGeneration;
-        return new ZLinkStoreKey(
-            CAPACITY_PREFIX + HexFormat.of().formatHex(
-                identity.getBytes(StandardCharsets.UTF_8)));
+        ZLinkMeshNodeDescriptorKey descriptor) {
+        return new ZLinkStoreKey(CAPACITY_PREFIX
+            + encodeUriComponent(descriptor.meshName())
+            + ":" + encodeUriComponent(descriptor.rid().toString()));
+    }
+
+    private static String encodeUriComponent(String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        StringBuilder encoded = new StringBuilder(bytes.length);
+        for (byte valueByte : bytes) {
+            int current = valueByte & 0xff;
+            if ((current >= 'A' && current <= 'Z')
+                || (current >= 'a' && current <= 'z')
+                || (current >= '0' && current <= '9')
+                || current == '-' || current == '_' || current == '.'
+                || current == '!' || current == '~' || current == '*'
+                || current == '\'' || current == '(' || current == ')') {
+                encoded.append((char) current);
+            } else {
+                encoded.append('%')
+                    .append(Character.toUpperCase(
+                        Character.forDigit(current >>> 4, 16)))
+                    .append(Character.toUpperCase(
+                        Character.forDigit(current & 0xf, 16)));
+            }
+        }
+        return encoded.toString();
     }
 
     // Reverses authorityKey(): recovers the "zla1:..." authority-key
@@ -2666,6 +2821,13 @@ final class ZLinkProviderAuthorityRepository {
         ACCEPTED
     }
 
+    private enum StaleAuthorityReclaim {
+        OWNER_LIVE,
+        RECLAIMED,
+        CONFLICT,
+        RECOVERY_REQUIRED
+    }
+
     private record CapacityPlan(
         CapacityAdmission admission,
         ZLinkStoreKey key,
@@ -2675,6 +2837,11 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreKey key,
         ZLinkStoreValue value,
         CapacityRecord record) {}
+
+    private record DecodedCapacityUsage(
+        int actors,
+        int spots,
+        Map<String, Integer> spotTypes) {}
 
     private record TypeCounter(int active, int pending) {
         TypeCounter {
@@ -2788,7 +2955,12 @@ final class ZLinkProviderAuthorityRepository {
         }
 
         private static String typeKey(ZLinkSpotTypeCapacityDelta delta) {
-            return delta.objectKind().value() + "\0" + delta.stableType();
+            String objectKind = switch (delta.objectKind()) {
+                case ACTOR -> "actor";
+                case USER_SPOT -> "user_spot";
+                case INSTANCE_SPOT -> "instance_spot";
+            };
+            return objectKind + "\0" + delta.stableType();
         }
     }
 

@@ -66,7 +66,12 @@ final class ZoneStatusReporterLifecycleTest {
                 "tcp://127.0.0.1:1",
                 null,
                 "redis://127.0.0.1:1",
-                "test:"),
+                "test:",
+                false,
+                false,
+                false,
+                "",
+                ""),
             runtime,
             new NodeCensus(),
             new NodeMaintenanceState());

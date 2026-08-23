@@ -7,7 +7,7 @@ import type {
 import type {
   ZLinkAggregateFence,
   ZLinkAggregatePrepareRequest
-} from '../../contracts/Locations';
+} from './internal-location-contracts';
 import { storeKey } from './in-memory-provider-location-store';
 
 const PREFIX = 'zlink:v11:aggregate-inventory:';

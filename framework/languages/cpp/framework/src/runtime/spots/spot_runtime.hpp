@@ -2,6 +2,7 @@
 #pragma once
 
 #include "actor_transfer_coordinator.hpp"
+#include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
@@ -193,6 +194,8 @@ class spot_node_builder_state_t
         actor_ref_t source_actor;
         runtime::protocol::actor_route_fence_t source_fence;
         std::string transfer_id;
+        spot_id_t source_spot_id;
+        std::uint64_t source_spot_generation = 0;
         spot_id_t target_spot_id;
         std::chrono::steady_clock::time_point not_before;
         // True once submit_remote_actor_leave has validated and accepted the
@@ -273,6 +276,20 @@ class spot_node_builder_state_t
     std::map<std::string, spot_relocation_readiness_mode_t>
       spot_relocation_readiness;
     actor_transfer_coordinator_t actor_transfer_coordinator;
+    struct actor_join_relocation_recovery_t
+    {
+        std::string handoff_id;
+        spot_id_t source_spot_id;
+        spot_id_t target_spot_id;
+        std::uint64_t target_node_generation = 0;
+        std::uint64_t target_spot_generation = 0;
+        actor_ref_t source_actor;
+        std::uint64_t completion_operation_id_high = 0;
+        std::uint64_t completion_operation_id_low = 0;
+        std::vector<std::uint8_t> admission_reply;
+    };
+    std::map<std::string, actor_join_relocation_recovery_t>
+      actor_join_relocation_recoveries;
     // Message Follow relays messages that reach the committed source route
     // after relocation. The common contract bounds its default duration to 30s.
     std::chrono::milliseconds message_follow_duration{30000};
@@ -828,6 +845,7 @@ class spot_node_runtime_t
     {
         spot_id_t source_spot_id;
         zlink::message_t state;
+        std::string relocation_content_type;
     };
     explicit spot_node_runtime_t (std::shared_ptr<spot_node_builder_state_t> state);
 
@@ -959,6 +977,13 @@ class spot_node_runtime_t
     std::optional<std::uint64_t> resolve_spot_generation (
       const zlink::routing_id_t &target_node_rid,
       const spot_id_t &target_spot_id) const;
+    // Canonical actorJoin(28) reaches this boundary without a stable type.
+    // Read the target's Store Authority row here (not a cacheable routing
+    // projection), alongside the Actor Authority fence/type resolution in
+    // admit_remote_actor_to_spot. The transport deliberately does not own
+    // these authority decisions.
+    result_t<std::uint64_t> resolve_wire_actor_join_target (
+      const runtime::protocol::spot_route_fence_t &fence) const;
     std::vector<spot_context_t> active_contexts () const;
     result_t<void> dispatch_subscription (const spot_context_t &context,
                                           std::string topic,
@@ -1051,7 +1076,21 @@ class spot_node_runtime_t
                                 const zlink::message_t &request,
                                 std::uint64_t completion_operation_id_high = 0,
                                 std::uint64_t completion_operation_id_low = 0,
-                                std::uint64_t actor_authority_owner_generation = 0);
+                                std::uint64_t actor_authority_owner_generation = 0,
+                                std::uint64_t actor_node_generation = 0,
+                                std::uint64_t expected_owner_lease_generation = 0,
+                                bool actor_type_from_authority_only = false,
+                                std::uint64_t target_spot_generation = 0,
+                                std::uint64_t target_spot_authority_owner_generation = 0);
+    std::optional<bool> validate_actor_join_relocation_prepare (
+      const runtime::protocol::relocation_prepare_t &prepare) const;
+    bool consume_actor_join_recovery (
+      runtime::stateful::frozen_object_state_t &frozen,
+      const runtime::stateful::object_ref_t &target,
+      const runtime::protocol::relocation_prepare_t &prepare);
+    std::optional<std::tuple<std::string, std::string, std::uint64_t>>
+    actor_join_relocation_authority_spot (
+      const runtime::stateful::object_ref_t &target) const;
     // handoff_backlog holds the in-flight packets the source preserved while the
     // actor was moving (§10.2-2). They are enqueued on the target actor's
     // dispatch queue before the committed location is published (§10.2-3), and
@@ -1187,7 +1226,8 @@ class spot_node_runtime_t
     void abort_relocation_materialization (
       const std::vector<runtime::stateful::object_ref_t> &targets) noexcept;
     result_t<remote_actor_transfer_t> transfer_actor_out (const actor_ref_t &actor_ref,
-                                                          std::string transfer_id = {});
+                                                          std::string transfer_id = {},
+                                                          bool capture_state = true);
     result_t<void> leave_actor_for_remote_transfer (const actor_ref_t &actor_ref);
     result_t<void> submit_remote_actor_leave (
       const std::string &transfer_id,
@@ -1263,7 +1303,8 @@ class spot_node_runtime_t
                           zlink::routing_id_t::from (std::uint32_t{0}),
                         runtime::protocol::wire_operation_id_t
                           inbound_operation = {},
-                        std::uint64_t inbound_reply_route_id = 0);
+                        std::uint64_t inbound_reply_route_id = 0,
+                        std::optional<std::string> inbound_deadline = std::nullopt);
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>

@@ -1,14 +1,14 @@
-using System.Buffers.Binary;
+using System.Text;
 using System.Text.Json;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Actors;
 
 internal static class ZLinkActorRemoteJoinRecoveryCodec
 {
-    private const uint Magic = 0x5a4c4a52; // ZLJR
-    private const byte Version = 1;
     private const int MaximumMetadataBytes = 256 * 1024;
     private const int MaximumMessageBytes = 1024 * 1024;
+    private static readonly UTF8Encoding Utf8 = new(false, true);
 
     internal static byte[] Encode(ZLinkActorRelocationRecoveryRecord value)
     {
@@ -18,61 +18,38 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
             throw new ArgumentOutOfRangeException(nameof(value));
         Validate(value);
 
-        var request = value.Request.Request;
-        var reply = value.Reply;
-        var metadata = JsonSerializer.SerializeToUtf8Bytes(
-            value with
-            {
-                Request = value.Request with
-                {
-                    Request = [],
-                    HandoffFrames = []
-                },
-                Reply = []
-            });
+        var metadata = SerializeMetadata(value);
         if (metadata.Length > MaximumMetadataBytes)
             throw new ArgumentOutOfRangeException(nameof(value));
-
-        var encoded = GC.AllocateUninitializedArray<byte>(
-            checked(sizeof(uint) + sizeof(byte)
-                    + 3 * sizeof(uint)
-                    + metadata.Length + request.Length + reply.Length));
-        var offset = 0;
-        WriteU32(encoded, ref offset, Magic);
-        encoded[offset++] = Version;
-        WriteU32(encoded, ref offset, checked((uint)metadata.Length));
-        WriteU32(encoded, ref offset, checked((uint)request.Length));
-        WriteU32(encoded, ref offset, checked((uint)reply.Length));
-        metadata.CopyTo(encoded.AsSpan(offset));
-        offset += metadata.Length;
-        request.CopyTo(encoded.AsSpan(offset));
-        offset += request.Length;
-        reply.CopyTo(encoded.AsSpan(offset));
-        return encoded;
+        var request = value.Request;
+        return ServiceWirePilotCodec.EncodeZljrRecordV1(new(
+            new ServiceWirePilotCodec.ZljrNodeSourceV1(
+                Utf8.GetBytes(RoutingId.From(request.SourceNodeRid).ToHex()),
+                request.ActorNodeGeneration,
+                request.RelocationCoordinatorOwnerId,
+                request.RelocationCoordinatorLeaseGeneration),
+            new ServiceWirePilotCodec.OperationId(0, 0),
+            metadata,
+            request.Request,
+            value.Reply));
     }
 
     internal static ZLinkActorRelocationRecoveryRecord Decode(
-        ReadOnlySpan<byte> encoded)
+        ReadOnlySpan<byte> encoded) => Decode(encoded, out _);
+
+    internal static ZLinkActorRelocationRecoveryRecord Decode(
+        ReadOnlySpan<byte> encoded,
+        out ZLinkActorRelocationSourceFence source)
     {
+        source = default!;
         try
         {
-            var offset = 0;
-            if (ReadU32(encoded, ref offset) != Magic
-                || ReadU8(encoded, ref offset) != Version)
-                throw new InvalidDataException();
-            var metadataLength = ReadBoundedLength(
-                encoded, ref offset, MaximumMetadataBytes);
-            var requestLength = ReadBoundedLength(
-                encoded, ref offset, MaximumMessageBytes);
-            var replyLength = ReadBoundedLength(
-                encoded, ref offset, MaximumMessageBytes);
-            var metadata = Read(encoded, ref offset, metadataLength);
-            var request = Read(encoded, ref offset, requestLength).ToArray();
-            var reply = Read(encoded, ref offset, replyLength).ToArray();
-            if (offset != encoded.Length)
+            var generated = ServiceWirePilotCodec.DecodeZljrRecordV1(
+                encoded.ToArray());
+            if (generated.Operation.High != 0 || generated.Operation.Low != 0)
                 throw new InvalidDataException();
             var value = JsonSerializer.Deserialize<
-                            ZLinkActorRelocationRecoveryRecord>(metadata)
+                            ZLinkActorRelocationRecoveryRecord>(generated.Metadata)
                         ?? throw new InvalidDataException();
             if (value.Request is null
                 || value.Request.Request is null
@@ -84,17 +61,36 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
                 throw new InvalidDataException();
             var restored = value with
             {
-                Request = value.Request with { Request = request },
-                Reply = reply
+                Request = value.Request with { Request = generated.Request },
+                Reply = generated.Reply
             };
             Validate(restored);
+
+            var sourceRidHex = Utf8.GetString(generated.Source.NodeRid);
+            var sourceRid = RoutingId.FromHex(sourceRidHex);
+            if (!sourceRid.ToBytes().SequenceEqual(restored.Request.SourceNodeRid)
+                || generated.Source.NodeGeneration
+                   != restored.Request.ActorNodeGeneration
+                || !StringComparer.Ordinal.Equals(
+                    generated.Source.OwnerId,
+                    restored.Request.RelocationCoordinatorOwnerId)
+                || generated.Source.OwnerLeaseGeneration
+                   != restored.Request.RelocationCoordinatorLeaseGeneration)
+                throw new InvalidDataException();
+            source = new ZLinkActorRelocationSourceFence(
+                generated.Source.OwnerId,
+                generated.Source.OwnerLeaseGeneration,
+                sourceRid,
+                generated.Source.NodeGeneration);
             return restored;
         }
         catch (Exception error) when (error is JsonException
+                                      or DecoderFallbackException
                                       or NotSupportedException
                                       or ArgumentException
                                       or OverflowException
-                                      or IndexOutOfRangeException)
+                                      or IndexOutOfRangeException
+                                      or EndOfStreamException)
         {
             throw new InvalidDataException(
                 "Canonical Actor Join recovery payload is malformed.",
@@ -133,6 +129,44 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
         }
     }
 
+    private static byte[] SerializeMetadata(
+        ZLinkActorRelocationRecoveryRecord value)
+    {
+        var projection = JsonSerializer.SerializeToElement(value with
+        {
+            Request = value.Request with
+            {
+                Request = [],
+                HandoffFrames = []
+            },
+            Reply = []
+        });
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            foreach (var property in projection.EnumerateObject())
+            {
+                if (!property.NameEquals(nameof(value.Request)))
+                {
+                    property.WriteTo(writer);
+                    continue;
+                }
+                writer.WritePropertyName(property.Name);
+                writer.WriteStartObject();
+                foreach (var requestProperty in property.Value.EnumerateObject())
+                {
+                    if (!requestProperty.NameEquals(
+                            nameof(value.Request.TargetAttemptGeneration)))
+                        requestProperty.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+            writer.WriteEndObject();
+        }
+        return stream.ToArray();
+    }
+
     private static void Validate(ZLinkActorRelocationRecoveryRecord value)
     {
         if (value is null || value.Request is null
@@ -165,6 +199,15 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
             || request.TargetSpotGeneration != value.TargetSpotGeneration
             || request.TargetAuthorityOwnerGeneration
                != value.TargetAuthorityOwnerGeneration
+            || request.ActorNodeGeneration == 0
+            || request.ExpectedOwnerLeaseGeneration == 0
+            || string.IsNullOrWhiteSpace(
+                request.RelocationCoordinatorOwnerId)
+            || request.RelocationCoordinatorLeaseGeneration == 0
+            || request.RelocationCoordinatorNodeRid is not { Length: > 0 }
+            || request.RelocationCoordinatorNodeGeneration == 0
+            || string.IsNullOrWhiteSpace(
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion)
             || (value.OperationIdHigh == 0 && value.OperationIdLow == 0
                 && (!string.IsNullOrEmpty(value.ReplyContentType)
                     || value.Reply.Length != 0))
@@ -177,6 +220,7 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
         {
             _ = RoutingId.From(request.SourceNodeRid);
             _ = RoutingId.From(value.TargetNodeRid);
+            _ = RoutingId.From(request.RelocationCoordinatorNodeRid);
         }
         catch (ArgumentException error)
         {
@@ -184,40 +228,5 @@ internal static class ZLinkActorRemoteJoinRecoveryCodec
                 "Canonical Actor Join recovery route is invalid.",
                 error);
         }
-    }
-
-    private static int ReadBoundedLength(
-        ReadOnlySpan<byte> value,
-        ref int offset,
-        int maximum)
-    {
-        var length = checked((int)ReadU32(value, ref offset));
-        if (length > maximum)
-            throw new InvalidDataException();
-        return length;
-    }
-
-    private static byte ReadU8(ReadOnlySpan<byte> value, ref int offset) =>
-        Read(value, ref offset, 1)[0];
-
-    private static uint ReadU32(ReadOnlySpan<byte> value, ref int offset) =>
-        BinaryPrimitives.ReadUInt32BigEndian(Read(value, ref offset, 4));
-
-    private static void WriteU32(byte[] value, ref int offset, uint item)
-    {
-        BinaryPrimitives.WriteUInt32BigEndian(value.AsSpan(offset, 4), item);
-        offset += 4;
-    }
-
-    private static ReadOnlySpan<byte> Read(
-        ReadOnlySpan<byte> value,
-        ref int offset,
-        int length)
-    {
-        if (length < 0 || value.Length - offset < length)
-            throw new InvalidDataException();
-        var result = value.Slice(offset, length);
-        offset += length;
-        return result;
     }
 }

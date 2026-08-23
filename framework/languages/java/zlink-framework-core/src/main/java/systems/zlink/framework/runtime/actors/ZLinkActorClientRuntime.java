@@ -220,10 +220,17 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private ZLinkBackendActorRef rememberAuthority(
         ActorRoute row) {
         ZLinkBackendActorRef actor = toBackendActorRef(row);
-        spotNode.get().rememberActorAuthority(
-            actor,
-            row.authorityOwnerGeneration(),
-            row.ownerLeaseGeneration());
+        ZLinkInternalSpotNode node = spotNode.get();
+        // A positive route cache can overlap a completed relocation.  The
+        // provider-issued owner generation is monotonic, so an older cached
+        // observation must not replace a newer local publication fence.
+        if (node.actorAuthorityOwnerGeneration(actor)
+            < row.authorityOwnerGeneration()) {
+            node.rememberActorAuthority(
+                actor,
+                row.authorityOwnerGeneration(),
+                row.ownerLeaseGeneration());
+        }
         return actor;
     }
 

@@ -13,6 +13,9 @@ import {
   type RawServiceMeshRuntimeOptions
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
 import {
+  ServiceStatefulRuntime
+} from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+import {
   ZLinkNodeRawBindingPort
 } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import {
@@ -52,6 +55,9 @@ import {
   encodeReplyHeader,
   encodeRouteMeshAdmission
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
+import {
+  encodeActorJoin28
+} from '../../../../runtime/protocol/generated/node/service_wire_pilot_codec.generated';
 
 function descriptor(
   nodeRoutingId: string,
@@ -640,6 +646,153 @@ test('raw monitor preserves each physical candidate direction through admission 
   assert.equal(internal.connectionIds.get('peer'), inbound.connectionId);
 });
 
+test('raw monitor admits a discovered same-RID replacement only after its exact lifecycle fence', async () => {
+  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
+  const old = {
+    ...descriptor('peer', 'tcp://old-peer:41001'),
+    lifecycleGeneration: 99n,
+    state: 'serving' as const
+  };
+  const replacement = {
+    ...old,
+    advertisedEndpoint: 'tcp://replacement-peer:42001',
+    securityIdentity: 'replacement-security',
+    lifecycleGeneration: 3n,
+    descriptorRevision: 1n
+  };
+  const oldConnection = 'old-physical-pair';
+  const disconnectedPairs: Array<readonly [bigint, bigint]> = [];
+  const disconnectedRids: string[] = [];
+  const helloTargets: string[] = [];
+  const internal = runtime as unknown as {
+    expectedPeers: Map<string, {
+      meshName: string;
+      nodeRoutingId: string;
+      endpoint: string;
+      securityIdentity: string;
+      lifecycleGeneration: bigint;
+    }>;
+    connectionCandidates: Map<string, Map<string, {
+      connectionId: string;
+      direction: string;
+      discriminator: string;
+      localAddress: string;
+      remoteAddress: string;
+      transportPairId?: bigint;
+      transportPairGeneration?: bigint;
+    }>>;
+    connectionIds: Map<string, string>;
+    monitorEvents: Array<{
+      event: number;
+      value: number;
+      routingId: string;
+      localAddress: string;
+      remoteAddress: string;
+      transportPairId: bigint;
+      transportPairGeneration: bigint;
+      flags: number;
+    }>;
+    router: {
+      send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
+      disconnectRid(routingId: string): void;
+      disconnectTransportPair(pairId: bigint, generation: bigint): void;
+    };
+    admitPeer(
+      descriptor: ServiceNodeDescriptor,
+      connection: {
+        connectionId: string;
+        direction: string;
+        discriminator: string;
+        localAddress: string;
+        remoteAddress: string;
+        transportPairId?: bigint;
+        transportPairGeneration?: bigint;
+      },
+      nowMs: number,
+      expected: {
+        endpoint: string;
+        securityIdentity: string;
+        lifecycleGeneration: bigint;
+      }
+    ): string;
+  };
+  internal.router = {
+    async send(targetRid): Promise<void> {
+      helloTargets.push(targetRid);
+    },
+    disconnectRid(routingId): void {
+      disconnectedRids.push(routingId);
+    },
+    disconnectTransportPair(pairId, generation): void {
+      disconnectedPairs.push([pairId, generation]);
+    }
+  };
+  internal.connectionCandidates.set(old.nodeRoutingId, new Map([[oldConnection, {
+    connectionId: oldConnection,
+    direction: 'outbound',
+    discriminator: 'initiator:local',
+    localAddress: 'tcp://local:40001',
+    remoteAddress: old.advertisedEndpoint,
+    transportPairId: 101n,
+    transportPairGeneration: 7n
+  }]]));
+  internal.connectionIds.set(old.nodeRoutingId, oldConnection);
+  assert.equal(runtime.topology.admit(old, oldConnection, undefined, 'initiator:local'), 'admitted');
+  runtime.liveness.admit(old.nodeRoutingId, oldConnection, 1);
+  assert.equal(runtime.liveness.requestProbe(old.nodeRoutingId, oldConnection, 1), true);
+  const oldProbe = runtime.liveness.tick(1).probes[0]!;
+  assert.equal(runtime.liveness.acknowledge(old.nodeRoutingId, oldConnection, oldProbe.probeId, 1), true);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+
+  internal.expectedPeers.set(old.nodeRoutingId, {
+    meshName: replacement.meshName,
+    nodeRoutingId: replacement.nodeRoutingId,
+    endpoint: replacement.advertisedEndpoint,
+    securityIdentity: replacement.securityIdentity,
+    lifecycleGeneration: replacement.lifecycleGeneration
+  });
+  runtime.disconnectPeer(old.advertisedEndpoint, old.nodeRoutingId, old.lifecycleGeneration);
+  assert.deepEqual(disconnectedRids, []);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+  internal.monitorEvents.push({
+    event: 0x1000,
+    value: 1,
+    routingId: old.nodeRoutingId,
+    localAddress: 'tcp://local:40002',
+    remoteAddress: replacement.advertisedEndpoint,
+    transportPairId: 202n,
+    transportPairGeneration: 8n,
+    flags: 1
+  });
+
+  assert.equal(await runtime.drainMonitorEvents(), 1);
+  assert.deepEqual(helloTargets, [old.nodeRoutingId]);
+  assert.deepEqual(disconnectedPairs, []);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+
+  const replacementCandidate = [...internal.connectionCandidates.get(old.nodeRoutingId)!.values()]
+    .find(candidate => candidate.connectionId !== oldConnection)!;
+  const expected = internal.expectedPeers.get(old.nodeRoutingId)!;
+  assert.equal(internal.admitPeer(replacement, replacementCandidate, 2, expected), 'admitted');
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration, replacement.lifecycleGeneration);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementCandidate.connectionId);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, replacementCandidate.connectionId), false);
+  assert.deepEqual(disconnectedPairs, [[101n, 7n]]);
+
+  const lateOldCandidate = {
+    ...replacementCandidate,
+    connectionId: 'late-old-physical-pair',
+    transportPairId: 303n,
+    transportPairGeneration: 9n
+  };
+  assert.equal(internal.admitPeer(old, lateOldCandidate, 3, expected), 'invalidDescriptor');
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration, replacement.lifecycleGeneration);
+  assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementCandidate.connectionId);
+  assert.deepEqual(disconnectedPairs, [[101n, 7n], [303n, 9n]]);
+});
+
 test('raw monitor ignores a late disconnect from the superseded physical connection', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
@@ -1163,6 +1316,79 @@ test('raw protocol errors reply when correlation is recoverable and always repor
     },
     { sourceRoutingId: 'peer-send', request: false, replied: false }
   ]);
+  runtime.close();
+});
+
+test('unsequenced canonical actorJoin(28) drops with ProtocolError observation and no reply', async () => {
+  type UnsequencedReceived = {
+    readonly sourceRid: string;
+    readonly parts: readonly Buffer[];
+    reply(parts: readonly Uint8Array[]): void;
+  };
+  const observed: Array<{
+    sourceRoutingId: string;
+    request: boolean;
+    replied: boolean;
+    command?: number;
+  }> = [];
+  const runtime = rawServiceRuntime({
+    descriptor: descriptor('local'),
+    onProtocolError: record => observed.push(record)
+  });
+  runtime.topology.admit({ ...descriptor('peer'), state: 'serving' }, 'peer-connection');
+  const stateful = new ServiceStatefulRuntime(runtime, 'local', 1n);
+  const frames = encodeActorJoin28({
+    correlation: 17n,
+    actor: {
+      id: 'actor-a',
+      generation: 3n,
+      targetNodeRid: Buffer.from('peer'),
+      targetNodeGeneration: 1n,
+      expectedAuthorityOwnerGeneration: 5n,
+      expectedOwnerLeaseGeneration: 7n
+    },
+    entry: false,
+    targetSpot: {
+      id: 'missing-spot',
+      generation: 11n,
+      targetNodeRid: Buffer.from('local'),
+      targetNodeGeneration: 1n,
+      expectedAuthorityOwnerGeneration: 13n,
+      expectedOwnerLeaseGeneration: 17n
+    }
+  }).map(Buffer.from);
+  let replyAttempts = 0;
+  const received: UnsequencedReceived = {
+    sourceRid: 'peer',
+    parts: frames,
+    reply(_parts) { replyAttempts++; }
+  };
+  const internals = runtime as unknown as {
+    processReceived(
+      received: UnsequencedReceived,
+      nowMs: number,
+      applicationJobOwner: Awaited<ReturnType<RawServiceMeshRuntime['reserveLocalIngress']>>
+    ): Promise<string>;
+    reportProtocolError(received: UnsequencedReceived): void;
+  };
+  const applicationJobOwner = await runtime.reserveLocalIngress();
+  try {
+    await assert.doesNotReject(async () => {
+      assert.equal(await internals.processReceived(received, 0, applicationJobOwner), 'protocolError');
+    });
+  } finally {
+    applicationJobOwner.close();
+  }
+  internals.reportProtocolError(received);
+
+  assert.equal(replyAttempts, 0);
+  assert.deepEqual(observed, [{
+    sourceRoutingId: 'peer',
+    request: false,
+    replied: false,
+    command: ServiceWireCommand.actorJoin
+  }]);
+  stateful.close();
   runtime.close();
 });
 

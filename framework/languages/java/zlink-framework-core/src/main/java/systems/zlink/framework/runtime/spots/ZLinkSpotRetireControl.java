@@ -703,7 +703,7 @@ final class ZLinkSpotRetireControl {
             writeRid(output, relay.sourceNodeRid());
             output.writeLong(relay.sourceNodeGeneration());
             output.writeLong(relay.targetNodeGeneration());
-            output.writeLong(relay.targetAuthorityOwnerGeneration());
+            output.writeLong(relay.targetAttemptGeneration());
             output.writeInt(relay.hopCount());
             output.writeInt(relay.parts().size());
             for (byte[] part : relay.parts()) {
@@ -846,8 +846,8 @@ final class ZLinkSpotRetireControl {
                     input.readLong(), "sourceNodeGeneration");
                 long targetNodeGeneration = nonzero(
                     input.readLong(), "targetNodeGeneration");
-                long targetAuthorityOwnerGeneration = positive(
-                    input.readLong(), "targetAuthorityOwnerGeneration");
+                long targetAttemptGeneration = positive(
+                    input.readLong(), "targetAttemptGeneration");
                 int hopCount = input.readInt();
                 int partCount = input.readInt();
                 if (partCount < 1 || partCount > 64) {
@@ -879,7 +879,7 @@ final class ZLinkSpotRetireControl {
                         sourceNodeRid,
                         sourceNodeGeneration,
                         targetNodeGeneration,
-                        targetAuthorityOwnerGeneration,
+                        targetAttemptGeneration,
                         hopCount,
                         parts));
             } else {

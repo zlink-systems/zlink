@@ -71,8 +71,8 @@ public record ZLinkMeshNodeDescriptor(
         entrySpotId.ifPresent(
             value -> systems.zlink.framework.runtime.internal.spots
                 .ZLinkSpotIdValidator.requireValid(value));
-        if ((objectRole == ZLinkMeshNodeObjectRole.SERVER)
-            != entrySpotId.isPresent()) {
+        if (entrySpotId.isPresent()
+            && objectRole != ZLinkMeshNodeObjectRole.SERVER) {
             throw new IllegalArgumentException(
                 "Only an Object Server descriptor must publish entrySpotId");
         }
@@ -107,11 +107,6 @@ public record ZLinkMeshNodeDescriptor(
         if (objectCapabilities.size() > 1024) {
             throw new IllegalArgumentException(
                 "objectCapabilities must contain at most 1024 entries");
-        }
-        if (objectRole != ZLinkMeshNodeObjectRole.SERVER
-            && !objectCapabilities.isEmpty()) {
-            throw new IllegalArgumentException(
-                "Only a server descriptor may publish object capabilities");
         }
         Set<String> capabilityKeys = new HashSet<>();
         for (ZLinkObjectCapability capability : objectCapabilities) {

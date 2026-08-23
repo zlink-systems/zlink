@@ -81,8 +81,12 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
 
     public async ValueTask<JoinWorldRes> JoinWorldAsync(CancellationToken cancellationToken)
     {
-        Join = await Connector.Request(new JoinWorldReq(PlayerId))
-            .Async<JoinWorldRes>(cancellationToken);
+        var completed = Connector.WaitFor<JoinWorldRes>()
+            .Where(message => message.Payload.PlayerId == PlayerId)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Async(cancellationToken);
+        await Connector.Send(new JoinWorldReq(PlayerId)).Async(cancellationToken);
+        Join = (await completed).Payload;
         Position = (Join.X, Join.Y);
         return Join;
     }
@@ -199,6 +203,12 @@ public sealed class RelocationProbeClient(IZlinkStreamConnector connector) : IAs
         connector.Request(new ActorLocationProbeReq(actorId))
             .Async<ActorLocationProbeRes>(cancellationToken);
 
+    public ValueTask<FreshActorProbeRes> CreateFreshActorAsync(
+        string actorId,
+        CancellationToken cancellationToken) =>
+        connector.Request(new FreshActorProbeReq(actorId))
+            .Async<FreshActorProbeRes>(cancellationToken);
+
     public ValueTask<MessageFollowProbeRes> PrimeMessageFollowRouteAsync(
         string actorId,
         CancellationToken cancellationToken) =>
@@ -228,8 +238,13 @@ public sealed class RelocationProbeClient(IZlinkStreamConnector connector) : IAs
 public sealed record ClientOptions(
     string GatewayEndpoint,
     string OpsEndpoint,
-    bool StreamTrace)
+    bool StreamTrace,
+    string? FaultArmFile)
 {
     public static ClientOptions From(ZoneWorldClientSettings settings) =>
-        new(settings.GatewayEndpoint, settings.OpsEndpoint, settings.StreamTrace);
+        new(
+            settings.GatewayEndpoint,
+            settings.OpsEndpoint,
+            settings.StreamTrace,
+            settings.FaultArmFile);
 }

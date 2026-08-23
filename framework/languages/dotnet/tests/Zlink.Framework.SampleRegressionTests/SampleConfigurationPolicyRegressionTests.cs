@@ -376,16 +376,17 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("WaitAsync<", support, StringComparison.Ordinal);
         Assert.DoesNotContain("MoveAndWait", support, StringComparison.Ordinal);
         Assert.DoesNotContain("CollectAsync<", support, StringComparison.Ordinal);
-        Assert.DoesNotContain("WaitFor<", support, StringComparison.Ordinal);
+        Assert.Contains("WaitFor<JoinWorldRes>()", support, StringComparison.Ordinal);
+        Assert.DoesNotContain("Request(new JoinWorldReq", support, StringComparison.Ordinal);
         Assert.DoesNotContain("ExpectNone<", support, StringComparison.Ordinal);
         Assert.DoesNotContain("catch (Exception)", scenarios, StringComparison.Ordinal);
         Assert.Contains(".Connector.WaitFor<", scenarios, StringComparison.Ordinal);
         Assert.Contains(".Connector.ExpectNone<", scenarios, StringComparison.Ordinal);
         Assert.True(
-            scenarios.IndexOf("var goneWait =", StringComparison.Ordinal)
+            scenarios.IndexOf("var droppedWait =", StringComparison.Ordinal)
             < scenarios.IndexOf("scenario ZW-C2 armed", StringComparison.Ordinal));
         Assert.True(
-            scenarios.IndexOf("var droppedWait =", StringComparison.Ordinal)
+            scenarios.IndexOf("var goneWait =", StringComparison.Ordinal)
             < scenarios.IndexOf("scenario ZW-C3 armed", StringComparison.Ordinal));
         Assert.True(
             scenarios.IndexOf("var expiredWait =", StringComparison.Ordinal)

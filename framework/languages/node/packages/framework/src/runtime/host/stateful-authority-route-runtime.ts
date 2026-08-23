@@ -483,7 +483,8 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         current.allocation.state === 'active'
         && current.allocation.objectKind === 'actor'
         && decodeActorAuthorityIdentity(
-          serviceRelocationAuthorityApplicationPayload(current.payload)
+          serviceRelocationAuthorityApplicationPayload(current.payload),
+          current.objectGeneration
         ) !== undefined
       ) {
         actors.push(current);
@@ -508,7 +509,7 @@ function authorityNeedsExactRead(
   }
   return snapshot.allocation.state === 'active'
     && snapshot.allocation.objectKind === 'actor'
-    && decodeActorAuthorityIdentity(snapshot.payload) !== undefined;
+    && decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration) !== undefined;
 }
 
 function pendingInstanceActivation(

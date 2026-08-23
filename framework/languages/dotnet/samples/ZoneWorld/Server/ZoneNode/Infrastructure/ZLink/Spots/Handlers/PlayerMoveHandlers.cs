@@ -62,6 +62,23 @@ internal sealed class PlayerBotTickHandler(PlayerMovement movement)
 }
 
 /// <summary>
+/// Starts the runner's G4 operation through the same deferred Actor Join path as a normal
+/// boundary move, while marking only this admission as the deterministic crash boundary.
+/// </summary>
+[ZLinkSpotActorSendHandler(nameof(CrashRelocationProbeMsg))]
+internal sealed class PlayerCrashRelocationProbeHandler(PlayerMovement movement)
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, CrashRelocationProbeMsg>
+{
+    public ValueTask HandleAsync(
+        ZoneSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        CrashRelocationProbeMsg message,
+        CancellationToken cancellationToken) =>
+        movement.CrashProbeAsync(spot, actor, message.X, message.Y, cancellationToken);
+}
+
+/// <summary>
 /// Receives a zone snapshot on the Actor's serialized turn and forwards it through
 /// the session currently bound to that Actor.
 /// </summary>
@@ -208,6 +225,29 @@ internal sealed class PlayerMovement(
     IZLinkSpotClient spots,
     ILogger<PlayerMovement> logger)
 {
+    public ValueTask CrashProbeAsync(
+        ZoneSpot spot,
+        PlayerActor actor,
+        int toX,
+        int toY,
+        CancellationToken cancellationToken)
+    {
+        if (moves.Decide(actor.Position, toX, toY) is not MoveDecision.Accepted
+            {
+                ZoneChanged: true,
+                To: var target
+            })
+            throw new InvalidOperationException(
+                "The G4 crash probe must be one legal cross-zone move.");
+
+        return ChangeZoneAsync(
+            actor,
+            target,
+            PlayerJoinPurpose.CrashBoundaryProbe,
+            crashBoundaryProbe: true,
+            cancellationToken);
+    }
+
     public async ValueTask MoveAsync(
         ZoneSpot spot,
         PlayerActor actor,
@@ -235,7 +275,12 @@ internal sealed class PlayerMovement(
                 return;
 
             case MoveDecision.Accepted accepted:
-                await ChangeZoneAsync(actor, accepted.To, cancellationToken);
+                await ChangeZoneAsync(
+                    actor,
+                    accepted.To,
+                    PlayerJoinPurpose.ZoneChange,
+                    crashBoundaryProbe: false,
+                    cancellationToken);
                 return;
         }
     }
@@ -249,10 +294,12 @@ internal sealed class PlayerMovement(
     private ValueTask ChangeZoneAsync(
         PlayerActor actor,
         PlayerPosition to,
+        PlayerJoinPurpose purpose,
+        bool crashBoundaryProbe,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        actor.TrackDeferredJoin(to);
+        actor.TrackDeferredJoin(to, purpose);
         actor.Context
             .JoinSpot(
                 to.ZoneId,
@@ -262,7 +309,8 @@ internal sealed class PlayerMovement(
                     to.Y,
                     actor.IsBot,
                     InitialEntry: false,
-                    FromNodeId: ZoneTopology.NodeOf(actor.ZoneId)))
+                    FromZoneId: actor.ZoneId,
+                    CrashBoundaryProbe: crashBoundaryProbe))
             .Defer();
 
         logger.LogInformation(

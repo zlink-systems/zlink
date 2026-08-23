@@ -42,6 +42,12 @@ internal static class TestHostScenarioConfigurator
             case "entry-spot-target":
                 ConfigureEntryRelocation(services, options, isSource: false);
                 return;
+            case "user-spot-target":
+                ConfigureUserSpotTarget(services, options);
+                return;
+            case "user-spot-source":
+                ConfigureUserSpotSource(services, options);
+                return;
             case "stream-raw":
                 ConfigureStreamRawNode(services, options);
                 return;
@@ -339,6 +345,131 @@ internal static class TestHostScenarioConfigurator
                     ?? throw new InvalidOperationException(
                         "entry-spot-target mode requires --peer-rid (the source's node rid).")));
         }
+    }
+
+    private static void ConfigureUserSpotTarget(
+        IServiceCollection services, TestHostOptions options)
+    {
+        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
+        services.AddSingleton<UserSpotJoinObserver>();
+        if (!string.IsNullOrWhiteSpace(options.EventFilePath))
+        {
+            services.AddSingleton(
+                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+        }
+        services.AddZLinkFramework(framework =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.EventFilePath))
+                framework.ConfigureDispatch().Diagnostics
+                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var redisEndpoint = options.RedisEndpoint
+                                ?? throw new InvalidOperationException(
+                                    "user-spot-target mode requires --redis-endpoint.");
+            var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-user-spot-join";
+            framework.AddLocationStore(new ZLinkRedisLocationStore(o =>
+            {
+                o.ConnectionString = redisEndpoint;
+                o.KeyPrefix = $"{keyPrefix}:location";
+            }));
+            framework.AddRelocationStore(new ZLinkRedisRelocationStore(o =>
+            {
+                o.ConnectionString = redisEndpoint;
+                o.KeyPrefix = $"{keyPrefix}:relocation";
+            }));
+
+            var meshName = options.MeshName
+                           ?? throw new InvalidOperationException(
+                               "user-spot-target mode requires --mesh-name.");
+            var mesh = framework.AddRouteMesh(meshName)
+                .Listen(options.BindEndpoint
+                        ?? throw new InvalidOperationException(
+                            "user-spot-target mode requires --bind-endpoint."))
+                .SetPlacementWeight(100);
+            mesh.Channel(meshName).Server();
+            var objects = mesh.Objects().Server();
+            objects.AddSpotFactory<RelocationUserSpot>(
+                RelocationUserSpot.SpotType,
+                factory => factory.DisableRelocation());
+            objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
+                RelocationEntrySpot.ActorType,
+                factory => factory.PreserveStateWith<RelocationActorAdapter>());
+        });
+
+        services.AddHostedService(provider =>
+            new UserSpotTargetHostedService(
+                provider.GetRequiredService<IZLinkSpotManager>(),
+                provider.GetRequiredService<IZLinkActorClient>(),
+                provider.GetRequiredService<IZLinkRouteClient>(),
+                provider.GetRequiredService<IZLinkRouteMeshRuntime>(),
+                provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
+                provider.GetRequiredService<UserSpotJoinObserver>(),
+                provider.GetRequiredService<TestHostEventSink>(),
+                options.SpotId
+                ?? throw new InvalidOperationException(
+                    "user-spot-target mode requires --spot-id."),
+                options.ActorId ?? "cross-lang-user-spot-actor",
+                options.MeshName ?? "cross.user-spot-join",
+                options.PeerRid
+                ?? throw new InvalidOperationException(
+                    "user-spot-target mode requires --peer-rid.")));
+    }
+
+    private static void ConfigureUserSpotSource(
+        IServiceCollection services, TestHostOptions options)
+    {
+        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
+        if (!string.IsNullOrWhiteSpace(options.EventFilePath))
+        {
+            services.AddSingleton(
+                new TestHostMessageFlowListener(options.EventFilePath + ".flow"));
+        }
+        services.AddZLinkFramework(framework =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.EventFilePath))
+                framework.ConfigureDispatch().Diagnostics
+                    .SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var redisEndpoint = options.RedisEndpoint
+                                ?? throw new InvalidOperationException(
+                                    "user-spot-source mode requires --redis-endpoint.");
+            var keyPrefix = options.RedisKeyPrefix ?? "zlink-cross-user-spot-join";
+            framework.AddLocationStore(new ZLinkRedisLocationStore(o =>
+            {
+                o.ConnectionString = redisEndpoint;
+                o.KeyPrefix = $"{keyPrefix}:location";
+            }));
+            framework.AddRelocationStore(new ZLinkRedisRelocationStore(o =>
+            {
+                o.ConnectionString = redisEndpoint;
+                o.KeyPrefix = $"{keyPrefix}:relocation";
+            }));
+
+            var meshName = options.MeshName
+                           ?? throw new InvalidOperationException(
+                               "user-spot-source mode requires --mesh-name.");
+            var mesh = framework.AddRouteMesh(meshName)
+                .Listen(options.BindEndpoint
+                        ?? throw new InvalidOperationException(
+                            "user-spot-source mode requires --bind-endpoint."))
+                .SetPlacementWeight(100);
+            mesh.Channel(meshName).Server();
+            var objects = mesh.Objects().Server();
+            objects.AddEntrySpot<RelocationEntrySpot>();
+            objects.AddActorFactory<RelocationActor, RelocationActorFactory>(
+                RelocationEntrySpot.ActorType,
+                factory => factory.PreserveStateWith<RelocationActorAdapter>());
+        });
+
+        services.AddHostedService(provider =>
+            new UserSpotSourceHostedService(
+                provider.GetRequiredService<IZLinkActorManager>(),
+                provider.GetRequiredService<IZLinkActorClient>(),
+                provider.GetRequiredService<IZLinkRouteMeshRuntime>(),
+                provider.GetRequiredService<TestHostEventSink>(),
+                options.ActorId ?? "cross-lang-user-spot-actor",
+                options.SpotId
+                ?? throw new InvalidOperationException(
+                    "user-spot-source mode requires --spot-id."),
+                options.MeshName ?? "cross.user-spot-join"));
     }
 
     private static void ConfigureStreamRawNode(IServiceCollection services, TestHostOptions options)

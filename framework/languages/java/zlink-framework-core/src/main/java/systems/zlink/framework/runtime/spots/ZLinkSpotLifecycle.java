@@ -458,6 +458,10 @@ final class ZLinkSpotLifecycle {
         return activation == null ? null : activation.spot();
     }
 
+    SpotActivation spotActivationFor(String spotId) {
+        return spots.get(spotId);
+    }
+
     DefaultSpotContext contextFor(ZLinkSpot<?> spot) {
         for (SpotActivation activation : spots.values()) {
             if (activation.spot() == spot) {

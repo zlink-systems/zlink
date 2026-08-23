@@ -949,6 +949,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
     ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/bound-session-replaced-v1.json"
     ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/session-relocation-barrier-v1.json"
+    ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-request-v1.json"
     ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
@@ -1006,6 +1007,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_relocation_envelope_golden)
   set_tests_properties(test_cpp_framework_relocation_envelope_golden PROPERTIES
     LABELS "framework-unit;framework-foundation;protocol"
+    TIMEOUT 30)
+
+  add_executable(test_cpp_framework_actor_authority_payload
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_authority_payload.cpp)
+  target_compile_features(test_cpp_framework_actor_authority_payload PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_actor_authority_payload PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_actor_authority_payload PRIVATE
+    ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/durable-authority-v1.json"
+    ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/authority-relocation-state-v1.json")
+  target_link_libraries(test_cpp_framework_actor_authority_payload PRIVATE
+    nlohmann_json::nlohmann_json
+    zlink::framework)
+  add_test(NAME test_cpp_framework_actor_authority_payload
+    COMMAND test_cpp_framework_actor_authority_payload)
+  set_tests_properties(test_cpp_framework_actor_authority_payload PROPERTIES
+    LABELS "framework-unit;framework-contract;protocol"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_store_record_golden
@@ -1413,6 +1432,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;async")
   target_include_directories(test_cpp_framework_async_task BEFORE PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp/include)
+  add_zlink_framework_test(
+    test_cpp_framework_actor_join_handoff_id
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp
+    "framework-unit;framework-regression;actor-join")
+  target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
@@ -2213,6 +2238,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
     cross-language/cross_language_host.cpp)
   target_link_libraries(zlink_cpp_cross_language_host PRIVATE
     zlink::framework
+    zlink::framework_locations_redis
     zlink::stream_e2e_client)
   target_include_directories(zlink_cpp_cross_language_host PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src

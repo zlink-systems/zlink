@@ -1521,7 +1521,7 @@ generation isn't applied to the current connection.
 | Shape | A non-zero opaque equality token. Execution order isn't judged by numeric magnitude. |
 | .NET notation | `ulong LifecycleGeneration` |
 | Public composition | A single non-zero generation value. A restarted run at the same endpoint uses a new value different from the previous one. |
-| Creation/management | The framework determines the value to use for each new listener/server lifecycle. |
+| Creation/management | The framework determines the value to use for each new listener/server lifecycle. Issued values stay within the wire `nonzero-u64` range `1..long.MaxValue` (2^63-1) — values using the top bit of a full-width `ulong` must not be issued. Receivers compare only by exact equality. |
 | Lifetime | Kept until that run ends. The remote compares the descriptor's and transport admission's values exactly. |
 
 <a id="descriptor"></a>

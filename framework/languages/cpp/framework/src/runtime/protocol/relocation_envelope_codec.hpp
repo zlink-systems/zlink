@@ -31,12 +31,8 @@ namespace zlink::framework::runtime::protocol
 struct relocation_envelope_application_state_t
 {
     std::uint64_t participant_id = 0;
-    /* Discriminator 0: no state.  1: state payload.  2: state payload plus
-     * an opaque canonical participant-recovery body (durable direct-join);
-     * this codec retains the recovery bytes without interpreting them. */
-    std::uint8_t state_encoding = 0;
+    bool has_state = false;
     std::vector<std::uint8_t> state;
-    std::vector<std::uint8_t> recovery;
 
     friend bool operator== (const relocation_envelope_application_state_t &,
                             const relocation_envelope_application_state_t &)

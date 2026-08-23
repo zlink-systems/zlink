@@ -26,6 +26,9 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkDirectJoinRelocationAuthority;
 import systems.zlink.framework.runtime.internal.relocation
@@ -79,12 +82,15 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
@@ -245,6 +251,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         new ZLinkActorLocationCoordinator(actorRegistry::actorType);
     private ZLinkChannelRuntime routedTransport;
     private ZLinkActorSpotJoinCall.TransferTransport actorJoinTransferTransport;
+    private ZLinkInternalMeshNode actorJoinCanonicalMeshNode;
     private Supplier<String> sourceEntrySpotId = () -> "";
     // Shared flow tracer (installed by the host); null = no tracing wired.
     private ZLinkMessageFlowTracer flow;
@@ -271,6 +278,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         DirectJoinSessionAbortFlight> directJoinSessionAborts =
             new ConcurrentHashMap<>();
     private volatile ZLinkDirectJoinRelocation directJoinRelocation;
+    private volatile ZLinkLocationRepository actorJoinAuthorityStore;
     private volatile ZLinkActorJoinRelocationPort actorJoinRelocationPort;
     private volatile MessageFollowNoticeSender messageFollowNoticeSender;
 
@@ -294,11 +302,91 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public void setDirectJoinRelocationStores(
         ZLinkLocationRepository authority) {
+        actorJoinAuthorityStore = authority;
         directJoinRelocation = authority == null
             ? null
             : new ZLinkDirectJoinRelocation(
                 authority,
                 serializer);
+    }
+
+    /**
+     * Reads the canonical Actor Authority row used to fence remote Join
+     * admission. Spec 51 §9 makes this row, rather than the legacy private
+     * packet's actorType, the receiver's stable-type source.
+     */
+    public CompletionStage<ActorJoinAuthority> readActorJoinAuthority(
+        String actorId) {
+        ZLinkLocationRepository store = actorJoinAuthorityStore;
+        if (store == null) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "Actor Join Location Store is unavailable"));
+        }
+        final String key;
+        try {
+            key = ZLinkAuthorityKeyCodec.actor(actorId);
+        } catch (RuntimeException error) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "Actor Join Authority key is invalid: " + actorId,
+                error));
+        }
+        try {
+            return store.read(key, () -> false)
+                .handle((read, error) -> {
+                    if (error != null) {
+                        throw new CompletionException(new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Actor Join could not read its Authority row", error));
+                    }
+                    if (read instanceof ZLinkAuthorityMissing) {
+                        throw new CompletionException(new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.NOT_FOUND,
+                            "Actor Join Authority row is missing: " + actorId));
+                    }
+                    if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                        throw new CompletionException(new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Actor Join Authority row could not be read: " + actorId));
+                    }
+                    if (snapshot.allocation().state()
+                            != ZLinkPlacementAllocationState.ACTIVE
+                        || snapshot.allocation().objectKind()
+                            != ZLinkPlacementObjectKind.ACTOR
+                        || snapshot.objectGeneration() <= 0
+                        || snapshot.authorityOwnerGeneration() <= 0
+                        || snapshot.ownerLeaseGeneration() <= 0
+                        // lifecycle generation is a full-range opaque token:
+                        // only zero represents absence.
+                        || snapshot.allocation().descriptorLifecycleGeneration() == 0) {
+                        throw new CompletionException(new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "Actor Join Authority row has an incomplete route fence: "
+                                + actorId));
+                    }
+                    return new ActorJoinAuthority(
+                        snapshot.allocation().stableType(),
+                        snapshot.objectGeneration(),
+                        snapshot.allocation().descriptor().rid(),
+                        snapshot.allocation().descriptorLifecycleGeneration(),
+                        snapshot.authorityOwnerGeneration(),
+                        snapshot.ownerLeaseGeneration());
+                });
+        } catch (RuntimeException error) {
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "Actor Join could not start its Authority read", error));
+        }
+    }
+
+    public record ActorJoinAuthority(
+        String stableType,
+        long objectGeneration,
+        RoutingId ownerNodeRid,
+        long ownerNodeGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
     }
 
     public void setActorJoinRelocationPort(
@@ -327,6 +415,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 "canonical Actor Join relocation is not installed");
         }
         port.admit(admission);
+    }
+
+    public void admitCanonicalActorJoin(
+        ZLinkActorJoinRelocationPort.CanonicalAdmission admission) {
+        ZLinkActorJoinRelocationPort port = actorJoinRelocationPort;
+        if (port == null) {
+            throw new ZLinkConfigurationException(
+                "canonical Actor Join relocation is not installed");
+        }
+        port.admitCanonical(admission);
     }
 
     CompletionStage<ZLinkDirectJoinRelocation.Manifest>
@@ -4116,6 +4214,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         actorJoinTransferTransport = transferTransport;
     }
 
+    public void setActorJoinCanonicalMeshNode(
+        ZLinkInternalMeshNode meshNode) {
+        actorJoinCanonicalMeshNode = meshNode;
+    }
+
     public CompletionStage<Void> notifyDisconnected(ZLinkActor actor) {
         if (actor == null) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
@@ -4813,6 +4916,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 remoteAddressResolver,
                 routedTransport,
                 actorJoinTransferTransport,
+                actorJoinCanonicalMeshNode,
                 actorRegistry::actorType,
                 serializer,
                 flow,

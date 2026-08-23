@@ -90,6 +90,8 @@ builder.Services.AddZLinkFramework(options =>
     var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
         .SetRoutingIdPrefix("zn")
         .Listen(node.MeshEndpoint);
+    if (!string.IsNullOrWhiteSpace(node.MeshAdvertiseHost))
+        mesh.SetAdvertiseHost(node.MeshAdvertiseHost);
     mesh.Objects().Server()
         .AddEntrySpot<ZoneEntrySpot>()
         .AddActorFactory<PlayerActor, PlayerActorFactory>(
@@ -97,11 +99,8 @@ builder.Services.AddZLinkFramework(options =>
         .AddSpotFactory<ZoneSpot>(
             ZoneWorldNames.ZoneSpotType,
             factory => factory
-                // Two Zone Spots per eligible node make the two configured node pairs
-                // deterministic while keeping placement inside the public Location Store
-                // contract. The process-specific bootstrap requests only its logical pair;
-                // the capacity reservation prevents a startup race from placing both pairs
-                // on whichever process became ready first.
+                // Every eligible process requests all four global ZoneIds. Capacity is the
+                // only placement input and limits each process to two local Zone Spot owners.
                 .StableTypeLimit(2)
                 .DisableRelocation());
     mesh.Channel(ZoneWorldNames.ZoneChannel).Server();

@@ -1,12 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZONEWORLD_CONFIG } from '../../Configuration/configuration';
 import type { ZoneWorldConfiguration } from '../../Configuration/configuration';
-import { nodeOf } from '../../../Shared/spec';
 
 @Injectable()
 class NodeRuntimeState {
   private readonly maintenance = new Map<string, boolean>();
   private readonly playerZones = new Map<string, Set<string>>();
+  private readonly hostedZones = new Set<string>();
   private botTicksEnabled = false;
   readonly nodeId: string;
 
@@ -31,15 +31,20 @@ class NodeRuntimeState {
     return this.maintenance.get(nodeId) ?? false;
   }
 
-  rejectsArrival(zoneId: string, sourceNodeId: string | null): boolean {
-    return nodeOf(zoneId as never) === this.nodeId
-      && sourceNodeId !== this.nodeId
-      && this.ownMaintenance();
+  rejectsArrival(): boolean {
+    return this.ownMaintenance();
   }
 
-  targetUnavailable(zoneId: string): boolean {
-    const targetNodeId = nodeOf(zoneId as never);
-    return targetNodeId !== this.nodeId && (this.maintenance.get(targetNodeId) ?? false);
+  hostZone(zoneId: string): void {
+    this.hostedZones.add(zoneId);
+  }
+
+  releaseZone(zoneId: string): void {
+    this.hostedZones.delete(zoneId);
+  }
+
+  zones(): readonly string[] {
+    return [...this.hostedZones].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
   }
 
   joined(playerId: string, zoneId: string): void {

@@ -245,6 +245,34 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not yet own Framework Actor creation.
     }
 
+    /** Installs the canonical service-wire actorJoin(28) admission owner. */
+    default void setCanonicalActorJoinHandler(
+        CanonicalActorJoinHandler handler) {
+        // Alternate backends may not accept canonical actorJoin service records.
+    }
+
+    /**
+     * Returns whether the exact observed Spot authority and its admitted peer
+     * can carry canonical service-wire actorJoin(28).  A false result keeps
+     * the caller on the established private transfer path.
+     */
+    default boolean canRequestCanonicalActorJoin(
+        CanonicalActorJoinRequest request) {
+        return false;
+    }
+
+    /**
+     * Sends one canonical actorJoin(28) request to its exact admitted peer.
+     * Transfer and relocation bookkeeping deliberately do not appear in this
+     * transport boundary (spec 51 section 9).
+     */
+    default CompletionStage<CanonicalActorJoinReply> requestCanonicalActorJoin(
+        CanonicalActorJoinRequest request,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException(
+            "Canonical actorJoin transport is unavailable"));
+    }
+
     /**
      * Installs the durable source-owner resolver used before a remote Spot or
      * Actor operation enters an application queue.
@@ -281,11 +309,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 "Remote relocation control is unavailable"));
     }
 
-    /**
-     * Installs the canonical service-wire command 30-35/40-41 endpoint.
-     * These infrastructure records are one-way state-machine transitions and
-     * do not use the legacy relocation request/reply wrapper.
-     */
+    /** Installs the canonical service-wire command 30-35/40-41 endpoint. */
     default void setCanonicalRelocationControlHandler(
         CanonicalRelocationControlHandler handler) {
         // Alternate backends may not yet support canonical relocation control.
@@ -301,6 +325,19 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Canonical relocation control is unavailable"));
+    }
+
+    /**
+     * Sends command 40 as a request and completes with its command 30 or 53
+     * reply. Other canonical relocation controls remain one-way.
+     */
+    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+        RoutingId targetNodeRid,
+        byte[] command,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "Canonical relocation prepare request is unavailable"));
     }
 
     default void setActorLeftHandler(ActorLeftHandler handler) {
@@ -538,6 +575,65 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     @FunctionalInterface
+    interface CanonicalActorJoinHandler {
+        CompletionStage<CanonicalActorJoinResponse> admit(
+            RoutingId sourceNodeRid,
+            systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                .ActorJoin28 join);
+    }
+
+    record CanonicalActorJoinRequest(
+        ZLinkBackendActorRef actor,
+        long actorNodeGeneration,
+        long actorAuthorityOwnerGeneration,
+        long actorOwnerLeaseGeneration,
+        RoutingId targetNodeRid,
+        long targetNodeGeneration,
+        String targetSpotId,
+        long targetSpotGeneration,
+        long targetAuthorityOwnerGeneration,
+        long targetOwnerLeaseGeneration,
+        boolean entry,
+        String packetName,
+        String contentType,
+        byte[] applicationPayload) {
+        public CanonicalActorJoinRequest {
+            Objects.requireNonNull(actor, "actor");
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            Objects.requireNonNull(targetSpotId, "targetSpotId");
+            Objects.requireNonNull(packetName, "packetName");
+            Objects.requireNonNull(contentType, "contentType");
+            applicationPayload = Objects.requireNonNull(
+                applicationPayload, "applicationPayload").clone();
+        }
+    }
+
+    record CanonicalActorJoinReply(
+        boolean accepted,
+        long receiveChunkLimitBytes,
+        List<Message> applicationReply,
+        java.util.UUID handoffId,
+        String replyContentType) {
+        public CanonicalActorJoinReply(
+            boolean accepted,
+            long receiveChunkLimitBytes,
+            List<Message> applicationReply) {
+            this(
+                accepted,
+                receiveChunkLimitBytes,
+                applicationReply,
+                null,
+                "application/json");
+        }
+
+        public CanonicalActorJoinReply {
+            applicationReply = List.copyOf(Objects.requireNonNull(
+                applicationReply, "applicationReply"));
+            Objects.requireNonNull(replyContentType, "replyContentType");
+        }
+    }
+
+    @FunctionalInterface
     interface PeerAuthorityResolver {
         CompletionStage<Optional<PeerAuthorityFence>> resolve(
             String meshName,
@@ -574,9 +670,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface CanonicalRelocationControlHandler {
-        CompletionStage<Void> handle(
+        CompletionStage<byte[]> handle(
             RoutingId sourceNodeRid,
+            Long requestSequence,
             byte[] command);
+    }
+
+    /** Marks a node that can carry command 40's required reply leg. */
+    interface CanonicalRelocationPrepareRequestReplySupport {
     }
 
     @FunctionalInterface
@@ -719,6 +820,20 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         @Override
         public byte[] terminalEnvelope() {
             return terminalEnvelope.clone();
+        }
+    }
+
+    record CanonicalActorJoinResponse(
+        boolean accepted,
+        long membershipEpoch,
+        List<Message> applicationReply) {
+        public CanonicalActorJoinResponse {
+            if (accepted && membershipEpoch <= 0) {
+                throw new IllegalArgumentException(
+                    "accepted canonical Actor Join requires membership epoch");
+            }
+            applicationReply = List.copyOf(Objects.requireNonNull(
+                applicationReply, "applicationReply"));
         }
     }
 

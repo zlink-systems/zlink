@@ -6,7 +6,7 @@ import {
 } from '@zlink-systems/nestjs';
 import { ZoneWorldNames, ZoneWorldSpec } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
-import { BotTickMsg, EnterZoneReq, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
+import { BotTickMsg, EnterZoneReq, EnterZoneRes, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -52,6 +52,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
   async onInitialize(): Promise<void> {
     this.state = new ZoneState(String(this.context.spotId) as ZoneId);
+    this.nodeState.hostZone(String(this.context.spotId));
     console.log(`zone spot initialized zone=${String(this.context.spotId)}`);
     this.timer = await this.context.addTimer(
       'zone-tick',
@@ -72,6 +73,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     await this.botTimer?.cancel();
     this.timer = undefined;
     this.botTimer = undefined;
+    this.nodeState.releaseZone(String(this.context.spotId));
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
@@ -80,11 +82,11 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
       console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=player-id`);
       return { accepted: false };
     }
-    if (this.nodeState.rejectsArrival(String(this.context.spotId), enter.fromNodeId)) {
-      console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=wrong-node`);
-      return { accepted: false };
+    if (this.nodeState.rejectsArrival()) {
+      console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=maintenance`);
+      return { accepted: false, reply: new EnterZoneRes(String(this.context.spotId), 'ZoneMaintenance') };
     }
-    console.log(`zone admission accepted zone=${String(this.context.spotId)} player=${actorId} from=${enter.fromNodeId ?? 'new'}`);
+    console.log(`zone admission accepted zone=${String(this.context.spotId)} player=${actorId} initial=${enter.initialEntry}`);
     this.pendingJoins.set(actorId, enter);
     return { accepted: true };
   }
@@ -108,19 +110,16 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     actor.y = participant.y;
     actor.zoneId = participant.zoneId;
     actor.isBot = participant.isBot;
-    actor.completePendingJoin();
     this.actors.set(actorId, participant);
     this.nodeState.joined(actorId, participant.zoneId);
     this.requireState().enter(actorId, participant.x, participant.y, participant.isBot);
-    if (!participant.isBot && enter.fromNodeId !== null) {
+    if (!participant.isBot && !enter.initialEntry) {
       await this.notifyActor(participant.actorId, new ZoneChangedNotify(
         actorId,
-        participant.zoneId,
-        this.nodeState.nodeId,
-        enter.fromNodeId !== this.nodeState.nodeId
+        participant.zoneId
       ));
     }
-    console.log(`zone player entered zone=${participant.zoneId} player=${actorId} from=${enter.fromNodeId ?? 'new'}`);
+    console.log(`zone player entered zone=${participant.zoneId} player=${actorId} initial=${enter.initialEntry}`);
   }
 
   async onLeaveActor(actor: PlayerActor): Promise<void> {

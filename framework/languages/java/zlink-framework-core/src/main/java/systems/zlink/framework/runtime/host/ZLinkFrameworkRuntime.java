@@ -375,6 +375,7 @@ public final class ZLinkFrameworkRuntime
                 ? store
                 : null,
             this.locationRuntime,
+            this.storeLocationResolvers,
             this.spotTransportAddressResolver,
             this.meshNodes.nodesByName());
         this.spots = spotSubsystem.spots();

@@ -51,7 +51,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
         actor.text8(actorId);
         actor.u8(state == State.CREATING ? 0 : 1);
         actor.text8(currentSpotId);
-        actor.nonzeroU64(currentSpotGeneration);
+        actor.opaqueNonzeroU64(currentSpotGeneration);
         actor.u8(currentSpotKind);
 
         Writer body = new Writer();
@@ -61,7 +61,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
         body.nonzeroU64(ownerLeaseGeneration);
         body.text8(meshName);
         body.rid(nodeRid);
-        body.nonzeroU64(nodeGeneration);
+        body.opaqueNonzeroU64(nodeGeneration);
         body.conditional32(0, new byte[0]);
         body.conditional32(0, new byte[0]);
 
@@ -103,7 +103,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
             String actorId = object.text8();
             int stateValue = object.u8();
             String currentSpotId = object.text8();
-            long currentSpotGeneration = object.nonzeroU64();
+            long currentSpotGeneration = object.opaqueNonzeroU64();
             int currentSpotKind = object.u8();
             if (!object.end()) {
                 return Optional.empty();
@@ -121,7 +121,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
             long ownerLeaseGeneration = body.nonzeroU64();
             String meshName = body.text8();
             RoutingId nodeRid = body.rid();
-            long nodeGeneration = body.nonzeroU64();
+            long nodeGeneration = body.opaqueNonzeroU64();
             if (!body.emptyConditional32()
                 || !body.emptyConditional32()
                 || !body.end()) {
@@ -185,6 +185,15 @@ public final class ZLinkActorAuthorityPayloadCodec {
             if (value <= 0) {
                 throw new IllegalArgumentException(
                     "nonzero-u64 must be positive");
+            }
+            raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
+                .putLong(value).array());
+        }
+
+        void opaqueNonzeroU64(long value) {
+            if (value == 0) {
+                throw new IllegalArgumentException(
+                    "opaque-nonzero-u64 must not be zero");
             }
             raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
                 .putLong(value).array());
@@ -264,6 +273,16 @@ public final class ZLinkActorAuthorityPayloadCodec {
             long value = input.getLong();
             if (value <= 0) {
                 throw new IllegalArgumentException("invalid nonzero-u64");
+            }
+            return value;
+        }
+
+        long opaqueNonzeroU64() {
+            require(8);
+            long value = input.getLong();
+            if (value == 0) {
+                throw new IllegalArgumentException(
+                    "invalid opaque-nonzero-u64");
             }
             return value;
         }

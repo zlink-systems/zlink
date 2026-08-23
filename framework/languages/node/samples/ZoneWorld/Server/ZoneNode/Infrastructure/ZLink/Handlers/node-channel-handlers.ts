@@ -6,7 +6,6 @@ import {
 } from '@zlink-systems/nestjs';
 import { ZONEWORLD_CONFIG } from '../../../../Configuration/configuration';
 import type { ZoneWorldConfiguration } from '../../../../Configuration/configuration';
-import { zonesOf } from '../../../../../Shared/spec';
 import { DeliverAnnounceMsg, PacketNames } from '../../../../../Shared/contracts';
 import type {
   ApplyNodeMaintenanceReq,
@@ -38,7 +37,7 @@ class ApplyNodeMaintenanceHandler implements
     const nodeId = this.nodeId();
     if (request.nodeId !== nodeId) throw new Error(`Maintenance request targets '${request.nodeId}', not '${nodeId}'.`);
     this.state.setMaintenance(nodeId, request.enabled);
-    return { nodeId, enabled: request.enabled, zones: [...zonesOf(nodeId)] };
+    return { nodeId, enabled: request.enabled, zones: [...this.state.zones()] };
   }
 
   private nodeId(): string {
@@ -61,7 +60,7 @@ class GetNodeDiagnosticsHandler implements
     if (nodeId === undefined || request.nodeId !== nodeId) throw new Error('Diagnostics request targets another node.');
     return {
       nodeId,
-      zones: [...zonesOf(nodeId)],
+      zones: [...this.state.zones()],
       playerCount: this.state.playerCount(),
       maintenance: this.state.ownMaintenance()
     };
@@ -73,6 +72,7 @@ class GetNodeDiagnosticsHandler implements
 class WorldAnnounceSubscriber implements ZLinkFanoutHandler<WorldAnnounceEvent> {
   constructor(
     @Inject(ZONEWORLD_CONFIG) private readonly config: ZoneWorldConfiguration,
+    private readonly state: NodeRuntimeState,
     @Optional() @Inject(ZLINK_SPOT_MANAGER) private readonly handles: ZLinkSpotManager | undefined,
     @Optional() @Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound | undefined
   ) {}
@@ -81,7 +81,7 @@ class WorldAnnounceSubscriber implements ZLinkFanoutHandler<WorldAnnounceEvent> 
     console.log(`fanout subscriber received announcement id=${message.announcementId} topic=${context.topic}`);
     const nodeId = this.config.zoneNode?.nodeId;
     if (nodeId === undefined || this.handles === undefined || this.outbound === undefined) return;
-    for (const zoneId of zonesOf(nodeId)) {
+    for (const zoneId of this.state.zones()) {
       const handle = await this.handles.find(zoneId);
       if (handle !== undefined) {
         await this.outbound

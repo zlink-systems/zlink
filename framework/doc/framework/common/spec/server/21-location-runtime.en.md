@@ -1004,7 +1004,7 @@ process terminates, the object is left in an unavailable state.
 | Value | Purpose |
 |---|---|
 | `RelocationId` | A non-zero 128-bit random number identifying one move. Used only by the runtime. |
-| `TargetAttemptGeneration` | A non-zero value distinguishing a duplicate or previous Restore request sent to the same target. Not used to select a different target. |
+| `TargetAttemptGeneration` | A non-zero value distinguishing a duplicate or previous Restore request sent to the same target. Not used to select a different target. Always compared by exact equality, never ordered numerically ([51 §9](51-internal-service-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope)). Must not be derived from the target node's lifecycle generation — that value cannot distinguish a second attempt sent to the same target node from the first. |
 | [Reservation ID](01-glossary.en.md#reservation-id) | A non-zero 128-bit value identifying the request that secured target capacity. Separate from the creation ID. |
 
 The Location Store's per-object location record is at most 1 MiB. Large lists are split

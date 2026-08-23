@@ -15,6 +15,43 @@ import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationSt
 
 final class ZLinkAggregateInventoryStoreTest {
     @Test
+    void highBitDescriptorLifecycleTokenIsAcceptedByStoreRequests() {
+        long highBit = Long.MIN_VALUE;
+        var descriptor = new ZLinkMeshNodeDescriptorKey(
+            "game", RoutingId.from("node-b"));
+        var owner = new ZLinkLocationOwnerToken("owner-b", 1);
+        assertEquals(
+            highBit,
+            new ZLinkObjectReservation(
+                "authority", "store", 1, 1, "reservation", descriptor,
+                highBit, owner).targetDescriptorLifecycleGeneration());
+        assertEquals(
+            highBit,
+            new ZLinkAggregatePrepareRequest(
+                UUID.randomUUID(), 1,
+                List.of(new ZLinkAggregateParticipant(
+                    "authority", 1, 1, "store",
+                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                    new byte[0], new byte[0])),
+                new byte[32], descriptor, highBit,
+                ZLinkPlacementCapacityBundle.actor(1), owner)
+                .targetDescriptorLifecycleGeneration());
+        assertEquals(
+            highBit,
+            new ZLinkAggregateRelocationCoordinator.Request(
+                UUID.randomUUID(), 1, 2,
+                List.of(new ZLinkAggregateRelocationCoordinator.Participant(
+                    "authority", systems.zlink.framework.locations
+                        .ZLinkPlacementObjectKind.ACTOR,
+                    1, 1, "store",
+                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                    new byte[0], new byte[0])),
+                new byte[] {1}, descriptor, highBit,
+                ZLinkPlacementCapacityBundle.actor(1), owner, "store")
+                .targetDescriptorLifecycleGeneration());
+    }
+
+    @Test
     void storesAndReadsInventoryAcrossTheLeafPageBound() {
         List<ZLinkAggregateParticipant> participants = new ArrayList<>();
         for (int index = 0; index < 2_050; index++) {

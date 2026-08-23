@@ -80,6 +80,23 @@ final class ZLinkServiceM6AWireCodecTest {
         assertArrayEquals(payload.payload(), decoded.payload());
     }
 
+    @Test
+    void highBitCorrelationRoundTripsAsAnOpaqueU64() {
+        long highBit = Long.MIN_VALUE;
+        assertEquals(
+            highBit,
+            codec.decodeNodeRequestHeader(
+                codec.encodeNodeRequestHeader(highBit, 0)));
+        assertEquals(
+            highBit,
+            codec.decodeChannelRequestHeader(
+                codec.encodeChannelRequestHeader(highBit, "orders", 0))
+                .correlation());
+        assertEquals(
+            new ZLinkServiceM6AWireCodec.Reply(highBit, 0, 0),
+            codec.decodeReplyHeader(codec.encodeReplyHeader(highBit, 0, 0)));
+    }
+
     //  GOLDEN — service-wire-v1.schema.json reply(20) byte layout.
     //  `request-specific-tail` is a conditional-union WITHOUT `bodyLengthType`,
     //  so the tail is written inline: prefix(5) + u64 correlation +

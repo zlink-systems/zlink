@@ -426,6 +426,70 @@ test('spot actor leave completes inside the current owner turn without nested ad
   ]);
 });
 
+test('spot actor leave yields its current turn while the Entry rejoin is pending', async () => {
+  const events = [];
+  const localNodeRid = zlink.RoutingId.from('play-node-a');
+  let completeJoin;
+  const actor = {
+    actorId: 'player-1',
+    context: {
+      actorId: 'player-1',
+      async [ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](nodeRid) {
+        events.push(`join-entry:${String(nodeRid)}`);
+        return await new Promise(resolve => {
+          completeJoin = () => resolve(true);
+        });
+      }
+    }
+  };
+  const activation = {
+    serial: {
+      isCurrentTurn: true,
+      currentTurn: {
+        async yieldFrameworkPromise(pending) {
+          events.push('yield');
+          completeJoin();
+          return await pending;
+        }
+      }
+    },
+    beginActorTransfer(actorId) {
+      events.push(`begin:${actorId}`);
+    },
+    spot: {
+      async onLeaveActor(leftActor) {
+        events.push(`leave:${leftActor.actorId}`);
+      }
+    },
+    commitActorDeparture(actorId) {
+      events.push(`commit:${actorId}`);
+    }
+  };
+  const membership = new ZLinkSpotActorMembership({
+    resolveActivation: () => activation,
+    entryNodeRid: localNodeRid,
+    actorTransferRuntime: {
+      actorEntryNodeRid() {
+        return localNodeRid;
+      },
+      clearRoutedActor(leftActor) {
+        events.push(`clear:${leftActor.actorId}`);
+      }
+    }
+  });
+
+  await membership.leaveActor('bingo-room', actor);
+
+  assert.deepEqual(events, [
+    'begin:player-1',
+    'leave:player-1',
+    'commit:player-1',
+    'clear:player-1',
+    'join-entry:play-node-a',
+    'yield'
+  ]);
+});
+
 test('ZLinkSpotManager creates lists finds and closes spots with lifecycle order', async () => {
   const events = [];
   class StageSpot {

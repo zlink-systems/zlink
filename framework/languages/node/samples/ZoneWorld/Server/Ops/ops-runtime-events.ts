@@ -9,6 +9,7 @@ import { OpsConsoleRegistry } from './ops-console-registry';
 @Injectable()
 class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly stop = new AbortController();
+  private expiryTimer?: NodeJS.Timeout;
 
   constructor(
     @Inject(ZLINK_ROUTE_MESH_RUNTIME) private readonly routeMeshRuntime: ZLinkRouteMeshRuntime,
@@ -18,10 +19,15 @@ class OpsRuntimeStatusObserver implements OnApplicationBootstrap, OnApplicationS
 
   onApplicationBootstrap(): void {
     void this.observeReadiness();
+    this.expiryTimer = setInterval(() => {
+      this.publish(this.nodes.expireReports());
+    }, 250);
   }
 
   onApplicationShutdown(): void {
     this.stop.abort();
+    if (this.expiryTimer !== undefined) clearInterval(this.expiryTimer);
+    this.expiryTimer = undefined;
   }
 
   private async observeReadiness(): Promise<void> {

@@ -44,7 +44,9 @@ export interface ZLinkSpotActorTransferRuntime {
     operationId: ZLinkActorJoinOperationId,
     actorRef: ActorRef,
     rawReply: Uint8Array,
-    signal?: AbortSignal
+    replyContentType?: string,
+    signal?: AbortSignal,
+    canonicalInventoryDigest?: string
   ): Promise<ZLinkDeferredJoinAcceptedRoot>;
   discardDeferredJoinAccepted(
     root: ZLinkDeferredJoinAcceptedRoot,
@@ -80,7 +82,7 @@ export interface ZLinkSpotActorTransferRuntime {
     membershipEpoch: bigint,
     deadlineAtMs: number,
     signal?: AbortSignal
-  ): Promise<import('../../contracts/Locations').ZLinkAuthoritySnapshot>;
+  ): Promise<import('../locations/internal-location-contracts').ZLinkAuthoritySnapshot>;
   rememberRoutedActorTransferTarget(
     actorId: string,
     target: ZLinkRemoteBoundSessionTarget | undefined

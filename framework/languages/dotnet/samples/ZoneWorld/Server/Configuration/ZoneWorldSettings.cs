@@ -11,11 +11,14 @@ public sealed record ZoneNodeSettings(
     string MeshEndpoint,
     string? FaultTickZone = null,
     bool DisableBots = false,
-    bool SubscriberOnly = false);
+    bool SubscriberOnly = false,
+    bool AllowEmptyZoneSet = false,
+    string? MeshAdvertiseHost = null);
 
 public sealed record GatewaySettings(
     string StreamEndpoint,
-    string MeshEndpoint);
+    string MeshEndpoint,
+    string? MeshAdvertiseHost = null);
 
 public sealed record OpsSettings(
     string StreamEndpoint,
@@ -25,7 +28,8 @@ public sealed record ZoneWorldClientSettings(
     string GatewayEndpoint,
     string OpsEndpoint,
     string Scenarios = "all",
-    bool StreamTrace = false);
+    bool StreamTrace = false,
+    string? FaultArmFile = null);
 
 public sealed record ZoneWorldConfiguration(
     ZoneWorldSettings Shared,

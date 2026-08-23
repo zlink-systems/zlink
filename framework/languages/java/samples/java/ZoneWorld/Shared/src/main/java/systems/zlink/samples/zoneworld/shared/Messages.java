@@ -80,6 +80,37 @@ public final class Messages {
         String error) {
     }
 
+    public record RelocationPairReq() {
+    }
+
+    public record RelocationPairRes(
+        String sourceZoneId,
+        String targetZoneId,
+        String sourceOwnerNodeRid,
+        String targetOwnerNodeRid,
+        String error) {
+    }
+
+    public record ActorLocationProbeReq(String actorId) {
+    }
+
+    public record ActorLocationProbeRes(
+        String actorId,
+        long objectGeneration,
+        String ownerNodeRid,
+        String error) {
+    }
+
+    public record FreshActorProbeReq(String actorId) {
+    }
+
+    public record FreshActorProbeRes(
+        String actorId,
+        long objectGeneration,
+        String ownerNodeRid,
+        String error) {
+    }
+
     public record WorldAnnounceEvent(String announcementId, String text) {
     }
 
@@ -121,7 +152,8 @@ public final class Messages {
         int y,
         boolean isBot,
         boolean initialEntry,
-        String fromNodeId) {
+        String fromZoneId,
+        boolean crashBoundaryProbe) {
     }
 
     public record EnterZoneRes(String zoneId, String error) {
@@ -133,6 +165,9 @@ public final class Messages {
     public record DeliverZoneStateMsg(String zoneId, long tick, List<PlayerView> players) {
     }
 
+    public record DeliverZoneChangedMsg(String playerId, String zoneId) {
+    }
+
     public record DeliverWorldAnnounceMsg(String announcementId, String text) {
     }
 
@@ -140,5 +175,14 @@ public final class Messages {
     }
 
     public record MessageFollowProbeRes(String probeId, byte[] payload) {
+    }
+
+    public record MessageFollowProbeMsg(String actorId, String probeId, byte[] payload) {
+    }
+
+    public record CrashRelocationProbeMsg(int x, int y) {
+    }
+
+    public record CrashRelocationProbeRes(String error) {
     }
 }

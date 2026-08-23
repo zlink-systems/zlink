@@ -149,8 +149,9 @@ raw frame 조합, codec table 또는 maintenance field를 노출하지 않는다
 
 여러 Framework message part를 하나의 application payload로 전달하는 service messaging command에서는 outer
 application envelope에 공통 profile을 사용한다. 이 envelope의 packet name은 `ZLinkFrameworkMultipart`이고 content type은
-`application/x-zlink-multipart`로 고정한다. 실제 application message의 packet name과 bytes는 envelope의
-payload 안에 있는 part 순서로 보존한다.
+`application/x-zlink-multipart`로 고정한다. 실제 application message의 bytes는 envelope의 payload 안에
+있는 part 순서로 그대로 보존한다. part는 opaque bytes이며, 이 profile은 part별 packet name이나
+content type을 wire에 싣지 않는다.
 
 Actor creation처럼 command 자체가 별도의 application-payload envelope를 정의한 operation은 이 profile의
 대상이 아니다. 그 operation의 packet name과 content type은 해당 operation 계약을 따른다.
@@ -464,14 +465,59 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ### Actor join 요청 envelope
 
-`actorJoin`(28)의 요청 body — correlation, actor route fence, `entry` flag와 target spot
+`actorJoin`(28)은 `[request]`로 보내며, 그 결과는 command 20 reply — 이 request의 `[reply]`
+leg — 로만 돌아온다. `actorJoin`(28)의 요청 body — correlation, actor route fence, `entry` flag와 target spot
 route fence — 는 이 operation의 완전한 cross-language 계약이다. 이 body 외에 wire로 전달되는
 필드는 없다. 특히 runtime이 진행 중인 이동을 내부에서 추적하기 위해 사용하는 transfer 단위
 bookkeeping identifier(예: transfer id)는 language-internal일 뿐 이 body에 나타나지 않는다.
-이런 id가 필요한 runtime은 local에서 생성하고 유지하며 wire에 싣지 않는다.
+이런 id가 필요한 runtime은 local에서 생성하고 유지하며 wire에 싣지 않는다. Command 28을
+request/reply pair가 아니라 one-way record로 보내거나 받는 것은 이 operation의 계약 밖이며,
+수신자는 [2. Record framing과 decode](#2-record-framing과-decode)의 규칙대로 application
+dispatch 전에 protocol error로 거부한다.
 [15. Spot과 Actor 모델 §4.2](15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)에
 설명한 기존 준비 뒤에서 대기하는 동작과 later-attempt-wins 규칙을 포함한 수신 측 admission
 semantics는 language-internal id가 아니라 이 body에 실린 actor identity를 key로 삼는다.
+
+Join 수락 reply에 application reply가 있으면 target은 그것을
+[Framework multipart application profile](#framework-multipart-application-profile)로 감싸
+reply leg에 싣는다. Part는 정확히 하나이며, 그 part는 handler가 만든 application reply
+message의 bytes를 그대로 싣는다. 이 profile은 part별 packet name이나 content type을 wire에
+싣지 않는다 — envelope의 packet name과 content type은 profile 고정값이며, part bytes의
+해석은 계층별 규범 형식 원칙에 따라 application 계층의 소관이다. Application reply가 없으면
+multipart envelope 자체를 싣지 않는다. Source는 이 profile을 언랩해 sole part를 application
+reply로 전달하며, part bytes를 다시 다른 envelope로 해석하지 않는다. Source가 caller에
+노출하는 reply metadata는 profile 고정 outer content type이거나 없음이다 — request의 content
+type 등 다른 값으로 재구성하지 않는다. 이 profile 외의 프레이밍 — part를 중첩 envelope로
+감싸거나, 언랩하지 않은 inner bytes를 그대로 노출하는 것 — 은 이 operation의 계약 밖이다.
+
+#### 수신자 stable-type 해석
+
+`actorJoin`(28) body는 Actor stable type을 의도적으로 싣지 않으므로, 수신자는 factory type을
+wire field나 사전 local record가 아니라 canonical Location Store에서 해석한다. Actor의 Authority
+row가 per-Actor 단일 진실 원천이며(canonical key `authority\0actor\0{ActorId}`,
+[21. Location Runtime §2.4](21-location-runtime.ko.md) 참조) 이미 `allocation.stableType`을
+가진다. admission 시 수신자는 body의 `ActorId`에 해당하는 그 row를 **반드시 읽고**, row가 actor
+route fence와 정확히 일치할 때만 join을 수용한다.
+
+- `allocation.state == active`이고 `allocation.objectKind == actor`;
+- row의 `objectGeneration`이 fence의 `ObjectGeneration`과 일치;
+- row의 owner node RID·descriptor lifecycle generation이 fence의 target node RID·node generation과 일치;
+- row의 `authorityOwnerGeneration`이 fence의 `expectedAuthorityOwnerGeneration`과 일치;
+- row의 `ownerLeaseGeneration`이 fence의 `expectedOwnerLeaseGeneration`과 일치.
+
+그 뒤 row의 `allocation.stableType`으로 local factory registry에서 factory를 해석한다. 이는
+relocation 경로가 `relocationState`(52)(마찬가지로 wire object에서 type 생략)에서 이미 수행하는
+Authority 유도 stable-type 검증과 동일하며, 28 admission 경로는 sender가 준 type을 신뢰하는 대신
+이 검증을 첫 target 준비 단계로 확장한다. 모든 실패는 command 20 reply의 typed terminal이고 조용한
+drop이 아니다: 없거나 읽을 수 없는 row는 `Unavailable`(Store unavailable) 또는 `NotFound`(미생성/
+이미 retire); 불일치하는 fence field는 stale/mismatch protocol terminal; 미지의 `stableType`(local
+factory 부재)은 typed rejection. 여기서 비교하는 generation은 bounded generation이며 정확 equality로만
+대조하고 숫자 크기 순서로 판정하지 않는다(§12).
+
+source가 fence의 `expectedOwnerLeaseGeneration`에 넣는 lease 값은 bound-Session token이 아니라
+Actor의 현재 Location owner lease다. unbound Actor도 자기 owner lease를 실으며, bound Session은
+seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28) 수용에 bound Session을
+요구해서는 안 된다.
 
 ### Session seal과 source relay
 
@@ -544,10 +590,14 @@ semantics는 language-internal id가 아니라 이 body에 실린 actor identity
   `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 쓴다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
-  dotnet, java, node) 모두 동일하게 decode한다. Java와 Node는 오늘 `receiveChunkLimitBytes`를
-  실제 cross-node `actorJoin` admission reply에 실어 보낸다. C++과 .NET은 같은 conformant wire
-  codec을 갖지만 cross-node `actorJoin` operation을 originate하지 않으므로, 이 field는 두
-  runtime에서 live admission 경로 없이 codec으로만 decode·검증된다.
+  dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** target의 canonical
+  capability(observed authority fence + 그 generation에 admitted된 peer)가 확인되면 canonical
+  `actorJoin`(28)을 `[request]`로 originate하고, command 20 reply — 이 request의 `[reply]`
+  leg — 에 `receiveChunkLimitBytes`를 실어 보낸다.
+  capability가 확인되지 않으면 각 runtime은 언어-내부 admission 경로를 유지한다(과도기 폴백).
+  수신측은 stable type을 wire가 아니라 §9대로 Store Actor Authority row에서 해석한다.
+  (이전 개정에서 C++·.NET은 originate하지 않는다고 명시했으나, 네 runtime의 Store-backed
+  canonical 수신자가 완성되어 네 runtime 모두 originate로 통일한다.)
 
 ### Target CAS와 남은 Store 역할
 

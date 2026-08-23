@@ -150,12 +150,12 @@ final class ZLinkSpotRelocationReplyRoutes {
         byte[] acceptedRecord,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
-        long targetAuthorityOwnerGeneration) {
+        long targetAttemptGeneration) {
         bindCommitted(
             List.of(acceptedRecord),
             targetNodeRid,
             targetNodeGeneration,
-            targetAuthorityOwnerGeneration);
+            targetAttemptGeneration);
     }
 
     synchronized void bindCommitted(
@@ -167,7 +167,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             acceptedRecords,
             targetNodeRid,
             targetNodeGeneration,
-            fence.targetAuthorityOwnerGeneration());
+            fence.targetAttemptGeneration());
         attachCanonicalFence(acceptedRecords, false, fence);
     }
 
@@ -175,7 +175,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         List<byte[]> acceptedRecords,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
-        long targetAuthorityOwnerGeneration) {
+        long targetAttemptGeneration) {
         Objects.requireNonNull(acceptedRecords, "acceptedRecords");
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         // targetNodeGeneration is a lifecycle-generation opaque equality
@@ -184,10 +184,10 @@ final class ZLinkSpotRelocationReplyRoutes {
         // `<= 0` sentinel wrongly rejected it and flattened the failure to
         // STORE_UNAVAILABLE (spec 01-glossary lifecycle generation).
         if (targetNodeGeneration == 0
-            || targetAuthorityOwnerGeneration <= 0) {
+            || targetAttemptGeneration <= 0) {
             throw new IllegalArgumentException(
                 "committed target reply fence requires a non-zero target node"
-                    + " generation and a positive authority owner generation");
+                    + " generation and a positive target attempt generation");
         }
         List<Route> selected = new ArrayList<>();
         for (byte[] acceptedRecord : acceptedRecords) {
@@ -206,8 +206,8 @@ final class ZLinkSpotRelocationReplyRoutes {
                 || route.committed && (!targetNodeRid.equals(
                         route.targetNodeRid)
                     || route.targetNodeGeneration != targetNodeGeneration
-                    || route.targetAuthorityOwnerGeneration
-                        != targetAuthorityOwnerGeneration)) {
+                    || route.targetAttemptGeneration
+                        != targetAttemptGeneration)) {
                 throw new IllegalStateException(
                     "committed relocation reply capability is unavailable");
             }
@@ -216,8 +216,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         for (Route route : selected) {
             route.targetNodeRid = targetNodeRid;
             route.targetNodeGeneration = targetNodeGeneration;
-            route.targetAuthorityOwnerGeneration =
-                targetAuthorityOwnerGeneration;
+            route.targetAttemptGeneration = targetAttemptGeneration;
             route.committed = true;
         }
     }
@@ -226,7 +225,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         List<byte[]> acceptedRecords,
         RoutingId targetNodeRid,
         long targetNodeGeneration,
-        long targetAuthorityOwnerGeneration) {
+        long targetAttemptGeneration) {
         Objects.requireNonNull(acceptedRecords, "acceptedRecords");
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         // targetNodeGeneration is a lifecycle-generation opaque equality
@@ -235,10 +234,10 @@ final class ZLinkSpotRelocationReplyRoutes {
         // `<= 0` sentinel wrongly rejected it and flattened the failure to
         // STORE_UNAVAILABLE (spec 01-glossary lifecycle generation).
         if (targetNodeGeneration == 0
-            || targetAuthorityOwnerGeneration <= 0) {
+            || targetAttemptGeneration <= 0) {
             throw new IllegalArgumentException(
                 "committed target reply fence requires a non-zero target node"
-                    + " generation and a positive authority owner generation");
+                    + " generation and a positive target attempt generation");
         }
         List<Route> selected = new ArrayList<>();
         for (byte[] acceptedRecord : acceptedRecords) {
@@ -257,8 +256,8 @@ final class ZLinkSpotRelocationReplyRoutes {
                 || route.committed && (!targetNodeRid.equals(
                         route.targetNodeRid)
                     || route.targetNodeGeneration != targetNodeGeneration
-                    || route.targetAuthorityOwnerGeneration
-                        != targetAuthorityOwnerGeneration)) {
+                    || route.targetAttemptGeneration
+                        != targetAttemptGeneration)) {
                 throw new IllegalStateException(
                     "committed Actor relocation reply capability is unavailable");
             }
@@ -267,8 +266,8 @@ final class ZLinkSpotRelocationReplyRoutes {
         for (Route route : selected) {
             route.targetNodeRid = targetNodeRid;
             route.targetNodeGeneration = targetNodeGeneration;
-            route.targetAuthorityOwnerGeneration =
-                targetAuthorityOwnerGeneration;
+            route.targetAttemptGeneration =
+                targetAttemptGeneration;
             route.committed = true;
         }
     }
@@ -282,7 +281,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             acceptedRecords,
             targetNodeRid,
             targetNodeGeneration,
-            fence.targetAuthorityOwnerGeneration());
+            fence.targetAttemptGeneration());
         attachCanonicalFence(acceptedRecords, true, fence);
     }
 
@@ -334,7 +333,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             || route.authorityKey == null || route.participantId == 0
             || route.replyRouteId != relay.replyRouteId()
             || route.participantId != relay.participantId()
-            || route.targetAuthorityOwnerGeneration
+            || route.targetAttemptGeneration
                 != relay.targetAttemptGeneration()
             || !transportSource.equals(route.targetNodeRid)
             || !transportSource.equals(relay.coordinator().nodeRid())
@@ -418,8 +417,8 @@ final class ZLinkSpotRelocationReplyRoutes {
                 || route.sourceNodeGeneration != relay.sourceNodeGeneration()
                 || !transportSource.equals(route.targetNodeRid)
                 || route.targetNodeGeneration != relay.targetNodeGeneration()
-                || route.targetAuthorityOwnerGeneration
-                    != relay.targetAuthorityOwnerGeneration()
+                || route.targetAttemptGeneration
+                    != relay.targetAttemptGeneration()
                 || route.replyRouteId != relay.replyRouteId()
                 || relay.hopCount() < 0 || relay.hopCount() > 8) {
                 return CompletableFuture.completedFuture(
@@ -488,11 +487,11 @@ final class ZLinkSpotRelocationReplyRoutes {
     record CommittedFence(
         String authorityKey,
         long participantId,
-        long targetAuthorityOwnerGeneration) {
+        long targetAttemptGeneration) {
         CommittedFence {
             Objects.requireNonNull(authorityKey, "authorityKey");
             if (authorityKey.isBlank() || participantId == 0
-                || targetAuthorityOwnerGeneration == 0) {
+                || targetAttemptGeneration == 0) {
                 throw new IllegalArgumentException(
                     "canonical committed reply fence is invalid");
             }
@@ -522,7 +521,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         RoutingId sourceNodeRid,
         long sourceNodeGeneration,
         long targetNodeGeneration,
-        long targetAuthorityOwnerGeneration,
+        long targetAttemptGeneration,
         int hopCount,
         List<byte[]> parts) {
         Relay {
@@ -536,15 +535,15 @@ final class ZLinkSpotRelocationReplyRoutes {
             // 01-glossary "Lifecycle generation"): full range, only zero is
             // unassigned, so a signed `<= 0` sentinel wrongly rejects a
             // legitimate negative-as-long value (bit 63 set). The other
-            // fields here (replyRouteId, objectGeneration,
-            // sourceOwnerLeaseGeneration, targetAuthorityOwnerGeneration)
-            // are spec-bounded to `1..long.MaxValue`, so `<= 0` is correct
-            // for them.
-            if (replyRouteId <= 0 || objectGeneration <= 0
+            // fields here (objectGeneration, sourceOwnerLeaseGeneration,
+            // targetAttemptGeneration) are spec-bounded to
+            // `1..long.MaxValue`, so `<= 0` is correct for them. ReplyRouteId
+            // is separately a non-zero u64 identity (spec 51 §11).
+            if (replyRouteId == 0 || objectGeneration <= 0
                 || sourceOwnerLeaseGeneration <= 0
                 || sourceNodeGeneration == 0
                 || targetNodeGeneration == 0
-                || targetAuthorityOwnerGeneration <= 0) {
+                || targetAttemptGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "reply relay fence contains an invalid value");
             }
@@ -653,7 +652,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         private final Delivery delivery;
         private RoutingId targetNodeRid;
         private long targetNodeGeneration;
-        private long targetAuthorityOwnerGeneration;
+        private long targetAttemptGeneration;
         private boolean committed;
         private boolean relayInProgress;
         private boolean delivered;

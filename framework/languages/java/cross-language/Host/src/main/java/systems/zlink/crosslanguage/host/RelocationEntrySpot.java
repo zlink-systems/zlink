@@ -26,6 +26,11 @@ public final class RelocationEntrySpot implements ZLinkEntrySpot<RelocationActor
     @Override
     public void configure() {
         context.handlers().addHandler(RelocationProbeHandler.class);
+        // User-Spot JoinSpot scenario: the source Entry Spot both starts the
+        // deferred join and answers the target's owner probe until the Actor
+        // has actually moved into the target User Spot.
+        context.handlers().addHandler(BeginUserSpotJoinHandler.class);
+        context.handlers().addHandler(SourceUserSpotProbeHandler.class);
     }
 
     @Override

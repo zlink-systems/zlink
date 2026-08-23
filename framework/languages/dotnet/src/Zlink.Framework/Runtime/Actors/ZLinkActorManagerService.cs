@@ -167,7 +167,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         currentRef,
                         authority.NodeRid,
                         authority.NodeGeneration,
-                        snapshot.AuthorityOwnerGeneration),
+                        snapshot.AuthorityOwnerGeneration,
+                        checked((ulong)snapshot.OwnerLeaseGeneration)),
                     cancellationToken)
                 .ConfigureAwait(false);
             return local.Completion?.Destroyed
@@ -181,6 +182,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 currentRef.ToBackend(),
                 authority.NodeGeneration,
                 snapshot.AuthorityOwnerGeneration,
+                checked((ulong)snapshot.OwnerLeaseGeneration),
                 runtime.Registration.DefaultRequestTimeout,
                 cancellationToken)
             .ConfigureAwait(false);

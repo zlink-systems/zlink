@@ -14,6 +14,7 @@ import type {
 import type { DefaultZLinkBoundSession } from '../streams/session-context';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import type { ZLinkStoreLocationResolvers } from '../locations';
+import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
 import { ZLinkRemoteBoundSessionRelay } from './remote-bound-session-relay';
 import { ZLinkActorPacketRelay } from './actor-packet-relay';
 import { ZLinkRemoteActorJoinReceiver } from './remote-actor-join-receiver';
@@ -31,6 +32,7 @@ export interface ZLinkBoundSessionRelayOptions {
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly actorSessionNode: (actorId: string) => ZLinkBackendActorSessionNode | undefined;
   readonly actorLocationResolver?: () => ZLinkStoreLocationResolvers | undefined;
+  readonly authorityStore: () => ZLinkAuthorityStore | undefined;
   readonly destroyedActorRefs: ReadonlyMap<string, ActorRef>;
   readonly errorSink: () => { reportRuntimeTaskException(taskName: string, error: unknown): void };
   readonly boundSessionFactory: (actorId: string) => DefaultZLinkBoundSession;
@@ -81,12 +83,12 @@ export class ZLinkBoundSessionRelay {
     });
     this.actorJoins = new ZLinkRemoteActorJoinReceiver({
       actorManager: options.actorManager,
-      spotManager: options.spotManager
+      spotManager: options.spotManager,
+      authorityStore: options.authorityStore
     });
   }
 
   clearRemoteActorPacketTarget(actorId: string): void {
     this.actorPackets.clearRemoteActorPacketTarget(actorId);
-    this.boundSessions.clearOwnership(actorId);
   }
 }

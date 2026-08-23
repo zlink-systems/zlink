@@ -39,6 +39,7 @@ struct client_options_t
     std::string node_a_stream;
     std::string node_b_stream;
     std::string session_proxy_admin;
+    std::string relocation_proxy_admin;
     std::string scenario;
 };
 
@@ -67,6 +68,7 @@ client_options_t read_options (int argc, char **argv)
             .node_a_stream = section.at ("nodeAStream").get<std::string> (),
             .node_b_stream = section.at ("nodeBStream").get<std::string> (),
             .session_proxy_admin = section.value ("sessionProxyAdmin", ""),
+            .relocation_proxy_admin = section.value ("relocationProxyAdmin", ""),
             .scenario = section.at ("scenario").get<std::string> ()};
 }
 
@@ -105,6 +107,7 @@ struct nodes_t
     std::string a_stream_endpoint;
     std::string b_stream_endpoint;
     std::string session_proxy_admin;
+    std::string relocation_proxy_admin;
 };
 
 e2e::create_spot_res_t

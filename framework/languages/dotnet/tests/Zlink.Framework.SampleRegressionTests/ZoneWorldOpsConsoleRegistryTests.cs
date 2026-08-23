@@ -127,6 +127,55 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
         Assert.True(Assert.Single(registry.Snapshot()).Connected);
     }
 
+    [Fact]
+    public async Task RegistrationExpiresOnlyAfterThreeFiveSecondReportPeriods()
+    {
+        var time = new TestTimeProvider();
+        var registry = new NodeRegistry(time);
+        var routingId = RoutingId.From("ttl-node-rid");
+
+        await registry.ApplyLiveRoutingIdsAsync(
+            new HashSet<string> { routingId.ToString() },
+            CancellationToken.None);
+        await registry.ApplyReportAsync(
+            new ReportNodeStatusMsg(NodeIds.West, [ZoneIds.NorthWest], 0, false),
+            routingId,
+            CancellationToken.None);
+
+        time.Advance(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+        await registry.ExpireStaleReportsAsync(CancellationToken.None);
+        Assert.True(Assert.Single(registry.Snapshot()).Registered);
+
+        time.Advance(TimeSpan.FromTicks(1));
+        await registry.ExpireStaleReportsAsync(CancellationToken.None);
+        var expired = Assert.Single(registry.Snapshot());
+        Assert.False(expired.Registered);
+        Assert.True(expired.Connected);
+    }
+
+    [Fact]
+    public async Task RuntimeDisconnectDoesNotClearRegistrationBeforeReportTtl()
+    {
+        var time = new TestTimeProvider();
+        var registry = new NodeRegistry(time);
+        var routingId = RoutingId.From("disconnect-node-rid");
+        await registry.ApplyLiveRoutingIdsAsync(
+            new HashSet<string> { routingId.ToString() },
+            CancellationToken.None);
+        await registry.ApplyReportAsync(
+            new ReportNodeStatusMsg(NodeIds.East, [ZoneIds.NorthEast], 0, false),
+            routingId,
+            CancellationToken.None);
+
+        await registry.ApplyLiveRoutingIdsAsync(
+            new HashSet<string>(StringComparer.Ordinal),
+            CancellationToken.None);
+
+        var disconnected = Assert.Single(registry.Snapshot());
+        Assert.True(disconnected.Registered);
+        Assert.False(disconnected.Connected);
+    }
+
     private static NodeStatusNotify Status(string nodeId) =>
         new(nodeId, Registered: true, Connected: true, Maintenance: false, [], PlayerCount: 0);
 
@@ -174,5 +223,16 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
             submit();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class TestTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public void Advance(TimeSpan duration) => _timestamp += duration.Ticks;
     }
 }

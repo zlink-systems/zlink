@@ -290,9 +290,10 @@ class provider_location_repository_t final : public location_repository_t
                 || !owner_is_live (snapshot.owner))
                 return authority_conflict (std::move (current));
             auto target = read_target_descriptor (snapshot.allocation.target, false);
-            if (!target
-                || !adjust_capacity (target->descriptor, snapshot.allocation.capacity_bundle, 0,
-                                     -1))
+            if (!target)
+                return authority_conflict (std::move (current));
+            auto capacity = read_capacity (snapshot.allocation.target, *target);
+            if (!adjust_capacity (capacity.record, snapshot.allocation.capacity_bundle, 0, -1))
                 return authority_conflict (std::move (current));
             const auto decoded_key = authority_key_codec_detail::decode_authority_key (
               key.value);
@@ -309,10 +310,11 @@ class provider_location_repository_t final : public location_repository_t
               version_condition (row_key, found->value.version),
               version_condition (key_owner (snapshot.owner.owner_id),
                                  target->owner_provider_version),
-              version_condition (target->key, target->provider_version)};
+              version_condition (target->key, target->provider_version),
+              capacity.condition};
             write_request.mutations = {
               store_delete_t{row_key},
-              store_put_t{target->key, encode_target_record (*target), std::nullopt}};
+              store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}};
             if (stored_reservation) {
                 write_request.conditions.push_back (
                   version_condition (reservation_key, stored_reservation->value.version));
@@ -352,21 +354,26 @@ class provider_location_repository_t final : public location_repository_t
               same_target (snapshot.allocation.target, retarget->target);
             const auto same_descriptor =
               source_descriptor->key.value == target_descriptor->key.value;
+            std::optional<stored_capacity_t> source_capacity;
+            std::optional<stored_capacity_t> target_capacity;
             if (!same_allocation_target) {
-                if (!capacity_available (target_descriptor->descriptor,
+                source_capacity = read_capacity (snapshot.allocation.target, *source_descriptor);
+                target_capacity = read_capacity (retarget->target, *target_descriptor);
+                if (source_capacity->key.value == target_capacity->key.value)
+                    target_capacity->record = source_capacity->record;
+                if (!capacity_available (target_descriptor->descriptor, target_capacity->record,
                                          snapshot.allocation.capacity_bundle)
-                    || !adjust_capacity (source_descriptor->descriptor,
+                    || !adjust_capacity (source_capacity->record,
                                          snapshot.allocation.capacity_bundle, 0, -1))
                     return authority_conflict (std::move (current));
-                if (same_descriptor) {
-                    if (!adjust_capacity (source_descriptor->descriptor,
-                                          snapshot.allocation.capacity_bundle, 0, 1))
-                        return authority_conflict (std::move (current));
-                    target_descriptor = source_descriptor;
-                } else if (!adjust_capacity (target_descriptor->descriptor,
-                                             snapshot.allocation.capacity_bundle, 0, 1)) {
+                if (source_capacity->key.value == target_capacity->key.value)
+                    target_capacity->record = source_capacity->record;
+                if (!adjust_capacity (target_capacity->record,
+                                      snapshot.allocation.capacity_bundle, 0, 1)) {
                     return authority_conflict (std::move (current));
                 }
+                if (source_capacity->key.value == target_capacity->key.value)
+                    source_capacity->record = target_capacity->record;
             }
 
             auto owner_generations = read (authority_owner_counter_key);
@@ -391,16 +398,25 @@ class provider_location_repository_t final : public location_repository_t
             if (!same_descriptor)
                 write_request.conditions.push_back (
                   version_condition (target_descriptor->key, target_descriptor->provider_version));
+            if (source_capacity) {
+                write_request.conditions.push_back (source_capacity->condition);
+                if (target_capacity->key.value != source_capacity->key.value)
+                    write_request.conditions.push_back (target_capacity->condition);
+            }
             write_request.mutations = {
               store_put_t{row_key, encode_authority (snapshot), std::nullopt},
               store_put_t{authority_owner_counter_key,
                           to_bytes (std::to_string (next_owner_generation + 1)),
-                          std::nullopt},
-              store_put_t{source_descriptor->key, encode_target_record (*source_descriptor),
                           std::nullopt}};
-            if (!same_descriptor)
+            if (source_capacity) {
                 write_request.mutations.push_back (store_put_t{
-                  target_descriptor->key, encode_target_record (*target_descriptor), std::nullopt});
+                  source_capacity->key, encode_capacity_record (source_capacity->record),
+                  std::nullopt});
+                if (target_capacity->key.value != source_capacity->key.value)
+                    write_request.mutations.push_back (store_put_t{
+                      target_capacity->key, encode_capacity_record (target_capacity->record),
+                      std::nullopt});
+            }
             auto written = write (std::move (write_request));
             return authority_write_result (row_key, snapshot, std::move (written));
         }
@@ -577,10 +593,11 @@ class provider_location_repository_t final : public location_repository_t
             || !owner_is_live (request.target.owner))
             return completed (object_reserve_result_t{object_reserve_conflict_t{
               authority_missing_t{std::get<store_missing_t> (authority).store_now}}});
-        if (!capacity_available (target->descriptor, request.capacity_bundle)) {
+        auto capacity = read_capacity (request.target, *target);
+        if (!capacity_available (target->descriptor, capacity.record, request.capacity_bundle)) {
             return completed (object_reserve_result_t{object_placement_capacity_exhausted_t{}});
         }
-        if (!adjust_capacity (target->descriptor, request.capacity_bundle, 1, 0))
+        if (!adjust_capacity (capacity.record, request.capacity_bundle, 1, 0))
             return completed (object_reserve_result_t{object_placement_capacity_exhausted_t{}});
 
         auto object_generations = read (object_counter_key);
@@ -631,7 +648,8 @@ class provider_location_repository_t final : public location_repository_t
             condition_for (authority_owner_counter_key, owner_generations),
             version_condition (target->key, target->provider_version),
             version_condition (key_owner (request.target.owner.owner_id),
-                               target->owner_provider_version)},
+                               target->owner_provider_version),
+            capacity.condition},
            {store_put_t{authority_key, encode_authority (creating), std::nullopt},
             store_put_t{reservation_key, to_bytes (reservation_record.dump ()), std::nullopt},
             store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
@@ -639,7 +657,7 @@ class provider_location_repository_t final : public location_repository_t
             store_put_t{authority_owner_counter_key,
                         to_bytes (std::to_string (owner_generation_value + 1)),
                         std::nullopt},
-            store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
+            store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}});
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied)
             return completed (object_reserve_result_t{
@@ -788,7 +806,8 @@ class provider_location_repository_t final : public location_repository_t
         if (!target)
             return completed (
               object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}});
-        if (!adjust_capacity (target->descriptor, request.fence.capacity_bundle, -1, 1))
+        auto capacity = read_capacity (request.fence.target, *target);
+        if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 1))
             return completed (
               object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}});
         snapshot.payload = std::move (request.ready_payload);
@@ -801,10 +820,12 @@ class provider_location_repository_t final : public location_repository_t
                    version_condition (reservation_key, stored_reservation->value.version),
                    version_condition (key_owner (request.fence.target.owner.owner_id),
                                       target->owner_provider_version),
-                   version_condition (target->key, target->provider_version)},
+                   version_condition (target->key, target->provider_version),
+                   capacity.condition},
                   {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
                    store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
-                   store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
+                   store_put_t{capacity.key, encode_capacity_record (capacity.record),
+                               std::nullopt}}});
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied)
             return completed (object_commit_result_t{
@@ -847,16 +868,21 @@ class provider_location_repository_t final : public location_repository_t
         if (snapshot.store_version != request.fence.expected_store_version)
             return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
         auto target = read_target_descriptor (request.fence.target, false);
-        if (!target || !adjust_capacity (target->descriptor, request.fence.capacity_bundle, -1, 0))
+        if (!target)
+            return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
+        auto capacity = read_capacity (request.fence.target, *target);
+        if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 0))
             return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
         record["status"] = "aborted";
         auto written =
           write ({{version_condition (authority_key, stored_authority->value.version),
                    version_condition (reservation_key, stored_reservation->value.version),
-                   version_condition (target->key, target->provider_version)},
+                   version_condition (target->key, target->provider_version),
+                   capacity.condition},
                   {store_delete_t{authority_key},
                    store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
-                   store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
+                   store_put_t{capacity.key, encode_capacity_record (capacity.record),
+                               std::nullopt}}});
         if (!std::holds_alternative<store_write_applied_t> (written))
             return completed (object_abort_result_t{
               object_abort_conflict_t{read_authority_value (object_key (request.key))}});
@@ -1053,10 +1079,12 @@ class provider_location_repository_t final : public location_repository_t
           node_rid_t::from_string (request.target_descriptor.rid.to_string ()),
           request.target_descriptor_lifecycle_generation, request.target_owner};
         auto target_descriptor = read_target_descriptor (target);
-        if (!target_descriptor
-            || !capacity_available (target_descriptor->descriptor, request.capacity_bundle))
+        if (!target_descriptor)
             return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-        if (!adjust_capacity (target_descriptor->descriptor, request.capacity_bundle, 1, 0))
+        auto capacity = read_capacity (target, *target_descriptor);
+        if (!capacity_available (target_descriptor->descriptor, capacity.record,
+                                 request.capacity_bundle)
+            || !adjust_capacity (capacity.record, request.capacity_bundle, 1, 0))
             return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
         auto preparing_row = read (row_key);
         const auto *preparing_found = std::get_if<store_found_t> (&preparing_row);
@@ -1079,10 +1107,11 @@ class provider_location_repository_t final : public location_repository_t
           version_condition (target_descriptor->key, target_descriptor->provider_version));
         write_request.conditions.push_back (version_condition (
           key_owner (request.target_owner.owner_id), target_descriptor->owner_provider_version));
+        write_request.conditions.push_back (capacity.condition);
         write_request.mutations.push_back (
           store_put_t{row_key, to_bytes (encoded.dump ()), std::nullopt});
-        write_request.mutations.push_back (store_put_t{
-          target_descriptor->key, encode_target_record (*target_descriptor), std::nullopt});
+        write_request.mutations.push_back (
+          store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
         auto written = write (std::move (write_request));
         if (!std::holds_alternative<store_write_applied_t> (written))
             return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
@@ -1213,6 +1242,10 @@ class provider_location_repository_t final : public location_repository_t
         entries.reserve (participants.size ());
         std::map<std::string, stored_target_t> descriptors;
         descriptors.emplace (target_descriptor->key.value, *target_descriptor);
+        std::map<std::string, stored_capacity_t> capacities;
+        auto target_capacity = read_capacity (target, *target_descriptor);
+        const auto target_capacity_key = target_capacity.key.value;
+        capacities.emplace (target_capacity_key, std::move (target_capacity));
 
         for (std::size_t participant_index = 0;
              participant_index < participants.size ();
@@ -1280,7 +1313,11 @@ class provider_location_repository_t final : public location_repository_t
             auto [source_state, inserted] = descriptors.emplace (source->key.value, *source);
             if (!inserted && source_state->second.provider_version != source->provider_version)
                 return completed (aggregate_commit_result_t::stale);
-            if (!adjust_capacity (source_state->second.descriptor,
+            auto source_capacity = read_capacity (before.allocation.target, *source);
+            auto [capacity_state, capacity_inserted] = capacities.emplace (
+              source_capacity.key.value, std::move (source_capacity));
+            (void) capacity_inserted;
+            if (!adjust_capacity (capacity_state->second.record,
                                   before.allocation.capacity_bundle, 0, -1))
                 return completed (aggregate_commit_result_t::stale);
             entries.push_back (std::move (entry));
@@ -1290,7 +1327,7 @@ class provider_location_repository_t final : public location_repository_t
         // target descriptor, and the target owner lease condition. Bound that
         // set before any committing page is installed; a provider must never
         // reject the terminal CAS after authority pages have been staged.
-        if (descriptors.size () + 2 > aggregate_commit_final_key_limit)
+        if (descriptors.size () + capacities.size () + 2 > aggregate_commit_final_key_limit)
             return completed (aggregate_commit_result_t::stale);
 
         const auto commit_pages = split_aggregate_commit_entries (entries);
@@ -1387,9 +1424,9 @@ class provider_location_repository_t final : public location_repository_t
         if (record.value ("status", "") != "committing")
             return completed (aggregate_commit_result_t::stale);
 
-        auto target_state = descriptors.find (target_descriptor->key.value);
-        if (target_state == descriptors.end ()
-            || !adjust_capacity (target_state->second.descriptor,
+        auto target_capacity_state = capacities.find (target_capacity_key);
+        if (target_capacity_state == capacities.end ()
+            || !adjust_capacity (target_capacity_state->second.record,
                                  decode_bundle (record.at ("capacityBundle")), -1, 1))
             return completed (aggregate_commit_result_t::stale);
         store_write_request_t final_request;
@@ -1403,8 +1440,12 @@ class provider_location_repository_t final : public location_repository_t
             (void) descriptor_key;
             final_request.conditions.push_back (
               version_condition (descriptor.key, descriptor.provider_version));
-            final_request.mutations.push_back (
-              store_put_t{descriptor.key, encode_target_record (descriptor), std::nullopt});
+        }
+        for (auto &[capacity_key_value, capacity] : capacities) {
+            (void) capacity_key_value;
+            final_request.conditions.push_back (capacity.condition);
+            final_request.mutations.push_back (store_put_t{
+              capacity.key, encode_capacity_record (capacity.record), std::nullopt});
         }
         record["status"] = "committed";
         final_request.mutations.push_back (
@@ -1496,11 +1537,14 @@ class provider_location_repository_t final : public location_repository_t
 
         const bool target_capacity_reserved = status != "preparing";
         std::optional<stored_target_t> target_descriptor;
+        std::optional<stored_capacity_t> target_capacity;
         if (target_capacity_reserved) {
             target_descriptor = read_target_descriptor (target, false);
-            if (!target_descriptor
-                || !adjust_capacity (target_descriptor->descriptor,
-                                     decode_bundle (record.at ("capacityBundle")), -1, 0))
+            if (!target_descriptor)
+                return completed (aggregate_abort_result_t::stale);
+            target_capacity = read_capacity (target, *target_descriptor);
+            if (!adjust_capacity (target_capacity->record,
+                                  decode_bundle (record.at ("capacityBundle")), -1, 0))
                 return completed (aggregate_abort_result_t::stale);
         }
 
@@ -1553,8 +1597,10 @@ class provider_location_repository_t final : public location_repository_t
             if (!target_descriptor->owner_provider_version.empty ())
                 final_request.conditions.push_back (version_condition (
                   key_owner (target.owner.owner_id), target_descriptor->owner_provider_version));
+            final_request.conditions.push_back (target_capacity->condition);
             final_request.mutations.push_back (store_put_t{
-              target_descriptor->key, encode_target_record (*target_descriptor), std::nullopt});
+              target_capacity->key, encode_capacity_record (target_capacity->record),
+              std::nullopt});
         }
         auto written = write (std::move (final_request));
         return completed (std::holds_alternative<store_write_applied_t> (written)
@@ -1697,6 +1743,33 @@ class provider_location_repository_t final : public location_repository_t
         std::string owner_provider_version;
         mesh_node_descriptor_t descriptor;
         json_t record;
+    };
+
+    enum class capacity_record_format_t
+    {
+        canonical,
+        node_compatible
+    };
+
+    struct capacity_count_t
+    {
+        std::int64_t active = 0;
+        std::int64_t pending = 0;
+    };
+
+    struct capacity_record_t
+    {
+        capacity_count_t actors;
+        capacity_count_t spots;
+        std::map<std::string, capacity_count_t> spot_types;
+        capacity_record_format_t format = capacity_record_format_t::canonical;
+    };
+
+    struct stored_capacity_t
+    {
+        store_key_t key;
+        store_condition_t condition;
+        capacity_record_t record;
     };
 
     struct aggregate_commit_entry_t
@@ -2272,6 +2345,42 @@ class provider_location_repository_t final : public location_repository_t
     static store_key_t key_mesh (std::string_view mesh_name, const zlink::routing_id_t &rid)
     {
         return {prefix_mesh (mesh_name) + rid.to_hex ()};
+    }
+
+    static store_key_t key_capacity (std::string_view mesh_name,
+                                     const zlink::routing_id_t &rid,
+                                     std::uint64_t lifecycle_generation)
+    {
+        return {std::string (prefix) + "capacity:" + segment (mesh_name)
+                + segment (rid.to_hex ()) + std::to_string (lifecycle_generation)};
+    }
+
+    static std::string encode_uri_component (std::string_view value)
+    {
+        static constexpr char digits[] = "0123456789ABCDEF";
+        std::string result;
+        result.reserve (value.size ());
+        for (const auto character : value) {
+            const auto byte = static_cast<unsigned char> (character);
+            if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')
+                || (byte >= '0' && byte <= '9') || byte == '-' || byte == '_'
+                || byte == '.' || byte == '!' || byte == '~' || byte == '*'
+                || byte == '\'' || byte == '(' || byte == ')') {
+                result.push_back (static_cast<char> (byte));
+            } else {
+                result.push_back ('%');
+                result.push_back (digits[byte >> 4]);
+                result.push_back (digits[byte & 0x0f]);
+            }
+        }
+        return result;
+    }
+
+    static store_key_t key_node_capacity (std::string_view mesh_name,
+                                          std::string_view node_rid)
+    {
+        return {std::string (prefix) + "capacity:" + encode_uri_component (mesh_name)
+                + ":" + encode_uri_component (node_rid)};
     }
 
     static std::string prefix_client_server (std::string_view channel_name)
@@ -3113,63 +3222,197 @@ class provider_location_repository_t final : public location_repository_t
                && bundle.spot_type->stable_type == stable_type && bundle.spot_type->slots == 1;
     }
 
-    static bool capacity_available (const mesh_node_descriptor_t &descriptor,
-                                    const placement_capacity_bundle_t &bundle)
+    static std::string canonical_capacity_type_key (placement_object_kind_t kind,
+                                                    std::string_view stable_type)
     {
-        const auto enough = [] (const capacity_usage_t &usage, std::uint32_t requested) {
-            return requested == 0 || usage.limit == 0
-                   || usage.active + usage.reserved + requested
-                        <= static_cast<std::uint64_t> (usage.limit);
-        };
-        if (!enough (descriptor.capacity.actors, bundle.actor_slots)
-            || !enough (descriptor.capacity.spots, bundle.spot_slots))
-            return false;
-        if (!bundle.spot_type)
-            return true;
-        const auto found = std::find_if (
-          descriptor.capacity.spot_types.begin (), descriptor.capacity.spot_types.end (),
-          [&] (const spot_type_capacity_t &item) {
-              return item.object_kind == bundle.spot_type->object_kind
-                     && item.stable_type == bundle.spot_type->stable_type;
-          });
-        return found != descriptor.capacity.spot_types.end ()
-               && enough (found->usage, bundle.spot_type->slots);
+        return std::to_string (static_cast<int> (kind)) + ":" + std::string (stable_type);
     }
 
-    static bool adjust_capacity (mesh_node_descriptor_t &descriptor,
-                                 const placement_capacity_bundle_t &bundle,
-                                 std::int64_t reserved_delta,
-                                 std::int64_t active_delta)
+    static std::string node_capacity_type_key (placement_object_kind_t kind,
+                                               std::string_view stable_type)
     {
-        const auto adjust = [] (capacity_usage_t &usage, std::uint32_t slots,
-                                std::int64_t reserved_change, std::int64_t active_change) {
-            const auto reserved = static_cast<std::int64_t> (usage.reserved)
-                                  + reserved_change * static_cast<std::int64_t> (slots);
-            const auto active = static_cast<std::int64_t> (usage.active)
-                                + active_change * static_cast<std::int64_t> (slots);
-            if (reserved < 0 || active < 0)
-                return false;
-            if (usage.limit > 0
-                && static_cast<std::uint64_t> (reserved + active)
-                     > static_cast<std::uint64_t> (usage.limit))
-                return false;
-            usage.reserved = static_cast<std::uint64_t> (reserved);
-            usage.active = static_cast<std::uint64_t> (active);
-            return true;
+        const auto object_kind = kind == placement_object_kind_t::user_spot
+                                   ? "user_spot"
+                                   : (kind == placement_object_kind_t::instance_spot
+                                        ? "instance_spot"
+                                        : "actor");
+        return std::string (object_kind) + '\0' + std::string (stable_type);
+    }
+
+    static capacity_record_t decode_capacity_record (const std::vector<std::byte> &bytes)
+    {
+        const auto value = parse_json (bytes);
+        capacity_record_t result;
+        if (value.contains ("active") && value.contains ("pending")) {
+            result.format = capacity_record_format_t::node_compatible;
+            const auto decode_usage = [&] (const json_t &usage, bool active) {
+                auto &actors = active ? result.actors.active : result.actors.pending;
+                auto &spots = active ? result.spots.active : result.spots.pending;
+                actors = usage.at ("actors").get<std::int64_t> ();
+                spots = usage.at ("spots").get<std::int64_t> ();
+                for (const auto &[key, count] : usage.at ("spotTypes").items ()) {
+                    auto &typed = result.spot_types[key];
+                    (active ? typed.active : typed.pending) = count.get<std::int64_t> ();
+                }
+            };
+            decode_usage (value.at ("active"), true);
+            decode_usage (value.at ("pending"), false);
+        } else {
+            result.actors.active = value.at ("actorsActive").get<std::int64_t> ();
+            result.actors.pending = value.at ("actorsPending").get<std::int64_t> ();
+            result.spots.active = value.at ("spotsActive").get<std::int64_t> ();
+            result.spots.pending = value.at ("spotsPending").get<std::int64_t> ();
+            for (const auto &[key, count] : value.at ("spotTypes").items ())
+                result.spot_types.emplace (
+                  key, capacity_count_t{count.at ("active").get<std::int64_t> (),
+                                        count.at ("pending").get<std::int64_t> ()});
+        }
+        const auto non_negative = [] (const capacity_count_t &count) {
+            return count.active >= 0 && count.pending >= 0;
         };
-        if (!adjust (descriptor.capacity.actors, bundle.actor_slots, reserved_delta, active_delta)
-            || !adjust (descriptor.capacity.spots, bundle.spot_slots, reserved_delta, active_delta))
+        if (!non_negative (result.actors) || !non_negative (result.spots)
+            || std::any_of (result.spot_types.begin (), result.spot_types.end (),
+                            [&] (const auto &item) { return !non_negative (item.second); }))
+            throw std::invalid_argument ("Location Store capacity row is inconsistent");
+        return result;
+    }
+
+    static std::vector<std::byte> encode_capacity_record (const capacity_record_t &record)
+    {
+        json_t value;
+        if (record.format == capacity_record_format_t::node_compatible) {
+            json_t active_types = json_t::object ();
+            json_t pending_types = json_t::object ();
+            for (const auto &[key, count] : record.spot_types) {
+                if (count.active != 0)
+                    active_types[key] = count.active;
+                if (count.pending != 0)
+                    pending_types[key] = count.pending;
+            }
+            value = {{"active", {{"actors", record.actors.active},
+                                   {"spots", record.spots.active},
+                                   {"spotTypes", std::move (active_types)}}},
+                     {"pending", {{"actors", record.actors.pending},
+                                    {"spots", record.spots.pending},
+                                    {"spotTypes", std::move (pending_types)}}}};
+        } else {
+            json_t typed = json_t::object ();
+            for (const auto &[key, count] : record.spot_types)
+                typed[key] = {{"active", count.active}, {"pending", count.pending}};
+            value = {{"actorsActive", record.actors.active},
+                     {"actorsPending", record.actors.pending},
+                     {"spotsActive", record.spots.active},
+                     {"spotsPending", record.spots.pending},
+                     {"spotTypes", std::move (typed)}};
+        }
+        return to_bytes (value.dump ());
+    }
+
+    stored_capacity_t read_capacity (const object_creation_target_t &target,
+                                     const stored_target_t &descriptor)
+    {
+        const auto canonical_key = key_capacity (
+          descriptor.descriptor.mesh_name, descriptor.descriptor.rid,
+          target.node_lifecycle_generation);
+        auto current = read (canonical_key);
+        if (const auto *found = std::get_if<store_found_t> (&current))
+            return {canonical_key, version_condition (canonical_key, found->value.version),
+                    decode_capacity_record (found->value.bytes)};
+
+        // Node's current repository uses a node-keyed active/pending JSON
+        // shape. Preserve that row's key and encoding when it owns the
+        // allocation so a cross-language retarget can update its source
+        // accounting in the same CAS.
+        const auto node_key = key_node_capacity (target.mesh_name, target.node_rid.value ());
+        auto node_current = read (node_key);
+        if (const auto *found = std::get_if<store_found_t> (&node_current))
+            return {node_key, version_condition (node_key, found->value.version),
+                    decode_capacity_record (found->value.bytes)};
+        return {canonical_key, missing_condition (canonical_key), capacity_record_t{}};
+    }
+
+    static bool capacity_available (const mesh_node_descriptor_t &descriptor,
+                                    const capacity_record_t &capacity,
+                                    const placement_capacity_bundle_t &bundle)
+    {
+        const auto enough = [] (const capacity_count_t &usage,
+                                std::int32_t limit,
+                                std::uint32_t requested) {
+            if (requested == 0 || limit == 0)
+                return true;
+            return usage.active <= limit && usage.pending <= limit
+                   && static_cast<std::uint64_t> (usage.active)
+                        + static_cast<std::uint64_t> (usage.pending) + requested
+                      <= static_cast<std::uint64_t> (limit);
+        };
+        if (!enough (capacity.actors, descriptor.capacity.actors.limit, bundle.actor_slots)
+            || !enough (capacity.spots, descriptor.capacity.spots.limit, bundle.spot_slots))
             return false;
         if (!bundle.spot_type)
             return true;
-        const auto found = std::find_if (
+        const auto limit = std::find_if (
           descriptor.capacity.spot_types.begin (), descriptor.capacity.spot_types.end (),
           [&] (const spot_type_capacity_t &item) {
               return item.object_kind == bundle.spot_type->object_kind
                      && item.stable_type == bundle.spot_type->stable_type;
           });
-        return found != descriptor.capacity.spot_types.end ()
-               && adjust (found->usage, bundle.spot_type->slots, reserved_delta, active_delta);
+        if (limit == descriptor.capacity.spot_types.end ())
+            return false;
+        const auto key = capacity.format == capacity_record_format_t::node_compatible
+                           ? node_capacity_type_key (bundle.spot_type->object_kind,
+                                                     bundle.spot_type->stable_type)
+                           : canonical_capacity_type_key (bundle.spot_type->object_kind,
+                                                          bundle.spot_type->stable_type);
+        const auto found = capacity.spot_types.find (key);
+        return enough (found == capacity.spot_types.end () ? capacity_count_t{} : found->second,
+                       limit->usage.limit, bundle.spot_type->slots);
+    }
+
+    static bool adjust_capacity (capacity_record_t &record,
+                                 const placement_capacity_bundle_t &bundle,
+                                 std::int64_t pending_delta,
+                                 std::int64_t active_delta)
+    {
+        const auto adjust = [] (capacity_count_t &usage, std::uint32_t slots,
+                                std::int64_t pending_change, std::int64_t active_change) {
+            const auto apply = [slots] (std::int64_t current, std::int64_t change,
+                                        std::int64_t &next) {
+                if (change < -1 || change > 1)
+                    return false;
+                const auto amount = static_cast<std::int64_t> (slots);
+                if ((change < 0 && current < amount)
+                    || (change > 0
+                        && current > std::numeric_limits<std::int64_t>::max () - amount))
+                    return false;
+                next = current + change * amount;
+                return true;
+            };
+            std::int64_t pending = 0;
+            std::int64_t active = 0;
+            if (!apply (usage.pending, pending_change, pending)
+                || !apply (usage.active, active_change, active))
+                return false;
+            usage.pending = pending;
+            usage.active = active;
+            return true;
+        };
+        if (!adjust (record.actors, bundle.actor_slots, pending_delta, active_delta)
+            || !adjust (record.spots, bundle.spot_slots, pending_delta, active_delta))
+            return false;
+        if (!bundle.spot_type)
+            return true;
+        const auto key = record.format == capacity_record_format_t::node_compatible
+                           ? node_capacity_type_key (bundle.spot_type->object_kind,
+                                                     bundle.spot_type->stable_type)
+                           : canonical_capacity_type_key (bundle.spot_type->object_kind,
+                                                          bundle.spot_type->stable_type);
+        auto &typed = record.spot_types[key];
+        if (!adjust (typed, bundle.spot_type->slots, pending_delta, active_delta))
+            return false;
+        if (record.format == capacity_record_format_t::node_compatible
+            && typed.active == 0 && typed.pending == 0)
+            record.spot_types.erase (key);
+        return true;
     }
 
     static std::vector<std::byte> encode_target_record (stored_target_t target)

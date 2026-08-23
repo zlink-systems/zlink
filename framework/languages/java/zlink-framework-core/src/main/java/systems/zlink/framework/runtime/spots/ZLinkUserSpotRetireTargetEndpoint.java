@@ -24,6 +24,8 @@ import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -206,6 +208,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
     public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
         ZLinkSpotRetireControl.StageRequest request,
         long defaultActorSpotGeneration) {
+        if (actorJoin != null && isStandaloneActor(request)) {
+            actorJoin.claimRecovery(request);
+        }
         return actorJoin == null
             ? ZLinkSpotRetireControl.TargetEndpoint.super.applyTargetProfile(
                 request, defaultActorSpotGeneration)
@@ -710,8 +715,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             new ZLinkServiceRelocationWireCodec.RelocationId(
                 request.fence().aggregateId().getMostSignificantBits(),
                 request.fence().aggregateId().getLeastSignificantBits()),
-            Math.addExact(
-                participant.fence().sourceAuthorityOwnerGeneration(), 1),
+            request.fence().aggregateGeneration(),
             coordinatorFence,
             participant.id(),
             completion.sequence(),
@@ -973,6 +977,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 "standalone Actor relocation target is unavailable"));
         }
         var participant = request.participants().getFirst();
+        if (actorJoin != null) {
+            actorJoin.claimRecovery(request);
+        }
         var targetRequest =
             new ZLinkStandaloneActorRelocationStagingOwner.Request(
                 request.fence().aggregateId(),
@@ -1330,6 +1337,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             parked.reply(),
                             parked.failure()),
                         () -> {
+                            if (actorStages.putIfAbsent(
+                                    request.fence(), target) != null) {
+                                throw new IllegalStateException(
+                                    "standalone Actor target stage already "
+                                        + "exists");
+                            }
+                        },
+                        () -> {
                             //  Newer exact identity evicted this attempt
                             //  before publish committed: tear the
                             //  installed (not yet published) stage down.
@@ -1347,17 +1362,21 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                     });
                             }
                         });
-                } catch (IllegalStateException evicted) {
+                } catch (ZLinkActorJoinPrewarmRegistry.SupersededAttemptException
+                    superseded) {
+                    actorJoin.releasePrewarm(relocationId);
                     return actorStaging.discard(staged).thenCompose(ignored ->
-                        CompletableFuture.<Void>failedFuture(evicted));
+                        CompletableFuture.<Void>failedFuture(
+                            new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "canonical Actor Join PREPARE was superseded "
+                                    + "by a newer relocation identity",
+                                superseded,
+                                Map.of(
+                                    "zlink.origin", "framework",
+                                    "zlink.actorJoin.superseded", "true"))));
                 }
-                if (actorStages.putIfAbsent(request.fence(), target) == null) {
-                    return CompletableFuture.<Void>completedFuture(null);
-                }
-                return actorStaging.discard(staged).thenCompose(ignored ->
-                    CompletableFuture.<Void>failedFuture(
-                        new IllegalStateException(
-                            "standalone Actor target stage already exists")));
+                return CompletableFuture.completedFuture(null);
             });
     }
 

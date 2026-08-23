@@ -1,0 +1,80 @@
+{
+  "format": "user-spot-close-v1",
+  "consumers": [
+    "cpp",
+    "dotnet",
+    "jvm",
+    "node"
+  ],
+  "commandId": 48,
+  "notes": {
+    "encoding": "complete service-wire command 48 frame; all integers are big-endian; target is user-spot-close-fence-v1 version 1 with a u16 exact body length; payload and trailing bytes are forbidden",
+    "offsetConvention": "inclusive zero-based byte offsets",
+    "offsets": [
+      "0..1 magic=ZM",
+      "2 wireMajor=1",
+      "3 commandId=48",
+      "4 flags=0",
+      "5..12 correlation(nonzero-u64)",
+      "13..20 operation.high(u64)",
+      "21..28 operation.low(u64)",
+      "29 sourceNodeRid.length(u8)=3",
+      "30..32 sourceNodeRid bytes",
+      "33..40 sourceNodeGeneration(nonzero-u64)",
+      "41 target.version(u8)=1",
+      "42..43 target.bodyLength(u16)=45",
+      "44 target.spot.spotId.length(u8)=6",
+      "45..50 target.spot.spotId UTF-8 bytes",
+      "51..58 target.spot.objectGeneration(nonzero-u64)",
+      "59 target.targetNodeRid.length(u8)=3",
+      "60..62 target.targetNodeRid bytes",
+      "63..70 target.targetNodeGeneration(nonzero-u64)",
+      "71..78 target.expectedAuthorityOwnerGeneration(nonzero-u64)",
+      "79..80 target.expectedStoreVersion.length(u16)=8",
+      "81..88 target.expectedStoreVersion UTF-8 bytes",
+      "89..96 deadlineUnixMs(nonzero-u64)"
+    ]
+  },
+  "canonical": {
+    "name": "userSpotClose",
+    "decoded": {
+      "correlation": "1",
+      "operation": {
+        "high": "2",
+        "low": "3"
+      },
+      "sourceNodeRid": "737263",
+      "sourceNodeGeneration": "4",
+      "target": {
+        "version": "1",
+        "spot": {
+          "spotId": "spot-a",
+          "objectGeneration": "5"
+        },
+        "targetNodeRid": "647374",
+        "targetNodeGeneration": "7",
+        "expectedAuthorityOwnerGeneration": "6",
+        "expectedStoreVersion": "store-v1"
+      },
+      "deadlineUnixMs": "10"
+    },
+    "hex": "5a4d01300000000000000000010000000000000002000000000000000303737263000000000000000401002d0673706f742d6100000000000000050364737400000000000000070000000000000006000873746f72652d7631000000000000000a"
+  },
+  "malformed": [
+    {
+      "name": "shortTargetBodyLength",
+      "hex": "5a4d01300000000000000000010000000000000002000000000000000303737263000000000000000401002c0673706f742d6100000000000000050364737400000000000000070000000000000006000873746f72652d7631000000000000000a",
+      "error": "invalid-body-length"
+    },
+    {
+      "name": "zeroTargetNodeGeneration",
+      "hex": "5a4d01300000000000000000010000000000000002000000000000000303737263000000000000000401002d0673706f742d6100000000000000050364737400000000000000000000000000000006000873746f72652d7631000000000000000a",
+      "error": "invalid-field"
+    },
+    {
+      "name": "trailingByte",
+      "hex": "5a4d01300000000000000000010000000000000002000000000000000303737263000000000000000401002d0673706f742d6100000000000000050364737400000000000000070000000000000006000873746f72652d7631000000000000000a00",
+      "error": "trailing-byte"
+    }
+  ]
+}

@@ -577,6 +577,43 @@ test('in-memory aggregate prepare, commit, and abort converge across repository 
     source.abortAggregate(abortPrepared.fence), recovery.abortAggregate(abortPrepared.fence)
   ]);
   assert.deepEqual(aborts.map(value => value.kind).sort(), ['aborted', 'alreadyAborted']);
+
+  const foreignSnapshot = await createReadyUserSpot(
+    source, 'memory-room-foreign-source', sourceTarget
+  );
+  const foreignRequest = aggregateRequest(
+    { value: '99999999-9999-4999-8999-999999999999' },
+    1n,
+    [foreignSnapshot],
+    targetTarget,
+    ['memory-room-foreign-source']
+  );
+  const foreignPrepared = await recovery.prepareAggregate(foreignRequest);
+  assert.equal(foreignPrepared.kind, 'prepared');
+  if (foreignPrepared.kind !== 'prepared') return;
+  const foreignSourceCapacityKey = {
+    value: 'zlink:v11:capacity:memory-play:memory-source-node'
+  };
+  const foreignSourceCapacity = await provider.read(foreignSourceCapacityKey);
+  assert.equal(foreignSourceCapacity.kind, 'found');
+  if (foreignSourceCapacity.kind !== 'found') return;
+  assert.equal((await provider.write({
+    conditions: [{
+      kind: 'version',
+      key: foreignSourceCapacityKey,
+      expected: foreignSourceCapacity.value.version
+    }],
+    mutations: [{ kind: 'delete', key: foreignSourceCapacityKey }]
+  })).kind, 'applied');
+  assert.deepEqual(
+    await recovery.commitAggregate(foreignPrepared.fence),
+    { kind: 'committed' }
+  );
+  const foreignMoved = await recovery.readAuthority(
+    foreignRequest.participants[0].authorityKey
+  );
+  assert.equal(foreignMoved.kind, 'snapshot');
+  assert.equal(foreignMoved.ownerId, targetOwner.token.ownerId);
 });
 
 test('redis opaque Relocation Store uses Framework-issued immutable references', async (t) => {

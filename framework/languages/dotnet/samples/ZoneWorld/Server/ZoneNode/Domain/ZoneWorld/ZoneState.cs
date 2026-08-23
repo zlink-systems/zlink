@@ -1,3 +1,4 @@
+using System.Text;
 using ZoneWorld.Shared.Contracts;
 
 namespace ZoneWorld.Server.ZoneNode.Domain.ZoneWorld;
@@ -82,7 +83,7 @@ public sealed class ZoneState(string zoneId)
             merged[resident.PlayerId] = resident.ToView(ZoneId);
 
         return merged.Values
-            .OrderBy(player => player.PlayerId, StringComparer.Ordinal)
+            .OrderBy(player => player.PlayerId, Utf8StringComparer.Instance)
             .ToArray();
     }
 
@@ -93,10 +94,24 @@ public sealed class ZoneState(string zoneId)
             .Where(resident => World.InBorderBand(
                 resident.Position.X, resident.Position.Y, ZoneId, toZoneId))
             .Select(resident => resident.ToView(ZoneId))
-            .OrderBy(player => player.PlayerId, StringComparer.Ordinal)
+            .OrderBy(player => player.PlayerId, Utf8StringComparer.Instance)
             .ToArray();
 
     private sealed record BorderSnapshot(long Tick, long ReceivedAtTick, IReadOnlyList<PlayerView> Players);
+}
+
+internal sealed class Utf8StringComparer : IComparer<string>
+{
+    public static Utf8StringComparer Instance { get; } = new();
+
+    public int Compare(string? left, string? right)
+    {
+        if (ReferenceEquals(left, right)) return 0;
+        if (left is null) return -1;
+        if (right is null) return 1;
+        return Encoding.UTF8.GetBytes(left).AsSpan()
+            .SequenceCompareTo(Encoding.UTF8.GetBytes(right));
+    }
 }
 
 public readonly record struct ResidentPlayer(string PlayerId, PlayerPosition Position, bool IsBot)

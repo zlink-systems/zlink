@@ -25,6 +25,8 @@
                  Link="Internal/ZLinkCanonicalLocationKeyFormatter.cs"/>
         <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWireConstants.g.cs"
                  Link="Runtime/Protocol/ServiceWireConstants.g.cs"/>
+        <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWirePilotCodec.g.cs"
+                 Link="Runtime/Protocol/ServiceWirePilotCodec.g.cs"/>
     </ItemGroup>
 
     <Target Name="PinStreamConnectorPackageDependency"

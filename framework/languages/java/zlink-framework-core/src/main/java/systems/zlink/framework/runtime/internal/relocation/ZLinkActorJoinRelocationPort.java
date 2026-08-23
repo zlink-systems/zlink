@@ -18,6 +18,11 @@ public interface ZLinkActorJoinRelocationPort {
 
     void admit(Admission admission);
 
+    default void admitCanonical(CanonicalAdmission admission) {
+        throw new UnsupportedOperationException(
+            "canonical Actor Join recovery admission is unavailable");
+    }
+
     record Goal(
         UUID relocationId,
         ZLinkActorJoinOperationId operationId,
@@ -38,7 +43,10 @@ public interface ZLinkActorJoinRelocationPort {
         //  The target's advertised relocation state chunk receive limit
         //  from the Join Accepted reply (spec 15 §4.2); 0 means not
         //  advertised (a mixed-version peer, or a legacy admission reply).
-        long advertisedReceiveChunkLimitBytes) {
+        long advertisedReceiveChunkLimitBytes,
+        String requestContentType,
+        byte[] rawRequest,
+        String replyContentType) {
         public Goal(
             UUID relocationId,
             ZLinkActorJoinOperationId operationId,
@@ -65,7 +73,43 @@ public interface ZLinkActorJoinRelocationPort {
                 targetOwnerLeaseGeneration,
                 rawReply,
                 activeTurnSeal,
-                0L);
+                0L,
+                "application/json",
+                new byte[0],
+                "application/json");
+        }
+
+        public Goal(
+            UUID relocationId,
+            ZLinkActorJoinOperationId operationId,
+            ZLinkBackendActorRef sourceActor,
+            String actorType,
+            String targetSpotId,
+            long targetSpotGeneration,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            long targetSpotAuthorityOwnerGeneration,
+            long targetOwnerLeaseGeneration,
+            byte[] rawReply,
+            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
+            long advertisedReceiveChunkLimitBytes) {
+            this(
+                relocationId,
+                operationId,
+                sourceActor,
+                actorType,
+                targetSpotId,
+                targetSpotGeneration,
+                targetNodeRid,
+                targetNodeGeneration,
+                targetSpotAuthorityOwnerGeneration,
+                targetOwnerLeaseGeneration,
+                rawReply,
+                activeTurnSeal,
+                advertisedReceiveChunkLimitBytes,
+                "application/json",
+                new byte[0],
+                "application/json");
         }
 
         public Goal {
@@ -76,12 +120,19 @@ public interface ZLinkActorJoinRelocationPort {
             Objects.requireNonNull(targetSpotId, "targetSpotId");
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             rawReply = Objects.requireNonNull(rawReply, "rawReply").clone();
+            requestContentType = Objects.requireNonNull(
+                requestContentType, "requestContentType");
+            rawRequest = Objects.requireNonNull(rawRequest, "rawRequest").clone();
+            replyContentType = Objects.requireNonNull(
+                replyContentType, "replyContentType");
             if (relocationId.equals(new UUID(0L, 0L))
                 || targetSpotGeneration <= 0
                 || targetNodeGeneration == 0
                 || targetSpotAuthorityOwnerGeneration <= 0
                 || targetOwnerLeaseGeneration <= 0
-                || advertisedReceiveChunkLimitBytes < 0) {
+                || advertisedReceiveChunkLimitBytes < 0
+                || requestContentType.isBlank()
+                || replyContentType.isBlank()) {
                 throw new IllegalArgumentException(
                     "direct Join relocation target fence is invalid");
             }
@@ -90,6 +141,64 @@ public interface ZLinkActorJoinRelocationPort {
         @Override public byte[] rawReply() {
             return rawReply.clone();
         }
+
+        @Override public byte[] rawRequest() {
+            return rawRequest.clone();
+        }
+    }
+
+    record CanonicalAdmission(
+        UUID relocationId,
+        String actorId,
+        String actorType,
+        long objectGeneration,
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        long sourceAuthorityOwnerGeneration,
+        long sourceOwnerLeaseGeneration,
+        String targetSpotId,
+        long targetSpotGeneration,
+        RoutingId targetNodeRid,
+        long targetNodeGeneration,
+        long targetSpotAuthorityOwnerGeneration,
+        long targetOwnerLeaseGeneration,
+        Object targetSpot,
+        Function<ZLinkActor, CompletionStage<Void>> joined,
+        ZLinkMessage reply,
+        String requestContentType,
+        byte[] rawRequest,
+        Duration timeout) {
+        public CanonicalAdmission {
+            Objects.requireNonNull(relocationId, "relocationId");
+            Objects.requireNonNull(actorId, "actorId");
+            Objects.requireNonNull(actorType, "actorType");
+            Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
+            Objects.requireNonNull(targetSpotId, "targetSpotId");
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            Objects.requireNonNull(targetSpot, "targetSpot");
+            Objects.requireNonNull(joined, "joined");
+            Objects.requireNonNull(reply, "reply");
+            Objects.requireNonNull(requestContentType, "requestContentType");
+            rawRequest = Objects.requireNonNull(rawRequest, "rawRequest").clone();
+            if (relocationId.equals(new UUID(0L, 0L))
+                || actorId.isBlank() || actorType.isBlank()
+                || objectGeneration <= 0
+                || sourceNodeGeneration == 0
+                || sourceAuthorityOwnerGeneration <= 0
+                || sourceOwnerLeaseGeneration <= 0
+                || targetSpotId.isBlank()
+                || targetSpotGeneration <= 0
+                || targetNodeGeneration == 0
+                || targetSpotAuthorityOwnerGeneration <= 0
+                || targetOwnerLeaseGeneration <= 0
+                || requestContentType.isBlank()
+                || timeout == null || timeout.isZero() || timeout.isNegative()) {
+                throw new IllegalArgumentException(
+                    "canonical Actor Join recovery admission fence is invalid");
+            }
+        }
+
+        @Override public byte[] rawRequest() { return rawRequest.clone(); }
     }
 
     record Admission(

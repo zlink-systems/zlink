@@ -3,12 +3,14 @@
 
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
+#include <zlink/framework/contracts/detail/message_name.hpp>
 
 #include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <typeindex>
 #include <type_traits>
 #include <utility>
@@ -57,6 +59,7 @@ class message_t
         using value_type = std::remove_cvref_t<TValue>;
         message_t wrapped;
         wrapped._type = std::type_index (typeid (value_type));
+        wrapped._packet_name = detail::message_name<value_type> ();
         wrapped._value = std::make_shared<value_type> (std::move (value));
         auto typed_value = std::static_pointer_cast<const value_type> (wrapped._value);
         wrapped._encoder = [typed_value] (const serializer_registry_t &serializers) {
@@ -241,6 +244,7 @@ class message_t
     std::shared_ptr<decode_state_t> _decode;
     std::shared_ptr<const void> _value;
     std::type_index _type = std::type_index (typeid (void));
+    std::string _packet_name;
     std::function<encoded_payload_t (const serializer_registry_t &)> _encoder;
     const serializer_registry_t *_serializers = nullptr;
 

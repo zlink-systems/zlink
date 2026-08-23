@@ -12,6 +12,8 @@ import java.util.UUID;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.runtime.internal.service
+    .ZLinkActorJoinRecoveryCodec;
 
 /** Projects one independent Actor onto relocation-envelope-v1. */
 public final class ZLinkCanonicalActorRelocationEnvelope {
@@ -34,7 +36,8 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             restoreSnapshot,
             state,
             journal,
-            ZLinkSpotTimerRelocationEnvelope.encodeCanonical(List.of()));
+            ZLinkSpotTimerRelocationEnvelope.encodeCanonical(List.of()),
+            null);
     }
 
     static byte[] encode(
@@ -46,6 +49,52 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         byte[] state,
         List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
         byte[] timerEnvelope) {
+        return encode(
+            relocationId,
+            actorId,
+            objectGeneration,
+            expectedAuthorityOwnerGeneration,
+            restoreSnapshot,
+            state,
+            journal,
+            timerEnvelope,
+            null);
+    }
+
+    static byte[] encode(
+        UUID relocationId,
+        String actorId,
+        long objectGeneration,
+        long expectedAuthorityOwnerGeneration,
+        boolean restoreSnapshot,
+        byte[] state,
+        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        byte[] timerEnvelope,
+        byte[] actorJoinRecovery) {
+        return encode(
+            relocationId,
+            actorId,
+            objectGeneration,
+            expectedAuthorityOwnerGeneration,
+            1,
+            restoreSnapshot,
+            state,
+            journal,
+            timerEnvelope,
+            actorJoinRecovery);
+    }
+
+    static byte[] encode(
+        UUID relocationId,
+        String actorId,
+        long objectGeneration,
+        long expectedAuthorityOwnerGeneration,
+        long applicationVersion,
+        boolean restoreSnapshot,
+        byte[] state,
+        List<ZLinkAsyncSerialQueue.QueuedRecord> journal,
+        byte[] timerEnvelope,
+        byte[] actorJoinRecovery) {
         Objects.requireNonNull(relocationId, "relocationId");
         Objects.requireNonNull(actorId, "actorId");
         byte[] applicationState = Objects.requireNonNull(state, "state").clone();
@@ -67,8 +116,21 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
                     timerEnvelope));
         timers.sort(Comparator.comparing(
             ZLinkSpotTimerRelocationEnvelope.CanonicalTimer::name));
+        boolean hasActorJoinRecovery = actorJoinRecovery != null;
+        byte[] recovery = hasActorJoinRecovery
+            ? actorJoinRecovery.clone() : null;
+        if (hasActorJoinRecovery
+            && !ZLinkActorJoinRecoveryCodec.isRecoverySavedWork(recovery)) {
+            throw new IllegalArgumentException(
+                "Actor Join recovery saved work is not canonical ZLJR");
+        }
         long acceptedBoundary = records.isEmpty()
             ? 0 : records.getLast().sequence();
+        long actorJoinRecoverySequence = 0;
+        if (hasActorJoinRecovery) {
+            actorJoinRecoverySequence = Math.incrementExact(acceptedBoundary);
+            acceptedBoundary = actorJoinRecoverySequence;
+        }
         List<PendingTimer> pendingTimers = new ArrayList<>();
         for (var timer : timers) {
             if (timer.pending() != null) {
@@ -87,7 +149,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         object.u64(expectedAuthorityOwnerGeneration);
         writer.u8(1);
         writer.body16(object);
-        writer.u64(1);
+        writer.u64(applicationVersion);
         writer.u32(1);
         writer.u64(1);
         writer.u8(restoreSnapshot ? 1 : 0);
@@ -113,11 +175,16 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
                     .service.ZLinkServiceFrozenRecordCodec.isCanonical(
                         record.payload()))
                 .toList();
-        writer.u32(encodedRecords.size());
+        writer.u32(encodedRecords.size() + (hasActorJoinRecovery ? 1 : 0));
         for (var record : encodedRecords) {
             writer.u64(1);
             writer.u64(record.sequence());
             writer.raw(record.payload());
+        }
+        if (hasActorJoinRecovery) {
+            writer.u64(1);
+            writer.u64(actorJoinRecoverySequence);
+            writer.raw(recovery);
         }
         writer.u32(timers.size());
         for (var timer : timers) {
@@ -171,6 +238,8 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         }
         List<ZLinkAsyncSerialQueue.QueuedRecord> journal =
             root.savedWork().stream()
+                .filter(value -> !ZLinkActorJoinRecoveryCodec
+                    .isRecoverySavedWork(value.frozenRecord()))
                 .map(value -> {
                     if (value.participantId() != 1) {
                         throw new IllegalArgumentException(

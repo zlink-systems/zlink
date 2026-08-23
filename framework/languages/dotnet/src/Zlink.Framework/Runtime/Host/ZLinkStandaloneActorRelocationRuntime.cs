@@ -35,6 +35,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     ZLinkActorSessionManager actorSessions,
     ZLinkFrameworkRegistration registration)
 {
+    internal const ulong InitialTargetAttemptGeneration = 1;
     private static readonly TimeSpan TargetStageTtl = TimeSpan.FromMinutes(5);
     private readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
     private int _targetAttemptAdmissionSealed;
@@ -233,8 +234,15 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     throw new ZLinkConfigurationException(
                         "The source MeshNode does not support canonical relocation commands.");
                 canonical = backend;
+                //  Same pre-precommit Coordinator fence as the remote-join
+                //  path (ZLinkActorRemoteJoiner.cs): sessionRelocationContext
+                //  above already fences on found.Snapshot (pre-BeginPreparing
+                //  StoreVersion) — Prepare must reuse that same baseline, not
+                //  the post-Capture precommitSnapshot, whose StoreVersion has
+                //  already rotated past what the durable ZLJR/saved-work
+                //  recovery carries.
                 prepare = CreatePrepare(
-                        precommitSnapshot,
+                        found.Snapshot,
                         sourceAuthority,
                         target,
                         initialEnvelope,
@@ -966,7 +974,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         var relocationId = ToWireId(envelope.AggregateId);
         return new ZLinkServiceWireCodec.RelocationPrepareRecord(
             relocationId,
-            1,
+            InitialTargetAttemptGeneration,
             new ZLinkServiceWireCodec.RelocationCoordinatorFence(
                 sourceSnapshot.OwnerId,
                 checked((ulong)sourceSnapshot.OwnerLeaseGeneration),
@@ -2476,35 +2484,103 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 || stage.AuthorityPublished)
                 return;
             stage.ValidateRetry(prepare, authenticatedSourceNodeRid);
-            if (!stage.TryBeginAbort(
-                    () => lease.Slot.TryRemoveStage(stage)))
-                return;
-            var abort = new TargetAbort(stage);
-            if (!lease.Slot.TrySetAbort(abort))
-                throw new InvalidOperationException(
-                    "Standalone Actor target abort barrier could not be registered.");
-            var forceStopToken = runtime.ForceStopToken;
-            if (!runtime.TryRunDetached(
-                    "standalone-actor-target-abort",
-                    _ => CompleteTargetAbortAsync(
-                        key,
-                        abort,
-                        forceStopToken)))
-            {
-                lease.Slot.TryRemoveAbort(abort);
-                stage.RestorePendingAfterAbortSchedulingFailure();
-                if (!lease.Slot.TrySetStage(stage))
-                    throw new InvalidOperationException(
-                        "Standalone Actor target abort scheduling rejection lost its prepared stage.");
-                throw new InvalidOperationException(
-                    "Standalone Actor target abort could not enter the runtime task scope.");
-            }
+            _ = BeginTargetAbortLocked(key, lease.Slot, stage);
         }
         finally
         {
             lease.Slot.Gate.Release();
             CloseTargetAttemptIfEmpty(key, lease.Slot);
         }
+    }
+
+    /// <summary>
+    /// Spec 15 §4.2 newest-attempt-wins boundary for canonical Actor Join.
+    /// A later admission has already displaced any pre-PREPARE temporary
+    /// queue when it reaches here. If the displaced identity has since
+    /// installed a target stage, reuse its normal target-abort path and wait
+    /// for the cleanup to finish before the later admission can return
+    /// Accepted. AuthorityPublished is the CAS boundary: from that point the
+    /// winner is fixed and a later admission must not reopen target staging.
+    /// </summary>
+    internal async ValueTask AbortSupersededRoutedActorJoinPreparationAsync(
+        string actorId,
+        ulong actorGeneration,
+        string newerHandoffId,
+        CancellationToken cancellationToken)
+    {
+        foreach (var pair in _targetAttempts.ToArray())
+        {
+            if (!TryAcquireTargetAttempt(pair.Key, pair.Value, out var lease))
+                continue;
+
+            Task? terminal = null;
+            try
+            {
+                await lease.Slot.Gate.WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                try
+                {
+                    var stage = lease.Slot.Stage;
+                    var request = stage?.RemoteJoinRequest;
+                    if (stage is null
+                        || request is null
+                        || stage.AuthorityPublished
+                        || string.Equals(
+                            request.HandoffId,
+                            newerHandoffId,
+                            StringComparison.Ordinal)
+                        || !string.Equals(
+                            request.ActorId,
+                            actorId,
+                            StringComparison.Ordinal)
+                        || request.ActorGeneration != actorGeneration)
+                        continue;
+
+                    terminal = BeginTargetAbortLocked(
+                        pair.Key,
+                        lease.Slot,
+                        stage)?.Terminal;
+                }
+                finally
+                {
+                    lease.Slot.Gate.Release();
+                    CloseTargetAttemptIfEmpty(pair.Key, lease.Slot);
+                }
+            }
+            finally
+            {
+                lease.Dispose();
+            }
+
+            if (terminal is not null)
+                await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private TargetAbort? BeginTargetAbortLocked(
+        AttemptKey key,
+        AttemptSlot slot,
+        TargetStage stage)
+    {
+        if (!stage.TryBeginAbort(() => slot.TryRemoveStage(stage)))
+            return null;
+        var abort = new TargetAbort(stage);
+        if (!slot.TrySetAbort(abort))
+            throw new InvalidOperationException(
+                "Standalone Actor target abort barrier could not be registered.");
+        var forceStopToken = runtime.ForceStopToken;
+        if (runtime.TryRunDetached(
+                "standalone-actor-target-abort",
+                _ => CompleteTargetAbortAsync(key, abort, forceStopToken)))
+            return abort;
+
+        slot.TryRemoveAbort(abort);
+        stage.RestorePendingAfterAbortSchedulingFailure();
+        if (!slot.TrySetStage(stage))
+            throw new InvalidOperationException(
+                "Standalone Actor target abort scheduling rejection lost its prepared stage.");
+        throw new InvalidOperationException(
+            "Standalone Actor target abort could not enter the runtime task scope.");
     }
 
     private async ValueTask CompleteTargetAbortAsync(

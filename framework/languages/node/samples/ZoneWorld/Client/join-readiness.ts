@@ -7,18 +7,21 @@ async function joinAndWaitForOwnedState(
   client: ZlinkStreamConnector,
   playerId: string
 ): Promise<JoinWorldRes> {
-  // Client push is not replayed. Arm before the request so the first state
-  // emitted after the deferred join commit cannot pass the consumer.
+  // Client pushes are not replayed. Arm both completion-owned JoinWorldRes
+  // and the first owned state before submitting JoinWorldReq.
+  const joinedTask = client
+    .waitFor<JoinWorldRes>(PacketNames.joinWorldRes)
+    .where((message) => message.payload.playerId === playerId)
+    .timeout(10_000)
+    .submit();
   const ownedStateTask = client
     .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
     .where((message) => message.payload.players.some((player) => player.playerId === playerId))
     .timeout(10_000)
     .submit();
-  const joinedTask = client
-    .request(new JoinWorldReq(playerId))
-    .packetName(PacketNames.joinWorldReq)
-    .submit<JoinWorldRes>();
-  const [joined, ownedState] = await Promise.all([joinedTask, ownedStateTask]);
+  await client.send(new JoinWorldReq(playerId)).packetName(PacketNames.joinWorldReq).submit();
+  const [joinedMessage, ownedState] = await Promise.all([joinedTask, ownedStateTask]);
+  const joined = joinedMessage.payload;
   zlinkStreamAssert.ensure(joined.error === null, `Player '${playerId}' join was rejected.`);
   zlinkStreamAssert.ensure(
     ownedState.payload.zoneId === joined.zoneId

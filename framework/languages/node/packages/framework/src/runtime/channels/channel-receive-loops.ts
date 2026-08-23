@@ -678,10 +678,7 @@ export class ZLinkRouteReceiveLoop {
         await waitReceiveLoopIdle();
         continue;
       }
-      const applicationJobPermit = await this.acquirePermit(capacitySignal);
-      if (applicationJobPermit === undefined) break;
       if (!this.poller.wait(0)) {
-        applicationJobPermit.releaseAfterInternalProcessing();
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
@@ -690,7 +687,6 @@ export class ZLinkRouteReceiveLoop {
       }
       this.roundRobin?.setReady(this.receiveOwner, true);
       if (this.roundRobin?.tryAcquire(this.receiveOwner) === false) {
-        applicationJobPermit.releaseAfterInternalProcessing();
         await waitReceiveLoopTurn();
         continue;
       }
@@ -698,14 +694,12 @@ export class ZLinkRouteReceiveLoop {
         ? this.rawReceiveReservations.tryAcquire()
         : this.roundRobin.tryAcquireRawReceiveReservation();
       if (releaseRawReceive === undefined) {
-        applicationJobPermit.releaseAfterInternalProcessing();
         this.roundRobin?.release(this.receiveOwner);
         await waitReceiveLoopTurn();
         continue;
       }
       const received = this.router.recv(1);
       if (received == null) {
-        applicationJobPermit.releaseAfterInternalProcessing();
         releaseRawReceive();
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
@@ -718,14 +712,12 @@ export class ZLinkRouteReceiveLoop {
       try {
         infrastructureConsumed = this.dispatcher.dispatchInfrastructure?.(received) === true;
       } catch (error) {
-        applicationJobPermit.releaseAfterInternalProcessing();
         releaseRawReceive();
         received.close();
         this.inFlight.track(Promise.reject(error));
         continue;
       }
       if (infrastructureConsumed) {
-        applicationJobPermit.releaseAfterInternalProcessing();
         releaseRawReceive();
         if (batch.record(receivedBytes)) {
           this.roundRobin?.release(this.receiveOwner);
@@ -734,7 +726,19 @@ export class ZLinkRouteReceiveLoop {
         continue;
       }
       if (this.isStopped() || signalAborted(signal)) {
-        applicationJobPermit.releaseAfterInternalProcessing();
+        releaseRawReceive();
+        received.close();
+        break;
+      }
+      let applicationJobPermit: ApplicationJobQueuePermit | undefined;
+      try {
+        applicationJobPermit = await this.acquirePermit(capacitySignal);
+      } catch (error) {
+        releaseRawReceive();
+        received.close();
+        throw error;
+      }
+      if (applicationJobPermit === undefined) {
         releaseRawReceive();
         received.close();
         break;

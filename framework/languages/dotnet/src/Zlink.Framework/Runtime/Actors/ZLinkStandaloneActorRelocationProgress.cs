@@ -229,9 +229,19 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             .ConfigureAwait(false);
         if (root.AggregateId != identity.AggregateId
             || root.CanonicalRelocationHigh != identity.CanonicalRelocationHigh
-            || root.CanonicalRelocationLow != identity.CanonicalRelocationLow)
+            || root.CanonicalRelocationLow != identity.CanonicalRelocationLow
+            || root.CanonicalLogicalStream.IsEmpty
+            && root.AggregateGeneration != 0
+            && root.AggregateGeneration != publication.AggregateGeneration)
             throw new ZLinkRelocationDataLostException(
-                "Standalone Actor replay root does not match its authority.");
+                "Standalone Actor replay root does not match its authority "
+                + $"(root={root.AggregateGeneration}, "
+                + $"authority={publication.AggregateGeneration}, "
+                + $"expected={identity.AggregateGeneration}).");
+        root = root with
+        {
+            AggregateGeneration = publication.AggregateGeneration
+        };
         ZLinkActorRelocationAuthorityPayload phase;
         ZLinkCanonicalRelocationAuthorityProjection? canonical = null;
         if (publication.IsCanonical)

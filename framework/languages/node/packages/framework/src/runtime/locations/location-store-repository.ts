@@ -54,8 +54,8 @@ import type {
   ZLinkOwnerLeaseReleaseResult,
   ZLinkOwnerLeaseRenewResult,
   ZLinkPlacementAllocation
-} from '../../contracts/Locations';
-import { ZLinkLocationWriteIntent } from '../../contracts/Locations';
+} from './internal-location-contracts';
+import { ZLinkLocationWriteIntent } from './internal-location-contracts';
 import type {
   ZLinkActorLocation,
   ZLinkActorLocationFilter,
@@ -883,7 +883,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const capacityReads = new Map<string, Extract<ZLinkStoreReadResult, { kind: 'found' }>>();
     for (const [value, key] of capacityKeys) {
       const read = await this.provider.read(key, signal);
-      if (read.kind === 'missing') return { kind: 'stale' };
+      if (read.kind === 'missing') {
+        // Capacity rows are provider-private. A foreign source legitimately
+        // has no row under this provider's key encoding; its source runtime
+        // releases that capacity after observing the committed authority.
+        // The target row remains mandatory because this provider reserved it
+        // during prepare and must consume it atomically with commit.
+        if (value === targetCapacityKey.value) return { kind: 'stale' };
+        capacityKeys.delete(value);
+        continue;
+      }
       capacityReads.set(value, read);
     }
     const capacityMutations = [];
@@ -3190,13 +3199,28 @@ function counterNextValue(counter: ZLinkStoreReadResult): bigint {
 }
 
 function encodeJson<T>(value: T): Uint8Array {
-  return Buffer.from(JSON.stringify(value, (_key, candidate) => {
+  return Buffer.from(JSON.stringify(value, (key, candidate) => {
     if (typeof candidate === 'bigint') return { $bigint: candidate.toString() };
     if (candidate instanceof Uint8Array) {
       return { $bytes: Buffer.from(candidate).toString('base64') };
     }
+    if (
+      key === 'spotTypes'
+      && candidate !== null
+      && typeof candidate === 'object'
+      && !Array.isArray(candidate)
+    ) {
+      return Object.fromEntries(
+        Object.entries(candidate as Record<string, unknown>)
+          .sort(([left], [right]) => compareUtf16Ordinal(left, right))
+      );
+    }
     return candidate;
   }), 'utf8');
+}
+
+function compareUtf16Ordinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function decodeJson<T>(value: Uint8Array): T {

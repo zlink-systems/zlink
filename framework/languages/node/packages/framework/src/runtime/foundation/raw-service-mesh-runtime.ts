@@ -305,6 +305,16 @@ export class RawServiceMeshRuntime {
     if (
       lifecycleGeneration !== undefined
       && (
+        // Discovery has already fenced this RID to a replacement process.
+        // The old auto-connect intent must not use disconnectRid here: that
+        // is RID-wide and can close the provisional replacement before its
+        // Hello/admission promotes it. admitPeer owns exact old-pair teardown
+        // after the replacement descriptor is accepted.
+        (
+          expected?.lifecycleGeneration !== undefined
+          && expected.lifecycleGeneration !== lifecycleGeneration
+        )
+        ||
         (
           current !== undefined
           && current.descriptor.lifecycleGeneration !== lifecycleGeneration
@@ -990,6 +1000,21 @@ export class RawServiceMeshRuntime {
           if (this.liveness.isReady(nodeRoutingId, existingPeer.connectionId)) {
             const existingCandidate = this.connectionCandidates
               .get(nodeRoutingId)?.get(existingPeer.connectionId);
+            if (this.isDiscoveredLifecycleReplacement(existingPeer, nodeRoutingId)) {
+              // A current discovery descriptor with the same RID but a
+              // different lifecycle token denotes a replacement process.
+              // Keep its physical pair provisional until its Hello passes
+              // the descriptor fence; the old ready peer remains semantic
+              // current until then.
+              let provisionalCandidates = this.connectionCandidates.get(nodeRoutingId);
+              if (provisionalCandidates === undefined) {
+                provisionalCandidates = new Map();
+                this.connectionCandidates.set(nodeRoutingId, provisionalCandidates);
+              }
+              provisionalCandidates.set(candidate.connectionId, candidate);
+              await this.announcePeer(nodeRoutingId);
+              continue;
+            }
             if (existingPeer.connectionId.startsWith('unmonitored:')
               && candidate.transportPairId !== undefined
               && candidate.transportPairGeneration !== undefined) {
@@ -1016,10 +1041,10 @@ export class RawServiceMeshRuntime {
               this.monitorConnectionStates.set(nodeRoutingId, existingPeer.connectionId);
               continue;
             }
-            // A ready route is the current semantic owner. A second physical
-            // candidate may be admitted only after the current lease expires;
-            // this also prevents a late old-process reconnect from replacing
-            // the ready replacement by arrival order.
+            // A non-replacement ready route is the current semantic owner.
+            // A second physical candidate may be admitted only after the
+            // current lease expires; this also prevents a late old-process
+            // reconnect from replacing the ready replacement by arrival order.
             this.disconnectUnexpectedMonitorPair(candidate);
             continue;
           }
@@ -1528,6 +1553,20 @@ export class RawServiceMeshRuntime {
     if (this.connectionIds.get(nodeRoutingId) === connectionId) {
       this.connectionIds.delete(nodeRoutingId);
     }
+  }
+
+  private isDiscoveredLifecycleReplacement(
+    admitted: AdmittedServicePeer,
+    nodeRoutingId: string
+  ): boolean {
+    const expected = this.expectedPeers.get(nodeRoutingId);
+    // A same-RID replacement is permitted only from a complete discovery
+    // fence. Manual/endpoint-only intent has no authority to replace a ready
+    // peer, and lifecycle generations are opaque equality tokens.
+    return expected?.endpoint !== undefined
+      && expected.securityIdentity !== undefined
+      && expected.lifecycleGeneration !== undefined
+      && admitted.descriptor.lifecycleGeneration !== expected.lifecycleGeneration;
   }
 
   private expectedPeerRoutingId(endpoint: string): string | undefined {

@@ -518,7 +518,8 @@ void maintenance_runtime_t::release_transfer_budget (
 }
 
 task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
-  std::shared_ptr<relocation_terminal_state_t> state)
+  std::shared_ptr<relocation_terminal_state_t> state,
+  std::function<bool ()> target_failed)
 {
     if (!state->context.send_state_chunk)
         co_return false;
@@ -536,6 +537,8 @@ task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
       principal.owner.authority_owner_generation};
     for (std::uint32_t ordinal = 0; ordinal != state->manifest.chunk_count;
          ++ordinal) {
+        if (target_failed && target_failed ())
+            co_return false;
         auto chunk = make_relocation_state_chunk (
           state->context.relocation, state->context.target_attempt_generation,
           state->context.coordinator, object, state->payload, ordinal,
@@ -548,6 +551,8 @@ task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
             sent = false;
         }
         if (!sent)
+            co_return false;
+        if (target_failed && target_failed ())
             co_return false;
     }
     co_return true;
@@ -807,11 +812,19 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
     }
     /* Start the Restore request first: the eager task enqueues the request
      * frame on the ordered connection before its first suspension, so the
-     * relocationState chunks sent next arrive after it. The relay-ready
-     * reply arrives only after the target assembled and restored every
-     * chunk, so the reply is awaited after the chunk sends complete. */
+     * relocationState chunks sent next arrive after it. A target can reply
+     * with relocationFailed while chunks are still in flight; observe that
+     * existing terminal between sends so it stops the outbound transfer.
+     * Relay-ready still arrives only after every chunk was assembled and
+     * restored, and is awaited after the chunk sends complete. */
     auto prepared = relocate_prepare_target (state);
-    const auto chunks_sent = co_await relocate_send_state_chunks (state);
+    const auto chunks_sent = co_await relocate_send_state_chunks (
+      state, [&prepared] {
+          if (!prepared.await_ready ())
+              return false;
+          const auto &result = prepared.result ();
+          return !result || !result.value ();
+      });
     release_reservation ();
     const auto target_ready = co_await prepared;
     if (!target_ready)
@@ -878,8 +891,20 @@ bool maintenance_runtime_t::relocate_encode (
      * the wire and retained through the retransmission window. Nothing is
      * written to the Relocation Store on this path. */
     try {
+        if (state->context.augment_frozen
+            && !state->context.augment_frozen (
+              state->seal_attempt.seal.participants)) {
+            (void) _objects.abort_relocation (
+              state->seal_attempt.seal.token);
+            state->result.emplace (finish (
+              {relocation_terminal_t::blocked,
+               relocation_reason_t::restore_failed,
+               std::nullopt}));
+            return false;
+        }
         state->payload = encode_envelope (
-          state->seal_attempt.seal.participants, state->context.relocation);
+          state->seal_attempt.seal.participants, state->context.relocation,
+          state->context.application_version);
         if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
             (void) _objects.abort_relocation (state->seal_attempt.seal.token);
             state->result.emplace (finish (
@@ -1186,8 +1211,19 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->sealed_at = std::chrono::steady_clock::now ();
     state->pending_unit_token = begin_pending_relocation_unit ();
     try {
+        if (persisted_context.augment_frozen
+            && !persisted_context.augment_frozen (
+              state->seal_attempt.seal.participants)) {
+            (void) _objects.abort_relocation_before_cutover (
+              seal.token);
+            co_return aggregate_relocation_result_t{
+              relocation_terminal_t::blocked,
+              relocation_reason_t::restore_failed, {}};
+        }
         state->payload = encode_envelope (
-          seal.participants, persisted_context.relocation);
+          state->seal_attempt.seal.participants,
+          persisted_context.relocation,
+          persisted_context.application_version);
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
     }
@@ -1206,7 +1242,14 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
       persisted_context, seal.participants, state->manifest));
     const auto chunks_sent =
-      co_await relocate_send_state_chunks (state);
+      co_await relocate_send_state_chunks (
+        state, [prepared] {
+            if (!prepared->await_ready ())
+                return false;
+            const auto &result = prepared->result ();
+            return !result
+                   || result.value () != relocation_reason_t::none;
+        });
     release_transfer_budget (state->budget_reserved);
     state->budget_reserved = 0;
     auto target_prepare_reason = relocation_reason_t::restore_failed;
@@ -1362,7 +1405,8 @@ constexpr std::string_view bare_timer_handler_type = "LogicalTimer";
 
 std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
   const std::vector<frozen_object_state_t> &participants,
-  const protocol::relocation_id_t &relocation)
+  const protocol::relocation_id_t &relocation,
+  std::uint64_t application_version)
 {
     if (participants.empty ()
         || (relocation.high == 0 && relocation.low == 0))
@@ -1404,7 +1448,12 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                        root.stable_type, root.owner.key,
                        root.owner.object_generation,
                        root.owner.authority_owner_generation};
-    envelope.application_version = 1;
+    if (application_version
+             > static_cast<std::uint64_t> (
+                 std::numeric_limits<std::int64_t>::max ()))
+        return {};
+    envelope.application_version =
+      static_cast<std::int64_t> (application_version);
 
     try {
         for (std::size_t index = 0; index != ordered.size (); ++index) {
@@ -1412,7 +1461,7 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
             const auto participant_id =
               static_cast<std::uint64_t> (index) + 1;
             envelope.application_states.push_back (
-              {participant_id, 1, frozen.application_state, {}});
+              {participant_id, true, frozen.application_state});
 
             std::uint64_t boundary = 0;
             for (const auto &record : frozen.pending_application) {

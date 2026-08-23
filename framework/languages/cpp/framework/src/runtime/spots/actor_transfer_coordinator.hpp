@@ -37,9 +37,20 @@ struct pending_actor_admission_t
     actor_ref_t source_actor;
     spot_id_t source_spot_id;
     spot_id_t target_spot_id;
+    // Only command-28's canonical non-entry branch creates this admission.
+    // Legacy/maintenance transfers may use the same coordinator, but do not
+    // carry the durable routed-Join recovery contract.
+    bool canonical_user_spot_join = false;
     std::chrono::steady_clock::time_point deadline;
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
+    std::string reservation_token;
+    std::uint64_t reserved_payload_bytes = 0;
+    std::uint64_t target_spot_generation = 0;
+    std::uint64_t target_spot_authority_owner_generation = 0;
+    std::uint64_t source_actor_authority_owner_generation = 0;
+    std::uint64_t source_node_generation = 0;
+    std::uint64_t source_owner_lease_generation = 0;
     std::optional<message_t> admission_reply;
     std::vector<std::uint8_t> session_relocation_route;
     std::string session_relocation_actor_type;

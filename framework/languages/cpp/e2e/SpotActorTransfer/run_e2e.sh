@@ -90,6 +90,7 @@ start_role() {
   local stream="$5"
   local pub="$6"
   local router_advertise_host="${7:-}"
+  local relocation_chunk_limit="${8:-}"
   local binary
   if [[ "$role" == "actor" ]]; then
     binary="$ACTOR_NODE_BIN"
@@ -98,14 +99,15 @@ start_role() {
   fi
   local config_path="$CONFIG_DIR/$rid.json"
   python3 - "$config_path" "$rid" "$url" "$router" "$stream" "$pub" \
-    "$router_advertise_host" \
+    "$router_advertise_host" "$relocation_chunk_limit" \
     "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" "$LOG_DIR" <<'PY'
 import json
 import os
 import stat
 import sys
 
-(path, rid, http_url, router, stream, pub, router_advertise_host, redis_endpoint,
+(path, rid, http_url, router, stream, pub, router_advertise_host,
+ relocation_chunk_limit, redis_endpoint,
  redis_key_prefix, log_dir) = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as file:
     section = {"initialActorNode": "actor-a",
@@ -115,6 +117,8 @@ with open(path, "w", encoding="utf-8") as file:
         "logDir": log_dir, "evidenceFile": f"{log_dir}/{rid}.evidence.log"}
     if router_advertise_host:
         section["routerAdvertiseHost"] = router_advertise_host
+    if relocation_chunk_limit:
+        section["relocationPayloadChunkLimitBytes"] = int(relocation_chunk_limit)
     json.dump({"e2e": section}, file, indent=2)
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 PY
@@ -128,16 +132,19 @@ run_client() {
   local config_path="$CONFIG_DIR/client-${scenario//[^a-zA-Z0-9_-]/_}.json"
   python3 - "$config_path" "$NODE_A_URL" "$NODE_B_URL" "${NODE_C_URL:-}" \
     "$SESSION_A_STREAM" "$SESSION_B_STREAM" "${SESSION_PROXY_ADMIN:-}" \
+    "${RELOCATION_PROXY_ADMIN:-}" \
     "$scenario" <<'PY'
 import json
 import os
 import stat
 import sys
 
-path, node_a_url, node_b_url, node_c_url, node_a_stream, node_b_stream, proxy_admin, scenario = sys.argv[1:]
+(path, node_a_url, node_b_url, node_c_url, node_a_stream, node_b_stream,
+ session_proxy_admin, relocation_proxy_admin, scenario) = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as file:
     json.dump({"e2e": {"nodeAUrl": node_a_url, "nodeBUrl": node_b_url,
-        "nodeCUrl": node_c_url, "sessionProxyAdmin": proxy_admin,
+        "nodeCUrl": node_c_url, "sessionProxyAdmin": session_proxy_admin,
+        "relocationProxyAdmin": relocation_proxy_admin,
         "nodeAStream": node_a_stream, "nodeBStream": node_b_stream,
         "scenario": scenario}}, file, indent=2)
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
@@ -158,7 +165,7 @@ read -r NODE_A_HTTP_PORT NODE_B_HTTP_PORT SESSION_A_HTTP_PORT SESSION_B_HTTP_POR
   NODE_A_PUB_PORT NODE_B_PUB_PORT SESSION_A_PUB_PORT SESSION_B_PUB_PORT \
   < <(pick_ports 16)
 read -r NODE_C_HTTP_PORT NODE_C_ROUTER_PORT NODE_C_STREAM_PORT NODE_C_PUB_PORT \
-  SESSION_PROXY_ADMIN_PORT < <(pick_ports 5)
+  SESSION_PROXY_ADMIN_PORT RELOCATION_PROXY_ADMIN_PORT < <(pick_ports 6)
 NODE_A_PUB="tcp://127.0.0.1:$NODE_A_PUB_PORT"
 NODE_B_PUB="tcp://127.0.0.1:$NODE_B_PUB_PORT"
 SESSION_A_PUB="tcp://127.0.0.1:$SESSION_A_PUB_PORT"
@@ -180,6 +187,27 @@ SESSION_A_STREAM="tcp://127.0.0.1:$SESSION_A_STREAM_PORT"
 SESSION_B_STREAM="tcp://127.0.0.1:$SESSION_B_STREAM_PORT"
 NODE_C_PUB="tcp://127.0.0.1:$NODE_C_PUB_PORT"
 SESSION_PROXY_ADMIN=""
+RELOCATION_PROXY_ADMIN=""
+NODE_A_ROUTER_TARGET="$NODE_A_ROUTER"
+NODE_B_ROUTER_TARGET="$NODE_B_ROUTER"
+ACTOR_ROUTER_ADVERTISE_HOST=""
+ACTOR_A_RELOCATION_CHUNK_LIMIT=""
+
+if [[ "$SCENARIO" == "all" || ",$SCENARIO," == *",ST-C4,"* ]]; then
+  NODE_A_ROUTER_TARGET="tcp://127.0.0.2:$NODE_A_ROUTER_PORT"
+  NODE_B_ROUTER_TARGET="tcp://127.0.0.2:$NODE_B_ROUTER_PORT"
+  ACTOR_ROUTER_ADVERTISE_HOST="127.0.0.1"
+  ACTOR_A_RELOCATION_CHUNK_LIMIT="16"
+  RELOCATION_PROXY_ADMIN="http://127.0.0.1:$RELOCATION_PROXY_ADMIN_PORT"
+  setsid python3 "$ROOT_DIR/Support/relocation_chunk_conflict_proxy.py" \
+    --route "127.0.0.1:$NODE_A_ROUTER_PORT=127.0.0.2:$NODE_A_ROUTER_PORT" \
+    --route "127.0.0.1:$NODE_B_ROUTER_PORT=127.0.0.2:$NODE_B_ROUTER_PORT" \
+    --control "127.0.0.1:$RELOCATION_PROXY_ADMIN_PORT" \
+    >"$LOG_DIR/relocation-chunk-conflict-proxy.stdout.log" \
+    2>"$LOG_DIR/relocation-chunk-conflict-proxy.stderr.log" &
+  pids+=("$!")
+  wait_health "$RELOCATION_PROXY_ADMIN" relocation-chunk-conflict-proxy
+fi
 
 if [[ "$SCENARIO" == "ST-F3A" ]]; then
   SESSION_A_ROUTER_TARGET="tcp://127.0.0.2:$SESSION_A_ROUTER_PORT"
@@ -199,10 +227,12 @@ fi
 
 echo "log_dir=$LOG_DIR"
 
-start_role actor actor-a "$NODE_A_URL" "$NODE_A_ROUTER" "$NODE_A_STREAM" "$NODE_A_PUB"
+start_role actor actor-a "$NODE_A_URL" "$NODE_A_ROUTER_TARGET" "$NODE_A_STREAM" "$NODE_A_PUB" \
+  "$ACTOR_ROUTER_ADVERTISE_HOST" "$ACTOR_A_RELOCATION_CHUNK_LIMIT"
 wait_health "$NODE_A_URL" actor-a
 if [[ "$SCENARIO" != "ST-A1" && "$SCENARIO" != "all" ]]; then
-  start_role actor actor-b "$NODE_B_URL" "$NODE_B_ROUTER" "$NODE_B_STREAM" "$NODE_B_PUB"
+  start_role actor actor-b "$NODE_B_URL" "$NODE_B_ROUTER_TARGET" "$NODE_B_STREAM" "$NODE_B_PUB" \
+    "$ACTOR_ROUTER_ADVERTISE_HOST"
   wait_health "$NODE_B_URL" actor-b
 fi
 if [[ "$SCENARIO" == "ST-F3A" ]]; then
@@ -237,7 +267,8 @@ if [[ "$SCENARIO" == "all" ]]; then
   # ST-A1 measures an exact zero Relocation Store delta. Run it before any
   # remote relocation can leave asynchronous cleanup activity behind.
   run_client "ST-A1"
-  start_role actor actor-b "$NODE_B_URL" "$NODE_B_ROUTER" "$NODE_B_STREAM" "$NODE_B_PUB"
+  start_role actor actor-b "$NODE_B_URL" "$NODE_B_ROUTER_TARGET" "$NODE_B_STREAM" "$NODE_B_PUB" \
+    "$ACTOR_ROUTER_ADVERTISE_HOST"
   wait_health "$NODE_B_URL" actor-b
   sleep "$ROUTE_SETTLE_SECONDS"
   # Callback-failure cases intentionally hold transfer boundaries until their

@@ -60,7 +60,12 @@
         <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
         <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>
         <Compile Include="Runtime/AuthorityKeyCodecTests.cs"/>
+        <Compile Include="Runtime/ActorAuthorityPayloadFixedVectorTests.cs"/>
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
+        <Compile Include="Runtime/CanonicalActorJoinAttemptTests.cs"/>
+        <Compile Include="Runtime/CanonicalActorJoinIngressReplyTests.cs"/>
+        <Compile Include="Runtime/CanonicalActorJoinWireAdmissionNegativeTests.cs"/>
+        <Compile Include="Runtime/RemoteJoinerCanonicalReplyTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
@@ -80,6 +85,8 @@
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
         <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
+        <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
+        <Compile Include="Runtime/AuthorityRelocationStateGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
@@ -95,6 +102,9 @@
         <Compile Include="Runtime/ExactMessageFlowRuntimeTests.cs"/>
         <Compile Include="Runtime/FlowCorrelationTests.cs"/>
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
+        <Compile Include="Runtime/GeneratedRelocationCodecConformanceTests.cs"/>
+        <Compile Include="Runtime/GeneratedServiceWireCommandCodecConformanceTests.cs"/>
+        <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
@@ -124,6 +134,7 @@
         <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>
         <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
         <Compile Include="Runtime/ServiceWireActorJoinReplyCodecTests.cs"/>
+        <Compile Include="Runtime/ServiceWireActorDestroyCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>

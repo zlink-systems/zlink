@@ -16,9 +16,9 @@ public record ZLinkObjectReservation(
         Objects.requireNonNull(storeVersion, "storeVersion");
         Objects.requireNonNull(reservationVersion, "reservationVersion");
         Objects.requireNonNull(targetDescriptor, "targetDescriptor");
-        if (targetDescriptorLifecycleGeneration <= 0) {
+        if (targetDescriptorLifecycleGeneration == 0) {
             throw new IllegalArgumentException(
-                "targetDescriptorLifecycleGeneration must be positive");
+                "targetDescriptorLifecycleGeneration must be non-zero");
         }
         Objects.requireNonNull(targetOwner, "targetOwner");
     }

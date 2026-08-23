@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Message, SubmitResult } from '@zlink-systems/zlink';
+import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
-import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/contracts/Locations';
+import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import {
   createServiceRelocationId,
   relocationFailedFailureCode,
@@ -12,9 +12,11 @@ import {
 import {
   decodeServiceRelocationControlRequest,
   decodeServiceRelocationControlResponse,
-  encodeServiceRelocationControlRequest
+  encodeServiceRelocationControlRequest,
+  encodeServiceRelocationControlResponse
 } from '../../packages/framework/src/runtime/host/service-relocation-control';
 import {
+  decodeSessionRelocationRoute,
   decodeSessionRelocationSealed,
   encodeServiceWireFrozenActorApplicationRecord,
   encodeSessionRelocationRoute,
@@ -29,13 +31,25 @@ import {
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
-import { crc32c } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
+import {
+  crc32c,
+  ServiceRelocationAuthorityPayloadCodec
+} from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
 import { createInitialActorMessageFollowContext } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import { ReceiveKind } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
+import {
+  ServiceStatefulRuntime,
+  type ServiceStatefulMailboxData
+} from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+import {
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_WIRE_REQUIRED_CAPABILITY
+} from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
+import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import {
@@ -64,6 +78,19 @@ const object = {
   objectGeneration: 5n,
   expectedAuthorityOwnerGeneration: 11n
 } as const;
+
+function actorJoinApplicationJobOwner() {
+  const permit = {
+    markApplicationQueued() {},
+    detachForHandlerTurn() {},
+    releaseBeforeHandler() {},
+    releaseAfterInternalProcessing() {}
+  };
+  return {
+    takeInitial: () => permit,
+    close() {}
+  };
+}
 
 test('relocation identity retries zero and local collisions with all 128 entropy bits', () => {
   const zero = Buffer.alloc(16);
@@ -324,6 +351,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
   };
   const sent: Array<{ readonly target: string; readonly bytes: Buffer }> = [];
   const received: string[] = [];
+  let rejectRouteSubmit = false;
   const runtime = new ZLinkHostServiceRelocationRuntime({
     currentOwner: () => ({ ownerId: 'session-owner-id', leaseGeneration: 8n }),
     meshNode: () => ({
@@ -334,7 +362,9 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
       ],
       sendInfrastructureControl: (targetRid: string, bytes: Uint8Array) => {
         sent.push({ target: targetRid, bytes: Buffer.from(bytes) });
-        return SubmitResult.Ok;
+        return rejectRouteSubmit && targetRid === 'target'
+          ? SubmitResult.NotConnected
+          : SubmitResult.Ok;
       }
     }),
     boundSessionRelocation: {
@@ -400,6 +430,19 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     await runtime.sendSessionRelocationRoute('mesh-a', 'session-owner', selfRoute);
     assert.equal(sent.length, 1, 'self-target command 44 dispatches locally');
     assert.deepEqual(received, ['seal', 'route', 'seal', 'route']);
+
+    // A remote command 44 rejection is terminal for this one-way attempt:
+    // it neither retries the identical control nor changes the committed
+    // relocation terminal. The sealed Session performs its own timeout
+    // cleanup; later recovery requires reconnect and explicit bind.
+    rejectRouteSubmit = true;
+    await runtime.sendSessionRelocationRoute('mesh-a', 'target', route);
+    assert.equal(sent.length, 2, 'rejected command 44 has exactly one submit');
+    assert.equal(sent[1]!.target, 'target');
+    assert.deepEqual(decodeSessionRelocationRoute(sent[1]!.bytes), {
+      ...route,
+      actor: { ...route.actor, nodeRid: '' }
+    });
   } finally {
     await runtime.dispose();
   }
@@ -435,14 +478,7 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   let prepareCalls = 0;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  const runtime = new ZLinkHostServiceRelocationRuntime({
-    meshNode: () => ({
-      sendInfrastructureControl: (_targetRid: string, bytes: Uint8Array) => {
-        sent.push(Buffer.from(bytes));
-        return SubmitResult.Ok;
-      }
-    })
-  } as never);
+  const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
   const internals = runtime as unknown as {
     handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
     handleOneWayControl: (
@@ -462,8 +498,13 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     const part = Message.from(encodeServiceRelocationControlRequest(request));
     try {
       return await runtime.tryHandleControl('mesh-a', {
+        kind: request.kind === 'prepare' ? ReceiveKind.NodeRequest : ReceiveKind.NodeSend,
         sourceNodeRid: 'source',
-        parts: [part]
+        parts: [part],
+        reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+          sent.push(Buffer.from(Array.isArray(reply) ? reply[0]! : reply));
+          return SubmitResult.Ok;
+        }
       } as never);
     } finally {
       part.close();
@@ -531,8 +572,7 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   }
 });
 
-test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its classified failure, ' +
-  'and never resolves a different relocation identity\'s ACK', async () => {
+test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its classified failure', async () => {
   // Spec 28 §9: an explicit Failed reply restores source memory promptly —
   // the source must not learn the outcome only from its own resend-loop
   // deadline. Node's wire failureCode vocabulary distinguishes DataLost(35)
@@ -553,29 +593,27 @@ test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its c
     payloadChecksumCrc32c: 123,
     applicationVersion: 4n
   });
-  const deliverFailed = async (
-    runtime: ZLinkHostServiceRelocationRuntime,
-    failed: ServiceMaintenanceRelocationFailed
-  ) => {
-    const part = Message.from(encodeServiceRelocationControlRequest(failed));
-    try {
-      await runtime.tryHandleControl('mesh-a', {
-        sourceNodeRid: 'target',
-        parts: [part]
-      } as never);
-    } finally {
-      part.close();
-    }
-  };
-  const pendingCount = (runtime: ZLinkHostServiceRelocationRuntime) =>
-    (runtime as unknown as { pendingControls: Map<string, unknown> }).pendingControls.size;
-
   for (const [failureCode, expectedKind] of [
     [35, ZLinkFrameworkErrorKind.DataLost],
     [17, ZLinkFrameworkErrorKind.InternalFailure]
   ] as const) {
+    const prepare = buildPrepare({ high: 71n, low: BigInt(failureCode) });
+    const failed: ServiceMaintenanceRelocationFailed = {
+      kind: 'failed',
+      relocation: prepare.relocation,
+      targetAttemptGeneration: prepare.targetAttemptGeneration,
+      coordinator,
+      target,
+      object,
+      senderRole: 'target',
+      failureCode
+    };
     const runtime = new ZLinkHostServiceRelocationRuntime({
-      meshNode: () => ({ sendInfrastructureControl: () => SubmitResult.Ok })
+      meshNode: () => ({
+        async requestInfrastructureControlFrames() {
+          return [encodeServiceRelocationControlResponse(failed)];
+        }
+      })
     } as never);
     const internals = runtime as unknown as {
       sendControl: (
@@ -586,51 +624,20 @@ test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its c
         deadlineAtMs: number
       ) => Promise<unknown>;
     };
-    const prepare = buildPrepare({ high: 71n, low: BigInt(failureCode) });
     try {
-      // A one-minute deadline: a prompt rejection proves it came from the
-      // Failed reply, not the resend-loop timeout.
-      const ack = internals.sendControl('mesh-a', 'target', prepare, undefined, Date.now() + 60_000);
-      ack.catch(() => undefined);
-      assert.equal(pendingCount(runtime), 1, 'the Prepare ACK must be pending');
-
-      // A Failed for an unrelated relocation identity must never resolve it.
-      await deliverFailed(runtime, {
-        kind: 'failed',
-        relocation: { high: 999n, low: 999n },
-        targetAttemptGeneration: 1n,
-        coordinator,
-        target,
-        object,
-        senderRole: 'target',
-        failureCode
-      });
-      assert.equal(
-        pendingCount(runtime), 1,
-        'a Failed for a different relocation identity must not resolve the pending ACK'
-      );
-
       const started = Date.now();
-      await deliverFailed(runtime, {
-        kind: 'failed',
-        relocation: prepare.relocation,
-        targetAttemptGeneration: prepare.targetAttemptGeneration,
-        coordinator,
-        target,
-        object,
-        senderRole: 'target',
-        failureCode
-      });
-      await assert.rejects(ack, (error: unknown) => {
-        assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
-        assert.equal(error.kind, expectedKind, `failureCode ${failureCode} must classify as ${expectedKind}`);
-        return true;
-      });
+      await assert.rejects(
+        internals.sendControl('mesh-a', 'target', prepare, undefined, Date.now() + 60_000),
+        (error: unknown) => {
+          assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
+          assert.equal(error.kind, expectedKind, `failureCode ${failureCode} must classify as ${expectedKind}`);
+          return true;
+        }
+      );
       assert.ok(
         Date.now() - started < 1_000,
         'the explicit Failed must resolve the ACK promptly, not via the 60s deadline'
       );
-      assert.equal(pendingCount(runtime), 0, 'the resolved ACK must be removed from the pending map');
     } finally {
       await runtime.dispose();
     }
@@ -897,7 +904,66 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
   assert.equal(committed.authorityOwnerGeneration, 12n);
 });
 
-test('ActorJoin profile reuses the Host terminal owner and a failed one-way source leave submit does not gate Accepted', async () => {
+test('target-ready authority keeps aggregate, attempt and coordinator StoreVersion distinct', () => {
+  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const sourceAuthority = encodeActorAuthorityIdentity({
+    actorType: 'Player',
+    actor: {
+      nodeRid: coordinator.nodeRid,
+      actorId: object.actorId,
+      objectGeneration: object.objectGeneration,
+      meshName: 'mesh-a'
+    },
+    meshName: 'mesh-a',
+    ownerNodeGeneration: coordinator.nodeGeneration,
+    owner: {
+      ownerId: coordinator.ownerId,
+      leaseGeneration: coordinator.leaseGeneration
+    },
+    spotId: 'source-entry',
+    spotGeneration: coordinator.nodeGeneration,
+    spotKind: ZLinkSpotKind.Entry
+  });
+  const projected = (runtime as unknown as {
+    authorityPayloadForPublication(
+      payload: Uint8Array,
+      publication: unknown,
+      target: unknown
+    ): Uint8Array;
+  }).authorityPayloadForPublication(sourceAuthority, {
+    reference: 'root/1',
+    checksumCrc32c: 0x0102_0304,
+    aggregateId: '00000000-0000-0001-0000-000000000002',
+    aggregateGeneration: 2n,
+    inventoryDigest: '0'.repeat(64),
+    targetOwnerId: target.ownerId,
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration
+  }, {
+    owner: {
+      ownerId: target.ownerId,
+      leaseGeneration: target.ownerLeaseGeneration
+    },
+    meshName: 'mesh-a',
+    nodeRid: target.nodeRid,
+    nodeGeneration: target.nodeGeneration,
+    objectGeneration: object.objectGeneration,
+    targetAttemptGeneration: 3n,
+    coordinatorExpectedStoreVersion: 'source-v1',
+    actorSpotId: 'target-entry',
+    actorSpotGeneration: target.nodeGeneration,
+    actorSpotKind: ZLinkSpotKind.Entry
+  });
+  const publication = new ServiceRelocationAuthorityPayloadCodec().read(projected)!;
+
+  assert.equal(publication.aggregateGeneration, 2n);
+  assert.equal(publication.targetAttemptGeneration, 3n);
+  assert.equal(publication.coordinatorExpectedStoreVersion, 'source-v1');
+  assert.equal(publication.sourceNodeRid, coordinator.nodeRid);
+  assert.equal(publication.targetNodeRid, target.nodeRid);
+  assert.equal(publication.coordinatorOwnerId, target.ownerId);
+});
+
+test('ActorJoin target invalidates a previous-owner Actor route before lifecycle and preserves post-open relay order', async () => {
   const events: string[] = [];
   const actor = { context: { actorId: 'actor-join', meshName: 'mesh-a' } };
   const nativeRef = { actorId: 'actor-join', generation: 5n, nodeRid: 'target' };
@@ -946,6 +1012,10 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
       async publishRoutedActorOwnership() {
         events.push('command44');
       }
+    },
+    invalidateActorRoute: (actorId: string) => {
+      assert.equal(actorId, 'actor-join');
+      events.push('actorRoute:invalidated');
     }
   } as never);
   const internals = runtime as unknown as {
@@ -963,9 +1033,9 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
     events.push('cas');
     return authority;
   };
-  internals.relayTerminalReplies = async () => {};
+  internals.relayTerminalReplies = async () => { events.push('replies:relay'); };
   internals.targetReplyRelayCoordinator = () => ({});
-  internals.clearTargetRelocationPublication = async () => {};
+  internals.clearTargetRelocationPublication = async () => { events.push('publication:clear'); };
   const envelope = {
     aggregateId: '00000000-0000-0000-0000-000000000021',
     aggregateGeneration: 1n,
@@ -1005,13 +1075,134 @@ test('ActorJoin profile reuses the Host terminal owner and a failed one-way sour
     'cas',
     'queue:merged',
     'route:closed',
+    'actorRoute:invalidated',
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
     'accepted',
+    'publication:clear',
     'dispatch:open',
-    'command44'
+    'command44',
+    'replies:relay'
   ]);
+});
+
+test('target admission opens after bounded publication-clear conflicts and a later cleanup retry clears it', async () => {
+  const events: string[] = [];
+  const key = encodeAuthorityKey('actor', 'actor-clear-retry');
+  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const publication = {
+    reference: 'relocation-root',
+    checksumCrc32c: 7,
+    aggregateId: '00000000-0000-0000-0000-000000000022',
+    aggregateGeneration: 1n,
+    inventoryDigest: '0'.repeat(64),
+    targetOwnerId: target.ownerId,
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration
+  } as const;
+  let current = {
+    kind: 'snapshot',
+    storeVersion: { value: 'target-v2' } as never,
+    payload: codec.publish(Buffer.from('actor-state'), publication),
+    objectGeneration: 5n,
+    authorityOwnerGeneration: 12n,
+    ownerId: target.ownerId,
+    ownerLeaseGeneration: target.ownerLeaseGeneration,
+    allocation: {
+      state: 'active',
+      objectKind: 'actor',
+      stableType: 'Player',
+      descriptor: { meshName: 'mesh-a', rid: 'target' },
+      descriptorLifecycleGeneration: 6n,
+      capacity: { actors: 1, spots: 0 }
+    },
+    storeNow: new Date()
+  } as ZLinkAuthoritySnapshot;
+  let conflictsRemaining = 16;
+  let clearAttempts = 0;
+  let actorAvailable = false;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    spotManager: () => undefined,
+    locationStore: () => ({
+      async readAuthority() { return current; },
+      async compareExchangeAuthority(_key: unknown, _version: unknown, mutation: { payload: Uint8Array }) {
+        clearAttempts += 1;
+        if (conflictsRemaining > 0) {
+          conflictsRemaining -= 1;
+          return { kind: 'conflict' };
+        }
+        current = {
+          ...current,
+          storeVersion: { value: `target-v${clearAttempts + 2}` } as never,
+          payload: Buffer.from(mutation.payload)
+        };
+        return { kind: 'stored' };
+      }
+    }),
+    metrics: {
+      count(name: string) { events.push(`metric:${name}`); },
+      duration() {}
+    }
+  } as never);
+  const internals = runtime as unknown as {
+    commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
+    relayTerminalReplies: () => Promise<void>;
+    targetReplyRelayCoordinator: () => unknown;
+    clearTargetRelocationPublication: (
+      stage: unknown,
+      authority: ZLinkAuthoritySnapshot
+    ) => Promise<void>;
+    finalizeTargetStage: (
+      meshName: string,
+      stagingId: string,
+      stage: unknown
+    ) => Promise<void>;
+  };
+  internals.commitTargetReservation = async () => current;
+  internals.relayTerminalReplies = async () => {};
+  internals.targetReplyRelayCoordinator = () => ({});
+  const envelope = {
+    aggregateId: publication.aggregateId,
+    aggregateGeneration: publication.aggregateGeneration,
+    participants: [],
+    memberships: []
+  };
+  const stage = {
+    offer: { prepareFingerprint: 'clear-retry' },
+    owner: {
+      async normalize() {},
+      async publish() {},
+      async openAdmission() { actorAvailable = true; }
+    },
+    staging: {
+      primaryAuthorityKey: key,
+      envelope,
+      hidden: new Map()
+    },
+    phase: 'ready',
+    lane: Promise.resolve(),
+    cutoverReceived: true,
+    boundaryRelay: []
+  };
+  const originalWarn = console.warn;
+  console.warn = marker => events.push(String(marker));
+  try {
+    await internals.finalizeTargetStage('mesh-a', 'clear-retry-stage', stage);
+    assert.equal(actorAvailable, true, 'the committed Actor must be dispatchable after clear conflicts');
+    assert.equal(stage.phase, 'open');
+    assert.equal(clearAttempts, 16);
+    assert.deepEqual(events, [
+      '[zlink.runtime.relocation.publication_clear_failed]',
+      'metric:zlink.relocation.publication_clear_failed'
+    ]);
+
+    await internals.clearTargetRelocationPublication(stage, current);
+    assert.equal(clearAttempts, 17, 'the retained publication must be clearable by follow-up cleanup');
+    assert.equal(codec.read(current.payload), undefined);
+  } finally {
+    console.warn = originalWarn;
+    await runtime.dispose();
+  }
 });
 
 test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner before target completion', async () => {
@@ -1092,6 +1283,139 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
     );
   } finally {
     await harness.dispose();
+  }
+});
+
+test('canonical ActorJoin admission recovery crosses command 28 into command 40 without preloaded admission state', async () => {
+  const harness = createActorJoinHostHarness({ canonicalRecovery: true });
+  try {
+    const relocated = await harness.relocate();
+    await harness.targetIdle();
+
+    assert.equal(String(relocated.actorRef.nodeRid), 'target');
+    const recovery = harness.canonicalRecoveryIdentity();
+    assert.notEqual(recovery, undefined);
+    assert.equal(recovery!.request.sourceSpotId, 'source-room');
+    assert.equal(
+      harness.canonicalAdmissionActorNodeRid(),
+      'source',
+      'command 28 admission must retain the source ActorRef until target CAS'
+    );
+    assert.equal(
+      recovery!.request.relocationAggregateId.replaceAll('-', ''),
+      recovery!.request.handoffId,
+      'canonical HandoffId must own the relocation aggregate'
+    );
+    assert.equal(recovery!.request.reservationToken, recovery!.request.handoffId);
+    assert.equal(
+      recovery!.request.reservedPayloadBytes,
+      BigInt((64 * 1024) + (16 * 1024 * 1024) + Buffer.byteLength('canonical-request'))
+    );
+    assert.deepEqual(harness.controlKinds, ['prepare', 'state', 'data', 'cutover']);
+    assert.deepEqual(harness.events.filter(value =>
+      value === 'recovery:prepared'
+      || value === 'onJoined'
+      || value === 'accepted:completed'
+      || value.startsWith('queue:merged:')
+      || value.startsWith('replay:')
+    ), [
+      'recovery:prepared',
+      'queue:merged:B1,B2,D1',
+      'onJoined',
+      'accepted:completed',
+      'replay:B1',
+      'replay:B2',
+      'replay:D1'
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('canonical ActorJoin recovery retains the admitted typed reply content type inside outer multipart', async () => {
+  const actorRef = {
+    actorId: 'actor-canonical-reply-type',
+    objectGeneration: 5n,
+    meshName: 'mesh-a',
+    nodeRid: 'source'
+  };
+  const handoffId = '00112233445566778899aabbccddeeff';
+  const request = Buffer.from('canonical-request');
+  const reply = Buffer.from('{"accepted":true}');
+  const admissions = new ZLinkFormalRemoteActorAdmissionRegistry();
+  admissions.begin({
+    actorId: actorRef.actorId,
+    actorType: 'Player',
+    actorRef,
+    spotId: 'room-target',
+    targetSpotGeneration: 6n,
+    expectedMembershipEpoch: 1n,
+    requestFingerprint: request.toString('base64'),
+    transferId: handoffId,
+    sourceActorNodeRid: 'source'
+  });
+  admissions.complete(handoffId, {
+    accepted: true,
+    actorRef,
+    reply,
+    replyContentType: 'application/json'
+  });
+  let preparedContentType: string | undefined;
+  const manager = {
+    formalRemoteActorAdmissions: admissions,
+    options: {
+      actorTransferRuntime: {
+        async prepareDeferredJoinAccepted(
+          _actorId: string,
+          _operationId: unknown,
+          _actor: unknown,
+          _reply: Uint8Array,
+          replyContentType?: string
+        ) {
+          preparedContentType = replyContentType;
+          return { actor: actorRef };
+        }
+      }
+    }
+  };
+  const recovery: CanonicalActorJoinRecovery = {
+    source: {
+      nodeRid: 'source',
+      nodeGeneration: 2n,
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 3n
+    },
+    request: {
+      actorId: actorRef.actorId,
+      actorType: 'Player',
+      handoffId,
+      sourceSpotId: 'source-room',
+      sourceNodeRid: Buffer.from('source'),
+      actorGeneration: actorRef.objectGeneration,
+      actorAuthorityOwnerGeneration: 11n,
+      relocationAggregateId: '00112233-4455-6677-8899-aabbccddeeff',
+      requestContentType: 'application/json',
+      request,
+      reservationToken: handoffId,
+      reservedPayloadBytes: 1n
+    },
+    targetSpotId: 'room-target',
+    targetNodeRid: Buffer.from('target'),
+    targetNodeGeneration: 6n,
+    targetSpotGeneration: 6n,
+    targetAuthorityOwnerGeneration: 12n,
+    operationId: { high: 7n, low: 8n },
+    replyContentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+    reply
+  };
+  try {
+    await DefaultZLinkSpotManager.prototype.restoreCanonicalActorJoinRecovery.call(
+      manager as never,
+      recovery
+    );
+    assert.equal(preparedContentType, 'application/json');
+  } finally {
+    admissions.delete(handoffId);
   }
 });
 
@@ -1257,7 +1581,16 @@ test('a target-side restore failure delivers Failed(53) end to end and restores 
       Date.now() - started < 5_000,
       'the explicit Failed must resolve the relocation well before the 30s control deadline'
     );
-    assert.equal(harness.location.aborts, 1, 'the source authority must be restored from memory');
+    assert.equal(
+      harness.location.aborts,
+      0,
+      'a restore failure before reservation must not create an aggregate marker to abort'
+    );
+    assert.equal(
+      harness.events.includes('source:rolled-back'),
+      true,
+      'the source in-memory seal must still roll back before the failure returns'
+    );
   } finally {
     console.warn = originalWarn;
     console.error = originalError;
@@ -1299,6 +1632,7 @@ interface ActorJoinHarnessOptions {
   readonly readyResults?: number[];
   readonly sourceLeaveResult?: number;
   readonly dropCutover?: boolean;
+  readonly canonicalRecovery?: boolean;
 }
 
 function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
@@ -1306,8 +1640,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const controlKinds: string[] = [];
   const prepareFingerprints: string[] = [];
   const relocationId = '00000000-0000-0000-0000-000000000091';
+  let canonicalHandoffId: string | undefined;
   const actorId = 'actor-host-profile';
   const completionOperationId = { high: 61n, low: 67n };
+  let canonicalAdmissionOperationId = completionOperationId;
   const sourceActor = { context: { actorId, meshName: 'mesh-a' } };
   const sourceActorRef = {
     actorId,
@@ -1333,7 +1669,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       ownerNodeGeneration: 2n,
       owner: { ownerId: 'source-owner', leaseGeneration: 3n },
       spotId: 'source-room',
-      spotGeneration: 4n
+      spotGeneration: 4n,
+      spotKind: ZLinkSpotKind.User
     }),
     objectGeneration: 5n,
     authorityOwnerGeneration: 11n,
@@ -1362,7 +1699,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorType: 'Player',
     actor: sourceActor,
     meshName: 'mesh-a',
-    spotId: 'source-room',
+    spotId: options.canonicalRecovery === true ? 'entry-spot-estimate' : 'source-room',
     spotMembershipEpoch: 8n,
     nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
     locationGeneration: 11n,
@@ -1452,22 +1789,25 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const admissions = new ZLinkFormalRemoteActorAdmissionRegistry();
-  admissions.begin({
-    actorId,
-    actorType: 'Player',
-    actorRef: sourceActorRef as never,
-    spotId: 'entry-target' as never,
-    targetSpotGeneration: 6n,
-    expectedMembershipEpoch: 8n,
-    requestFingerprint: 'public-admission',
-    transferId: relocationId,
-    completionOperationId
-  });
-  admissions.complete(relocationId, {
-    accepted: true,
-    actorRef: sourceActorRef as never,
-    deferredJoinRoot: { reference: 'accepted-root' } as never
-  });
+  let restoredCanonicalRecovery: CanonicalActorJoinRecovery | undefined;
+  if (options.canonicalRecovery !== true) {
+    admissions.begin({
+      actorId,
+      actorType: 'Player',
+      actorRef: sourceActorRef as never,
+      spotId: 'entry-target' as never,
+      targetSpotGeneration: 6n,
+      expectedMembershipEpoch: 8n,
+      requestFingerprint: 'public-admission',
+      transferId: relocationId,
+      completionOperationId
+    });
+    admissions.complete(relocationId, {
+      accepted: true,
+      actorRef: sourceActorRef as never,
+      deferredJoinRoot: { reference: 'accepted-root' } as never
+    });
+  }
   assert.notEqual(`${completionOperationId.high.toString(16)}:${completionOperationId.low.toString(16)}`, relocationId);
 
   let sourceRuntime!: ZLinkHostServiceRelocationRuntime;
@@ -1495,25 +1835,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }).finally(() => part.close());
     deliveries.push(delivery);
   };
-  const deliverFrames = (
-    runtime: ZLinkHostServiceRelocationRuntime,
-    sourceNodeRid: string,
-    frames: readonly Uint8Array[],
-    deliveries: Promise<void>[]
-  ) => {
-    const parts = frames.map(frame => Message.from(frame));
-    const delivery = runtime.tryHandleControl('mesh-a', {
-      kind: ReceiveKind.NodeSend,
-      sourceNodeRid,
-      parts
-    } as never).then(() => undefined).catch(error => {
-      deliveryErrors.push(error);
-      if (runtime === targetRuntime && options.readyResults === undefined) {
-        sourceSignal.abort(error);
-      }
-    }).finally(() => parts.forEach(part => part.close()));
-    deliveries.push(delivery);
-  };
   const sourceNode = {
     status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
     peers: () => [{ routingId: 'target', lifecycleGeneration: 6n, state: 3 }],
@@ -1531,7 +1852,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       queueMicrotask(() => deliver(targetRuntime, 'source', Buffer.from(bytes), targetDeliveries));
       return SubmitResult.Ok;
     },
-    sendInfrastructureControlFrames(_targetRid: string, frames: readonly Uint8Array[]) {
+    requestInfrastructureControlFrames(
+      _targetRid: string,
+      frames: readonly Uint8Array[],
+      requestOptions?: { readonly timeoutMs?: number }
+    ): Promise<readonly Uint8Array[]> {
       const bytes = frames[0]!;
       const control = decodeServiceRelocationControlRequest(bytes);
       if (control !== undefined) {
@@ -1540,24 +1865,50 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           prepareFingerprints.push(Buffer.from(bytes).toString('base64'));
         }
       }
-      queueMicrotask(() => deliverFrames(targetRuntime, 'source', frames, targetDeliveries));
-      return SubmitResult.Ok;
+      return new Promise<readonly Uint8Array[]>((resolve, reject) => {
+        const parts = frames.map(frame => Message.from(frame));
+        let settled = false;
+        const finish = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          action();
+        };
+        const timer = setTimeout(
+          () => finish(() => reject(new Error('in-memory infrastructure request timed out'))),
+          requestOptions?.timeoutMs ?? 30_000
+        );
+        const delivery = targetRuntime.tryHandleControl('mesh-a', {
+          kind: ReceiveKind.NodeRequest,
+          sourceNodeRid: 'source',
+          parts,
+          reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+            events.push('ready:submit');
+            const queuedResult = options.readyResults?.shift();
+            const result = queuedResult
+              ?? options.readyResult
+              ?? SubmitResult.Ok;
+            if (result === SubmitResult.Ok) {
+              const replyParts = Array.isArray(reply) ? reply : [reply];
+              finish(() => resolve(replyParts.map(part => Buffer.from(part))));
+            }
+            return result;
+          }
+        } as never).then(() => undefined).catch(error => {
+          deliveryErrors.push(error);
+          if (options.readyResults === undefined) sourceSignal.abort(error);
+          finish(() => reject(error));
+        }).finally(() => parts.forEach(part => part.close()));
+        targetDeliveries.push(delivery);
+      });
     }
   };
   const targetNode = {
     status: () => ({ routingId: 'target', lifecycleGeneration: 6n }),
     peers: () => [{ routingId: 'source', lifecycleGeneration: 2n, state: 3 }],
     sendInfrastructureControl(_sourceRid: string, bytes: Uint8Array) {
-      const control = decodeServiceRelocationControlRequest(bytes);
-      if (control?.kind === 'ready') {
-        events.push('ready:submit');
-        const queuedResult = options.readyResults?.shift();
-        if (queuedResult !== undefined) return queuedResult;
-        if (options.readyResult !== undefined) return options.readyResult;
-      } else {
-        events.push('sourceLeave:submit');
-        if (options.sourceLeaveResult !== undefined) return options.sourceLeaveResult;
-      }
+      events.push('sourceLeave:submit');
+      if (options.sourceLeaveResult !== undefined) return options.sourceLeaveResult;
       queueMicrotask(() => deliver(sourceRuntime, 'target', Buffer.from(bytes), sourceDeliveries));
       return SubmitResult.Ok;
     },
@@ -1572,14 +1923,21 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   const targetSpotManager = {
     formalRemoteActorAdmissions: admissions,
+    formalRemoteTransfers: { delete() {} },
     activations: { resolve: () => undefined },
     resolveRelocationActivation: () => undefined,
     options: {
       entryNodeRid: 'entry-target',
+      canonicalActorJoinResolver: async () => ({ actorType: 'Player' }),
+      actorResolver: () => undefined,
       async dispatchEntryActorJoin() {
         events.push('onJoined');
       },
       actorTransferRuntime: {
+        async prepareDeferredJoinAccepted() {
+          events.push('recovery:prepared');
+          return { reference: 'recovered-root' };
+        },
         async commitAndDeliverDeferredJoinAccepted() {
           events.push('accepted:started');
           await acceptedGate;
@@ -1587,9 +1945,140 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         }
       }
     },
+    dispatchMeshActorJoin: DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin,
+    async restoreCanonicalActorJoinRecovery(
+      recovery: CanonicalActorJoinRecovery,
+      signal?: AbortSignal
+    ) {
+      restoredCanonicalRecovery = recovery;
+      await DefaultZLinkSpotManager.prototype.restoreCanonicalActorJoinRecovery.call(
+        this as never,
+        recovery,
+        signal
+      );
+    },
     finalizeActorJoinRelocation:
       DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation
   };
+  let canonicalIngress: ((record: {
+    readonly command: number;
+    readonly flags: number;
+    readonly sourceRoutingId: string;
+    readonly requestSequence: bigint;
+    readonly parts: readonly Buffer[];
+    readonly applicationJobOwner: ReturnType<typeof actorJoinApplicationJobOwner>;
+  }) => Promise<unknown>) | undefined;
+  let canonicalReply: ((parts: readonly Buffer[]) => void) | undefined;
+  let canonicalMailboxTask = Promise.resolve();
+  const targetCanonicalRuntime = new ServiceStatefulRuntime({
+    topology: {
+      peer: (rid: string) => rid === 'source'
+        ? {
+            descriptor: {
+              lifecycleGeneration: 2n,
+              protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY]
+            }
+          }
+        : undefined
+    },
+    mailbox: {
+      tryEnqueue(record: {
+        readonly stateful?: ServiceStatefulMailboxData;
+      }) {
+        const stateful = record.stateful!;
+        canonicalMailboxTask = (async () => {
+          const requestPayload = stateful.canonicalApplicationPayload!;
+          const request = Message.from(requestPayload.payload);
+          try {
+            await DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
+              targetSpotManager as never,
+              'mesh-a',
+              { spotId: 'entry-target' } as never,
+              {
+                kindData: stateful.kindData,
+                parts: [request],
+                contentType: requestPayload.contentType,
+                isPending: () => true,
+                replyActorJoin: (joinResult: 0 | 1) => stateful.reply?.(
+                  RequestResult.Ok,
+                  0,
+                  undefined,
+                  {
+                    kind: 'actorJoin',
+                    joinResult,
+                    spot: { spotId: 'entry-target', generation: 6n },
+                    membershipEpoch: 8n
+                  }
+                ) === true ? SubmitResult.Ok : SubmitResult.NotConnected
+              } as never
+            );
+          } finally {
+            request.close();
+          }
+        })();
+        return true;
+      }
+    },
+    setServiceIngress(handler: typeof canonicalIngress) { canonicalIngress = handler; },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      canonicalReply?.(parts.map(part => Buffer.from(part)));
+    }
+  } as never, 'target', 6n);
+  const canonicalTargetSpot = targetCanonicalRuntime.restoreUserSpotAuthority(
+    'entry-target',
+    'Entry',
+    6n,
+    1n
+  );
+  const sourceCanonicalRuntime = new ServiceStatefulRuntime({
+    topology: {
+      peer: (rid: string) => rid === 'target'
+        ? {
+            descriptor: {
+              lifecycleGeneration: 6n,
+              protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY]
+            }
+          }
+        : undefined
+    },
+    setServiceIngress() {},
+    async requestService(_rid: string, parts: readonly Buffer[]) {
+      const reply = new Promise<readonly Buffer[]>(resolve => { canonicalReply = resolve; });
+      const applicationJobOwner = actorJoinApplicationJobOwner();
+      try {
+        await canonicalIngress!({
+          command: 28,
+          flags: 0,
+          sourceRoutingId: 'source',
+          requestSequence: 1n,
+          parts,
+          applicationJobOwner
+        });
+        await canonicalMailboxTask;
+        return await reply;
+      } finally {
+        applicationJobOwner.close();
+      }
+    }
+  } as never, 'source', 2n);
+  sourceCanonicalRuntime.restoreUserSpotAuthority('source-room', 'Room', 4n, 1n);
+  const canonicalSourceActor = sourceCanonicalRuntime.restoreActorAuthority(
+    actorId,
+    'Player',
+    5n,
+    11n,
+    'source-room',
+    4n,
+    7n
+  );
+  sourceCanonicalRuntime.rememberSpotRoute({
+    spot: canonicalTargetSpot.ref,
+    targetNodeRid: 'target',
+    targetNodeGeneration: 6n,
+    authorityOwnerGeneration: canonicalTargetSpot.authorityOwnerGeneration,
+    ownerLeaseGeneration: 14n,
+    storeVersion: 'target-entry-v1'
+  });
   const common = {
     registration,
     locationStore: () => location,
@@ -1629,6 +2118,39 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
 
   const relocate = async (advertisedReceiveChunkLimitBytes?: number) => {
     sourceSignal = new AbortController();
+    if (options.canonicalRecovery === true && canonicalHandoffId === undefined) {
+      const admission = sourceCanonicalRuntime.joinActorCanonical(
+        canonicalSourceActor.ref,
+        'target',
+        canonicalTargetSpot.ref,
+        canonicalTargetSpot.ref.generation,
+        {
+          packetName: '__zlink.actor.join_spot.request',
+          contentType: 'application/json',
+          payload: Buffer.from('canonical-request')
+        },
+        {
+          targetNodeGeneration: 2n,
+          authorityOwnerGeneration: 11n,
+          ownerLeaseGeneration: 3n
+        },
+        { phase: 'admission', transferId: 'private-local-transfer' },
+        5_000
+      );
+      const admissionResult = await admission.promise;
+      canonicalAdmissionOperationId = { high: 2n, low: admission.id };
+      assert.equal(admissionResult.terminalResult, RequestResult.Ok);
+      assert.equal(admissionResult.kindData?.kind, 'actorJoinCompletion');
+      canonicalHandoffId = admissionResult.kindData?.kind === 'actorJoinCompletion'
+        ? admissionResult.kindData.canonicalHandoffId
+        : undefined;
+      assert.notEqual(canonicalHandoffId, undefined);
+    }
+    const activeRelocationId = options.canonicalRecovery === true
+      ? `${canonicalHandoffId!.slice(0, 8)}-${canonicalHandoffId!.slice(8, 12)}`
+        + `-${canonicalHandoffId!.slice(12, 16)}-${canonicalHandoffId!.slice(16, 20)}`
+        + `-${canonicalHandoffId!.slice(20)}`
+      : relocationId;
     const result = await sourceRuntime.relocateActorJoin({
       meshName: 'mesh-a',
       actor: sourceActor as never,
@@ -1641,8 +2163,26 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         targetSpotGeneration: 6n,
         targetNodeGeneration: 6n
       },
-      relocationId,
-      completionOperationId: `${completionOperationId.high.toString(16)}:${completionOperationId.low.toString(16)}`,
+      relocationId: activeRelocationId,
+      completionOperationId,
+      ...(options.canonicalRecovery !== true
+        ? {}
+        : {
+            canonicalRecovery: {
+              handoffId: canonicalHandoffId!,
+              admissionOperationId: canonicalAdmissionOperationId,
+              requestContentType: 'application/json',
+              request: Buffer.from('canonical-request'),
+              replyContentType: 'application/octet-stream',
+              reply: Buffer.alloc(0),
+              actorNodeGeneration: 2n,
+              expectedOwnerLeaseGeneration: 3n,
+              targetNodeGeneration: 6n,
+              targetSpotGeneration: 6n,
+              targetAuthorityOwnerGeneration: 12n,
+              targetSpotAuthorityOwnerGeneration: 1n
+            }
+          }),
       advertisedReceiveChunkLimitBytes,
       signal: sourceSignal.signal
     });
@@ -1658,6 +2198,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     prepareFingerprints,
     location,
     targetActorManager,
+    canonicalRecoveryIdentity: () => restoredCanonicalRecovery,
+    canonicalAdmissionActorNodeRid: () => {
+      if (canonicalHandoffId === undefined) return undefined;
+      return String(admissions.get(canonicalHandoffId)?.admission.actorRef.nodeRid);
+    },
     relocate,
     releaseAccepted,
     releaseSourceLeave,
@@ -1680,7 +2225,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       const wire = {
         kind: 'cutover',
         relocation: { high: 0n, low: 145n },
-        targetAttemptGeneration: 1n,
+        targetAttemptGeneration: 6n,
         coordinator,
         senderRole: 'source',
         object: {
@@ -1717,7 +2262,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       releaseAccepted();
       releaseSourceLeave();
       admissions.delete(relocationId);
+      if (canonicalHandoffId !== undefined) admissions.delete(canonicalHandoffId);
       await Promise.all([...targetDeliveries, ...sourceDeliveries]);
+      sourceCanonicalRuntime.close();
+      targetCanonicalRuntime.close();
       await sourceRuntime.dispose();
       await targetRuntime.dispose();
     }

@@ -43,7 +43,6 @@ import {
   encodeActorCreateHeader,
   encodeActorDestroyHeader,
   encodeActorHeader,
-  encodeActorJoinHeader,
   encodeActorLookupHeader,
   encodeBoundSessionBindHeader,
   encodeBoundSessionReplacedHeader,
@@ -74,6 +73,15 @@ import {
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
+import {
+  decodeActorJoin28,
+  encodeActorJoin28,
+  type ActorJoin28
+} from '../protocol/service_wire_pilot_codec.generated';
+import {
+  canonicalActorJoinHandoffId,
+  routingIdBytes
+} from './actor-join-recovery-codec';
 
 import {
   decodeApplicationPayload,
@@ -170,12 +178,25 @@ export interface ServiceStatefulMailboxData {
   /** Carries the local operation deadline into the lifecycle dispatch lane. */
   readonly deadlineUnixMs?: bigint;
   readonly onTerminalCompletion?: () => void | Promise<void>;
+  /** Decoded only by the canonical command-28 generator path. */
+  readonly canonicalApplicationPayload?: ServiceApplicationPayload;
   readonly reply?: (
     terminalResult: number,
     failureCode: number,
     payload?: ServiceApplicationPayload,
     tail?: ServiceStatefulReplyTail
   ) => boolean;
+}
+
+export interface ServiceCanonicalActorJoinCandidate {
+  readonly request: ServiceApplicationPayload;
+  readonly actorFence: {
+    readonly targetNodeGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  };
+  /** Local-only relocation bookkeeping; it is never encoded in command 28. */
+  readonly local: { readonly phase: 'admission'; readonly transferId: string };
 }
 
 export interface ServiceSessionDelivery {
@@ -353,10 +374,7 @@ export class ServiceStatefulRuntime {
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceAuthorityTerminals = new Map<string, number>();
   private readonly instanceApplicationWaiters = new Map<string, Set<() => void>>();
-  private readonly actorJoinPhases = new Map<bigint, 'admission' | 'commit' | 'abort' | undefined>();
-  private readonly actorJoinTransferIds = new Map<bigint, string | undefined>();
-  private readonly actorJoinCommittedTransfers = new Map<string, number>();
-  private readonly actorJoinSourceLeaves = new Map<string, number>();
+  private readonly canonicalActorJoinHandoffs = new Map<bigint, string>();
   private readonly actorRoutes = new Map<string, ServiceActorRouteFence>();
   // Direct application messages use the logical Spot ID. Actor joins and
   // lifecycle controls use the exact Spot object generation. Keep both views
@@ -1504,6 +1522,33 @@ export class ServiceStatefulRuntime {
     return pending;
   }
 
+  joinActorCanonical(
+    actor: ServiceActorRef,
+    targetNodeRid: string,
+    targetSpot: ServiceSpotRef,
+    targetSpotGeneration: bigint,
+    request: ServiceApplicationPayload,
+    actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
+    local: ServiceCanonicalActorJoinCandidate['local'],
+    timeoutMs: number
+  ): ServiceStatefulPendingOperation {
+    const pending = this.operations.reserve(timeoutMs);
+    const target = this.trySpotFence(targetNodeRid, {
+      ...targetSpot,
+      generation: targetSpotGeneration
+    });
+    this.submitActorJoin(
+      pending,
+      actor,
+      targetNodeRid,
+      target,
+      request,
+      timeoutMs,
+      { request, actorFence, local }
+    );
+    return pending;
+  }
+
   joinActorEntrySpot(
     actor: ServiceActorRef,
     targetNodeRid: string,
@@ -1518,6 +1563,27 @@ export class ServiceStatefulRuntime {
       this.tryEntrySpotFence(targetNodeRid),
       payload,
       timeoutMs
+    );
+    return pending;
+  }
+
+  joinActorEntrySpotCanonical(
+    actor: ServiceActorRef,
+    targetNodeRid: string,
+    request: ServiceApplicationPayload,
+    actorFence: ServiceCanonicalActorJoinCandidate['actorFence'],
+    local: ServiceCanonicalActorJoinCandidate['local'],
+    timeoutMs: number
+  ): ServiceStatefulPendingOperation {
+    const pending = this.operations.reserve(timeoutMs);
+    this.submitActorJoin(
+      pending,
+      actor,
+      targetNodeRid,
+      this.tryEntrySpotFence(targetNodeRid),
+      request,
+      timeoutMs,
+      { request, actorFence, local }
     );
     return pending;
   }
@@ -1842,8 +1908,18 @@ export class ServiceStatefulRuntime {
       return undefined;
     }
     let decoded: ServiceStatefulWireRecord;
+    let canonicalActorJoin: ActorJoin28 | undefined;
     try {
-      decoded = decodeStatefulHeader(record.parts[0]!);
+      if (record.command === M6bServiceWireCommand.actorJoin) {
+        try {
+          canonicalActorJoin = decodeActorJoin28(record.parts);
+        } catch {
+          return 'protocolError';
+        }
+        decoded = statefulActorJoinFromCanonical(canonicalActorJoin);
+      } else {
+        decoded = decodeStatefulHeader(record.parts[0]!);
+      }
       const hasPayload = [
         'spotSend',
         'spotRequest',
@@ -1875,11 +1951,25 @@ export class ServiceStatefulRuntime {
       const metadataFrame = instanceMetadata
         ? validateServiceMetadataFrame(record.parts[1]!)
         : undefined;
-      const payloadFrame = record.parts.length >= 2
-        ? record.parts[record.parts.length - 1]
-        : undefined;
+      const canonicalPayload = canonicalActorJoin?.payload === undefined
+        ? undefined
+        : {
+            packetName: canonicalActorJoin.payload.packetName,
+            contentType: canonicalActorJoin.payload.contentType,
+            payload: Buffer.from(canonicalActorJoin.payload.payload)
+          };
+      const payloadFrame = canonicalPayload === undefined
+        ? (record.parts.length >= 2 ? record.parts[record.parts.length - 1] : undefined)
+        : encodeApplicationPayload(canonicalPayload);
       try {
-        return await this.handleIngress(record, decoded, payloadFrame, metadataFrame);
+        return await this.handleIngress(
+          record,
+          decoded,
+          payloadFrame,
+          metadataFrame,
+          canonicalActorJoin,
+          canonicalPayload
+        );
       } catch (error) {
         const correlation = statefulCorrelation(decoded);
         if (correlation !== undefined) {
@@ -1910,7 +2000,9 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     record: ServiceStatefulWireRecord,
     payloadFrame: Buffer | undefined,
-    metadataFrame?: Buffer
+    metadataFrame?: Buffer,
+    canonicalActorJoin?: ActorJoin28,
+    canonicalActorJoinPayload?: ServiceApplicationPayload
   ): Promise<RawServicePumpResult> {
     switch (record.kind) {
       case 'messageFollow': {
@@ -2040,8 +2132,20 @@ export class ServiceStatefulRuntime {
       case 'actorDestroy':
         return this.replyDestroy(ingress, record);
       case 'actorJoin':
+        // Canonical command-28 is a request/reply control.  A one-way ingress
+        // cannot carry its typed terminal, so report it as a protocol error
+        // through RawServiceMeshRuntime rather than attempting replyWire().
+        if (canonicalActorJoin !== undefined && ingress.requestSequence === undefined) {
+          return 'protocolError';
+        }
         this.validateSpotFence(record.target);
-        return this.enqueueActorJoin(ingress, record, payloadFrame);
+        return this.enqueueActorJoin(
+          ingress,
+          record,
+          payloadFrame,
+          canonicalActorJoin,
+          canonicalActorJoinPayload
+        );
       case 'boundSessionBind':
         return this.replySessionBind(ingress, record);
       case 'boundSessionReplaced':
@@ -3048,7 +3152,9 @@ export class ServiceStatefulRuntime {
   private enqueueActorJoin(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'actorJoin' }>,
-    payloadFrame: Buffer | undefined
+    payloadFrame: Buffer | undefined,
+    canonicalActorJoin?: ActorJoin28,
+    canonicalApplicationPayload?: ServiceApplicationPayload
   ): RawServicePumpResult {
     const current = this.registry.actor(record.actor.actor.actorId);
     const previousEpoch = current?.membershipEpoch ?? 0n;
@@ -3067,11 +3173,27 @@ export class ServiceStatefulRuntime {
       currentSpotGeneration: record.target.spot.generation,
       previousMembershipEpoch: previousEpoch,
       currentMembershipEpoch: previousEpoch + 1n,
-      resultCode: 0
+      resultCode: 0,
+      ...(canonicalActorJoin === undefined
+        ? {}
+        : {
+            canonicalActorJoin: {
+              handoffId: canonicalActorJoinHandoffId({
+                sourceActorNodeRid: canonicalActorJoin.actor.targetNodeRid,
+                actorId: record.actor.actor.actorId,
+                actorGeneration: record.actor.actor.generation,
+                sourceActorNodeGeneration: record.actor.targetNodeGeneration,
+                correlation: record.correlation
+              }),
+              actorNodeRid: record.actor.actor.nodeRid,
+              actorGeneration: record.actor.actor.generation,
+              actorNodeGeneration: record.actor.targetNodeGeneration,
+              authorityOwnerGeneration: record.actor.authorityOwnerGeneration,
+              ownerLeaseGeneration: record.actor.ownerLeaseGeneration
+            }
+          })
     };
     const applicationFrame = payloadFrame ?? encodeApplicationPayload(emptyPayload());
-    const actorJoinPhase = actorJoinPhaseFromApplicationFrame(payloadFrame);
-    const actorJoinTransferId = actorJoinTransferIdFromApplicationFrame(payloadFrame);
     return this.enqueueLifecycleFrame(
       ingress,
       `spot:${record.target.spot.spotId}`,
@@ -3083,35 +3205,13 @@ export class ServiceStatefulRuntime {
         targetSpot: record.target.spot,
         targetActor: actor,
         kindData: control,
+        ...(canonicalApplicationPayload === undefined ? {} : { canonicalApplicationPayload }),
         reply: (terminalResult, failureCode, replyPayload, tail) => {
-          const committedReplay = actorJoinTransferId !== undefined
-            && this.hasCommittedActorJoin(actorJoinTransferId);
-          if (
-            actorJoinPhase !== 'admission'
-            && actorJoinPhase !== 'abort'
-            && !committedReplay
-            && terminalResult === RequestResult.Ok
-            && tail?.kind === 'actorJoin'
-            && tail.joinResult === 0
-          ) {
-            this.commitJoinedActor(record.actor.actor, record.target.spot, previousEpoch + 1n);
-            if (actorJoinTransferId !== undefined) {
-              this.rememberCommittedActorJoin(actorJoinTransferId);
-            }
-          }
-          const replyTail = committedReplay
-            && tail?.kind === 'actorJoin'
-            ? {
-                ...tail,
-                membershipEpoch: this.registry.actor(record.actor.actor.actorId)?.membershipEpoch
-                  ?? tail.membershipEpoch
-              }
-            : tail;
           return this.replyPort(ingress, record.correlation, 'actorJoin')(
             terminalResult,
             failureCode,
             replyPayload,
-            replyTail
+            tail
           );
         }
       }
@@ -3729,6 +3829,7 @@ export class ServiceStatefulRuntime {
       ingress.requestSequence === undefined
       || record.sourceNodeRid !== ingress.sourceRoutingId
       || record.sourceNodeGeneration !== this.peerGeneration(ingress.sourceRoutingId)
+      || (record.kind === 'actorCreate' && record.reservation.pendingCapacityDelta !== 1)
     ) {
       return 'protocolError';
     }
@@ -4082,8 +4183,7 @@ export class ServiceStatefulRuntime {
       reply => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
       error => {
         if (operationKind === 'actorJoin') {
-          this.actorJoinPhases.delete(pending.id);
-          this.actorJoinTransferIds.delete(pending.id);
+          this.canonicalActorJoinHandoffs.delete(pending.id);
         }
         this.operations.fail(pending.id, error);
       }
@@ -4096,9 +4196,12 @@ export class ServiceStatefulRuntime {
     targetNodeRid: string,
     target: ServiceSpotRouteFence | undefined,
     payload: ServiceApplicationPayload | undefined,
-    timeoutMs: number
+    timeoutMs: number,
+    canonical?: ServiceCanonicalActorJoinCandidate
   ): void {
-    const actorRoute = this.tryActorFence(actor);
+    const actorRoute = canonical === undefined
+      ? this.tryActorFence(actor)
+      : this.acceptCanonicalActorFence(actor, canonical.actorFence);
     if (target === undefined || actorRoute === undefined) {
       this.operations.reply(pending.id, {
         terminalResult: RequestResult.NotFound,
@@ -4106,27 +4209,39 @@ export class ServiceStatefulRuntime {
       });
       return;
     }
-    const header = encodeActorJoinHeader(
-      pending.id,
-      actorRoute,
-      target.spot.spotId === targetNodeRid,
-      target
-    );
-    this.actorJoinPhases.set(
-      pending.id,
-      actorJoinMetadataFromMultipartPayload(payload?.payload)?.phase
-    );
-    this.actorJoinTransferIds.set(
-      pending.id,
-      actorJoinMetadataFromMultipartPayload(payload?.payload)?.transferId
-    );
+    if (canonical !== undefined) {
+      this.canonicalActorJoinHandoffs.set(pending.id, canonicalActorJoinHandoffId({
+        sourceActorNodeRid: routingIdBytes(actor.nodeRid as never),
+        actorId: actor.actorId,
+        actorGeneration: actor.generation,
+        sourceActorNodeGeneration: actorRoute.targetNodeGeneration,
+        correlation: pending.id
+      }));
+    }
     this.submitRequest(
       pending,
       targetNodeRid,
-      [
-        header,
-        ...(payload === undefined ? [] : [encodeApplicationPayload(payload)])
-      ],
+      encodeActorJoin28({
+        correlation: pending.id,
+        actor: {
+          id: actor.actorId,
+          generation: actor.generation,
+          targetNodeRid: routingIdBytes(actor.nodeRid as never),
+          targetNodeGeneration: actorRoute.targetNodeGeneration,
+          expectedAuthorityOwnerGeneration: actorRoute.authorityOwnerGeneration,
+          expectedOwnerLeaseGeneration: actorRoute.ownerLeaseGeneration
+        },
+        entry: target.spot.spotId === targetNodeRid,
+        targetSpot: {
+          id: target.spot.spotId,
+          generation: target.spot.generation,
+          targetNodeRid: routingIdBytes(target.targetNodeRid as never),
+          targetNodeGeneration: target.targetNodeGeneration,
+          expectedAuthorityOwnerGeneration: target.authorityOwnerGeneration,
+          expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
+        },
+        ...(payload === undefined ? {} : { payload })
+      }).map(frame => Buffer.from(frame)),
       timeoutMs,
       'actorJoin',
       actor
@@ -4142,10 +4257,19 @@ export class ServiceStatefulRuntime {
     actor?: ServiceActorRef,
     deadlineUnixMs?: bigint
   ): void {
-    const decoded = decodeStatefulHeader(ingress.parts[0]!);
-    const payloadFrame = ingress.parts.length < 2
-      ? undefined
-      : ingress.parts[1];
+    const canonicalActorJoin = operationKind === 'actorJoin'
+      ? decodeActorJoin28(ingress.parts)
+      : undefined;
+    const decoded = canonicalActorJoin === undefined
+      ? decodeStatefulHeader(ingress.parts[0]!)
+      : statefulActorJoinFromCanonical(canonicalActorJoin);
+    const payloadFrame = canonicalActorJoin?.payload === undefined
+      ? (ingress.parts.length < 2 ? undefined : ingress.parts[1])
+      : encodeApplicationPayload({
+          packetName: canonicalActorJoin.payload.packetName,
+          contentType: canonicalActorJoin.payload.contentType,
+          payload: Buffer.from(canonicalActorJoin.payload.payload)
+        });
     if (decoded.kind === 'actorLookup') {
       const found = this.registry.actor(decoded.actorId);
       this.operations.reply(pending.id, found === undefined
@@ -4248,24 +4372,21 @@ export class ServiceStatefulRuntime {
           targetSpot: decoded.target.spot,
           targetActor: decoded.actor.actor,
           kindData: control,
+          ...(canonicalActorJoin?.payload === undefined
+            ? {}
+            : {
+                canonicalApplicationPayload: {
+                  packetName: canonicalActorJoin.payload.packetName,
+                  contentType: canonicalActorJoin.payload.contentType,
+                  payload: Buffer.from(canonicalActorJoin.payload.payload)
+                }
+              }),
           isPending: () => this.operations.isPending(pending.id),
           ...(deadlineUnixMs === undefined ? {} : { deadlineUnixMs }),
           onTerminalCompletion: () => completeOnJoinDispatchTerminal?.(),
           reply: (terminalResult, failureCode, replyPayload, tail) => {
             if (actorJoinReplyAccepted) return false;
-            const actorJoinTransferId = actorJoinTransferIdFromApplicationFrame(payloadFrame);
-            const committedReplay = actorJoinTransferId !== undefined
-              && this.hasCommittedActorJoin(actorJoinTransferId);
-            const replyTail = committedReplay
-              && tail?.kind === 'actorJoin'
-              ? {
-                  ...tail,
-                  membershipEpoch: this.registry.actor(decoded.actor.actor.actorId)?.membershipEpoch
-                  ?? tail.membershipEpoch
-                }
-              : tail;
-            const acceptedJoin = !committedReplay
-              && terminalResult === RequestResult.Ok
+            const acceptedJoin = terminalResult === RequestResult.Ok
               && tail?.kind === 'actorJoin'
               && tail.joinResult === 0;
             if (acceptedJoin && this.operations.isPending(pending.id)) {
@@ -4277,7 +4398,7 @@ export class ServiceStatefulRuntime {
               const completeReply = (): void => {
                 if (completed) return;
                 completed = true;
-                localReply(terminalResult, failureCode, replyPayload, replyTail);
+                localReply(terminalResult, failureCode, replyPayload, tail);
               };
               this.commitJoinedActor(
                 decoded.actor.actor,
@@ -4285,9 +4406,6 @@ export class ServiceStatefulRuntime {
                 control.currentMembershipEpoch,
                 targetSpotKind === 'user' ? completeReply : undefined
               );
-              if (actorJoinTransferId !== undefined) {
-                this.rememberCommittedActorJoin(actorJoinTransferId);
-              }
               if (targetSpotKind === 'entry') {
                 completeOnJoinDispatchTerminal = completeReply;
               } else if (targetSpotKind !== 'user') {
@@ -4299,7 +4417,7 @@ export class ServiceStatefulRuntime {
               terminalResult,
               failureCode,
               replyPayload,
-              replyTail
+              tail
             );
             if (acceptedReply) actorJoinReplyAccepted = true;
             return acceptedReply;
@@ -4379,41 +4497,21 @@ export class ServiceStatefulRuntime {
     actor: ServiceActorRef | undefined,
     reply: readonly Buffer[]
   ): void {
-    const actorJoinPhase = operationKind === 'actorJoin'
-      ? this.actorJoinPhases.get(pending.id)
-      : undefined;
-    const actorJoinTransferId = operationKind === 'actorJoin'
-      ? this.actorJoinTransferIds.get(pending.id)
+    const canonicalActorJoinHandoffId = operationKind === 'actorJoin'
+      ? this.canonicalActorJoinHandoffs.get(pending.id)
       : undefined;
     try {
       if (reply.length < 1 || reply.length > 2) throw new ServiceWireProtocolError('Invalid M6B reply parts.');
       const decoded = decodeStatefulReply(reply[0]!, pending.id, operationKind, reply.length >= 2);
       const payload = reply.length < 2 ? undefined : decodeApplicationPayload(reply[1]);
-      if (
-        operationKind === 'actorJoin'
-        && actor !== undefined
-        && actorJoinPhase !== 'admission'
-        && actorJoinPhase !== 'abort'
-        && decoded.terminalResult === RequestResult.Ok
-        && decoded.tail?.kind === 'actorJoin'
-        && decoded.tail.joinResult === 0
-        && (
-          actorJoinTransferId === undefined
-          || !this.hasSourceLeave(actorJoinTransferId)
-        )
-      ) {
-        this.enqueueRemoteSourceLeave(actor);
-        if (actorJoinTransferId !== undefined) {
-          this.rememberSourceLeave(actorJoinTransferId);
-        }
-      }
       this.operations.reply(pending.id, this.resultFromReply(
         decoded.terminalResult,
         decoded.failureCode,
         payload,
         decoded.tail,
         targetNodeRid,
-        actor
+        actor,
+        canonicalActorJoinHandoffId
       ));
     } catch (error) {
       //  Spec 32-framework-error-model:58-60, 91-92 — an unprocessable remote
@@ -4422,32 +4520,9 @@ export class ServiceStatefulRuntime {
       this.operations.fail(pending.id, translateWireReplyDecodeError(error));
     } finally {
       if (operationKind === 'actorJoin') {
-        this.actorJoinPhases.delete(pending.id);
-        this.actorJoinTransferIds.delete(pending.id);
+        this.canonicalActorJoinHandoffs.delete(pending.id);
       }
     }
-  }
-
-  private enqueueRemoteSourceLeave(actor: ServiceActorRef): void {
-    const current = this.registry.requireActor(actor);
-    const transition = this.registry.leaveActor(actor, current.membershipEpoch);
-    // The Core-owned remote Entry transfer emits the LEFT lifecycle event to
-    // the source membership. The actor state already points at the Entry
-    // Spot, so routing this control to currentSpot would skip the source
-    // User Spot's onLeaveActor callback and only notify the Entry callback.
-    this.enqueueActorControl(transition.previousSpot.spotId, {
-      kind: 'actorControl',
-      lifecycleKind: ActorLifecycleKind.Left,
-      previousActor: transition.actor.ref,
-      currentActor: transition.actor.ref,
-      previousSpotId: transition.previousSpot.spotId,
-      currentSpotId: transition.currentSpot.spotId,
-      previousSpotGeneration: transition.previousSpot.generation,
-      currentSpotGeneration: transition.currentSpot.generation,
-      previousMembershipEpoch: transition.previousMembershipEpoch,
-      currentMembershipEpoch: transition.currentMembershipEpoch,
-      resultCode: 0
-    });
   }
 
   private resultFromReply(
@@ -4456,7 +4531,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload | undefined,
     tail: ServiceStatefulReplyTail | undefined,
     targetNodeRid: string,
-    actor: ServiceActorRef | undefined
+    actor: ServiceActorRef | undefined,
+    canonicalActorJoinHandoffId?: string
   ): ServiceStatefulResult {
     let kindData: ReceiveKindData | undefined;
     if (tail?.kind === 'actorLookup') {
@@ -4491,7 +4567,11 @@ export class ServiceStatefulRuntime {
         },
         ...(tail.receiveChunkLimitBytes === undefined
           ? {}
-          : { receiveChunkLimitBytes: tail.receiveChunkLimitBytes })
+          : { receiveChunkLimitBytes: tail.receiveChunkLimitBytes }),
+        ...(payload === undefined ? {} : { replyContentType: payload.contentType }),
+        ...(canonicalActorJoinHandoffId === undefined
+          ? {}
+          : { canonicalHandoffId: canonicalActorJoinHandoffId })
       } satisfies ActorJoinCompletionPayload;
     }
     return {
@@ -4847,6 +4927,33 @@ export class ServiceStatefulRuntime {
     return route !== undefined && sameActorRef(route.actor, actor) ? route : undefined;
   }
 
+  private acceptCanonicalActorFence(
+    actor: ServiceActorRef,
+    fence: ServiceCanonicalActorJoinCandidate['actorFence']
+  ): ServiceActorRouteFence | undefined {
+    // Canonical command 28 carries the current Location Store authority
+    // snapshot selected for this attempt. A private Core route may describe a
+    // previous visit to the same owner, so it cannot veto that snapshot; the
+    // receiving runtime validates every field against the Store before
+    // application admission (spec 15 section 4.2 / spec 51 section 9).
+    // Object/authority/lease are bounded counters.  Node lifecycle is a
+    // full-range opaque token, where only zero represents absence.
+    if (
+      actor.generation <= 0n
+      || fence.targetNodeGeneration === 0n
+      || fence.authorityOwnerGeneration <= 0n
+      || fence.ownerLeaseGeneration <= 0n
+    ) {
+      return undefined;
+    }
+    return {
+      actor,
+      targetNodeGeneration: fence.targetNodeGeneration,
+      authorityOwnerGeneration: fence.authorityOwnerGeneration,
+      ownerLeaseGeneration: fence.ownerLeaseGeneration
+    };
+  }
+
   private trySpotFence(
     targetNodeRid: string,
     spot: ServiceSpotRef
@@ -5010,33 +5117,6 @@ export class ServiceStatefulRuntime {
     }
   }
 
-  private hasCommittedActorJoin(transferId: string): boolean {
-    const expiresAt = this.actorJoinCommittedTransfers.get(transferId);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
-      this.actorJoinCommittedTransfers.delete(transferId);
-      return false;
-    }
-    return true;
-  }
-
-  private rememberCommittedActorJoin(transferId: string): void {
-    this.actorJoinCommittedTransfers.set(transferId, Date.now() + 30_000);
-  }
-
-  private hasSourceLeave(transferId: string): boolean {
-    const expiresAt = this.actorJoinSourceLeaves.get(transferId);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
-      this.actorJoinSourceLeaves.delete(transferId);
-      return false;
-    }
-    return true;
-  }
-
-  private rememberSourceLeave(transferId: string): void {
-    this.actorJoinSourceLeaves.set(transferId, Date.now() + 30_000);
-  }
 
   private requireOpen(): void {
     if (this.closed) throw new Error('Stateful runtime is closed.');
@@ -5454,59 +5534,44 @@ function emptyPayload(): ServiceApplicationPayload {
   };
 }
 
-function actorJoinPhaseFromApplicationFrame(
-  frame: Uint8Array | undefined
-): 'admission' | 'commit' | 'abort' | undefined {
-  return actorJoinMetadataFromApplicationFrame(frame)?.phase;
-}
-
-function actorJoinTransferIdFromApplicationFrame(
-  frame: Uint8Array | undefined
-): string | undefined {
-  return actorJoinMetadataFromApplicationFrame(frame)?.transferId;
-}
-
-function actorJoinMetadataFromApplicationFrame(
-  frame: Uint8Array | undefined
-): {
-  readonly phase: 'admission' | 'commit' | 'abort' | undefined;
-  readonly transferId: string | undefined;
-} | undefined {
-  if (frame === undefined) return undefined;
-  try {
-    return actorJoinMetadataFromMultipartPayload(decodeApplicationPayload(frame).payload);
-  } catch {
-    return undefined;
-  }
-}
-
-function actorJoinMetadataFromMultipartPayload(
-  payload: Uint8Array | undefined
-): {
-  readonly phase: 'admission' | 'commit' | 'abort' | undefined;
-  readonly transferId: string | undefined;
-} | undefined {
-  if (payload === undefined || payload.byteLength < 8) return undefined;
-  const bytes = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
-  const partCount = bytes.readUInt32BE(0);
-  if (partCount < 1 || bytes.length < 8) return undefined;
-  const partLength = bytes.readUInt32BE(4);
-  if (partLength > bytes.length - 8) return undefined;
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(bytes.subarray(8, 8 + partLength).toString('utf8'));
-  } catch {
-    return undefined;
-  }
-  if (typeof decoded !== 'object' || decoded === null) return undefined;
-  const phase = (decoded as { readonly phase?: unknown }).phase;
-  const transferId = (decoded as { readonly transferId?: unknown }).transferId;
+/**
+ * The generated command-28 decoder is the canonical wire authority.  Keep
+ * the stateful mailbox's internal record shape as an adapter only; it must
+ * not re-parse the canonical bytes with the legacy hand-written decoder.
+ */
+function statefulActorJoinFromCanonical(value: ActorJoin28): Extract<
+  ServiceStatefulWireRecord,
+  { readonly kind: 'actorJoin' }
+> {
   return {
-    phase: phase === 'admission' || phase === 'commit' || phase === 'abort'
-      ? phase
-      : undefined,
-    transferId: typeof transferId === 'string' ? transferId : undefined
+    kind: 'actorJoin',
+    correlation: value.correlation,
+    actor: {
+      actor: {
+        actorId: value.actor.id,
+        generation: value.actor.generation,
+        nodeRid: decodeCanonicalRoutingId(value.actor.targetNodeRid)
+      },
+      targetNodeGeneration: value.actor.targetNodeGeneration,
+      authorityOwnerGeneration: value.actor.expectedAuthorityOwnerGeneration,
+      ownerLeaseGeneration: value.actor.expectedOwnerLeaseGeneration
+    },
+    entry: value.entry,
+    target: {
+      spot: {
+        spotId: value.targetSpot.id,
+        generation: value.targetSpot.generation
+      },
+      targetNodeRid: decodeCanonicalRoutingId(value.targetSpot.targetNodeRid),
+      targetNodeGeneration: value.targetSpot.targetNodeGeneration,
+      authorityOwnerGeneration: value.targetSpot.expectedAuthorityOwnerGeneration,
+      ownerLeaseGeneration: value.targetSpot.expectedOwnerLeaseGeneration
+    }
   };
+}
+
+function decodeCanonicalRoutingId(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
 }
 
 function instanceOperationParts(

@@ -14,6 +14,7 @@ internal sealed record ZLinkAggregateRelocationParticipant(
 internal sealed record ZLinkAggregateRelocationRequest(
     Guid AggregateId,
     ulong AggregateGeneration,
+    ulong TargetAttemptGeneration,
     IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants,
     ZLinkMeshNodeDescriptorKey TargetDescriptor,
     ulong TargetDescriptorLifecycleGeneration,
@@ -263,7 +264,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             new ZLinkCanonicalRelocationAuthorityState(
                 envelope.CanonicalRelocationHigh,
                 envelope.CanonicalRelocationLow,
-                request.AggregateGeneration,
+                request.TargetAttemptGeneration,
                 sourceNodeRid,
                 sourceNodeGeneration,
                 sourceOwnerId,
@@ -279,6 +280,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 Phase: 4,
                 envelope.CanonicalApplicationVersion)
             {
+                AggregateGeneration = request.AggregateGeneration,
                 CoordinatorExpectedAuthorityStoreVersion =
                     spotParticipant.ExpectedStoreVersion,
                 RelocationReference = stored.Reference,
@@ -663,7 +665,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             throw new ArgumentException(
                 "The aggregate id must not be empty.",
                 nameof(request));
-        if (request.AggregateGeneration is 0 or > long.MaxValue)
+        if (request.AggregateGeneration is 0 or >= long.MaxValue
+            || request.TargetAttemptGeneration is 0 or > long.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(request));
         if (request.TargetOwner.LeaseGeneration <= 0)
             throw new ArgumentOutOfRangeException(nameof(request));
