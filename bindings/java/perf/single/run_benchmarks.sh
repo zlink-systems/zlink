@@ -5,6 +5,49 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 JAVA_BINDINGS_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${ROOT_DIR}/../../.." && pwd)"
+CORE_VERSION_OPTION=""
+SCRIPT_ARGUMENTS=("$@")
+for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
+  case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --core-version)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]}"
+      ;;
+    --core-version=*)
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if [[ ! "${requested_core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: --core-version must be MAJOR.MINOR.PATCH: ${requested_core_version:-<missing>}" >&2
+    exit 1
+  fi
+  if [[ -n "${CORE_VERSION_OPTION}" && "${CORE_VERSION_OPTION}" != "${requested_core_version}" ]]; then
+    echo "Error: --core-version may be specified only once." >&2
+    exit 1
+  fi
+  CORE_VERSION_OPTION="${requested_core_version}"
+done
+
+# Use the current workspace Core by default. An explicit --core-version selects
+# the downloaded release package for that version instead.
+if [[ -n "${CORE_VERSION_OPTION}" ]]; then
+  if [[ -n "${ZLINK_CORE_SOURCE:-}" && "${ZLINK_CORE_SOURCE}" != "release" ]]; then
+    echo "Error: --core-version cannot be combined with ZLINK_CORE_SOURCE=${ZLINK_CORE_SOURCE}." >&2
+    exit 1
+  fi
+  export ZLINK_CORE_SOURCE=release
+  export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
+  export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+else
+  export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+fi
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
 source "${ROOT_DIR}/require_java22.sh"
 VERSION_FILE="${REPO_DIR}/VERSION"
@@ -72,6 +115,11 @@ Options:
   --auto-hwm-profile NAME Auto-HWM profile.
   --results-dir PATH     Results root override.
   --results-tag NAME     Optional report suffix tag.
+  --core-version VERSION Download and use the specified released Core version.
+
+Notes:
+  - by default the current workspace Core (core/build) is used; pass --core-version
+    to fetch and use a released Core runtime instead.
 USAGE
 }
 
@@ -99,6 +147,8 @@ while [[ $# -gt 0 ]]; do
     --rcvtimeo|--recv-timeout-ms) RCVTIMEO_MS="${2:-}"; shift ;;
     --results-dir) RESULTS_ROOT="${2:-}"; shift ;;
     --results-tag) RESULTS_TAG="${2:-}"; shift ;;
+    --core-version) shift ;;
+    --core-version=*) ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac

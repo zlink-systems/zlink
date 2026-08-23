@@ -219,6 +219,31 @@ endfunction()
 
 zlink_cpp_ensure_core_target(ZLINK_CPP_CORE_TARGET ZLINK_CPP_RUNTIME_DIR)
 
+# Link-Time Optimization (IPO). Default OFF: with the option off nothing is set
+# on any target, so the produced binaries are byte-for-byte the same as before
+# this option existed. When ON, IPO is applied both to the binding library and
+# to the final consumers (the perf executables) - LTO on the static library
+# alone would not remove any translation-unit boundary at the link step.
+if(NOT DEFINED ENABLE_LTO)
+  option(
+    ENABLE_LTO
+    "Enable Link-Time Optimization (LTO/IPO) for C++ binding targets"
+    OFF
+  )
+endif()
+
+set(ZLINK_CPP_IPO_ENABLED OFF)
+if(ENABLE_LTO)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT _zlink_cpp_ipo_supported OUTPUT _zlink_cpp_ipo_output)
+  if(_zlink_cpp_ipo_supported)
+    set(ZLINK_CPP_IPO_ENABLED ON)
+    message(STATUS "zlink_cpp: LTO/IPO enabled (ENABLE_LTO=ON)")
+  else()
+    message(WARNING "zlink_cpp: ENABLE_LTO=ON but IPO is not supported: ${_zlink_cpp_ipo_output}")
+  endif()
+endif()
+
 add_library(zlink_cpp STATIC
   src/Runtime/Core/capability.cpp
   src/Runtime/Core/context.cpp
@@ -270,6 +295,9 @@ set_target_properties(zlink_cpp PROPERTIES
   CXX_EXTENSIONS OFF
   NO_SYSTEM_FROM_IMPORTED TRUE
 )
+if(ZLINK_CPP_IPO_ENABLED)
+  set_property(TARGET zlink_cpp PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
 
 install(TARGETS zlink_cpp
   EXPORT zlink_cppTargets

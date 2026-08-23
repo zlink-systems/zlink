@@ -37,7 +37,6 @@ REQUIRED_RESULT_METRICS = (
 REQUIRED_RESULT_METRIC_COUNT = len(REQUIRED_RESULT_METRICS)
 PATTERN_SEPARATOR = "==============================================================================="
 STREAM_VARIANT_PATTERNS = ("STREAM",)
-SPOT_CONTROL_PATTERNS = ()
 PATTERN_ALIASES = {
     "STREAM": ("STREAM",),
     "STREAMS": STREAM_VARIANT_PATTERNS,
@@ -626,10 +625,6 @@ NON_SERVICE_TRANSPORTS = ["tcp", "tls", "ws", "wss"]
 if not IS_WINDOWS:
     NON_SERVICE_TRANSPORTS.append("ipc")
 
-# SPOT control-plane patterns are official perf targets on every network
-# transport used by the multi suite.
-SPOT_TRANSPORTS = ["tcp", "tls", "ws", "wss"]
-
 # STREAM socket uses different transports (raw TCP/TLS/WS/WSS)
 STREAM_TRANSPORTS = ["tcp", "tls", "ws", "wss"]
 FAIL_FAST = os.environ.get("PERF_FAIL_FAST", "0") == "1"
@@ -643,13 +638,7 @@ def is_pattern(pattern_name):
 
 
 def select_transports(pattern_name):
-    service_or_stream = (
-        pattern_name in STREAM_VARIANT_PATTERNS
-        or pattern_name in SPOT_CONTROL_PATTERNS
-    )
-    if pattern_name in SPOT_CONTROL_PATTERNS:
-        base = SPOT_TRANSPORTS
-    elif service_or_stream:
+    if pattern_name in STREAM_VARIANT_PATTERNS:
         base = STREAM_TRANSPORTS
     elif is_pattern(pattern_name):
         base = NON_SERVICE_TRANSPORTS
@@ -902,10 +891,6 @@ def _auto_hwm_emit_markdown_table(emit, indent, columns, rows):
             for index, (_header, key) in enumerate(columns)
         ]
         emit(f"{indent}|" + "|".join(cells) + "|")
-
-
-def _auto_hwm_pattern_is_spot(pattern_name):
-    return normalize_multi_pattern_name(pattern_name) in SPOT_CONTROL_PATTERNS
 
 
 def _auto_hwm_spot_scope_and_socket(label):
@@ -1340,13 +1325,6 @@ def emit_auto_hwm_detail_table(emit, pattern_name):
     if not rows:
         return False
 
-    if _auto_hwm_pattern_is_spot(pattern):
-        if not _auto_hwm_emit_spot_tables(emit, rows):
-            return False
-        for fields in rows:
-            _AUTO_HWM_DETAIL_TABLE_SEEN.add((pattern, fields.get("_dedup_key")))
-        return True
-
     rows = [
         fields
         for fields in rows
@@ -1659,9 +1637,7 @@ def build_bench_cmd(binary_path, args):
 
 
 def _resolve_server_timeouts(pattern_name, transport, ready_timeout_ms, shutdown_timeout_ms):
-    if pattern_name in SPOT_CONTROL_PATTERNS and transport in ("tls", "wss"):
-        ready_timeout_ms = max(ready_timeout_ms, 20000)
-        shutdown_timeout_ms = max(shutdown_timeout_ms, 10000)
+    del pattern_name, transport
     return ready_timeout_ms, shutdown_timeout_ms
 
 
@@ -1709,9 +1685,6 @@ def _prepare_case_env(
     if not connect_value:
         connect_value = str(resolve_pattern_connect_concurrency(clients_int))
     set_env_pair(env, "PERF_CONNECT_CONCURRENCY", connect_value)
-
-    if pattern_name in SPOT_CONTROL_PATTERNS:
-        spot_idle_sleep_ms = max(1, parse_env_int("PERF_SPOT_IDLE_SLEEP_MS", 1))
 
     if pattern_name in STREAM_VARIANT_PATTERNS:
         stream_timeout_ms = parse_env_int("PERF_STREAM_TIMEOUT_MS", 0)
@@ -1867,7 +1840,11 @@ def run_sizes_test_stream_shared(
     out_queue = queue.Queue()
     reader_threads = []
     debug_transitions = os.getenv("PERF_DEBUG_TRANSITIONS") is not None
-    use_control_plane = normalize_multi_pattern_name(pattern_name) in SPOT_CONTROL_PATTERNS
+    # No pattern currently runs over a control-plane connection; keep the
+    # flag (rather than deleting every branch it guards) so a future
+    # control-plane pattern can flip it back on without re-deriving the
+    # surrounding wiring.
+    use_control_plane = False
     control_connected = [not use_control_plane]
     pending_ready_sizes = set()
     pending_phase_active_sizes = set()
@@ -2364,9 +2341,7 @@ def run_sizes_test_split(
         size_count = max(1, len(sizes))
         has_large_payload = any(sz >= 131072 for sz in sizes)
         is_secure_transport = transport in ("tls", "wss")
-        if pattern_name in SPOT_CONTROL_PATTERNS:
-            timeout_sec = max(180, duration_seconds * size_count * 8 + 80)
-        elif pattern_name == "DEALER_DEALER":
+        if pattern_name == "DEALER_DEALER":
             # DEALER_DEALER recv sweeps can spend a long time draining and
             # shutting down after the first size finishes. Keep a larger
             # budget here so a 64 -> 256 sweep can complete without the
@@ -2428,7 +2403,11 @@ def run_sizes_test_split(
     out_queue = queue.Queue()
     reader_threads = []
     debug_transitions = os.getenv("PERF_DEBUG_TRANSITIONS") is not None
-    use_control_plane = normalize_multi_pattern_name(pattern_name) in SPOT_CONTROL_PATTERNS
+    # No pattern currently runs over a control-plane connection; keep the
+    # flag (rather than deleting every branch it guards) so a future
+    # control-plane pattern can flip it back on without re-deriving the
+    # surrounding wiring.
+    use_control_plane = False
     control_connected = [not use_control_plane]
     pending_ready_sizes = set()
     pending_phase_active_sizes = set()
@@ -3052,18 +3031,6 @@ def run_sizes_test(
                 result_line_callback=result_line_callback,
             )
 
-        def run_one_size_case_with_env(case_size, extra_env):
-            return run_sizes_test_split(
-                names["server"],
-                names["client"],
-                lib_name,
-                transport,
-                [case_size],
-                pattern_name,
-                result_line_callback=None,
-                extra_env=extra_env,
-            )
-
     merged = {
         "status": "success",
         "parsed": {},
@@ -3073,7 +3040,6 @@ def run_sizes_test(
         "warnings": [],
     }
     for size_index, size in enumerate(size_list):
-        normalized_pattern = normalize_multi_pattern_name(pattern_name)
         isolated = None
         if size_start_callback is not None:
             try:
@@ -3092,40 +3058,6 @@ def run_sizes_test(
             merged["reason"] = f"{reason}_size_{size}"
             return merged
 
-        # MULTI_SPOT clean-latency second pass: the saturated active pass
-        # measures throughput, but SPOT latency must come from a clean,
-        # isolated latency-only pass. Mirrors the C reference
-        # (bindings/c/perf/run_comparison.py:3062-3088): re-run the same size
-        # with PERF_MULTI_SPOT_LATENCY_ONLY=1 and override the SPOT RESULT's
-        # latency / p95 / p99 with the clean-pass values.
-        if (
-            normalized_pattern == "SPOT"
-            and parse_env_int("PERF_MULTI_SPOT_CLEAN_LATENCY", 1) != 0
-        ):
-            clean_latency = run_one_size_case_with_env(
-                size,
-                {
-                    "PERF_MULTI_SPOT_LATENCY_ONLY": "1",
-                    "PERF_MULTI_SPOT_CLEAN_LATENCY": "0",
-                },
-            )
-            merged["warnings"].extend(clean_latency.get("warnings", []))
-            if clean_latency.get("status") != "success":
-                merged["status"] = clean_latency.get("status", "fail")
-                merged["timed_out"] = clean_latency.get("timed_out", False)
-                merged["returncode"] = clean_latency.get("returncode", -1)
-                reason = clean_latency.get("reason", "clean_latency_failed")
-                merged["reason"] = f"{reason}_clean_latency_size_{size}"
-                return merged
-
-            clean_parsed = clean_latency.get("parsed", {}) or {}
-            active_parsed = isolated.get("parsed", {}) or {}
-            for key, value in clean_parsed.items():
-                metric = key.rsplit("|", 1)[-1]
-                if metric in ("latency", LATENCY_P95_METRIC, LATENCY_P99_METRIC):
-                    active_parsed[key] = value
-                    merged["parsed"][key] = value
-
         if size_result_callback is not None:
             try:
                 size_result_callback(transport, size, isolated)
@@ -3136,17 +3068,10 @@ def run_sizes_test(
 
 
 def defer_live_multi_rows(pattern_name):
-    # MULTI_SPOT runs a saturated active pass (throughput) followed by a
-    # clean latency-only second pass whose latency/p95/p99 override the
-    # active values in the merged result (see run_sizes_test). The live
-    # streaming callback fires during the active pass and would write the
-    # saturated latency to the report before the override is applied, so
-    # for SPOT the row must be deferred and emitted from the merged
-    # size_result (which carries the clean-pass latency). This mirrors the
-    # C reference, which suppresses the live SPOT row in on_result_metric
-    # (bindings/c/perf/run_comparison.py:3400-3401) and emits it from
-    # on_size_result instead.
-    return normalize_multi_pattern_name(pattern_name) == "SPOT"
+    # No pattern currently defers its live streaming row to a merged
+    # size_result; every pattern's live callback fires immediately.
+    del pattern_name
+    return False
 
 
 def run_single_test(binary_name, lib_name, transport, size, pattern_name=""):

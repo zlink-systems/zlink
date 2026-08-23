@@ -79,11 +79,11 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
         static_cast<void (zlink::sub_socket_t::*)(
             const std::string &)>(&zlink::sub_socket_t::set_subscription);
     (subscriber.*set_subscription) (std::string ());
-    if (!perf::single::recalculate_single_auto_hwm (ctx)) {
-        if (perf_debug_enabled ())
-            std::cerr << "pubsub: auto-hwm recalculation failed errno=" << errno << std::endl;
-        return false;
-    }
+    // PERF policy (plan 0.12.0 §5): the C reference runner
+    // bindings/c/perf/single/src/perf_pubsub.cpp never recalculates the
+    // context auto-HWM, so neither does this runner. Keeping a step the
+    // reference does not perform would make the paired numbers describe
+    // different measurements.
 
     if (!perf::single::setup_connected_pair (publisher, subscriber, transport,
                                              lib_name + "_pubsub")) {

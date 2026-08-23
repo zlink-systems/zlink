@@ -4,6 +4,49 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${PROJECT_DIR}/../.." && pwd)"
+CORE_VERSION_OPTION=""
+SCRIPT_ARGUMENTS=("$@")
+for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
+  case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --core-version)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]}"
+      ;;
+    --core-version=*)
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if [[ ! "${requested_core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: --core-version must be MAJOR.MINOR.PATCH: ${requested_core_version:-<missing>}" >&2
+    exit 1
+  fi
+  if [[ -n "${CORE_VERSION_OPTION}" && "${CORE_VERSION_OPTION}" != "${requested_core_version}" ]]; then
+    echo "Error: --core-version may be specified only once." >&2
+    exit 1
+  fi
+  CORE_VERSION_OPTION="${requested_core_version}"
+done
+
+# Use the current workspace Core by default. An explicit --core-version selects
+# the downloaded release package for that version instead.
+if [[ -n "${CORE_VERSION_OPTION}" ]]; then
+  if [[ -n "${ZLINK_CORE_SOURCE:-}" && "${ZLINK_CORE_SOURCE}" != "release" ]]; then
+    echo "Error: --core-version cannot be combined with ZLINK_CORE_SOURCE=${ZLINK_CORE_SOURCE}." >&2
+    exit 1
+  fi
+  export ZLINK_CORE_SOURCE=release
+  export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
+  export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+else
+  export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+fi
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
 if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
     CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
@@ -83,6 +126,10 @@ Options:
   --results-dir PATH
   --results-tag NAME
   --output PATH
+  --core-version VERSION  Download and use the specified released Core version.
+
+By default the current workspace Core (core/build) is used; pass --core-version
+to fetch and use a released Core runtime instead.
 EOF
 }
 
@@ -116,6 +163,8 @@ while [[ $# -gt 0 ]]; do
         --reuse-build) REUSE_BUILD=1; shift ;;
         --clean-build) CLEAN_BUILD=1; shift ;;
         --pin-cpu) PIN_CPU=1; shift ;;
+        --core-version) shift 2 ;;
+        --core-version=*) shift ;;
         *)           echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done

@@ -26,6 +26,8 @@ enum class context_option_id : int
 
 enum class socket_option_id : int
 {
+    sndbuf = 12293,
+    rcvbuf = 12294,
     linger = 12298,
     reconnect_ivl = 12299,
     backlog = 12300,

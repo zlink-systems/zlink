@@ -60,6 +60,30 @@ void common_socket_options_t::linger (std::chrono::milliseconds value)
                                           detail::native_option_ms (value));
 }
 
+int common_socket_options_t::send_buffer () const
+{
+    return detail::get_typed_option_value<int> (detail::native_option_handle (_socket),
+                                                 detail::socket_option_id::sndbuf);
+}
+
+void common_socket_options_t::send_buffer (int value)
+{
+    detail::set_typed_option_value<int> (detail::native_option_handle (_socket),
+                                          detail::socket_option_id::sndbuf, value);
+}
+
+int common_socket_options_t::recv_buffer () const
+{
+    return detail::get_typed_option_value<int> (detail::native_option_handle (_socket),
+                                                 detail::socket_option_id::rcvbuf);
+}
+
+void common_socket_options_t::recv_buffer (int value)
+{
+    detail::set_typed_option_value<int> (detail::native_option_handle (_socket),
+                                          detail::socket_option_id::rcvbuf, value);
+}
+
 byte_count_t common_socket_options_t::send_hwm () const
 {
     return byte_count_t::bytes (detail::get_typed_option_value<uint64_t> (

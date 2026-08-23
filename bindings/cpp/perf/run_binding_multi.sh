@@ -3,6 +3,49 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+CORE_VERSION_OPTION=""
+SCRIPT_ARGUMENTS=("$@")
+for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
+  case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --core-version)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]}"
+      ;;
+    --core-version=*)
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if [[ ! "${requested_core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: --core-version must be MAJOR.MINOR.PATCH: ${requested_core_version:-<missing>}" >&2
+    exit 1
+  fi
+  if [[ -n "${CORE_VERSION_OPTION}" && "${CORE_VERSION_OPTION}" != "${requested_core_version}" ]]; then
+    echo "Error: --core-version may be specified only once." >&2
+    exit 1
+  fi
+  CORE_VERSION_OPTION="${requested_core_version}"
+done
+
+# Use the current workspace Core by default. An explicit --core-version selects
+# the downloaded release package for that version instead.
+if [[ -n "${CORE_VERSION_OPTION}" ]]; then
+  if [[ -n "${ZLINK_CORE_SOURCE:-}" && "${ZLINK_CORE_SOURCE}" != "release" ]]; then
+    echo "Error: --core-version cannot be combined with ZLINK_CORE_SOURCE=${ZLINK_CORE_SOURCE}." >&2
+    exit 1
+  fi
+  export ZLINK_CORE_SOURCE=release
+  export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
+  export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+else
+  export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+fi
 source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 CPP_PERF_DIR="${ROOT_DIR}/bindings/cpp/perf"
 OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/cpp/build"
@@ -14,7 +57,7 @@ fi
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 MAKE_BIN="$(command -v gmake || command -v make)"
 PERF_COMPARISON_SCRIPT="${ROOT_DIR}/bindings/cpp/perf/multi/run_comparison.py"
-PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,SPOT,SPOT_REQREP,SPOT_SENDSEND,STREAM"
+PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
 TRANSPORTS="tcp,tls,ws,wss"
 DEFAULT_MULTI_MSG_SIZES="64,256,1024,4096,65536,131072"
 IFS=',' read -r -a PATTERN_LIST <<< "${PATTERNS}"
@@ -183,7 +226,7 @@ Usage: bindings/cpp/perf/run_benchmarks_multi.sh [options]
 
 Run only multi-socket benchmark patterns.
 Default PATTERN is:
-  DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,SPOT,SPOT_REQREP,SPOT_SENDSEND,STREAM
+  DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM
 This script invokes the shared comparison runner directly.
 By default, multi-bench uses ready -> active with a 5s duration window.
 By default, multi-bench uses transports: tcp,tls,ws,wss (can be overridden with --transports).
@@ -244,6 +287,8 @@ Options:
                          Override PERF_MULTI_SERVER_BIND_PORT (default: 0=auto).
   --auto-hwm-profile NAME
                          Set auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
+  --core-version VERSION
+                         Download and use the specified released Core version.
 
 Environment:
   PERF_SKIP_NOFILE_CHECK=1   Disable resource guard nofile(limit) check
@@ -262,6 +307,8 @@ Notes:
     libzlink runtime before execution.
   - if core/src or core/include is newer than the resolved runtime library,
     the runner fails fast and asks for a core/build rebuild.
+  - by default the current workspace Core (core/build) is used; pass --core-version
+    to fetch and use a released Core runtime instead.
 USAGE
 }
 
@@ -672,6 +719,12 @@ while [[ $# -gt 0 ]]; do
       fi
       SERVER_BIND_PORT="${2}"
       shift 2
+      ;;
+    --core-version)
+      shift 2
+      ;;
+    --core-version=*)
+      shift
       ;;
     --*)
       echo "Error: unknown option: $1" >&2

@@ -81,13 +81,11 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
         return false;
     }
 
-    bind_socket.options ().tcp_no_delay (true);
-    conn_socket.options ().tcp_no_delay (true);
-    if (!perf::single::recalculate_single_auto_hwm (ctx)) {
-        if (perf_debug_enabled ())
-            std::cerr << "pair: auto-hwm recalculation failed errno=" << errno << std::endl;
-        return false;
-    }
+    // Measurement semantics are owned by the C reference harness
+    // (bindings/c/perf/single/src/perf_pair.cpp): it sets neither
+    // tcp_no_delay nor a context auto-HWM recalculation for this pattern.
+    // Adding them here would make the C++ cell measure a different socket and
+    // context configuration than the paired C cell.
 
     if (!perf::single::setup_connected_pair (bind_socket, conn_socket, transport,
                                              lib_name + "_pair")) {

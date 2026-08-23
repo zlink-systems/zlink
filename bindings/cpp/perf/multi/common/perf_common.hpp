@@ -129,15 +129,7 @@ inline int bench_max_sockets ()
     if (settings.clients == 0)
         return 0;
 
-    const char *pattern_env = std::getenv ("PERF_PATTERN");
-    const std::string pattern = pattern_env ? pattern_env : "";
-
-    long required = 0;
-    if (pattern == "SPOT" || pattern == "MULTI_SPOT") {
-        required = static_cast<long> (settings.clients) * 16L + 64L;
-    } else {
-        required = static_cast<long> (settings.clients) * 3L + 4096L;
-    }
+    const long required = static_cast<long> (settings.clients) * 3L + 4096L;
 
     if (required > INT_MAX)
         return INT_MAX;
@@ -424,6 +416,15 @@ inline void apply_benchmark_socket_options (SocketLike &socket,
     // Manual HWM is a debug-only override; the default benchmark surface uses
     // context auto-HWM.
     apply_benchmark_hwm (socket, settings.sndhwm, settings.rcvhwm);
+    // Manual SNDBUF/RCVBUF is likewise a debug-only override, gated the same
+    // way as HWM (settings.sndbuf/rcvbuf are -1 unless
+    // PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1).
+    if (settings.sndbuf > 0)
+        (void) set_common_socket_option (socket, perf::options::socket_options::sndbuf,
+                                         settings.sndbuf);
+    if (settings.rcvbuf > 0)
+        (void) set_common_socket_option (socket, perf::options::socket_options::rcvbuf,
+                                         settings.rcvbuf);
     if (transport == "tcp")
         (void) set_common_socket_option (socket, perf::options::socket_options::tcp_nodelay, 1);
     apply_debug_timeouts (socket, transport);

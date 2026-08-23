@@ -1072,11 +1072,6 @@ def main() -> int:
         30,
         parse_env_int("PERF_SINGLE_DURATION_SECONDS", 5) * 6 + 15,
     )
-    if "SPOT" in patterns:
-        default_timeout_sec = max(
-            default_timeout_sec,
-            parse_env_int("PERF_SINGLE_DURATION_SECONDS", 5) * 12 + 60,
-        )
     timeout_sec = max(
         1,
         parse_env_int(

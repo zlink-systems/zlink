@@ -1,5 +1,6 @@
 #include "perf_single_common.hpp"
 
+#include <cctype>
 #include <cerrno>
 
 namespace perf
@@ -191,6 +192,63 @@ uint64_t resolve_single_socket_hwm (bool send_)
                  : parse_positive_uint64_env ("PERF_SINGLE_RCVHWM", base_hwm);
 }
 
+namespace
+{
+// Mirrors bindings/c/perf single parse_single_byte_size_token(): accepts an
+// optional case-insensitive b/k/m/g[b] suffix. Returns default_value_ on any
+// parse failure or overflow, matching the C reference byte-for-byte.
+int parse_single_byte_size_token (const char *value_, int default_value_)
+{
+    if (!value_ || !*value_)
+        return default_value_;
+
+    errno = 0;
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull (value_, &end, 10);
+    if (errno != 0 || end == value_)
+        return default_value_;
+
+    unsigned long long multiplier = 1;
+    if (end && *end) {
+        char suffix[3] = {0, 0, 0};
+        size_t suffix_len = 0;
+        while (end[suffix_len] != '\0' && suffix_len < 2) {
+            suffix[suffix_len] =
+              static_cast<char> (std::tolower (static_cast<unsigned char> (end[suffix_len])));
+            ++suffix_len;
+        }
+        if (end[suffix_len] != '\0')
+            return default_value_;
+
+        if (suffix[0] == 'b' && suffix[1] == '\0')
+            multiplier = 1;
+        else if (suffix[0] == 'k' && (suffix[1] == '\0' || suffix[1] == 'b'))
+            multiplier = 1024ULL;
+        else if (suffix[0] == 'm' && (suffix[1] == '\0' || suffix[1] == 'b'))
+            multiplier = 1024ULL * 1024ULL;
+        else if (suffix[0] == 'g' && (suffix[1] == '\0' || suffix[1] == 'b'))
+            multiplier = 1024ULL * 1024ULL * 1024ULL;
+        else
+            return default_value_;
+    }
+
+    const unsigned long long bytes = parsed * multiplier;
+    if (bytes == 0)
+        return default_value_;
+    if (bytes > static_cast<unsigned long long> (INT_MAX))
+        return INT_MAX;
+    return static_cast<int> (bytes);
+}
+} // namespace
+
+int resolve_single_socket_buffer (bool send_)
+{
+    if (!single_manual_socket_overrides_enabled ())
+        return -1;
+    return parse_single_byte_size_token (
+      std::getenv (send_ ? "PERF_SINGLE_SNDBUF" : "PERF_SINGLE_RCVBUF"), -1);
+}
+
 zlink::auto_hwm_profile resolve_single_ctx_auto_hwm_profile ()
 {
     const char *value = std::getenv ("PERF_CTX_AUTO_HWM_PROFILE");
@@ -286,7 +344,13 @@ void apply_single_benchmark_socket_options (perf_socket_t &socket_, const std::s
     const int linger_ms = 0;
     const int sndtimeo_ms = resolve_single_send_timeout_ms ();
     const int rcvtimeo_ms = resolve_single_recv_timeout_ms ();
+    const int sndbuf = resolve_single_socket_buffer (true);
+    const int rcvbuf = resolve_single_socket_buffer (false);
     (void) set_sockopt_int (socket_, perf::options::socket_options::linger, linger_ms, "linger");
+    if (sndbuf > 0)
+        (void) set_sockopt_int (socket_, perf::options::socket_options::sndbuf, sndbuf, "sndbuf");
+    if (rcvbuf > 0)
+        (void) set_sockopt_int (socket_, perf::options::socket_options::rcvbuf, rcvbuf, "rcvbuf");
     (void) set_sockopt_int (socket_, perf::options::socket_options::sndtimeo, sndtimeo_ms,
                             "sndtimeo");
     (void) set_sockopt_int (socket_, perf::options::socket_options::rcvtimeo, rcvtimeo_ms,

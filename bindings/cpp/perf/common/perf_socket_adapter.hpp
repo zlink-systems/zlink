@@ -928,6 +928,12 @@ class socket_t
                         case socket_option::linger:
                             options.linger (std::chrono::milliseconds (static_cast<int> (value_)));
                             return 0;
+                        case socket_option::sndbuf:
+                            options.send_buffer (static_cast<int> (value_));
+                            return 0;
+                        case socket_option::rcvbuf:
+                            options.recv_buffer (static_cast<int> (value_));
+                            return 0;
                         case socket_option::sndhwm:
                             options.send_hwm (byte_count_t::bytes (value_));
                             return 0;

@@ -13,6 +13,57 @@ mkdir -p "${GOCACHE}" "${GOTMPDIR}"
 # Resolve the SONAME from the binding package header so another workstream's
 # root VERSION cannot redirect this runner to a different native payload.
 CORE_VERSION="$(sed -n 's/^#define ZLINK_VERSION_MAJOR //p' "${ROOT_DIR}/include/zlink.h" | head -n1).$(sed -n 's/^#define ZLINK_VERSION_MINOR //p' "${ROOT_DIR}/include/zlink.h" | head -n1).$(sed -n 's/^#define ZLINK_VERSION_PATCH //p' "${ROOT_DIR}/include/zlink.h" | head -n1)"
+
+# --core-version selects the verified release runtime instead of the current
+# workspace Core (bindings/go/native, the default). Mirrors bindings/c/perf.
+CORE_VERSION_OPTION=""
+SCRIPT_ARGUMENTS=("$@")
+for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
+  case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --core-version)
+      if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
+        echo "Error: --core-version requires a version." >&2
+        exit 1
+      fi
+      ((++argument_index))
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]}"
+      ;;
+    --core-version=*)
+      requested_core_version="${SCRIPT_ARGUMENTS[argument_index]#--core-version=}"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if [[ ! "${requested_core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: --core-version must be MAJOR.MINOR.PATCH: ${requested_core_version:-<missing>}" >&2
+    exit 1
+  fi
+  if [[ -n "${CORE_VERSION_OPTION}" && "${CORE_VERSION_OPTION}" != "${requested_core_version}" ]]; then
+    echo "Error: --core-version may be specified only once." >&2
+    exit 1
+  fi
+  CORE_VERSION_OPTION="${requested_core_version}"
+done
+
+if [[ -n "${CORE_VERSION_OPTION}" ]]; then
+  if [[ -n "${ZLINK_CORE_SOURCE:-}" && "${ZLINK_CORE_SOURCE}" != "release" ]]; then
+    echo "Error: --core-version cannot be combined with ZLINK_CORE_SOURCE=${ZLINK_CORE_SOURCE}." >&2
+    exit 1
+  fi
+  export ZLINK_CORE_SOURCE=release
+  export ZLINK_CORE_RELEASE_VERSION="${CORE_VERSION_OPTION}"
+  export ZLINK_CORE_ALLOW_VERSION_MISMATCH=1
+else
+  export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+fi
+GO_NATIVE_DIR_OVERRIDE=""
+if [[ "${ZLINK_CORE_SOURCE}" == "release" ]]; then
+  source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
+  CORE_VERSION="${ZLINK_CORE_VERSION}"
+  GO_NATIVE_DIR_OVERRIDE="${ZLINK_CORE_PACKAGE_PREFIX}/lib"
+fi
+
 PERF_REPORT_PY="${REPO_DIR}/bindings/python/perf/perf_report.py"
 TOTAL_TIME_ENABLED=0
 
@@ -141,6 +192,7 @@ Options:
   --recv-timeout-ms N
   --auto-hwm-profile NAME
   --monitor-hwm-bytes N
+  --core-version VERSION      Download and use the specified released Core version.
   -h, --help
 
 Notes:
@@ -148,6 +200,8 @@ Notes:
   - If GOMAXPROCS is unset, PERF_GO_GOMAXPROCS is an explicit positive-integer override.
     Otherwise --io-threads/PERF_IO_THREADS derives Go scheduler parallelism
     with a minimum of 4.
+  - by default the current workspace Core (bindings/go/native) is used; pass
+    --core-version to fetch and use a released Core runtime instead.
 USAGE
 }
 
@@ -200,6 +254,10 @@ while [[ $# -gt 0 ]]; do
     --monitor-hwm-bytes)
       MONITOR_HWM_BYTES="$2"
       shift 2 ;;
+    --core-version)
+      shift 2 ;;
+    --core-version=*)
+      shift ;;
     --reuse-build)
       REUSE_BUILD=1
       shift ;;
@@ -329,14 +387,19 @@ run_go_perf() {
 }
 
 prepare_core_runtime() {
-  local native_dir="${ZLINK_GO_NATIVE_DIR:-${ROOT_DIR}/native}"
-  case "${PLATFORM}:$(uname -m)" in
-    linux:x86_64|linux:amd64) native_dir="${native_dir}/linux-x86_64" ;;
-    linux:aarch64|linux:arm64) native_dir="${native_dir}/linux-aarch64" ;;
-    macos:x86_64|macos:amd64) native_dir="${native_dir}/darwin-x86_64" ;;
-    macos:arm64|macos:aarch64) native_dir="${native_dir}/darwin-aarch64" ;;
-    *) echo "unsupported Go package platform: ${PLATFORM}:$(uname -m)" >&2; exit 1 ;;
-  esac
+  local native_dir
+  if [[ -n "${GO_NATIVE_DIR_OVERRIDE}" ]]; then
+    native_dir="${GO_NATIVE_DIR_OVERRIDE}"
+  else
+    native_dir="${ZLINK_GO_NATIVE_DIR:-${ROOT_DIR}/native}"
+    case "${PLATFORM}:$(uname -m)" in
+      linux:x86_64|linux:amd64) native_dir="${native_dir}/linux-x86_64" ;;
+      linux:aarch64|linux:arm64) native_dir="${native_dir}/linux-aarch64" ;;
+      macos:x86_64|macos:amd64) native_dir="${native_dir}/darwin-x86_64" ;;
+      macos:arm64|macos:aarch64) native_dir="${native_dir}/darwin-aarch64" ;;
+      *) echo "unsupported Go package platform: ${PLATFORM}:$(uname -m)" >&2; exit 1 ;;
+    esac
+  fi
   local runtime="${native_dir}/libzlink.dylib"
   if [[ "${PLATFORM}" == "linux" ]]; then
     runtime="${native_dir}/libzlink.so.${CORE_VERSION}"

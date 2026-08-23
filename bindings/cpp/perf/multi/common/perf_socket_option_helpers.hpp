@@ -47,6 +47,12 @@ inline int set_common_socket_option_impl (SocketLike &socket,
             case perf::options::socket_option::linger:
                 socket.options ().linger (std::chrono::milliseconds (value));
                 return 0;
+            case perf::options::socket_option::sndbuf:
+                socket.options ().send_buffer (static_cast<int> (value));
+                return 0;
+            case perf::options::socket_option::rcvbuf:
+                socket.options ().recv_buffer (static_cast<int> (value));
+                return 0;
             default:
                 errno = EOPNOTSUPP;
                 return -1;

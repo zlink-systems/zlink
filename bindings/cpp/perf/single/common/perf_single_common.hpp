@@ -63,6 +63,10 @@ int resolve_single_pubsub_recv_timeout_ms ();
 int resolve_single_pubsub_ready_settle_ms ();
 int resolve_single_connect_ready_timeout_ms ();
 uint64_t resolve_single_socket_hwm (bool send_);
+// Debug-only manual SNDBUF/RCVBUF override in bytes; -1 means "leave the OS
+// default" (mirrors bindings/c/perf single bench_single_manual_socket_overrides_allowed()
+// + parse_single_byte_size_token()). Gated by single_manual_socket_overrides_enabled().
+int resolve_single_socket_buffer (bool send_);
 zlink::auto_hwm_profile resolve_single_ctx_auto_hwm_profile ();
 bool single_manual_socket_overrides_enabled ();
 
@@ -89,6 +93,12 @@ bool set_sockopt_int (SocketLike &socket_,
         switch (option_.option) {
             case perf::options::socket_option::linger:
                 options.linger (std::chrono::milliseconds (value_));
+                return true;
+            case perf::options::socket_option::sndbuf:
+                options.send_buffer (value_);
+                return true;
+            case perf::options::socket_option::rcvbuf:
+                options.recv_buffer (value_);
                 return true;
             case perf::options::socket_option::sndhwm:
                 options.send_hwm (zlink::byte_count_t::bytes (static_cast<uint64_t> (value_)));
@@ -176,7 +186,13 @@ void apply_single_benchmark_socket_options (SocketLike &socket_, const std::stri
     const int linger_ms = 0;
     const int sndtimeo_ms = resolve_single_send_timeout_ms ();
     const int rcvtimeo_ms = resolve_single_recv_timeout_ms ();
+    const int sndbuf = resolve_single_socket_buffer (true);
+    const int rcvbuf = resolve_single_socket_buffer (false);
     (void) set_sockopt_int (socket_, perf::options::socket_options::linger, linger_ms, "linger");
+    if (sndbuf > 0)
+        (void) set_sockopt_int (socket_, perf::options::socket_options::sndbuf, sndbuf, "sndbuf");
+    if (rcvbuf > 0)
+        (void) set_sockopt_int (socket_, perf::options::socket_options::rcvbuf, rcvbuf, "rcvbuf");
     (void) set_sockopt_int (socket_, perf::options::socket_options::sndtimeo, sndtimeo_ms,
                             "sndtimeo");
     (void) set_sockopt_int (socket_, perf::options::socket_options::rcvtimeo, rcvtimeo_ms,

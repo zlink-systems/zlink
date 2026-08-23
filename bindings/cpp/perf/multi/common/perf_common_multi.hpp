@@ -11,6 +11,7 @@
 #include <iostream>
 #include <string>
 
+
 namespace perf
 {
 namespace multi
@@ -22,6 +23,11 @@ struct multi_bench_settings_t
     uint64_t hwm;
     uint64_t sndhwm;
     uint64_t rcvhwm;
+    // Debug-only manual SNDBUF/RCVBUF override in bytes; -1 means "leave the
+    // OS default" (mirrors bindings/c/perf multi bench_manual_socket_overrides_allowed()
+    // + bench_socket_buffer_bytes_from_env()).
+    int sndbuf;
+    int rcvbuf;
     int duration_seconds;
     int client_poll_timeout_ms;
     int connect_ready_timeout_ms;
@@ -73,6 +79,62 @@ inline bool manual_socket_overrides_enabled ()
            || parse_positive_env ("PERF_ALLOW_MANUAL_SOCKET_OVERRIDES", 0) > 0;
 }
 
+// Mirrors bindings/c/perf multi parse_byte_size_token(): accepts an optional
+// case-insensitive b/k/m/g[b] suffix. Returns default_value on any parse
+// failure or overflow, matching the C reference byte-for-byte.
+inline int parse_byte_size_token (const char *value, int default_value)
+{
+    if (!value || !*value)
+        return default_value;
+
+    errno = 0;
+    char *end = NULL;
+    const unsigned long long parsed = std::strtoull (value, &end, 10);
+    if (errno != 0 || end == value)
+        return default_value;
+
+    unsigned long long multiplier = 1;
+    if (end && *end) {
+        char suffix[3] = {0, 0, 0};
+        size_t suffix_len = 0;
+        while (end[suffix_len] != '\0' && suffix_len < 2) {
+            suffix[suffix_len] =
+              static_cast<char> (std::tolower (static_cast<unsigned char> (end[suffix_len])));
+            ++suffix_len;
+        }
+        if (end[suffix_len] != '\0')
+            return default_value;
+
+        if (suffix[0] == 'b' && suffix[1] == '\0')
+            multiplier = 1;
+        else if (suffix[0] == 'k' && (suffix[1] == '\0' || suffix[1] == 'b'))
+            multiplier = 1024ULL;
+        else if (suffix[0] == 'm' && (suffix[1] == '\0' || suffix[1] == 'b'))
+            multiplier = 1024ULL * 1024ULL;
+        else if (suffix[0] == 'g' && (suffix[1] == '\0' || suffix[1] == 'b'))
+            multiplier = 1024ULL * 1024ULL * 1024ULL;
+        else
+            return default_value;
+    }
+
+    const unsigned long long bytes = parsed * multiplier;
+    if (bytes == 0)
+        return default_value;
+    if (bytes > static_cast<unsigned long long> (INT_MAX))
+        return INT_MAX;
+    return static_cast<int> (bytes);
+}
+
+inline int bench_socket_buffer_bytes_from_env (const char *name, int default_bytes)
+{
+    if (!name || !*name)
+        return default_bytes;
+    const char *value = std::getenv (name);
+    if (!value || !*value)
+        return default_bytes;
+    return parse_byte_size_token (value, default_bytes);
+}
+
 inline bool is_stream_pattern (const char *pattern)
 {
     if (!pattern || !*pattern)
@@ -114,10 +176,14 @@ inline multi_bench_settings_t resolve_multi_bench_settings ()
         out.hwm = parse_positive_uint64_env ("PERF_MULTI_HWM", default_hwm);
         out.sndhwm = parse_positive_uint64_env ("PERF_MULTI_SNDHWM", out.hwm);
         out.rcvhwm = parse_positive_uint64_env ("PERF_MULTI_RCVHWM", out.hwm);
+        out.sndbuf = bench_socket_buffer_bytes_from_env ("PERF_MULTI_SNDBUF", -1);
+        out.rcvbuf = bench_socket_buffer_bytes_from_env ("PERF_MULTI_RCVBUF", -1);
     } else {
         out.hwm = 0;
         out.sndhwm = 0;
         out.rcvhwm = 0;
+        out.sndbuf = -1;
+        out.rcvbuf = -1;
     }
     out.duration_seconds = std::max (1, parse_positive_env ("PERF_MULTI_DURATION_SECONDS", 5));
     out.client_poll_timeout_ms = 0;

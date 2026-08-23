@@ -13,6 +13,8 @@ namespace options
 enum class socket_option
 {
     linger,
+    sndbuf,
+    rcvbuf,
     sndhwm,
     rcvhwm,
     sndtimeo,
@@ -95,6 +97,8 @@ template <typename T> struct stream_option_key_t
 namespace socket_options
 {
 static const socket_option_key_t<int> linger (socket_option::linger);
+static const socket_option_key_t<int> sndbuf (socket_option::sndbuf);
+static const socket_option_key_t<int> rcvbuf (socket_option::rcvbuf);
 static const socket_option_key_t<uint64_t> sndhwm (socket_option::sndhwm);
 static const socket_option_key_t<uint64_t> rcvhwm (socket_option::rcvhwm);
 static const socket_option_key_t<int> sndtimeo (socket_option::sndtimeo);

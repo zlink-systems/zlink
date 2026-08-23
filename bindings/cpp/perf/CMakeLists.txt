@@ -46,6 +46,14 @@ function(configure_perf_target target_name out_subdir)
   set_target_properties(${target_name} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${PERF_ROOT_DIR}/${out_subdir}/build"
   )
+
+  # LTO/IPO must reach the final consumer too, otherwise the binding library's
+  # translation-unit boundaries survive the link. ZLINK_CPP_IPO_ENABLED is set
+  # by the parent bindings/cpp/CMakeLists.txt only when ENABLE_LTO=ON and
+  # check_ipo_supported() succeeded; with the default OFF nothing is set here.
+  if(ZLINK_CPP_IPO_ENABLED)
+    set_property(TARGET ${target_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  endif()
 endfunction()
 
 function(add_cpp_single_bench target_name src_path)

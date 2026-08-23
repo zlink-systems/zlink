@@ -55,6 +55,14 @@ class common_socket_options_t
 
     std::chrono::milliseconds linger () const;
     void linger (std::chrono::milliseconds value);
+    /// @brief Kernel send buffer size in bytes (-1 keeps the OS default,
+    /// >= 0 requests that size from the OS). Mirrors @c ZLINK_OPT_SNDBUF.
+    int send_buffer () const;
+    void send_buffer (int value);
+    /// @brief Kernel receive buffer size in bytes (-1 keeps the OS default,
+    /// >= 0 requests that size from the OS). Mirrors @c ZLINK_OPT_RCVBUF.
+    int recv_buffer () const;
+    void recv_buffer (int value);
     byte_count_t send_hwm () const;
     void send_hwm (byte_count_t value);
     byte_count_t recv_hwm () const;
