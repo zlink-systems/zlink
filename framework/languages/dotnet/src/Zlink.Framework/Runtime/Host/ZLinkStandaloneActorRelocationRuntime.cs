@@ -35,6 +35,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     ZLinkActorSessionManager actorSessions,
     ZLinkFrameworkRegistration registration)
 {
+    internal const ulong InitialTargetAttemptGeneration = 1;
     private static readonly TimeSpan TargetStageTtl = TimeSpan.FromMinutes(5);
     private readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
     private int _targetAttemptAdmissionSealed;
@@ -973,7 +974,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         var relocationId = ToWireId(envelope.AggregateId);
         return new ZLinkServiceWireCodec.RelocationPrepareRecord(
             relocationId,
-            1,
+            InitialTargetAttemptGeneration,
             new ZLinkServiceWireCodec.RelocationCoordinatorFence(
                 sourceSnapshot.OwnerId,
                 checked((ulong)sourceSnapshot.OwnerLeaseGeneration),

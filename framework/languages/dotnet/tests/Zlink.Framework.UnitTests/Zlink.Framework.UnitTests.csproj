@@ -86,6 +86,7 @@
         <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
         <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
+        <Compile Include="Runtime/AuthorityRelocationStateGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>

@@ -548,7 +548,8 @@ public sealed class ActorRelocationProtocolTests
             ZLinkMessage.From("join-request"),
             codecs,
             actorNodeGeneration: 11,
-            expectedOwnerLeaseGeneration: 5);
+            expectedOwnerLeaseGeneration: 5,
+            targetAttemptGeneration: 19);
 
         var decoded = ZLinkRemoteActorJoinPackets.DecodeJoinRequest(parts);
 
@@ -559,6 +560,7 @@ public sealed class ActorRelocationProtocolTests
         Assert.Equal((uint)17, decoded.RelocationChecksumCrc32c);
         Assert.Equal(32, decoded.RelocationInventoryDigest.Length);
         Assert.Equal((ulong)11, decoded.ActorNodeGeneration);
+        Assert.Equal((ulong)19, decoded.TargetAttemptGeneration);
         Assert.Equal((ulong)5, decoded.ExpectedOwnerLeaseGeneration);
         Assert.Equal("join-request", ZLinkRemoteActorJoinPackets.DecodeJoinRequestPayload(decoded, codecs).Decode<string>());
     }

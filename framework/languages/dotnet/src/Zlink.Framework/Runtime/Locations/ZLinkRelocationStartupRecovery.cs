@@ -136,17 +136,6 @@ internal sealed class ZLinkRelocationStartupRecovery(
                 unpublished++;
                 continue;
             }
-            if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
-                    out var canonical)
-                && canonical.Phase == 1
-                && string.IsNullOrEmpty(canonical.RelocationReference))
-            {
-                // Preparing has no immutable root yet and therefore cannot be
-                // reconciled as a published relocation tree.
-                unpublished++;
-                continue;
-            }
             AddPublished(entry, linked);
         }
 
@@ -231,8 +220,18 @@ internal sealed class ZLinkRelocationStartupRecovery(
         if (entry.Snapshot.Allocation.ObjectKind is not (
                 ZLinkPlacementObjectKind.Actor
                 or ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot)
-            || !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
+                or ZLinkPlacementObjectKind.InstanceSpot))
+            return;
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                entry.Snapshot.Payload.Span,
+                out var preparingCanonical)
+            && preparingCanonical.Phase == 1)
+        {
+            if (preparing is not null)
+                preparing[entry.Key.Value] = entry;
+            return;
+        }
+        if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 entry.Snapshot.Payload.Span,
                 out var publication))
             return;

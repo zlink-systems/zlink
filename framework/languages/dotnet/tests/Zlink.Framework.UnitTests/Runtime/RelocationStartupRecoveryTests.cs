@@ -61,7 +61,7 @@ public sealed class RelocationStartupRecoveryTests
                 PrecommitState(
                     canonical.Envelope.AggregateId,
                     phase: 1,
-                    reference: string.Empty,
+                    reference: "pending",
                     checksum: 0),
                 root: null);
         var authority = new RecoveryAuthorityStore(
@@ -439,7 +439,10 @@ public sealed class RelocationStartupRecoveryTests
             phase,
             reference,
             checksum,
-            7);
+            7)
+        {
+            AggregateGeneration = phase == 1 ? 0UL : 1UL
+        };
     }
 
     private static ZLinkAuthorityEntry CanonicalEntry(

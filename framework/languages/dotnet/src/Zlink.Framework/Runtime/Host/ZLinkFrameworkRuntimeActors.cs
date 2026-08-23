@@ -654,6 +654,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         request.ActorGeneration,
                         ZLinkActorRelocationRoot.Reference(request),
                         durableEnvelope,
+                        request.TargetAttemptGeneration,
                         request.TargetAuthorityOwnerGeneration,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -2305,6 +2306,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong sourceObjectGeneration,
         ZLinkRelocationManifestReference relocationReference,
         ZLinkRelocationEnvelope relocationRoot,
+        ulong targetAttemptGeneration,
         ulong targetAuthorityOwnerGeneration,
         CancellationToken cancellationToken)
     {
@@ -2352,6 +2354,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         : default,
                     relocationReference,
                     relocationRoot,
+                    targetAttemptGeneration,
                     targetAuthorityOwnerGeneration,
                     _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
                     cancellationToken)
@@ -4225,6 +4228,33 @@ internal sealed partial class ZLinkFrameworkRuntime
         string bindingToken)
     {
         _actorBoundSessionCoordinator.UnbindSessionActor(actorId, context, bindingToken);
+    }
+
+    internal bool TrySubmitLocalActorSend(
+        ZLinkBackendActorRef actor,
+        ZlinkStreamHeader header,
+        Message payload)
+    {
+        if (!_actorSessionManager.IsCurrentLocalActorRef(actor)) return false;
+        return TryRunDetached(
+            "local-actor-client-send",
+            async cancellationToken =>
+            {
+                try
+                {
+                    await _actorSessionManager
+                        .SubmitActorByIdAsync(
+                            actor.ActorId,
+                            header,
+                            payload,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    payload.Dispose();
+                }
+            });
     }
 
     /// <summary>Actor-node entry for a relayed session frame whose bound actor

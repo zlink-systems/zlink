@@ -128,7 +128,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkActorRelocationReservation? reservation = null,
         ZLinkSessionRelocationContext sessionRelocationContext = default,
         ulong actorNodeGeneration = 0,
-        ulong expectedOwnerLeaseGeneration = 0)
+        ulong expectedOwnerLeaseGeneration = 0,
+        ulong targetAttemptGeneration = 0)
     {
         var payload = CreateJoinRequest(
             actorId,
@@ -148,7 +149,8 @@ internal static class ZLinkRemoteActorJoinPackets
             reservation,
             sessionRelocationContext,
             actorNodeGeneration,
-            expectedOwnerLeaseGeneration);
+            expectedOwnerLeaseGeneration,
+            targetAttemptGeneration);
         return EncodeJoinRequest(header, payload);
     }
 
@@ -170,7 +172,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkActorRelocationReservation? reservation = null,
         ZLinkSessionRelocationContext sessionRelocationContext = default,
         ulong actorNodeGeneration = 0,
-        ulong expectedOwnerLeaseGeneration = 0)
+        ulong expectedOwnerLeaseGeneration = 0,
+        ulong targetAttemptGeneration = 0)
     {
         var encodedRequest = request.Encode(codecs);
         return new ZLinkRemoteActorJoinRequest(
@@ -219,7 +222,8 @@ internal static class ZLinkRemoteActorJoinPackets
             sessionRelocationContext.Coordinator.NodeGeneration,
             sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion,
             actorNodeGeneration,
-            expectedOwnerLeaseGeneration);
+            expectedOwnerLeaseGeneration,
+            targetAttemptGeneration);
     }
 
     internal static IReadOnlyList<Message> EncodeJoinRequest(
@@ -737,7 +741,8 @@ byte[]? RelocationCoordinatorNodeRid = null,
 ulong RelocationCoordinatorNodeGeneration = 0,
 string RelocationCoordinatorExpectedAuthorityStoreVersion = "",
 ulong ActorNodeGeneration = 0,
-ulong ExpectedOwnerLeaseGeneration = 0);
+ulong ExpectedOwnerLeaseGeneration = 0,
+ulong TargetAttemptGeneration = 0);
 
 internal readonly record struct ZLinkActorRelocationReservation(
     string Token,

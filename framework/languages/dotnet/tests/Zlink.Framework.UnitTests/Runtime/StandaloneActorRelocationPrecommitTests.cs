@@ -66,7 +66,9 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None);
         var preparingState = Projection(preparing);
         Assert.Equal(1, preparingState.Phase);
-        Assert.Empty(preparingState.RelocationReference);
+        Assert.Equal("pending", preparingState.RelocationReference);
+        Assert.Equal(ready.Snapshot.StoreVersion,
+            preparingState.State.CoordinatorExpectedAuthorityStoreVersion);
         Assert.Equal(0UL, preparingState.TargetAttemptGeneration);
         Assert.Equal(sourceOwner.OwnerId, preparing.OwnerId);
 
@@ -103,7 +105,9 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None);
         var capturedState = Projection(captured);
         Assert.Equal(2, capturedState.Phase);
-        Assert.Equal(string.Empty, capturedState.RelocationReference);
+        Assert.Equal("pending", capturedState.RelocationReference);
+        Assert.Equal(envelope.AggregateGeneration,
+            capturedState.AggregateGeneration);
         Assert.Equal(0UL, capturedState.TargetAttemptGeneration);
 
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(

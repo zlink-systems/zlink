@@ -8262,6 +8262,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var request = new ZLinkAggregateRelocationRequest(
                 relocation.Envelope.AggregateId,
                 relocation.Envelope.AggregateGeneration,
+                1,
                 staging.Participants,
                 reservation.TargetDescriptor,
                 reservation.TargetDescriptorLifecycleGeneration,

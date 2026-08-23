@@ -76,6 +76,17 @@ internal sealed class ZLinkActorClient(
             packetName,
             message,
             metadata);
+        if (actor.NodeRid == nodeRuntime.Node.RoutingId)
+        {
+            var header = ZLinkStreamProtocolDefaults.DecodeHeader(
+                parts[0].AsReadOnlyMemory());
+            if (runtime.TrySubmitLocalActorSend(actor.ToBackend(), header, parts[1]))
+            {
+                TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorSend);
+                parts[0].Dispose();
+                return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
+            }
+        }
         try
         {
             TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorSend);

@@ -3442,6 +3442,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3495,6 +3496,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3536,6 +3538,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3618,6 +3621,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3668,6 +3672,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -3739,6 +3744,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             canonical.AggregateId,
             canonical.AggregateGeneration,
+            1,
             participants,
             new ZLinkMeshNodeDescriptorKey(
                 "mesh",
@@ -3783,6 +3789,7 @@ public sealed class RelocationRuntimeTests
         var request = new ZLinkAggregateRelocationRequest(
             envelope.AggregateId,
             envelope.AggregateGeneration,
+            1,
             envelope.Participants.Select(
                     participant => new ZLinkAggregateRelocationParticipant(
                         participant,
@@ -4780,6 +4787,7 @@ public sealed class RelocationRuntimeTests
         ZLinkRelocationEnvelope envelope) => new(
         envelope.AggregateId,
         envelope.AggregateGeneration,
+        1,
         envelope.Participants.Select(participant =>
                 new ZLinkAggregateRelocationParticipant(
                     participant,
@@ -4915,7 +4923,10 @@ public sealed class RelocationRuntimeTests
                         5,
                         "published-root",
                         37,
-                        canonical.CanonicalApplicationVersion),
+                        canonical.CanonicalApplicationVersion)
+                    {
+                        AggregateGeneration = decoded.AggregateGeneration
+                    },
                     decoded);
         var allocation = new ZLinkPlacementAllocation(
             ZLinkPlacementAllocationState.Active,

@@ -552,18 +552,8 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
                 encoded,
                 out var canonical))
         {
-            var aggregateGeneration = canonical.AggregateGeneration;
-            if (aggregateGeneration == 0
-                && ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(
-                    canonical.SteadyAuthorityPayload.Span,
-                    out var actor)
-                && actor.CurrentSpotKind == ZLinkSpotKind.Entry)
-            {
-                // A standalone Actor relocation always owns a one-participant
-                // root at generation 1. Older canonical authority payloads did
-                // not persist that value, but this case is unambiguous.
-                aggregateGeneration = 1;
-            }
+            if (canonical.AggregateGeneration == 0)
+                return false;
             Span<byte> id = stackalloc byte[16];
             BinaryPrimitives.WriteUInt64BigEndian(id, canonical.RelocationHigh);
             BinaryPrimitives.WriteUInt64BigEndian(id[8..], canonical.RelocationLow);
@@ -571,7 +561,7 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
                 canonical.RelocationReference,
                 canonical.RelocationChecksumCrc32c,
                 new Guid(id, bigEndian: true),
-                aggregateGeneration,
+                canonical.AggregateGeneration,
                 new byte[32],
                 canonical.TargetOwnerId,
                 checked((long)canonical.TargetOwnerLeaseGeneration),

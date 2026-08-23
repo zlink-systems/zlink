@@ -511,6 +511,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         ZLinkRemoteActorBoundSessionRoute boundSessionRoute,
         ZLinkRelocationManifestReference relocationReference,
         ZLinkRelocationEnvelope relocationRoot,
+        ulong targetAttemptGeneration,
         ulong targetAuthorityOwnerGeneration,
         Func<CancellationToken, ValueTask>? deactivate,
         CancellationToken cancellationToken = default)
@@ -579,7 +580,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         var targetOwner = new ZLinkLocationOwnerToken(
             target.OwnerId,
             target.LeaseGeneration);
-        if (targetAuthorityOwnerGeneration
+        if (targetAttemptGeneration is 0 or > long.MaxValue
+            || targetAuthorityOwnerGeneration
                 <= snapshot.AuthorityOwnerGeneration
             || targetAuthorityOwnerGeneration > long.MaxValue)
             throw new ZLinkRelocationDataLostException(
@@ -607,7 +609,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         .ReadUInt64BigEndian(relocationBytes.AsSpan(0, 8)),
                     System.Buffers.Binary.BinaryPrimitives
                         .ReadUInt64BigEndian(relocationBytes.AsSpan(8, 8)),
-                    targetAuthorityOwnerGeneration,
+                    targetAttemptGeneration,
                     authority.NodeRid.ToHex(),
                     authority.NodeGeneration,
                     snapshot.OwnerId,
@@ -623,6 +625,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     (byte)ZLinkStandaloneActorCanonicalPhase.Activated,
                     0)
                 {
+                    AggregateGeneration = relocationRoot.AggregateGeneration,
                     CoordinatorExpectedAuthorityStoreVersion =
                         snapshot.StoreVersion,
                     RelocationReference = relocationReference.Reference,
@@ -743,6 +746,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         ZLinkRemoteActorBoundSessionRoute boundSessionRoute,
         ZLinkRelocationManifestReference relocationReference,
         ZLinkRelocationEnvelope relocationRoot,
+        ulong targetAttemptGeneration,
         ulong targetAuthorityOwnerGeneration,
         Func<CancellationToken, ValueTask>? deactivate,
         CancellationToken cancellationToken = default) =>
@@ -757,6 +761,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             boundSessionRoute,
             relocationReference,
             relocationRoot,
+            targetAttemptGeneration,
             targetAuthorityOwnerGeneration,
             deactivate,
             cancellationToken);

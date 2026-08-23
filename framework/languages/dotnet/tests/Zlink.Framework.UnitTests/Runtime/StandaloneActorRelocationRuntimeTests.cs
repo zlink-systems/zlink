@@ -994,7 +994,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
             BinaryPrimitives.ReadUInt64BigEndian(id),
             BinaryPrimitives.ReadUInt64BigEndian(id[8..]),
             1,
-            "source",
+            RoutingId.From("source").ToHex(),
             7,
             "source-owner",
             3,
@@ -1009,7 +1009,10 @@ public sealed class StandaloneActorRelocationRuntimeTests
             4,
             "root-stable",
             17,
-            7);
+            7)
+        {
+            AggregateGeneration = root.AggregateGeneration
+        };
         var firstPayload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(
                 ZLinkActorAuthorityPayloadCodec.Encode(firstTarget),
@@ -1405,7 +1408,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
                     BinaryPrimitives.ReadUInt64BigEndian(id),
                     BinaryPrimitives.ReadUInt64BigEndian(id[8..]),
                     1,
-                    "source",
+                    RoutingId.From("source").ToHex(),
                     7,
                     "source-owner",
                     3,
@@ -1420,7 +1423,10 @@ public sealed class StandaloneActorRelocationRuntimeTests
                     4,
                     stored.Root.Reference,
                     stored.Root.ChecksumCrc32c,
-                    7),
+                    7)
+                {
+                    AggregateGeneration = identity.AggregateGeneration
+                },
                 identity);
         var authorityStore = new ProgressAuthorityStore(
             participant.AuthorityKey,
