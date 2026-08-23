@@ -31,10 +31,13 @@ runtime 경로를 선택한다. 따라서 파일 이름이나 `Perf runtime libz
 `share/zlink/core-package-provenance.json`이 보고한 실제 runtime 버전도
 {{CORE_VERSION}}인지 확인한다.
 
-측정을 시작할 때는 Core source를 다시 build하지 않는다.
-`ZLINK_CORE_SOURCE=release`(기본값) 상태에서 release prefix를 준비한다.
-`core/build`와 현재 source 변경은 측정 runtime을 구성하지 않는다. 다른 버전의 local
-package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으로 사용하지 않는다.
+측정을 시작할 때는 Core source를 다시 build하지 않는다. 모든 perf runner는 기본적으로
+LOCAL Core build를 선택한다. 공식 측정에서는 runner에 `--core-version {{CORE_VERSION}}`를
+전달해 검증된 release runtime을 선택하며, 이 option이 release prefix와 package provenance를
+resolve하고 verify한다. `ZLINK_CORE_SOURCE`를 명시적으로 export한 경우에는 그 값이 runner의
+기본 선택보다 우선한다. `core/build`와 현재 source 변경은 측정 runtime을 구성하지 않는다.
+다른 버전의 local package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으로 사용하지
+않는다.
 
 모든 성능 셀은 `미측정`에서 시작한다. 상세 표에는 현재 binding runner에 실제로 등록된
 pattern만 포함한다. 공식 C runner에만 있고 binding runner에 없는 pattern은 이 계획의
@@ -69,6 +72,20 @@ binding ratio (%) = binding throughput / C throughput * 100
 ```
 
 ### 2.1 Throughput 목표
+
+> **주의 — 2026-08-23/24 realignment 이전 historical thresholds**
+>
+> 이 절의 표와 예외 설명에 인용한 historical numbers(과거 p10·하위 25% 경계값·중앙값·
+> per-cell exception·ceiling)는 2026-08-23/24 realignment 전에 측정한 기록이다. 당시의
+> binding async-admission machinery를 사용했으며, realignment에서 sync submit terminal로
+> 정렬하고 해당 machinery를 삭제했으며 send-completion을 Core가 담당하도록 변경했다. 이로
+> 인해 routed-path economics가 근본적으로 달라졌고 C++ `DEALER_DEALER / 64B`는 +185%
+> 개선됐다.
+>
+> 이 historical numbers는 초기 target을 seed하는 참고값으로만 사용한다. 새 contract에서
+> 각 언어의 첫 paired measurement를 기준으로 그 언어의 per-cell exception과 median을 반드시
+> 다시 도출(MUST re-derive)하며, 기존 ceiling은 한계로 취급하지 않는다. 아래 수치는 기록이므로
+> 삭제하지 않는다.
 
 각 언어에는 개별 셀의 **최소 기준**과 같은 pattern·transport에 속한 message size 비율의
 **목표**를 둔다. transport의 throughput 판정은 모든 측정 size ratio의 **산술평균
@@ -183,6 +200,11 @@ transition을 제거하면 측정 의미나 안전 계약이 달라지므로, �
 | .NET | `ipc` | 단순 one-way | 64% / 82% |
 | .NET | `inproc` | `DEALER_ROUTER` | 24% / 60% |
 | .NET | `inproc` | `ROUTER_ROUTER` | 24% / 55% |
+
+**재검증 주의:** 아래 `ROUTER_ROUTER / inproc` 특수 사례의 sender가 public routed builder
+boundary를 통과한다는 rationale와 54.5%/50.10% 중앙값은 2026-08-23/24 realignment 이전의
+builder 비용 구조에 기반한다. realignment 이후에는 이 rationale와 그에 따른 threshold를
+재사용하기 전에 새 paired 측정으로 반드시 다시 검증한다.
 
 `ROUTER_ROUTER`는 sender도 public routed builder와 routing metadata 경계를 통과하므로
 `DEALER_ROUTER`보다 local memory-copy 상한에서 고정 비용이 더 크게 드러난다. 전체 크기
@@ -337,6 +359,11 @@ C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 �
 | 조건 | suite, pattern, transport, size, duration, runs, client 수, I/O thread 수 |
 | 결과 | report 경로, `status`, Effective Options, auto-HWM detail |
 | pair | C와 binding에 공통으로 부여한 session tag |
+
+`auto-HWM` 기본값은 0.13.0에서 프로파일별 비율 2%/3%/5%/8%와 고정 cap 64/256/512/1024 MB로
+변경되었고 budget은 `min(percent x memory, max(cap, queues x per-queue minimum))`으로
+계산된다(사양: `doc/site/docs/spec/core/01-context.ko.md`); 따라서 이전 auto-HWM 기본값으로
+측정한 cycle과 비교할 때는 서로 다른 effective HWM을 반드시 반영한다.
 
 Core release version/tag, package provenance, runtime, host boot, CPU governor, client 수, toolchain 또는
 성능 관련 환경 변수가 바뀌면 이전 C 결과와 새 binding 결과를 짝지어 판정하지 않는다.
