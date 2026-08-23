@@ -252,6 +252,16 @@ behavior are defined only by the immutable byte value.
 - Data-plane `Recv`, routed recv, `Subscribe`, and subscription event receive fill a caller-provided `Received`, `TopicMessage`, or `SubscriptionEvent` instance and return `bool`.
 - A .NET caller creates a reusable receive storage with `Received.Create()`. `Received` has no public constructor.
 - `Send`, routed send, `Publish`, `Request`, `Reply`, SPOT operations, and Actor location/session operations return a fluent operation builder.
+- The terminal for PUB/XPUB `Publish(topic)` is the synchronous
+  `PublishSubmitOperation.Submit() -> void`. Default PUB semantics are lossy, so
+  the publisher never waits at the high-water mark. Under `NODROP` a full
+  subscriber surfaces on the spot as `ZlinkSubmitException`
+  (`Result == Backpressured`), and the retry policy belongs to the application.
+  `TryPublish(topic)` is the separate surface that observes the same
+  back-pressure as `false` instead of an exception.
+- A back-pressure-cleared callback (`OnSendReady`) is not part of the public
+  contract: the `send_ready` readiness-hint semantics were withdrawn in Core
+  0.13.0.
 - A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, callback, and async submit choices are handled at the builder stage.
 - A reply builder has no send-flag stage. Since the core reply function takes no send-flag argument, the .NET binding does not expose a no-op `Flags(...)` as part of the public contract.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
@@ -292,13 +302,14 @@ behavior are defined only by the immutable byte value.
   another send from progressing.
 - HWM waiting on one target does not delay admission for another target. This
   independence is not a public strict-FIFO guarantee for a routing id.
-- Routed send fixes `SendTimeout`, and request fixes builder `Timeout(...)`, as
-  an absolute deadline at the start of `Async(...)`, including admission wait.
-  Cancellation, close, disconnect, target loss, timeout,
-  and a fast reply may race, but only one Task terminal wins.
+- Request passes builder `Timeout(...)` to Core as the per-request deadline, and
+  Core reports expiry as `ZLINK_REQUEST_TIMED_OUT`. The routed send admission
+  deadline is the Core-side per-operation option. Cancellation, close,
+  disconnect, target loss, timeout, and a fast reply may race, but only one Task
+  terminal wins.
 - Cancellation completes the Task as canceled, so awaiting it throws
-  `OperationCanceledException`. If routed send is not admitted by
-  `SendTimeout`, it faults with `ZlinkSubmitException`
+  `OperationCanceledException`. If routed send is not admitted by the Core
+  deadline, it faults with `ZlinkSubmitException`
   (`Result == Backpressured`); if request does not finish by `Timeout(...)`, it
   faults with `ZlinkRequestException` (`Result == TimedOut`).
 - Not awaiting the returned Task, or discarding its reference, does not cancel
@@ -309,17 +320,32 @@ behavior are defined only by the immutable byte value.
 - Unrelated common synchronous data-plane builders for roles such as PAIR and
   STREAM remain separate contracts; they are not canonical terminals for the
   DEALER/ROUTER HWM-managed routed path.
-- Before accepting an asynchronous operation, the socket runtime registers
-  Core's long-lived routed-target readiness handler. Before its first attempt,
-  an operation places its exact `(socket, RID, transport pair ID, generation)`
-  key, completion state, and complete record in pending state, then attempts
-  `DONTWAIT` on that same target. The callback marks only that key ready; a pump
-  outside the callback performs native submit. An event for another pair
-  generation is a stale wake and is ignored.
-- Outbound paths on one native handle share a short attempt gate that protects
-  one complete multipart attempt from its first part through `FINAL`. The gate
-  is released immediately after success, backpressure, or failure and is never
-  held during readiness waiting.
+- Core's send-completion notification drives routed send completion. The socket
+  runtime installs `zlink_send_complete_handler` once, on the first `Async(...)`,
+  and every operation then hands one complete record to `zlink_send_async`. The
+  binding owns no park queue, no readiness retry pump, no deadline timer and no
+  dispatcher thread — the `send_ready` readiness-hint semantics are withdrawn.
+- The completion callback only delivers completion. It never calls send,
+  publish, or request on any socket; Core refuses such a call with `EDEADLK`.
+- The completion delegate instance handed to Core must outlive the socket. The
+  runtime roots it through both a field and an explicit `GCHandle`, and releases
+  it only after the native socket is closed. Collecting it early would leave
+  Core calling a freed reverse-P/Invoke stub.
+- Operation state is kept alive by the `GCHandle` that travels through Core as
+  the operation `userdata`; the exactly-once completion frees that handle. A
+  submit that is not `SUBMIT_OK` runs no completion, so payload ownership
+  returns to the caller immediately.
+- A record admitted immediately runs its completion inline inside
+  `zlink_send_async`, so the caller never suspends on that path.
+- `CancellationToken` maps to `zlink_send_async_cancel`. A cancelled operation
+  still completes exactly once (`TERMINAL` / `ECANCELED`), and an operation
+  whose admission is already committed is not cancelled and completes as
+  `ADMITTED`.
+- The per-operation deadline is a Core-side option
+  (`zlink_send_async_options_t.timeout_ms`). The binding owns no deadline timer.
+- PUB/XPUB `publish` is not part of this surface: Core's `zlink_send_async`
+  returns `ENOTSUP` for PUB/XPUB, and the publish terminal is the synchronous
+  `Submit()`.
 
 ## Contract folder layout
 

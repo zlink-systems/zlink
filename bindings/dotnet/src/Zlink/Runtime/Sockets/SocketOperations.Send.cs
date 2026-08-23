@@ -114,15 +114,21 @@ internal sealed class PublisherTrySendOperation : SendOperation,
     }
 }
 
-internal sealed class PublisherAsyncSendOperation : AsyncSendOperation,
-    AsyncSendSubmitOperation
+/// <summary>
+///     The synchronous PUB/XPUB publish terminal. Lossy PUB semantics mean the
+///     publisher never waits at the high-water mark, so there is no pending
+///     record, no admission queue and no asynchronous completion here.
+/// </summary>
+internal sealed class PublisherPublishOperation : PublishOperation,
+    PublishSubmitOperation
 {
     private readonly PublisherSocketBase _socket;
     private readonly string _topic;
+    private SendFlags _flags;
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
-    internal PublisherAsyncSendOperation(PublisherSocketBase socket,
+    internal PublisherPublishOperation(PublisherSocketBase socket,
         string topic)
     {
         _socket = socket;
@@ -130,20 +136,36 @@ internal sealed class PublisherAsyncSendOperation : AsyncSendOperation,
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public AsyncSendSubmitOperation Message(Message message)
+    public PublishSubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
         _parts.Add(message);
         return this;
     }
 
-    public Task Async(CancellationToken ct = default)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public PublishSubmitOperation Flags(SendFlags flags)
+    {
+        EnsureNotSubmitted();
+        _flags = flags;
+        return this;
+    }
+
+    public void Submit()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
         _submission.MarkSubmittedAfterValidation();
-        return _socket.Kernel.PublisherAdmission.PublishAsync(_topic,
-            _parts.Parts, ct);
+        // A publisher never waits at the high-water mark: the default contract
+        // drops the full subscriber's copy, and NODROP must surface the refusal
+        // on the spot rather than parking on SNDTIMEO.
+        var flags = _flags | SendFlags.DontWait;
+        var accepted = _parts.IsSingle
+            ? _socket.PublishCore(_topic, _parts.Single, flags)
+            : _socket.PublishCore(_topic, _parts.Parts, flags);
+        if (!accepted)
+            throw ZlinkException.CreateSubmitException(
+                (int)ErrorCode.EAgain);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -247,7 +269,7 @@ internal sealed class RoutedAsyncSendOperation : RoutedSendOperation,
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
         _submission.MarkSubmittedAfterValidation();
-        return _socket.Kernel.RoutedAdmission.SendAsync(_routingId,
+        return _socket.Kernel.SendCompletion.SendAsync(_routingId,
             _parts.Parts, ct);
     }
 

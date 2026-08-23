@@ -294,6 +294,14 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   `Received`에는 공개 생성자가 없다.
 - `Send`, routed send, `Publish`, `Request`, `Reply`, SPOT 연산, Actor
   location/세션 연산은 fluent operation builder를 반환한다.
+- PUB/XPUB `Publish(topic)`의 terminal은 동기 `PublishSubmitOperation.Submit()
+  -> void`다. 기본 PUB 의미론은 lossy이므로 publisher는 HWM에서 대기하지
+  않는다. `NODROP`에서 가득 찬 subscriber는 그 자리에서
+  `ZlinkSubmitException`(`Result == Backpressured`)으로 표면화되고, 재시도
+  정책은 어플리케이션이 소유한다. `TryPublish(topic)`는 같은 backpressure를
+  예외 없이 `false`로 관찰하는 별도 표면이다.
+- back-pressure 해소 콜백(`OnSendReady`)은 공개 계약이 아니다. `send_ready`
+  readiness-hint 시맨틱이 Core 0.13.0에서 폐지되었기 때문이다.
 - builder의 시작 메서드는 target identity, topic, channel, routing id,
   request 시퀀스만 받는다. payload, flag, timeout, callback, 비동기 submit
   선택은 builder 단계에서 처리한다.
@@ -349,12 +357,13 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   같은 socket의 다른 send를 막는 socket-wide lock도 점유하지 않는다.
 - 한 target의 HWM 대기는 다른 target의 admission을 지연시키지 않는다. 이
   독립성은 특정 routing id에 대한 공개 strict-FIFO 보장을 뜻하지 않는다.
-- routed send는 `SendTimeout`, request는 builder `Timeout(...)`을
-  `Async(...)`가 시작된 시점의 절대 deadline으로 고정하며 admission 대기
-  시간도 포함한다. cancellation, close, disconnect, target 연결 종료,
-  timeout, 빠른 reply가 경합해도 Task terminal은 한 번만 결정된다.
+- request는 builder `Timeout(...)`을 Core의 per-request deadline으로 넘기며,
+  만료는 Core가 `ZLINK_REQUEST_TIMED_OUT`으로 통지한다. routed send의
+  admission deadline은 Core-side per-operation 옵션이다. cancellation, close,
+  disconnect, target 연결 종료, timeout, 빠른 reply가 경합해도 Task terminal은
+  한 번만 결정된다.
 - `CancellationToken`이 취소되면 Task는 취소 상태로 끝나며 await는
-  `OperationCanceledException`을 발생시킨다. Routed send가 `SendTimeout`까지
+  `OperationCanceledException`을 발생시킨다. Routed send가 Core deadline까지
   admission되지 않으면 `ZlinkSubmitException`(`Result == Backpressured`)으로,
   request가 `Timeout(...)`까지 끝나지 않으면
   `ZlinkRequestException`(`Result == TimedOut`)으로 끝난다.
@@ -366,14 +375,29 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - PAIR, STREAM 등 unrelated 공통 sync data-plane builder는 별도 계약으로 남지만
   DEALER/ROUTER의 HWM-managed routed 경로에서 canonical terminal로 취급하지
   않는다.
-- 비동기 operation을 받기 전에 socket runtime은 Core routed-target readiness handler를
-  장기 등록한다. Operation은 최초 시도 전에 정확한 `(socket, RID, transport pair ID,
-  generation)` key와 completion state, complete record를 pending에 넣고 같은 target에
-  `DONTWAIT`로 시도한다. Callback은 해당 key만 ready로 표시하고 native submit은 callback
-  밖의 pump가 수행한다. Pair generation이 다른 event는 stale wake로 무시한다.
-- 같은 native handle의 outbound 경로는 complete multipart의 첫 part부터 `FINAL`까지 한
-  시도만 보호하는 짧은 attempt gate를 공유한다. Gate는 성공·backpressure·실패 직후
-  반환하며 readiness 대기 중에는 보유하지 않는다.
+- routed send의 완료는 Core send-completion 통지가 구동한다. socket runtime은 첫
+  `Async(...)` 시점에 `zlink_send_complete_handler`를 한 번 등록하고, 이후 모든
+  operation은 complete record 하나를 `zlink_send_async`로 넘긴다. 바인딩은 park
+  queue, readiness 재시도 pump, deadline timer, dispatcher thread를 두지
+  않는다 — `send_ready` readiness-hint 시맨틱은 폐지되었다.
+- 완료 콜백은 completion 전달만 한다. 콜백 안에서 어떤 socket의 send/publish/
+  request도 호출하지 않는다(Core는 그런 호출을 `EDEADLK`로 거부한다).
+- Core에 넘긴 완료 delegate 인스턴스는 socket 수명 동안 살아 있어야 한다.
+  runtime은 이를 필드와 명시적 `GCHandle` 두 경로로 뿌리내리고, native socket이
+  닫힌 뒤에만 해제한다. 수집되면 Core가 해제된 reverse-P/Invoke stub을 호출하게
+  된다.
+- operation 상태는 `zlink_send_async`의 `userdata`로 전달되는 `GCHandle`이
+  살려 두며, 정확히 한 번 도착하는 완료가 그 handle을 해제한다. `SUBMIT_OK`가
+  아니면 완료가 없으므로 payload ownership은 즉시 호출자에게 되돌아간다.
+- 즉시 admission되는 record는 `zlink_send_async` 안에서 완료가 inline으로
+  실행되므로 호출자는 suspend하지 않는다.
+- `CancellationToken`은 `zlink_send_async_cancel`로 매핑한다. 취소된 operation도
+  정확히 한 번 완료하며(`TERMINAL`/`ECANCELED`), 이미 admission이 확정된
+  operation은 취소되지 않고 `ADMITTED`로 완료한다.
+- per-operation deadline은 Core-side 옵션(`zlink_send_async_options_t.timeout_ms`)
+  이다. 바인딩은 자체 deadline timer를 두지 않는다.
+- PUB/XPUB의 `publish`는 이 표면에 포함되지 않는다. Core의 `zlink_send_async`는
+  PUB/XPUB에서 `ENOTSUP`을 반환하며, publish는 동기 `Submit()`이 terminal이다.
 
 ## Contract 폴더 레이아웃
 

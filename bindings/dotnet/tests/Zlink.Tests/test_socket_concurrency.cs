@@ -68,9 +68,7 @@ public sealed class test_socket_concurrency
             string[] parts = payload.Split('|');
             Assert.Equal(2, parts.Length);
             Assert.EndsWith("-header", parts[0], StringComparison.Ordinal);
-            Assert.Equal(
-                parts[0][..^"-header".Length] + "-body",
-                parts[1]);
+            Assert.Equal(parts[0][..^"-header".Length] + "-body", parts[1]);
         });
         RoutingId target = dealerRoutingId
             ?? throw new InvalidOperationException(
@@ -117,9 +115,7 @@ public sealed class test_socket_concurrency
             string[] parts = payload.Split('|');
             Assert.Equal(2, parts.Length);
             Assert.EndsWith("-header", parts[0], StringComparison.Ordinal);
-            Assert.Equal(
-                parts[0][..^"-header".Length] + "-body",
-                parts[1]);
+            Assert.Equal(parts[0][..^"-header".Length] + "-body", parts[1]);
         });
     }
 

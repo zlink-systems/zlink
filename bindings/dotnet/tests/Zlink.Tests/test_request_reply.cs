@@ -20,7 +20,6 @@ public sealed class test_request_reply
         string endpoint = CoreTestSupport.NewEndpoint(
             "inproc", "router-poller-receive-completion");
 
-        router.OnSendReady(() => { });
         router.Bind(endpoint);
 
         poller.Add(
@@ -510,9 +509,6 @@ public sealed class test_request_reply
         serverA.Options.PeerWeight = 100;
         serverB.Options.PeerWeight = 100;
         client.Options.PeerWeight = 100;
-        serverA.OnSendReady(() => { });
-        serverB.OnSendReady(() => { });
-        client.OnSendReady(() => { });
 
         string endpointA = CoreTestSupport.NewEndpoint("tcp",
             "dealer-framework-options-a");

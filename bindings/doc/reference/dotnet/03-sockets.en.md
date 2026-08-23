@@ -103,7 +103,6 @@ if (pair.Recv(received)) { /* ... */ }
 | --- | --- | --- |
 | `Send()` | — | starts the shared `SendOperation` builder (Messaging category) |
 | `Recv(Received result, RecvFlags flags)` | `RecvFlags.None` | populates `result` |
-| `OnSendReady(Action handler)` | — | back-pressure-cleared callback, background dispatch thread |
 
 `IPairSocket` adds nothing beyond this shared `IMessageSocket` surface.
 
@@ -158,8 +157,8 @@ router.Send(peerRid).Message(Message.From("hello")).Submit();
 router.OnCompletionControl((rid, parts) => { /* ... */ });
 ```
 
-**Options.** Adds to `IRoutedMessageSocket` (`Send(RoutingId)`, `Recv(Received, RecvFlags)`,
-`OnSendReady(Action)`) and `IConnectableSocket`:
+**Options.** Adds to `IRoutedMessageSocket` (`Send(RoutingId)`, `Recv(Received, RecvFlags)`)
+and `IConnectableSocket`:
 
 | Member | Default | Meaning |
 | --- | --- | --- |
@@ -200,8 +199,11 @@ using SubscriptionEvent evt = new SubscriptionEvent();
 if (xpub.ReceiveSubscriptionEvent(evt)) { /* ... */ }
 ```
 
-**Options.** Shared `IPublisherSocket`: `Publish(string topic)` (starts the shared
-`SendOperation`), `OnSendReady(Action)`. `IPubSocket` also has `SetRoutingId`/`GetRoutingId` —
+**Options.** Shared `IPublisherSocket`: `Publish(string topic)` (starts the synchronous
+`PublishOperation`) and `TryPublish(string topic)`. Publish is synchronous-only — the default PUB
+contract is lossy, so a subscriber at its high-water mark has its copy dropped and the publisher
+proceeds; under `NoDrop` the full subscriber surfaces immediately as `ZlinkSubmitException`.
+`IPubSocket` also has `SetRoutingId`/`GetRoutingId` —
 **`IXPubSocket` does not** (it inherits only `IPublisherSocket`). Both expose `Options` as the
 same `PubSocketOptions` facade:
 

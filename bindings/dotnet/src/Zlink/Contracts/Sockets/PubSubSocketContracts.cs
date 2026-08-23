@@ -8,24 +8,23 @@ namespace Systems.Zlink;
 public interface IPublisherSocket : IConnectableSocket
 {
     /// <summary>
-    ///     Begins publishing under <paramref name="topic" />. The asynchronous
-    ///     terminal transfers the parts and waits for local Core admission.
+    ///     Begins publishing under <paramref name="topic" />. Publish is
+    ///     synchronous: PUB semantics are lossy, so the publisher never waits at
+    ///     the high-water mark and the terminal
+    ///     <see cref="PublishSubmitOperation.Submit" /> completes on the calling
+    ///     thread. With <c>NODROP</c> a full subscriber surfaces immediately as
+    ///     <see cref="ZlinkSubmitException" />; the retry policy belongs to the
+    ///     application.
     /// </summary>
-    AsyncSendOperation Publish(string topic);
+    PublishOperation Publish(string topic);
 
     /// <summary>
     ///     Begins an explicit immediate publish attempt. Add parts and call
     ///     <see cref="SendSubmitOperation.Submit" />; use
-    ///     <see cref="SendFlags.DontWait" /> to observe back-pressure without
-    ///     waiting.
+    ///     <see cref="SendFlags.DontWait" /> to observe back-pressure as a
+    ///     <c>false</c> result rather than an exception.
     /// </summary>
     SendOperation TryPublish(string topic);
-
-    /// <summary>
-    ///     Registers a callback invoked when the socket can accept more sends after
-    ///     back-pressure. The callback runs on a background dispatch thread.
-    /// </summary>
-    void OnSendReady(Action handler);
 }
 
 /// <summary>

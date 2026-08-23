@@ -40,11 +40,6 @@ internal abstract class RoutedReceivingSocketBase : SocketBase,
         return Kernel.ReceiveRoutedRetainedInto(result, (int)flags);
     }
 
-
-    public void OnSendReady(Action handler)
-    {
-        Kernel.SendReadyHandler(handler);
-    }
 }
 
 [EditorBrowsable(EditorBrowsableState.Never)]

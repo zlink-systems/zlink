@@ -36,8 +36,9 @@ public sealed class test_validation_contract
         using var ctx = Zlink.CreateContext();
         using var socket = ctx.CreatePairSocket();
 
+        // 0x10000 is SocketEvent.SendFlowPaused; SocketEvent.All is 0x7FFFF.
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            socket.MonitorOpen((SocketEvent)0x10000));
+            socket.MonitorOpen((SocketEvent)0x80000));
     }
 
     [Fact]

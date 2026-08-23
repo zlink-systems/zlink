@@ -192,7 +192,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(
             timeout,
             DefaultRequestTimeout);
-        return Kernel.RoutedAdmission.RequestAsync(null, parts, timeoutMs, ct);
+        return Kernel.RequestAsync(null, parts, timeoutMs, ct);
     }
 
     private ReceivedReplyHandler CreateReplyHandler(ulong requestSeq)

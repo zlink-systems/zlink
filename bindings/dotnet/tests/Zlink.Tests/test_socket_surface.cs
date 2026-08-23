@@ -162,4 +162,28 @@ public sealed class test_socket_surface
         Assert.DoesNotContain(typeof(Zlink).Assembly.GetTypes(),
             type => type.Name == "LegacyRoutedSendOperation");
     }
+
+    [Fact]
+    public void publish_exposes_only_the_synchronous_submit_terminal()
+    {
+        MethodInfo publish = PublicInstanceMethods(typeof(IPublisherSocket))
+            .Single(method => method.Name == nameof(IPublisherSocket.Publish));
+        Assert.Equal(typeof(PublishOperation), publish.ReturnType);
+
+        MethodInfo submit = PublicInstanceMethods(
+                typeof(PublishSubmitOperation))
+            .Single(method => method.Name == "Submit");
+        Assert.Equal(typeof(void), submit.ReturnType);
+        Assert.DoesNotContain(PublicInstanceMethods(
+                typeof(PublishSubmitOperation)),
+            method => method.Name == "Async");
+
+        // The withdrawn send_ready readiness hint has no public surface.
+        Assert.DoesNotContain(typeof(Zlink).Assembly.GetExportedTypes()
+                .SelectMany(PublicInstanceMethods),
+            method => method.Name == "OnSendReady");
+        Assert.DoesNotContain(typeof(Zlink).Assembly.GetExportedTypes(),
+            type => type.Name is "AsyncSendOperation"
+                or "AsyncSendSubmitOperation");
+    }
 }

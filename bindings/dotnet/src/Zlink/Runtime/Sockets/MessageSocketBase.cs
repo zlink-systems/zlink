@@ -56,11 +56,6 @@ internal abstract class ReceivingMessageSocketBase : ConnectableSocketBase,
     }
 
 
-    public void OnSendReady(Action handler)
-    {
-        Kernel.SendReadyHandler(handler);
-    }
-
     internal void OnReceive(SocketRecvHandler handler)
     {
         Kernel.RecvHandler(handler);

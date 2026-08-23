@@ -53,33 +53,41 @@ public interface SendSubmitOperation
 }
 
 /// <summary>
-///     Builds a send whose terminal operation waits asynchronously for local
-///     Core admission.
+///     Builds a topic publish. Publish is a synchronous one-shot: the default
+///     PUB contract is lossy, so a subscriber at its high-water mark has its
+///     copy dropped and the publisher proceeds immediately.
 /// </summary>
-public interface AsyncSendOperation
+public interface PublishOperation
 {
     /// <summary>
-    ///     Adds the first message part. Ownership transfers when
-    ///     <see cref="AsyncSendSubmitOperation.Async" /> is called.
+    ///     Adds the first message part. The part is consumed on a successful
+    ///     submit; see <see cref="SendOperation" /> for the ownership contract.
     /// </summary>
-    AsyncSendSubmitOperation Message(Message message);
+    PublishSubmitOperation Message(Message message);
 }
 
 /// <summary>
-///     Accepts further parts and asynchronously waits until Core admits the
-///     complete record.
+///     Accepts further parts, flags, and the synchronous terminal submit of a
+///     publish builder.
 /// </summary>
-public interface AsyncSendSubmitOperation
+public interface PublishSubmitOperation
 {
     /// <summary>Adds another message part.</summary>
-    AsyncSendSubmitOperation Message(Message message);
+    PublishSubmitOperation Message(Message message);
 
     /// <summary>
-    ///     Transfers the accumulated parts to the operation and returns without
-    ///     waiting for HWM credit. The task completes when Core admits the
-    ///     complete record.
+    ///     Sets the flags applied at submit time, replacing any previously set
+    ///     flags.
     /// </summary>
-    Task Async(CancellationToken ct = default);
+    PublishSubmitOperation Flags(SendFlags flags);
+
+    /// <summary>
+    ///     Publishes the accumulated parts on the calling thread. The publisher
+    ///     never waits at the high-water mark. Failures — including the
+    ///     immediate back-pressure a <c>NODROP</c> publisher surfaces — throw
+    ///     <see cref="ZlinkSubmitException" />.
+    /// </summary>
+    void Submit();
 }
 
 /// <summary>
@@ -106,10 +114,17 @@ public interface RoutedSendSubmitOperation
     RoutedSendSubmitOperation Message(Message message);
 
     /// <summary>
-    ///     Transfers the accumulated parts to the operation and returns without
-    ///     waiting for target HWM credit. The task completes when the complete
-    ///     record is admitted to the selected exact target.
+    ///     Hands the complete record to Core and returns without waiting for
+    ///     target HWM credit. The task is completed exactly once by the Core
+    ///     send completion: successfully on admission, with
+    ///     <see cref="ZlinkSubmitException" /> on a terminal outcome, and
+    ///     cancelled when <paramref name="ct" /> cancels the operation before
+    ///     admission commits.
     /// </summary>
+    /// <remarks>
+    ///     A record admitted immediately completes inline, before the returned
+    ///     task is handed back, so the caller never suspends on the fast path.
+    /// </remarks>
     Task Async(CancellationToken ct = default);
 }
 

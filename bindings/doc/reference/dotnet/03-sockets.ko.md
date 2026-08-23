@@ -105,7 +105,6 @@ if (pair.Recv(received)) { /* ... */ }
 | --- | --- | --- |
 | `Send()` | — | 공유 `SendOperation` builder 시작(Messaging category) |
 | `Recv(Received result, RecvFlags flags)` | `RecvFlags.None` | `result`를 채움 |
-| `OnSendReady(Action handler)` | — | back-pressure 해소 콜백, background dispatch 스레드 |
 
 `IPairSocket`은 이 공유 `IMessageSocket` 표면 외에 더하는 게 없다.
 
@@ -161,8 +160,8 @@ router.Send(peerRid).Message(Message.From("hello")).Submit();
 router.OnCompletionControl((rid, parts) => { /* ... */ });
 ```
 
-**옵션.** `IRoutedMessageSocket`(`Send(RoutingId)`, `Recv(Received, RecvFlags)`,
-`OnSendReady(Action)`)과 `IConnectableSocket`에 더하는 것:
+**옵션.** `IRoutedMessageSocket`(`Send(RoutingId)`, `Recv(Received, RecvFlags)`)과
+`IConnectableSocket`에 더하는 것:
 
 | Member | 기본값 | 의미 |
 | --- | --- | --- |
@@ -204,8 +203,11 @@ using SubscriptionEvent evt = new SubscriptionEvent();
 if (xpub.ReceiveSubscriptionEvent(evt)) { /* ... */ }
 ```
 
-**옵션.** 공유 `IPublisherSocket`: `Publish(string topic)`(공유 `SendOperation`
-시작), `OnSendReady(Action)`. `IPubSocket`은 `SetRoutingId`/`GetRoutingId`도
+**옵션.** 공유 `IPublisherSocket`: `Publish(string topic)`(동기 `PublishOperation`
+시작)과 `TryPublish(string topic)`. publish는 동기 전용이다 — 기본 PUB 계약은
+lossy이므로 HWM에 도달한 subscriber의 copy는 drop되고 publisher는 즉시
+진행하며, `NoDrop`에서는 가득 찬 subscriber가 그 자리에서
+`ZlinkSubmitException`으로 표면화된다. `IPubSocket`은 `SetRoutingId`/`GetRoutingId`도
 있다 — **`IXPubSocket`은 없다**(`IPublisherSocket`만 상속). 둘 다 같은
 `PubSocketOptions` facade를 `Options`로 노출한다:
 

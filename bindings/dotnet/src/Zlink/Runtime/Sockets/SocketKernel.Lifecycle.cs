@@ -18,23 +18,17 @@ internal sealed partial class SocketKernel : IDisposable
 
     private void Dispose(bool closeNativeSocket)
     {
-        PublisherAdmissionScheduler? publisherAdmission;
-        lock (_publisherAdmissionSync)
+        SendCompletionRegistry? sendCompletion;
+        lock (_sendCompletionSync)
         {
-            _publisherAdmissionClosing = true;
-            publisherAdmission = _publisherAdmission;
+            _sendCompletionClosing = true;
+            sendCompletion = _sendCompletion;
         }
-        publisherAdmission?.BeginClose();
-        publisherAdmission?.WaitForSubmitQuiescence();
 
-        RoutedAdmissionScheduler? routedAdmission;
-        lock (_routedAdmissionSync)
-        {
-            _routedAdmissionClosing = true;
-            routedAdmission = _routedAdmission;
-        }
-        routedAdmission?.BeginClose();
-        routedAdmission?.WaitForSubmitQuiescence();
+        // Core delivers a terminal completion for every operation still
+        // pending when the socket closes, so nothing is drained here; the
+        // binding only stops accepting new cancel entry points.
+        sendCompletion?.BeginClose();
 
         // The Core raw API has no STREAM detach entry point; the packet
         // callback lifecycle ends with the socket close below. Clearing the
@@ -49,6 +43,10 @@ internal sealed partial class SocketKernel : IDisposable
             _handle.Dispose();
         else
             _handle.ReleaseWithoutClose();
+
+        // Core no longer holds the reverse-P/Invoke stub once the socket is
+        // closed, so the completion delegate root can finally be released.
+        sendCompletion?.ReleaseAfterNativeClose();
         _callbacks.ClearAllNonStream();
         GC.SuppressFinalize(this);
     }

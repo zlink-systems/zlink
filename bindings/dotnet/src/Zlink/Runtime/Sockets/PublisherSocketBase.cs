@@ -23,11 +23,11 @@ internal abstract class PublisherSocketBase : ConnectableSocketBase, IPublisherS
     ///     Start a topic publish operation (operation builder).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public AsyncSendOperation Publish(string topic)
+    public PublishOperation Publish(string topic)
     {
         if (topic == null)
             throw new ArgumentNullException(nameof(topic));
-        return new PublisherAsyncSendOperation(this, topic);
+        return new PublisherPublishOperation(this, topic);
     }
 
     /// <summary>
@@ -39,11 +39,6 @@ internal abstract class PublisherSocketBase : ConnectableSocketBase, IPublisherS
         if (topic == null)
             throw new ArgumentNullException(nameof(topic));
         return new PublisherTrySendOperation(this, topic);
-    }
-
-    public void OnSendReady(Action handler)
-    {
-        Kernel.SendReadyHandler(handler);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

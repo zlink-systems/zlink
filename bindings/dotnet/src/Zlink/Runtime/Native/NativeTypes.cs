@@ -29,20 +29,38 @@ internal struct ZlinkRoutedSubmitTarget
     public ulong TransportPairGeneration;
 }
 
+/// <summary>
+///     Mirrors <c>zlink_send_async_options_t</c>.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
-internal struct ZlinkRoutedSendReadyEvent
+internal unsafe struct ZlinkSendAsyncOptions
 {
+    public uint StructSize;
+    public uint TimeoutMs;
+    public IntPtr Userdata;
+    public ZlinkRoutedSubmitTarget* Target;
+}
+
+/// <summary>
+///     Mirrors <c>zlink_send_complete_event_t</c>.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct ZlinkSendCompleteEvent
+{
+    public ulong OpId;
+    public IntPtr Userdata;
     public ZlinkRoutingId PeerRoutingId;
     public ulong TransportPairId;
     public ulong TransportPairGeneration;
-    public ZlinkRoutedSendReadyState State;
+    public ZlinkSendCompleteResult Result;
     public int TerminalErrno;
 }
 
-internal enum ZlinkRoutedSendReadyState
+internal enum ZlinkSendCompleteResult
 {
-    Writable = 1,
-    Terminal = 2
+    Admitted = 0,
+    TimedOut = 201,
+    Terminal = 202
 }
 
 [StructLayout(LayoutKind.Sequential)]

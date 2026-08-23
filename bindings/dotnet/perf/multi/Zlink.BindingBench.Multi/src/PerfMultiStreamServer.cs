@@ -274,7 +274,7 @@ internal static class PerfMultiStreamServer
         {
             try
             {
-                if (((IStreamSocket)server).Send(routingId).Message(payload)
+                if (((IStreamSocket)server).TrySend(routingId).Message(payload)
                         .Flags(SendFlags.DontWait).Submit())
                     return SendStatus.Done;
             }
@@ -296,7 +296,7 @@ internal static class PerfMultiStreamServer
                 if (message.Payload == null)
                     return SendStatus.Fatal;
 
-                if (((IStreamSocket)server).Send(message.RoutingId)
+                if (((IStreamSocket)server).TrySend(message.RoutingId)
                         .Message(message.Payload).Flags(SendFlags.DontWait)
                         .Submit())
                 {

@@ -9,9 +9,7 @@ internal sealed partial class SocketKernel : IDisposable
     private const int TopicBufferSize = 4096;
     private const int DontWaitFlag = 1;
     private readonly SocketCallbackRegistry _callbacks = new();
-    private readonly object _sendReadyRegistrationSync = new();
-    private readonly object _publisherAdmissionSync = new();
-    private readonly object _routedAdmissionSync = new();
+    private readonly object _sendCompletionSync = new();
     private readonly object _streamModeGate = new();
 
     private readonly SocketHandle _handle;
@@ -19,10 +17,8 @@ internal sealed partial class SocketKernel : IDisposable
     private readonly SocketTypePolicy _policy;
     private string? _publishTopicCacheKey;
     private byte[]? _publishTopicCacheUtf8;
-    private PublisherAdmissionScheduler? _publisherAdmission;
-    private bool _publisherAdmissionClosing;
-    private RoutedAdmissionScheduler? _routedAdmission;
-    private bool _routedAdmissionClosing;
+    private SendCompletionRegistry? _sendCompletion;
+    private bool _sendCompletionClosing;
     private bool _streamAttached;
     private int _streamReceiveMode;
 
@@ -45,59 +41,37 @@ internal sealed partial class SocketKernel : IDisposable
     public SocketType Type => _policy.SocketType;
     internal object SubmitGate { get; } = new();
 
-    internal RoutedAdmissionScheduler RoutedAdmission
+    /// <summary>
+    ///     The socket's Core send-completion bridge. Created on first use so a
+    ///     socket that never calls an asynchronous send terminal never asks
+    ///     Core to start its async completion dispatch.
+    /// </summary>
+    internal SendCompletionRegistry SendCompletion
     {
         get
         {
-            if (Type is not (SocketType.Dealer or SocketType.Router
-                or SocketType.Stream))
+            if (Type is not (SocketType.Pair or SocketType.Dealer
+                or SocketType.Router or SocketType.Stream))
                 throw new NotSupportedException(
-                    "Exact routed admission requires a DEALER, ROUTER, or STREAM socket.");
+                    "Asynchronous send requires a PAIR, DEALER, ROUTER, or STREAM socket.");
 
-            lock (_routedAdmissionSync)
+            lock (_sendCompletionSync)
             {
-                if (_routedAdmissionClosing)
+                if (_sendCompletionClosing)
                     throw new ZlinkSubmitException(
                         ZlinkSubmitException.ErrorCode.Terminated);
-                return _routedAdmission ??= new RoutedAdmissionScheduler(
-                    Handle, Type, SubmitGate,
-                    () => GetOption(SocketOptions.SndTimeo));
+                return _sendCompletion ??= new SendCompletionRegistry(Handle,
+                    Type, SubmitGate);
             }
         }
     }
 
-    internal PublisherAdmissionScheduler PublisherAdmission
+    internal Task<IReadOnlyList<Message>> RequestAsync(
+        RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
+        uint timeoutMs, CancellationToken cancellationToken)
     {
-        get
-        {
-            if (Type is not (SocketType.Pub or SocketType.XPub))
-                throw new NotSupportedException(
-                    "Publisher admission requires a PUB or XPUB socket.");
-
-            lock (_publisherAdmissionSync)
-            {
-                if (_publisherAdmissionClosing)
-                    throw new ZlinkSubmitException(
-                        ZlinkSubmitException.ErrorCode.Terminated);
-                if (_publisherAdmission != null)
-                    return _publisherAdmission;
-
-                var admission = new PublisherAdmissionScheduler(
-                    Handle, SubmitGate,
-                    () => GetOption(SocketOptions.SndTimeo));
-                try
-                {
-                    AdmissionSendReadyHandler(admission.SignalReady);
-                    _publisherAdmission = admission;
-                    return admission;
-                }
-                catch
-                {
-                    admission.BeginClose();
-                    throw;
-                }
-            }
-        }
+        return RoutedRequestSubmitter.RequestAsync(Handle, Type, SubmitGate,
+            routerRoutingId, parts, timeoutMs, cancellationToken);
     }
 
     public bool ReceiveSubscriptionEvent(SubscriptionEvent result,

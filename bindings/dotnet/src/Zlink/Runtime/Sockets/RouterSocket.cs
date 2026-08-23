@@ -68,8 +68,7 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(
             timeout,
             DefaultRequestTimeout);
-        return Kernel.RoutedAdmission.RequestAsync(peerRid, parts, timeoutMs,
-            ct);
+        return Kernel.RequestAsync(peerRid, parts, timeoutMs, ct);
     }
 
     internal void ReplyCore(RoutingId peerRid, ulong requestSeq,

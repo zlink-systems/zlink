@@ -92,13 +92,22 @@ internal static partial class NativeMethods
     internal static extern int zlink_recv_handler(IntPtr subject,
         ZlinkSocketMsgHandlerDelegate handler, IntPtr userData);
 
+    // Core 0.13.0 send-completion family. `zlink_send_async` never blocks:
+    // an immediately admitted record can run its completion inline before the
+    // call returns, and a backpressured record completes later on a Core
+    // dispatch context. Exactly one completion runs per ZLINK_SUBMIT_OK submit.
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_send_ready_handler(IntPtr subject,
-        ZlinkSendReadyHandlerDelegate handler, IntPtr userData);
+    internal static extern int zlink_send_complete_handler(IntPtr subject,
+        ZlinkSendCompleteHandlerDelegate handler, IntPtr userData);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_routed_send_ready_handler(IntPtr subject,
-        ZlinkRoutedSendReadyHandlerDelegate handler, IntPtr userData);
+    internal static extern unsafe int zlink_send_async(IntPtr subject,
+        ZlinkMsg* parts, nuint partCount, ZlinkSendAsyncOptions* options,
+        out ulong opId);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_send_async_cancel(IntPtr subject,
+        ulong opId);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_select_routed_submit_target(IntPtr subject,
@@ -220,11 +229,12 @@ internal static partial class NativeMethods
         nuint partCount,
         IntPtr userData);
 
+    /// <summary>
+    ///     Core send completion callback. The managed instance handed to
+    ///     <see cref="zlink_send_complete_handler" /> must stay reachable for
+    ///     the whole socket lifetime; Core keeps the raw function pointer.
+    /// </summary>
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    internal delegate void ZlinkSendReadyHandlerDelegate(IntPtr subject,
-        IntPtr userData);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    internal delegate void ZlinkRoutedSendReadyHandlerDelegate(IntPtr subject,
-        IntPtr readyEvent, IntPtr userData);
+    internal delegate void ZlinkSendCompleteHandlerDelegate(IntPtr subject,
+        IntPtr completeEvent, IntPtr userData);
 }

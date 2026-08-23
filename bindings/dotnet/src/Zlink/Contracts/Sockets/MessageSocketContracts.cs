@@ -47,12 +47,6 @@ public interface IReceivingMessageSocket : ISocket
     ///     dequeue.
     /// </remarks>
     bool RecvRetained(Received result, RecvFlags flags = RecvFlags.None);
-
-    /// <summary>
-    ///     Registers a callback invoked when the socket can accept more sends after
-    ///     back-pressure. The callback runs on a background dispatch thread.
-    /// </summary>
-    void OnSendReady(Action handler);
 }
 
 /// <summary>

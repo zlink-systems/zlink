@@ -174,10 +174,25 @@ internal static class CoreTestSupport
     internal static void SendAsyncWithTimeout(IDealerSocket socket,
         ReadOnlySpan<byte> payload, int timeoutMs)
     {
-        using Message message = Message.From(payload);
-        socket.Send().Message(message).Async()
-            .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs))
-            .GetAwaiter().GetResult();
+        // Core refuses a submit that has no connected peer yet, and the
+        // binding never retries on the caller's behalf. Retrying here is the
+        // application-owned policy the contract puts on this side.
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (true)
+        {
+            using Message message = Message.From(payload);
+            try
+            {
+                socket.Send().Message(message).Async()
+                    .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs))
+                    .GetAwaiter().GetResult();
+                return;
+            }
+            catch (ZlinkSubmitException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(10);
+            }
+        }
     }
 
     internal static void PublishWithRetry(IPublisherSocket socket, string topic,

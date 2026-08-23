@@ -37,11 +37,11 @@ public static class MessageOperations
     }
 
     /// <summary>
-    ///     Adds asynchronous-send parts in order. Ownership transfers when the
-    ///     builder's asynchronous terminal is called.
+    ///     Adds publish parts in order. The parts are consumed on a successful
+    ///     submit.
     /// </summary>
-    public static AsyncSendSubmitOperation Messages(
-        this AsyncSendOperation operation,
+    public static PublishSubmitOperation Messages(
+        this PublishOperation operation,
         IReadOnlyList<Message> messages)
     {
         EnsureNotEmpty(messages);
@@ -49,11 +49,11 @@ public static class MessageOperations
     }
 
     /// <summary>
-    ///     Adds asynchronous-send parts in order. Ownership transfers when the
-    ///     builder's asynchronous terminal is called.
+    ///     Adds publish parts in order. The parts are consumed on a successful
+    ///     submit.
     /// </summary>
-    public static AsyncSendSubmitOperation Messages(
-        this AsyncSendSubmitOperation operation,
+    public static PublishSubmitOperation Messages(
+        this PublishSubmitOperation operation,
         IReadOnlyList<Message> messages)
     {
         EnsureNotEmpty(messages);
@@ -178,8 +178,8 @@ public static class MessageOperations
         return operation;
     }
 
-    private static AsyncSendSubmitOperation Messages(
-        this AsyncSendSubmitOperation operation,
+    private static PublishSubmitOperation Messages(
+        this PublishSubmitOperation operation,
         IReadOnlyList<Message> messages,
         int startIndex)
     {

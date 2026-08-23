@@ -9,10 +9,6 @@ internal sealed class SocketCallbackRegistry
     internal SocketRecvHandler? RecvHandler;
     internal SynchronizationContext? RecvHandlerContext;
     internal NativeMethods.ZlinkSocketMsgHandlerDelegate? RecvHandlerNative;
-    internal Action? SendReadyHandler;
-    internal SynchronizationContext? SendReadyHandlerContext;
-    internal NativeMethods.ZlinkSendReadyHandlerDelegate? SendReadyHandlerNative;
-    internal Action? AdmissionSendReadyHandler;
     internal StreamFramedPacketHandler? StreamFramedPacketHandler;
     internal SynchronizationContext? StreamPacketContext;
     internal NativeMethods.ZlinkStreamOnPacketDelegate? StreamPacketNative;
@@ -33,17 +29,8 @@ internal sealed class SocketCallbackRegistry
         RecvHandlerNative = null;
     }
 
-    internal void ClearSendReady()
-    {
-        SendReadyHandler = null;
-        SendReadyHandlerContext = null;
-        SendReadyHandlerNative = null;
-        AdmissionSendReadyHandler = null;
-    }
-
     internal void ClearAllNonStream()
     {
         ClearReceive();
-        ClearSendReady();
     }
 }
