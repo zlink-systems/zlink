@@ -1461,7 +1461,7 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
             const auto participant_id =
               static_cast<std::uint64_t> (index) + 1;
             envelope.application_states.push_back (
-              {participant_id, 1, frozen.application_state, {}});
+              {participant_id, true, frozen.application_state});
 
             std::uint64_t boundary = 0;
             for (const auto &record : frozen.pending_application) {

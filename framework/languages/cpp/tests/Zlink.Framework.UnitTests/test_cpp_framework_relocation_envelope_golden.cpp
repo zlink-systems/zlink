@@ -132,7 +132,7 @@ int main ()
         const auto &application = expected.at ("applicationState");
         const auto has_state =
           application.at ("hasState").get<bool> ();
-        require ((actual.state_encoding >= 1) == has_state,
+        require (actual.has_state == has_state,
                  "state presence must match");
         if (has_state)
             require (actual.state
