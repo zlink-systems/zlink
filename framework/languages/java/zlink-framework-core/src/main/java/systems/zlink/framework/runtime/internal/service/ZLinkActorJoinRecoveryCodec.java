@@ -3,8 +3,6 @@ package systems.zlink.framework.runtime.internal.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
@@ -23,6 +21,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 /** Byte-stable ZLJR saved-work codec shared by canonical Actor Join recovery. */
 public final class ZLinkActorJoinRecoveryCodec {
@@ -35,8 +34,6 @@ public final class ZLinkActorJoinRecoveryCodec {
     public static final String SNAPSHOT_CONTENT_TYPE =
         "application/vnd.zlink.actor-relocation.snapshot";
 
-    private static final int MAGIC = 0x5a4c4a52;
-    private static final int VERSION = 1;
     private static final int MAXIMUM_METADATA_BYTES = 256 * 1024;
     private static final int MAXIMUM_MESSAGE_BYTES = 1024 * 1024;
     private static final long FRAMEWORK_METADATA_RESERVATION_BYTES = 64L * 1024;
@@ -122,77 +119,48 @@ public final class ZLinkActorJoinRecoveryCodec {
             throw new IllegalArgumentException(
                 "Actor Join recovery metadata exceeds 256 KiB");
         }
-        byte[] zljr = section(output -> {
-            output.writeInt(MAGIC);
-            output.writeByte(VERSION);
-            output.writeInt(metadata.length);
-            output.writeInt(request.length);
-            output.writeInt(reply.length);
-            output.write(metadata);
-            output.write(request);
-            output.write(reply);
-        });
-        byte[] source = section(output -> {
-            text8(output, value.sourceNodeRid().toHex());
-            output.writeLong(value.actorNodeGeneration());
-            text8(output, value.coordinator().ownerId());
-            output.writeLong(value.coordinator().leaseGeneration());
-        });
-        byte[] payload = section(output -> {
-            text8(output, PACKET_NAME);
-            text8(output, CONTENT_TYPE);
-            output.writeInt(zljr.length);
-            output.write(zljr);
-        });
-        return section(output -> {
-            output.writeByte(1); // node application send
-            output.writeByte(1); // node source
-            body16(output, source);
-            output.writeByte(0); // no application metadata
-            output.writeLong(0L);
-            output.writeLong(0L);
-            output.writeInt(0);
-            output.writeShort(0);
-            output.writeByte(1); // application payload present
-            output.writeInt(payload.length);
-            output.write(payload);
-        });
+        try {
+            return ServiceWirePilotCodec.encodeZljrRecordV1(
+                new ServiceWirePilotCodec.ZljrRecordV1(
+                    new ServiceWirePilotCodec.ZljrNodeSourceV1(
+                        value.sourceNodeRid().toHex()
+                            .getBytes(StandardCharsets.UTF_8),
+                        value.actorNodeGeneration(),
+                        value.coordinator().ownerId(),
+                        value.coordinator().leaseGeneration()),
+                    new ServiceWirePilotCodec.OperationId(0, 0),
+                    metadata,
+                    request,
+                    reply));
+        } catch (IOException failure) {
+            throw invalid("Actor Join recovery encoding failed", failure);
+        }
     }
 
-    /** Returns empty only when the frozen record is not a ZLJR record. */
+    /** Returns empty when the generated codec does not recognize a ZLJR record. */
     public static Optional<Recovery> decodeSavedWork(byte[] encoded) {
-        Reader reader = new Reader(encoded);
-        if (reader.remaining() < 2 || reader.u8() != 1 || reader.u8() != 1) {
+        Objects.requireNonNull(encoded, "encoded");
+        final ServiceWirePilotCodec.ZljrRecordV1 generated;
+        try {
+            generated = ServiceWirePilotCodec.decodeZljrRecordV1(encoded);
+        } catch (IOException failure) {
             return Optional.empty();
         }
-        Reader source = reader.body16();
-        String sourceRidHex = source.text8();
-        long sourceNodeGeneration = source.nonzeroU64("source node generation");
-        String sourceOwnerId = source.text8();
-        long sourceOwnerLeaseGeneration = source.nonzeroU64(
-            "source owner lease generation");
-        source.end("Actor Join recovery source");
-        if (reader.u8() != 0
-            || reader.u64() != 0 || reader.u64() != 0
-            || reader.u32() != 0 || reader.u16() != 0
-            || reader.u8() != 1) {
-            return Optional.empty();
+        if (generated.operation().high() != 0
+            || generated.operation().low() != 0) {
+            throw invalid("Actor Join recovery operation field changed");
         }
-        Reader payload = reader.body32();
-        String packetName = payload.text8();
-        String contentType = payload.text8();
-        if (!PACKET_NAME.equals(packetName) || !CONTENT_TYPE.equals(contentType)) {
-            return Optional.empty();
-        }
-        byte[] zljr = payload.bytes(payload.u32Length());
-        payload.end("Actor Join recovery application payload");
-        reader.end("Actor Join recovery saved work");
-        Recovery recovery = decodeZljr(zljr);
+        Recovery recovery = decodeMetadata(
+            generated.metadata(), generated.request(), generated.reply());
+        String sourceRidHex = new String(
+            generated.source().nodeRid(), StandardCharsets.UTF_8);
         RoutingId sourceNodeRid = RoutingId.fromHex(sourceRidHex);
         if (!sourceNodeRid.equals(recovery.sourceNodeRid())
-            || sourceNodeGeneration != recovery.actorNodeGeneration()
-            || !sourceOwnerId.equals(recovery.coordinator().ownerId())
-            || sourceOwnerLeaseGeneration
+            || generated.source().nodeGeneration()
+                != recovery.actorNodeGeneration()
+            || !generated.source().ownerId().equals(
+                recovery.coordinator().ownerId())
+            || generated.source().ownerLeaseGeneration()
                 != recovery.coordinator().leaseGeneration()) {
             throw invalid("Actor Join recovery source fence changed");
         }
@@ -220,21 +188,8 @@ public final class ZLinkActorJoinRecoveryCodec {
         return decodeSavedWork(encoded).isPresent();
     }
 
-    private static Recovery decodeZljr(byte[] encoded) {
-        Reader reader = new Reader(encoded);
-        if (reader.u32() != MAGIC || reader.u8() != VERSION) {
-            throw invalid("Actor Join recovery header is invalid");
-        }
-        int metadataLength = reader.boundedLength(
-            MAXIMUM_METADATA_BYTES, "metadata");
-        int requestLength = reader.boundedLength(
-            MAXIMUM_MESSAGE_BYTES, "request");
-        int replyLength = reader.boundedLength(
-            MAXIMUM_MESSAGE_BYTES, "reply");
-        byte[] metadata = reader.bytes(metadataLength);
-        byte[] requestBytes = reader.bytes(requestLength);
-        byte[] replyBytes = reader.bytes(replyLength);
-        reader.end("Actor Join recovery payload");
+    private static Recovery decodeMetadata(
+        byte[] metadata, byte[] requestBytes, byte[] replyBytes) {
         try {
             JsonNode root = JSON.readTree(metadata);
             JsonNode request = object(root, "Request");
@@ -546,39 +501,6 @@ public final class ZLinkActorJoinRecoveryCodec {
         return true;
     }
 
-    private static void text8(DataOutputStream output, String value)
-        throws IOException {
-        byte[] encoded = requireText(value, "text8")
-            .getBytes(StandardCharsets.UTF_8);
-        if (encoded.length > 255) {
-            throw invalid("Actor Join recovery text8 exceeds 255 bytes");
-        }
-        output.writeByte(encoded.length);
-        output.write(encoded);
-    }
-
-    private static void body16(DataOutputStream output, byte[] value)
-        throws IOException {
-        if (value.length > 0xffff) {
-            throw invalid("Actor Join recovery body16 exceeds 65535 bytes");
-        }
-        output.writeShort(value.length);
-        output.write(value);
-    }
-
-    private static byte[] section(Writer writer) {
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream output = new DataOutputStream(bytes);
-            writer.write(output);
-            output.flush();
-            return bytes.toByteArray();
-        } catch (IOException failure) {
-            throw new IllegalStateException(
-                "Actor Join recovery encoding failed", failure);
-        }
-    }
-
     private static IllegalArgumentException invalid(String message) {
         return new IllegalArgumentException(message);
     }
@@ -586,11 +508,6 @@ public final class ZLinkActorJoinRecoveryCodec {
     private static IllegalArgumentException invalid(
         String message, Throwable failure) {
         return new IllegalArgumentException(message, failure);
-    }
-
-    @FunctionalInterface
-    private interface Writer {
-        void write(DataOutputStream output) throws IOException;
     }
 
     public record Coordinator(
@@ -636,62 +553,4 @@ public final class ZLinkActorJoinRecoveryCodec {
         @Override public byte[] reply() { return reply.clone(); }
     }
 
-    private static final class Reader {
-        private final byte[] bytes;
-        private int offset;
-
-        private Reader(byte[] bytes) {
-            this.bytes = Objects.requireNonNull(bytes, "bytes").clone();
-        }
-
-        int remaining() { return bytes.length - offset; }
-        int u8() { return Byte.toUnsignedInt(bytes(1)[0]); }
-        int u16() { return Short.toUnsignedInt(ByteBuffer.wrap(bytes(2)).getShort()); }
-        int u32() { return ByteBuffer.wrap(bytes(4)).getInt(); }
-        long u64() { return ByteBuffer.wrap(bytes(8)).getLong(); }
-
-        long nonzeroU64(String field) {
-            long value = u64();
-            if (value == 0) throw invalid("Actor Join recovery " + field + " is zero");
-            return value;
-        }
-
-        int boundedLength(int maximum, String field) {
-            long value = Integer.toUnsignedLong(u32());
-            if (value > maximum) {
-                throw invalid("Actor Join recovery " + field + " length exceeds its bound");
-            }
-            return (int) value;
-        }
-
-        int u32Length() {
-            long value = Integer.toUnsignedLong(u32());
-            if (value > remaining()) {
-                throw invalid("Actor Join recovery body32 is truncated");
-            }
-            return (int) value;
-        }
-
-        Reader body16() { return new Reader(bytes(u16())); }
-        Reader body32() { return new Reader(bytes(u32Length())); }
-        String text8() {
-            return new String(bytes(u8()), StandardCharsets.UTF_8);
-        }
-
-        byte[] bytes(int length) {
-            if (length < 0 || length > remaining()) {
-                throw invalid("Actor Join recovery bytes are truncated");
-            }
-            byte[] result = java.util.Arrays.copyOfRange(
-                bytes, offset, offset + length);
-            offset += length;
-            return result;
-        }
-
-        void end(String field) {
-            if (remaining() != 0) {
-                throw invalid(field + " has trailing bytes");
-            }
-        }
-    }
 }
