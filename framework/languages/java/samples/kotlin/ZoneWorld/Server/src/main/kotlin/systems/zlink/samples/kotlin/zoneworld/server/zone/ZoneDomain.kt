@@ -8,6 +8,7 @@ import java.util.HexFormat
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicBoolean
+import org.springframework.beans.factory.ObjectProvider
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.actors.ZLinkActor
@@ -257,7 +258,6 @@ class ZoneSpot(
     private data class BorderSnapshot(val tick: Long, val players: List<Messages.PlayerView>)
 
     override fun onCreate(request: ZLinkMessage): CompletionStage<ZLinkSpotCreateResponse> {
-        census.record(context.spotId(), 0)
         return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept())
     }
 
@@ -303,12 +303,14 @@ class ZoneSpot(
     }
 
     override fun onInitialize(): CompletionStage<Void> {
+        census.hostZone(context.spotId())
         val tick = context.addTimer("zone-tick", Duration.ofMillis(ZoneWorldSpec.TICK_PERIOD_MS), ZoneTickHandler::class.java, null)
         val bots = context.addTimer("zone-bot-tick", Duration.ofMillis(ZoneWorldSpec.BOT_TICK_PERIOD_MS), ZoneBotTickHandler::class.java, null)
         return tick.thenCombine(bots) { first, second -> tickTimer = first; botTimer = second; null }
     }
 
     override fun onClosing(): CompletionStage<Void> {
+        census.releaseZone(context.spotId())
         val first = tickTimer?.cancel() ?: CompletableFuture.completedFuture(null)
         val second = botTimer?.cancel() ?: CompletableFuture.completedFuture(null)
         return first.thenCombine(second) { _, _ -> null }
@@ -597,10 +599,15 @@ class WorldAnnounceSubscriber(
 class NodeMaintenanceSubscriber(
     private val state: NodeMaintenanceState,
     private val store: MaintenanceStore,
+    private val topology: SampleTopology,
+    private val statusReporter: ObjectProvider<ZoneStatusReporter>,
 ) : ZLinkFanoutHandler<Messages.NodeMaintenanceChangedEvent> {
     override fun handle(message: Messages.NodeMaintenanceChangedEvent, context: ZLinkPublishMessageContext): CompletionStage<Void> {
         state.apply(message.nodeId, message.enabled); store.set(message.nodeId, message.enabled)
-        println("maintenance state node=${message.nodeId} enabled=${message.enabled}")
+        if (topology.nodeValue() == message.nodeId) {
+            println("maintenance state node=${message.nodeId} enabled=${message.enabled}")
+            statusReporter.ifAvailable?.let { return it.reportNow() }
+        }
         return CompletableFuture.completedFuture(null)
     }
 }

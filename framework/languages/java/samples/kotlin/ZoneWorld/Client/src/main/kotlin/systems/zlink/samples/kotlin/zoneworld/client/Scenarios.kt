@@ -30,7 +30,7 @@ internal object Scenarios {
     val runnerDriven: Map<String, Scenario> = linkedMapOf(
         "ZW-B4" to ::b4, "ZW-B8" to ::b8, "ZW-C2" to ::c2, "ZW-C3" to ::c3,
         "ZW-E5-arm" to ::e5Arm, "ZW-E5" to ::e5, "ZW-G2" to ::g2,
-        "ZW-G4" to ::g4, "ZW-G4-fresh" to ::g4Fresh,
+        "ZW-G4" to ::g4, "ZW-G3-fresh" to ::g3Fresh, "ZW-G4-fresh" to ::g4Fresh,
     )
 
     private suspend fun a1(options: ClientOptions) {
@@ -386,11 +386,14 @@ internal object Scenarios {
 
     private suspend fun e5(options: ClientOptions) {
         val ops = Ops.create(options); withResources(ops) {
-            val node = ops.watch().nodes.first { it.registered && it.connected && it.maintenance }
-            val diagnostics = ops.connector.request(Messages.NodeDiagnosticsReq(node.nodeId))
+            val nodeId = ops.watch().nodes.firstOrNull { it.registered && it.connected && it.maintenance }?.nodeId
+                ?: ops.connector.waitFor<Messages.NodeStatusNotify>()
+                    .where { it.payload().registered && it.payload().connected && it.payload().maintenance }
+                    .timeout(Duration.ofSeconds(20)).await().payload().nodeId
+            val diagnostics = ops.connector.request(Messages.NodeDiagnosticsReq(nodeId))
                 .timeout(REQUEST_TIMEOUT).awaitReply<Messages.NodeDiagnosticsRes>()
             try { ensure(diagnostics.error == null && diagnostics.maintenance, "restart restores stored maintenance") }
-            finally { ops.maintenance(node.nodeId, false) }
+            finally { ops.maintenance(nodeId, false) }
         }
     }
 
@@ -424,12 +427,16 @@ internal object Scenarios {
         } }
     }
 
-    private suspend fun g4Fresh(options: ClientOptions) {
+    private suspend fun g3Fresh(options: ClientOptions) = replacementFresh(options, "g3")
+
+    private suspend fun g4Fresh(options: ClientOptions) = replacementFresh(options, "g4")
+
+    private suspend fun replacementFresh(options: ClientOptions, scenario: String) {
         val probes = Probes.create(options); withResources(probes) {
             repeat(16) {
-                val created = probes.fresh(unique("g4-fresh")); ensure(created.error == null && created.objectGeneration > 0,
+                val created = probes.fresh(unique("$scenario-fresh")); ensure(created.error == null && created.objectGeneration > 0,
                     "replacement accepts a fresh actor")
-                println("scenario ZW-G4-fresh owner=${created.ownerNodeRid} actor=${created.actorId}")
+                println("scenario ZW-${scenario.uppercase()}-fresh owner=${created.ownerNodeRid} actor=${created.actorId}")
             }
         }
     }

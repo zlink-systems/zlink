@@ -16,6 +16,7 @@ import systems.zlink.framework.channels.ZLinkRouteSendHandler
 import systems.zlink.framework.channels.ZLinkSendHandler
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.messaging.ZLinkMessage
+import systems.zlink.framework.spots.ZLinkSpotCreateState
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.MaintenanceStore
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeCensus
@@ -58,16 +59,19 @@ class ZoneBootstrap(
             }
             val fallbackOrder = ZoneWorldSpec.zones().filter { it !in claimed && it !in adjacentOrder }
             var claimedChanged = false
-            var adjacentFailed = false
+            var adjacentSettling = false
             for (zone in adjacentOrder) {
                 if (census.zoneIds() != claimed) { claimedChanged = true; break }
-                if (runCatching {
+                val result = runCatching {
                     spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
                         .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join()
-                }.isFailure) adjacentFailed = true
+                }
+                if (result.isFailure ||
+                    census.zoneIds() == claimed && result.getOrNull()?.state() == ZLinkSpotCreateState.CREATED
+                ) adjacentSettling = true
                 if (census.zoneIds() != claimed) { claimedChanged = true; break }
             }
-            if (!claimedChanged && !adjacentFailed) {
+            if (!claimedChanged && !adjacentSettling) {
                 for (zone in fallbackOrder) {
                     if (census.zoneIds() != claimed) break
                     runCatching {
@@ -126,10 +130,12 @@ class ZoneStatusReporter(
         )
     }
 
-    private fun report() = synchronized(lifecycleLock) {
-        if (!running) return@synchronized
+    fun reportNow(): CompletionStage<Void> = report()
+
+    private fun report(): CompletionStage<Void> = synchronized(lifecycleLock) {
+        if (!running) return@synchronized CompletableFuture.completedFuture(null)
         try {
-            routes.sendToChannel(
+            return@synchronized routes.sendToChannel(
                 ZoneWorldNames.REPORT_CHANNEL,
                 Messages.ReportNodeStatusMsg(
                     topology.nodeValue(), census.zoneIds(),
@@ -146,6 +152,7 @@ class ZoneStatusReporter(
             // A fixed-rate task is cancelled when an invocation escapes. Ops
             // can start after a Zone node, so retain the periodic retry.
             println("report failed node=${topology.nodeValue()} detail=${error.message}")
+            return@synchronized CompletableFuture.completedFuture(null)
         }
     }
 

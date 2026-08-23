@@ -31,7 +31,9 @@ class NodeMaintenanceState {
 
 class NodeCensus {
     private val counts = ConcurrentHashMap<String, Int>()
-    fun record(zoneId: String, count: Int) { counts[zoneId] = count }
+    fun hostZone(zoneId: String) { counts.putIfAbsent(zoneId, 0) }
+    fun releaseZone(zoneId: String) { counts.remove(zoneId) }
+    fun record(zoneId: String, count: Int) { counts.computeIfPresent(zoneId) { _, _ -> count } }
     fun total() = counts.values.sum()
     fun zoneIds() = counts.keys.sorted()
 }

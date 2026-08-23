@@ -47,6 +47,7 @@ final class Scenarios {
         all.put("ZW-C2", Scenarios::c2); all.put("ZW-C3", Scenarios::c3);
         all.put("ZW-E5-arm", Scenarios::e5Arm); all.put("ZW-E5", Scenarios::e5);
         all.put("ZW-G2", Scenarios::g2); all.put("ZW-G4", Scenarios::g4);
+        all.put("ZW-G3-fresh", Scenarios::g3Fresh);
         all.put("ZW-G4-fresh", Scenarios::g4Fresh);
         return all;
     }
@@ -462,12 +463,17 @@ final class Scenarios {
     private static void e5(ClientOptions options) {
         try (Ops ops = new Ops(options)) {
             Messages.NodeView node = ops.watch().nodes().stream().filter(value -> value.registered()
-                && value.connected() && value.maintenance()).findFirst().orElseThrow();
+                && value.connected() && value.maintenance()).findFirst().orElse(null);
+            String nodeId = node == null
+                ? waitFor(ops.connector, Messages.NodeStatusNotify.class,
+                    value -> value.registered() && value.connected() && value.maintenance(),
+                    Duration.ofSeconds(20)).toCompletableFuture().join().payload().nodeId()
+                : node.nodeId();
             Messages.NodeDiagnosticsRes diagnostics = request(ops.connector,
-                new Messages.NodeDiagnosticsReq(node.nodeId()), Messages.NodeDiagnosticsRes.class);
+                new Messages.NodeDiagnosticsReq(nodeId), Messages.NodeDiagnosticsRes.class);
             try { ensure(diagnostics.error() == null && diagnostics.maintenance(),
                 "restart restores stored maintenance"); }
-            finally { ops.maintenance(node.nodeId(), false); }
+            finally { ops.maintenance(nodeId, false); }
         }
     }
 
@@ -508,13 +514,22 @@ final class Scenarios {
         }
     }
 
+    private static void g3Fresh(ClientOptions options) {
+        replacementFresh(options, "g3");
+    }
+
     private static void g4Fresh(ClientOptions options) {
+        replacementFresh(options, "g4");
+    }
+
+    private static void replacementFresh(ClientOptions options, String scenario) {
         try (Probes probes = new Probes(options)) {
             for (int i = 0; i < 16; i++) {
-                Messages.FreshActorProbeRes created = probes.fresh(unique("g4-fresh"));
+                Messages.FreshActorProbeRes created = probes.fresh(unique(scenario + "-fresh"));
                 ensure(created.error() == null && created.objectGeneration() > 0,
                     "replacement accepts a fresh actor");
-                System.out.println("scenario ZW-G4-fresh owner=" + created.ownerNodeRid()
+                System.out.println("scenario ZW-" + scenario.toUpperCase() + "-fresh owner="
+                    + created.ownerNodeRid()
                     + " actor=" + created.actorId());
             }
         }

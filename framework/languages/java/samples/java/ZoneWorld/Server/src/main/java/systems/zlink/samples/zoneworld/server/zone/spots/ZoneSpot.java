@@ -56,7 +56,6 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        census.record(context.spotId(), 0);
         return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
     }
 
@@ -126,6 +125,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onInitialize() {
+        census.hostZone(context.spotId());
         CompletionStage<ZLinkTimer> tick = context.addTimer(
             "zone-tick", Duration.ofMillis(ZoneWorldSpec.TICK_PERIOD_MS), ZoneTickHandler.class, null);
         CompletionStage<ZLinkTimer> bots = context.addTimer(
@@ -140,6 +140,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onClosing() {
+        census.releaseZone(context.spotId());
         CompletionStage<Void> first = tickTimer == null
             ? CompletableFuture.completedFuture(null)
             : tickTimer.cancel();

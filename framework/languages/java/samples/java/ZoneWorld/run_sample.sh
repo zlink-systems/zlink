@@ -158,9 +158,11 @@ echo "==> topology"
 start ops "$SERVER_BIN" --config "$CONFIG_DIR/ops.properties"; wait_log ops 'ZLINK_FRAMEWORK_READY' 1 900
 if selected ZW-G2 && [[ "$G4_CHILD" == 0 ]]; then
   start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.properties"
+  wait_log zone-node-2 topology=ready 1 900
   start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.properties"
 else
   start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.properties"
+  wait_log zone-node-1 topology=ready 1 900
   start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.properties"
 fi
 wait_log zone-node-1 topology=ready 1 900; wait_log zone-node-2 topology=ready 1 900
@@ -222,7 +224,7 @@ run_with_stop() {
   if ! wait_log_while_running client "scenario $id armed node=" "$first" "$pid" 900; then wait "$pid" || true; fail "$id" "client did not arm"; return; fi
   line="$(tail -n +"$first" "$LOG_DIR/client.log" | grep "scenario $id armed node=" | tail -1)"; node=${line##*node=}
   kill_node "$node" "$mode"; wait "$pid" || fail "$id" "client verdict failed after stop"
-  if [[ "$node" == zone-node-2 ]]; then start_zone zone-node-2 zone-node-replacement; else start_zone "$node"; fi
+  if [[ "$node" == zone-node-2 ]]; then start_zone zone-node-2 zone-node-crash-replacement; else start_zone "$node"; fi
 }
 run_with_stop ZW-B4 KILL
 run_with_stop ZW-C2 TERM
@@ -231,7 +233,7 @@ run_with_stop ZW-C3 KILL
 if selected ZW-E5; then
   run_client ZW-E5-arm || fail ZW-E5-arm "could not store maintenance"
   kill_node zone-node-2 KILL
-  if start_zone zone-node-2 zone-node-replacement; then
+  if start_zone zone-node-2 zone-node-crash-replacement; then
     run_client ZW-E5 || fail ZW-E5 "maintenance not restored"
   else
     fail ZW-E5 "replacement did not reach topology ready"
@@ -279,10 +281,16 @@ fi
 
 if selected ZW-G3; then
   old="$rid2"; kill_node zone-node-2 TERM
-  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-replacement.properties"
+  start zone-node-replacement "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-crash-replacement.properties"
   if wait_log_while_running zone-node-replacement topology=ready 1 "${node_pid[zone-node-replacement]}" 900; then
     new="$(routing_id zone-node-replacement)"
-    if is_zone_rid "$new" && [[ "$new" != "$old" ]] && run_client ZW-A1; then pass ZW-G3; else fail ZW-G3 "replacement RID/fresh placement failed"; fi
+    first="$(next_line "$LOG_DIR/client.log")"
+    if is_zone_rid "$new" && [[ "$new" != "$old" ]] && run_client ZW-G3-fresh \
+        && tail -n +"$first" "$LOG_DIR/client.log" | grep -Fq "scenario ZW-G3-fresh owner=$new "; then
+      pass ZW-G3
+    else
+      fail ZW-G3 "replacement RID/fresh object placement failed"
+    fi
   else
     fail ZW-G3 "replacement did not reach topology ready"
   fi
