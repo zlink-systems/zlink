@@ -42,6 +42,14 @@ void public_api_sync_backoff (unsigned int attempt_)
 
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
 {
+    // Completion callbacks are application hand-off points, not nested
+    // submission points. This is deliberately a global TLS check: a
+    // callback dispatched by one socket must not submit on another socket.
+    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
+        errno = EDEADLK;
+        return false;
+    }
+
     const uint32_t old = public_api_state.fetch_add (1, std::memory_order_acq_rel);
     if ((old & public_api_closing_bit) == 0)
         return true;
@@ -54,6 +62,14 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
 
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api_and_lock_sync ()
 {
+    // The uncontended sync fast path must observe the same global completion
+    // dispatch guard as enter_public_api(); otherwise a callback on a
+    // different socket could bypass the guard through its CAS success.
+    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
+        errno = EDEADLK;
+        return false;
+    }
+
     uint32_t expected = 0;
     if (public_api_state.compare_exchange_strong (expected, 1u | public_api_sync_bit,
                                                   std::memory_order_acq_rel,

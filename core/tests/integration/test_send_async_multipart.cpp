@@ -29,6 +29,47 @@ struct completion_probe_t
     std::vector<completion_snapshot_t> events;
 };
 
+struct completion_reentry_probe_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    void *different_socket;
+    void *request_socket;
+    void *publish_socket;
+    size_t callback_count;
+    zlink_send_complete_result_t completion_result;
+    zlink_send_op_id_t completion_op_id;
+    zlink_submit_result_t same_send;
+    zlink_submit_result_t different_send;
+    zlink_submit_result_t async_send;
+    zlink_submit_result_t different_async_send;
+    zlink_submit_result_t publish;
+    zlink_submit_result_t request;
+    int same_send_errno;
+    int different_send_errno;
+    int async_send_errno;
+    int different_async_errno;
+    int publish_errno;
+    int request_errno;
+    bool done;
+
+    completion_reentry_probe_t () :
+        different_socket (NULL), request_socket (NULL), publish_socket (NULL),
+        callback_count (0), completion_result (ZLINK_SEND_TERMINAL), completion_op_id (0),
+        same_send (ZLINK_SUBMIT_INTERNAL_ERROR),
+        different_send (ZLINK_SUBMIT_INTERNAL_ERROR),
+        async_send (ZLINK_SUBMIT_INTERNAL_ERROR),
+        different_async_send (ZLINK_SUBMIT_INTERNAL_ERROR),
+        publish (ZLINK_SUBMIT_INTERNAL_ERROR), request (ZLINK_SUBMIT_INTERNAL_ERROR),
+        same_send_errno (0), different_send_errno (0), async_send_errno (0),
+        different_async_errno (0),
+        publish_errno (0), request_errno (0), done (false)
+    {
+    }
+};
+
+void init_part (zlink_msg_t *part_, const std::string &payload_);
+
 void capture_completion (void *, const zlink_send_complete_event_t *event_, void *userdata_)
 {
     completion_probe_t *probe = static_cast<completion_probe_t *> (userdata_);
@@ -41,6 +82,82 @@ void capture_completion (void *, const zlink_send_complete_event_t *event_, void
         snapshot.result = event_->result;
         snapshot.terminal_errno = event_->terminal_errno;
         probe->events.push_back (snapshot);
+    }
+    probe->changed.notify_all ();
+}
+
+void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
+{
+}
+
+zlink_submit_result_t attempt_sync_part (void *socket_, int *errno_out_)
+{
+    zlink_msg_t part;
+    init_part (&part, "reentrant-sync");
+    errno = 0;
+    const zlink_submit_result_t result = zlink_send_part (
+      socket_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    *errno_out_ = errno;
+    if (result != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&part);
+    return result;
+}
+
+zlink_submit_result_t attempt_async_part (void *socket_, int *errno_out_)
+{
+    zlink_msg_t part;
+    init_part (&part, "reentrant-async");
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    zlink_send_op_id_t op_id = 0;
+    errno = 0;
+    const zlink_submit_result_t result = zlink_send_async (
+      socket_, &part, 1, &options, &op_id);
+    *errno_out_ = errno;
+    if (result != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&part);
+    return result;
+}
+
+void capture_reentrant_completion (
+  void *subject_, const zlink_send_complete_event_t *event_, void *userdata_)
+{
+    completion_reentry_probe_t *probe =
+      static_cast<completion_reentry_probe_t *> (userdata_);
+    ++probe->callback_count;
+    probe->completion_result = event_->result;
+    probe->completion_op_id = event_->op_id;
+    probe->same_send = attempt_sync_part (subject_, &probe->same_send_errno);
+    probe->different_send = attempt_sync_part (
+      probe->different_socket, &probe->different_send_errno);
+    probe->async_send = attempt_async_part (subject_, &probe->async_send_errno);
+    probe->different_async_send = attempt_async_part (
+      probe->different_socket, &probe->different_async_errno);
+
+    zlink_msg_t publish_part;
+    init_part (&publish_part, "reentrant-publish");
+    errno = 0;
+    probe->publish = zlink_publish_part (
+      probe->publish_socket, "reentrant", &publish_part,
+      ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    probe->publish_errno = errno;
+    if (probe->publish != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&publish_part);
+
+    zlink_msg_t request_part;
+    init_part (&request_part, "reentrant-request");
+    errno = 0;
+    probe->request = zlink_dealer_request_part (
+      probe->request_socket, &request_part, ZLINK_SEND_FLAGS_NONE,
+      ZLINK_PART_FINAL, 1000, &ignore_reply, NULL);
+    probe->request_errno = errno;
+    if (probe->request != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&request_part);
+
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        probe->done = true;
     }
     probe->changed.notify_all ();
 }
@@ -304,6 +421,54 @@ void run_sync_multipart_sequence (void *router_,
 }
 }
 
+void test_completion_callback_rejects_all_reentrant_submit_entry_points ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *different = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *request_socket = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *publish_socket = test_context_socket (ZLINK_SOCKET_PUB);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, "inproc://completion-reentry-send"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, "inproc://completion-reentry-send"));
+    msleep (SETTLE_TIME);
+
+    completion_reentry_probe_t probe;
+    probe.different_socket = different;
+    probe.request_socket = request_socket;
+    probe.publish_socket = publish_socket;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (sender, &capture_reentrant_completion, &probe));
+
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK, submit_record (sender, {"completion-reentry-root"}, &options));
+
+    {
+        std::unique_lock<std::mutex> lock (probe.mutex);
+        TEST_ASSERT_TRUE (probe.changed.wait_for (
+          lock, std::chrono::seconds (3), [&probe] { return probe.done; }));
+    }
+
+    TEST_ASSERT_EQUAL_UINT64 (1, probe.callback_count);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, probe.completion_result);
+    TEST_ASSERT_TRUE (probe.completion_op_id != 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.same_send);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.same_send_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.different_send);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.different_send_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.async_send);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.async_send_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.different_async_send);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.different_async_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.publish);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.publish_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.request);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.request_errno);
+}
+
 void test_router_send_async_admits_and_delivers_two_and_three_part_records ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -515,6 +680,7 @@ int main ()
     setup_test_environment (60);
 
     UNITY_BEGIN ();
+    RUN_TEST (test_completion_callback_rejects_all_reentrant_submit_entry_points);
     RUN_TEST (test_router_send_async_admits_and_delivers_two_and_three_part_records);
     RUN_TEST (test_dealer_generic_target_admits_multipart_after_connect);
     RUN_TEST (test_routed_multipart_async_rolls_back_when_later_part_hits_hwm);

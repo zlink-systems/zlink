@@ -325,11 +325,14 @@ static void copy_routing_id (zlink_routing_id_t *out_, const zlink::blob_t &rout
 
 zlink::socket_base_t::~socket_base_t ()
 {
-    if (_mailbox)
-        LIBZLINK_DELETE (_mailbox);
-
     scoped_lock_t lock (monitor_runtime ().sync);
     stop_monitor ();
+
+    // stop_monitor() may release the monitor's async-mailbox ownership and
+    // signal this mailbox from the reaper thread. Keep it alive until that
+    // hand-off is complete.
+    if (_mailbox)
+        LIBZLINK_DELETE (_mailbox);
 
     zlink_assert (lifecycle_coordinator ().is_destroyed ());
 }

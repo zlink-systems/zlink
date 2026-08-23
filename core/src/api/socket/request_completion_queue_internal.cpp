@@ -19,6 +19,7 @@ class request_completion_callback_scope_t
 {
   public:
     explicit request_completion_callback_scope_t (void *owner_handle_) :
+        dispatch_scope (static_cast<zlink::socket_base_t *> (owner_handle_)),
         previous_owner (request_completion_owner_tls ())
     {
         request_completion_owner_tls () = owner_handle_;
@@ -27,6 +28,7 @@ class request_completion_callback_scope_t
     ~request_completion_callback_scope_t () { request_completion_owner_tls () = previous_owner; }
 
   private:
+    zlink::socket_send_complete_dispatch_scope_t dispatch_scope;
     void *previous_owner;
 };
 }

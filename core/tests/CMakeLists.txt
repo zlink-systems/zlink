@@ -407,6 +407,39 @@ foreach(test_source ${tests})
   endif()
 endforeach()
 
+# Keep the monitor teardown reproducer in C so it remains a minimal public-API
+# regression test. The source intentionally exits after the reaper has had a
+# chance to destroy the PUB; the monitor handle and context are owned by that
+# process and need not be reused after the source socket closes.
+add_executable(
+  test_pub_monitor_close_full_mask
+  ${INTEGRATION_TEST_ROOT}/test_pub_monitor_close_full_mask.c)
+set_target_properties(test_pub_monitor_close_full_mask PROPERTIES LINKER_LANGUAGE CXX)
+if(BUILD_STATIC)
+  target_link_libraries(
+    test_pub_monitor_close_full_mask
+    libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+else()
+  target_link_libraries(
+    test_pub_monitor_close_full_mask
+    libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+endif()
+add_test(NAME test_pub_monitor_close_full_mask COMMAND test_pub_monitor_close_full_mask)
+set_tests_properties(test_pub_monitor_close_full_mask PROPERTIES TIMEOUT 10 SKIP_RETURN_CODE 77)
+if(WIN32)
+  set_tests_properties(
+    test_pub_monitor_close_full_mask
+    PROPERTIES ENVIRONMENT "PATH=$<TARGET_FILE_DIR:libzlink>;$ENV{PATH}")
+elseif(APPLE)
+  set_tests_properties(
+    test_pub_monitor_close_full_mask
+    PROPERTIES ENVIRONMENT "DYLD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{DYLD_LIBRARY_PATH}")
+elseif(BUILD_SHARED)
+  set_tests_properties(
+    test_pub_monitor_close_full_mask
+    PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{LD_LIBRARY_PATH}")
+endif()
+
 if(TARGET test_thread_safe_contract_policy)
   target_compile_definitions(
     test_thread_safe_contract_policy

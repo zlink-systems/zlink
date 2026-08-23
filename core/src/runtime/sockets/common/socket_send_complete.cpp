@@ -552,6 +552,14 @@ int zlink::socket_base_t::send_async_submit (
     if (op_id_out_)
         *op_id_out_ = 0;
 
+    // Admit at the common public boundary before send-async-specific
+    // validation. A callback on one socket must receive EDEADLK even when it
+    // targets another socket whose completion handler is not installed yet.
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    socket_public_api_scope_t admission (lifecycle);
+    if (!admission.acquired ())
+        return -1;
+
     if (!parts_ || part_count_ == 0 || !options_
         || options_->struct_size != sizeof (zlink_send_async_options_t)) {
         errno = EINVAL;
@@ -579,22 +587,10 @@ int zlink::socket_base_t::send_async_submit (
         errno = EINVAL;
         return -1;
     }
-    //  A completion callback hands the result to application state and
-    //  returns. Submitting from inside one is the retry loop this design
-    //  removed, so it is refused rather than silently supported.
-    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
-        errno = EDEADLK;
-        return -1;
-    }
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
         return -1;
     }
-
-    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
-    socket_public_api_scope_t admission (lifecycle);
-    if (!admission.acquired ())
-        return -1;
 
     //  Resolve the exact target now. Deferring the choice to completion time
     //  would make per-target FIFO order impossible to state.

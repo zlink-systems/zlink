@@ -57,6 +57,34 @@ struct reply_probe_t
     }
 };
 
+struct reply_reentry_probe_t
+{
+    std::mutex mutex;
+    std::condition_variable cv;
+    void *dealer;
+    void *different_dealer;
+    zlink_submit_result_t same_request;
+    zlink_submit_result_t different_request;
+    zlink_submit_result_t same_async;
+    zlink_submit_result_t different_async;
+    int same_request_errno;
+    int different_request_errno;
+    int same_async_errno;
+    int different_async_errno;
+    bool done;
+
+    reply_reentry_probe_t () :
+        dealer (NULL), different_dealer (NULL),
+        same_request (ZLINK_SUBMIT_INTERNAL_ERROR),
+        different_request (ZLINK_SUBMIT_INTERNAL_ERROR),
+        same_async (ZLINK_SUBMIT_INTERNAL_ERROR),
+        different_async (ZLINK_SUBMIT_INTERNAL_ERROR),
+        same_request_errno (0), different_request_errno (0),
+        same_async_errno (0), different_async_errno (0), done (false)
+    {
+    }
+};
+
 struct completion_owner_probe_t
 {
     std::mutex mutex;
@@ -660,6 +688,119 @@ void send_captured_reply (void *router_,
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_router_reply (router_, &handler_probe_->peer_rid_value,
                                                    handler_probe_->request_seq, &reply_part, 1));
+}
+
+void ignore_reentrant_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
+{
+}
+
+zlink_submit_result_t attempt_reentrant_request (void *dealer_, int *errno_out_)
+{
+    zlink_msg_t part;
+    zlink_msg_init (&part);
+    init_string_part (&part, "reentrant-request");
+    errno = 0;
+    const zlink_submit_result_t result = zlink_dealer_request_part (
+      dealer_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1000,
+      &ignore_reentrant_reply, NULL);
+    *errno_out_ = errno;
+    if (result != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&part);
+    return result;
+}
+
+zlink_submit_result_t attempt_reentrant_async (void *dealer_, int *errno_out_)
+{
+    zlink_msg_t part;
+    zlink_msg_init (&part);
+    init_string_part (&part, "reentrant-async");
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    zlink_send_op_id_t op_id = 0;
+    errno = 0;
+    const zlink_submit_result_t result = zlink_send_async (
+      dealer_, &part, 1, &options, &op_id);
+    *errno_out_ = errno;
+    if (result != ZLINK_SUBMIT_OK)
+        zlink_msg_close (&part);
+    return result;
+}
+
+void capture_reentrant_reply (zlink_request_result_t,
+                              zlink_msg_t *,
+                              size_t,
+                              void *userdata_)
+{
+    reply_reentry_probe_t *probe =
+      static_cast<reply_reentry_probe_t *> (userdata_);
+    probe->same_request = attempt_reentrant_request (
+      probe->dealer, &probe->same_request_errno);
+    probe->different_request = attempt_reentrant_request (
+      probe->different_dealer, &probe->different_request_errno);
+    probe->same_async = attempt_reentrant_async (
+      probe->dealer, &probe->same_async_errno);
+    probe->different_async = attempt_reentrant_async (
+      probe->different_dealer, &probe->different_async_errno);
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        probe->done = true;
+    }
+    probe->cv.notify_all ();
+}
+
+void test_reply_callback_rejects_sync_and_async_submit_on_all_sockets ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *different_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "reply-reentry-dealer", 20));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://reply-completion-reentry"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://reply-completion-reentry"));
+    msleep (SETTLE_TIME);
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK, zlink_send_complete_handler (dealer, &ignore_routed_ready, NULL));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (different_dealer, &ignore_routed_ready, NULL));
+
+    reply_reentry_probe_t probe;
+    probe.dealer = dealer;
+    probe.different_dealer = different_dealer;
+    zlink_msg_t request;
+    zlink_msg_init (&request);
+    init_string_part (&request, "reply-reentry-request");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request_part (dealer, &request, ZLINK_SEND_FLAGS_NONE,
+                                 ZLINK_PART_FINAL, 3000,
+                                 &capture_reentrant_reply, &probe));
+
+    request_handler_probe_t handler_probe;
+    recv_router_request_into_probe (router, &handler_probe);
+    send_captured_reply (router, &handler_probe, "reply-reentry-reply");
+
+    {
+        std::unique_lock<std::mutex> lock (probe.mutex);
+        TEST_ASSERT_TRUE (probe.cv.wait_for (
+          lock, std::chrono::seconds (3), [&probe] { return probe.done; }));
+    }
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.same_request);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.same_request_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.different_request);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.different_request_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.same_async);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.same_async_errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_THREAD_VIOLATION, probe.different_async);
+    TEST_ASSERT_EQUAL_INT (EDEADLK, probe.different_async_errno);
+
+    test_context_socket_close_zero_linger (different_dealer);
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
 }
 
 void send_router_reply_to_event (void *router_,
@@ -3249,6 +3390,7 @@ int main ()
 
     UNITY_BEGIN ();
     RUN_SELECTED (test_reserved_request_reply_message_type_is_invalid);
+    RUN_SELECTED (test_reply_callback_rejects_sync_and_async_submit_on_all_sockets);
     RUN_SELECTED (test_dealer_to_router_request_reply_basic);
     RUN_SELECTED (test_dealer_receives_unsolicited_message_after_request_reply);
     RUN_SELECTED (test_concurrent_first_dealer_requests_share_dispatch_install);

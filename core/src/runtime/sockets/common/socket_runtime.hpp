@@ -610,9 +610,10 @@ class socket_public_send_scope_t
     bool _sync_locked;
 };
 
-//  Marks the calling thread as running inside a send-completion callback for
-//  one socket. Send entry points consult it to reject re-entrant submits with
-//  EDEADLK, the same mechanism completion_drain_scope_t uses for replies.
+//  Marks the calling thread as running inside a Core completion callback for
+//  one socket. Both send-complete and reply callbacks use this global TLS
+//  scope; public submission entry points reject re-entry on any socket with
+//  EDEADLK.
 class socket_send_complete_dispatch_scope_t
 {
   public:
