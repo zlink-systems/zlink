@@ -3,9 +3,9 @@
 #include <zlink/common.h>
 
 static_assert(ZLINK_VERSION_MAJOR == 0, "zlink/common.h major version must match Core version");
-static_assert(ZLINK_VERSION_MINOR == 12, "zlink/common.h minor version must match Core version");
+static_assert(ZLINK_VERSION_MINOR == 13, "zlink/common.h minor version must match Core version");
 static_assert(ZLINK_VERSION_PATCH == 0, "zlink/common.h patch version must match Core version");
-static_assert(ZLINK_VERSION == ZLINK_MAKE_VERSION(0, 12, 0),
+static_assert(ZLINK_VERSION == ZLINK_MAKE_VERSION(0, 13, 0),
   "zlink/common.h aggregate version must match Core version");
 
 int main()

@@ -3,6 +3,8 @@
 #include "support.hpp"
 
 #include <Runtime/Messaging/async_operation_state.hpp>
+#include <Runtime/Messaging/operation_state.hpp>
+#include <Runtime/Messaging/operation_submit.hpp>
 #include <Runtime/Core/routing_id_access.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
 #include <zlink/message/api.h>
@@ -376,7 +378,7 @@ void test_request_dealer_router_roundtrip ()
     std::this_thread::sleep_for (std::chrono::milliseconds (50));
 
     zlink::message_t warmup = make_request_message ("warmup");
-    await_send (dealer_socket.send ().message (warmup).async ());
+    dealer_socket.send ().message (warmup).submit ();
     std::this_thread::sleep_for (std::chrono::milliseconds (50));
     zlink::received_t warmup_received;
     assert (router_socket.recv (warmup_received) == 0);
@@ -537,13 +539,15 @@ void test_dealer_send_without_initial_routed_target_is_terminal ()
     zlink::message_t payload = make_request_message ("send:late-target");
     bool terminal_without_target = false;
     try {
-        (void) dealer.send ().message (payload).async ();
-        assert (false && "send without an initial exact target must fail");
+        dealer.send ().message (payload).submit ();
+        assert (false && "send without a route must fail");
     }
     catch (const zlink::submit_error_t &error) {
+        // The synchronous terminal reports the Core send verdict verbatim:
+        // without an admitted pipe Core has no credit to give.
         terminal_without_target = true;
-        assert (error.result () == zlink::submit_result_t::not_connected);
-        assert (error.internal_errno () == ENOTCONN);
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
     }
     assert (terminal_without_target);
     assert (payload.valid ());
@@ -558,10 +562,7 @@ void test_dealer_send_without_initial_routed_target_is_terminal ()
     assert (router.recv (received, zlink::recv_flags_t::dontwait) != 0);
 
     zlink::message_t fresh = make_request_message ("send:fresh-target");
-    auto fresh_completion = await_result (
-      dealer.send ().message (std::move (fresh)).async ());
-    assert (fresh_completion.wait_for (std::chrono::seconds (2)));
-    fresh_completion.take ();
+    dealer.send ().message (std::move (fresh)).submit ();
 
     bool received_message = false;
     for (int attempt = 0; attempt < 200 && !received_message; ++attempt) {
@@ -574,48 +575,48 @@ void test_dealer_send_without_initial_routed_target_is_terminal ()
     assert (received.first_part ().to_string () == "send:fresh-target");
 }
 
-void test_routed_send_direct_await_and_cancel_are_event_driven ()
+void test_routed_send_submit_is_synchronous_and_consumes_parts ()
 {
     zlink::context_t ctx;
     zlink::dealer_socket_t dealer (ctx);
     zlink::router_socket_t router (ctx);
-    dealer.set_routing_id (zlink::routing_id_t::from ("async-dealer"));
-    router.set_routing_id (zlink::routing_id_t::from ("async-router"));
+    dealer.set_routing_id (zlink::routing_id_t::from ("sync-dealer"));
+    router.set_routing_id (zlink::routing_id_t::from ("sync-router"));
     const std::string endpoint =
-      zlink_cpp_contract::unique_inproc ("routed-send-async");
+      zlink_cpp_contract::unique_inproc ("routed-send-sync");
     router.bind (endpoint);
     dealer.connect (endpoint);
     std::this_thread::sleep_for (std::chrono::milliseconds (50));
 
-    zlink::message_t future_payload = make_request_message ("awaited-send");
-    auto send_completion = await_result (
-      dealer.send ().message (std::move (future_payload)).async ());
-    assert (send_completion.wait_for (std::chrono::seconds (2)));
-    send_completion.take ();
+    // The terminal returns on the caller thread; no suspension object is
+    // handed back and nothing else has to be pumped for the send to finish.
+    zlink::message_t owned = make_request_message ("submitted-send");
+    dealer.send ().message (std::move (owned)).submit ();
     zlink::received_t received;
     assert (router.recv (received) == 0);
-    assert (received.first_part ().to_string () == "awaited-send");
+    assert (received.first_part ().to_string () == "submitted-send");
+    received.close ();
 
-    zlink::message_t cancel_payload = make_request_message ("cancel-race");
-    zlink::async_result_t<void> cancelled =
-      dealer.send ().message (std::move (cancel_payload)).async ();
-    const bool cancellation_won = cancelled.cancel ();
-    auto cancelled_completion = await_result (std::move (cancelled));
-    if (cancellation_won) {
-        try {
-            cancelled_completion.take ();
-            assert (false && "cancelled send must fail its completion");
-        }
-        catch (const zlink::submit_error_t &error) {
-            assert (error.result () == zlink::submit_result_t::terminated);
-            assert (error.internal_errno () == ECANCELED);
-        }
-    } else {
-        cancelled_completion.take ();
-    }
+    // A borrowed part is consumed by a successful submit.
+    zlink::message_t borrowed = make_request_message ("borrowed-send");
+    dealer.send ().message (borrowed).submit ();
+    assert (!borrowed.valid ());
+    assert (router.recv (received) == 0);
+    assert (received.first_part ().to_string () == "borrowed-send");
+    received.close ();
+
+    // A multipart routed send keeps the whole part sequence on the caller.
+    zlink::message_t first = make_request_message ("multi-1");
+    zlink::message_t second = make_request_message ("multi-2");
+    dealer.send ().message (first).message (second).submit ();
+    assert (router.recv (received) == 0);
+    assert (received.parts ().size () == 2);
+    assert (received.parts ()[0].to_string () == "multi-1");
+    assert (received.parts ()[1].to_string () == "multi-2");
+    received.close ();
 }
 
-void test_routed_async_builder_does_not_outlive_socket_anchor ()
+void test_routed_builder_does_not_outlive_socket_anchor ()
 {
     zlink::context_t ctx;
     zlink::message_t payload = make_request_message ("expired-builder");
@@ -625,7 +626,7 @@ void test_routed_async_builder_does_not_outlive_socket_anchor ()
         builder.emplace (dealer.send ().message (payload));
     }
     try {
-        (void) std::move (*builder).async ();
+        std::move (*builder).submit ();
         assert (false && "builder must not dereference a destroyed socket anchor");
     }
     catch (const zlink::submit_error_t &error) {
@@ -639,7 +640,7 @@ void test_routed_async_builder_does_not_outlive_socket_anchor ()
     auto closed_builder = closed_dealer.send ().message (closed_payload);
     closed_dealer.close ();
     try {
-        (void) std::move (closed_builder).async ();
+        std::move (closed_builder).submit ();
         assert (false && "builder must not submit through a closed socket anchor");
     }
     catch (const zlink::submit_error_t &error) {
@@ -649,7 +650,10 @@ void test_routed_async_builder_does_not_outlive_socket_anchor ()
     assert (closed_payload.valid ());
 }
 
-void test_routed_send_async_isolates_a_backpressure_from_b ()
+// Backpressure on one ROUTER target is reported to the caller as the Core
+// verdict for that submit. The binding neither parks the send nor retries it,
+// and a backpressured target does not poison a send to another target.
+void test_routed_send_reports_core_backpressure_without_poisoning_b ()
 {
     zlink::context_t ctx;
     zlink::router_socket_t router (ctx);
@@ -658,8 +662,8 @@ void test_routed_send_async_isolates_a_backpressure_from_b ()
     zlink::socket_monitor_t router_monitor = router.monitor_open ();
     zlink::socket_monitor_t dealer_a_monitor = dealer_a.monitor_open ();
     zlink::socket_monitor_t dealer_b_monitor = dealer_b.monitor_open ();
-    const zlink::routing_id_t rid_a = zlink::routing_id_t::from ("async-a");
-    const zlink::routing_id_t rid_b = zlink::routing_id_t::from ("async-b");
+    const zlink::routing_id_t rid_a = zlink::routing_id_t::from ("sync-a");
+    const zlink::routing_id_t rid_b = zlink::routing_id_t::from ("sync-b");
     dealer_a.set_routing_id (rid_a);
     dealer_b.set_routing_id (rid_b);
 
@@ -669,26 +673,21 @@ void test_routed_send_async_isolates_a_backpressure_from_b ()
     dealer_b.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
 
     const std::string endpoint =
-      zlink_cpp_contract::unique_inproc ("routed-send-target-isolation");
+      zlink_cpp_contract::unique_inproc ("routed-send-sync-backpressure");
     router.bind (endpoint);
     dealer_a.connect (endpoint);
     dealer_b.connect (endpoint);
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      router_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      router_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
+    for (int i = 0; i < 2; ++i) {
+        assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+          router_monitor,
+          static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+    }
     assert (zlink_cpp_contract::wait_for_socket_monitor_event (
       dealer_a_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
+      static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
     assert (zlink_cpp_contract::wait_for_socket_monitor_event (
       dealer_b_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
+      static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     const std::string filler_text (65536, 'a');
     bool a_backpressured = false;
@@ -700,96 +699,91 @@ void test_routed_send_async_isolates_a_backpressure_from_b ()
     }
     assert (a_backpressured);
 
-    zlink::message_t pending_a_first =
-      make_request_message ("a-after-credit-1");
-    zlink::message_t pending_a_second =
-      make_request_message ("a-after-credit-2");
-    const auto submit_started = std::chrono::steady_clock::now ();
-    auto pending_a_first_completion = await_result (
-      router.send (rid_a).message (std::move (pending_a_first)).async ());
-    auto pending_a_second_completion = await_result (
-      router.send (rid_a).message (std::move (pending_a_second)).async ());
-    assert (std::chrono::steady_clock::now () - submit_started
-            < std::chrono::milliseconds (250));
-    assert (!pending_a_first_completion.wait_for (std::chrono::milliseconds (50)));
-    assert (!pending_a_second_completion.wait_for (std::chrono::milliseconds (0)));
+    // SNDTIMEO is the only wait bound, and Core owns it. The binding adds no
+    // deadline timer and no park queue.
+    router.options ().send_timeout (std::chrono::milliseconds (100));
+    zlink::message_t blocked = make_request_message ("a-backpressured");
+    const auto started = std::chrono::steady_clock::now ();
+    bool reported_backpressure = false;
+    try {
+        router.send (rid_a).message (blocked).submit ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        reported_backpressure = true;
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
+    }
+    const auto waited = std::chrono::steady_clock::now () - started;
+    assert (reported_backpressure);
+    assert (waited >= std::chrono::milliseconds (50));
+    assert (waited < std::chrono::seconds (2));
+    // The caller keeps the message handle Core refused. Core empties the part
+    // it inspected, so the handle is valid but no longer carries the payload.
+    assert (blocked.valid ());
 
+    // SNDTIMEO(0) is the DONTWAIT contract: Core answers immediately.
     router.options ().send_timeout (std::chrono::milliseconds (0));
+    zlink::message_t immediate = make_request_message ("a-dontwait");
+    const auto dontwait_started = std::chrono::steady_clock::now ();
+    bool immediate_backpressure = false;
+    try {
+        router.send (rid_a).message (immediate).submit ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        immediate_backpressure = true;
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
+    }
+    assert (immediate_backpressure);
+    assert (std::chrono::steady_clock::now () - dontwait_started
+            < std::chrono::milliseconds (100));
+    assert (immediate.valid ());
+
+    // B is untouched by A's backpressure.
     zlink::message_t progress_b = make_request_message ("b-progress");
-    auto b_completion = await_result (
-      router.send (rid_b).message (std::move (progress_b)).async ());
-    assert (b_completion.wait_for (std::chrono::seconds (2)));
-    b_completion.take ();
+    router.send (rid_b).message (std::move (progress_b)).submit ();
     zlink::received_t received_b;
     assert (dealer_b.recv (received_b) == 0);
     assert (received_b.first_part ().to_string () == "b-progress");
-    router.options ().send_timeout (std::chrono::milliseconds (1000));
+    received_b.close ();
 
-    zlink::received_t received_a;
-    std::vector<std::string> resumed_payloads;
-    for (int i = 0; i < 20 && resumed_payloads.size () != 2; ++i) {
-        assert (dealer_a.recv (received_a) == 0);
-        const std::string payload = received_a.first_part ().to_string ();
-        if (payload.rfind ("a-after-credit-", 0) == 0)
-            resumed_payloads.push_back (payload);
-        received_a.close ();
-    }
-    assert (resumed_payloads.size () == 2);
-    assert (pending_a_first_completion.wait_for (std::chrono::seconds (2)));
-    assert (pending_a_second_completion.wait_for (std::chrono::seconds (2)));
-    pending_a_first_completion.take ();
-    pending_a_second_completion.take ();
-
-    a_backpressured = false;
-    for (int i = 0; i < 16; ++i) {
-        if (!submit_router_dontwait (router, rid_a, filler_text)) {
-            a_backpressured = true;
-            break;
+    // Draining A restores its credit and the same submit now succeeds.
+    const auto drain_a = [&] {
+        int idle = 0;
+        for (int i = 0; i < 4096 && idle < 20; ++i) {
+            zlink::received_t received;
+            if (dealer_a.recv (received, zlink::recv_flags_t::dontwait) != 0) {
+                ++idle;
+                std::this_thread::sleep_for (std::chrono::milliseconds (5));
+                continue;
+            }
+            idle = 0;
+            received.close ();
         }
+    };
+    drain_a ();
+    router.options ().send_timeout (std::chrono::milliseconds (2000));
+    zlink::message_t retried = make_request_message ("a-backpressured");
+    router.send (rid_a).message (retried).submit ();
+    assert (!retried.valid ());
+    bool delivered = false;
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + std::chrono::seconds (5);
+    while (!delivered && std::chrono::steady_clock::now () < deadline) {
+        zlink::received_t received;
+        if (dealer_a.recv (received, zlink::recv_flags_t::dontwait) != 0) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (5));
+            continue;
+        }
+        delivered = received.first_part ().to_string () == "a-backpressured";
+        received.close ();
     }
-    assert (a_backpressured);
-
-    zlink::message_t cancel_payload = make_request_message ("cancel-pending");
-    zlink::async_result_t<void> cancel_pending =
-      router.send (rid_a).message (cancel_payload).async ();
-    std::atomic<int> cancel_winners{0};
-    std::thread cancel_one ([&] {
-        if (cancel_pending.cancel ())
-            cancel_winners.fetch_add (1, std::memory_order_relaxed);
-    });
-    std::thread cancel_two ([&] {
-        if (cancel_pending.cancel ())
-            cancel_winners.fetch_add (1, std::memory_order_relaxed);
-    });
-    cancel_one.join ();
-    cancel_two.join ();
-    assert (cancel_winners.load (std::memory_order_relaxed) == 1);
-    auto cancelled_completion = await_result (std::move (cancel_pending));
-    try {
-        cancelled_completion.take ();
-        assert (false && "exactly one cancellation must win");
-    }
-    catch (const zlink::submit_error_t &error) {
-        assert (error.result () == zlink::submit_result_t::terminated);
-        assert (error.internal_errno () == ECANCELED);
-    }
-
-    zlink::message_t close_pending = make_request_message ("close-pending");
-    auto close_completion = await_result (
-      router.send (rid_a).message (std::move (close_pending)).async ());
-    assert (!close_completion.wait_for (std::chrono::milliseconds (50)));
-    router.close ();
-    assert (close_completion.wait_for (std::chrono::seconds (2)));
-    try {
-        close_completion.take ();
-        assert (false && "socket close must terminate pending admission");
-    }
-    catch (const zlink::submit_error_t &error) {
-        assert (error.result () == zlink::submit_result_t::terminated);
-    }
+    assert (delivered);
 }
 
-void test_routed_send_async_progress_is_independent_of_another_continuation ()
+// Two caller threads own their own routed submits; the binding owns no queue
+// that could couple them.
+void test_routed_send_submits_from_concurrent_callers ()
 {
     zlink::context_t ctx;
     zlink::router_socket_t router (ctx);
@@ -798,82 +792,69 @@ void test_routed_send_async_progress_is_independent_of_another_continuation ()
     zlink::socket_monitor_t router_monitor = router.monitor_open ();
     zlink::socket_monitor_t dealer_a_monitor = dealer_a.monitor_open ();
     zlink::socket_monitor_t dealer_b_monitor = dealer_b.monitor_open ();
-    const zlink::routing_id_t rid_a =
-      zlink::routing_id_t::from ("continuation-a");
-    const zlink::routing_id_t rid_b =
-      zlink::routing_id_t::from ("continuation-b");
+    const zlink::routing_id_t rid_a = zlink::routing_id_t::from ("concurrent-a");
+    const zlink::routing_id_t rid_b = zlink::routing_id_t::from ("concurrent-b");
     dealer_a.set_routing_id (rid_a);
     dealer_b.set_routing_id (rid_b);
-    router.options ().send_timeout (std::chrono::seconds (10));
+    router.options ().send_timeout (std::chrono::seconds (5));
 
     const std::string endpoint =
-      zlink_cpp_contract::unique_inproc ("routed-send-continuation-isolation");
+      zlink_cpp_contract::unique_inproc ("routed-send-concurrent");
     router.bind (endpoint);
     dealer_a.connect (endpoint);
     dealer_b.connect (endpoint);
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      router_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
-    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
-      router_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
+    for (int i = 0; i < 2; ++i) {
+        assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+          router_monitor,
+          static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+    }
     assert (zlink_cpp_contract::wait_for_socket_monitor_event (
       dealer_a_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
+      static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
     assert (zlink_cpp_contract::wait_for_socket_monitor_event (
       dealer_b_monitor,
-      static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-      2000));
+      static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
-    continuation_gate_t gate;
-    zlink::message_t first_payload =
-      make_request_message ("first-continuation-held");
-    auto first_completion = await_send_and_hold_continuation (
-      router.send (rid_a)
-        .message (std::move (first_payload))
-        .async (),
-      gate);
-    {
-        std::unique_lock<std::mutex> lock (gate.mutex);
-        assert (gate.changed.wait_for (
-          lock, std::chrono::seconds (2), [&] { return gate.entered; }));
-    }
+    constexpr int k_per_thread = 64;
+    std::atomic<int> failures{0};
+    const auto sender = [&] (const zlink::routing_id_t &rid, const char *tag) {
+        for (int i = 0; i < k_per_thread; ++i) {
+            try {
+                zlink::message_t part = make_request_message (tag);
+                router.send (rid).message (std::move (part)).submit ();
+            }
+            catch (const zlink::submit_error_t &) {
+                failures.fetch_add (1, std::memory_order_relaxed);
+            }
+        }
+    };
+    std::thread thread_a ([&] { sender (rid_a, "to-a"); });
+    std::thread thread_b ([&] { sender (rid_b, "to-b"); });
+    thread_a.join ();
+    thread_b.join ();
+    assert (failures.load (std::memory_order_relaxed) == 0);
 
-    zlink::message_t second_payload =
-      make_request_message ("second-target-progress");
-    auto second_completion = await_result (
-      router.send (rid_b)
-        .message (std::move (second_payload))
-        .async ());
-    const bool second_completed_while_first_continuation_was_held =
-      second_completion.wait_for (std::chrono::seconds (2));
-
-    {
-        std::lock_guard<std::mutex> lock (gate.mutex);
-        gate.released = true;
-    }
-    gate.changed.notify_all ();
-    assert (first_completion.wait_for (std::chrono::seconds (2)));
-    first_completion.take ();
-    assert (second_completion.wait_for (std::chrono::seconds (2)));
-    second_completion.take ();
-
-    zlink::received_t received_a;
-    zlink::received_t received_b;
-    assert (dealer_a.recv (received_a) == 0);
-    assert (dealer_b.recv (received_b) == 0);
-    assert (received_a.first_part ().to_string ()
-            == "first-continuation-held");
-    assert (received_b.first_part ().to_string ()
-            == "second-target-progress");
-    assert (second_completed_while_first_continuation_was_held
-            && "RID B admission must not run on RID A's continuation");
+    const auto drain = [] (zlink::dealer_socket_t &dealer_, const char *tag) {
+        int seen = 0;
+        for (int i = 0; i < k_per_thread * 4 && seen < k_per_thread; ++i) {
+            zlink::received_t received;
+            if (dealer_.recv (received, zlink::recv_flags_t::dontwait) != 0) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (5));
+                continue;
+            }
+            if (received.first_part ().to_string () == tag)
+                ++seen;
+            received.close ();
+        }
+        return seen;
+    };
+    assert (drain (dealer_a, "to-a") == k_per_thread);
+    assert (drain (dealer_b, "to-b") == k_per_thread);
 }
 
-void test_routed_request_deadline_includes_admission_wait ()
+// Both routed terminals delegate the send-side wait bound to Core: SNDTIMEO
+// is the only deadline the binding consults, and it owns no timer of its own.
+void test_routed_send_and_request_honor_core_sndtimeo ()
 {
     zlink::context_t ctx;
     zlink::dealer_socket_t dealer (ctx);
@@ -885,7 +866,7 @@ void test_routed_request_deadline_includes_admission_wait ()
     router.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
 
     const std::string endpoint =
-      zlink_cpp_contract::unique_inproc ("request-admission-deadline");
+      zlink_cpp_contract::unique_inproc ("request-sndtimeo");
     router.bind (endpoint);
     dealer.connect (endpoint);
     std::this_thread::sleep_for (std::chrono::milliseconds (100));
@@ -902,36 +883,44 @@ void test_routed_request_deadline_includes_admission_wait ()
 
     dealer.options ().send_timeout (std::chrono::milliseconds (100));
     zlink::message_t send = make_request_message ("deadline-send");
-    auto send_completion = await_result (
-      dealer.send ().message (std::move (send)).async ());
-    assert (send_completion.wait_for (std::chrono::seconds (2)));
+    const auto send_started = std::chrono::steady_clock::now ();
+    bool send_reported = false;
     try {
-        send_completion.take ();
-        assert (false && "send admission must honor the original SNDTIMEO");
+        dealer.send ().message (send).submit ();
+        assert (false && "send must honor SNDTIMEO");
     }
     catch (const zlink::submit_error_t &error) {
+        send_reported = true;
         assert (error.result () == zlink::submit_result_t::backpressured);
-        assert (error.internal_errno () == ETIMEDOUT);
+        assert (error.internal_errno () == EAGAIN);
     }
+    assert (send_reported);
+    assert (std::chrono::steady_clock::now () - send_started
+            < std::chrono::seconds (2));
+    assert (send.valid ());
 
+    // The request terminal submits through the same Core send contract before
+    // it hands back a suspension, so a send that never gets credit fails at
+    // submit time instead of parking in a binding-owned queue.
     zlink::message_t request = make_request_message ("deadline-request");
     const auto started = std::chrono::steady_clock::now ();
-    auto request_completion = await_result (
-      dealer.request ()
-        .message (request)
-        .timeout (std::chrono::milliseconds (100))
-        .async ());
-    assert (std::chrono::steady_clock::now () - started
-            < std::chrono::milliseconds (250));
-    assert (request_completion.wait_for (std::chrono::seconds (2)));
+    bool request_reported = false;
     try {
-        (void) request_completion.take ();
-        assert (false && "admission wait must consume the original deadline");
+        (void) dealer.request ()
+          .message (request)
+          .timeout (std::chrono::milliseconds (100))
+          .async ();
+        assert (false && "request submit must honor SNDTIMEO");
     }
-    catch (const zlink::request_error_t &error) {
-        assert (error.result () == zlink::request_result_t::timed_out);
-        assert (error.internal_errno () == ETIMEDOUT);
+    catch (const zlink::submit_error_t &error) {
+        request_reported = true;
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
     }
+    assert (request_reported);
+    assert (std::chrono::steady_clock::now () - started
+            < std::chrono::seconds (2));
+    assert (request.valid ());
 }
 
 void test_request_router_preserves_data_recv_surface ()
@@ -952,7 +941,7 @@ void test_request_router_preserves_data_recv_surface ()
     std::this_thread::sleep_for (std::chrono::milliseconds (50));
 
     zlink::message_t data = make_request_message ("plain-data");
-    await_send (dealer_socket.send ().message (data).async ());
+    dealer_socket.send ().message (data).submit ();
 
     zlink::received_t received;
     assert (router_socket.recv (received) == 0);
@@ -1042,6 +1031,196 @@ void test_reply_submit_is_one_shot_without_ghost_retry ()
     assert (dealer.recv (ghost, zlink::recv_flags_t::dontwait) != 0);
 }
 
+// A multipart request that fails at submit must hand every caller-owned part
+// back, exactly as the single-part path does. The submit adapter only borrows
+// the parts, so on failure the caller's message_t objects must still hold their
+// original payloads once the builder has recycled its state.
+void assert_part_intact (const zlink::message_t &part_, const std::string &text_)
+{
+    assert (part_.valid ());
+    assert (part_.size () == text_.size ());
+    assert (part_.to_string () == text_);
+}
+
+// One DEALER wired to a ROUTER that never receives, so the request terminal can
+// be driven into a real Core submit failure.
+struct multipart_request_fixture_t
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer{ctx};
+    zlink::router_socket_t router{ctx};
+
+    explicit multipart_request_fixture_t (const char *name_)
+    {
+        dealer.set_routing_id (zlink::routing_id_t::from ("multipart-dealer"));
+        router.set_routing_id (zlink::routing_id_t::from ("multipart-router"));
+        const uint64_t hwm = UINT64_C (65536) + sizeof (zlink_msg_t);
+        dealer.options ().send_hwm (zlink::byte_count_t::bytes (hwm));
+        router.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
+        const std::string endpoint = zlink_cpp_contract::unique_inproc (name_);
+        router.bind (endpoint);
+        dealer.connect (endpoint);
+        std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        dealer.options ().send_timeout (std::chrono::milliseconds (100));
+    }
+
+    // Refills the send pipe until Core reports backpressure. Credit can come
+    // back between the fill and the next submit, so callers retry rather than
+    // assume the very next submit fails.
+    void fill_until_backpressured ()
+    {
+        const std::string filler_text (65536, 'd');
+        for (int i = 0; i < 64; ++i) {
+            if (!submit_dealer_dontwait (dealer, filler_text))
+                return;
+        }
+        assert (false && "dealer never reported send backpressure");
+    }
+};
+
+// Later-error path: Core rejects the part sequence after the state handed its
+// parts to the submit adapter. Every lvalue part must come back valid.
+void test_multipart_request_failure_returns_every_part ()
+{
+    multipart_request_fixture_t fixture ("multipart-request-failure");
+
+    const std::string first_text = "multipart:first";
+    const std::string second_text = "multipart:second";
+    const std::string third_text = "multipart:third";
+
+    bool reported = false;
+    for (int attempt = 0; attempt < 64 && !reported; ++attempt) {
+        fixture.fill_until_backpressured ();
+        zlink::message_t first = make_request_message (first_text);
+        zlink::message_t second = make_request_message (second_text);
+        zlink::message_t third = make_request_message (third_text);
+        try {
+            (void) fixture.dealer.request ()
+              .message (first)
+              .message (second)
+              .message (third)
+              .timeout (std::chrono::milliseconds (100))
+              .async ();
+            continue;
+        }
+        catch (const zlink::submit_error_t &error) {
+            reported = true;
+            assert (error.result () == zlink::submit_result_t::backpressured);
+            assert (error.internal_errno () == EAGAIN);
+        }
+        // The builder state is already recycled here; each caller-owned part
+        // must still be the message it was before the failed submit.
+        assert_part_intact (first, first_text);
+        assert_part_intact (second, second_text);
+        assert_part_intact (third, third_text);
+    }
+    assert (reported);
+}
+
+// Same later-error path reached deterministically: an invalid part makes the
+// native-view build fail after the parts were taken out of the state. The two
+// caller-owned parts around it must still be returned.
+void test_multipart_request_invalid_part_returns_the_others ()
+{
+    multipart_request_fixture_t fixture ("multipart-request-invalid");
+
+    const std::string first_text = "multipart:invalid-first";
+    const std::string third_text = "multipart:invalid-third";
+    zlink::message_t first = make_request_message (first_text);
+    zlink::message_t invalid = make_request_message ("multipart:invalid-second");
+    zlink::message_t consumed = std::move (invalid);
+    assert (!invalid.valid ());
+    zlink::message_t third = make_request_message (third_text);
+
+    bool reported = false;
+    try {
+        (void) fixture.dealer.request ()
+          .message (first)
+          .message (invalid)
+          .message (third)
+          .timeout (std::chrono::milliseconds (100))
+          .async ();
+        assert (false && "a request carrying an invalid part must fail");
+    }
+    catch (const zlink::submit_error_t &) {
+        reported = true;
+    }
+    assert (reported);
+
+    assert_part_intact (first, first_text);
+    assert_part_intact (third, third_text);
+    assert (!invalid.valid ());
+}
+
+// Mixed ownership: lvalue parts come back, and an rvalue part added mid-chain
+// neither replaces the parts before it nor is handed back to any caller.
+void test_multipart_request_failure_keeps_rvalue_parts_consumed ()
+{
+    multipart_request_fixture_t fixture ("multipart-request-rvalue");
+
+    const std::string first_text = "multipart:lvalue-first";
+    const std::string third_text = "multipart:lvalue-third";
+
+    bool reported = false;
+    for (int attempt = 0; attempt < 64 && !reported; ++attempt) {
+        fixture.fill_until_backpressured ();
+        zlink::message_t first = make_request_message (first_text);
+        zlink::message_t third = make_request_message (third_text);
+        try {
+            (void) fixture.dealer.request ()
+              .message (first)
+              .message (make_request_message ("multipart:rvalue-second"))
+              .message (third)
+              .timeout (std::chrono::milliseconds (100))
+              .async ();
+            continue;
+        }
+        catch (const zlink::submit_error_t &error) {
+            reported = true;
+            assert (error.result () == zlink::submit_result_t::backpressured);
+        }
+        assert_part_intact (first, first_text);
+        assert_part_intact (third, third_text);
+    }
+    assert (reported);
+}
+
+// The throwing failure path (the `catch (...)` guard around the submit adapter)
+// is only reachable on an allocation failure inside the native-view builder, so
+// it is covered here at the state level: it restores through the same helper,
+// with the same taken-parts vector, that the return-code path uses.
+void test_multipart_request_restore_helper_matches_single_part_semantics ()
+{
+    const std::string first_text = "restore:first";
+    const std::string second_text = "restore:second";
+    zlink::message_t first = make_request_message (first_text);
+    zlink::message_t second = make_request_message (second_text);
+    zlink::message_t consumed = make_request_message ("restore:rvalue");
+
+    zlink::detail::operation_state_t state;
+    state.kind = zlink::detail::operation_kind_t::raw_request;
+    state.message.single_part_source = &first;
+    zlink::detail::append_send_part (state, second);
+    zlink::detail::append_send_part (state, std::move (consumed));
+
+    std::vector<zlink::message_t> parts = zlink::detail::take_send_parts (state);
+    assert (parts.size () == 3u);
+    assert (!first.valid ());
+    assert (!second.valid ());
+
+    zlink::detail::restore_send_parts_to_sources (state, parts);
+    assert_part_intact (first, first_text);
+    assert_part_intact (second, second_text);
+    // The rvalue part carries no caller source and stays consumed on submit.
+    assert (parts[2].valid ());
+
+    // Recycling the state after the restore must not disturb the caller parts.
+    zlink::detail::reset_for_reuse (state);
+    parts.clear ();
+    assert_part_intact (first, first_text);
+    assert_part_intact (second, second_text);
+}
+
 void test_raw_router_reply_maps_submit_result ()
 {
     zlink::context_t ctx;
@@ -1069,14 +1248,18 @@ int main ()
     test_request_direct_await_suspends_until_reply ();
     test_dealer_request_without_initial_routed_target_is_terminal ();
     test_dealer_send_without_initial_routed_target_is_terminal ();
-    test_routed_send_direct_await_and_cancel_are_event_driven ();
-    test_routed_async_builder_does_not_outlive_socket_anchor ();
-    test_routed_send_async_isolates_a_backpressure_from_b ();
-    test_routed_send_async_progress_is_independent_of_another_continuation ();
-    test_routed_request_deadline_includes_admission_wait ();
+    test_routed_send_submit_is_synchronous_and_consumes_parts ();
+    test_routed_builder_does_not_outlive_socket_anchor ();
+    test_routed_send_reports_core_backpressure_without_poisoning_b ();
+    test_routed_send_submits_from_concurrent_callers ();
+    test_routed_send_and_request_honor_core_sndtimeo ();
     test_request_router_preserves_data_recv_surface ();
     test_received_reply_rejects_non_none_flags ();
     test_reply_submit_is_one_shot_without_ghost_retry ();
     test_raw_router_reply_maps_submit_result ();
+    test_multipart_request_failure_returns_every_part ();
+    test_multipart_request_invalid_part_returns_the_others ();
+    test_multipart_request_failure_keeps_rvalue_parts_consumed ();
+    test_multipart_request_restore_helper_matches_single_part_semantics ();
     std::quick_exit (0);
 }

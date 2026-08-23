@@ -254,8 +254,8 @@ inline async_task_t<bool> run_reqrep_pattern (const reqrep_config_t &config_,
         state->completion_changed.wait_for (lock, std::chrono::milliseconds (50));
     }
     const bool stop_ok = config_.routed_request
-                           ? co_await send_stop_token_async (client.sock (), server_rid)
-                           : co_await send_stop_token_async (client.sock ());
+                           ? send_stop_token_active (client.sock (), server_rid)
+                           : send_stop_token_active (client.sock ());
     server_thread.join ();
 
     const unsigned long long completed = state->completed.load (std::memory_order_acquire);

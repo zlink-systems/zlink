@@ -160,7 +160,7 @@ perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
 
             const zlink::routing_id_t source_node_rid = *received.routing_id ();
             try {
-                co_await std::move (server.send (source_node_rid)).message (part).async ();
+                std::move (server.send (source_node_rid)).message (part).submit ();
             }
             catch (const zlink::submit_error_t &err) {
                 const int err_no = err.internal_errno ();

@@ -477,31 +477,30 @@ class channel_native_client_t
             }
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
               operation_deadline - now);
-            std::optional<zlink::async_result_t<void>> pending;
             {
                 std::lock_guard transport_lock (transport->mutex);
                 const auto configured_timeout =
                   transport->socket->options ().send_timeout ();
+                // The routed submit is synchronous, so the per-operation
+                // SNDTIMEO has to stay installed until it returns.
                 transport->socket->options ().send_timeout (
                   remaining > std::chrono::milliseconds::zero ()
                     ? remaining
                     : std::chrono::milliseconds (1));
                 try {
-                    pending.emplace (
-                      transport->socket->send ()
-                        .message (send_header)
-                        .message (send_body)
-                        .async ());
-                    transport->socket->options ().send_timeout (
-                      configured_timeout);
+                    transport->socket->send ()
+                      .message (send_header)
+                      .message (send_body)
+                      .submit ();
                 }
                 catch (...) {
                     transport->socket->options ().send_timeout (
                       configured_timeout);
                     throw;
                 }
+                transport->socket->options ().send_timeout (
+                  configured_timeout);
             }
-            co_await std::move (*pending);
             co_return;
         }
         catch (const framework_exception_t &) {
@@ -763,7 +762,6 @@ class channel_native_publisher_t
               detail::boundary_error_t::shutdown,
               "channel native publisher is closed");
         }
-        std::optional<zlink::async_result_t<void>> submitted;
         {
             std::lock_guard lock (_mutex);
             if (_closed.load (std::memory_order_acquire)) {
@@ -774,15 +772,26 @@ class channel_native_publisher_t
             drain_subscription_events ();
             zlink::message_t header = parts[0];
             zlink::message_t body = parts[1];
-            auto operation = _socket.publish (topic)
-                               .message (header)
-                               .message (body);
-            submitted.emplace (
-              timeout > std::chrono::milliseconds::zero ()
-                ? std::move (operation).timeout (timeout).async ()
-                : std::move (operation).async ());
+            // Publish is synchronous; SNDTIMEO owns the wait bound.
+            const auto configured_timeout = _socket.options ().send_timeout ();
+            const bool override_timeout =
+              timeout > std::chrono::milliseconds::zero ();
+            if (override_timeout)
+                _socket.options ().send_timeout (timeout);
+            try {
+                (void) _socket.publish (topic)
+                  .message (header)
+                  .message (body)
+                  .submit ();
+            }
+            catch (...) {
+                if (override_timeout)
+                    _socket.options ().send_timeout (configured_timeout);
+                throw;
+            }
+            if (override_timeout)
+                _socket.options ().send_timeout (configured_timeout);
         }
-        co_await std::move (*submitted);
         co_return;
     }
 

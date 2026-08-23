@@ -264,7 +264,7 @@ class router_router_client_bench_t
         }
 
         try {
-            co_await std::move (state.sock->send (_server_rid)).message (request).async ();
+            std::move (state.sock->send (_server_rid)).message (request).submit ();
             ++_seq;
             state.awaiting_reply = true;
             state.send_pending = false;

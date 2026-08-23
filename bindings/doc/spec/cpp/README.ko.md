@@ -259,7 +259,6 @@ public:
     send_operation_t send();
     reply_operation_t reply();
     int recv(received_t& out, recv_flags_t flags = recv_flags_t::none);
-    void set_send_ready_handler(std::function<void()> handler);
     void close();
 };
 
@@ -434,8 +433,8 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   받는다. payload, flag, timeout, async submit 선택은 빌더 단계에서 한다.
 - SPOT 채널 대상 operation은 `send_to_channel(...)`과 `request_to_channel(...)`을 쓴다.
   SPOT topic publish는 `publish(topic)`을 그대로 쓴다.
-- handler 등록 메서드는 `set_..._handler` 이름을 쓴다. 예를 들어 send readiness는
-  `set_send_ready_handler(...)`, raw STREAM packet 처리는 `set_packet_handler(...)`,
+- handler 등록 메서드는 `set_..._handler` 이름을 쓴다. 예를 들어 raw STREAM
+  packet 처리는 `set_packet_handler(...)`,
   monitor 이벤트는 `set_monitor_handler(...)`, SPOT dispatch는
   `set_dispatch_handler(...)`를 쓴다.
 - `on_...` 이름은 완성된 C++ API에서 공개 등록 메서드가 아니다. 이는 필요할 때 내부 또는
@@ -453,27 +452,39 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   계열을 추가하지 않는다. operation 이름은 하나로 유지하고 변형은 빌더가 흡수한다. 종단
   빌더 메서드의 언어별 이름은
   [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
-- routed send와 routed request의 `async()`는 Core에 blocking submit을 호출하기 전에
-  완료 객체와 operation-owned multipart record를 만든다. Binding은
-  Core가 선택한 정확한 `(RID, transport pair id, generation)`을 operation key로 고정하고,
-  그 key를 대기 집합에 넣은 뒤 exact-target `DONTWAIT` submit만 시도한다.
+- routed **send**의 terminal은 `routed_send_submit_operation_t::submit() -> void`인
+  동기 호출이다. Core send를 그대로 감싸며 호출 thread에서 끝난다. Binding은
+  admission을 위한 park queue, WRITABLE-callback 재시도, deadline timer,
+  dispatcher thread를 두지 않는다 —
+  [바인딩 routed 전송 계약과 비동기 완료 표면 정책](../async-coroutine-policy.ko.md)
+  참고. **binding 라이브러리는 스레드를 하나도 소유하지 않는다.**
+- routed send의 HWM 대기·재개·timeout은 전부 Core가 소유한다. blocking 모드는 Core
+  내부에서 대기하다 Core 신호로 재개하고, socket `SNDTIMEO`가 대기 상한이며,
+  `SNDTIMEO=0`은 즉시 `BACKPRESSURED`(`EAGAIN`)를 반환한다. 백프레셔 정책의 소유자는
+  어플리케이션이며 binding은 재시도하지 않는다. 실패는 `submit_error_t`로 던지고,
+  Core가 받아들이지 않은 part의 handle은 호출자에게 남는다.
+- routed send builder는 flags 단계도 async terminal도 노출하지 않는다. `DONTWAIT`
+  의미는 socket `SNDTIMEO`로 표현한다.
 - 같은 native handle의 모든 C++ outbound 경로는 binding-owned record-attempt gate를 공유한다.
-  한 번의 native attempt에서 기존 exact-target part API를 첫 part부터 `FINAL`까지 호출하고
-  즉시 gate를 해제한다. readiness 대기나 continuation 재개 중에는 gate를 보유하지 않는다.
-- backpressure가 발생하면 operation만 기다린다. record-attempt 밖의 socket-wide lock, 호출 thread,
-  coroutine executor나 Framework scheduler를 점유하지 않으며, 다른 target operation은 같은
-  socket에서도 독립적으로 Core에 도달한다. Core의 exact-target writable/terminal event만 해당
-  key를 재개하고 stale generation event는 무시한다. 내부 ready-target ring은 한 target이 다른
-  target을 독점하지 않게 하지만 같은 RID concurrent call에 새 strict FIFO 공개 계약을 추가하지 않는다.
-- Send는 operation 시작 시 socket `SNDTIMEO`를 한 번 읽어 absolute deadline으로 고정한다.
-  `SNDTIMEO=0`도 최초 exact-target `DONTWAIT` 시도 한 번은 수행한다. Request의 최초 absolute
-  deadline도 admission 대기 중 연장하지 않는다. target detach, socket/context
-  종료, deadline과 `async_result_t::cancel()`은 terminal completion을 정확히 한 번만 이긴다.
-  Request는 최종 wire 수용 전에 Core reply correlation을 등록하고, 수용 후에는 Core reply
-  lifecycle이 완료를 소유한다.
-- Send builder의 `.flags(dontwait).submit()`은 one-shot 즉시 호출이다. backpressure면
-  `false`를 즉시 반환한다. `async()`만 binding의 event-driven admission 대기를 사용하고
-  managed callback terminal이나 `get`/`wait` 호환 표면은 제공하지 않는다.
+  한 번의 native attempt에서 기존 part API를 첫 part부터 `FINAL`까지 호출하고 즉시 gate를
+  해제한다. gate는 part sequence의 교차 제출과 close 경합만 막으며, 재시도나 대기 정책을
+  소유하지 않는다.
+- routed **request**의 terminal은 `request_submit_operation_t::async()`로, Core가 선택한
+  정확한 `(RID, transport pair id, generation)` target에 호출 thread에서 동기 제출한 뒤
+  `async_result_t<std::vector<message_t>>` suspension을 돌려준다. 제출 자체의 HWM 계약은
+  routed send와 같다(Core 소유, `SNDTIMEO`가 상한). 완료는 Core가 구동한다 — Core reply
+  handler callback이 suspension을 완료하고, 재개는 그 완료가 발생한 컨텍스트에서 일어난다.
+  binding은 이 표면을 위해 재시도 큐, 타이머, 전용 스레드를 두지 않는다.
+- request timeout은 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). builder의 `timeout(...)`은 그
+  Core-owned reply deadline을 지정한다. 제출 실패는 `submit_error_t`로 던지고, 수용 후에는
+  Core reply lifecycle이 완료를 소유한다. drop과 `async_result_t::cancel()`은 cancellation을
+  요청하지만 Core가 이미 수용한 request는 Core-owned terminal event로 끝난다.
+- 재개가 Core callback 컨텍스트에서 일어나므로, 그 continuation에서 socket이나 context를
+  파괴하면 안 된다. 실행 모델 연결(다른 executor로의 handoff)은 framework와 어플리케이션
+  몫이다.
+- `send_submit_operation_t`(PAIR/PUB/STREAM one-shot)의 terminal은 `submit() -> bool`
+  하나다. `.flags(dontwait).submit()`은 backpressure면 `false`를 즉시 반환한다. 이 builder에는
+  async terminal도 per-call timeout 단계도 없다 — 대기 상한은 socket `SNDTIMEO`다.
 - Raw ROUTER/`received_t` reply의 terminal은
   `reply_submit_operation_t::submit() -> void`인 동기 one-shot이다. Terminal reply와 error
   reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는

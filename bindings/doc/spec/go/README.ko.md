@@ -6,9 +6,9 @@ title: "Go 바인딩 공개 계약"
 [스펙 목록](../README.ko.md) | [이전: Python](../python/README.ko.md) | [다음: Rust](../rust/README.ko.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.12.0 공개 계약
+# Go binding Core 0.13.0 공개 계약
 
-> **이 장이 정의하는 것** — 현재 구현된 Go binding이 Core 0.12.0 raw C API 위에
+> **이 장이 정의하는 것** — 현재 구현된 Go binding이 Core 0.13.0 raw C API 위에
 > 제공하는 공개 type·ownership·오류 계약.
 
 이 문서는 현재 구현된 Go binding의 공개 계약만 정의한다. 구현 전 설계나 다른
@@ -18,7 +18,7 @@ signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 
 
 | 절 | 다루는 내용 |
 |---|---|
-| [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core 0.12.0 raw 범위 |
+| [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core 0.13.0 raw 범위 |
 | [공개 계약 범주](#공개-계약-범주) | 범주별 공개 개념 표 |
 | [Context와 resource 수명](#context와-resource-수명) | Context/socket/monitor/poller/timer 소유·해제 규칙 |
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Go `uint64`와 Core `uint64_t` byte HWM의 매핑 |
@@ -40,7 +40,7 @@ Runtime handle, cgo declaration, native struct, callback trampoline과 buffer
 marshalling은 `internal/native`의 구현 세부사항이다. 이 타입과 package는 consumer
 계약이 아니다.
 
-- 현재 package 계약은 Core 0.12.0 raw C API만 투영한다.
+- 현재 package 계약은 Core 0.13.0 raw C API만 투영한다.
 - Context, Message, raw socket, monitor, poller, timer와 utility는 포함하지만 Spot, Actor, MeshNode와 service operation은 포함하지 않는다.
 - Go module에는 message별 codec 등록 API도 없다.
 - Message와 byte payload의 기본 경로는 binding이 제공하는 typed API를 사용한다.
@@ -261,7 +261,7 @@ Framework backend의 queue·executor·handler 수명에 Core credit을 함께 �
 노출하지 않는다.
 
 Socket monitor는 typed event mask로 열고 `MonitorEvent`, `MonitorStatus`를 제공한다.
-Core 0.12.0의 각 monitor event mask와 delivered event value는 대응하는 typed constant로
+Core 0.13.0의 각 monitor event mask와 delivered event value는 대응하는 typed constant로
 제공한다. `MonitorEventMask`는 monitor를 열 때 사용하고 `MonitorEventType`은
 수신한 `MonitorEvent.Event`를 검사할 때 사용한다.
 `OpenSocketMonitor(socket, options...)`는 `MonitorEventMask`와
@@ -341,9 +341,9 @@ allowlist에 없다.
 Module package는 다음 file proxy layout을 사용한다.
 
 ```text
-zlink.systems/zlink/@v/v0.12.0.info
-zlink.systems/zlink/@v/v0.12.0.mod
-zlink.systems/zlink/@v/v0.12.0.zip
+zlink.systems/zlink/@v/v0.13.0.info
+zlink.systems/zlink/@v/v0.13.0.mod
+zlink.systems/zlink/@v/v0.13.0.zip
 ```
 
 지원 platform runtime은 module의 `native/<platform>/` 아래에 포함한다. Package

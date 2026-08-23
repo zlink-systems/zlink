@@ -59,7 +59,7 @@ resolve_candidate() {
     return 1
   fi
   if [[ -z "${ZLINK_CORE_PACKAGE_PREFIX:-}" || -z "${ZLINK_CORE_PACKAGE_EVIDENCE:-}" ]]; then
-    echo "ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_EVIDENCE must identify the Core 0.11.1 package" >&2
+    echo "ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_EVIDENCE must identify the Core 0.13.0 package" >&2
     return 1
   fi
   [[ -d "$ZLINK_CORE_PACKAGE_PREFIX" ]] || {

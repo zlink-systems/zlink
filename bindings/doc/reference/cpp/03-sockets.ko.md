@@ -44,7 +44,6 @@ socket.close ();
 | `options()` | — | `common_socket_options_t`(아래) 반환 |
 | `set_tls_server(cert, key, require_client_cert)` | `require_client_cert = false` | `bind` 전에 적용 |
 | `set_tls_client(ca_cert, hostname, trust_system)` | `trust_system = false` | `connect` 전에 적용 |
-| `set_send_ready_handler(std::function<void()>)` | — | back-pressure 해소 콜백 등록 |
 
 **완료 결과.** `valid()`/`monitor_open()`/`options()`를 제외한 모든 member는
 반환값 없이 동기다. `socket_t`는 move-only다(복사는 delete) — 소멸자는 암묵적으로
@@ -121,7 +120,6 @@ if (pair.recv (received) == 0) { /* ... */ }
 | `explicit pair_socket_t(context_t&)` | — | 그 context에 묶인 socket을 생성 |
 | `send()` | — | 공유 `send_operation_t` builder 시작 |
 | `recv(received_t&, recv_flags_t)` / `recv(message_t&, recv_flags_t)` | `recv_flags_t::none` | 뒤는 single-part shortcut |
-| `set_send_ready_handler(std::function<void()>)` | — | back-pressure 해소 콜백 등록 |
 
 **완료 결과.** `recv`는 `int`를 직접 반환한다 — 성공하면 `0`, receive 실패나
 no data면 `recv_result_t` 값, binding-local 실패에서만 `errno`가 설정된 채
@@ -149,7 +147,6 @@ auto reply = std::move (dealer.request ()).message (payload).async ().get ();
 | --- | --- | --- |
 | `explicit dealer_socket_t(context_t&)` | — | 그 context에 묶인 socket을 생성 |
 | `send()` / `recv(received_t&, recv_flags_t)` / `recv(message_t&, recv_flags_t)` | `recv_flags_t::none` | `pair_socket_t`와 같은 형태 |
-| `set_send_ready_handler(...)` | — | back-pressure 해소 콜백 등록 |
 | `request()` | — | 공유 `request_operation_t` 시작; target 인자 없음 — DEALER는 API 레벨 peer routing id가 없음 |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | 이 socket 자신의 routing id를 지정/읽음, peer가 connect 시 관찰 |
 | `options()` | — | `dealer_socket_options_t` 반환 |
@@ -181,7 +178,6 @@ router.set_completion_control_handler ([] (auto &rid, auto parts) { /* ... */ })
 | `send(const routing_id_t&)` | — | 그 peer로 향하는 공유 `send_operation_t` 시작 |
 | `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | 다음 메시지로 envelope을 채움 |
 | `recv(routing_id_t& source_rid_out_, message_t& part_out_, recv_flags_t)` | `recv_flags_t::none` | pull 기반 single-part receive; caller가 오래 사는 `received_t`를 유지해 storage를 재할당 없이 재사용 가능 |
-| `set_send_ready_handler(...)` | — | back-pressure 해소 콜백 등록 |
 | `request(const routing_id_t&)` | — | Messaging category의 `request_operation_t`, 특정 peer로 향함 |
 | `reply(const routing_id_t&, uint64_t request_seq_)` | — | Messaging category의 `reply_operation_t`, 그 peer의 request에 응답 |
 | `try_send_completion_control(const routing_id_t& peer_rid_, const std::vector<message_t>& parts_)` | — | `parts_`를 소비하지 않고 peer의 기존 connection으로 opaque control record 전송 |
@@ -220,7 +216,6 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 | --- | --- | --- |
 | `explicit pub_socket_t(context_t&)` | — | 그 context에 묶인 socket을 생성 |
 | `publish(const std::string& topic_id_)` | — | 공유 `send_operation_t` 시작 |
-| `set_send_ready_handler(...)` | — | back-pressure 해소 콜백 등록 |
 | `options()` | — | `pub_socket_options_t` 반환 |
 | `receive_subscription_event(subscription_event_t&, recv_flags_t)` | `recv_flags_t::none` | 다음 subscribe·unsubscribe로 event를 채움; `xpub_socket_t`만 |
 
@@ -293,7 +288,6 @@ stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* heade
 | `send(const routing_id_t&)` | — | 그 peer로 향하는 공유 `send_operation_t` 시작 |
 | `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | 다음 packet으로 envelope을 채움; dotnet의 `IStreamSocket`(raw part와 routing id/`hasMore`를 반환하는 `RecvPart`가 있음)과 달리, 여기 public으로 선언된 별도 raw-part receive overload는 없음 |
 | `set_packet_handler(std::function<void(const routing_id_t&, message_t&&, message_t&&)>)` | — | callback 기반 packet loop 등록 |
-| `set_send_ready_handler(...)` | — | back-pressure 해소 콜백 등록 |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | 이 socket 자신의 routing id를 지정/읽음, peer가 connect 시 관찰 |
 | `options()` | — | `stream_socket_options_t` 반환 |
 

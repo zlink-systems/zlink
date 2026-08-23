@@ -317,7 +317,7 @@ complete_router_router_handshake (perf_socket_t &receiver_,
             co_return false;
 
         try {
-            co_await sender_.send_async (receiver_rid_, outbound);
+            sender_.send_routed (receiver_rid_, outbound);
             for (;;) {
                 zlink::received_t inbound;
                 if (receiver_.receive (inbound,
@@ -358,7 +358,7 @@ complete_router_router_handshake (perf_socket_t &receiver_,
     if (!reply.valid ())
         co_return false;
     try {
-        co_await receiver_.send_async (*sender_actual_rid, reply);
+        receiver_.send_routed (*sender_actual_rid, reply);
     }
     catch (const zlink::binding_error_t &) {
         co_return false;
@@ -584,57 +584,57 @@ inline int send_payload_active (zlink::pair_socket_t &socket_, const void *data_
     }
 }
 
-inline async_task_t<int>
+inline int
 send_payload_active (perf_socket_t &socket_, const void *data_, size_t size_)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
-        co_return -1;
+        return -1;
     try {
-        co_await socket_.send_async (msg);
-        co_return 1;
+        socket_.send_routed (msg);
+        return 1;
     }
     catch (const zlink::binding_error_t &err) {
         errno = err.internal_errno ();
         if (is_transient_send_errno (errno))
-            co_return 0;
-        co_return -1;
+            return 0;
+        return -1;
     }
 }
 
-inline async_task_t<int> send_payload_active (perf_socket_t &socket_,
-                                              const zlink::routing_id_t &routing_id_,
-                                              const void *data_,
-                                              size_t size_)
+inline int send_payload_active (perf_socket_t &socket_,
+                                const zlink::routing_id_t &routing_id_,
+                                const void *data_,
+                                size_t size_)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
-        co_return -1;
+        return -1;
     try {
-        co_await socket_.send_async (routing_id_, msg);
-        co_return 1;
+        socket_.send_routed (routing_id_, msg);
+        return 1;
     }
     catch (const zlink::binding_error_t &err) {
         errno = err.internal_errno ();
         if (is_transient_send_errno (errno))
-            co_return 0;
-        co_return -1;
+            return 0;
+        return -1;
     }
 }
 
-inline async_task_t<bool> send_stop_token_async (perf_socket_t &socket_)
+inline bool send_stop_token_active (perf_socket_t &socket_)
 {
-    const int rc = co_await send_payload_active (
-      socket_, k_stop_token, std::strlen (k_stop_token));
-    co_return rc > 0;
+    return send_payload_active (socket_, k_stop_token,
+                                std::strlen (k_stop_token))
+           > 0;
 }
 
-inline async_task_t<bool> send_stop_token_async (perf_socket_t &socket_,
-                                                 const zlink::routing_id_t &routing_id_)
+inline bool send_stop_token_active (perf_socket_t &socket_,
+                                    const zlink::routing_id_t &routing_id_)
 {
-    const int rc = co_await send_payload_active (
-      socket_, routing_id_, k_stop_token, std::strlen (k_stop_token));
-    co_return rc > 0;
+    return send_payload_active (socket_, routing_id_, k_stop_token,
+                                std::strlen (k_stop_token))
+           > 0;
 }
 
 inline bool send_stop_token_blocking (zlink::pair_socket_t &socket_)

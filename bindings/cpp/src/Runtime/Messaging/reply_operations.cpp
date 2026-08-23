@@ -70,7 +70,7 @@ reply_submit_operation_t reply_operation_t::message (message_t &part_) &&
     if (state ().kind == detail::operation_kind_t::received_reply)
         state ().message.single_part_source = &part_;
     else
-        state ().message.parts.push_back (std::move (part_));
+        detail::append_send_part_from (state (), part_, &part_);
     return reply_submit_operation_t (release_state_ptr ());
 }
 

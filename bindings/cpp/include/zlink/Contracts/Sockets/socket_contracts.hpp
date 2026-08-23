@@ -142,8 +142,6 @@ class socket_t
     [[nodiscard]] int subscription_event (subscription_event_t &event_,
                                           recv_flags_t flags_ = recv_flags_t::none);
 
-    void set_send_ready_handler (std::function<void ()> handler_);
-
   protected:
     detail::socket_callback_state_t &callback_state ();
 

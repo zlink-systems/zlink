@@ -2297,7 +2297,9 @@ int main ()
       "ClientServer calls do not distinguish a missing Client role from a missing target");
 
     /* CPP-CONTRACT-STREAM-001 — STREAM send alone exposes the per-call
-     * admission bound and narrows the existing socket admission context. */
+     * admission bound and narrows the existing socket admission context.
+     * The binding terminal is the synchronous submit(), so the per-call
+     * deadline is propagated as the Core-owned SNDTIMEO for that submit. */
     gate.require (
       call_hpp.find (
         "stream_send_call_t &timeout (std::chrono::milliseconds timeout)")
@@ -2306,7 +2308,10 @@ int main ()
              "_submit (header, payload, _timeout)")
              != std::string::npos
         && stream_host.find (
-             "std::move (send).timeout (*timeout).async ()")
+             "_core_socket->options ().send_timeout (*timeout)")
+             != std::string::npos
+        && stream_host.find (
+             "_core_socket->send (rid).message (std::move (frame)).submit ()")
              != std::string::npos
         && !tree_contains (
              root / "framework/src/runtime/streams", "async_submit_runtime"),

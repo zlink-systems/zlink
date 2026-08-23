@@ -198,9 +198,10 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
     send_submit_operation_t &&message (message_t &part_) &&;
     send_submit_operation_t &&message (message_t &&part_) &&;
     send_submit_operation_t &&flags (int flags_) &&;
-    send_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
+    /// Submits the part sequence to Core on the calling thread. The wait
+    /// bound is `SNDTIMEO` on the socket; the binding owns no deadline.
     bool submit () &&;
-    async_result_t<void> async () &&;
+
   private:
     using base_t::base_t;
     using base_t::release_state_ptr;
@@ -209,9 +210,10 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
     friend class send_operation_t;
 };
 
-/// @brief Accepts further parts and starts an exact-target routed send.
-/// @note This stage deliberately exposes only async(); DEALER/ROUTER sends do
-///       not have a second blocking, callback, flags, or progress terminal.
+/// @brief Accepts further parts and the terminal synchronous submit of a
+///        DEALER/ROUTER send.
+/// @note This stage deliberately exposes only submit(); DEALER/ROUTER sends do
+///       not have a second async, callback, or progress terminal.
 class routed_send_submit_operation_t : private detail::operation_builder_base_t<
                                          detail::operation_state_t,
                                          detail::pooled_operation_state_policy_t>
@@ -228,10 +230,13 @@ class routed_send_submit_operation_t : private detail::operation_builder_base_t<
     routed_send_submit_operation_t &&message (message_t &part_) &&;
     routed_send_submit_operation_t &&message (message_t &&part_) &&;
 
-    /// Starts event-driven exact-target admission. The returned result owns
-    /// the pending record and suspends a coroutine without occupying a caller
-    /// or runtime worker thread while HWM credit is unavailable.
-    async_result_t<void> async () &&;
+    /// Submits the part sequence to Core on the calling thread. Core owns the
+    /// HWM contract: a blocking submit waits inside Core and resumes on the
+    /// Core signal, `SNDTIMEO` bounds that wait, and the binding neither
+    /// parks, retries, nor times the operation out. Failure, including an
+    /// expired `SNDTIMEO`, is reported as a @ref submit_error_t; the parts
+    /// stay owned by the caller when the submit does not succeed.
+    void submit () &&;
 
   private:
     using base_t::base_t;
@@ -241,7 +246,7 @@ class routed_send_submit_operation_t : private detail::operation_builder_base_t<
     friend class routed_send_operation_t;
 };
 
-/// @brief Builds a DEALER/ROUTER send whose only terminal is async().
+/// @brief Builds a DEALER/ROUTER send whose only terminal is submit().
 class routed_send_operation_t : private detail::operation_builder_base_t<
                                   detail::operation_state_t,
                                   detail::pooled_operation_state_policy_t>
@@ -270,6 +275,10 @@ class routed_send_operation_t : private detail::operation_builder_base_t<
  * @brief Builds a multipart send: add one or more parts, then submit().
  * @note Submitting consumes the added message_t parts; on success each part is
  *       moved into the transport and left invalid; on failure ownership returns to the caller.
+ * @note "Returns to the caller" covers every part added from an lvalue, in a
+ *       multipart sequence as well as a single-part one: each such message_t
+ *       holds its payload again after a failed submit. A part added from an
+ *       rvalue has no caller object left to return to and stays consumed.
  */
 class send_operation_t : private detail::operation_builder_base_t<
                            detail::operation_state_t,
@@ -317,8 +326,10 @@ class request_submit_operation_t : private detail::operation_builder_base_t<
     request_submit_operation_t &&message (message_t &part_) &&;
     request_submit_operation_t &&message (message_t &&part_) &&;
     request_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
-    /// Starts event-driven exact-target admission and then waits through the
-    /// Core-owned reply lifecycle using the original absolute deadline.
+    /// Submits the request to one exact target on the calling thread and
+    /// returns a suspension that Core completes from its reply handler
+    /// callback. The reply deadline is Core-owned
+    /// (`ZLINK_REQUEST_TIMED_OUT`); the binding owns no timer and no worker.
     async_result_t<std::vector<message_t>> async () &&;
 
   private:

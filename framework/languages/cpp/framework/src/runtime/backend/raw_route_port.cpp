@@ -67,7 +67,8 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
         throw std::invalid_argument ("raw route send requires a target and message parts");
     }
     auto messages = materialize_binding_parts (parts);
-    std::optional<zlink::async_result_t<void>> pending;
+    // Routed send is the synchronous binding terminal: admission is decided by
+    // Core inside this call, so there is no separate wait stage to trace.
     try {
         if (trace)
             trace ("router_admission_submit", "begin");
@@ -84,37 +85,24 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
             for (std::size_t index = 1; index < messages.size (); ++index) {
                 operation = std::move (operation).message (messages[index]);
             }
-            pending.emplace (std::move (operation).async ());
+            std::move (operation).submit ();
         }
         if (trace) {
-            trace ("router_admission_submit", "queued");
-            trace ("router_admission_wait", "pending");
+            trace ("router_admission_submit", "admitted");
+            trace ("router_admission_complete", "ok");
         }
+        co_return zlink::submit_result_t::ok;
     }
     catch (const zlink::submit_error_t &error) {
-        if (trace)
+        if (trace) {
             trace ("router_admission_submit", submit_result_name (error.result ()));
+            trace ("router_admission_complete", submit_result_name (error.result ()));
+        }
         co_return error.result ();
     }
     catch (...) {
         if (trace)
             trace ("router_admission_submit", "exception");
-        throw;
-    }
-    try {
-        co_await std::move (*pending);
-        if (trace)
-            trace ("router_admission_complete", "ok");
-        co_return zlink::submit_result_t::ok;
-    }
-    catch (const zlink::submit_error_t &error) {
-        if (trace)
-            trace ("router_admission_complete", submit_result_name (error.result ()));
-        co_return error.result ();
-    }
-    catch (...) {
-        if (trace)
-            trace ("router_admission_complete", "exception");
         throw;
     }
 }

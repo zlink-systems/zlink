@@ -42,7 +42,6 @@ socket.close ();
 | `options()` | — | returns `common_socket_options_t`, below |
 | `set_tls_server(cert, key, require_client_cert)` | `require_client_cert = false` | apply before `bind` |
 | `set_tls_client(ca_cert, hostname, trust_system)` | `trust_system = false` | apply before `connect` |
-| `set_send_ready_handler(std::function<void()>)` | — | registers a back-pressure-cleared callback |
 
 **Completion result.** All synchronous, no return value except `valid()`/`monitor_open()`/
 `options()`. `socket_t` is move-only (copy deleted); its destructor does not implicitly close.
@@ -117,7 +116,6 @@ if (pair.recv (received) == 0) { /* ... */ }
 | `explicit pair_socket_t(context_t&)` | — | constructs the socket, bound to that context |
 | `send()` | — | starts the shared `send_operation_t` builder |
 | `recv(received_t&, recv_flags_t)` / `recv(message_t&, recv_flags_t)` | `recv_flags_t::none` | latter is a single-part shortcut |
-| `set_send_ready_handler(std::function<void()>)` | — | registers a back-pressure-cleared callback |
 
 **Completion result.** `recv` returns `int` directly — `0` on success, a `recv_result_t` value on
 receive failure or no data, `-1` only for a binding-local failure with `errno` set (this
@@ -145,7 +143,6 @@ auto reply = std::move (dealer.request ()).message (payload).async ().get ();
 | --- | --- | --- |
 | `explicit dealer_socket_t(context_t&)` | — | constructs the socket, bound to that context |
 | `send()` / `recv(received_t&, recv_flags_t)` / `recv(message_t&, recv_flags_t)` | `recv_flags_t::none` | same shape as `pair_socket_t` |
-| `set_send_ready_handler(...)` | — | registers a back-pressure-cleared callback |
 | `request()` | — | starts the shared `request_operation_t`; no target parameter — DEALER has no API-level peer routing id |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | assigns/reads this socket's own routing id, observed by peers on connect |
 | `options()` | — | returns `dealer_socket_options_t` |
@@ -176,7 +173,6 @@ router.set_completion_control_handler ([] (auto &rid, auto parts) { /* ... */ })
 | `send(const routing_id_t&)` | — | starts the shared `send_operation_t`, addressed to that peer |
 | `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | populates the envelope with the next message |
 | `recv(routing_id_t& source_rid_out_, message_t& part_out_, recv_flags_t)` | `recv_flags_t::none` | pull-based single-part receive; caller may keep a long-lived `received_t` across calls to reuse storage without reallocation |
-| `set_send_ready_handler(...)` | — | registers a back-pressure-cleared callback |
 | `request(const routing_id_t&)` | — | Messaging category's `request_operation_t`, addressed to a specific peer |
 | `reply(const routing_id_t&, uint64_t request_seq_)` | — | Messaging category's `reply_operation_t`, answering that peer's request |
 | `try_send_completion_control(const routing_id_t& peer_rid_, const std::vector<message_t>& parts_)` | — | sends an opaque control record to a peer over its existing connection, without consuming `parts_` |
@@ -215,7 +211,6 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 | --- | --- | --- |
 | `explicit pub_socket_t(context_t&)` | — | constructs the socket, bound to that context |
 | `publish(const std::string& topic_id_)` | — | starts the shared `send_operation_t` |
-| `set_send_ready_handler(...)` | — | registers a back-pressure-cleared callback |
 | `options()` | — | returns `pub_socket_options_t` |
 | `receive_subscription_event(subscription_event_t&, recv_flags_t)` | `recv_flags_t::none` | populates the event with the next subscribe/unsubscribe; `xpub_socket_t` only |
 
@@ -287,7 +282,6 @@ stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* owns 
 | `send(const routing_id_t&)` | — | starts the shared `send_operation_t`, addressed to that peer |
 | `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | populates the envelope with the next packet; unlike dotnet's `IStreamSocket` (which has a `RecvPart` returning raw parts plus routing id/`hasMore`), no separate raw-part receive overload is public here |
 | `set_packet_handler(std::function<void(const routing_id_t&, message_t&&, message_t&&)>)` | — | registers a callback-driven packet loop |
-| `set_send_ready_handler(...)` | — | registers a back-pressure-cleared callback |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | assigns/reads this socket's own routing id, observed by peers on connect |
 | `options()` | — | returns `stream_socket_options_t` |
 

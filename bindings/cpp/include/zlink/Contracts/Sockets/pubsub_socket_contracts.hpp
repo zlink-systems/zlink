@@ -63,15 +63,7 @@ class pub_socket_t : public publisher_socket_t
 
     send_operation_t publish (const std::string &topic_id_);
 
-    void set_send_ready_handler (std::function<void ()> handler_)
-    {
-        socket_t::set_send_ready_handler (std::move (handler_));
-    }
-
     pub_socket_options_t options () { return pub_socket_options_t (*this); }
-
-  private:
-    using publisher_socket_t::set_send_ready_handler;
 };
 
 } // namespace zlink
@@ -140,18 +132,10 @@ class xpub_socket_t : public publisher_socket_t
 
     send_operation_t publish (const std::string &topic_id_);
 
-    void set_send_ready_handler (std::function<void ()> handler_)
-    {
-        socket_t::set_send_ready_handler (std::move (handler_));
-    }
-
     int receive_subscription_event (subscription_event_t &out_,
                                     recv_flags_t flags_ = recv_flags_t::none);
 
     pub_socket_options_t options () { return pub_socket_options_t (*this); }
-
-  private:
-    using publisher_socket_t::set_send_ready_handler;
 };
 
 } // namespace zlink

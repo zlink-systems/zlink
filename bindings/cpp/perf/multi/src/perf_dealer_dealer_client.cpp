@@ -226,7 +226,7 @@ class dealer_dealer_client_bench_t
             debug_log ("stamp payload failed");
             co_return false;
         }
-        co_await std::move (state.sock->send ()).message (state.message).async ();
+        std::move (state.sock->send ()).message (state.message).submit ();
         ++_seq;
         if (count)
             ++(*count);
@@ -250,7 +250,7 @@ class dealer_dealer_client_bench_t
             co_return stop_token_fatal;
 
         try {
-            co_await std::move (state.sock->send ()).message (part).async ();
+            std::move (state.sock->send ()).message (part).submit ();
             co_return stop_token_sent;
         }
         catch (const zlink::submit_error_t &error_) {

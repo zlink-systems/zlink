@@ -6,6 +6,7 @@
 #include <zlink.h>
 #include <zlink/message/api.h>
 
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -210,11 +211,41 @@ bool wait_for_request_on_either (two_target_fixture_t &fixture_,
     return false;
 }
 
-int test_request_retry_keeps_initial_exact_target ()
+// The request terminal picks one exact target and submits to it synchronously.
+// The binding no longer parks or retries the submit, so what has to hold is
+// that the send waits inside Core for that exact target's credit and never
+// gets rerouted to the other pipe.
+int test_request_stays_on_the_initially_selected_exact_target ()
 {
     two_target_fixture_t fixture ("exact-request-credit");
     const std::string filler (16384, 'f');
     fixture.fill_a_until_backpressured (filler);
+    fixture.dealer.options ().send_timeout (std::chrono::seconds (5));
+
+    // Only Core can release the parked submit; drain A from another thread.
+    std::atomic<bool> stop_drain{false};
+    std::thread drain_a ([&] {
+        while (!stop_drain.load (std::memory_order_acquire)) {
+            zlink::received_t received;
+            if (fixture.router_a.recv (received, zlink::recv_flags_t::dontwait)
+                != 0) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+                continue;
+            }
+            if (received.first_part ().to_string () == filler) {
+                received.close ();
+                continue;
+            }
+            // The request itself: reply on A so the suspension can complete.
+            if (received.request_seq ().has_value ()) {
+                zlink::message_t reply =
+                  zlink_cpp_contract::make_message ("reply:A");
+                received.reply ().message (reply).submit ();
+                continue;
+            }
+            received.close ();
+        }
+    });
 
     const std::string request_payload = "request-must-stay-on-A";
     zlink::message_t request =
@@ -222,42 +253,64 @@ int test_request_retry_keeps_initial_exact_target ()
     request_test_task_t completion = await_request (
       fixture.dealer.request ()
         .message (std::move (request))
-        .timeout (std::chrono::seconds (3))
+        .timeout (std::chrono::seconds (5))
         .async ());
 
-    bool on_a = false;
-    bool on_b = false;
-    assert (wait_for_request_on_either (
-      fixture, request_payload, on_a, on_b));
-    const std::vector<zlink::message_t> reply = completion.get ();
+    std::vector<zlink::message_t> reply;
+    std::string failure;
+    try {
+        reply = completion.get ();
+    }
+    catch (const zlink::binding_error_t &error) {
+        failure = "request failed errno="
+                  + std::to_string (error.internal_errno ());
+    }
+    stop_drain.store (true, std::memory_order_release);
+    drain_a.join ();
+
+    bool rerouted_to_b = false;
+    zlink::received_t stray;
+    if (fixture.router_b.recv (stray, zlink::recv_flags_t::dontwait) == 0) {
+        rerouted_to_b = stray.first_part ().to_string () == request_payload;
+        stray.close ();
+    }
+
     const std::string reply_payload =
       reply.empty () ? std::string () : reply.front ().to_string ();
-    if (!on_a || on_b || reply_payload != "reply:A") {
+    if (!failure.empty () || rerouted_to_b || reply_payload != "reply:A") {
         std::fprintf (
           stderr,
-          "exact request retry violation: on_A=%d on_B=%d reply=%s\n",
-          on_a ? 1 : 0, on_b ? 1 : 0, reply_payload.c_str ());
+          "exact request violation: %s on_B=%d reply=%s\n",
+          failure.c_str (), rerouted_to_b ? 1 : 0, reply_payload.c_str ());
         return 1;
     }
     return 0;
 }
 
+// A target that never regains credit fails the submit on the caller thread and
+// is never rerouted to the other pipe.
 int test_detached_exact_request_is_terminal_without_reroute ()
 {
     two_target_fixture_t fixture ("exact-request-detach");
     const std::string filler (16384, 'd');
     fixture.fill_a_until_backpressured (filler);
+    fixture.dealer.options ().send_timeout (std::chrono::milliseconds (200));
 
     const std::string request_payload = "detached-request-must-not-reroute";
     zlink::message_t request =
       zlink_cpp_contract::make_message (request_payload);
-    request_test_task_t completion = await_request (
-      fixture.dealer.request ()
-        .message (std::move (request))
-        .timeout (std::chrono::seconds (3))
-        .async ());
-    std::this_thread::sleep_for (std::chrono::milliseconds (50));
-    fixture.router_a.close ();
+    bool terminal = false;
+    zlink::submit_result_t terminal_result = zlink::submit_result_t::ok;
+    try {
+        (void) fixture.dealer.request ()
+          .message (request)
+          .timeout (std::chrono::seconds (3))
+          .async ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        terminal = true;
+        terminal_result = error.result ();
+    }
 
     bool rerouted_to_b = false;
     const auto b_deadline = std::chrono::steady_clock::now ()
@@ -270,31 +323,19 @@ int test_detached_exact_request_is_terminal_without_reroute ()
             std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
 
-    bool terminal_not_connected = false;
-    try {
-        (void) completion.get ();
-    }
-    catch (const zlink::submit_error_t &error) {
-        terminal_not_connected =
-          error.result () == zlink::submit_result_t::not_connected;
-        if (!terminal_not_connected)
-            std::fprintf (stderr,
-                          "detached exact request result=%d errno=%d\n",
-                          static_cast<int> (error.result ()),
-                          error.internal_errno ());
-    }
-    catch (const zlink::request_error_t &error) {
-        std::fprintf (stderr,
-                      "detached exact request reached reply lifecycle: result=%d errno=%d\n",
-                      static_cast<int> (error.result ()),
-                      error.internal_errno ());
-    }
-
-    if (!terminal_not_connected || rerouted_to_b) {
+    if (!terminal || rerouted_to_b) {
         std::fprintf (
           stderr,
-          "detached exact request did not terminate without reroute\n");
+          "detached exact request did not terminate without reroute: "
+          "terminal=%d result=%d on_B=%d\n",
+          terminal ? 1 : 0, static_cast<int> (terminal_result),
+          rerouted_to_b ? 1 : 0);
         return 1;
+    }
+    // A refused submit leaves the request part with the caller.
+    if (!request.valid ()) {
+        std::fprintf (stderr, "refused request submit consumed the part\n");
+        return 2;
     }
     return 0;
 }
@@ -304,7 +345,7 @@ int test_detached_exact_request_is_terminal_without_reroute ()
 int main ()
 {
     const int retry_result =
-      test_request_retry_keeps_initial_exact_target ();
+      test_request_stays_on_the_initially_selected_exact_target ();
     if (retry_result != 0)
         return retry_result;
     return test_detached_exact_request_is_terminal_without_reroute ();

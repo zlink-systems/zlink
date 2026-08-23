@@ -346,8 +346,7 @@ void test_dealer_routed_send_async_builder ()
       dealer_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("direct");
-    zlink_cpp_contract::submit_routed_send (
-      dealer.send ().message (outbound).async ());
+    dealer.send ().message (outbound).submit ();
     assert (!outbound.valid ());
 
     zlink::routing_id_t source =
@@ -407,8 +406,7 @@ void test_router_recv_single_part_direct ()
       dealer_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("routed");
-    zlink_cpp_contract::submit_routed_send (
-      dealer.send ().message (outbound).async ());
+    dealer.send ().message (outbound).submit ();
 
     zlink::routing_id_t source =
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
@@ -449,8 +447,7 @@ void test_router_send_builder_owns_target_rid ()
       dealer_b_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t hello_a = zlink_cpp_contract::make_message ("hello-a");
-    zlink_cpp_contract::submit_routed_send (
-      dealer_a.send ().message (hello_a).async ());
+    dealer_a.send ().message (hello_a).submit ();
     zlink::routing_id_t source =
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
     zlink::message_t inbound;
@@ -458,8 +455,7 @@ void test_router_send_builder_owns_target_rid ()
     assert (source == dealer_a_id);
 
     zlink::message_t hello_b = zlink_cpp_contract::make_message ("hello-b");
-    zlink_cpp_contract::submit_routed_send (
-      dealer_b.send ().message (hello_b).async ());
+    dealer_b.send ().message (hello_b).submit ();
     assert (router.recv (source, inbound) == 0);
     assert (source == dealer_b_id);
 
@@ -468,7 +464,7 @@ void test_router_send_builder_owns_target_rid ()
     auto pending = router.send (target).message (outbound);
     target = dealer_b_id;
 
-    zlink_cpp_contract::submit_routed_send (std::move (pending).async ());
+    std::move (pending).submit ();
 
     zlink::message_t routed_to_a;
     assert (dealer_a.recv (routed_to_a) == 0);
@@ -505,8 +501,7 @@ void test_router_recv_received_single_part_large ()
     zlink::message_t outbound (payload_size);
     assert (outbound.valid ());
     std::memset (outbound.data (), 0x7b, payload_size);
-    zlink_cpp_contract::submit_routed_send (
-      dealer.send ().message (outbound).async ());
+    dealer.send ().message (outbound).submit ();
 
     zlink::received_t inbound;
     assert (router.recv (inbound) == 0);
@@ -551,8 +546,7 @@ void test_router_recv_received_multipart ()
 
     zlink::message_t first = zlink_cpp_contract::make_message ("one");
     zlink::message_t second = zlink_cpp_contract::make_message ("two");
-    zlink_cpp_contract::submit_routed_send (
-      dealer.send ().message (first).message (second).async ());
+    dealer.send ().message (first).message (second).submit ();
 
     zlink::received_t inbound;
     assert (router.recv (inbound) == 0);
@@ -614,8 +608,7 @@ void test_router_direct_recv_multipart_failure_preserves_output ()
 
     zlink::message_t first = zlink_cpp_contract::make_message ("first");
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
-    zlink_cpp_contract::submit_routed_send (
-      dealer.send ().message (first).message (second).async ());
+    dealer.send ().message (first).message (second).submit ();
 
     const zlink::routing_id_t placeholder =
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
@@ -743,8 +736,7 @@ void test_publisher_async_admission_multipart ()
     std::vector<zlink::message_t> outbound;
     outbound.push_back (zlink_cpp_contract::make_message ("alpha"));
     outbound.push_back (zlink_cpp_contract::make_message ("beta"));
-    zlink_cpp_contract::submit_routed_send (
-      publisher.publish (topic).message (outbound[0]).message (outbound[1]).async ());
+    publisher.publish (topic).message (outbound[0]).message (outbound[1]).submit ();
 
     zlink::topic_message_t inbound;
     assert (subscriber.subscribe_retained (inbound)

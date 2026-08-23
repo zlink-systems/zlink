@@ -26,11 +26,6 @@ class stream_socket_t : public routed_message_socket_t
     void set_packet_handler (
       std::function<void (const routing_id_t &, message_t &&, message_t &&)> handler_);
 
-    void set_send_ready_handler (std::function<void ()> handler_)
-    {
-        socket_t::set_send_ready_handler (std::move (handler_));
-    }
-
     void set_routing_id (const routing_id_t &routing_id_);
 
     void get_routing_id (routing_id_t &routing_id_) const;

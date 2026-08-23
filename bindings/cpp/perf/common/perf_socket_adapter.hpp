@@ -619,24 +619,27 @@ class socket_t
         });
     }
 
-    async_result_t<void> send_async (message_t &part_)
+    // DEALER/ROUTER send is the synchronous public terminal: it wraps the Core
+    // send on the caller thread, so the harness measures the same shape the C
+    // harness does. Backpressure and SNDTIMEO stay Core-owned.
+    void send_routed (message_t &part_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<void> {
+        visit ([&] (auto &socket_) {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
-                return std::move (socket_.send ()).message (part_).async ();
+                std::move (socket_.send ()).message (part_).submit ();
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
         });
     }
 
-    async_result_t<void> send_async (const routing_id_t &routing_id_, message_t &part_)
+    void send_routed (const routing_id_t &routing_id_, message_t &part_)
     {
-        return visit ([&] (auto &socket_) -> async_result_t<void> {
+        visit ([&] (auto &socket_) {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
-                return std::move (socket_.send (routing_id_)).message (part_).async ();
+                std::move (socket_.send (routing_id_)).message (part_).submit ();
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }

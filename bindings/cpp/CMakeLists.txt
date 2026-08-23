@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 0.12.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.13.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -11,7 +11,7 @@ set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core"
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 0.12.0 Core release prefix")
+    "Path to an installed Zlink 0.13.0 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -213,7 +213,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 0.12.0 package, an existing libzlink target, "
+    "Expected an installed Core 0.13.0 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 
@@ -256,9 +256,6 @@ add_library(zlink_cpp STATIC
   src/Runtime/Messaging/received.cpp
   src/Runtime/Messaging/reply_operations.cpp
   src/Runtime/Messaging/request_reply.cpp
-  src/Runtime/Messaging/async_continuation_dispatcher.cpp
-  src/Runtime/Messaging/routed_admission_state.cpp
-  src/Runtime/Messaging/publish_admission_state.cpp
   src/Runtime/Messaging/send_operations.cpp
   src/Runtime/Options/dealer_socket_options.cpp
   src/Runtime/Options/pubsub_socket_options.cpp

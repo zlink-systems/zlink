@@ -150,7 +150,7 @@ perf::async_task_t<bool> perf_dealer_router_server (const std::string &lib_name,
             if (part.size () == 0)
                 continue;
             try {
-                co_await std::move (server.send (source_rid)).message (part).async ();
+                std::move (server.send (source_rid)).message (part).submit ();
             }
             catch (const zlink::submit_error_t &err) {
                 const int err_no = err.internal_errno ();

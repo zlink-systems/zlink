@@ -119,8 +119,21 @@ static_assert (!has_blocking_wait_t<zlink::async_result_t<void>>);
 static_assert (!has_blocking_wait_for_t<zlink::async_result_t<void>>);
 static_assert (!has_managed_send_callback_t<zlink::send_submit_operation_t>);
 static_assert (!has_managed_request_callback_t<zlink::request_submit_operation_t>);
-static_assert (!has_sync_submit_t<zlink::routed_send_submit_operation_t>);
+template <typename T>
+concept has_async_t = requires (T &&operation) { std::move (operation).async (); };
+
+// Routed send is a synchronous submit() that wraps the Core send. It has no
+// async terminal, and no flags stage: SNDTIMEO/DONTWAIT policy is owned by the
+// socket options, i.e. by Core and the application.
+static_assert (has_sync_submit_t<zlink::routed_send_submit_operation_t>);
 static_assert (!has_flags_t<zlink::routed_send_submit_operation_t>);
+static_assert (!has_async_t<zlink::routed_send_submit_operation_t>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::routed_send_submit_operation_t &&> ().submit ()),
+               void>);
+// Plain send/publish builders keep the synchronous submit() only; the async
+// terminal is gone with the binding-owned admission machinery.
+static_assert (!has_async_t<zlink::send_submit_operation_t>);
 
 template <typename Fn> void expect_runtime_error (Fn fn_)
 {
@@ -217,7 +230,7 @@ void test_router_send_throws_for_closed_socket ()
     zlink::routing_id_t routing_id = zlink::routing_id_t::from (
       reinterpret_cast<const uint8_t *> (rid_text.data ()), rid_text.size ());
     zlink::message_t outbound = zlink_cpp_contract::make_message ("no-route");
-    expect_runtime_error ([&] { (void) router.send (routing_id).message (outbound).async (); });
+    expect_runtime_error ([&] { router.send (routing_id).message (outbound).submit (); });
     assert (outbound.valid ());
 }
 
@@ -322,70 +335,6 @@ void test_stream_packet_handler_survives_move_and_source_destruction ()
         client.send_all (reinterpret_cast<const char *> (frame.data ()), frame.size ());
 
         assert (zlink_cpp_contract::wait_future (payload_future, 2000) == payload);
-        return moved;
-    } ();
-
-    moved_server.close ();
-}
-
-void test_stream_send_ready_handler_survives_move_and_source_destruction ()
-{
-    zlink::context_t ctx;
-    std::promise<zlink::routing_id_t> routing_id_promise;
-    std::future<zlink::routing_id_t> routing_id_future = routing_id_promise.get_future ();
-    std::atomic<int> ready_count {0};
-
-    zlink::stream_socket_t moved_server = [&] {
-        zlink::stream_socket_t server (ctx);
-        zlink::socket_monitor_t monitor = server.monitor_open ();
-        server.options ().notify (false);
-        server.options ().send_hwm (zlink::byte_count_t::bytes (8));
-        server.bind ("tcp://127.0.0.1:0");
-        const std::string endpoint = server.options ().last_endpoint ();
-        assert (!endpoint.empty ());
-
-        server.set_packet_handler (
-          [&routing_id_promise] (const zlink::routing_id_t &source_rid_, zlink::message_t,
-                                 zlink::message_t) { routing_id_promise.set_value (source_rid_); });
-        server.set_send_ready_handler ([&ready_count] {
-            ready_count.fetch_add (1, std::memory_order_release);
-        });
-
-        zlink::stream_socket_t moved = std::move (server);
-        zlink_cpp_contract::raw_tcp_client_t client (endpoint);
-        assert (zlink_cpp_contract::wait_stream_connected (monitor));
-
-        const std::vector<unsigned char> hello =
-          zlink_cpp_contract::encode_stream_packet_frame ("route-me");
-        client.send_all (reinterpret_cast<const char *> (hello.data ()), hello.size ());
-        const zlink::routing_id_t routing_id =
-          zlink_cpp_contract::wait_future (routing_id_future, 2000);
-
-        bool backpressured = false;
-        const std::string payload (64 * 1024, 'x');
-        for (int i = 0; i < 512; ++i) {
-            zlink::message_t message = zlink_cpp_contract::make_message (payload);
-            if (!std::move (moved.send (routing_id))
-                   .message (message)
-                   .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-                   .submit ()) {
-                backpressured = true;
-                break;
-            }
-        }
-        assert (backpressured);
-
-        zlink::poller_t poller;
-        poller.add (moved, zlink::poll_event_flag_t::pollout, 1);
-
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
-        while (std::chrono::steady_clock::now () < deadline
-               && ready_count.load (std::memory_order_acquire) == 0) {
-            (void) client.drain_available ();
-            zlink::poll_event_t event;
-            (void) poller.wait (&event, 1, std::chrono::milliseconds (10));
-        }
-        assert (ready_count.load (std::memory_order_acquire) > 0);
         return moved;
     } ();
 
@@ -501,7 +450,6 @@ int main ()
     test_stream_receive_returns_busy_in_packet_callback_mode ();
     test_stream_receive_with_poller_readiness ();
     test_stream_packet_handler_survives_move_and_source_destruction ();
-    test_stream_send_ready_handler_survives_move_and_source_destruction ();
     test_socket_monitor_receive_returns_empty_without_event ();
     test_routing_id_accepts_maximum_size ();
     test_routing_id_rejects_oversize_input ();

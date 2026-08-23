@@ -117,7 +117,6 @@ task_t<void> raw_fanout_publisher_t::publish (
     auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
       header, zlink::message_t::from (std::move (payload.payload)));
     auto items = std::move (parts).take_items ();
-    std::optional<zlink::async_result_t<void>> submitted;
     {
         std::lock_guard lock (_mutex);
         if (!_socket) {
@@ -125,18 +124,30 @@ task_t<void> raw_fanout_publisher_t::publish (
               framework_error_kind_t::unavailable,
               "fanout publisher is stopped");
         }
-        /* Lvalue chaining appends multipart frames (the rvalue overload
-         * replaces the staged single part); items stays alive in this
-         * coroutine frame until the submit completes. */
-        auto operation = std::move (_socket->publish (topic))
-                           .message (items[0])
-                           .message (items[1]);
-        submitted.emplace (
-          timeout.count () > 0
-            ? std::move (operation).timeout (timeout).async ()
-            : std::move (operation).async ());
+        /* Publish is a synchronous binding terminal. SNDTIMEO is the
+         * Core-owned wait bound, so a per-call timeout is installed for the
+         * duration of the submit and restored afterwards. */
+        const auto configured_timeout = _socket->options ().send_timeout ();
+        const bool override_timeout = timeout.count () > 0;
+        if (override_timeout)
+            _socket->options ().send_timeout (timeout);
+        try {
+            /* Lvalue chaining appends multipart frames (the rvalue overload
+             * replaces the staged single part). */
+            auto operation = std::move (_socket->publish (topic))
+                               .message (items[0])
+                               .message (items[1]);
+            (void) std::move (operation).submit ();
+        }
+        catch (...) {
+            if (override_timeout)
+                _socket->options ().send_timeout (configured_timeout);
+            throw;
+        }
+        if (override_timeout)
+            _socket->options ().send_timeout (configured_timeout);
     }
-    co_await std::move (*submitted);
+    co_return;
 }
 
 bool raw_fanout_publisher_t::tick (

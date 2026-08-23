@@ -3,6 +3,8 @@
 #include "../common/perf_single_common.hpp"
 #include "../common/perf_single_runner.hpp"
 
+#include <atomic>
+#include <thread>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -60,14 +62,17 @@ bool record_router_router_sample (uint32_t run_id_,
     return true;
 }
 
-perf::async_task_t<bool> send_router_samples (::perf::socket_t *sender_,
+// The routed send terminal is synchronous, so the sender owns a thread of its
+// own exactly like the C reference runner. Measurement anchors are unchanged:
+// the timestamp is stamped immediately before the send and decoded on receipt.
+bool send_router_samples (::perf::socket_t *sender_,
                                               std::vector<char> *payload_,
                                               router_router_recv_state_t *state_,
                                               int duration_s_,
                                               std::atomic<unsigned long long> *sent_count_)
 {
     if (!sender_ || !payload_ || !state_ || !sent_count_)
-        co_return false;
+        return false;
 
     const auto deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (std::max (1, duration_s_));
@@ -77,13 +82,13 @@ perf::async_task_t<bool> send_router_samples (::perf::socket_t *sender_,
                                                 state_->run_id, perf_single_metric::phase_active,
                                                 state_->msg_size, seq,
                                                 perf_single_metric::now_ns ())) {
-            co_return false;
+            return false;
         }
 
         if (!state_->target_rid.has_value ())
-            co_return false;
+            return false;
 
-        const int send_rc = co_await perf::single::send_payload_active (
+        const int send_rc = perf::single::send_payload_active (
           *sender_, *state_->target_rid, payload_->data (), payload_->size ());
         if (send_rc <= 0) {
             const int err = errno;
@@ -95,7 +100,7 @@ perf::async_task_t<bool> send_router_samples (::perf::socket_t *sender_,
                 break;
             if (perf_debug_enabled ())
                 std::cerr << "router_router: send failed errno=" << err << std::endl;
-            co_return false;
+            return false;
         }
 
         sent_count_->fetch_add (1, std::memory_order_release);
@@ -105,8 +110,8 @@ perf::async_task_t<bool> send_router_samples (::perf::socket_t *sender_,
     // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with one
     // wire-level blocking stop token.
     const bool stop_ok =
-      co_await perf::single::send_stop_token_async (*sender_, *state_->target_rid);
-    co_return stop_ok;
+      perf::single::send_stop_token_active (*sender_, *state_->target_rid);
+    return stop_ok;
 }
 
 } // namespace
@@ -174,8 +179,13 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
     state.run_id = run_id;
     state.msg_size = msg_size;
     state.payload_size = payload_size;
-    perf::async_task_t<bool> sender_task =
-      send_router_samples (&sender.sock (), &payload, &state, duration_s, &sent_count);
+    std::atomic<bool> sender_result{false};
+    std::thread sender_thread ([&] {
+        sender_result.store (
+          send_router_samples (&sender.sock (), &payload, &state, duration_s,
+                               &sent_count),
+          std::memory_order_release);
+    });
     unsigned long long received = 0;
     perf::single::latency_stats_t latency;
     // C-faithful receiver (bindings/c/perf single perf_router_router.cpp
@@ -212,7 +222,9 @@ perf::async_task_t<bool> run_pattern_router_router_async (const std::string &tra
         }
     }
 
-    sender_ok.store (co_await std::move (sender_task), std::memory_order_release);
+    sender_thread.join ();
+    sender_ok.store (sender_result.load (std::memory_order_acquire),
+                     std::memory_order_release);
     if (!sender_ok.load (std::memory_order_acquire)) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
         co_return false;

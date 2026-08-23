@@ -13,8 +13,6 @@
 #include <Runtime/Sockets/socket_access.hpp>
 #include <Runtime/Sockets/socket_callback_state.hpp>
 #include <Runtime/Messaging/received_access.hpp>
-#include <Runtime/Messaging/routed_admission_state.hpp>
-#include <Runtime/Messaging/publish_admission_state.hpp>
 #include <Runtime/Native/subscription_reader.hpp>
 
 #include <zlink.h>
@@ -43,60 +41,12 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
     return (rid && rid->size > 0) ? native_routing_id (*rid) : unchecked_empty_routing_id ();
 }
 
-namespace
-{
-void send_ready_trampoline (void *, void *userdata_) noexcept
-{
-    auto *state = static_cast<socket_callback_state_t *> (userdata_);
-    if (!state)
-        return;
-    std::function<void ()> handler;
-    {
-        std::lock_guard<std::mutex> lock (state->send_ready_mutex);
-        handler = state->send_ready_handler;
-    }
-    if (handler) {
-        try {
-            handler ();
-        }
-        catch (...) {
-            // A user observer must not cross the native callback boundary or
-            // prevent binding-owned admission progress.
-        }
-    }
-    notify_routed_admission_ready (*state);
-    notify_publish_admission_ready (*state);
-}
-} // namespace
-
-void ensure_native_send_ready_handler (
-  void *socket_,
-  socket_callback_state_t &state_)
-{
-    std::call_once (
-      state_.native_send_ready_handler_once,
-      [&] {
-          if (zlink_send_ready_handler (
-                socket_,
-                static_cast<zlink_send_ready_handler_fn> (
-                  +send_ready_trampoline),
-                &state_)
-              != 0)
-              throw_if_failed<handler_error_t> (
-                static_cast<handler_result_t> (
-                  handler_result_from_errno (zlink_errno ())));
-      });
-}
-
 } // namespace detail
 
 socket_t::~socket_t ()
 {
-    if (_callbacks) {
+    if (_callbacks)
         _callbacks->socket_closed.store (true, std::memory_order_release);
-        detail::shutdown_routed_admission_state (*_callbacks);
-        detail::shutdown_publish_admission_state (*_callbacks);
-    }
     if (_socket && _callbacks) {
         std::lock_guard<std::mutex> attempt_lock (
           _callbacks->outbound_record_attempt_mutex);
@@ -112,11 +62,8 @@ socket_t &socket_t::operator= (socket_t &&other_) noexcept
 {
     if (this == &other_)
         return *this;
-    if (_callbacks) {
+    if (_callbacks)
         _callbacks->socket_closed.store (true, std::memory_order_release);
-        detail::shutdown_routed_admission_state (*_callbacks);
-        detail::shutdown_publish_admission_state (*_callbacks);
-    }
     if (_socket && _callbacks) {
         std::lock_guard<std::mutex> attempt_lock (
           _callbacks->outbound_record_attempt_mutex);
@@ -145,9 +92,14 @@ void socket_t::close ()
         throw close_error_t (close_result_t::busy, EBUSY);
     int rc = 0;
     if (_socket && _callbacks) {
+        // Publish the closing intent before contending for the submit gate.
+        // A hot send loop re-takes that gate immediately after every submit,
+        // so acquiring it first would let close starve indefinitely; with the
+        // flag already set, in-flight submits drain and new ones are rejected.
+        // The destructor path publishes the flag the same way.
+        _callbacks->socket_closed.store (true, std::memory_order_release);
         std::lock_guard<std::mutex> attempt_lock (
           _callbacks->outbound_record_attempt_mutex);
-        _callbacks->socket_closed.store (true, std::memory_order_release);
         rc = _socket->close ();
         if (rc != 0)
             _callbacks->socket_closed.store (false, std::memory_order_release);
@@ -156,10 +108,6 @@ void socket_t::close ()
     }
     if (rc != 0)
         throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
-    if (_callbacks)
-        detail::shutdown_routed_admission_state (*_callbacks);
-    if (_callbacks)
-        detail::shutdown_publish_admission_state (*_callbacks);
 }
 
 void socket_t::bind (const std::string &endpoint_)
@@ -595,17 +543,6 @@ int socket_t::subscription_at (size_t index_, std::string &filter_, bool *is_pat
     if (is_pattern_)
         *is_pattern_ = pattern != 0;
     return 0;
-}
-
-void socket_t::set_send_ready_handler (std::function<void ()> handler_)
-{
-    detail::socket_callback_state_t &state = callback_state ();
-    {
-        std::lock_guard<std::mutex> lock (state.send_ready_mutex);
-        state.send_ready_handler = std::move (handler_);
-    }
-    detail::ensure_native_send_ready_handler (
-      detail::native_handle (*this), state);
 }
 
 detail::socket_callback_state_t &socket_t::callback_state ()

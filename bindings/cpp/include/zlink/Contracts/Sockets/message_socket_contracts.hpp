@@ -51,11 +51,6 @@ class pair_socket_t : public message_socket_t
 
     int recv (message_t &part_out_, recv_flags_t flags_ = recv_flags_t::none);
 
-    void set_send_ready_handler (std::function<void ()> handler_)
-    {
-        socket_t::set_send_ready_handler (std::move (handler_));
-    }
-
   private:
     using message_socket_t::recv;
 };
@@ -82,11 +77,6 @@ class dealer_socket_t : public message_socket_t
                        recv_flags_t flags_ = recv_flags_t::none);
 
     int recv (message_t &part_out_, recv_flags_t flags_ = recv_flags_t::none);
-
-    void set_send_ready_handler (std::function<void ()> handler_)
-    {
-        socket_t::set_send_ready_handler (std::move (handler_));
-    }
 
     request_operation_t request ();
 

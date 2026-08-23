@@ -296,8 +296,7 @@ void test_close_then_set_reports_invalid_handle_or_invalid_state ()
 // back-pressure behavior for an unrelated pair. DEALER/ROUTER routed sends
 // only expose an async() terminal, so PAIR (send_operation_t with flags()
 // and a nonblocking submit() terminal) is used to observe backpressure
-// synchronously, matching the existing pattern in
-// test_stream_send_ready_handler_survives_move_and_source_destruction.
+// synchronously.
 void test_existing_hwm_backpressure_is_unchanged ()
 {
     zlink::context_t ctx;

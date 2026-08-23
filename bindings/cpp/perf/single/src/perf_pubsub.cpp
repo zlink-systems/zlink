@@ -79,7 +79,7 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
         static_cast<void (zlink::sub_socket_t::*)(
             const std::string &)>(&zlink::sub_socket_t::set_subscription);
     (subscriber.*set_subscription) (std::string ());
-    // PERF policy (plan 0.12.0 §5): the C reference runner
+    // PERF policy (plan 0.13.0 §5): the C reference runner
     // bindings/c/perf/single/src/perf_pubsub.cpp never recalculates the
     // context auto-HWM, so neither does this runner. Keeping a step the
     // reference does not perform would make the paired numbers describe

@@ -69,7 +69,7 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
         co_return false;
     }
 
-    auto sender_work = [&] () -> perf::async_task_t<void> {
+    auto sender_work = [&] () -> void {
         uint64_t seq = 1;
         // C-faithful send model (bindings/c/perf single
         // perf_single_one_way.hpp send_active_samples +
@@ -83,7 +83,7 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
-            const int send_rc = co_await perf::single::send_payload_active (
+            const int send_rc = perf::single::send_payload_active (
               conn_socket.sock (), payload.data (), payload.size ());
             if (send_rc < 0) {
                 sender_ok.store (false, std::memory_order_release);
@@ -98,7 +98,7 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
         }
         // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with one
         // wire-level blocking stop token.
-        if (!co_await perf::single::send_stop_token_async (conn_socket.sock ()))
+        if (!perf::single::send_stop_token_active (conn_socket.sock ()))
             sender_ok.store (false, std::memory_order_release);
     };
 
@@ -180,7 +180,7 @@ perf::async_task_t<bool> run_pattern_dealer_dealer_async (const std::string &tra
         }
     });
 
-    co_await sender_work ();
+    sender_work ();
     receiver_thread.join ();
 
     const unsigned long long received = received_count.load (std::memory_order_acquire);

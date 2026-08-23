@@ -66,6 +66,13 @@ struct operation_state_t
         message_t *single_part_source = nullptr;
         bool discard_single_part_on_backpressure = false;
         std::vector<message_t> parts;
+        // Parallel to `parts`: for every part added from an lvalue message_t,
+        // the caller object it was moved out of; nullptr for parts added from
+        // an rvalue (those are consumed on submit and have no owner to return
+        // to). The vector is kept the same length as `parts` so a failed
+        // submit can hand every caller-owned part back, which is the multipart
+        // form of the single-part `single_part_source` restore.
+        std::vector<message_t *> part_sources;
 
         void reset () noexcept
         {
@@ -73,6 +80,7 @@ struct operation_state_t
             single_part_source = nullptr;
             discard_single_part_on_backpressure = false;
             parts.clear ();
+            part_sources.clear ();
         }
     };
 
@@ -121,7 +129,6 @@ struct operation_state_t
     received_command_t received;
     send_flags_t flags = send_flags_t::none;
     std::chrono::milliseconds timeout{};
-    bool timeout_explicit = false;
 };
 
 // Lifetime ownership of the callback state belongs to socket_t. An operation
@@ -148,8 +155,8 @@ inline socket_callback_state_t *live_callback_state (
     return raw_.callbacks;
 }
 
-// Asynchronous/admission terminals: the record outlives the submitting
-// statement, so it must own a strong reference.
+// Terminals whose state outlives the submitting statement must own a strong
+// reference to the callback state instead of the weak view above.
 inline std::shared_ptr<socket_callback_state_t> share_callback_state (
   const operation_state_t::raw_command_t &raw_)
 {
@@ -196,17 +203,48 @@ inline message_t &send_single_part (operation_state_t &state_) noexcept
     return state_.message.parts.front ();
 }
 
-inline void append_send_part (operation_state_t &state_, message_t &part_)
+//  Appends one part that the state does not own to the multipart sequence and
+//  remembers @p source_ as the object a failed submit must give it back to.
+//  Passing nullptr marks the part as rvalue-owned (consumed on submit).
+inline void append_send_part_from (operation_state_t &state_,
+                                   message_t &part_,
+                                   message_t *source_)
+{
+    state_.message.parts.push_back (std::move (part_));
+    state_.message.part_sources.push_back (source_);
+}
+
+//  Moves the part staged in the single-part fast path (if any) into the
+//  multipart sequence, keeping its caller-source association.
+inline void fold_staged_single_part (operation_state_t &state_)
 {
     if (state_.message.single_part.has_value ()) {
-        state_.message.parts.push_back (std::move (*state_.message.single_part));
+        // A staged single_part that also has a source is a caller lvalue; one
+        // without a source came from an rvalue and stays consumed on submit.
+        append_send_part_from (state_, *state_.message.single_part,
+                               state_.message.single_part_source);
         state_.message.single_part.reset ();
         state_.message.single_part_source = nullptr;
     } else if (state_.message.single_part_source) {
-        state_.message.parts.push_back (std::move (*state_.message.single_part_source));
+        append_send_part_from (state_, *state_.message.single_part_source,
+                               state_.message.single_part_source);
         state_.message.single_part_source = nullptr;
     }
-    state_.message.parts.push_back (std::move (part_));
+}
+
+inline void append_send_part (operation_state_t &state_, message_t &part_)
+{
+    fold_staged_single_part (state_);
+    append_send_part_from (state_, part_, &part_);
+}
+
+//  Rvalue parts are consumed on submit, so they carry no restore source. Only
+//  the submit-stage builders call this, and those are only reachable after a
+//  first part was staged, so folding always yields a real multipart sequence.
+inline void append_send_part (operation_state_t &state_, message_t &&part_)
+{
+    fold_staged_single_part (state_);
+    append_send_part_from (state_, part_, nullptr);
 }
 
 inline bool can_borrow_single_send_part (operation_kind_t kind_) noexcept
@@ -239,11 +277,37 @@ inline void restore_single_send_part_to_source (operation_state_t &state_,
     state_.message.single_part_source = nullptr;
 }
 
+//  Failure-path counterpart of `append_send_part()`: hands every caller-owned
+//  part in @p parts_ back to the message_t it was taken from, which is the
+//  documented "on failure ownership returns to the caller" rule applied to a
+//  multipart sequence. Parts added as rvalues carry no source and follow the
+//  consumed-on-submit rule, so they are left in @p parts_ to be destroyed.
+//  Parts the transport already consumed are invalid here and are skipped, so a
+//  partial submit failure restores exactly the parts the caller still owns.
+inline void restore_send_parts_to_sources (operation_state_t &state_,
+                                           std::vector<message_t> &parts_) noexcept
+{
+    if (state_.message.single_part_source) {
+        restore_single_send_part_to_source (state_, parts_);
+        return;
+    }
+    const size_t count = parts_.size () < state_.message.part_sources.size ()
+                           ? parts_.size ()
+                           : state_.message.part_sources.size ();
+    for (size_t i = 0; i < count; ++i) {
+        message_t *const source = state_.message.part_sources[i];
+        if (!source || source == &parts_[i] || !parts_[i].valid ())
+            continue;
+        *source = std::move (parts_[i]);
+    }
+    state_.message.part_sources.clear ();
+}
+
 inline void restore_send_parts_to_state (operation_state_t &state_,
                                          std::vector<message_t> &parts_) noexcept
 {
     const bool had_single_part_source = state_.message.single_part_source != nullptr;
-    restore_single_send_part_to_source (state_, parts_);
+    restore_send_parts_to_sources (state_, parts_);
     if (had_single_part_source || parts_.empty ())
         return;
     if (parts_.size () == 1u && state_.message.single_part.has_value ()) {
@@ -267,7 +331,6 @@ inline void reset_for_reuse (operation_state_t &state_) noexcept
     state_.received.reset ();
     state_.flags = send_flags_t::none;
     state_.timeout = std::chrono::milliseconds{};
-    state_.timeout_explicit = false;
 }
 
 inline std::vector<std::unique_ptr<operation_state_t>> &state_pool () noexcept

@@ -1586,7 +1586,6 @@ class stream_host_service_t::listener_t
         auto frame = zlink::message_t::from (std::move (encoded.value ()));
         const auto frame_bytes = frame.size ();
 
-        std::optional<zlink::async_result_t<void>> submitted;
         {
             std::lock_guard socket_lock (_core_socket_mutex);
             if (!_core_socket) {
@@ -1594,16 +1593,28 @@ class stream_host_service_t::listener_t
                   framework_error_kind_t::unavailable,
                   "Core STREAM socket is stopped");
             }
-            auto send = _core_socket->send (rid).message (std::move (frame));
-            submitted.emplace (timeout
-                                 ? std::move (send).timeout (*timeout).async ()
-                                 : std::move (send).async ());
+            /* Routed send is synchronous; SNDTIMEO is the Core-owned wait
+             * bound for the whole call. */
+            const auto configured_timeout =
+              _core_socket->options ().send_timeout ();
+            if (timeout)
+                _core_socket->options ().send_timeout (*timeout);
+            try {
+                _core_socket->send (rid).message (std::move (frame)).submit ();
+            }
+            catch (...) {
+                if (timeout)
+                    _core_socket->options ().send_timeout (configured_timeout);
+                throw;
+            }
+            if (timeout)
+                _core_socket->options ().send_timeout (configured_timeout);
         }
         trace_stream_host (
           "core-write", _stream, header,
           "rid=" + rid.to_hex () + " bytes=" + std::to_string (frame_bytes)
             + " result=admitted");
-        co_await std::move (*submitted);
+        co_return;
     }
 
     /* Writes the error reply for a rejected request. The optional

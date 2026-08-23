@@ -273,7 +273,6 @@ public:
     send_operation_t send();
     reply_operation_t reply();
     int recv(received_t& out, recv_flags_t flags = recv_flags_t::none);
-    void set_send_ready_handler(std::function<void()> handler);
     void close();
 };
 
@@ -410,38 +409,53 @@ artifact. The finished binding therefore keeps the following build rules.
 - send, routed send, publish, request, reply, SPOT operations, and Actor location/session operations return a move-only fluent builder.
 - A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, and async submit choices happen at the builder stage.
 - A SPOT channel-targeted operation uses `send_to_channel(...)` and `request_to_channel(...)`. SPOT topic publish keeps `publish(topic)` as-is.
-- A handler registration method uses the `set_..._handler` name. For example, send readiness uses `set_send_ready_handler(...)`, raw STREAM packet handling uses `set_packet_handler(...)`, a monitor event uses `set_monitor_handler(...)`, and SPOT dispatch uses `set_dispatch_handler(...)`.
+- A handler registration method uses the `set_..._handler` name. For example, raw STREAM packet handling uses `set_packet_handler(...)`, a monitor event uses `set_monitor_handler(...)`, and SPOT dispatch uses `set_dispatch_handler(...)`.
 - An `on_...` name is not a public registration method in the finished C++ API — it is reserved for an internal or protected hook when needed.
 - No single-payload shortcut overload is added under the same name as an operation's start method. `send(message)`, `send(routing_id, message)`, `publish(topic, message)`, `send_to_channel(channel, message)`, `send_to_spot(..., message)` are not public contract members. A caller uses `send(...).message(message).submit()`.
 - A multipart payload accumulates via repeated `message(...)` calls. A `messages(...)` convenience method is allowed only when it delegates to the same builder contract and is declared in `Contracts/`.
 - A Dealer socket does not expose protocol envelope helpers such as `request_frame(...)` or `reply(request_token, parts)`. Dealer can start a request with `request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token.
 - No operation-start overload family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The per-language name of the terminal builder method follows the [bindings async execution surface policy](../async-coroutine-policy.en.md).
-- Routed send and routed request `async()` create their completion object and
-  operation-owned multipart record before invoking any
-  Core submit. The binding fixes the exact Core-selected `(RID, transport pair id,
-  generation)` as the operation key, inserts that key into its pending set, and then
-  attempts only exact-target `DONTWAIT` submits.
+- The terminal for a routed **send** is the synchronous
+  `routed_send_submit_operation_t::submit() -> void`. It wraps the Core send
+  directly and finishes on the calling thread. The binding keeps no admission
+  park queue, no WRITABLE-callback retry, no deadline timer, and no dispatcher
+  thread — see the
+  [bindings routed send contract and async completion surface policy](../async-coroutine-policy.en.md).
+  **The binding library owns no threads at all.**
+- Core owns the routed send HWM contract end to end: a blocking submit waits
+  inside Core and resumes on the Core signal, the socket `SNDTIMEO` is the wait
+  bound, and `SNDTIMEO=0` returns `BACKPRESSURED` (`EAGAIN`) immediately.
+  Backpressure policy belongs to the application; the binding never retries.
+  Failure is thrown as `submit_error_t`, and the handle of a part Core did not
+  accept stays with the caller.
+- The routed send builder exposes neither a flags stage nor an async terminal.
+  `DONTWAIT` semantics are expressed through the socket `SNDTIMEO`.
 - Every C++ outbound path on the same native handle shares a binding-owned record-
-  attempt gate. One native attempt calls the existing exact-target part API from its
-  first part through `FINAL`, then immediately releases the gate. It never holds the
-  gate while waiting for readiness or resuming a continuation.
-- Backpressure waits only the affected operation. Outside the short record attempt it
-  occupies no socket-wide submit lock, calling thread, coroutine executor, or Framework scheduler, so operations for
-  other targets on the same socket can reach Core independently. Only Core's exact-
-  target writable or terminal event resumes that key; stale-generation events are
-  ignored. The internal ready-target ring prevents one target from monopolizing
-  another, but this adds no new public strict-FIFO guarantee for concurrent calls to
-  the same RID.
-- A send snapshots the socket `SNDTIMEO` once when the operation starts and fixes that
-  absolute deadline. `SNDTIMEO=0` still performs one exact-target `DONTWAIT` attempt.
-  A request's original absolute deadline is likewise never extended during admission wait. Target
-  detach, socket/context termination, deadline, and `async_result_t::cancel()` race to
-  one terminal completion. A request installs Core reply correlation before final wire
-  admission; after admission, Core's reply lifecycle owns completion.
-- A send builder's `.flags(dontwait).submit()` is the one-shot immediate call
-  and returns `false` immediately on backpressure. Only `async()` uses
-  binding-owned event-driven admission wait; no managed callback terminal or
-  `get`/`wait` compatibility surface is provided.
+  attempt gate. One native attempt calls the existing part API from its first part
+  through `FINAL`, then immediately releases the gate. The gate only prevents two
+  threads from interleaving part sequences and a close from running underneath an
+  in-flight submit; it owns no retry or wait policy.
+- The terminal for a routed **request** is `request_submit_operation_t::async()`.
+  It submits synchronously on the calling thread to the exact Core-selected
+  `(RID, transport pair id, generation)` target and returns an
+  `async_result_t<std::vector<message_t>>` suspension. The submit itself follows
+  the same Core-owned HWM contract as a routed send (`SNDTIMEO` is the bound).
+  Completion is Core-driven: the Core reply handler callback completes the
+  suspension, and resumption happens in the context that delivered that
+  completion. The binding keeps no retry queue, timer, or dedicated thread for
+  this surface.
+- The request timeout is Core-owned (`ZLINK_REQUEST_TIMED_OUT`); the builder's
+  `timeout(...)` sets that Core-owned reply deadline. A submit failure is thrown as
+  `submit_error_t`; after admission, Core's reply lifecycle owns completion. Drop
+  and `async_result_t::cancel()` request cancellation, but a request Core already
+  accepted still ends on its Core-owned terminal event.
+- Because resumption happens in the Core callback context, that continuation must
+  not destroy the socket or the context. Handing the continuation to another
+  execution model is the framework's and the application's job.
+- `send_submit_operation_t` (the PAIR/PUB/STREAM one-shot) has exactly one
+  terminal, `submit() -> bool`. `.flags(dontwait).submit()` returns `false`
+  immediately on backpressure. This builder has no async terminal and no per-call
+  timeout stage — the wait bound is the socket `SNDTIMEO`.
 - The terminal for a raw ROUTER/`received_t` reply is the synchronous one-shot
   `reply_submit_operation_t::submit() -> void`. It submits a terminal reply or
   error reply to the HWM-free completion lane with one native call. HWM

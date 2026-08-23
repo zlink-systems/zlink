@@ -14,9 +14,6 @@
 namespace zlink::detail
 {
 
-void dispatch_async_continuation (std::function<void ()> work_) noexcept;
-void ensure_async_continuation_dispatcher ();
-
 class async_resume_slot_t
 {
   public:
@@ -173,28 +170,28 @@ class async_operation_state_t final : public async_result_state_t<T>
         return true;
     }
 
+    // The binding owns no dispatcher: the suspension resumes in the context
+    // that delivered the completion (for a request that is Core's reply
+    // handler callback). Handing the continuation to another execution model
+    // is the framework's job through the optional promise scheduler hook.
     static void resume (std::shared_ptr<async_resume_slot_t> continuation_,
                         async_continuation_scheduler_t scheduler_) noexcept
     {
         if (!continuation_)
             return;
-        auto work = [continuation_] { continuation_->resume (); };
-        dispatch_async_continuation (
-          [work = std::move (work), scheduler = std::move (scheduler_)] () mutable {
-              if (!scheduler) {
-                  work ();
-                  return;
-              }
-              try {
-                  scheduler (work);
-              }
-              catch (...) {
-                  // A scheduler hook must either accept the continuation or
-                  // throw before doing so. Direct resume prevents permanent
-                  // suspension when a foreign promise violates that contract.
-                  work ();
-              }
-          });
+        if (!scheduler_) {
+            continuation_->resume ();
+            return;
+        }
+        try {
+            scheduler_ ([continuation_] { continuation_->resume (); });
+        }
+        catch (...) {
+            // A scheduler hook must either accept the continuation or throw
+            // before doing so. Direct resume prevents permanent suspension
+            // when a foreign promise violates that contract.
+            continuation_->resume ();
+        }
     }
 
     mutable std::mutex _mutex;
@@ -321,25 +318,22 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         return true;
     }
 
+    // See the primary template: resume runs in the completing context.
     static void resume (std::shared_ptr<async_resume_slot_t> continuation_,
                         async_continuation_scheduler_t scheduler_) noexcept
     {
         if (!continuation_)
             return;
-        auto work = [continuation_] { continuation_->resume (); };
-        dispatch_async_continuation (
-          [work = std::move (work), scheduler = std::move (scheduler_)] () mutable {
-              if (!scheduler) {
-                  work ();
-                  return;
-              }
-              try {
-                  scheduler (work);
-              }
-              catch (...) {
-                  work ();
-              }
-          });
+        if (!scheduler_) {
+            continuation_->resume ();
+            return;
+        }
+        try {
+            scheduler_ ([continuation_] { continuation_->resume (); });
+        }
+        catch (...) {
+            continuation_->resume ();
+        }
     }
 
     mutable std::mutex _mutex;

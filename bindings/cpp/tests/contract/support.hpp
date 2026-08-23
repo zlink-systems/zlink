@@ -9,7 +9,6 @@
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
-#include <coroutine>
 #include <cstdint>
 #include <cstring>
 #include <future>
@@ -73,50 +72,6 @@ inline std::string unique_tcp (const char *base_)
 inline zlink::message_t make_message (const std::string &text_)
 {
     return zlink::message_t::from (text_);
-}
-
-class routed_send_test_task_t
-{
-  public:
-    struct promise_type
-    {
-        std::promise<void> completion;
-
-        routed_send_test_task_t get_return_object ()
-        {
-            return routed_send_test_task_t (completion.get_future ());
-        }
-        std::suspend_never initial_suspend () noexcept { return {}; }
-        std::suspend_never final_suspend () noexcept { return {}; }
-        void return_void () { completion.set_value (); }
-        void unhandled_exception () { completion.set_exception (std::current_exception ()); }
-    };
-
-    explicit routed_send_test_task_t (std::future<void> completion_) :
-        _completion (std::move (completion_))
-    {
-    }
-
-    void get ()
-    {
-        assert (_completion.wait_for (std::chrono::seconds (5))
-                == std::future_status::ready);
-        _completion.get ();
-    }
-
-  private:
-    std::future<void> _completion;
-};
-
-inline routed_send_test_task_t await_routed_send (
-  zlink::async_result_t<void> result_)
-{
-    co_await std::move (result_);
-}
-
-inline void submit_routed_send (zlink::async_result_t<void> result_)
-{
-    await_routed_send (std::move (result_)).get ();
 }
 
 inline std::vector<unsigned char> encode_stream_packet_frame (const std::string &payload_)

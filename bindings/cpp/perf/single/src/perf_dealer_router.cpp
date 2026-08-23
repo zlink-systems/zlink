@@ -157,7 +157,9 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
         co_return false;
     }
 
-    auto sender_work = [&] () -> perf::async_task_t<void> {
+    // Synchronous routed send: the sender runs on its own thread, matching the
+    // C reference runner. Measurement anchors are unchanged.
+    auto sender_work = [&] () -> void {
         uint64_t seq = 1;
         while (std::chrono::steady_clock::now () < active_deadline) {
             // Keep this measured send hot path aligned with the C reference:
@@ -178,7 +180,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
 
             int send_rc = -1;
             try {
-                co_await dealer.sock ().send_async (msg);
+                dealer.sock ().send_routed (msg);
                 send_rc = 1;
             }
             catch (const zlink::binding_error_t &err) {
@@ -204,11 +206,11 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
         }
         // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with one
         // wire-level blocking stop token.
-        if (!co_await perf::single::send_stop_token_async (dealer.sock ()))
+        if (!perf::single::send_stop_token_active (dealer.sock ()))
             sender_ok.store (false, std::memory_order_release);
     };
 
-    perf::async_task_t<void> sender_task = sender_work ();
+    std::thread sender_thread (sender_work);
 
     unsigned long long received_count = 0;
     {
@@ -290,7 +292,7 @@ perf::async_task_t<bool> run_pattern_dealer_router_async (const std::string &tra
         }
     }
 
-    co_await std::move (sender_task);
+    sender_thread.join ();
 
     if (!sender_ok.load (std::memory_order_acquire) || received_count == 0
         || latency_builder.count () == 0) {
