@@ -1,7 +1,7 @@
-// The wire contract from scenario §7, mirrored from the language-neutral definition.
+// The wire contract from scenario §6, mirrored from the language-neutral definition.
 // The field names are the contract: every language server encodes exactly these.
 // Only the messages the browser exchanges appear here — server-internal messages
-// (§7.3) never reach the client.
+// (§6.3) never reach the client.
 
 export interface PlayerView {
   playerId: string;
@@ -20,7 +20,7 @@ export interface NodeView {
   playerCount: number;
 }
 
-// --- §7.1 game — browser <-> Gateway ---------------------------------------
+// --- §6.1 game — browser <-> Gateway ---------------------------------------
 
 export interface JoinWorldReq {
   playerId: string;
@@ -29,7 +29,6 @@ export interface JoinWorldReq {
 export interface JoinWorldRes {
   playerId: string;
   zoneId: string;
-  nodeId: string;
   x: number;
   y: number;
   error?: string | null;
@@ -49,8 +48,6 @@ export interface ZoneStateNotify {
 export interface ZoneChangedNotify {
   playerId: string;
   zoneId: string;
-  nodeId: string;
-  transferred: boolean;
 }
 
 export interface WorldAnnounceNotify {
@@ -70,7 +67,7 @@ export type MoveRejectReason =
   | 'DiagonalCrossing'
   | 'ZoneMaintenance';
 
-// --- §7.2 ops console — browser <-> Ops -------------------------------------
+// --- §6.2 ops console — browser <-> Ops -------------------------------------
 
 export type WatchNodesReq = Record<string, never>;
 
@@ -129,7 +126,7 @@ export interface NodeDiagnosticsRes {
 }
 
 /** A request whose target node is not connected returns this in `error`. */
-export const NODE_UNAVAILABLE = 'NodeUnavailable';
+export const NODE_UNAVAILABLE = 'Unavailable';
 
 /** Packet names are the contract type names; the servers register them the same way. */
 export const Packets = {

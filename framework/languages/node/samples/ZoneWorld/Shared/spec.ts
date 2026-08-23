@@ -35,7 +35,9 @@ const ZoneWorldSpec = {
   botsPerZone: 2,
   botCount: 8,
   borderSnapshotExpiryTicks: 3,
-  nodeStatusReportPeriodMs: 1000
+  nodeStatusReportPeriodMs: 5_000,
+  nodeStatusReportTtlMs: 15_000,
+  zoneSpotCapacity: 2
 } as const;
 
 const ZoneWorldNames = {
@@ -65,9 +67,10 @@ const NodeAlertKinds = {
 } as const;
 
 const ZoneWorldErrors = {
-  nodeUnavailable: 'NodeUnavailable',
+  nodeUnavailable: 'Unavailable',
   actorNotFound: 'ActorNotFound',
-  actorUnavailable: 'ActorUnavailable'
+  actorUnavailable: 'Unavailable',
+  deadlineExceeded: 'DeadlineExceeded'
 } as const;
 
 type ZoneId = typeof ZoneIds[keyof typeof ZoneIds];
@@ -82,18 +85,6 @@ function zoneOf(x: number, y: number): ZoneId {
   return y < ZoneWorldSpec.zoneSplit ? ZoneIds.northEast : ZoneIds.southEast;
 }
 
-function nodeOf(zoneId: ZoneId): NodeId {
-  return zoneId === ZoneIds.northWest || zoneId === ZoneIds.southWest
-    ? NodeIds.west
-    : NodeIds.east;
-}
-
-function zonesOf(nodeId: string): readonly ZoneId[] {
-  if (nodeId === NodeIds.west) return [ZoneIds.northWest, ZoneIds.southWest];
-  if (nodeId === NodeIds.east) return [ZoneIds.northEast, ZoneIds.southEast];
-  return [];
-}
-
 export {
   BotIds,
   MoveRejectReasons,
@@ -103,8 +94,6 @@ export {
   ZoneWorldNames,
   ZoneWorldErrors,
   ZoneWorldSpec,
-  nodeOf,
-  zoneOf,
-  zonesOf
+  zoneOf
 };
 export type { MoveRejectReason, NodeAlertKind, NodeId, ZoneId };

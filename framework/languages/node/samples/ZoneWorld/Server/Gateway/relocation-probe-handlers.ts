@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ZLINK_ACTOR_CLIENT, ZLINK_ACTOR_MANAGER } from '@zlink-systems/nestjs';
+import { ZLINK_ACTOR_MANAGER } from '@zlink-systems/nestjs';
 import { ZLinkPacket } from '@zlink-systems/framework';
 import {
   ActorLocationProbeReq,
@@ -11,7 +11,6 @@ import {
 } from '../../Shared/contracts';
 import { ZoneWorldErrors } from '../../Shared/spec';
 import type {
-  ZLinkActorClient,
   ZLinkActorManager,
   ZLinkMessage,
   ZLinkSessionContext,
@@ -52,23 +51,21 @@ class ActorLocationProbeHandler {
 @Injectable()
 @ZLinkPacket(PacketNames.messageFollowProbeReq)
 class MessageFollowProbeRequestSessionHandler {
-  constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
-
   async handle(
     context: ZLinkSessionContext,
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
     const request = payload.decode(MessageFollowProbeReq);
+    const actor = context.actors.bound.find((candidate) => candidate.actorId === request.actorId);
+    if (actor === undefined) {
+      context.client.reply(
+        new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable)
+      ).submit();
+      return;
+    }
     try {
-      const reply = await this.actors
-        .requestToActor(
-          request.actorId,
-          new MessageFollowProbeReq(request.actorId, request.probeId, request.payload)
-        )
-        .timeout(10_000)
-        .submit<MessageFollowProbeRes>();
-      context.client.reply(new MessageFollowProbeRes(reply.probeId, reply.payload)).submit();
+      await actor.relay(payload);
     } catch (error) {
       console.error(
         `message-follow probe terminal actor=${request.actorId} probe=${request.probeId}`,
@@ -84,19 +81,16 @@ class MessageFollowProbeRequestSessionHandler {
 @Injectable()
 @ZLinkPacket(PacketNames.messageFollowProbeMsg)
 class MessageFollowProbeSendSessionHandler {
-  constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
-
   async handle(
-    _context: ZLinkSessionContext,
+    context: ZLinkSessionContext,
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
     const message = payload.decode(MessageFollowProbeMsg);
+    const actor = context.actors.bound.find((candidate) => candidate.actorId === message.actorId);
+    if (actor === undefined) return;
     try {
-      await this.actors.sendToActor(
-        message.actorId,
-        new MessageFollowProbeMsg(message.actorId, message.probeId, message.payload)
-      ).submit();
+      await actor.relay(payload);
     } catch (error) {
       console.error(
         `message-follow probe terminal actor=${message.actorId} probe=${message.probeId}`,

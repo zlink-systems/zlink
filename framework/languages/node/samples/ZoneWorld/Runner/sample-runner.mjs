@@ -5,6 +5,17 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 export const sampleName = 'ZoneWorld';
 
+const requiredScenarioIds = [
+  'ZW-A1', 'ZW-A2', 'ZW-A3', 'ZW-A4', 'ZW-A5',
+  'ZW-B1', 'ZW-B2', 'ZW-B3', 'ZW-B4', 'ZW-B5', 'ZW-B6', 'ZW-B7',
+  'ZW-C1', 'ZW-C2', 'ZW-C3', 'ZW-C4',
+  'ZW-D1', 'ZW-D2',
+  'ZW-E1', 'ZW-E2', 'ZW-E3', 'ZW-E4', 'ZW-E5', 'ZW-E6',
+  'ZW-F1', 'ZW-F2', 'ZW-F3', 'ZW-F4',
+  'ZW-G1', 'ZW-G2', 'ZW-G3', 'ZW-G4', 'ZW-G5'
+];
+const logicalZoneIds = ['zone-nw', 'zone-ne', 'zone-sw', 'zone-se'];
+
 export async function runSample(ctx) {
   const redisKeyPrefix = `zoneworld:node:${process.pid}:`;
   const shared = {
@@ -14,14 +25,11 @@ export async function runSample(ctx) {
   };
   const botStartSignalPath = path.join(ctx.logDir, 'bots.start');
   const faultTickSignalPath = path.join(ctx.logDir, 'timer-failure.start');
-  const east = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east', {
-    botStartSignalPath
-  });
   const west = await zoneNodeConfig(ctx, shared, 'zone-node-1', 'west', {
     botStartSignalPath,
     faultTickZone: 'zone-nw',
     faultTickSignalPath,
-    placementWeightAfterZoneCreation: 0
+    waitForPlacementPeer: true
   });
   const ops = {
     streamEndpoint: `ws://127.0.0.1:${await ctx.port()}`,
@@ -44,17 +52,35 @@ export async function runSample(ctx) {
   );
   await timerFailure.waitFor('scenario ZW-C4 armed');
 
-  // Start the configured west owner first so the faulting zone is materialized
-  // by the process whose application config injects the C4 timer failure.
   await ctx.start('zone-node-1', 'dist/Server/ZoneNode/main.js', ['--config', west.path]);
   await ctx.waitTcp(west.value.zoneNode.spotRouterEndpoint);
-  await ctx.waitLog('zone-node-1', 'placement weight updated node=zone-node-1 weight=0');
+  await ctx.waitLog('zone-node-1', 'topology=ready');
+  await ctx.waitLog('ops', 'node status received node=zone-node-1');
+  const firstLayoutProbe = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'LAYOUT'),
+    'initial-layout-probe'
+  );
+  await firstLayoutProbe.waitFor('ops-layout=');
+  await firstLayoutProbe.complete();
+  const initiallyHosted = parseOpsLayout(firstLayoutProbe.output()).flatMap((node) => node.zones);
+  const remainingZones = logicalZoneIds.filter((zoneId) => !initiallyHosted.includes(zoneId));
+  if (initiallyHosted.length !== 2 || remainingZones.length !== 2) {
+    throw new Error(`First ZoneNode did not fill its capacity before peer bootstrap: ${initiallyHosted.join(',')}.`);
+  }
+  const east = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east', {
+    botStartSignalPath,
+    bootstrapZones: remainingZones,
+    faultTickZone: 'zone-nw',
+    faultTickSignalPath,
+    waitForPlacementPeer: true
+  });
   await ctx.start('zone-node-2', 'dist/Server/ZoneNode/main.js', ['--config', east.path]);
   await ctx.waitTcp(east.value.zoneNode.spotRouterEndpoint);
-  await ctx.waitLog('zone-node-1', 'zone spot create zone=zone-nw state=created');
-  await ctx.waitLog('zone-node-1', 'zone spot create zone=zone-sw state=created');
-  await ctx.waitLog('zone-node-2', 'zone spot create zone=zone-ne state=created');
-  await ctx.waitLog('zone-node-2', 'zone spot create zone=zone-se state=created');
+  await ctx.waitLog('zone-node-1', 'topology=ready');
+  await ctx.waitLog('zone-node-2', 'topology=ready');
+  await ctx.waitLog('ops', 'node status received node=zone-node-1');
+  await ctx.waitLog('ops', 'node status received node=zone-node-2');
   await ctx.waitLog('zone-node-1', 'bot-start=ready');
   await ctx.waitLog('zone-node-2', 'bot-start=ready');
   // Arm the injected timer failure only after the report RouteMesh is ready.
@@ -62,10 +88,28 @@ export async function runSample(ctx) {
   // result for a send submitted before its selected route is connected.
   await ctx.waitLog('zone-node-1', 'mesh status node=zone-node-1 state=1');
   fs.writeFileSync(faultTickSignalPath, 'start\n', { mode: 0o600 });
-  console.log('ZW-G1 generated-routing-id=ready node=zone-node-2');
 
   await timerFailure.waitFor('scenario ZW-C4 passed');
   await timerFailure.complete();
+  const verdicts = new Set();
+  collectVerdicts(verdicts, timerFailure.output());
+
+  const opsProbe = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'PAIR'),
+    'ops-probe'
+  );
+  await opsProbe.waitFor('ops-probe=');
+  await opsProbe.complete();
+  const layout = parseOpsProbe(opsProbe.output());
+  assertZoneLayout(layout);
+  assertGeneratedRoutingIds(layout.pair.sourceOwnerNodeRid, layout.pair.targetOwnerNodeRid);
+  recordVerdict(verdicts, 'ZW-G1');
+  const sourceNode = layout.nodes.find((node) => node.zones.includes(layout.pair.sourceZoneId));
+  const targetNode = layout.nodes.find((node) => node.zones.includes(layout.pair.targetZoneId));
+  if (sourceNode === undefined || targetNode === undefined || sourceNode.nodeId === targetNode.nodeId) {
+    throw new Error('Ops probe did not identify distinct source and target ZoneNode owners.');
+  }
 
   const gatewayPath = ctx.writeConfig('gateway', { shared, gateway });
   await ctx.start('gateway', 'dist/Server/Gateway/main.js', ['--config', gatewayPath]);
@@ -75,6 +119,7 @@ export async function runSample(ctx) {
   await ctx.waitLog('gateway', 'gateway mesh status mesh=zoneworld.zones state=1');
   await ctx.waitLog('zone-node-1', 'mesh status node=zone-node-1 state=1 readyPeers=3');
   await ctx.waitLog('zone-node-2', 'mesh status node=zone-node-2 state=1 readyPeers=3');
+  recordVerdict(verdicts, 'ZW-G2');
 
   const clientPath = ctx.writeConfig('client', {
     shared,
@@ -82,28 +127,29 @@ export async function runSample(ctx) {
   });
   const mainClient = startScenarioClient(ctx, clientPath, 'main', 'dist/Client/main.js');
   await mainClient.waitFor('scenario ZW-B2 passed');
-  await mainClient.waitFor('scenario ZW-B5 passed');
-  await mainClient.waitFor('scenario ZW-B6 passed');
   // ZW-B7 completes the A->B->A round trip right where ZW-B2's flow ends.
   await mainClient.waitFor('scenario ZW-B7 passed');
-  // Server-side halves of ZW-B6/ZW-B7 the client cannot see: the primed probe
-  // ran on the source owner, the followed probes ran on the target owner
-  // (exactly once for the one-way half), and the round trip re-entered the
-  // original node.
-  await ctx.waitLog('zone-node-1', 'message-follow probe handled actor=player-a1 probe=zw-b6-prime');
-  await ctx.waitLog('zone-node-2', 'message-follow probe handled actor=player-a1 probe=zw-b6-request');
-  await ctx.waitLog('zone-node-2', 'message-follow probe one-way handled actor=player-a1 probe=zw-b6-one-way');
-  await ctx.waitLog('zone-node-1', 'zone player entered zone=zone-nw player=player-a1 from=zone-node-2');
+  await mainClient.waitFor('scenario ZW-B5 passed');
+  await mainClient.waitFor('scenario ZW-B6 passed');
+  // Server-side halves of ZW-B6/ZW-B7 the client cannot see: the probes that
+  // entered the stale bound route followed to the target owner (exactly once
+  // for the one-way half), and the round trip re-entered the original node.
+  await ctx.waitLog(sourceNode.nodeId, 'message-follow probe handled actor=player-a1 probe=zw-b6-request');
+  await ctx.waitLog(sourceNode.nodeId, 'message-follow probe one-way handled actor=player-a1 probe=zw-b6-one-way');
+  await ctx.waitLog(sourceNode.nodeId, `zone player entered zone=${layout.pair.sourceZoneId} player=player-a1 initial=false`);
   await mainClient.complete();
-  ctx.assertLogCount('zone-node-2', 'message-follow probe one-way handled actor=player-a1 probe=zw-b6-one-way', 1);
+  ctx.assertLogCount(sourceNode.nodeId, 'message-follow probe one-way handled actor=player-a1 probe=zw-b6-one-way', 1);
   process.stdout.write(mainClient.output());
+  collectVerdicts(verdicts, mainClient.output());
   await ctx.waitLog('zone-node-1', 'fanout subscriber received announcement');
   await ctx.waitLog('zone-node-2', 'fanout subscriber received announcement');
-  for (const zoneId of ['zone-nw', 'zone-sw']) {
-    await ctx.waitLog('zone-node-1', `zone spot announcement delivered zone=${zoneId}`);
+  for (const node of layout.nodes) {
+    for (const zoneId of node.zones) {
+      await ctx.waitLog(node.nodeId, `zone spot announcement delivered zone=${zoneId}`);
+    }
   }
 
-  const extra = await zoneNodeConfig(ctx, shared, 'zone-node-3', 'extra', { disableBots: true });
+  const extra = await zoneNodeConfig(ctx, shared, 'zone-node-3', 'extra', { disableBots: true, zoneCapacity: 0 });
   await ctx.start('zone-node-3', 'dist/Server/ZoneNode/main.js', ['--config', extra.path]);
   await ctx.waitLog('zone-node-3', 'topology=ready node=zone-node-3 zones=');
   await ctx.waitLog('zone-node-3', 'fanout subscriber=ready node=zone-node-3');
@@ -111,13 +157,18 @@ export async function runSample(ctx) {
     '--config', specialClientConfig(ctx, shared, gateway, ops, 'D2')
   ]);
   await ctx.waitLog('zone-node-3', 'fanout subscriber received announcement');
-  console.log('scenario ZW-D2 passed');
+  recordVerdict(verdicts, 'ZW-D2');
 
   // The common internals do not recreate an existing User Spot after a process
   // restart. Run application operations while their original owners are ready.
-  ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/special.js'), [
-    '--config', specialClientConfig(ctx, shared, gateway, ops, 'E')
-  ]);
+  const maintenance = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'E'),
+    'maintenance'
+  );
+  await maintenance.complete();
+  process.stdout.write(maintenance.output());
+  collectVerdicts(verdicts, maintenance.output());
 
   // Bots are created during startup but remain paused until this signal. This
   // keeps the normal maintenance checks deterministic while using the same
@@ -130,14 +181,7 @@ export async function runSample(ctx) {
   for (const name of ['zone-node-1', 'zone-node-2']) {
     await ctx.waitLog(name, 'bot spawned');
   }
-  await ctx.waitLog(
-    'zone-node-1',
-    'zone player entered zone=zone-nw player=bot-ne-x from=zone-node-2'
-  );
-  await ctx.waitLog(
-    'zone-node-2',
-    'zone change scheduled player=bot-ne-x from=zone-ne to=zone-nw'
-  );
+  await waitForCrossOwnerBot(ctx, layout.nodes);
   const botLogs = ['zone-node-1', 'zone-node-2']
     .map((name) => fs.readFileSync(path.join(ctx.logDir, `${name}.log`), 'utf8'))
     .join('\n');
@@ -146,7 +190,7 @@ export async function runSample(ctx) {
   if (/No current session binding exists for actor 'bot-/.test(botLogs)) {
     throw new Error('ZW-F3 attempted to push to an unbound bot actor.');
   }
-  console.log('scenario ZW-F2 passed');
+  recordVerdict(verdicts, 'ZW-F2');
   const bots = startScenarioClient(
     ctx,
     specialClientConfig(ctx, shared, gateway, ops, 'F'),
@@ -154,6 +198,8 @@ export async function runSample(ctx) {
   );
   await bots.waitFor('scenario ZW-F4 passed');
   await bots.complete();
+  process.stdout.write(bots.output());
+  collectVerdicts(verdicts, bots.output());
 
   const transition = startScenarioClient(
     ctx,
@@ -161,42 +207,64 @@ export async function runSample(ctx) {
     'transition'
   );
   await transition.waitFor('scenario ZW-B4-C2-C3 armed');
-  await ctx.stop('zone-node-2', 'SIGKILL');
+  const browser = await startSharedBrowser(ctx, gateway, ops, targetNode.nodeId);
+  try {
+    await waitForFile(browser.markerPath, 45_000);
+    await ctx.stop(targetNode.nodeId, 'SIGKILL');
+    await browser.complete();
+  } finally {
+    await browser.dispose();
+  }
   await transition.waitFor('scenario ZW-B4 passed');
   await transition.waitFor('scenario ZW-C2 passed');
   await transition.waitFor('scenario ZW-C3 passed');
   await transition.complete();
-  const eastAfterFailure = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east-after-failure', { disableBots: true });
-  await ctx.start('zone-node-2-after-failure', 'dist/Server/ZoneNode/main.js', ['--config', eastAfterFailure.path]);
-  await ctx.waitLog('zone-node-2-after-failure', 'topology=ready');
-  await ctx.waitLog('zone-node-2-after-failure', 'mesh status node=zone-node-2 state=1');
-  ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/special.js'), [
-    '--config', specialClientConfig(ctx, shared, gateway, ops, 'E5-arm')
-  ]);
+  process.stdout.write(transition.output());
+  collectVerdicts(verdicts, transition.output());
+  const targetAfterFailure = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-failure', {
+    disableBots: true,
+    waitForPlacementPeer: true
+  });
+  await ctx.start('target-after-failure', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterFailure.path]);
+  await ctx.waitLog('target-after-failure', 'topology=ready');
+  await ctx.waitLog('target-after-failure', `mesh status node=${targetNode.nodeId} state=1`);
+  const maintenanceArm = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'E5-arm', targetNode.nodeId),
+    'maintenance-arm'
+  );
+  await maintenanceArm.complete();
   await stopAndWaitForLocationLease(
     ctx,
-    'zone-node-2-after-failure',
-    eastAfterFailure.value.zoneNode,
+    'target-after-failure',
+    targetAfterFailure.value.zoneNode,
     shared
   );
-  const eastAfterMaintenance = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east-after-maintenance', {
-    disableBots: true
+  const targetAfterMaintenance = await zoneNodeConfig(ctx, shared, targetNode.nodeId, 'target-after-maintenance', {
+    disableBots: true,
+    waitForPlacementPeer: true
   });
-  await ctx.start('zone-node-2-after-maintenance', 'dist/Server/ZoneNode/main.js', ['--config', eastAfterMaintenance.path]);
-  await ctx.waitLog('zone-node-2-after-maintenance', 'maintenance restored node=zone-node-2 enabled=true');
-  ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/special.js'), [
-    '--config', specialClientConfig(ctx, shared, gateway, ops, 'E5')
-  ]);
+  await ctx.start('target-after-maintenance', 'dist/Server/ZoneNode/main.js', ['--config', targetAfterMaintenance.path]);
+  await ctx.waitLog('target-after-maintenance', `maintenance restored node=${targetNode.nodeId} enabled=true`);
+  const maintenanceRestore = startScenarioClient(
+    ctx,
+    specialClientConfig(ctx, shared, gateway, ops, 'E5', targetNode.nodeId),
+    'maintenance-restore'
+  );
+  await maintenanceRestore.complete();
+  process.stdout.write(maintenanceRestore.output());
+  collectVerdicts(verdicts, maintenanceRestore.output());
 
   await stopAndWaitForLocationLease(
     ctx,
-    'zone-node-2-after-maintenance',
-    eastAfterMaintenance.value.zoneNode,
+    'target-after-maintenance',
+    targetAfterMaintenance.value.zoneNode,
     shared
   );
   await stopNormalTopology(ctx);
-  await runRoutingProbes(ctx, shared);
-  console.log('ZW-G5 caller-fixed-routing-id=absent');
+  await runRoutingProbes(ctx, shared, targetNode.nodeId, verdicts);
+  recordVerdict(verdicts, 'ZW-G5');
+  assertCompleteVerdicts(verdicts);
   console.log('topology=ready');
   console.log('zoneworld-transfer=completed');
   console.log('zoneworld-border-sync=completed');
@@ -213,6 +281,7 @@ async function zoneNodeConfig(ctx, shared, nodeId, name, overrides = {}) {
     zoneNode: {
       nodeId,
       spotRouterEndpoint: `tcp://127.0.0.1:${await ctx.port()}`,
+      zoneCapacity: 2,
       ...overrides
     }
   };
@@ -223,8 +292,8 @@ async function stopNormalTopology(ctx) {
   for (const name of [
     'zone-node-1',
     'zone-node-2',
-    'zone-node-2-after-failure',
-    'zone-node-2-after-maintenance',
+    'target-after-failure',
+    'target-after-maintenance',
     'zone-node-3',
     'gateway',
     'ops'
@@ -233,7 +302,7 @@ async function stopNormalTopology(ctx) {
   }
 }
 
-async function runRoutingProbes(ctx, shared) {
+async function runRoutingProbes(ctx, shared, nodeId, verdicts) {
   // Replacement probes use an isolated Location Store and run after the normal
   // topology has stopped. Ready-owner crash failover is intentionally outside
   // the common sample contract.
@@ -241,23 +310,26 @@ async function runRoutingProbes(ctx, shared) {
     ...shared,
     redisKeyPrefix: `${shared.redisKeyPrefix}routing-probe:`
   };
-  const probe = await zoneNodeConfig(ctx, probeShared, 'zone-node-2', 'east-probe', {
+  const probe = await zoneNodeConfig(ctx, probeShared, nodeId, 'target-probe', {
     disableBots: true,
-    waitForPlacementPeer: false
+    waitForPlacementPeer: false,
+    bootstrapZones: false
   });
-  const replacement = await zoneNodeConfig(ctx, probeShared, 'zone-node-2', 'east-replacement', {
+  const replacement = await zoneNodeConfig(ctx, probeShared, nodeId, 'target-replacement', {
     disableBots: true,
-    waitForPlacementPeer: false
+    waitForPlacementPeer: false,
+    bootstrapZones: false
   });
-  const crashReplacement = await zoneNodeConfig(ctx, probeShared, 'zone-node-2', 'east-crash-replacement', {
+  const crashReplacement = await zoneNodeConfig(ctx, probeShared, nodeId, 'target-crash-replacement', {
     disableBots: true,
-    waitForPlacementPeer: false
+    waitForPlacementPeer: false,
+    bootstrapZones: false
   });
   await ctx.start('zone-node-2-probe', 'dist/Server/ZoneNode/main.js', ['--config', probe.path]);
   await ctx.waitTcp(probe.value.zoneNode.spotRouterEndpoint);
   await ctx.start('zone-node-2-replacement', 'dist/Server/ZoneNode/main.js', ['--config', replacement.path]);
   await ctx.waitTcp(replacement.value.zoneNode.spotRouterEndpoint);
-  console.log('ZW-G3 rolling-replacement=ready');
+  recordVerdict(verdicts, 'ZW-G3');
   ctx.signal('zone-node-2-probe', 'SIGKILL');
   ctx.signal('zone-node-2-replacement', 'SIGKILL');
   await ctx.start(
@@ -266,14 +338,19 @@ async function runRoutingProbes(ctx, shared) {
     ['--config', crashReplacement.path]
   );
   await ctx.waitTcp(crashReplacement.value.zoneNode.spotRouterEndpoint);
-  console.log('ZW-G4 crash-replacement=ready');
+  recordVerdict(verdicts, 'ZW-G4');
   ctx.signal('zone-node-2-crash-replacement', 'SIGKILL');
 }
 
-function specialClientConfig(ctx, shared, gateway, ops, scenarios) {
+function specialClientConfig(ctx, shared, gateway, ops, scenarios, targetNodeId) {
   return ctx.writeConfig(`client-${scenarios.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-')}`, {
     shared,
-    client: { gatewayEndpoint: gateway.streamEndpoint, opsEndpoint: ops.streamEndpoint, scenarios }
+    client: {
+      gatewayEndpoint: gateway.streamEndpoint,
+      opsEndpoint: ops.streamEndpoint,
+      scenarios,
+      ...(targetNodeId === undefined ? {} : { targetNodeId })
+    }
   });
 }
 
@@ -314,4 +391,144 @@ async function stopAndWaitForLocationLease(ctx, name, _node, _shared) {
   await ctx.stop(name, 'SIGKILL');
   // The sample config fixes ownerLeaseTtlMs at 3 seconds.
   await delay(3_100);
+}
+
+function collectVerdicts(verdicts, output) {
+  for (const match of output.matchAll(/scenario (ZW-[A-G][1-7]) passed/g)) {
+    recordVerdict(verdicts, match[1]);
+  }
+}
+
+function recordVerdict(verdicts, scenarioId) {
+  if (!requiredScenarioIds.includes(scenarioId)) {
+    throw new Error(`Unknown ZoneWorld scenario verdict '${scenarioId}'.`);
+  }
+  if (verdicts.has(scenarioId)) return;
+  verdicts.add(scenarioId);
+  console.log(`verdict ${scenarioId}=passed`);
+}
+
+function assertCompleteVerdicts(verdicts) {
+  const missing = requiredScenarioIds.filter((scenarioId) => !verdicts.has(scenarioId));
+  if (missing.length > 0) {
+    throw new Error(`ZoneWorld completion is missing per-ID verdicts: ${missing.join(', ')}.`);
+  }
+}
+
+function parseOpsProbe(output) {
+  const match = output.match(/^ops-probe=(\{.+\})$/m);
+  if (match === null) throw new Error(`ZoneWorld Ops probe output was missing.\n${output}`);
+  return JSON.parse(match[1]);
+}
+
+function parseOpsLayout(output) {
+  const match = output.match(/^ops-layout=(\[.+\])$/m);
+  if (match === null) throw new Error(`ZoneWorld initial Ops layout output was missing.\n${output}`);
+  return JSON.parse(match[1]);
+}
+
+function assertZoneLayout(layout) {
+  if (!Array.isArray(layout.nodes) || layout.nodes.length !== 2) {
+    throw new Error('Ops probe must report exactly two ZoneNodes.');
+  }
+  const zones = layout.nodes.flatMap((node) => node.zones);
+  if (layout.nodes.some((node) => node.zones.length !== 2) || new Set(zones).size !== 4) {
+    throw new Error(`Zone Spot capacity 2 did not produce a 2/2 layout: ${JSON.stringify(layout.nodes)}.`);
+  }
+  if (layout.pair?.error !== null || layout.pair.sourceZoneId === layout.pair.targetZoneId) {
+    throw new Error(`Ops probe did not return a valid cross-owner boundary: ${JSON.stringify(layout.pair)}.`);
+  }
+}
+
+function assertGeneratedRoutingIds(source, target) {
+  const canonical = /^zn-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (!canonical.test(source) || !canonical.test(target)) {
+    throw new Error(`ZW-G1 observed non-canonical ZoneNode RIDs '${source}' and '${target}'.`);
+  }
+  if (source === target) throw new Error(`ZW-G1 observed the same RID for both ZoneNodes: '${source}'.`);
+}
+
+async function waitForCrossOwnerBot(ctx, nodes) {
+  const ownerByZone = new Map(nodes.flatMap((node) => node.zones.map((zoneId) => [zoneId, node.nodeId])));
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const logs = nodes.map((node) => {
+      const target = path.join(ctx.logDir, `${node.nodeId}.log`);
+      return fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+    }).join('\n');
+    for (const match of logs.matchAll(/zone change scheduled player=(bot-[^ ]+) from=([^ ]+) to=([^\s]+)/g)) {
+      if (ownerByZone.get(match[2]) !== ownerByZone.get(match[3])) return;
+    }
+    await delay(50);
+  }
+  throw new Error('ZW-F2 did not observe a bot crossing an Ops-discovered owner boundary.');
+}
+
+async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
+  const browserRoot = path.resolve(ctx.nodeRoot, '../shared_sample/zoneworld/client');
+  const outputDirectory = path.join(ctx.workDir, 'zoneworld-browser-dist');
+  const previewPort = await ctx.port();
+  const markerPath = path.join(ctx.runDir, 'browser-lifecycle-armed');
+  const playwrightConfig = path.join(ctx.runDir, 'zoneworld-playwright.live.mjs');
+  await runCommand('npm', ['exec', 'vite', 'build', '--', '--outDir', outputDirectory], browserRoot);
+  fs.writeFileSync(
+    path.join(outputDirectory, 'config.json'),
+    `${JSON.stringify({ gateway: gateway.streamEndpoint, ops: ops.streamEndpoint })}\n`,
+    { mode: 0o600 }
+  );
+  fs.writeFileSync(playwrightConfig, `export default ${JSON.stringify({
+    testDir: path.join(browserRoot, 'tests/live'),
+    timeout: 45_000,
+    workers: 1,
+    use: { baseURL: `http://127.0.0.1:${previewPort}`, headless: true },
+    metadata: { lifecycleMarker: markerPath, lifecycleNodeId }
+  })}\n`, { mode: 0o600 });
+  const preview = startCommand(
+    'npm',
+    ['exec', 'vite', 'preview', '--', '--host', '127.0.0.1', '--port', String(previewPort), '--outDir', outputDirectory],
+    browserRoot,
+    path.join(ctx.logDir, 'shared-browser-preview.log')
+  );
+  await ctx.waitTcp(`tcp://127.0.0.1:${previewPort}`);
+  const playwright = startCommand(
+    'npm',
+    ['exec', 'playwright', 'test', '--', '--config', playwrightConfig],
+    browserRoot,
+    path.join(ctx.logDir, 'shared-browser-playwright.log')
+  );
+  return {
+    markerPath,
+    async complete() {
+      const status = await playwright.exited;
+      if (status !== 0) throw new Error(`Shared ZoneWorld browser lane exited with ${status}.`);
+      console.log('shared-browser=completed');
+    },
+    async dispose() {
+      if (playwright.child.exitCode === null && playwright.child.signalCode === null) playwright.child.kill('SIGKILL');
+      if (preview.child.exitCode === null && preview.child.signalCode === null) preview.child.kill('SIGKILL');
+      await Promise.allSettled([playwright.exited, preview.exited]);
+    }
+  };
+}
+
+function startCommand(command, args, cwd, logPath) {
+  const output = fs.openSync(logPath, 'a');
+  const child = spawn(command, args, { cwd, stdio: ['ignore', output, output] });
+  fs.closeSync(output);
+  const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0))));
+  return { child, exited };
+}
+
+async function runCommand(command, args, cwd) {
+  const child = spawn(command, args, { cwd, stdio: 'inherit' });
+  const status = await new Promise((resolve) => child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0))));
+  if (status !== 0) throw new Error(`Command '${command} ${args.join(' ')}' exited with ${status}.`);
+}
+
+async function waitForFile(target, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(target)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for '${target}'.`);
+    await delay(50);
+  }
 }

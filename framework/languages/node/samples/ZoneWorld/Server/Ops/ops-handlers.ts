@@ -11,6 +11,7 @@ import {
   NodeDiagnosticsReq,
   NodeAlertNotify,
   NodeMaintenanceChangedEvent,
+  RelocationPairRes,
   SetMaintenanceRes,
   SetMaintenanceReq,
   WatchNodesRes,
@@ -73,6 +74,23 @@ class WatchNodesHandler {
   async handle(context: ZLinkSessionContext): Promise<void> {
     context.client.reply(new WatchNodesRes(this.nodes.snapshot())).submit();
     this.consoles.replayAlerts(context);
+  }
+}
+
+@ZLinkPacket(PacketNames.relocationPairReq)
+class RelocationPairHandler {
+  constructor(private readonly nodes: NodeRegistry) {}
+
+  async handle(context: ZLinkSessionContext): Promise<void> {
+    const pair = this.nodes.relocationPair();
+    context.client.reply(pair === undefined
+      ? new RelocationPairRes('', '', '', '', ZoneWorldErrors.nodeUnavailable)
+      : new RelocationPairRes(
+        pair.sourceZoneId,
+        pair.targetZoneId,
+        pair.sourceOwnerNodeRid,
+        pair.targetOwnerNodeRid
+      )).submit();
   }
 }
 
@@ -168,6 +186,7 @@ class NodeDiagnosticsHandler {
 export {
   AnnounceWorldHandler,
   NodeDiagnosticsHandler,
+  RelocationPairHandler,
   ReportNodeStatusHandler,
   ReportSpotEventHandler,
   SetMaintenanceHandler,

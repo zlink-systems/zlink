@@ -2,16 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { JoinForm } from '../../features/join-world/join-form';
 import { GameController } from '../../features/join-world/model';
 import { useKeyboardMovement } from '../../features/move-player/use-keyboard-movement';
+import { OpsController } from '../../features/watch-nodes/model';
 import { GameHud } from '../../widgets/game-hud/game-hud';
 import { WorldCanvas } from '../../widgets/world-canvas/world-canvas';
 
-export function GamePage({ gateway }: { gateway: string }) {
+export function GamePage({ gateway, ops }: { gateway: string; ops: string }) {
   const controller = useMemo(() => new GameController(gateway), [gateway]);
+  const operations = useMemo(() => new OpsController(ops), [ops]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const move = useCallback((dx: number, dy: number) => controller.move(dx, dy), [controller]);
   useKeyboardMovement(move, controller.player.joined.value);
-  useEffect(() => () => { void controller.close(); }, [controller]);
+  useEffect(() => {
+    void operations.connect().catch(() => undefined);
+    return () => { void Promise.allSettled([controller.close(), operations.close()]); };
+  }, [controller, operations]);
 
   const join = async (playerId: string) => {
     setBusy(true); setError(null);
@@ -28,7 +33,12 @@ export function GamePage({ gateway }: { gateway: string }) {
       {error !== null && <p class="notice danger">{error}</p>}
       <div class="game-layout">
         <section class="canvas-panel"><WorldCanvas model={controller.player} /><div class="canvas-legend"><span><i class="human" />human</span><span><i class="bot" />bot</span><span><i class="adjacent" />adjacent zone</span></div></section>
-        <GameHud player={controller.player} announcements={controller.announcements} connectionState={controller.stream.state.value} />
+        <GameHud
+          player={controller.player}
+          announcements={controller.announcements}
+          connectionState={controller.stream.state.value}
+          nodes={operations.topology.nodes.value}
+        />
       </div>
     </div>
   );

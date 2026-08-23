@@ -15,7 +15,6 @@ class JoinWorldRes {
   constructor(
     readonly playerId: string,
     readonly zoneId: string,
-    readonly nodeId: string,
     readonly x: number,
     readonly y: number,
     readonly error: string | null = null
@@ -24,7 +23,7 @@ class JoinWorldRes {
 class MoveMsg { constructor(readonly x: number, readonly y: number) {} }
 class ZoneStateNotify { constructor(readonly zoneId: string, readonly tick: number, readonly players: PlayerView[]) {} }
 class ZoneChangedNotify {
-  constructor(readonly playerId: string, readonly zoneId: string, readonly nodeId: string, readonly transferred: boolean) {}
+  constructor(readonly playerId: string, readonly zoneId: string) {}
 }
 class WorldAnnounceNotify { constructor(readonly announcementId: string, readonly text: string) {} }
 class MoveRejectedNotify { constructor(readonly reason: MoveRejectReason, readonly x: number, readonly y: number) {} }
@@ -50,6 +49,16 @@ class MessageFollowProbeRes {
 
 class WatchNodesReq {}
 class WatchNodesRes { constructor(readonly nodes: NodeView[]) {} }
+class RelocationPairReq {}
+class RelocationPairRes {
+  constructor(
+    readonly sourceZoneId: string,
+    readonly targetZoneId: string,
+    readonly sourceOwnerNodeRid: string,
+    readonly targetOwnerNodeRid: string,
+    readonly error: string | null = null
+  ) {}
+}
 class NodeStatusNotify {
   constructor(
     readonly nodeId: string,
@@ -101,7 +110,6 @@ class EnterWorldReq {
 class EnterWorldRes {
   constructor(
     readonly zoneId: string,
-    readonly nodeId: string,
     readonly x: number,
     readonly y: number,
     readonly error: string | null = null
@@ -140,11 +148,11 @@ class EnterZoneReq {
     readonly x: number,
     readonly y: number,
     readonly isBot: boolean,
-    readonly fromNodeId: string | null
+    readonly initialEntry: boolean
   ) {}
 }
 class EnterZoneRes {
-  constructor(readonly zoneId: string, readonly nodeId: string, readonly error: string | null = null) {}
+  constructor(readonly zoneId: string, readonly error: string | null = null) {}
 }
 
 const PacketNames = {
@@ -154,6 +162,7 @@ const PacketNames = {
   joinWorldReq: 'JoinWorldReq', joinWorldRes: 'JoinWorldRes', moveMsg: 'MoveMsg', zoneStateNotify: 'ZoneStateNotify',
   zoneChangedNotify: 'ZoneChangedNotify', worldAnnounceNotify: 'WorldAnnounceNotify',
   moveRejectedNotify: 'MoveRejectedNotify', watchNodesReq: 'WatchNodesReq', watchNodesRes: 'WatchNodesRes',
+  relocationPairReq: 'RelocationPairReq', relocationPairRes: 'RelocationPairRes',
   nodeStatusNotify: 'NodeStatusNotify', nodeAlertNotify: 'NodeAlertNotify',
   announceWorldReq: 'AnnounceWorldReq', announceWorldRes: 'AnnounceWorldRes',
   setMaintenanceReq: 'SetMaintenanceReq', setMaintenanceRes: 'SetMaintenanceRes',
@@ -176,7 +185,7 @@ export {
   MessageFollowProbeMsg, MessageFollowProbeReq, MessageFollowProbeRes,
   MoveMsg, MoveRejectedNotify, NodeAlertNotify, NodeDiagnosticsReq, NodeDiagnosticsRes,
   NodeMaintenanceChangedEvent, NodeStatusNotify, PacketNames, ReportNodeStatusMsg, ReportSpotEventMsg,
-  SetMaintenanceReq, SetMaintenanceRes, WatchNodesReq, WatchNodesRes, WorldAnnounceEvent,
+  RelocationPairReq, RelocationPairRes, SetMaintenanceReq, SetMaintenanceRes, WatchNodesReq, WatchNodesRes, WorldAnnounceEvent,
   WorldAnnounceNotify, ZoneBorderEvent, ZoneChangedNotify, ZoneStateNotify
 };
 export type { NodeView, PlayerView };

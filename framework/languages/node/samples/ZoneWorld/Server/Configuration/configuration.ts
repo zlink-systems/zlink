@@ -11,6 +11,8 @@ type SharedSettings = {
 type ZoneNodeSettings = {
   nodeId: string;
   spotRouterEndpoint: string;
+  zoneCapacity: number;
+  bootstrapZones?: readonly string[] | false;
   faultTickZone?: string | null;
   faultTickSignalPath?: string;
   disableBots?: boolean;
@@ -34,6 +36,7 @@ type ClientSettings = {
   gatewayEndpoint: string;
   opsEndpoint: string;
   scenarios?: string;
+  targetNodeId?: string;
 };
 
 type ZoneWorldConfiguration = {
@@ -102,12 +105,28 @@ function validateConfiguration(
   if (expectedRole === 'zoneNode' && role.faultTickSignalPath !== undefined) {
     requireString(role, 'faultTickSignalPath', expectedRole);
   }
+  if (expectedRole === 'zoneNode' && role.bootstrapZones !== undefined && role.bootstrapZones !== false) {
+    if (!Array.isArray(role.bootstrapZones)
+      || role.bootstrapZones.some((zoneId) => typeof zoneId !== 'string' || zoneId.length === 0)
+      || new Set(role.bootstrapZones).size !== role.bootstrapZones.length) {
+      throw new Error(`Configuration value '${expectedRole}.bootstrapZones' must be false or distinct zone ids.`);
+    }
+  }
+  if (expectedRole === 'client' && role.targetNodeId !== undefined) {
+    requireString(role, 'targetNodeId', expectedRole);
+  }
   if (expectedRole === 'zoneNode' && role.placementWeightAfterZoneCreation !== undefined) {
     const weight = role.placementWeightAfterZoneCreation;
     if (typeof weight !== 'number' || !Number.isSafeInteger(weight) || weight < 0 || weight > 10_000) {
       throw new Error(
         `Configuration value '${expectedRole}.placementWeightAfterZoneCreation' must be an integer from 0 through 10000.`
       );
+    }
+  }
+  if (expectedRole === 'zoneNode') {
+    const capacity = role.zoneCapacity;
+    if (typeof capacity !== 'number' || !Number.isSafeInteger(capacity) || capacity < 0 || capacity > 10_000) {
+      throw new Error(`Configuration value '${expectedRole}.zoneCapacity' must be an integer from 0 through 10000.`);
     }
   }
   return document as ZoneWorldConfiguration;

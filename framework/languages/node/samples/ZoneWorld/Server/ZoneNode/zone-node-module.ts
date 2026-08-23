@@ -9,7 +9,7 @@ import {
   createZoneWorldRelocationStore,
   zoneWorldLocationOptions
 } from '../Configuration/location-store';
-import { ZoneWorldNames, zonesOf } from '../../Shared/spec';
+import { ZoneWorldNames } from '../../Shared/spec';
 import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-factory';
 import { PlayerActorRelocationAdapter } from './Infrastructure/ZLink/Actors/player-actor-relocation-adapter';
 import { ZoneEntrySpot } from './Infrastructure/ZLink/Spots/zone-entry-spot';
@@ -50,7 +50,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           builder.configureDispatch()
             .messageFlow('normal');
 
-          if (zonesOf(node.nodeId).length === 0) {
+          if (node.zoneCapacity === 0) {
             builder.addFanoutChannel(ZoneWorldNames.broadcastChannel)
               .enableSubscriber()
               .addHandlerGroup('zone-broadcast');
@@ -65,7 +65,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           objectServer.addSpotFactory(
             ZoneSpot.name,
             ZoneSpot,
-            (factory) => factory.disableRelocation()
+            (factory) => factory.stableTypeLimit(node.zoneCapacity).disableRelocation()
           );
           objectServer.addActorFactory(
             ZoneWorldNames.playerActorType,

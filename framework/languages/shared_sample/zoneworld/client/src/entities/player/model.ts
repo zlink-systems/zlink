@@ -12,8 +12,6 @@ export class PlayerModel {
   readonly x = signal(0);
   readonly y = signal(0);
   readonly zoneId = signal('—');
-  readonly nodeId = signal('—');
-  readonly transferred = signal(false);
   readonly visiblePlayers = signal<readonly PlayerView[]>([]);
   readonly rejection = signal<MoveRejectedNotify | null>(null);
   readonly joined = computed(() => this.id.value.length > 0);
@@ -22,7 +20,6 @@ export class PlayerModel {
     if (reply.error !== undefined && reply.error !== null) throw new Error(reply.error);
     this.id.value = reply.playerId;
     this.zoneId.value = reply.zoneId;
-    this.nodeId.value = reply.nodeId;
     this.x.value = reply.x;
     this.y.value = reply.y;
   }
@@ -38,8 +35,6 @@ export class PlayerModel {
   applyZoneChange(change: ZoneChangedNotify): void {
     if (change.playerId !== this.id.value) return;
     this.zoneId.value = change.zoneId;
-    this.nodeId.value = change.nodeId;
-    this.transferred.value = change.transferred;
   }
 
   applyRejection(rejection: MoveRejectedNotify): void {

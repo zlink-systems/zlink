@@ -6,13 +6,19 @@ import type {
   ZLinkActorJoinCompletion,
   ZLinkMessageContext
 } from '@zlink-systems/framework';
+import { ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import { ZoneIds } from '../../../../../Shared/spec';
 import {
+  EnterZoneRes,
+  JoinWorldRes,
+  MoveRejectedNotify,
   WorldAnnounceNotify,
   ZoneChangedNotify,
   ZoneStateNotify
 } from '../../../../../Shared/contracts';
 import type { ZoneId } from '../../../../../Shared/spec';
+
+type PendingJoinKind = 'world' | 'move' | 'bot';
 
 class PlayerActor implements ZLinkActor {
   readonly context!: ZLinkActorContext;
@@ -27,21 +33,29 @@ class PlayerActor implements ZLinkActor {
     public dirY = 0
   ) {}
 
-  private pendingJoin = false;
+  private pendingJoinKind: PendingJoinKind | null = null;
 
   get hasPendingJoin(): boolean {
-    return this.pendingJoin;
+    return this.pendingJoinKind !== null;
   }
 
-  beginPendingJoin(): void {
-    if (this.pendingJoin) {
+  beginPendingJoin(kind: PendingJoinKind): void {
+    if (this.pendingJoinKind !== null) {
       throw new Error(`Actor '${this.actorId}' already has a pending zone join.`);
     }
-    this.pendingJoin = true;
+    this.pendingJoinKind = kind;
+  }
+
+  pendingJoin(): PendingJoinKind | null {
+    return this.pendingJoinKind;
+  }
+
+  restorePendingJoin(kind: PendingJoinKind | null): void {
+    this.pendingJoinKind = kind;
   }
 
   completePendingJoin(): void {
-    this.pendingJoin = false;
+    this.pendingJoinKind = null;
   }
 
   push(payload: unknown): void {
@@ -59,12 +73,39 @@ class PlayerActor implements ZLinkActor {
   }
 
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
-    this.completePendingJoin();
     const kind = 'kind' in completion ? completion.kind : 'none';
     console.log(
       `actor join completed actor=${this.actorId} status=${completion.status}`
         + ` kind=${kind}`
     );
+    const pending = this.pendingJoinKind;
+    this.completePendingJoin();
+    if (completion.status === 'accepted') {
+      if (pending === 'world') await this.sendJoinResult(null);
+      return;
+    }
+    if (pending === 'bot') {
+      this.dirX *= -1;
+      this.dirY *= -1;
+      return;
+    }
+    let reason = 'ZoneMaintenance';
+    if (completion.status === 'rejected' && completion.reply !== undefined) {
+      reason = completion.reply.decode<EnterZoneRes>().error ?? reason;
+    } else if (completion.status === 'failed') {
+      reason = ZLinkFrameworkErrorKind[completion.kind];
+    }
+    if (pending === 'world') {
+      await this.sendJoinResult(reason);
+      return;
+    }
+    this.push(new MoveRejectedNotify(reason as never, this.x, this.y));
+  }
+
+  async sendJoinResult(error: string | null): Promise<void> {
+    await this.context.boundSession
+      .send(new JoinWorldRes(this.actorId, this.zoneId, this.x, this.y, error))
+      .submit();
   }
 }
 
@@ -97,9 +138,7 @@ class DeliverZoneNotificationMsgHandler {
       case 'ZoneChangedNotify':
         actor.push(new ZoneChangedNotify(
           value.playerId as string,
-          value.zoneId as string,
-          value.nodeId as string,
-          value.transferred as boolean
+          value.zoneId as string
         ));
         return;
       case 'WorldAnnounceNotify':

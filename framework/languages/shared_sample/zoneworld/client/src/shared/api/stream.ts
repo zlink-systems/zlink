@@ -46,8 +46,13 @@ export class StreamClient {
     return this.connector.request(payload, Object).packetName(packetName).submit<TReply>();
   }
 
-  send(packetName: string, payload: unknown): void {
-    this.connector.send(payload, Object).packetName(packetName).submit();
+  async waitFor<T>(packetName: string): Promise<T> {
+    const message = await this.connector.waitFor<T>(packetName).timeout(10_000).submit();
+    return message.payload;
+  }
+
+  send(packetName: string, payload: unknown): Promise<void> {
+    return this.connector.send(payload, Object).packetName(packetName).submit();
   }
 
   async close(): Promise<void> {
