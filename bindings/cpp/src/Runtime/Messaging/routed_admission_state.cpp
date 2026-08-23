@@ -158,6 +158,8 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
         operation->accepted = std::move (accepted_);
         operation->terminal = std::move (terminal_);
 
+        uint64_t inline_generation = 0;
+        bool run_inline = false;
         {
             std::lock_guard<std::mutex> lock (_mutex);
             if (_closed)
@@ -175,8 +177,28 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
                 mark_target_ready_locked (operation->key);
             if (!operation->attempt_before_expiry)
                 register_deadline_locked (*operation);
-            refresh_schedule_locked ();
+            // Physical admission fast path. Nothing is queued ahead of this
+            // operation for its target, so running the first attempt on the
+            // caller thread cannot reorder that target's FIFO stream. The
+            // attempt itself is a non-blocking Core submit, so the caller is
+            // never occupied while HWM credit is unavailable: a backpressured
+            // attempt just parks the operation in the waiting state exactly as
+            // the reactor would. When Core accepts immediately the operation
+            // reaches its terminal before the awaiter can suspend, which turns
+            // the common send into a suspension-free await instead of a
+            // reactor-thread hop plus a continuation-dispatcher hop per
+            // message.
+            if (operation->state == pending_operation_t::state_t::ready) {
+                _scheduled = true;
+                _scheduled_due = std::chrono::steady_clock::now ();
+                inline_generation = ++_schedule_generation;
+                run_inline = true;
+            } else {
+                refresh_schedule_locked ();
+            }
         }
+        if (run_inline)
+            pump (inline_generation);
         return routed_admission_ticket_t (shared_from_this (), operation->id);
     }
 
