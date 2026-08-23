@@ -40,6 +40,12 @@ import {
 } from './actor-authority-payload-codec';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import {
+  decodeRelocationDataChunkV1,
+  decodeRelocationManifestV1,
+  encodeRelocationDataChunkV1,
+  encodeRelocationManifestV1
+} from '../protocol/service_wire_pilot_codec.generated';
 
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
 const ROOT_VERSION = 2;
@@ -925,68 +931,31 @@ interface CanonicalTreeManifest {
 }
 
 function decodeCanonicalTreeManifest(payload: Uint8Array): CanonicalTreeManifest {
-  const body = decodeCanonicalTreeFrame(payload, 'ZLTM');
-  let offset = 0;
-  const take = (length: number): Buffer => {
-    if (length < 0 || offset + length > body.byteLength) {
-      throw new Error('Canonical relocation manifest is truncated.');
-    }
-    const result = body.subarray(offset, offset + length);
-    offset += length;
-    return result;
-  };
-  if (take(1)[0] !== 1) throw new Error('Canonical relocation manifest version is invalid.');
-  const logicalLength = take(8).readBigUInt64BE();
-  const logicalChecksumCrc32c = take(4).readUInt32BE();
-  if (take(1)[0] !== 32) throw new Error('Canonical relocation inventory digest is invalid.');
-  const inventoryDigest = Buffer.from(take(32));
-  const count = take(4).readUInt32BE();
-  if (count === 0 || count > 4096) throw new Error('Canonical relocation chunk count is invalid.');
-  const chunks = Array.from({ length: count }, (_, index) => {
-    const order = take(4).readUInt32BE();
-    const referenceLength = take(2).readUInt16BE();
-    if (order !== index || referenceLength === 0 || referenceLength > 4096) {
+  const generated = decodeRelocationManifestV1(payload);
+  const chunks = generated.chunks.map((chunk, index) => {
+    if (chunk.order !== index) {
       throw new Error('Canonical relocation chunk identity is invalid.');
     }
-    const reference = {
-      value: new TextDecoder('utf-8', { fatal: true }).decode(take(referenceLength))
-    } as ZLinkBlobReference;
-    const length = take(8).readBigUInt64BE();
-    const checksumCrc32c = take(4).readUInt32BE();
-    return { order, reference, length, checksumCrc32c };
+    return {
+      order: chunk.order,
+      reference: { value: chunk.reference } as ZLinkBlobReference,
+      length: chunk.length,
+      checksumCrc32c: chunk.checksumCrc32c
+    };
   });
-  if (offset !== body.byteLength
-    || chunks.reduce((total, value) => total + value.length, 0n) !== logicalLength) {
+  if (chunks.length === 0) {
+    throw new Error('Canonical relocation chunk count is invalid.');
+  }
+  if (chunks.reduce((total, value) => total + value.length, 0n)
+    !== generated.totalLength) {
     throw new Error('Canonical relocation manifest length is invalid.');
   }
-  return { inventoryDigest, logicalLength, logicalChecksumCrc32c, chunks };
-}
-
-function decodeCanonicalTreeFrame(payload: Uint8Array, magic: string): Buffer {
-  const bytes = Buffer.from(payload);
-  if (bytes.byteLength < 15
-    || !bytes.subarray(0, 4).equals(Buffer.from(magic))
-    || bytes[4] !== 1
-    || bytes.readUInt16BE(5) !== 0) {
-    throw new Error(`Canonical relocation ${magic} frame header is invalid.`);
-  }
-  const bodyLength = bytes.readUInt32BE(7);
-  if (bytes.byteLength !== 11 + bodyLength + 4
-    || bytes.readUInt32BE(bytes.byteLength - 4)
-      !== crc32c(bytes.subarray(0, bytes.byteLength - 4))) {
-    throw new Error(`Canonical relocation ${magic} frame checksum is invalid.`);
-  }
-  return bytes.subarray(11, 11 + bodyLength);
-}
-
-function encodeCanonicalTreeFrame(magic: string, body: Uint8Array): Buffer {
-  const header = Buffer.alloc(11);
-  header.write(magic, 0, 'ascii');
-  header[4] = 1;
-  header.writeUInt16BE(0, 5);
-  header.writeUInt32BE(body.byteLength, 7);
-  const frame = Buffer.concat([header, Buffer.from(body)]);
-  return Buffer.concat([frame, u32be(crc32c(frame))]);
+  return {
+    inventoryDigest: Buffer.from(generated.inventoryDigestSha256),
+    logicalLength: generated.totalLength,
+    logicalChecksumCrc32c: generated.totalChecksumCrc32c,
+    chunks
+  };
 }
 
 async function storeCanonicalTree(
@@ -996,19 +965,24 @@ async function storeCanonicalTree(
   signal?: AbortSignal
 ): Promise<{ readonly reference: ZLinkBlobReference; readonly checksumCrc32c: number }> {
   const logical = Buffer.from(logicalRoot);
-  const chunkBody = Buffer.concat([u32be(0), u32be(logical.byteLength), logical]);
-  const chunk = encodeCanonicalTreeFrame('ZLTC', chunkBody);
+  const logicalChecksumCrc32c = crc32c(logical);
+  const chunk = Buffer.from(encodeRelocationDataChunkV1({
+    order: 0,
+    data: logical
+  }));
   const storedChunk = await putAndVerifyCanonicalBlob(store, chunk, signal);
-  const referenceBytes = Buffer.from(storedChunk.reference.value, 'utf8');
-  const manifestBody = Buffer.concat([
-    Buffer.of(1),
-    u64be(BigInt(logical.byteLength)),
-    u32be(crc32c(logical)),
-    Buffer.of(32), Buffer.from(inventoryDigest),
-    u32be(1), u32be(0), u16be(referenceBytes.byteLength), referenceBytes,
-    u64be(BigInt(logical.byteLength)), u32be(crc32c(logical))
-  ]);
-  const manifest = encodeCanonicalTreeFrame('ZLTM', manifestBody);
+  const manifest = Buffer.from(encodeRelocationManifestV1({
+    logicalFormatVersion: 1,
+    totalLength: BigInt(logical.byteLength),
+    totalChecksumCrc32c: logicalChecksumCrc32c,
+    inventoryDigestSha256: Buffer.from(inventoryDigest),
+    chunks: [{
+      order: 0,
+      reference: storedChunk.reference.value,
+      length: BigInt(logical.byteLength),
+      checksumCrc32c: logicalChecksumCrc32c
+    }]
+  }));
   const storedManifest = await putAndVerifyCanonicalBlob(store, manifest, signal);
   return {
     reference: storedManifest.reference,
@@ -1051,13 +1025,12 @@ async function readCanonicalDeferredJoinRoot(
   for (const expected of manifest.chunks) {
     const read = await store.read(expected.reference, signal);
     if (read.kind !== 'found') throw new Error('Canonical relocation chunk is missing.');
-    const body = decodeCanonicalTreeFrame(read.bytes, 'ZLTC');
-    if (body.byteLength < 8
-      || body.readUInt32BE(0) !== expected.order
-      || BigInt(body.readUInt32BE(4)) !== expected.length) {
+    const chunk = decodeRelocationDataChunkV1(read.bytes);
+    if (chunk.order !== expected.order
+      || BigInt(chunk.data.byteLength) !== expected.length) {
       throw new Error('Canonical relocation chunk identity is invalid.');
     }
-    const data = body.subarray(8);
+    const data = Buffer.from(chunk.data);
     if (crc32c(data) !== expected.checksumCrc32c) {
       throw new Error('Canonical relocation chunk data checksum is invalid.');
     }
@@ -1273,18 +1246,6 @@ function u32le(value: number): Buffer {
 
 function u64le(value: bigint): Buffer {
   const result = Buffer.alloc(8); result.writeBigUInt64LE(value); return result;
-}
-
-function u16be(value: number): Buffer {
-  const result = Buffer.alloc(2); result.writeUInt16BE(value); return result;
-}
-
-function u32be(value: number): Buffer {
-  const result = Buffer.alloc(4); result.writeUInt32BE(value); return result;
-}
-
-function u64be(value: bigint): Buffer {
-  const result = Buffer.alloc(8); result.writeBigUInt64BE(value); return result;
 }
 
 function validateIdentity(

@@ -29,6 +29,12 @@ const {
   serviceRelocationAuthorityApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 const {
+  decodeRelocationDataChunkV1,
+  decodeRelocationManifestV1,
+  encodeRelocationDataChunkV1,
+  encodeRelocationManifestV1
+} = require('../../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated');
+const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
 
@@ -270,6 +276,74 @@ test('captured direct-transfer slot is not read as a deferred Join Store root', 
   assert.notEqual(root.reference.value, 'pending');
   assert.equal(context.roots.has('pending'), false);
   assert.equal(context.events.includes('authority-cas'), false);
+});
+
+test('deferred Join canonical ZLTC/ZLTM frames match generated durable codecs byte-for-byte', async () => {
+  for (const [fixtureName, decode, encode] of [
+    ['relocation-data-chunk-v1', decodeRelocationDataChunkV1, encodeRelocationDataChunkV1],
+    ['relocation-manifest-v1', decodeRelocationManifestV1, encodeRelocationManifestV1]
+  ]) {
+    const fixture = JSON.parse(readFileSync(path.resolve(
+      __dirname,
+      `../../../../runtime/protocol/golden/${fixtureName}.json`
+    ), 'utf8'));
+    const projection = JSON.parse(readFileSync(path.resolve(
+      __dirname,
+      `../../../../runtime/protocol/generated/fixtures/${fixtureName}-pilot.json`
+    ), 'utf8'));
+    assert.equal(projection.encodedHex, fixture.encodedHex, `${fixtureName}:projection`);
+    const golden = Buffer.from(fixture.encodedHex, 'hex');
+    assert.deepEqual(Buffer.from(encode(decode(golden))), golden, fixtureName);
+  }
+
+  const captured = encodeCanonicalRelocationSlot({
+    aggregateId: relocationPublication.aggregateId,
+    aggregateGeneration: 2n,
+    targetAttemptGeneration: 0n,
+    reference: 'pending',
+    checksumCrc32c: 123,
+    sourceNodeRid: 'node-a',
+    sourceNodeGeneration: 1n,
+    sourceOwnerId: 'owner-a',
+    sourceOwnerLeaseGeneration: 5n,
+    targetNodeRid: '',
+    targetNodeGeneration: 0n,
+    targetOwnerId: '',
+    targetOwnerLeaseGeneration: 0n,
+    coordinatorOwnerId: 'owner-a',
+    coordinatorLeaseGeneration: 5n,
+    coordinatorNodeRid: 'node-a',
+    coordinatorNodeGeneration: 1n,
+    coordinatorExpectedStoreVersion: '1',
+    phase: relocationPhases.captured,
+    applicationVersion: 0n,
+    sourceCleanupState: sourceCleanupStates.pending
+  });
+  const context = harness({
+    mutateAuthorityPayload: payload => withCanonicalRelocationSlot(payload, captured)
+  });
+  await context.journal.prepare(
+    'actor-a',
+    { high: 11n, low: 12n },
+    { nodeRid: 'node-a', actorId: 'actor-a', objectGeneration: 17n, meshName: 'game' },
+    Buffer.from('reply'),
+    undefined,
+    undefined,
+    'b'.repeat(64)
+  );
+
+  const chunk = [...context.roots.values()].find(value => value.subarray(0, 4).toString() === 'ZLTC');
+  const manifest = [...context.roots.values()].find(value => value.subarray(0, 4).toString() === 'ZLTM');
+  assert.ok(chunk, 'the runtime must write a ZLTC frame');
+  assert.ok(manifest, 'the runtime must write a ZLTM frame');
+  assert.deepEqual(
+    Buffer.from(encodeRelocationDataChunkV1(decodeRelocationDataChunkV1(chunk))),
+    chunk
+  );
+  assert.deepEqual(
+    Buffer.from(encodeRelocationManifestV1(decodeRelocationManifestV1(manifest))),
+    manifest
+  );
 });
 
 function harness(options = {}) {
