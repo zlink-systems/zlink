@@ -128,9 +128,20 @@ bool tcp_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
         return false;
     }
 
-    //  The fd is already set to non-blocking; inform Asio to avoid blocking
-    //  synchronous write_some/read_some paths.
-    _socket->native_non_blocking (true, ec);
+    //  The fd is already set to non-blocking, but Asio tracks two separate
+    //  state bits. native_non_blocking() only sets the *internal* bit, which
+    //  Asio uses for its own reactor-driven asynchronous operations.
+    //  socket_ops::sync_send()/sync_recv() consult the *user* bit
+    //  (user_set_non_blocking) instead: without it they treat EAGAIN as
+    //  "retry later" and block the calling thread in poll(fd, -1) until the
+    //  descriptor becomes ready again. Because a single IO thread drives both
+    //  peers of a connection, such a blocking poll() inside the speculative
+    //  write path stops the reactor and the peer's armed async read can never
+    //  drain the socket, deadlocking the connection permanently.
+    //  non_blocking() sets the user bit (and the O_NONBLOCK flag), so
+    //  write_some()/read_some() report would_block instead of blocking while
+    //  the asynchronous paths keep working unchanged.
+    _socket->non_blocking (true, ec);
     if (ec) {
         ASIO_GLOBAL_ERROR ("tcp_transport non-blocking failed: %s", ec.message ().c_str ());
         _socket.reset ();

@@ -110,9 +110,13 @@ bool ipc_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
         return false;
     }
 
-    //  The fd is already set to non-blocking; inform Asio to avoid blocking
-    //  synchronous write_some/read_some paths.
-    _socket->native_non_blocking (true, ec);
+    //  Same rationale as tcp_transport_t::open(): Asio's synchronous
+    //  write_some()/read_some() only honour the *user* non-blocking bit, so
+    //  native_non_blocking() would leave the speculative path able to block
+    //  the IO thread in poll(fd, -1). ZLINK_ASIO_IPC_SYNC_WRITE is opt-in
+    //  today, but the hazard is identical, so set the bit Asio actually
+    //  checks.
+    _socket->non_blocking (true, ec);
     if (ec) {
         const int tmp_errno = ec.value ();
         errno = tmp_errno;
