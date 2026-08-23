@@ -58,6 +58,20 @@ final class ZoneStatusReporterLifecycleTest {
         assertFalse(reporter.isRunning());
     }
 
+    @Test
+    void reportNowSubmitsWhileRunning() throws Exception {
+        RuntimePort runtime = new RuntimePort();
+        ZoneStatusReporter reporter = reporter(runtime);
+        reporter.start();
+        runtime.firstSubmission.get(2, TimeUnit.SECONDS);
+        int submissionsBeforeReportNow = runtime.submissions.get();
+
+        reporter.reportNow().toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+        assertEquals(submissionsBeforeReportNow + 1, runtime.submissions.get());
+        reporter.stop();
+    }
+
     private static ZoneStatusReporter reporter(RuntimePort runtime) {
         return new ZoneStatusReporter(
             new SampleTopology(
@@ -66,7 +80,12 @@ final class ZoneStatusReporterLifecycleTest {
                 "tcp://127.0.0.1:1",
                 null,
                 "redis://127.0.0.1:1",
-                "test:"),
+                "test:",
+                false,
+                false,
+                false,
+                "",
+                ""),
             runtime,
             new NodeCensus(),
             new NodeMaintenanceState());
@@ -74,6 +93,7 @@ final class ZoneStatusReporterLifecycleTest {
 
     private static final class RuntimePort implements ZLinkRouteClient, SmartLifecycle {
         private final CompletableFuture<Void> firstSubmission = new CompletableFuture<>();
+        private final AtomicInteger submissions = new AtomicInteger();
         private final AtomicInteger postStopSubmissions = new AtomicInteger();
         private final AtomicInteger runningProducerStops = new AtomicInteger();
         private ZoneStatusReporter producer;
@@ -83,6 +103,7 @@ final class ZoneStatusReporterLifecycleTest {
         @Override
         public ZLinkSendCall sendToChannel(String channelName, Object message) {
             return () -> {
+                submissions.incrementAndGet();
                 if (stopped) {
                     postStopSubmissions.incrementAndGet();
                 }
