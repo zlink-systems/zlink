@@ -115,7 +115,7 @@ if (conn_rc != ZLINK_CONNECT_OK) {
 - **투기적 쓰기(speculative write)** — 동기 쓰기를 먼저 시도하고 실패하면 비동기로 전환
 - **모아 쓰기(gather write)** — 헤더와 바디를 한 번에 보내 시스템 콜 횟수를 줄임
 
-> 투기적 쓰기 등 내부 최적화 상세는 [architecture.md](../internals/architecture.ko.md)를 참고.
+> 투기적 쓰기 등 내부 최적화 상세는 [architecture.md](../spec/core/systems/01-architecture.ko.md)를 참고.
 
 ## 3. IPC
 

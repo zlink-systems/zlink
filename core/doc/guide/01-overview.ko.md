@@ -61,7 +61,7 @@ cmake --build core/build
 
 [Socket Pattern](03-0-socket-patterns.ko.md)에서 통신 방식을 고른 뒤 [Core API](02-core-api.ko.md)와
 [Message API](09-message-api.ko.md)를 사용한다. Raw socket event와 snapshot은
-[Monitoring](06-monitoring.ko.md)에서 설명한다.
+[Monitoring](../spec/core/06-monitoring.ko.md)에서 설명한다.
 
 <!-- zlink-nav:bottom:start -->
 [Core API →](02-core-api.ko.md)

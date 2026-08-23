@@ -49,4 +49,4 @@ zlink_recv_result_t rc = zlink_router_recv_part(
 
 ROUTER mandatory와 handover 동작은 [Socket Option](12-socket-options.ko.md)의 typed router
 option으로 설정한다. Routing id 수명과 복사 규칙은 [Routing ID](08-routing-id.ko.md), 같은
-handle의 동시 사용 조건은 [Thread Safety](11-thread-safety.ko.md)를 참고한다.
+handle의 동시 사용 조건은 [Thread Safety](../spec/core/systems/04-thread-safety.ko.md)를 참고한다.

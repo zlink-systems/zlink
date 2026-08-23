@@ -7,7 +7,7 @@
 이 category는 messaging API를 보완하는 독립 helper 진입점 — atomic counter, 고해상도
 stopwatch, 그 밖의 프로세스 helper(capability 조회, proxy loop, sleep, OS thread 관리)를
 다룬다. 어느 것도 context나 socket에 의존하지 않는다. 정확한 signature는
-[Utilities 스펙](../spec/core/08-utilities.ko.md)이 소유한다.
+[Utilities 스펙](../spec/core/07-utilities.ko.md)이 소유한다.
 
 ---
 
@@ -194,4 +194,4 @@ Handle마다 정확히 한 번 `join`을 호출하고, join되는 스레드 자�
 
 ---
 
-전체 근거는 [Utilities 스펙](../spec/core/08-utilities.ko.md)을 참고한다.
+전체 근거는 [Utilities 스펙](../spec/core/07-utilities.ko.md)을 참고한다.

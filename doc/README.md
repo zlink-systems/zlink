@@ -25,7 +25,7 @@ internal context, link to the internals document instead.
 |----------|-------------------|-------------|
 | **Library Users** | [guide/01-overview.md](../core/doc/guide/01-overview.en.md) | Developing messaging applications with the zlink API |
 | **Binding Users** | [guide/bindings/README.ko.md](../bindings/doc/guide/README.ko.md) (Korean) | C++/Java/.NET/Node.js/Python bindings |
-| **Library Developers** | [internals/architecture.md](../core/doc/internals/architecture.en.md) | Internal architecture and implementation details |
+| **Library Developers** | [internals/architecture.md](../core/doc/spec/core/systems/01-architecture.en.md) | Internal architecture and implementation details |
 | **Build/Release Engineers** | [building/build-guide.md](building/build-guide.md) | Building, testing, and packaging |
 | **Adopters / Legal Reviewers** | [license/README.md](license/README.md) | License policy across `core`/`bindings`/`framework`/`http-client` |
 
@@ -46,7 +46,7 @@ internal context, link to the internals document instead.
 | [03-5-stream.md](../core/doc/guide/03-5-stream.en.md) | STREAM socket (RAW communication) |
 | [04-transports.md](../core/doc/guide/04-transports.en.md) | Transport guide (tcp/ipc/inproc/ws/wss/tls) |
 | [05-tls-security.md](../core/doc/guide/05-tls-security.en.md) | TLS/SSL configuration and security guide |
-| [06-monitoring.md](../core/doc/guide/06-monitoring.en.md) | Monitoring API usage |
+| [06-monitoring.md](../core/doc/spec/core/06-monitoring.en.md) | Monitoring API usage |
 
 ### Services
 | Document | Description |
@@ -85,14 +85,14 @@ language-specific rules.
 
 | Document | Description |
 |----------|-------------|
-| [architecture.md](../core/doc/internals/architecture.en.md) | System architecture overview (5-layer details) |
-| [protocol-zmp.md](../core/doc/internals/protocol-zmp.en.md) | ZMP v1.0 protocol details |
-| [protocol-raw.md](../core/doc/internals/protocol-raw.en.md) | RAW (STREAM) protocol details |
-| [stream-socket.md](../core/doc/internals/stream-socket.en.md) | STREAM socket internals, WS/WSS optimization, runtime defaults |
-| [socket-option-defaults.md](../core/doc/internals/socket-option-defaults.en.md) | Effective socket option defaults from code |
-| [threading-model.md](../core/doc/internals/threading-model.en.md) | Threading and concurrency model |
+| [architecture.md](../core/doc/spec/core/systems/01-architecture.en.md) | System architecture overview (5-layer details) |
+| [protocol-zmp.md](../core/doc/spec/core/protocol/01-zmp.en.md) | ZMP v1.0 protocol details |
+| [protocol-raw.md](../core/doc/spec/core/protocol/02-raw.en.md) | RAW (STREAM) protocol details |
+| [stream-socket.md](../core/doc/spec/core/socket/08-stream.en.md) | STREAM socket internals, WS/WSS optimization, runtime defaults |
+| [socket-option-defaults.md](../core/doc/spec/core/socket/README.en.md) | Effective socket option defaults from code |
+| [threading-model.md](../core/doc/spec/core/systems/02-threading-model.en.md) | Threading and concurrency model |
 | [Framework internals](../framework/doc/framework/common/spec/server/README.en.md) | Framework runtime structure and ownership boundaries |
-| [design-decisions.md](../core/doc/internals/design-decisions.en.md) | Design decision records |
+| [design-decisions.md](../core/doc/spec/core/systems/09-design-decisions.en.md) | Design decision records |
 
 ## Build and Development (building/)
 

@@ -1,6 +1,8 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/) | English
+[한국어](README.ko.md) | English
 
-[Spec Index](../../README.en.md) · [Core Index](../README.en.md)
+<!-- zlink-nav:start -->
+[Core Spec Index](../README.en.md) | [Previous: Runtime Boundary](../08-runtime-boundary.en.md) | [Next: PAIR](01-pair.en.md)
+<!-- zlink-nav:end -->
 
 # Socket — Common Specification
 
@@ -10,14 +12,14 @@ behavioral details) live in separate files.
 
 | Socket Type | Spec |
 |-------------|------|
-| PAIR | [01-pair.md](01-pair.en.md) |
-| DEALER | [06-dealer.md](06-dealer.en.md) |
-| ROUTER | [07-router.md](07-router.en.md) |
-| PUB | [02-pub.md](02-pub.en.md) |
-| SUB | [03-sub.md](03-sub.en.md) |
-| XPUB | [04-xpub.md](04-xpub.en.md) |
-| XSUB | [05-xsub.md](05-xsub.en.md) |
-| STREAM | [08-stream.md](08-stream.en.md) |
+| PAIR | [pair.md](01-pair.en.md) |
+| DEALER | [dealer.md](06-dealer.en.md) |
+| ROUTER | [router.md](07-router.en.md) |
+| PUB | [pub.md](02-pub.en.md) |
+| SUB | [sub.md](03-sub.en.md) |
+| XPUB | [xpub.md](04-xpub.en.md) |
+| XSUB | [xsub.md](05-xsub.en.md) |
+| STREAM | [stream.md](08-stream.en.md) |
 
 ## Thread-Safety Summary
 
@@ -640,7 +642,7 @@ the messaging pattern. Receive mode for raw sockets is fixed per type:
 `PAIR`, `DEALER`, `SUB`, and `XSUB` use part receive, and `ROUTER` uses
 `zlink_router_recv_part()`. Only `STREAM` offers a choice of raw part receive, raw
 callback (`zlink_recv_handler()`), or packet callback
-(`zlink_stream_packet_handler()`) — see [08-stream.md](08-stream.en.md). The socket
+(`zlink_stream_packet_handler()`) — see [stream.md](08-stream.en.md). The socket
 must be closed with `zlink_close()` before the context is terminated.
 
 **Returns:** Socket handle on success, `NULL` on failure (errno is set).
@@ -670,7 +672,7 @@ with `ENOTSUP`. After attach, `zlink_recv_part()`,
 the same handle fail with `errno=EBUSY`. A second attach on the same
 handle also fails with `errno=EBUSY`.
 
-See [08-stream.md](08-stream.en.md) for the full contract.
+See [stream.md](08-stream.en.md) for the full contract.
 
 **Returns:** `ZLINK_HANDLER_OK` on success. On failure, returns a
 `zlink_handler_result_t` value. Detailed internal errno remains available
@@ -1295,3 +1297,61 @@ needed.
 
 **See also:** `zlink_socket_monitor_handler`, `zlink_socket_monitor_recv`,
 `zlink_monitor_status`, `zlink_monitor_close`
+
+## Internals
+
+> **The document that owns this chapter's contract** — the public contract
+> for each option is covered by the contract part of this document and the
+> [socket options guide](../../../guide/12-socket-options.en.md). This section
+> explains internal defaults and storage layout.
+
+`options_t` stores common raw-socket and transport defaults. Typed socket
+implementations validate pattern-specific options before applying them.
+
+### Queue planning
+
+`sndhwm` and `rcvhwm` are 64-bit accounted-byte limits. Their manual default is
+`4,096,000` bytes, and `0` means unlimited. There is no message-count HWM
+compatibility state. A runtime shrink keeps already queued messages and defers
+the effective reduction until retained bytes fall below the new limit, then
+applies the deferred shrink immediately.
+
+Automatic HWM uses the context Core memory budget, profile role bounds, and a
+registry of unique physical directional queues. The registry records one
+inproc ypipe once rather than once per endpoint and identifies it with a stable
+queue ID and generation. After manual reservations, bounded water-filling
+starts each physical queue at its role minimum and raises unsaturated queues to
+their role maximum. Division remainders are granted one byte at a time in
+stable queue-ID order.
+
+Core does not add the values of two inproc endpoints. One finite-manual endpoint
+sets the cap; two finite-manual endpoints use the smaller cap; an
+unlimited-manual endpoint paired with an automatic endpoint uses the automatic
+plan. Two unlimited endpoints remain unlimited for admission while reserving
+the role maximum once for planning.
+
+The DEALER/ROUTER completion progress lane carries only terminal replies and
+error replies. It applies no automatic or manual HWM, LWM, inproc boost, role
+bounds, or Core budget reservation. Disabling automatic HWM preserves the last
+applied HWM on live pipes and excludes them from subsequent automatic planning.
+
+The Core pipe low watermark is `ceil(hwm_bytes / 2)`. This value controls byte
+credit updates and is not configurable through a Framework receive-resume
+profile.
+
+### Application-visible state
+
+`zlink_monitor_status()` ABI version 3 exposes planned, applied, and deferred
+64-bit HWM byte values; pending-message counts and pending bytes; bytes in
+flight; the minimum message charge; and oversize single-message admission
+counters. The context budget snapshot distinguishes physical-queue capacity,
+provisional and committed queue bytes, application-held leases, and completion
+and monitor queues. These fields are diagnostic snapshots. Applications
+configure policy inputs through public options rather than mutating internal
+values.
+
+### Transport defaults
+
+Reconnect, TCP keepalive, kernel buffers, TOS, handshake intervals, and TLS
+fields are applied by the relevant transport. Unsupported combinations fail
+through the typed configuration result.

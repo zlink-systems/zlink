@@ -83,7 +83,7 @@ STREAM만의 고유 동작은 다음과 같다.
 ## 4. 콜백 예시
 
 STREAM raw 콜백에서 전달되는 모든 part는 애플리케이션 데이터다.
-connect/disconnect는 소켓 monitor로 관찰한다([Monitoring](06-monitoring.ko.md) 참고).
+connect/disconnect는 소켓 monitor로 관찰한다([Monitoring](../spec/core/06-monitoring.ko.md) 참고).
 
 ```c
 void on_message(const zlink_routing_id_t *source_rid,
@@ -241,7 +241,7 @@ STREAM listener는 raw TCP 피어가 보낸 바이트를 직접 받을 수 있�
 - STREAM 세션 스케줄링 기본값: `rr`
 
 > STREAM 런타임 환경변수 및 내부 튜닝 상수는
-> [STREAM 내부 문서](../internals/stream-socket.ko.md)를 참고.
+> [STREAM 내부 문서](../spec/core/socket/08-stream.ko.md)를 참고.
 
 ---
 

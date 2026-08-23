@@ -12,7 +12,7 @@
 |------|-----------|------|
 | **라이브러리 사용자** | [guide/01-overview.ko.md](../core/doc/guide/01-overview.ko.md) | zlink API로 메시징 애플리케이션 개발 |
 | **바인딩 사용자** | [guide/bindings/README.ko.md](../bindings/doc/guide/README.ko.md) | C++/Java/.NET/Node.js/Python 바인딩 |
-| **라이브러리 개발자** | [internals/architecture.ko.md](../core/doc/internals/architecture.ko.md) | 내부 아키텍처 및 구현 상세 |
+| **라이브러리 개발자** | [internals/architecture.ko.md](../core/doc/spec/core/systems/01-architecture.ko.md) | 내부 아키텍처 및 구현 상세 |
 | **빌드/배포 담당자** | [building/build-guide.ko.md](building/build-guide.ko.md) | 빌드, 테스트, 패키징 |
 | **채택 검토자 / 법무 담당자** | [license/README.ko.md](license/README.ko.md) | `core`/`bindings`/`framework`/`http-client` 전반의 라이선스 정책 |
 
@@ -33,7 +33,7 @@
 | [03-5-stream.ko.md](../core/doc/guide/03-5-stream.ko.md) | STREAM 소켓 (RAW 통신) |
 | [04-transports.ko.md](../core/doc/guide/04-transports.ko.md) | Transport 가이드 (tcp/ipc/inproc/ws/wss/tls) |
 | [05-tls-security.ko.md](../core/doc/guide/05-tls-security.ko.md) | TLS/SSL 설정 및 보안 가이드 |
-| [06-monitoring.ko.md](../core/doc/guide/06-monitoring.ko.md) | 모니터링 API 사용법 |
+| [06-monitoring.ko.md](../core/doc/spec/core/06-monitoring.ko.md) | 모니터링 API 사용법 |
 
 ### Services
 | 문서 | 설명 |
@@ -73,14 +73,14 @@
 
 | 문서 | 설명 |
 |------|------|
-| [architecture.ko.md](../core/doc/internals/architecture.ko.md) | 시스템 아키텍처 전체 (5계층 상세) |
-| [protocol-zmp.ko.md](../core/doc/internals/protocol-zmp.ko.md) | ZMP v1.0 프로토콜 상세 |
-| [protocol-raw.ko.md](../core/doc/internals/protocol-raw.ko.md) | RAW (STREAM) 프로토콜 상세 |
-| [stream-socket.ko.md](../core/doc/internals/stream-socket.ko.md) | STREAM 소켓 내부 구조, WS/WSS 최적화, 런타임 기본값 |
-| [socket-option-defaults.ko.md](../core/doc/internals/socket-option-defaults.ko.md) | 코드 기준 소켓 옵션 실효 기본값 |
-| [threading-model.ko.md](../core/doc/internals/threading-model.ko.md) | 스레딩 및 동시성 모델 |
+| [architecture.ko.md](../core/doc/spec/core/systems/01-architecture.ko.md) | 시스템 아키텍처 전체 (5계층 상세) |
+| [protocol-zmp.ko.md](../core/doc/spec/core/protocol/01-zmp.ko.md) | ZMP v1.0 프로토콜 상세 |
+| [protocol-raw.ko.md](../core/doc/spec/core/protocol/02-raw.ko.md) | RAW (STREAM) 프로토콜 상세 |
+| [stream-socket.ko.md](../core/doc/spec/core/socket/08-stream.ko.md) | STREAM 소켓 내부 구조, WS/WSS 최적화, 런타임 기본값 |
+| [socket-option-defaults.ko.md](../core/doc/spec/core/socket/README.ko.md) | 코드 기준 소켓 옵션 실효 기본값 |
+| [threading-model.ko.md](../core/doc/spec/core/systems/02-threading-model.ko.md) | 스레딩 및 동시성 모델 |
 | [Framework 내부 구조](../framework/doc/framework/common/spec/server/README.ko.md) | Framework runtime 내부 구조와 책임 경계 |
-| [design-decisions.ko.md](../core/doc/internals/design-decisions.ko.md) | 설계 결정 기록 |
+| [design-decisions.ko.md](../core/doc/spec/core/systems/09-design-decisions.ko.md) | 설계 결정 기록 |
 
 ## 빌드 및 개발 (building/)
 

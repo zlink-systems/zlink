@@ -10,7 +10,7 @@ title: "ZMP protocol"
 
 > **이 장이 답하는 것** — socket 사이에서 handshake와 message frame을 교환하는 wire
 > protocol의 개념을 소개한다. 정확한 frame 형식은
-> [ZMP protocol internals](../internals/protocol-zmp.ko.md)가 소유한다.
+> [ZMP protocol internals](../spec/core/protocol/01-zmp.ko.md)가 소유한다.
 
 ZMP는 zlink raw socket 사이에서 handshake와 message frame을 교환하는 wire protocol이다. Application은
 일반적으로 protocol을 직접 구현하지 않고 socket API를 사용한다.
@@ -31,5 +31,5 @@ DEALER와 ROUTER의 typed request/reply API는 Core가 관리하는 control part
 sequence를 전달한다. Application payload는 control part 뒤에 유지되며 receive API는 control part를
 제거한 payload와 request metadata를 반환한다.
 
-Wire format의 구현 상세는 [ZMP internals](../internals/protocol-zmp.ko.md)를 참고한다. Application
+Wire format의 구현 상세는 [ZMP internals](../spec/core/protocol/01-zmp.ko.md)를 참고한다. Application
 topology protocol은 Framework package가 소유하며 Core ZMP guide의 범위에 포함되지 않는다.

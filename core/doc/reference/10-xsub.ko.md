@@ -8,7 +8,7 @@
 `zlink_set_sub_option`/`zlink_get_sub_option`,
 `zlink_set_subscription`/`zlink_unset_subscription`, `zlink_subscribe_part`,
 `zlink_subscription_at` — 을 노출하며 XSUB 전용 추가는 없다. 이 category는 taxonomy 안에
-XSUB의 자리를 마련하기 위해서만 존재한다 — 모든 항목은 [SUB category](08-sub.ko.md)를,
+XSUB의 자리를 마련하기 위해서만 존재한다 — 모든 항목은 [SUB category](../spec/core/socket/03-sub.ko.md)를,
 정확한 계약은 [XSUB 스펙](../spec/core/socket/05-xsub.ko.md)(SUB 스펙과 실질적으로 동일하며
 XSUB subject로 다시 서술됨)을 참고한다.
 

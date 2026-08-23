@@ -8,7 +8,7 @@ This category covers the entry points for waiting on raw sockets, file descripto
 timers in one event loop: the one-shot `zlink_poll` and the reusable poller family. Poller
 readiness is one of Core's three event families (the others are socket monitor events and timer
 fires — Socket monitor and Timers categories). The exact signatures are owned by the
-[Polling specification](../spec/core/06-polling.en.md).
+[Polling specification](../spec/core/05-polling.en.md).
 
 ---
 
@@ -175,4 +175,4 @@ readiness bit. `ZLINK_HAVE_POLLER == 1` means this public poller API is present 
 
 ---
 
-See the [Polling specification](../spec/core/06-polling.en.md) for the full rationale.
+See the [Polling specification](../spec/core/05-polling.en.md) for the full rationale.

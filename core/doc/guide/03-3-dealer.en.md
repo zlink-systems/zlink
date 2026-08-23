@@ -142,7 +142,7 @@ When DEALER needs to send a request and wait for a reply, use
 attaches a ZMP request-reply envelope and delivers the reply via callback.
 
 > For the ZMP request-reply envelope wire format, see
-> [ZMP Protocol](../internals/protocol-zmp.en.md).
+> [ZMP Protocol](../spec/core/protocol/01-zmp.en.md).
 
 ```c
 static void on_reply(zlink_request_result_t result,

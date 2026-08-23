@@ -176,6 +176,13 @@ plugins:
             Protocol Raw: Raw 프로토콜
             I/O Thread: I/O 스레드
             Result Enums: 결과 Enum
+            Sockets: 소켓
+            Protocol: 프로토콜
+            Systems: 시스템
+            Runtime Boundary: 런타임 경계
+            Connection Memory: 연결 메모리
+            Auto HWM: 자동 HWM
+            Source Layout: 소스 레이아웃
 
 # 문서 트리는 정본을 심링크로 직접 건다(`docs/guide` → `core/doc/guide` 등).
 # 복사본을 두면 양쪽이 갈라진다 — 실제로 갈라져서 사이트가 byte HWM 이전의 낡은
@@ -537,12 +544,11 @@ nav:
         - Context: spec/core/01-context.md
         - Message: spec/core/02-message.md
         - Errors: spec/core/03-errors.md
-        - Result Enums: spec/core/04-errno-map.md
-        - Events: spec/core/05-events.md
-        - Polling: spec/core/06-polling.md
-        - Monitoring: spec/core/07-monitoring.md
-        - Utilities: spec/core/08-utilities.md
-        - Runtime Boundary: spec/core/09-runtime-boundary.md
+        - Events: spec/core/04-events.md
+        - Polling: spec/core/05-polling.md
+        - Monitoring: spec/core/06-monitoring.md
+        - Utilities: spec/core/07-utilities.md
+        - Runtime Boundary: spec/core/08-runtime-boundary.md
         - Sockets:
           - Overview: spec/core/socket/README.md
           - PAIR: spec/core/socket/01-pair.md
@@ -553,22 +559,21 @@ nav:
           - DEALER: spec/core/socket/06-dealer.md
           - ROUTER: spec/core/socket/07-router.md
           - STREAM: spec/core/socket/08-stream.md
-      - Internals:
-        - Architecture: internals/architecture.md
-        - Threading Model: internals/threading-model.md
-        - Thread Safety: internals/thread-safety.md
-        - I/O Thread: internals/io-thread.md
-        - Design Decisions: internals/design-decisions.md
-        - POSD Module Structure: internals/posd-module-structure.md
-        - Source Layout: internals/core-source-layout.md
-        - Stream Socket: internals/stream-socket.md
-        - Socket Options: internals/socket-option-defaults.md
-        - Connection Memory: internals/connection-memory.md
-        - Auto HWM: internals/auto-hwm.md
-        - Multipart Atomicity: internals/multipart-atomicity.md
-        - Runtime Boundary: internals/runtime-boundary.md
-        - Protocol ZMP: internals/protocol-zmp.md
-        - Protocol Raw: internals/protocol-raw.md
+        - Protocol:
+          - Overview: spec/core/protocol/README.md
+          - Protocol ZMP: spec/core/protocol/01-zmp.md
+          - Protocol Raw: spec/core/protocol/02-raw.md
+        - Systems:
+          - Overview: spec/core/systems/README.md
+          - Architecture: spec/core/systems/01-architecture.md
+          - Threading Model: spec/core/systems/02-threading-model.md
+          - I/O Thread: spec/core/systems/03-io-thread.md
+          - Thread Safety: spec/core/systems/04-thread-safety.md
+          - Connection Memory: spec/core/systems/05-connection-memory.md
+          - Auto HWM: spec/core/systems/06-auto-hwm.md
+          - Source Layout: spec/core/systems/07-core-source-layout.md
+          - POSD Module Structure: spec/core/systems/08-posd-module-structure.md
+          - Design Decisions: spec/core/systems/09-design-decisions.md
 
 markdown_extensions:
   - admonition

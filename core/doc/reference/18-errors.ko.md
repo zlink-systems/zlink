@@ -10,7 +10,7 @@ introspection 진입점 세 개를 다룬다. 공개 함수는 주요 제어 흐
 enum으로 반환하고 같은 스레드의 `zlink_errno()`에 더 상세한 원인을 기록한다 — caller는
 result enum으로 분기하고 errno는 로깅과 세밀한 진단에 쓴다. 성공은 항상 숫자
 0이며, 성공 후에는 errno가 정의되지 않는다. 정확한 signature는
-[Errors 스펙](../spec/core/03-errors.ko.md)과 [errno map](../spec/core/04-errno-map.ko.md)이
+[Errors 스펙](../spec/core/03-errors.ko.md)과 [errno map](../spec/core/03-errors.ko.md)이
 소유한다.
 
 ---
@@ -32,7 +32,7 @@ result enum으로 분기하고 errno는 로깅과 세밀한 진단에 쓴다. �
 | `zlink_config_result_t` | 모든 `zlink_set_*`/`zlink_get_*` 옵션 API, 기타 control-path 호출 | `OK`(0), `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706), `CONFLICT`(707), `BUFFER_TOO_SMALL`(708), `BUSY`(709) |
 
 **각 값 family가 실제로 뜻하는 것**(함수별 정확한 `errno` 매핑은
-[errno map](../spec/core/04-errno-map.ko.md) 참고): submit의 `BACKPRESSURED`/
+[errno map](../spec/core/03-errors.ko.md) 참고): submit의 `BACKPRESSURED`/
 `NOT_CONNECTED`/`NOT_FOUND`/`NOT_ADMITTED`는 예외적 실패가 아니라 정상적인 실행 흐름이다
 — 모든 non-`OK` submit 결과를 똑같이 취급하는 caller는 "재시도가 합리적"과 "이대로
 제출하면 절대 성공하지 않음"의 구분을 잃는다. Receive/config의 `BUFFER_TOO_SMALL`은
@@ -93,4 +93,4 @@ library 버전이 application이 빌드된 버전과 일치하는지 런타임�
 ---
 
 전체 근거는 [Errors 스펙](../spec/core/03-errors.ko.md)과
-[errno map](../spec/core/04-errno-map.ko.md)을 참고한다.
+[errno map](../spec/core/03-errors.ko.md)을 참고한다.

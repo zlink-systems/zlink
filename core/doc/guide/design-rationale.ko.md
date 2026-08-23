@@ -9,10 +9,10 @@ title: "설계 근거 — 왜 이렇게 만들었나"
 # 설계 근거 — 왜 이렇게 만들었나
 
 > **이 장이 답하는 것** — zlink 핵심 설계 결정의 이유를 사용자 관점에서 설명한다.
-> 구현 상세는 [internals](../internals/architecture.ko.md)가 소유한다.
+> 구현 상세는 [internals](../spec/core/systems/01-architecture.ko.md)가 소유한다.
 
 이 문서는 zlink가 채택한 핵심 설계 결정의 **이유**를 사용자 관점에서 설명한다.
-구현 상세는 [internals](../internals/architecture.ko.md)가 소유하며, 여기서는
+구현 상세는 [internals](../spec/core/systems/01-architecture.ko.md)가 소유하며, 여기서는
 "이 선택이 사용자에게 어떤 의미인가"에 집중한다. zlink를 도입할지 평가하거나
 성능 특성을 이해하려는 독자를 위한 문서다.
 
@@ -52,7 +52,7 @@ API](09-message-api.ko.md)).
 
 **사용자에게 의미**: 핫 패스에서 락 경합이 없어 멀티코어 확장이 잘 된다. 대신
 소켓은 스레드 안전하지 않다 — 같은 소켓을 여러 스레드에서 동시에 다루지 않는 것이
-전제다([11 스레드 안전성](11-thread-safety.ko.md)).
+전제다([11 스레드 안전성](../spec/core/systems/04-thread-safety.ko.md)).
 
 ### True Async — Proactor 패턴
 
@@ -75,7 +75,7 @@ tcp(네트워크)로 옮겨 간다 — 주소 스킴만 바뀐다. 단 tls/wss�
 
 ## 더 깊이
 
-- 계층 아키텍처 전체: [internals/architecture](../internals/architecture.ko.md)
-- 설계 결정의 트레이드오프: [internals/design-decisions](../internals/design-decisions.ko.md)
+- 계층 아키텍처 전체: [internals/architecture](../spec/core/systems/01-architecture.ko.md)
+- 설계 결정의 트레이드오프: [internals/design-decisions](../spec/core/systems/09-design-decisions.ko.md)
 - wire protocol: [ZMP 프로토콜 레퍼런스](zmp-protocol.ko.md)
 - 전달 보장이 어디까지인지: [신뢰성·전달 보장](reliability.ko.md)

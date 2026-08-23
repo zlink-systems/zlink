@@ -56,7 +56,7 @@ cmake --build core/build
 
 Choose a socket pattern in [Socket Patterns](03-0-socket-patterns.en.md), then use
 the [Core API](02-core-api.en.md) and [Message API](09-message-api.en.md) guides. The
-[Monitoring](06-monitoring.en.md) guide covers raw socket events and snapshots.
+[Monitoring](../spec/core/06-monitoring.en.md) guide covers raw socket events and snapshots.
 
 <!-- zlink-nav:bottom:start -->
 [Core API →](02-core-api.en.md)

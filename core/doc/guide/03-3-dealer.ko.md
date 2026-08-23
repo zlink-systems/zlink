@@ -164,7 +164,7 @@ DEALER가 응답을 기다리는 흐름은 일반 `send/recv`와 별도로
 붙여 보내고, 응답은 콜백으로 전달된다.
 
 > ZMP request-reply envelope의 와이어 프레임 형식은
-> [ZMP 프로토콜](../internals/protocol-zmp.ko.md)을 참고.
+> [ZMP 프로토콜](../spec/core/protocol/01-zmp.ko.md)을 참고.
 
 ```c
 static void on_reply(zlink_request_result_t result,

@@ -8,7 +8,7 @@ An extended subscriber with subscription forwarding upstream. XSUB exposes exact
 entry points as SUB — `zlink_set_sub_option`/`zlink_get_sub_option`,
 `zlink_set_subscription`/`zlink_unset_subscription`, `zlink_subscribe_part`, and
 `zlink_subscription_at` — with no XSUB-specific addition. This category exists only so XSUB has
-a place in the taxonomy; see the [SUB category](08-sub.en.md) for every entry, and the
+a place in the taxonomy; see the [SUB category](../spec/core/socket/03-sub.en.md) for every entry, and the
 [XSUB specification](../spec/core/socket/05-xsub.en.md) for the exact contract (identical in
 substance to the SUB specification, restated for the XSUB subject).
 

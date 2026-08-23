@@ -8,7 +8,7 @@ This category covers the standalone helper entry points that complement the mess
 atomic counters, a high-resolution stopwatch, and miscellaneous process helpers (capability
 query, proxy loops, sleep, and OS thread management). None of these depend on a context or
 socket. The exact signatures are owned by the
-[Utilities specification](../spec/core/08-utilities.en.md).
+[Utilities specification](../spec/core/07-utilities.en.md).
 
 ---
 
@@ -189,4 +189,4 @@ API. Call `join` exactly once per handle, and never from the thread being joined
 
 ---
 
-See the [Utilities specification](../spec/core/08-utilities.en.md) for the full rationale.
+See the [Utilities specification](../spec/core/07-utilities.en.md) for the full rationale.

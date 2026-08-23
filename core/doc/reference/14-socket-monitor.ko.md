@@ -8,7 +8,7 @@
 protocol·lifecycle 상태를 관찰하는 진입점을 다룬다. Monitor는 Core의 세 event family 중
 하나다(나머지 둘은 poller readiness와 timer fire — Polling and pollers category
 참고) — 관찰 대상 socket에는 절대 영향을 주지 않는다. 정확한 signature는
-[Monitoring 스펙](../spec/core/07-monitoring.ko.md)이 소유한다.
+[Monitoring 스펙](../spec/core/06-monitoring.ko.md)이 소유한다.
 
 ---
 
@@ -133,6 +133,6 @@ callback과 마찬가지로 호출 동안만 유효한 borrowed view다.
 
 ---
 
-전체 근거는 [Monitoring 스펙](../spec/core/07-monitoring.ko.md)을 참고한다.
-[Events 카탈로그](../spec/core/05-events.ko.md)는 monitor 이벤트를 나머지 두 event
+전체 근거는 [Monitoring 스펙](../spec/core/06-monitoring.ko.md)을 참고한다.
+[Events 카탈로그](../spec/core/04-events.ko.md)는 monitor 이벤트를 나머지 두 event
 family인 poller readiness·timer fire와 연결한다.

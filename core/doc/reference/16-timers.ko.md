@@ -9,7 +9,7 @@
 `zlink_poller_remove_timer`, Polling and pollers category)하는 것을 다룬다. Timer fire는
 Core의 세 event family 중 하나다(나머지 둘은 socket monitor 이벤트와 poller readiness —
 Socket monitor·Polling and pollers category 참고). 정확한 signature는
-[Utilities 스펙](../spec/core/08-utilities.ko.md)이 소유한다.
+[Utilities 스펙](../spec/core/07-utilities.ko.md)이 소유한다.
 
 ---
 
@@ -89,4 +89,4 @@ zlink_timer_handler(timer, on_timer_fire, userdata);
 
 ---
 
-전체 근거는 [Utilities 스펙](../spec/core/08-utilities.ko.md)을 참고한다.
+전체 근거는 [Utilities 스펙](../spec/core/07-utilities.ko.md)을 참고한다.

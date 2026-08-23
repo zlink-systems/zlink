@@ -2,7 +2,7 @@
 title: "Core 공개 계약 관리"
 ---
 
-[English](https://zlink-systems.github.io/zlink/spec/core/00-public-contract-governance/) | 한국어
+[English](00-public-contract-governance.en.md) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: 개요](README.ko.md) | [다음: Context](01-context.ko.md)
@@ -23,7 +23,7 @@ test, bindings와 설치 package는 두 표현과 일치해야 한다.
 
 Core 공개 C ABI는 application과 raw binding이 직접 사용하는 context, message, socket, transport,
 eventing과 utility 기능만 제공한다. Framework service runtime을 위한 별도 public SPI, private C ABI 또는
-compatibility facade를 두지 않는다. 정확한 책임 경계는 [Core runtime 경계](09-runtime-boundary.ko.md)가
+compatibility facade를 두지 않는다. 정확한 책임 경계는 [Core runtime 경계](08-runtime-boundary.ko.md)가
 소유한다.
 
 정식 spec은 구현 편의를 이유로 축소하지 않는다. Header와 spec이 다르면 구현 완료로 판정하지 않으며

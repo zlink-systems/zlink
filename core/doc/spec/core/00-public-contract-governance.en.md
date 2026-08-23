@@ -1,6 +1,8 @@
-[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/00-public-contract-governance/) | English
+[한국어](00-public-contract-governance.ko.md) | English
 
-[Specification index](../README.en.md) · [Core index](README.en.md)
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Overview](README.en.md) | [Next: Context](01-context.en.md)
+<!-- zlink-nav:end -->
 
 # Core public-contract governance
 
@@ -19,7 +21,7 @@ with both expressions.
 The Core public C ABI provides only context, message, socket, transport,
 eventing, and utility capabilities used directly by applications and raw
 bindings. It provides no separate public SPI, private C ABI, or compatibility
-facade for Framework service runtimes. [Core Runtime Boundary](09-runtime-boundary.en.md)
+facade for Framework service runtimes. [Core Runtime Boundary](08-runtime-boundary.en.md)
 owns the exact responsibility boundary.
 
 The formal specification is not reduced for implementation convenience. A

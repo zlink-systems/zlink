@@ -43,4 +43,4 @@ ROUTER mandatory and handover behavior is configured with the typed router
 options described in [Socket Options](12-socket-options.en.md).
 
 See [Routing IDs](08-routing-id.en.md) for lifetime and copy rules and
-[Thread Safety](11-thread-safety.en.md) for same-handle concurrency.
+[Thread Safety](../spec/core/systems/04-thread-safety.en.md) for same-handle concurrency.

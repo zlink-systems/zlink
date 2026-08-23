@@ -5,7 +5,7 @@ title: "TLS와 WSS"
 [English](05-tls-security.ko.md)
 
 <!-- zlink-nav:start -->
-[가이드 목록](README.ko.md) | [이전: Transport 가이드](04-transports.ko.md) | [다음: Raw socket monitoring](06-monitoring.ko.md)
+[가이드 목록](README.ko.md) | [이전: Transport 가이드](04-transports.ko.md) | [다음: Raw socket monitoring](../spec/core/06-monitoring.ko.md)
 <!-- zlink-nav:end -->
 
 # TLS와 WSS
@@ -45,4 +45,4 @@ CA path, hostname과 system-trust flag가 peer 검증 방식을 결정한다. Te
 `wss://`는 같은 TLS 설정을 WebSocket transport에 적용한다. STREAM server는 외부
 WebSocket/TLS client를 받고 ZMP socket type은 zlink WSS endpoint에 connect할 수 있다.
 
-Handshake failure는 raw [socket monitor](06-monitoring.ko.md)로 확인한다.
+Handshake failure는 raw [socket monitor](../spec/core/06-monitoring.ko.md)로 확인한다.

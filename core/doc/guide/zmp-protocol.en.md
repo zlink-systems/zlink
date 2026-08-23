@@ -5,7 +5,7 @@
 > **What this chapter answers** — it introduces the concept of the wire
 > protocol that exchanges the handshake and message frames between sockets.
 > The exact frame format is owned by
-> [ZMP protocol internals](../internals/protocol-zmp.en.md).
+> [ZMP protocol internals](../spec/core/protocol/01-zmp.en.md).
 
 ZMP is the wire protocol that exchanges the handshake and message frames
 between zlink raw sockets. An application generally does not implement the
@@ -30,6 +30,6 @@ request sequence in a Core-managed control part. The application payload
 stays after the control part, and the receive API returns the payload with
 the control part stripped, along with the request metadata.
 
-See [ZMP internals](../internals/protocol-zmp.en.md) for the wire format's
+See [ZMP internals](../spec/core/protocol/01-zmp.en.md) for the wire format's
 implementation detail. The application topology protocol is owned by the
 Framework packages and is outside the scope of the Core ZMP guide.

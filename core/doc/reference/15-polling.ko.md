@@ -8,7 +8,7 @@
 기다리는 진입점 — 일회성 `zlink_poll`과 재사용 가능한 poller family를 다룬다. Poller
 readiness는 Core의 세 event family 중 하나다(나머지 둘은 socket monitor 이벤트와 timer
 fire — Socket monitor·Timers category 참고). 정확한 signature는
-[Polling 스펙](../spec/core/06-polling.ko.md)이 소유한다.
+[Polling 스펙](../spec/core/05-polling.ko.md)이 소유한다.
 
 ---
 
@@ -175,4 +175,4 @@ Socket lifecycle category와 DEALER/ROUTER category) `wait`는 공개 이벤트 
 
 ---
 
-전체 근거는 [Polling 스펙](../spec/core/06-polling.ko.md)을 참고한다.
+전체 근거는 [Polling 스펙](../spec/core/05-polling.ko.md)을 참고한다.

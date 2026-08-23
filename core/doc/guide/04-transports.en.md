@@ -92,7 +92,7 @@ if (conn_rc != ZLINK_CONNECT_OK) {
 - **Speculative write** — attempts synchronous write first, falls back to async on failure
 - **Gather write** — sends header and body together (reduces system calls)
 
-> For internal optimization details such as speculative write, see [architecture.md](../internals/architecture.en.md).
+> For internal optimization details such as speculative write, see [architecture.md](../spec/core/systems/01-architecture.en.md).
 
 ## 3. IPC
 

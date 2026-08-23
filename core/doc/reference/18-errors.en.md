@@ -12,7 +12,7 @@ their primary control flow through a `zlink_*_result_t` enum and record a more d
 logging and finer diagnosis. Success is always numeric zero, and errno is unspecified after
 success. The exact signatures are owned by the
 [Errors specification](../spec/core/03-errors.en.md) and the
-[errno map](../spec/core/04-errno-map.en.md).
+[errno map](../spec/core/03-errors.en.md).
 
 ---
 
@@ -32,7 +32,7 @@ table is the index every other category's entries point back to.
 | `zlink_connect_result_t` | `zlink_connect`/`zlink_unbind`/`zlink_disconnect`/`zlink_disconnect_rid` (Socket lifecycle category) | `OK`(0), `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607), `AUTH_FAILED`(608) |
 | `zlink_config_result_t` | every `zlink_set_*`/`zlink_get_*` option API, and misc. control-path calls | `OK`(0), `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706), `CONFLICT`(707), `BUFFER_TOO_SMALL`(708), `BUSY`(709) |
 
-**What each value family means in practice** (see the [errno map](../spec/core/04-errno-map.en.md)
+**What each value family means in practice** (see the [errno map](../spec/core/03-errors.en.md)
 for the exact per-function mapping to `errno`): `BACKPRESSURED`/`NOT_CONNECTED`/`NOT_FOUND`/
 `NOT_ADMITTED` on submit are normal runtime control flow, not exceptional failures — a caller
 that treats every non-`OK` submit result the same way loses the distinction between "retry is
@@ -95,4 +95,4 @@ build time.
 ---
 
 See the [Errors specification](../spec/core/03-errors.en.md) and the
-[errno map](../spec/core/04-errno-map.en.md) for the full rationale.
+[errno map](../spec/core/03-errors.en.md) for the full rationale.

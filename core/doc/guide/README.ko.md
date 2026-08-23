@@ -22,8 +22,8 @@
 
 - [Routing ID](08-routing-id.ko.md)
 - [Message API](09-message-api.ko.md)
-- [Monitoring](06-monitoring.ko.md)
-- [성능](10-performance.ko.md), [Thread safety](11-thread-safety.ko.md),
+- [Monitoring](../spec/core/06-monitoring.ko.md)
+- [성능](10-performance.ko.md), [Thread safety](../spec/core/systems/04-thread-safety.ko.md),
   [Socket option](12-socket-options.ko.md)
 - [신뢰성](reliability.ko.md), [공통 시나리오](scenarios.ko.md), [용어](glossary.ko.md)
 

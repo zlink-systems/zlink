@@ -36,4 +36,4 @@ make a test certificate connect.
 server accepts external WebSocket/TLS clients; ZMP socket types can connect to
 a zlink WSS endpoint.
 
-Monitor handshake failures through the raw [socket monitor](06-monitoring.en.md).
+Monitor handshake failures through the raw [socket monitor](../spec/core/06-monitoring.en.md).

@@ -83,7 +83,7 @@ STREAM-specific behavior:
 ## 4. Callback Example
 
 In STREAM raw callbacks every delivered part is application data; observe
-connect/disconnect on the socket monitor (see [Monitoring](06-monitoring.en.md)).
+connect/disconnect on the socket monitor (see [Monitoring](../spec/core/06-monitoring.en.md)).
 
 ```c
 void on_message(const zlink_routing_id_t *source_rid,
@@ -238,7 +238,7 @@ Defaults currently used by STREAM internals:
 - STREAM session scheduling default: `rr`
 
 > STREAM runtime environment variables and internal tuning constants
-> are documented in [STREAM internals](../internals/stream-socket.en.md).
+> are documented in [STREAM internals](../spec/core/socket/08-stream.en.md).
 
 ---
 

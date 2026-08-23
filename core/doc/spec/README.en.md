@@ -21,13 +21,13 @@ Formal specifications describe only the current contract. Guides own purpose and
 | [Context](core/01-context.en.md) | Context lifecycle and options |
 | [Message](core/02-message.en.md) | Message and routing-ID storage and ownership |
 | [Socket](core/socket/README.en.md) | Generic socket types and send/receive behavior |
-| [Polling](core/06-polling.en.md) | Poll items, pollers, and readiness |
-| [Monitoring](core/07-monitoring.en.md) | Raw-socket monitors and snapshots |
-| [Runtime boundary](core/09-runtime-boundary.en.md) | Core raw C ABI and Framework service responsibility boundary |
-| [Events](core/05-events.en.md) | Public events and state-transition meaning |
+| [Polling](core/05-polling.en.md) | Poll items, pollers, and readiness |
+| [Monitoring](core/06-monitoring.en.md) | Raw-socket monitors and snapshots |
+| [Runtime boundary](core/08-runtime-boundary.en.md) | Core raw C ABI and Framework service responsibility boundary |
+| [Events](core/04-events.en.md) | Public events and state-transition meaning |
 | [Errors](core/03-errors.en.md) | Result enums, errno, and the version ABI |
-| [Errno map](core/04-errno-map.en.md) | Per-function result and errno mappings |
-| [Utilities](core/08-utilities.en.md) | Timers, threads, stopwatch, and atomic utilities |
+| [Errno map](core/03-errors.en.md) | Per-function result and errno mappings |
+| [Utilities](core/07-utilities.en.md) | Timers, threads, stopwatch, and atomic utilities |
 
 ## 3. Conformance
 

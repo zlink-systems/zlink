@@ -1,4 +1,4 @@
-[한국어](11-thread-safety.en.md)
+[한국어](../spec/core/systems/04-thread-safety.en.md)
 
 # Thread safety
 

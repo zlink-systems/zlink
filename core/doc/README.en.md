@@ -8,7 +8,7 @@ object runtime are covered in the Framework documentation.
 |---|---|---|
 | User guide | [guide/](guide/README.en.md) | Raw socket patterns, transport, TLS, monitoring, and performance |
 | Public contract | [spec/](spec/README.en.md) | The exact contract of the Core C API |
-| Internal implementation | [internals/](internals/architecture.en.md) | The context, socket, engine, protocol, and transport structure |
+| Internal implementation | [internals/](spec/core/systems/01-architecture.en.md) | The context, socket, engine, protocol, and transport structure |
 
 For per-language usage, see [`bindings/doc/`](../../bindings/doc/README.en.md) (Korean-only);
 for application runtime, see [`framework/doc/`](../../framework/doc/README.en.md)

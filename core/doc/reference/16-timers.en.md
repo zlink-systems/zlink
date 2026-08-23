@@ -9,7 +9,7 @@ periodic or one-shot scheduling, consumed synchronously or by callback, and opti
 integrated into a poller (`zlink_poller_add_timer`/`zlink_poller_remove_timer`, Polling and
 pollers category). A timer fire is one of Core's three event families (the others are socket
 monitor events and poller readiness — Socket monitor and Polling and pollers categories). The
-exact signatures are owned by the [Utilities specification](../spec/core/08-utilities.en.md).
+exact signatures are owned by the [Utilities specification](../spec/core/07-utilities.en.md).
 
 ---
 
@@ -86,4 +86,4 @@ either of these, use `zlink_poller_add_timer` (Polling and pollers category) and
 
 ---
 
-See the [Utilities specification](../spec/core/08-utilities.en.md) for the full rationale.
+See the [Utilities specification](../spec/core/07-utilities.en.md) for the full rationale.

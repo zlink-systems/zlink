@@ -8,7 +8,7 @@ This category covers the entry points for observing a raw socket's connection, t
 protocol, and lifecycle state without changing routing or queue state. A monitor is one of three
 event families in Core (the others are poller readiness and timer fires — see the Polling and
 pollers category); it never affects the socket it observes. The exact signatures are owned by
-the [Monitoring specification](../spec/core/07-monitoring.en.md).
+the [Monitoring specification](../spec/core/06-monitoring.en.md).
 
 ---
 
@@ -131,6 +131,6 @@ grows unbounded) but the application currently has nothing to do with the events
 
 ---
 
-See the [Monitoring specification](../spec/core/07-monitoring.en.md) for the full rationale. The
-[Events catalog](../spec/core/05-events.en.md) relates monitor events to poller readiness and
+See the [Monitoring specification](../spec/core/06-monitoring.en.md) for the full rationale. The
+[Events catalog](../spec/core/04-events.en.md) relates monitor events to poller readiness and
 timer fires, the other two event families.

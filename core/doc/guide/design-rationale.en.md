@@ -4,11 +4,11 @@
 
 > **What this chapter answers** — it explains the reasoning behind zlink's
 > core design decisions from a user's perspective. Implementation detail is
-> owned by [internals](../internals/architecture.en.md).
+> owned by [internals](../spec/core/systems/01-architecture.en.md).
 
 This document explains, from a user's perspective, the **reasoning** behind
 the core design decisions zlink adopted. Implementation detail is owned by
-[internals](../internals/architecture.en.md); this document instead focuses
+[internals](../spec/core/systems/01-architecture.en.md); this document instead focuses
 on "what this choice means for the user." It's written for a reader
 evaluating whether to adopt zlink or trying to understand its performance
 characteristics.
@@ -57,7 +57,7 @@ queue (YPipe) instead of a lock.
 **What this means for the user**: there's no lock contention on the hot
 path, so multicore scaling works well. In exchange, a socket is not
 thread-safe — the premise is that the same socket is never handled from
-multiple threads at once ([11 Thread Safety](11-thread-safety.en.md)).
+multiple threads at once ([11 Thread Safety](../spec/core/systems/04-thread-safety.en.md)).
 
 ### True Async — The Proactor Pattern
 
@@ -87,7 +87,7 @@ cert/key) and, if needed, `zlink_set_tls_client()`
 
 ## Going Deeper
 
-- The full layered architecture: [internals/architecture](../internals/architecture.en.md)
-- Trade-offs behind design decisions: [internals/design-decisions](../internals/design-decisions.en.md)
+- The full layered architecture: [internals/architecture](../spec/core/systems/01-architecture.en.md)
+- Trade-offs behind design decisions: [internals/design-decisions](../spec/core/systems/09-design-decisions.en.md)
 - The wire protocol: [ZMP protocol reference](zmp-protocol.en.md)
 - How far the delivery guarantee goes: [Reliability and delivery guarantees](reliability.en.md)

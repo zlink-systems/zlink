@@ -2,7 +2,7 @@
 title: "Raw socket monitoring"
 ---
 
-[English](06-monitoring.ko.md)
+[English](../spec/core/06-monitoring.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: TLS와 WSS](05-tls-security.ko.md) | [다음: Core 성능](10-performance.ko.md)
@@ -10,7 +10,7 @@ title: "Raw socket monitoring"
 
 # Raw socket monitoring
 
-> **이 장의 계약 소유 문서** — [Monitoring](../spec/core/07-monitoring.ko.md)이 다룬다.
+> **이 장의 계약 소유 문서** — [Monitoring](../spec/core/06-monitoring.ko.md)이 다룬다.
 > 이 챕터는 연결 상태를 관측하는 방법을 사용법 중심으로 설명한다.
 
 Socket monitor는 data receive 경로를 바꾸지 않고 transport와 protocol event를 제공한다.
