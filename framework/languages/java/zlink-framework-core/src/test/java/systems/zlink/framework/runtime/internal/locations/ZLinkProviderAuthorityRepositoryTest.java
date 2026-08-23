@@ -551,6 +551,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         var relocationRequest = new ZLinkAggregateRelocationCoordinator.Request(
             new UUID(0, 9),
             1,
+            2,
             List.of(new ZLinkAggregateRelocationCoordinator.Participant(
                 authorityAContractKey,
                 ZLinkPlacementObjectKind.ACTOR,
@@ -564,7 +565,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
             new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
             1,
             ZLinkPlacementCapacityBundle.actor(1),
-            owner.token());
+            owner.token(),
+            version);
         byte[] canonicalPayload =
             ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 basePayload,

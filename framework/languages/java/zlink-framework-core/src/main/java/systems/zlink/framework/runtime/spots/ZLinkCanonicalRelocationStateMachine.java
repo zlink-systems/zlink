@@ -1167,6 +1167,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     1)));
         return new ZLinkAggregateRelocationCoordinator.Request(
             prepare.id(),
+            request.fence().aggregateGeneration(),
             prepare.targetAttemptGeneration(),
             participants,
             root,
@@ -1175,7 +1176,8 @@ final class ZLinkCanonicalRelocationStateMachine
             capacity,
             new ZLinkLocationOwnerToken(
                 request.targetOwnerId(),
-                request.targetOwnerLeaseGeneration()));
+                request.targetOwnerLeaseGeneration()),
+            prepare.coordinator().expectedAuthorityStoreVersion());
     }
 
     private CompletionStage<List<ZLinkAuthorityEntry>> readStandaloneActor(

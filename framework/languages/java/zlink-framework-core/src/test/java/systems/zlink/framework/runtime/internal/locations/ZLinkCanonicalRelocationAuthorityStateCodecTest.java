@@ -2,15 +2,16 @@ package systems.zlink.framework.runtime.internal.locations;
 import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.io.ByteArrayOutputStream;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -74,6 +75,29 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
     }
 
     @Test
+    void publicationKeepsAggregateAndTargetAttemptFencesDistinct() {
+        var request = request(
+            new UUID(0, 9),
+            7,
+            List.of(participant(
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                authorityPayload())));
+
+        var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+            ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                authorityPayload(),
+                request,
+                ZLinkAuthorityGenerationTransition.NEW_OWNER));
+
+        assertNotNull(publication);
+        assertEquals(7, publication.aggregateGeneration());
+        assertEquals(8, publication.targetAttemptGeneration());
+        assertEquals("version-1",
+            publication.coordinatorExpectedStoreVersion());
+        assertEquals(3, publication.phase());
+    }
+
+    @Test
     void canonicalStateFromAnotherAggregateIsRejected() {
         var initial = request(
             new UUID(0, 9),
@@ -127,87 +151,53 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 ZLinkAuthorityGenerationTransition.NEW_OWNER));
     }
 
-    // STOP (per Ruling): a .NET-shaped source-phase (phase=captured,
-    // targetAttemptGeneration=0, empty target fence) relocation slot per the
-    // frozen wire schema (authority-relocation-state,
-    // service-wire-v1.schema.json:6092) still does not decode through this
-    // codec's own semantic projection: field 12+ diverges from the schema's
-    // coordinatorOwnerId/phase/sourceCleanupState layout (this codec instead
-    // reads a legacy placementReservationToken/capacityOwner* shape).
-    // applicationPayloadOrOriginal (see ZLinkActorAuthorityPayloadCodecTest
-    // .decodeAcceptsASourcePhaseRelocationSlotWithEmptyTargetFence) no
-    // longer depends on this projection succeeding, so this divergence does
-    // not block the Actor authority path — it is recorded here so a reader
-    // does not mistake decode()'s continued rejection for a regression.
     @Test
-    void decodeStillRejectsADotNetShapedSourcePhaseSlot() {
-        byte[] payload = authorityPayload();
-        int slotOffset = relocationSlotOffset(payload);
-        byte[] slotBody = dotNetSourcePhaseRelocationSlotBody();
-
-        byte[] prefix = Arrays.copyOfRange(payload, 0, slotOffset);
-        byte[] tail = Arrays.copyOfRange(payload, slotOffset + 5, payload.length - 4);
-
-        ByteBuffer body = ByteBuffer.allocate(
-            prefix.length - 11 + 5 + slotBody.length + tail.length);
-        body.put(prefix, 11, prefix.length - 11);
-        body.put((byte) 1);
-        body.order(ByteOrder.BIG_ENDIAN).putInt(slotBody.length);
-        body.put(slotBody);
-        body.put(tail);
-
-        ByteBuffer envelope = ByteBuffer.allocate(11 + body.capacity() + 4);
-        envelope.put(prefix, 0, 7);
-        envelope.order(ByteOrder.BIG_ENDIAN).putInt(body.capacity());
-        envelope.put(body.array());
-        byte[] withoutChecksum = Arrays.copyOfRange(
-            envelope.array(), 0, envelope.position());
-        CRC32C checksum = new CRC32C();
-        checksum.update(withoutChecksum, 0, withoutChecksum.length);
-        envelope.order(ByteOrder.BIG_ENDIAN).putInt((int) checksum.getValue());
-        byte[] withRelocation = envelope.array();
-
-        assertNull(ZLinkCanonicalRelocationAuthorityStateCodec.decode(withRelocation));
-    }
-
-    // .NET-shaped authority-relocation-state slot body (frozen wire schema),
-    // phase=captured(2): a source-phase record with targetAttemptGeneration=0
-    // and an empty target fence, matching
-    // ZLinkStandaloneActorRelocationPrecommitCoordinator.cs's pre-command-40
-    // authority write and ZLinkCanonicalRelocationAuthorityState.cs
-    // EncodeSlot's field order. No trailing runtime-local extension.
-    private static byte[] dotNetSourcePhaseRelocationSlotBody() {
-        ByteArrayOutputStream body = new ByteArrayOutputStream();
-        writeU64(body, 0L);
-        writeU64(body, 9L);
-        writeU64(body, 0L);
-        writeText8(body, "node-a");
-        writeU64(body, 3L);
-        writeText8(body, "owner-a");
-        writeU64(body, 6L);
-        writeText8(body, "");
-        writeU64(body, 0L);
-        writeText8(body, "");
-        writeU64(body, 0L);
-        writeText8(body, "coordinator-a");
-        writeU64(body, 11L);
-        writeText8(body, "node-c");
-        writeU64(body, 5L);
-        body.write(2);
-        writeU64(body, 1L);
-        body.write(0);
-        return body.toByteArray();
-    }
-
-    private static void writeU64(ByteArrayOutputStream out, long value) {
-        out.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-            .putLong(value).array());
-    }
-
-    private static void writeText8(ByteArrayOutputStream out, String value) {
-        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        out.write(bytes.length);
-        out.writeBytes(bytes);
+    void sharedAuthorityRelocationGoldenDecodesAndEncodesExactly()
+        throws IOException {
+        JsonNode fixture = new ObjectMapper().readTree(
+            Files.readString(authorityRelocationFixture()));
+        int accepted = 0;
+        for (JsonNode vector : fixture.path("valid")) {
+            String name = vector.path("name").asText();
+            byte[] encoded = HexFormat.of().parseHex(
+                vector.path("hex").asText());
+            Long rootGeneration = vector.path("rootAggregateGeneration").isNull()
+                ? null
+                : Long.parseLong(
+                    vector.path("rootAggregateGeneration").asText());
+            var state = ZLinkCanonicalRelocationAuthorityStateCodec.decodeState(
+                encoded,
+                rootGeneration);
+            assertGoldenState(vector.path("decoded"), state, name);
+            assertArrayEquals(
+                encoded,
+                ZLinkCanonicalRelocationAuthorityStateCodec.encodeState(state),
+                "golden re-encode differs: " + name);
+            assertNotNull(
+                ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+                    withRelocationSlot(authorityPayload(), encoded)),
+                "authority projection rejected golden: " + name);
+            accepted++;
+        }
+        int rejected = 0;
+        for (JsonNode vector : fixture.path("invalid")) {
+            String name = vector.path("name").asText();
+            byte[] encoded = HexFormat.of().parseHex(
+                vector.path("hex").asText());
+            Long rootGeneration = vector.path("rootAggregateGeneration").isNull()
+                ? null
+                : Long.parseLong(
+                    vector.path("rootAggregateGeneration").asText());
+            assertThrows(
+                IllegalArgumentException.class,
+                () -> ZLinkCanonicalRelocationAuthorityStateCodec.decodeState(
+                    encoded,
+                    rootGeneration),
+                "golden reject was accepted: " + name);
+            rejected++;
+        }
+        assertEquals(6, accepted);
+        assertEquals(6, rejected);
     }
 
     @Test
@@ -231,6 +221,125 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 ZLinkAuthorityGenerationTransition.NEW_OWNER));
     }
 
+    private static void assertGoldenState(
+        JsonNode expected,
+        ZLinkCanonicalRelocationAuthorityStateCodec.State actual,
+        String name) {
+        assertEquals(expected.path("relocation").path("high").asLong(),
+            actual.relocationHigh(), name);
+        assertEquals(expected.path("relocation").path("low").asLong(),
+            actual.relocationLow(), name);
+        assertEquals(Long.parseLong(expected.path("aggregateGeneration").asText()),
+            actual.aggregateGeneration(), name);
+        assertEquals(Long.parseLong(
+                expected.path("targetAttemptGeneration").asText()),
+            actual.targetAttemptGeneration(), name);
+        assertEquals(expected.path("relocationReference").asText(),
+            actual.relocationReference(), name);
+        assertEquals(expected.path("relocationChecksumCrc32c").asLong(),
+            actual.relocationChecksumCrc32c(), name);
+        assertEquals(expected.path("sourceNodeRidHex").asText(),
+            HexFormat.of().formatHex(actual.sourceNodeRid().toBytes()), name);
+        assertEquals(Long.parseLong(expected.path("sourceNodeGeneration").asText()),
+            actual.sourceNodeGeneration(), name);
+        assertEquals(expected.path("sourceOwnerId").asText(),
+            actual.sourceOwnerId(), name);
+        assertEquals(Long.parseLong(
+                expected.path("sourceOwnerLeaseGeneration").asText()),
+            actual.sourceOwnerLeaseGeneration(), name);
+        assertEquals(expected.path("targetNodeRidHex").asText(),
+            HexFormat.of().formatHex(actual.targetNodeRid().toBytes()), name);
+        assertEquals(Long.parseLong(expected.path("targetNodeGeneration").asText()),
+            actual.targetNodeGeneration(), name);
+        assertEquals(expected.path("targetOwnerId").asText(),
+            actual.targetOwnerId(), name);
+        assertEquals(Long.parseLong(
+                expected.path("targetOwnerLeaseGeneration").asText()),
+            actual.targetOwnerLeaseGeneration(), name);
+        assertEquals(expected.path("coordinatorOwnerId").asText(),
+            actual.coordinatorOwnerId(), name);
+        assertEquals(Long.parseLong(
+                expected.path("coordinatorLeaseGeneration").asText()),
+            actual.coordinatorLeaseGeneration(), name);
+        assertEquals(expected.path("coordinatorNodeRidHex").asText(),
+            HexFormat.of().formatHex(actual.coordinatorNodeRid().toBytes()), name);
+        assertEquals(Long.parseLong(
+                expected.path("coordinatorNodeGeneration").asText()),
+            actual.coordinatorNodeGeneration(), name);
+        assertEquals(expected.path("coordinatorExpectedStoreVersion").asText(),
+            actual.coordinatorExpectedStoreVersion(), name);
+        assertEquals(phase(expected.path("phase").asText()), actual.phase(), name);
+        assertEquals(Long.parseLong(expected.path("applicationVersion").asText()),
+            actual.applicationVersion(), name);
+        assertEquals(cleanup(expected.path("sourceCleanupState").asText()),
+            actual.sourceCleanupState(), name);
+    }
+
+    private static int phase(String value) {
+        return switch (value) {
+            case "preparing" -> 1;
+            case "captured" -> 2;
+            case "prepared" -> 3;
+            case "committed" -> 4;
+            case "activating" -> 5;
+            case "activated" -> 6;
+            case "cleaning" -> 7;
+            case "completed" -> 8;
+            case "aborted" -> 9;
+            default -> throw new IllegalArgumentException("unknown phase: " + value);
+        };
+    }
+
+    private static int cleanup(String value) {
+        return switch (value) {
+            case "pending" -> 0;
+            case "completed" -> 1;
+            case "sourceLeaseExpired" -> 2;
+            default -> throw new IllegalArgumentException(
+                "unknown cleanup state: " + value);
+        };
+    }
+
+    private static byte[] withRelocationSlot(byte[] payload, byte[] state) {
+        int slotOffset = relocationSlotOffset(payload);
+        byte[] body = new byte[
+            payload.length - 11 - 4 - 5 + state.length];
+        int slotInBody = slotOffset - 11;
+        System.arraycopy(payload, 11, body, 0, slotInBody);
+        System.arraycopy(state, 0, body, slotInBody, state.length);
+        int tailSource = slotOffset + 5;
+        int tailLength = payload.length - 4 - tailSource;
+        System.arraycopy(
+            payload,
+            tailSource,
+            body,
+            slotInBody + state.length,
+            tailLength);
+        ByteBuffer envelope = ByteBuffer.allocate(11 + body.length + 4)
+            .order(ByteOrder.BIG_ENDIAN);
+        envelope.put(payload, 0, 7);
+        envelope.putInt(body.length);
+        envelope.put(body);
+        CRC32C checksum = new CRC32C();
+        checksum.update(envelope.array(), 0, envelope.position());
+        envelope.putInt((int) checksum.getValue());
+        return envelope.array();
+    }
+
+    private static Path authorityRelocationFixture() {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null) {
+            Path fixture = current.resolve(
+                "runtime/protocol/golden/authority-relocation-state-v1.json");
+            if (Files.isRegularFile(fixture)) {
+                return fixture;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException(
+            "shared authority relocation fixture was not found");
+    }
+
     private static ZLinkAggregateRelocationCoordinator.Request request(
         UUID aggregateId,
         long generation,
@@ -246,6 +355,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         return new ZLinkAggregateRelocationCoordinator.Request(
             aggregateId,
             generation,
+            generation + 1,
             participants,
             root,
             new ZLinkMeshNodeDescriptorKey(
@@ -256,7 +366,8 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 0,
                 0,
                 Optional.empty()),
-            new ZLinkLocationOwnerToken("owner-b", 12));
+            new ZLinkLocationOwnerToken("owner-b", 12),
+            "version-1");
     }
 
     private static ZLinkAggregateRelocationCoordinator.Participant participant(

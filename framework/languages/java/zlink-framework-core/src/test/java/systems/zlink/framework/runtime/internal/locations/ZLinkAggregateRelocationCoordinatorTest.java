@@ -80,7 +80,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             "RoomSpot", "room-a", "owner-a", 6,
             "game", RoutingId.from("node-a"), 3);
         return new ZLinkAggregateRelocationCoordinator.Request(
-            new UUID(0, 9), 7,
+            new UUID(0, 9), 7, 11,
             java.util.List.of(new ZLinkAggregateRelocationCoordinator.Participant(
                 "spot:room-a", ZLinkPlacementObjectKind.USER_SPOT,
                 3, 5, "version-1",
@@ -89,7 +89,8 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
             4, ZLinkPlacementCapacityBundle.spot(
                 ZLinkPlacementObjectKind.USER_SPOT, "RoomSpot", 1),
-            new ZLinkLocationOwnerToken("owner-b", 12));
+            new ZLinkLocationOwnerToken("owner-b", 12),
+            "version-1");
     }
 
     private static byte[] goldenRoot() {

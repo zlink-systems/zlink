@@ -141,6 +141,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 new ZLinkAggregateRelocationCoordinator.Request(
                     aggregateId,
                     1,
+                    1,
                     List.of(
                         new ZLinkAggregateRelocationCoordinator.Participant(
                             actorAuthorityKey,
@@ -171,7 +172,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             ZLinkPlacementObjectKind.USER_SPOT,
                             "room",
                             1))),
-                    new ZLinkLocationOwnerToken("target-owner", 23)),
+                    new ZLinkLocationOwnerToken("target-owner", 23),
+                    "version-1"),
                 OPEN)
             .toCompletableFuture().join();
         FakeStagingBackend backend = new FakeStagingBackend();
@@ -392,6 +394,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         var storeRequest = new ZLinkAggregateRelocationCoordinator.Request(
             aggregateId,
             targetAttemptGeneration,
+            targetAttemptGeneration,
             storeParticipants,
             ZLinkCanonicalUserSpotRelocationEnvelope.encode(
                 finalEnvelope, aggregateId, 5, participants),
@@ -404,7 +407,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     ZLinkPlacementObjectKind.USER_SPOT,
                     "room",
                     1))),
-            new ZLinkLocationOwnerToken("target-owner", 23));
+            new ZLinkLocationOwnerToken("target-owner", 23),
+            "version-1");
         var finalPrepared = coordinator.prepare(storeRequest, OPEN)
             .toCompletableFuture().join();
         coordinator.commit(finalPrepared, OPEN)

@@ -5,10 +5,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.zip.CRC32C;
@@ -16,53 +19,6 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkActorAuthorityPayloadCodecTest {
-    // .NET-shaped authority-relocation-state slot body (frozen wire schema,
-    // service-wire-v1.schema.json:6092), phase=captured(2): a source-phase
-    // record with targetAttemptGeneration=0 and an empty target fence
-    // (optional-rid / optional-text8 / ordinal-or-zero all zero-length or
-    // zero), matching ZLinkStandaloneActorRelocationPrecommitCoordinator.cs
-    // pre-command-40 authority write and ZLinkCanonicalRelocationAuthorityState
-    // .cs EncodeSlot's field order (relocation-id, targetAttemptGeneration,
-    // source*, target*, coordinator*, phase, applicationVersion,
-    // sourceCleanupState). No trailing runtime-local extension.
-    private static byte[] dotNetSourcePhaseRelocationSlotBody() {
-        ByteArrayOutputStream body = new ByteArrayOutputStream();
-        writeU64(body, 0L);
-        writeU64(body, 9L);
-        writeU64(body, 0L);
-        writeText8(body, "node-a");
-        writeU64(body, 3L);
-        writeText8(body, "owner-a");
-        writeU64(body, 6L);
-        writeText8(body, "");
-        writeU64(body, 0L);
-        writeText8(body, "");
-        writeU64(body, 0L);
-        writeText8(body, "coordinator-a");
-        writeU64(body, 11L);
-        writeText8(body, "node-c");
-        writeU64(body, 5L);
-        body.write(2);
-        writeI64(body, 1L);
-        body.write(0);
-        return body.toByteArray();
-    }
-
-    private static void writeU64(ByteArrayOutputStream out, long value) {
-        out.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-            .putLong(value).array());
-    }
-
-    private static void writeI64(ByteArrayOutputStream out, long value) {
-        writeU64(out, value);
-    }
-
-    private static void writeText8(ByteArrayOutputStream out, String value) {
-        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        out.write(bytes.length);
-        out.writeBytes(bytes);
-    }
-
     // Splices a relocation slot into the actor authority envelope's first
     // (currently-empty) conditional32 slot, replacing the outer envelope
     // body length and checksum. The two trailing empty conditional32 slots
@@ -97,14 +53,15 @@ final class ZLinkActorAuthorityPayloadCodecTest {
     }
 
     @Test
-    void decodeAcceptsASourcePhaseRelocationSlotWithEmptyTargetFence() {
+    void decodeAcceptsTheCanonicalCapturedSlotWithEmptyTargetFence()
+        throws IOException {
         var codec = new ZLinkActorAuthorityPayloadCodec();
         byte[] steady = codec.encode(
             ZLinkActorAuthorityPayloadCodec.State.READY,
             "A", "B", "C", 2, 1, "D", 3, "E",
             RoutingId.from("F"), 4);
         byte[] withRelocation =
-            withRelocationSlot(steady, dotNetSourcePhaseRelocationSlotBody());
+            withRelocationSlot(steady, canonicalCapturedSlotBody());
 
         var decoded = codec.decode(withRelocation);
 
@@ -122,7 +79,36 @@ final class ZLinkActorAuthorityPayloadCodecTest {
         assertArrayEquals(steady,
             systems.zlink.framework.runtime.internal.locations
                 .ZLinkCanonicalRelocationAuthorityStateCodec
-                .applicationPayloadOrOriginal(withRelocation));
+            .applicationPayloadOrOriginal(withRelocation));
+    }
+
+    private static byte[] canonicalCapturedSlotBody() throws IOException {
+        var fixture = new ObjectMapper().readTree(
+            Files.readString(authorityRelocationFixture()));
+        for (var vector : fixture.path("valid")) {
+            if (vector.path("name").asText().equals(
+                    "capturedNonzeroAggregateWithZeroAttempt")) {
+                byte[] state = HexFormat.of().parseHex(
+                    vector.path("hex").asText());
+                return Arrays.copyOfRange(state, 5, state.length);
+            }
+        }
+        throw new IllegalStateException(
+            "canonical captured authority relocation vector was not found");
+    }
+
+    private static Path authorityRelocationFixture() {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null) {
+            Path fixture = current.resolve(
+                "runtime/protocol/golden/authority-relocation-state-v1.json");
+            if (Files.isRegularFile(fixture)) {
+                return fixture;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException(
+            "shared authority relocation fixture was not found");
     }
 
     @Test

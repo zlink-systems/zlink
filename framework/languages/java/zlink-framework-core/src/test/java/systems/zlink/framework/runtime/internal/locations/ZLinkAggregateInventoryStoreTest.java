@@ -39,7 +39,7 @@ final class ZLinkAggregateInventoryStoreTest {
         assertEquals(
             highBit,
             new ZLinkAggregateRelocationCoordinator.Request(
-                UUID.randomUUID(), 1,
+                UUID.randomUUID(), 1, 2,
                 List.of(new ZLinkAggregateRelocationCoordinator.Participant(
                     "authority", systems.zlink.framework.locations
                         .ZLinkPlacementObjectKind.ACTOR,
@@ -47,7 +47,7 @@ final class ZLinkAggregateInventoryStoreTest {
                     ZLinkAuthorityGenerationTransition.NEW_OWNER,
                     new byte[0], new byte[0])),
                 new byte[] {1}, descriptor, highBit,
-                ZLinkPlacementCapacityBundle.actor(1), owner)
+                ZLinkPlacementCapacityBundle.actor(1), owner, "store")
                 .targetDescriptorLifecycleGeneration());
     }
 
