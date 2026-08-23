@@ -113,7 +113,7 @@ managed_send_start_t start_managed_send (
 {
     const auto operation_started = std::chrono::steady_clock::now ();
     const std::shared_ptr<detail::socket_callback_state_t> callbacks =
-      state_.raw.callbacks.lock ();
+      detail::share_callback_state (state_.raw);
     if (!state_.raw.socket)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
@@ -186,7 +186,7 @@ managed_publish_start_t start_managed_publish (
   const std::shared_ptr<detail::async_operation_state_t<void>> &completion_)
 {
     const auto started = std::chrono::steady_clock::now ();
-    const auto callbacks = state_.raw.callbacks.lock ();
+    const auto callbacks = detail::share_callback_state (state_.raw);
     if (!state_.raw.socket)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))

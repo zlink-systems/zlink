@@ -19,7 +19,7 @@ send_operation_t pair_socket_t::send ()
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_send;
     state_ptr->raw.socket = detail::native_handle (*this);
-    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
+    detail::bind_callback_state (state_ptr->raw, callback_state ());
     return send_operation_t (std::move (state_ptr));
 }
 

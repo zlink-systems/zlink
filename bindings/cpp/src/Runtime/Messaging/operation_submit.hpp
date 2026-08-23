@@ -33,8 +33,10 @@ inline bool submit_raw_send_state (operation_state_t &state_)
     };
     if (!state_.raw.socket)
         throw_invalid_argument ();
-    const std::shared_ptr<socket_callback_state_t> callbacks =
-      state_.raw.callbacks.lock ();
+    // Synchronous terminal: the submit cannot outlive the caller's statement,
+    // so the socket that owns this callback state is still the owner for the
+    // whole call. Only its liveness is checked; no ownership share is taken.
+    socket_callback_state_t *const callbacks = live_callback_state (state_.raw);
     if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire)) {
         restore_single_send_part_to_source (state_);
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);

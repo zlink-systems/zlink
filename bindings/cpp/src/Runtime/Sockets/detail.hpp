@@ -71,11 +71,49 @@ class recv_part_out_guard_t
     bool _committed;
 };
 
+inline void assign_recv_source_rid (routing_id_t *source_rid_out_,
+                                    const zlink_routing_id_t *source_rid_) noexcept
+{
+    if (!source_rid_out_)
+        return;
+    if (source_rid_ && source_rid_->size > 0)
+        assign_routing_id_native (*source_rid_out_, *source_rid_);
+    else
+        *source_rid_out_ = unchecked_empty_routing_id ();
+}
+
 inline int recv_single_part_message (void *handle_,
                                      routing_id_t *source_rid_out_,
                                      message_t &part_out_,
                                      recv_flags_t flags_)
 {
+    // HOT PATH: an already-initialized output message with no payload has
+    // nothing to preserve on failure, which is the whole reason the guard
+    // exists. message_t owns that fact (`has_payload`), so this case needs no
+    // guard object, no init() re-check, and no save/restore bookkeeping.
+    if (part_out_.valid () && !has_payload (part_out_)) {
+        const zlink_routing_id_t *source_rid = nullptr;
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        const int rc =
+          zlink_recv_part (handle_, &source_rid, detail::native_handle (part_out_), &has_more,
+                           static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+        if (rc != 0) {
+            part_out_.close ();
+            return rc;
+        }
+        // The frame is known valid here, so record presence directly instead
+        // of re-deriving validity through refresh_payload_presence().
+        message_access_t::has_payload (part_out_) =
+          zlink_msg_size (detail::native_handle (part_out_)) > 0;
+        if (has_more != ZLINK_PART_FINAL) {
+            part_out_.close ();
+            errno = EMSGSIZE;
+            return -1;
+        }
+        assign_recv_source_rid (source_rid_out_, source_rid);
+        return 0;
+    }
+
     recv_part_out_guard_t part_guard (part_out_);
     if (!part_guard.prepare ())
         return -1;
@@ -93,12 +131,7 @@ inline int recv_single_part_message (void *handle_,
         return -1;
     }
 
-    if (source_rid_out_) {
-        if (source_rid && source_rid->size > 0)
-            assign_routing_id_native (*source_rid_out_, *source_rid);
-        else
-            *source_rid_out_ = unchecked_empty_routing_id ();
-    }
+    assign_recv_source_rid (source_rid_out_, source_rid);
     part_guard.commit ();
     return 0;
 }

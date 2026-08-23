@@ -53,7 +53,9 @@ struct operation_state_t
         void reset () noexcept
         {
             first_rid.reset ();
-            first_rid_native_cache = zlink_routing_id_t{};
+            // The native cache is only readable while its presence flag is
+            // set, so clearing the flag is the whole reset. Zeroing the
+            // 256-byte payload would be dead work on every state reuse.
             has_first_rid_native_cache = false;
         }
     };
@@ -77,14 +79,22 @@ struct operation_state_t
     struct raw_command_t
     {
         void *socket = nullptr;
-        std::weak_ptr<socket_callback_state_t> callbacks;
+        // Non-owning view of the callback state owned by the originating
+        // socket_t. Reading it is only defined while `callbacks_anchor` has
+        // not expired; `live_callback_state()` enforces that.
+        socket_callback_state_t *callbacks = nullptr;
+        // Lifetime token for `callbacks`, and the only owner-tracking cost the
+        // operation state pays. It is deliberately kept across pooled reuse so
+        // a hot send loop on one socket rebinds it at most once.
+        std::weak_ptr<socket_callback_state_t> callbacks_anchor;
         std::string topic;
         routing_target_t target;
 
         void reset () noexcept
         {
             socket = nullptr;
-            callbacks.reset ();
+            // `callbacks`/`callbacks_anchor` are a socket-keyed cache, not
+            // per-operation state: bind_callback_state() revalidates them.
             topic.clear ();
             target.reset ();
         }
@@ -113,6 +123,38 @@ struct operation_state_t
     std::chrono::milliseconds timeout{};
     bool timeout_explicit = false;
 };
+
+// Lifetime ownership of the callback state belongs to socket_t. An operation
+// state only needs to be able to tell whether that owner is still alive, so it
+// carries one weak token plus the raw view. The token is bound once per
+// (pooled state, socket) pair instead of once per call.
+inline void bind_callback_state (operation_state_t::raw_command_t &raw_,
+                                 socket_callback_state_t &state_)
+{
+    if (raw_.callbacks == &state_ && !raw_.callbacks_anchor.expired ())
+        return;
+    raw_.callbacks = &state_;
+    raw_.callbacks_anchor = state_.weak_from_this ();
+}
+
+// Synchronous terminals: the submitting statement cannot outlive the socket_t
+// that owns the callback state, so no strong reference is taken. Returns
+// nullptr when the owning socket is already gone.
+inline socket_callback_state_t *live_callback_state (
+  const operation_state_t::raw_command_t &raw_) noexcept
+{
+    if (!raw_.callbacks || raw_.callbacks_anchor.expired ())
+        return nullptr;
+    return raw_.callbacks;
+}
+
+// Asynchronous/admission terminals: the record outlives the submitting
+// statement, so it must own a strong reference.
+inline std::shared_ptr<socket_callback_state_t> share_callback_state (
+  const operation_state_t::raw_command_t &raw_)
+{
+    return raw_.callbacks_anchor.lock ();
+}
 
 inline void cache_first_rid_native (operation_state_t::routing_target_t &target_,
                                     const routing_id_t &rid_) noexcept
@@ -218,20 +260,6 @@ inline void restore_send_parts_to_state (operation_state_t &state_,
 // trigger malloc/free per call.
 inline void reset_for_reuse (operation_state_t &state_) noexcept
 {
-    // RAW_SEND_HOT_PATH: pair/dealer send only populates the message, raw
-    // socket, and flags fields. Every other operation takes the complete
-    // reset below before the pooled state becomes reusable.
-    if (state_.kind == operation_kind_t::raw_send) {
-        state_.kind = operation_kind_t::none;
-        state_.message.reset ();
-        state_.raw.socket = nullptr;
-        state_.raw.callbacks.reset ();
-        state_.flags = send_flags_t::none;
-        state_.timeout = std::chrono::milliseconds{};
-        state_.timeout_explicit = false;
-        return;
-    }
-
     state_.kind = operation_kind_t::none;
     state_.message.reset ();
     state_.raw.reset ();

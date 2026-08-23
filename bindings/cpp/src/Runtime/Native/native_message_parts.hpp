@@ -46,6 +46,33 @@ close_native_parts (zlink_msg_t *parts_, size_t part_count_, size_t start_index_
         (void) zlink_msg_close (&parts_[i]);
 }
 
+//  Moves a native frame into an already-valid @p part_ and re-establishes the
+//  binding-side payload-presence metadata.
+//
+//  `move_to_native()` and `message_t::init()` both clear `_has_payload`, so
+//  every helper that pushes a native payload back into a `message_t` must
+//  restore that flag; otherwise a message holding a real payload advertises
+//  itself as empty and the receive fast path (which branches on
+//  `has_payload()`) can destroy that payload on a failed receive. These are
+//  recovery/materialization paths, not the hot single-part path, so the extra
+//  `zlink_msg_size()` query is acceptable here.
+inline bool adopt_native_part (message_t &part_, zlink_msg_t &native_) noexcept
+{
+    if (!part_.valid ())
+        return false;
+    if (zlink_msg_move (detail::native_handle (part_), &native_) != 0)
+        return false;
+    detail::refresh_payload_presence (part_);
+    return true;
+}
+
+inline void restore_part_from_native (message_t &part_, zlink_msg_t &native_) noexcept
+{
+    part_.init ();
+    (void) adopt_native_part (part_, native_);
+    (void) zlink_msg_close (&native_);
+}
+
 inline int move_parts_to_native (std::vector<message_t> &parts_, std::vector<zlink_msg_t> &native_)
 {
     native_.clear ();
@@ -65,23 +92,11 @@ inline int move_parts_to_native (std::vector<message_t> &parts_, std::vector<zli
     if (moved == parts_.size ())
         return 0;
 
-    for (size_t i = 0; i < moved; ++i) {
-        parts_[i].init ();
-        if (parts_[i].valid ())
-            (void) zlink_msg_move (detail::native_handle (parts_[i]), &native_[i]);
-        (void) zlink_msg_close (&native_[i]);
-    }
+    for (size_t i = 0; i < moved; ++i)
+        restore_part_from_native (parts_[i], native_[i]);
 
     native_.clear ();
     return -1;
-}
-
-inline void restore_part_from_native (message_t &part_, zlink_msg_t &native_) noexcept
-{
-    part_.init ();
-    if (part_.valid ())
-        (void) zlink_msg_move (detail::native_handle (part_), &native_);
-    (void) zlink_msg_close (&native_);
 }
 
 inline void restore_parts_from_native (std::vector<message_t> &parts_,
@@ -89,12 +104,8 @@ inline void restore_parts_from_native (std::vector<message_t> &parts_,
                                        size_t start_index_ = 0) noexcept
 {
     const size_t count = native_.size () < parts_.size () ? native_.size () : parts_.size ();
-    for (size_t i = start_index_; i < count; ++i) {
-        parts_[i].init ();
-        if (parts_[i].valid ())
-            (void) zlink_msg_move (detail::native_handle (parts_[i]), &native_[i]);
-        (void) zlink_msg_close (&native_[i]);
-    }
+    for (size_t i = start_index_; i < count; ++i)
+        restore_part_from_native (parts_[i], native_[i]);
     native_.clear ();
 }
 
@@ -142,7 +153,7 @@ inline int assign_parts_from_native (zlink_msg_t *parts_native_,
     parts_.clear ();
     parts_.resize (part_count_);
     for (size_t i = 0; i < part_count_; ++i) {
-        if (zlink_msg_move (detail::native_handle (parts_[i]), &parts_native_[i]) != 0) {
+        if (!adopt_native_part (parts_[i], parts_native_[i])) {
             parts_.clear ();
             close_message_array (parts_native_, part_count_);
             return -1;
@@ -158,7 +169,7 @@ inline int assign_parts_from_native (std::vector<zlink_msg_t> &parts_native_,
     parts_.clear ();
     parts_.resize (parts_native_.size ());
     for (size_t i = 0; i < parts_native_.size (); ++i) {
-        if (zlink_msg_move (detail::native_handle (parts_[i]), &parts_native_[i]) != 0) {
+        if (!adopt_native_part (parts_[i], parts_native_[i])) {
             parts_.clear ();
             close_native_parts (parts_native_, i);
             parts_native_.clear ();
@@ -174,7 +185,7 @@ inline std::vector<message_t> take_parts_from_native (zlink_msg_t *parts_, size_
     std::vector<message_t> parts;
     parts.resize (part_count_);
     for (size_t i = 0; i < part_count_; ++i)
-        (void) zlink_msg_move (detail::native_handle (parts[i]), &parts_[i]);
+        (void) adopt_native_part (parts[i], parts_[i]);
     close_message_array (parts_, part_count_);
     return parts;
 }

@@ -6,8 +6,45 @@
 #include <Runtime/Messaging/operation_state.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
+#include <memory>
+
 namespace zlink
 {
+
+namespace
+{
+
+// Single owner of the "describe a publish operation" step. PUB and XPUB differ
+// only in socket type, not in how a publish operation is set up, so the
+// sequence lives here once instead of being repeated per socket class.
+//
+// The callback state is supplied as a callable, not as an already-evaluated
+// reference: callback_state() allocates lazily, so the observable step order of
+// the pre-dedup code (topic validation first, then socket handle, then callback
+// state, then topic assignment) must be preserved exactly.
+template <class callback_state_fn_t>
+std::unique_ptr<detail::operation_state_t>
+make_publish_state (socket_t &socket_,
+                    const std::string &topic_id_,
+                    callback_state_fn_t &&callback_state_)
+{
+    detail::validate_no_embedded_null (topic_id_, "topic");
+    auto state_ptr = detail::acquire_state ();
+    state_ptr->kind = detail::operation_kind_t::raw_publish;
+    state_ptr->raw.socket = detail::native_handle (socket_);
+    detail::bind_callback_state (state_ptr->raw, callback_state_ ());
+    state_ptr->raw.topic = topic_id_;
+    return state_ptr;
+}
+
+// Single owner of the "configuration call failed" translation used by every
+// subscription accessor below.
+void throw_last_config_error ()
+{
+    throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+}
+
+} // namespace
 
 pub_socket_t::pub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socket_type::pub)
 {
@@ -15,13 +52,9 @@ pub_socket_t::pub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socket_
 
 send_operation_t pub_socket_t::publish (const std::string &topic_id_)
 {
-    detail::validate_no_embedded_null (topic_id_, "topic");
-    auto state_ptr = detail::acquire_state ();
-    state_ptr->kind = detail::operation_kind_t::raw_publish;
-    state_ptr->raw.socket = detail::native_handle (*this);
-    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
-    state_ptr->raw.topic = topic_id_;
-    return send_operation_t (std::move (state_ptr));
+    return send_operation_t (make_publish_state (
+      *this, topic_id_,
+      [this] () -> detail::socket_callback_state_t & { return callback_state (); }));
 }
 
 xpub_socket_t::xpub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socket_type::xpub)
@@ -30,13 +63,9 @@ xpub_socket_t::xpub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socke
 
 send_operation_t xpub_socket_t::publish (const std::string &topic_id_)
 {
-    detail::validate_no_embedded_null (topic_id_, "topic");
-    auto state_ptr = detail::acquire_state ();
-    state_ptr->kind = detail::operation_kind_t::raw_publish;
-    state_ptr->raw.socket = detail::native_handle (*this);
-    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
-    state_ptr->raw.topic = topic_id_;
-    return send_operation_t (std::move (state_ptr));
+    return send_operation_t (make_publish_state (
+      *this, topic_id_,
+      [this] () -> detail::socket_callback_state_t & { return callback_state (); }));
 }
 
 int xpub_socket_t::receive_subscription_event (subscription_event_t &out_, recv_flags_t flags_)
@@ -78,19 +107,19 @@ sub_socket_t::sub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, socket
 void sub_socket_t::set_subscription (const std::string &filter_)
 {
     if (socket_t::set_subscription (filter_) != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw_last_config_error ();
 }
 
 void sub_socket_t::unset_subscription (const std::string &filter_)
 {
     if (socket_t::unset_subscription (filter_) != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw_last_config_error ();
 }
 
 void sub_socket_t::subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_)
 {
     if (socket_t::subscription_at (index_, filter_out_, is_pattern_out_) != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw_last_config_error ();
 }
 
 xsub_socket_t::xsub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, socket_type::xsub)
@@ -100,19 +129,19 @@ xsub_socket_t::xsub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, sock
 void xsub_socket_t::set_subscription (const std::string &filter_)
 {
     if (socket_t::set_subscription (filter_) != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw_last_config_error ();
 }
 
 void xsub_socket_t::unset_subscription (const std::string &filter_)
 {
     if (socket_t::unset_subscription (filter_) != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw_last_config_error ();
 }
 
 void xsub_socket_t::subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_)
 {
     if (socket_t::subscription_at (index_, filter_out_, is_pattern_out_) != 0)
-        throw config_error_t (detail::config_result_from_errno (zlink_errno ()), zlink_errno ());
+        throw_last_config_error ();
 }
 
 } // namespace zlink

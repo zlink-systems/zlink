@@ -18,7 +18,7 @@ void submit_raw_reply (detail::operation_state_t &state_)
     if (!state_.raw.socket || !state_.raw.target.first_rid)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     const std::shared_ptr<detail::socket_callback_state_t> callbacks =
-      state_.raw.callbacks.lock ();
+      detail::share_callback_state (state_.raw);
     if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
 

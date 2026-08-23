@@ -247,7 +247,7 @@ managed_request_start_t start_managed_request (
     const auto operation_started = std::chrono::steady_clock::now ();
     ensure_raw_request_state (state_);
     const std::shared_ptr<detail::socket_callback_state_t> callbacks =
-      state_.raw.callbacks.lock ();
+      detail::share_callback_state (state_.raw);
     if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     const bool dealer = state_.kind == detail::operation_kind_t::raw_request;

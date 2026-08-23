@@ -23,7 +23,7 @@ routed_send_operation_t router_socket_t::send (const routing_id_t &target_rid_)
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
     state_ptr->raw.socket = detail::native_handle (*this);
-    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
+    detail::bind_callback_state (state_ptr->raw, callback_state ());
     detail::cache_first_rid_native (state_ptr->raw.target, target_rid_);
     return routed_send_operation_t (std::move (state_ptr));
 }
@@ -77,7 +77,7 @@ request_operation_t router_socket_t::request (const routing_id_t &routing_id_)
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_routed_request;
     state_ptr->raw.socket = detail::native_handle (*this);
-    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
+    detail::bind_callback_state (state_ptr->raw, callback_state ());
     // HOT PATH: routed request submission needs the native routing id only.
     // Keep the same cached representation as routed send instead of copying
     // the 256-byte public value into each operation state.
@@ -91,7 +91,7 @@ reply_operation_t router_socket_t::reply (const routing_id_t &routing_id_,
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_reply;
     state_ptr->raw.socket = detail::native_handle (*this);
-    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
+    detail::bind_callback_state (state_ptr->raw, callback_state ());
     state_ptr->raw.target.first_rid = routing_id_;
     state_ptr->reply.request_seq = request_seq_;
     return reply_operation_t (std::move (state_ptr));
