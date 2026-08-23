@@ -9,8 +9,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 final class ZLinkServiceRelocationEnvelopeCodecTest {
     private static final Pattern LOGICAL_HEX = Pattern.compile(
@@ -20,6 +22,8 @@ final class ZLinkServiceRelocationEnvelopeCodecTest {
     void sharedGoldenRoundTripsByteIdentically() throws IOException {
         byte[] encoded = golden();
         var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
+        var generated = ServiceWirePilotCodec.decodeRelocationEnvelopeV1(
+            List.of(encoded));
 
         assertEquals(0, envelope.relocationHigh());
         assertEquals(9, envelope.relocationLow());
@@ -37,6 +41,20 @@ final class ZLinkServiceRelocationEnvelopeCodecTest {
         assertEquals(3, envelope.pendingTimerTicks().getFirst().participantId());
         assertEquals(2, envelope.pendingTimerTicks().getFirst().sequence());
         assertArrayEquals(encoded, envelope.canonicalBytes());
+        assertArrayEquals(encoded,
+            ServiceWirePilotCodec.encodeRelocationEnvelopeV1(generated));
+    }
+
+    @Test
+    void handAndGeneratedDecodersRejectCrossSectionReferenceMutations()
+        throws IOException {
+        byte[] membershipMutation = golden();
+        membershipMutation[132] = 4;
+        assertRejectedByBoth(membershipMutation);
+
+        byte[] timerNameMutation = golden();
+        timerNameMutation[402] = 'x';
+        assertRejectedByBoth(timerNameMutation);
     }
 
     @Test
@@ -45,6 +63,14 @@ final class ZLinkServiceRelocationEnvelopeCodecTest {
         byte[] trailing = Arrays.copyOf(encoded, encoded.length + 1);
         assertThrows(IllegalArgumentException.class,
             () -> ZLinkServiceRelocationEnvelopeCodec.decode(trailing));
+    }
+
+    private static void assertRejectedByBoth(byte[] encoded) {
+        assertThrows(IllegalArgumentException.class,
+            () -> ZLinkServiceRelocationEnvelopeCodec.decode(encoded));
+        assertThrows(IOException.class,
+            () -> ServiceWirePilotCodec.decodeRelocationEnvelopeV1(
+                List.of(encoded)));
     }
 
     private static byte[] golden() throws IOException {
