@@ -3250,13 +3250,19 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
         != runtime::stateful::relocation_terminal_t::completed) {
         const auto ambiguous = relocated.terminal
           == runtime::stateful::relocation_terminal_t::recovery_required;
+        const auto data_lost =
+          relocated.terminal
+              == runtime::stateful::relocation_terminal_t::data_lost
+          || relocated.reason
+               == runtime::stateful::relocation_reason_t::checksum_mismatch;
         spot.fail_remote_actor_transfer (s->actor, ambiguous);
         if (!ambiguous)
             (void) co_await abort_remote_actor_join_seal (s);
         co_return fail_remote_actor_join (
           *s, result_t<actor_join_reply_t>::failure (
                 ambiguous ? framework_error_kind_t::unavailable
-                          : framework_error_kind_t::internal_failure,
+                : data_lost ? framework_error_kind_t::data_lost
+                            : framework_error_kind_t::internal_failure,
                 "canonical Actor Join relocation did not complete (terminal="
                   + std::to_string (static_cast<int> (relocated.terminal))
                   + ", reason="

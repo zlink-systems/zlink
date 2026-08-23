@@ -20,27 +20,9 @@ The proxy never invents framing: it copies the observed ZMP frame bytes
 verbatim and only flips one byte in the copy, so the target decodes a
 well-formed record and reaches the assembly, not the malformed-wire path.
 
-STATUS -- NOT WIRED INTO run_e2e.sh YET (2026-08-22).  The seam itself was
-built and verified end to end: both actor routers bind 127.0.0.2 and
-advertise 127.0.0.1 where this proxy listens (the ST-F3A bind/advertise
-split), mesh traffic passes through untouched, and a whole scenario
-(ST-C1) runs green behind it.  What is missing is the *trigger*: nothing
-in this config puts a relocationState(52) record on the wire.  A remote
-Actor Join carries the captured state inline as
-spot_actor_commit_route_request_t.transfer_state (core_transfer=true, see
-mesh_node_runtime.cpp prepare_remote_application_actor_join), and the only
-producer of relocationState chunks -- maintenance_runtime.cpp
-relocate_send_state_chunks, reached through maintenance->relocate -- has
-exactly two callers, mesh_node_runtime.cpp relocate_application_actor and
-relocate_application_unit, both invoked only from app.cpp's termination
-(drain) relocation.  Observed, not assumed: with both actor routers behind
-this proxy, ST-C4's Join, ST-C1, and a manual create-then-shutdown drain
-produced zero records of kinds 30/31/34/40/52/53, while the same
-connection carried actorJoin(28).  Driving the ST-C4 fault point therefore
-needs a relocation shape that uses the canonical chunk wire while the
-source node stays alive -- a coordinator/spec call, not a harness one.
-
-Harness wiring this expects, once such a trigger exists:
+The SpotActorTransfer harness wires this proxy for ST-C4 after remote Actor
+Join moved to the canonical ZLJR + relocationPrepare(40) +
+relocationState(52) path. Its topology is:
   --route 127.0.0.1:<A_ROUTER>=127.0.0.2:<A_ROUTER>
   --route 127.0.0.1:<B_ROUTER>=127.0.0.2:<B_ROUTER>
   --control 127.0.0.1:<ADMIN>
@@ -51,7 +33,10 @@ one payload spans several chunks and the target's assembly is holding
 staged bytes when the divergent duplicate arrives).  The scenario arms it
 with POST /arm and reads GET /state (stateFrames/injectedFrames) so a
 topology or chunk-limit regression fails loudly instead of degrading the
-assertion.
+assertion. The proxy also records relocationFailed(53)'s trailing u32
+failure code so the scenario proves the target emitted
+relocationDataLost(35), rather than inferring the wire result from a public
+callback.
 """
 
 from __future__ import annotations
@@ -74,6 +59,7 @@ ZMP_FLAG_MORE = 0x01
 # {magic0, magic1, wireMajor, command, flags}; command::relocationState = 52.
 WIRE_MAGIC = bytes((90, 77))
 COMMAND_RELOCATION_STATE = 52
+COMMAND_RELOCATION_FAILED = 53
 PREFIX_SIZE = 5
 
 
@@ -86,6 +72,8 @@ class State:
         self.state_frames = 0
         self.injected_frames = 0
         self.skipped_frames = 0
+        self.failure_frames = 0
+        self.failure_codes: list[int] = []
         self.kinds: dict[str, int] = {}
 
     def arm(self) -> None:
@@ -114,8 +102,15 @@ class State:
                 "stateFrames": self.state_frames,
                 "injectedFrames": self.injected_frames,
                 "skippedFrames": self.skipped_frames,
+                "failureFrames": self.failure_frames,
+                "failureCodes": list(self.failure_codes),
                 "kinds": dict(sorted(self.kinds.items())),
             }
+
+    def observe_failure(self, failure_code: int) -> None:
+        with self.lock:
+            self.failure_frames += 1
+            self.failure_codes.append(failure_code)
 
 
 def is_relocation_state_record(body: bytes) -> bool:
@@ -185,6 +180,14 @@ def pump_inspected(source: socket.socket, sink: socket.socket, state: State, tag
                     key = f"{tag}:{body[3]}"
                     with state.lock:
                         state.kinds[key] = state.kinds.get(key, 0) + 1
+                    if body[3] == COMMAND_RELOCATION_FAILED and len(body) >= 4:
+                        # relocationFailed.failureCode is the record's final
+                        # u32 (service_wire_codec.cpp encode_relocation_control).
+                        failure_code = int.from_bytes(body[-4:], "big")
+                        state.observe_failure(failure_code)
+                        print(
+                            f"relocation-failure {tag} code={failure_code}",
+                            flush=True)
                 if is_relocation_state_record(body):
                     carries_state_record = True
                 if flags & ZMP_FLAG_MORE:

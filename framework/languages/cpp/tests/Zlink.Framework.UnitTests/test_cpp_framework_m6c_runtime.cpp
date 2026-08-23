@@ -3000,6 +3000,81 @@ void test_public_authority_store_adapter (test_context_t &test)
 
 } // namespace
 
+void test_source_relocation_failure_stops_state_chunks_and_unseals (
+  test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    stateful_object_runtime_t objects;
+    objects.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t> (256, 0x5a);
+      },
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) { return true; });
+    const auto actor = create_actor (objects, "live-failure-actor");
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    maintenance_runtime_t relocation (objects, authority, roots);
+
+    auto target_terminal = std::make_shared<framework::detail::
+      task_completion_source_t<relocation_reason_t>> ();
+    std::uint32_t planned_chunks = 0;
+    std::uint32_t sent_chunks = 0;
+    eligible_relocation_unit_t::canonical_wire_context_t wire{
+      .relocation = {0x51, 0x52},
+      .target_attempt_generation = 7,
+      .coordinator =
+        {"source-owner", 1, {'s', 'r', 'c'}, 3, "authority-v1"},
+      .target_node_routing_id = {'d', 's', 't'},
+      .target_node_generation = 7,
+      .application_version = 1,
+      .prepare_target =
+        [&] (const std::vector<frozen_object_state_t> &,
+             const relocation_payload_manifest_t &manifest,
+             const std::vector<protocol::session_relocation_route_t> &)
+          -> framework::task_t<relocation_reason_t> {
+          planned_chunks = manifest.chunk_count;
+          co_return co_await target_terminal->task ();
+      },
+      .send_state_chunk =
+        [&] (const protocol::relocation_state_t &)
+          -> framework::task_t<bool> {
+          ++sent_chunks;
+          if (sent_chunks == 1) {
+              target_terminal->complete (
+                framework::result_t<relocation_reason_t>::success (
+                  relocation_reason_t::checksum_mismatch));
+          }
+          co_return true;
+      },
+      .send_relocation_data =
+        [] (const std::vector<protocol::relocation_data_t> &,
+            const relocation_ingress_batch_t &)
+          -> framework::task_t<bool> { co_return true; },
+      .send_cutover =
+        [] (const protocol::relocation_cutover_t &)
+          -> framework::task_t<eligible_relocation_unit_t::
+            canonical_wire_context_t::cutover_enqueue_t> {
+          co_return eligible_relocation_unit_t::canonical_wire_context_t::
+            cutover_enqueue_t::enqueued;
+      },
+      .abort_target_before_cutover = [] { return true; }};
+
+    const auto result = await_task (relocation.relocate (
+      actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+      digest_with (0x31), wire, {}, 16));
+    const auto source_resumed =
+      objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
+    test.require (
+      planned_chunks > 1 && sent_chunks == 1
+        && result.terminal == relocation_terminal_t::blocked
+        && result.reason == relocation_reason_t::checksum_mismatch
+        && source_resumed == stateful_error_t::none,
+      "an explicit target relocation failure must stop remaining state chunks, preserve its reason, and unseal the source");
+}
+
 void test_application_relocation_remote_production_path (
   test_context_t &test)
 {
@@ -5656,6 +5731,7 @@ int main ()
     test_shutdown_wins_during_retire_preflight (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
+    test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_application_relocation_remote_production_path (test);
     test_application_user_spot_aggregate_remote_production_path (
       test);

@@ -518,7 +518,8 @@ void maintenance_runtime_t::release_transfer_budget (
 }
 
 task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
-  std::shared_ptr<relocation_terminal_state_t> state)
+  std::shared_ptr<relocation_terminal_state_t> state,
+  std::function<bool ()> target_failed)
 {
     if (!state->context.send_state_chunk)
         co_return false;
@@ -536,6 +537,8 @@ task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
       principal.owner.authority_owner_generation};
     for (std::uint32_t ordinal = 0; ordinal != state->manifest.chunk_count;
          ++ordinal) {
+        if (target_failed && target_failed ())
+            co_return false;
         auto chunk = make_relocation_state_chunk (
           state->context.relocation, state->context.target_attempt_generation,
           state->context.coordinator, object, state->payload, ordinal,
@@ -548,6 +551,8 @@ task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
             sent = false;
         }
         if (!sent)
+            co_return false;
+        if (target_failed && target_failed ())
             co_return false;
     }
     co_return true;
@@ -807,11 +812,19 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
     }
     /* Start the Restore request first: the eager task enqueues the request
      * frame on the ordered connection before its first suspension, so the
-     * relocationState chunks sent next arrive after it. The relay-ready
-     * reply arrives only after the target assembled and restored every
-     * chunk, so the reply is awaited after the chunk sends complete. */
+     * relocationState chunks sent next arrive after it. A target can reply
+     * with relocationFailed while chunks are still in flight; observe that
+     * existing terminal between sends so it stops the outbound transfer.
+     * Relay-ready still arrives only after every chunk was assembled and
+     * restored, and is awaited after the chunk sends complete. */
     auto prepared = relocate_prepare_target (state);
-    const auto chunks_sent = co_await relocate_send_state_chunks (state);
+    const auto chunks_sent = co_await relocate_send_state_chunks (
+      state, [&prepared] {
+          if (!prepared.await_ready ())
+              return false;
+          const auto &result = prepared.result ();
+          return !result || !result.value ();
+      });
     release_reservation ();
     const auto target_ready = co_await prepared;
     if (!target_ready)
@@ -1229,7 +1242,14 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
       persisted_context, seal.participants, state->manifest));
     const auto chunks_sent =
-      co_await relocate_send_state_chunks (state);
+      co_await relocate_send_state_chunks (
+        state, [prepared] {
+            if (!prepared->await_ready ())
+                return false;
+            const auto &result = prepared->result ();
+            return !result
+                   || result.value () != relocation_reason_t::none;
+        });
     release_transfer_budget (state->budget_reserved);
     state->budget_reserved = 0;
     auto target_prepare_reason = relocation_reason_t::restore_failed;

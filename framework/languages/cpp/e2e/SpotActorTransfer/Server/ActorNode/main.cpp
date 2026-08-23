@@ -45,9 +45,12 @@ struct node_options_t
     std::string redis_key_prefix;
     std::string log_dir;
     std::string evidence_file;
+    std::uint64_t relocation_payload_chunk_limit_bytes = 262144;
 
     static node_options_t bind (const fw::configuration_section_t &section)
     {
+        const auto configured_chunk_limit =
+          section.get ("relocationPayloadChunkLimitBytes");
         return {.initial_actor_node = section.require ("initialActorNode"),
                 .rid = section.require ("rid"),
                 .http_url = section.require ("httpUrl"),
@@ -59,7 +62,11 @@ struct node_options_t
                 .redis_endpoint = section.require ("redis.endpoint"),
                 .redis_key_prefix = section.require ("redis.keyPrefix"),
                 .log_dir = section.require ("logDir"),
-                .evidence_file = section.require ("evidenceFile")};
+                .evidence_file = section.require ("evidenceFile"),
+                .relocation_payload_chunk_limit_bytes =
+                  configured_chunk_limit
+                    ? static_cast<std::uint64_t> (std::stoull (*configured_chunk_limit))
+                    : 262144};
     }
 };
 
@@ -1438,6 +1445,8 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
         /* Keep the source route briefly so the post-relocation packet enters
          * the committed Message Follow path before the lease fence expires. */
         locations.route_cache_max_age = std::chrono::seconds (1);
+        locations.relocation_payload_chunk_limit_bytes =
+          configured.relocation_payload_chunk_limit_bytes;
 
         auto mesh = framework.add_route_mesh (e2e::mesh_name);
         mesh.listen (router_endpoint).set_routing_id (zlink::routing_id_t::from (rid));

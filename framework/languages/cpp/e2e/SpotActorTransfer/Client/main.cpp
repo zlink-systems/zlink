@@ -57,7 +57,8 @@ int main (int argc, char **argv)
           options.node_c_url,
           options.node_a_stream,
           options.node_b_stream,
-          options.session_proxy_admin};
+          options.session_proxy_admin,
+          options.relocation_proxy_admin};
         scenario_runner_t runner (nodes);
         for (const auto &name : selected_scenarios (options.scenario)) {
             if (name == "ST-A1") {

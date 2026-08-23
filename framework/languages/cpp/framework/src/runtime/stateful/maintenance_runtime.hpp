@@ -557,7 +557,8 @@ class maintenance_runtime_t
     task_t<bool> relocate_prepare_target (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (
-      std::shared_ptr<relocation_terminal_state_t> state);
+      std::shared_ptr<relocation_terminal_state_t> state,
+      std::function<bool ()> target_failed = {});
     task_t<bool> relocate_boundary_and_send (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_cutover (
