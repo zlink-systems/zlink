@@ -31,7 +31,9 @@ import { EnterWorldReq, EnterWorldRes, ReportNodeStatusMsg } from '../../Shared/
 import { MaintenanceStore } from '../Configuration/maintenance-store';
 import { NodeRuntimeState } from './Domain/node-runtime-state';
 import { botRoutes } from './Domain/bot-patrol';
+import { adjacentZones } from './Domain/world';
 import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
+import type { ZoneId } from '../../Shared/spec';
 
 let statusTimer: NodeJS.Timeout | undefined;
 
@@ -223,7 +225,17 @@ async function ensureZones(
   const pending = new Set<string>(candidates);
   const deadline = Date.now() + 20_000;
   while (pending.size > 0 && state.zones().length < expectedLocalCapacity) {
-    for (const zoneId of [...pending]) {
+    const claimed = state.zones();
+    const claimOrder: string[] = [];
+    for (const zoneId of claimed) {
+      for (const adjacent of adjacentZones(zoneId as ZoneId)) {
+        if (pending.has(adjacent) && !claimed.includes(adjacent) && !claimOrder.includes(adjacent)) {
+          claimOrder.push(adjacent);
+        }
+      }
+    }
+    claimOrder.push(...candidates.filter((zoneId) => pending.has(zoneId) && !claimOrder.includes(zoneId)));
+    for (const zoneId of claimOrder) {
       try {
         const result = await spots
           .getOrCreate(zoneId, ZoneSpot.name)
@@ -236,6 +248,7 @@ async function ensureZones(
           throw error;
         }
       }
+      if (!sameZones(state.zones(), claimed)) break;
     }
     if (pending.size === 0 || state.zones().length >= expectedLocalCapacity) break;
     if (Date.now() >= deadline) {
@@ -249,4 +262,8 @@ async function ensureZones(
       `Zone Spot capacity expected ${expectedLocalCapacity} local zones, observed ${state.zones().length}.`
     );
   }
+}
+
+function sameZones(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((zoneId, index) => zoneId === right[index]);
 }
