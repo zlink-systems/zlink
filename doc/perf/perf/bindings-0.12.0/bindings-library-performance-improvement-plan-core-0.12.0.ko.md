@@ -1,15 +1,15 @@
 <!--
-이 계획서는 Core `0.11.1`을 기준으로 작성했다. 측정값과 실행 과정은 이 폴더의 표와 `log/`에 기록한다.
+이 계획서는 Core `0.12.0`을 기준으로 작성했다. 측정값과 실행 과정은 이 폴더의 표와 `log/`에 기록한다.
 -->
-# core 0.11.1 bindings 라이브러리 성능 개선 계획
+# core 0.12.0 bindings 라이브러리 성능 개선 계획
 
 > 시작일: 2026-08-19
 >
-> 작업 브랜치: `codex/bindings-0.11.1-performance`
+> 작업 브랜치: `codex/bindings-0.12.0-performance`
 >
-> 성능 측정과 구현은 `codex/bindings-0.11.1-performance`에서 진행하며, 측정과 문서 변경은 고정한 WSL/Linux 작업영역에서 수행한다.
+> 성능 측정과 구현은 `codex/bindings-0.12.0-performance`에서 진행하며, 측정과 문서 변경은 고정한 WSL/Linux 작업영역에서 수행한다.
 >
-> 이 문서는 core 0.11.1을 기준으로 bindings 라이브러리 성능 개선을 처음부터
+> 이 문서는 core 0.12.0을 기준으로 bindings 라이브러리 성능 개선을 처음부터
 > 진행하기 위한 실행 문서다. 이전 계획 문서의 측정값과 완료 판정은 가져오지 않는다.
 > 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다. 이 계획서에는 측정 대상,
 > 측정 조건, report 경로, 비교값과 판정만 남긴다. 실행 명령, 후보 검토, 프로파일과 같은
@@ -17,19 +17,19 @@
 
 ## 1. 기준 버전과 시작 상태
 
-이번 작업의 core 기준 버전은 0.11.1이다. 측정 전에 다음 세 파일의 버전이 모두 같은지
+이번 작업의 core 기준 버전은 0.12.0이다. 측정 전에 다음 세 파일의 버전이 모두 같은지
 확인한다.
 
-- `VERSION`: `LIBZLINK_VERSION=0.11.1`
-- `core/CMakeLists.txt`: `project(zlink VERSION 0.11.1 ...)`
-- `core/include/zlink.h`: major, minor, patch values matching 0.11.1
+- `VERSION`: `LIBZLINK_VERSION=0.12.0`
+- `core/CMakeLists.txt`: `project(zlink VERSION 0.12.0 ...)`
+- `core/include/zlink.h`: major, minor, patch values matching 0.12.0
 
 `bindings/tools/local_core_runtime.sh`는 `VERSION`의 값을 이용해 GitHub의
-`core/v0.11.1` release asset을 기존 release 절차로 가져오고 versioned
+`core/v0.12.0` release asset을 기존 release 절차로 가져오고 versioned
 runtime 경로를 선택한다. 따라서 파일 이름이나 `Perf runtime libzlink: ...` 경로만
 보고 판정하지 않는다. runner 또는 binding의 public version API와
 `share/zlink/core-package-provenance.json`이 보고한 실제 runtime 버전도
-0.11.1인지 확인한다.
+0.12.0인지 확인한다.
 
 측정을 시작할 때는 Core source를 다시 build하지 않는다.
 `ZLINK_CORE_SOURCE=release`(기본값) 상태에서 release prefix를 준비한다.
@@ -39,7 +39,7 @@ package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으�
 모든 성능 셀은 `미측정`에서 시작한다. 상세 표에는 현재 binding runner에 실제로 등록된
 pattern만 포함한다. 공식 C runner에만 있고 binding runner에 없는 pattern은 이 계획의
 측정 대상에서 제외한다. 이전 문서와 이전 report는 병목 후보를 찾는 참고 자료로만 사용하며,
-core 0.11.1의 통과 비율이나 완료 근거로 사용하지 않는다.
+core 0.12.0의 통과 비율이나 완료 근거로 사용하지 않는다.
 
 언어별 pattern 목록이 다른 것은 Core C API 또는 binding public contract가 언어별로 다르다는
 뜻이 아니다. 모든 binding은 같은 Core C API를 감싸지만, 각 언어의 perf runner가 현재
@@ -60,7 +60,7 @@ core 0.11.1의 통과 비율이나 완료 근거로 사용하지 않는다.
 | 6 | Rust | `bindings/rust/perf` |
 | 7 | Python | `bindings/python/perf` |
 
-비교 기준은 같은 core 0.11.1 runtime으로 실행한 `bindings/c/perf` 결과다. 같은 suite,
+비교 기준은 같은 core 0.12.0 runtime으로 실행한 `bindings/c/perf` 결과다. 같은 suite,
 pattern, transport, message size, duration, client 수, metric을 맞춘 뒤 다음 식으로
 비율을 계산한다.
 
@@ -112,7 +112,7 @@ GC·JIT·callback·event loop 같은 언어 runtime 비용을 나누어 판단�
 
 Python의 과거 full matrix는 이후 공개 계약 복구 전 구현으로 측정한 값이므로 달성 가능성
 판단에서도 제외한다. C++ socket request/reply의 완료 셀은 p10 88.9%, 중앙값
-96.3%였고 routed one-way와 multi routed echo도 비슷했다. 다만 현재 core 0.11.1의
+96.3%였고 routed one-way와 multi routed echo도 비슷했다. 다만 현재 core 0.12.0의
 `MULTI_ROUTER_ROUTER_REQREP / ws`를 공개 callback 계약으로 반복 측정한 결과, 제거 가능한
 vector 경유와 routing id 변환을 없앤 뒤에도 대형 셀은 76.4~78.0%였다. 따라서 C++
 socket request/reply는 중앙값 85%를 유지하고 개별 셀 최소 기준만 75%로 둔다. Rust는
@@ -141,7 +141,7 @@ socket request/reply는 중앙값 85%를 유지하고 개별 셀 최소 기준�
 Node의 과거 size 중앙값은 pattern 그룹에 따라 55.3~91.8%였다. 아직 최적화가 끝난
 결과가 아니므로 가장 낮은 값에 맞춰 목표를 낮추지 않고 모든 pattern 그룹의 중앙값 목표를
 60%로 둔다. Python의 과거 full matrix는 공개 계약 복구 전 결과이므로 목표를 낮추는
-근거로 쓰지 않으며 Node와 같은 60% 중앙값 목표에서 시작한다. 이후 현재 core 0.11.1의
+근거로 쓰지 않으며 Node와 같은 60% 중앙값 목표에서 시작한다. 이후 현재 core 0.12.0의
 paired 측정과 binding 개선으로 달성 가능성을 검증한다.
 
 .NET의 과거 size 중앙값은 multi routed echo 66.1%였고 Java는 69.8%였다. 이 값도
@@ -245,7 +245,7 @@ Single 기본 크기는 기존 구성을 유지한다.
 
 ### 3.2 Multi suite
 
-core 0.11.1의 현재 multi runner 기본값을 따른다. 이전 표의 256 KiB는 제거하고
+core 0.12.0의 현재 multi runner 기본값을 따른다. 이전 표의 256 KiB는 제거하고
 4 KiB를 추가한다.
 
 | 표시 | bytes | 상태 |
@@ -468,7 +468,7 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 ### 7.4 작업 순서
 
 1. inventory gate를 통과시키고 정책, runner, 상세 표의 측정 범위를 일치시킨다.
-2. GitHub `core/v0.11.1` release asset과 package provenance를 준비하고 재현
+2. GitHub `core/v0.12.0` release asset과 package provenance를 준비하고 재현
    환경 manifest를 기록한다. Core source를 다시 build하지 않는다.
 3. C++, .NET, Java, Node, Go, Rust, Python 순서로 진행한다.
 4. 현재 언어에서 진행할 pattern 하나를 선택한다. C 전체 pattern이나 다음 언어를 미리
@@ -594,7 +594,7 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 
 상태 값은 다음과 같이 사용한다.
 
-- `미측정`: 같은 조건의 core 0.11.1 C 결과와 binding 결과를 아직 비교하지 않았다.
+- `미측정`: 같은 조건의 core 0.12.0 C 결과와 binding 결과를 아직 비교하지 않았다.
 - `통과(비율%)`: 모든 size의 paired report가 complete이고, throughput ratio 산술평균과
   평균 latency ratio의 산술평균, 회귀, Effective Options, auto-HWM, client 수 조건을 만족한다.
   개별 size의 최소 기준·latency 상한 미달은 outlier로 함께 기록할 수 있다.
@@ -1231,14 +1231,14 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 
 | 날짜 | 언어 | suite / 범위 | pair tag | 측정 조건 | 결과 | report |
 |------|------|---------------|----------|----------------|------|---------------|
-| 2026-08-19 | 전체 | 계획 초기화 | - | Core 0.11.1 release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
+| 2026-08-19 | 전체 | 계획 초기화 | - | Core 0.12.0 release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
 
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
 
 - runner, 정책, 상세 표의 pattern, transport, size inventory가 일치한다.
-- 각 pattern의 최종 판정에 사용한 core 0.11.1 C와 binding paired report가 모두
+- 각 pattern의 최종 판정에 사용한 core 0.12.0 C와 binding paired report가 모두
   `status: complete`다.
 - 모든 binding 상세 표에 `미측정` 또는 `미달`이 없다.
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가

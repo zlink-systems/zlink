@@ -1,12 +1,12 @@
-# bindings 0.11.1 성능 개선 진행 시트
+# bindings 0.12.0 성능 개선 진행 시트
 
 > 시작일: 2026-08-19
 >
-> 기준 Core: `0.11.1`
+> 기준 Core: `0.12.0`
 >
-> 작업 브랜치: `codex/bindings-0.11.1-performance`
+> 작업 브랜치: `codex/bindings-0.12.0-performance`
 >
-> 계획서: [bindings 0.11.1 성능 개선 계획](./bindings-library-performance-improvement-plan-core-0.11.1.ko.md)
+> 계획서: [bindings 0.12.0 성능 개선 계획](./bindings-library-performance-improvement-plan-core-0.12.0.ko.md)
 >
 > 원본 템플릿: [bindings 성능 개선 계획 Core 템플릿](../bindings-library-performance-improvement-plan-core-template.ko.md)
 
@@ -16,7 +16,7 @@
 
 ## 1. 작업 범위
 
-같은 Core `0.11.1` release runtime으로 `bindings/c/perf`를 기준으로 삼고, 각 binding의
+같은 Core `0.12.0` release runtime으로 `bindings/c/perf`를 기준으로 삼고, 각 binding의
 공식 perf runner 결과를 paired 비교한다. 개선은 현재 public API와 ownership·error contract를
 유지한 binding 내부 구현을 대상으로 한다.
 
@@ -34,8 +34,8 @@
 
 | Gate | 상태 | 근거 또는 다음 작업 |
 |------|------|---------------------|
-| 버전 3곳 일치 | 확인됨 | `VERSION`, `core/CMakeLists.txt`, `core/include/zlink.h`가 모두 `0.11.1`이다. |
-| 실제 release runtime과 package provenance | 미확인 | `core/v0.11.1` release asset과 `core-package-provenance.json`을 준비하고 확인한다. |
+| 버전 3곳 일치 | 확인됨 | `VERSION`, `core/CMakeLists.txt`, `core/include/zlink.h`가 모두 `0.12.0`이다. |
+| 실제 release runtime과 package provenance | 미확인 | `core/v0.12.0` release asset과 `core-package-provenance.json`을 준비하고 확인한다. |
 | 공식 runner inventory | 미확인 | C와 각 binding runner의 pattern·transport·size·client 수를 대조한다. |
 | Multi size 정책 | 미확인 | 현재 runner의 `4 KiB` 포함 여부와 `MULTI_STREAM` 예외를 확인한다. |
 | 무시되는 runner option | 미확인 | `--output`, `--pin-cpu`, I/O thread, HWM, buffer, timeout의 적용 여부를 확인한다. |
@@ -80,7 +80,7 @@
 
 현재 다음 순서로 진행한다.
 
-1. `core/v0.11.1` release runtime과 package provenance를 준비한다. Core source는 다시 build하지 않는다.
+1. `core/v0.12.0` release runtime과 package provenance를 준비한다. Core source는 다시 build하지 않는다.
 2. C와 각 binding runner의 inventory gate를 통과시킨다.
 3. C++의 첫 `suite + pattern + transport`를 선택하고 64 B smoke를 C와 binding에서 순서대로 실행한다.
 4. smoke가 complete이면 같은 조건의 모든 message size를 paired 측정하고 결과를 계획서와 이 시트에 기록한다.
