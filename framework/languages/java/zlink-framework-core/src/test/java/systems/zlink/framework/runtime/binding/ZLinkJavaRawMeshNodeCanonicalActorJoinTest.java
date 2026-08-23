@@ -84,11 +84,6 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
             assertEquals("{\"transferId\":\"canonical-text\"}", new String(
                 join.payload().payload(), StandardCharsets.UTF_8));
 
-            // Java's fallback uses its route packet rather than command 28.
-            // Keep accepting flag 0x01 for a Node private command-28 sender,
-            // but do not create a Java-only sender solely for this test.
-            assertTrue(ZLinkJavaRawMeshNode.supportedActorJoinFlags(0));
-            assertTrue(ZLinkJavaRawMeshNode.supportedActorJoinFlags(0x01));
         }
     }
 

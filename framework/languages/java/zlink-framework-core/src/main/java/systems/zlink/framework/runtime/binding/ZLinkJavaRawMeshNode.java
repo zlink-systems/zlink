@@ -4499,7 +4499,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             return;
         }
         if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
-            dispatchCanonicalActorJoin(inbound, flags);
+            dispatchCanonicalActorJoin(inbound);
             return;
         }
         if (command == ServiceWireConstants.COMMAND_INSTANCE_SPOT) {
@@ -5869,9 +5869,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 failureCode)));
     }
 
-    private void dispatchCanonicalActorJoin(
-        ZLinkJavaRawServicePort.Inbound inbound,
-        int flags) {
+    private void dispatchCanonicalActorJoin(ZLinkJavaRawServicePort.Inbound inbound) {
         List<byte[]> frames = inbound.frames();
         if (inbound.requestSequence() == null || frames.isEmpty()) {
             return;
@@ -5880,27 +5878,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             replyCanonicalActorJoinProtocolFailure(inbound, frames);
             return;
         }
-        if (!supportedActorJoinFlags(flags)) {
+        final ServiceWirePilotCodec.ActorJoin28 join;
+        try {
+            join = ServiceWirePilotCodec.decodeActorJoin28(frames);
+        } catch (Exception invalidCanonical) {
             replyCanonicalActorJoinProtocolFailure(inbound, frames);
             return;
-        }
-        final ServiceWirePilotCodec.ActorJoin28 join;
-        if (flags == 0) {
-            try {
-                join = ServiceWirePilotCodec.decodeActorJoin28(frames);
-            } catch (Exception invalidCanonical) {
-                replyCanonicalActorJoinProtocolFailure(inbound, frames);
-                return;
-            }
-        } else if (flags == ZLinkServiceM6BWireCodec.PRIVATE_ACTOR_JOIN_FLAG) {
-            try {
-                join = decodePrivateActorJoin(frames);
-            } catch (RuntimeException invalidPrivate) {
-                replyCanonicalActorJoinProtocolFailure(inbound, frames);
-                return;
-            }
-        } else {
-            throw new AssertionError("unsupported actorJoin flags were accepted");
         }
         RoutingId targetNode = RoutingId.from(
             join.targetSpot().targetNodeRid());
@@ -5962,36 +5945,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             replyCanonicalActorJoinFailure(
                 inbound, join.correlation(), terminal[0], terminal[1]);
         }
-    }
-
-    static boolean supportedActorJoinFlags(int flags) {
-        return flags == 0
-            || flags == ZLinkServiceM6BWireCodec.PRIVATE_ACTOR_JOIN_FLAG;
-    }
-
-    private ServiceWirePilotCodec.ActorJoin28 decodePrivateActorJoin(
-        List<byte[]> frames) {
-        ZLinkServiceM6BWireCodec.ActorJoin privateJoin =
-            statefulWire.decodeActorJoinHeader(frames.getFirst());
-        ZLinkServiceM6AWireCodec.ApplicationPayload payload = frames.size() == 2
-            ? wire.decodeApplicationPayload(frames.get(1))
-            : null;
-        ZLinkServiceM6BWireCodec.ActorRouteFence actor = privateJoin.actor();
-        ZLinkServiceM6BWireCodec.SpotRouteFence target = privateJoin.target();
-        return new ServiceWirePilotCodec.ActorJoin28(
-            privateJoin.correlation(),
-            new ServiceWirePilotCodec.Fence(
-                actor.actor().actorId(), actor.actor().generation(),
-                actor.actor().nodeRid().toBytes(), actor.targetNodeGeneration(),
-                actor.authorityOwnerGeneration(), actor.ownerLeaseGeneration()),
-            privateJoin.entry(),
-            new ServiceWirePilotCodec.Fence(
-                target.spotId(), target.spotGeneration(),
-                target.targetNodeRid().toBytes(), target.targetNodeGeneration(),
-                target.authorityOwnerGeneration(), target.ownerLeaseGeneration()),
-            payload == null ? null
-                : new ServiceWirePilotCodec.ApplicationPayloadEnvelopeV1(
-                    payload.packetName(), payload.contentType(), payload.payload()));
     }
 
     private void replyCanonicalActorJoinProtocolFailure(
