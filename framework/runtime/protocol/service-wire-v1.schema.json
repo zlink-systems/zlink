@@ -386,7 +386,11 @@
           "sentinelIssued": "forbidden"
         },
         "rootAgreement": "must-equal-maintenance-aggregate-v1.aggregateGeneration-when-root-exists",
-        "participantAgreement": "all-authority-slots-in-one-aggregate-must-agree"
+        "participantAgreement": "all-authority-slots-in-one-aggregate-must-agree",
+        "coordinatorExpectedStoreVersion": {
+          "presence": "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
+          "comparison": "opaque-token-exact-equality-only-never-ordered-or-derived"
+        }
       },
       "replacement": "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
       "orphanCleanup": "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
@@ -6178,6 +6182,10 @@
             {
               "name": "coordinatorNodeGeneration",
               "$ref": "nonzero-u64"
+            },
+            {
+              "name": "coordinatorExpectedStoreVersion",
+              "$ref": "optional-text8"
             },
             {
               "name": "phase",

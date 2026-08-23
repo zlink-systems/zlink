@@ -3,13 +3,14 @@
   "consumers": ["cpp", "dotnet", "jvm", "node"],
   "notes": {
     "encoding": "authority-relocation-state selected present case only; all integers are big-endian; hasRelocation is bool8; bodyLength is u32 and covers the selected case exactly; trailing bytes are forbidden",
-    "fieldOrder": "relocation, aggregateGeneration, targetAttemptGeneration, relocationReference, relocationChecksumCrc32c, sourceNodeRid, sourceNodeGeneration, sourceOwnerId, sourceOwnerLeaseGeneration, targetNodeRid, targetNodeGeneration, targetOwnerId, targetOwnerLeaseGeneration, coordinatorOwnerId, coordinatorLeaseGeneration, coordinatorNodeRid, coordinatorNodeGeneration, phase, applicationVersion, sourceCleanupState",
+    "fieldOrder": "relocation, aggregateGeneration, targetAttemptGeneration, relocationReference, relocationChecksumCrc32c, sourceNodeRid, sourceNodeGeneration, sourceOwnerId, sourceOwnerLeaseGeneration, targetNodeRid, targetNodeGeneration, targetOwnerId, targetOwnerLeaseGeneration, coordinatorOwnerId, coordinatorLeaseGeneration, coordinatorNodeRid, coordinatorNodeGeneration, coordinatorExpectedStoreVersion, phase, applicationVersion, sourceCleanupState",
     "rootPointerShape": "relocationReference is relocation-reference (u16 byte length plus strict UTF-8 bytes); relocationChecksumCrc32c is u32",
+    "coordinatorExpectedStoreVersionShape": "optional-text8 (u8 byte length plus strict UTF-8 bytes); zero length means absent; non-empty values are opaque exact-equality tokens",
     "offsetConvention": "inclusive zero-based byte offsets; a zero-length optional field has only its length-prefix offset and no payload-byte range",
     "offsetLayouts": {
       "canonicalEmptyTarget": [
         "0 hasRelocation(bool8)=1",
-        "1..4 selected-case bodyLength(u32)=112",
+        "1..4 selected-case bodyLength(u32)=113",
         "5..12 relocation.high(u64)",
         "13..20 relocation.low(u64)",
         "21..28 aggregateGeneration(ordinal-or-zero)",
@@ -33,13 +34,14 @@
         "97 coordinatorNodeRid.length(u8)=1",
         "98 coordinatorNodeRid bytes",
         "99..106 coordinatorNodeGeneration(nonzero-u64)",
-        "107 phase(relocation-phase)",
-        "108..115 applicationVersion(i64)",
-        "116 sourceCleanupState(source-cleanup-state)"
+        "107 coordinatorExpectedStoreVersion.length(u8)=0; absent with no payload bytes",
+        "108 phase(relocation-phase)",
+        "109..116 applicationVersion(i64)",
+        "117 sourceCleanupState(source-cleanup-state)"
       ],
       "canonicalPreparedTarget": [
         "0 hasRelocation(bool8)=1",
-        "1..4 selected-case bodyLength(u32)=114",
+        "1..4 selected-case bodyLength(u32)=117",
         "5..12 relocation.high(u64)",
         "13..20 relocation.low(u64)",
         "21..28 aggregateGeneration(ordinal-or-zero)",
@@ -65,9 +67,11 @@
         "99 coordinatorNodeRid.length(u8)=1",
         "100 coordinatorNodeRid bytes",
         "101..108 coordinatorNodeGeneration(nonzero-u64)",
-        "109 phase(relocation-phase)",
-        "110..117 applicationVersion(i64)",
-        "118 sourceCleanupState(source-cleanup-state)"
+        "109 coordinatorExpectedStoreVersion.length(u8)=2",
+        "110..111 coordinatorExpectedStoreVersion UTF-8 bytes=\"v0\"",
+        "112 phase(relocation-phase)",
+        "113..120 applicationVersion(i64)",
+        "121 sourceCleanupState(source-cleanup-state)"
       ],
       "legacyDotnetNode": [
         "0 hasRelocation(bool8)=1",
@@ -148,11 +152,12 @@
         "coordinatorLeaseGeneration": "7",
         "coordinatorNodeRidHex": "71",
         "coordinatorNodeGeneration": "8",
+        "coordinatorExpectedStoreVersion": "",
         "phase": "preparing",
         "applicationVersion": "9",
         "sourceCleanupState": "pending"
       },
-      "hex": "010000007000000000000000010000000000000002000000000000000000000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000801000000000000000900"
+      "hex": "010000007100000000000000010000000000000002000000000000000000000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080001000000000000000900"
     },
     {
       "name": "capturedNonzeroAggregateWithZeroAttempt",
@@ -176,11 +181,12 @@
         "coordinatorLeaseGeneration": "7",
         "coordinatorNodeRidHex": "71",
         "coordinatorNodeGeneration": "8",
+        "coordinatorExpectedStoreVersion": "",
         "phase": "captured",
         "applicationVersion": "9",
         "sourceCleanupState": "pending"
       },
-      "hex": "010000007000000000000000010000000000000002000000000000000200000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900"
+      "hex": "010000007100000000000000010000000000000002000000000000000200000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900"
     },
     {
       "name": "preparedDistinctAggregateAndAttempt",
@@ -204,11 +210,12 @@
         "coordinatorLeaseGeneration": "7",
         "coordinatorNodeRidHex": "71",
         "coordinatorNodeGeneration": "8",
+        "coordinatorExpectedStoreVersion": "v0",
         "phase": "prepared",
         "applicationVersion": "9",
         "sourceCleanupState": "pending"
       },
-      "hex": "010000007200000000000000010000000000000002000000000000000200000000000000030006726f6f742f310102030401730000000000000003016f00000000000000040174000000000000000501700000000000000006016300000000000000070171000000000000000803000000000000000900"
+      "hex": "010000007500000000000000010000000000000002000000000000000200000000000000030006726f6f742f310102030401730000000000000003016f00000000000000040174000000000000000501700000000000000006016300000000000000070171000000000000000802763003000000000000000900"
     },
     {
       "name": "multiParticipantActorAgreement",
@@ -234,11 +241,12 @@
         "coordinatorLeaseGeneration": "7",
         "coordinatorNodeRidHex": "71",
         "coordinatorNodeGeneration": "8",
+        "coordinatorExpectedStoreVersion": "",
         "phase": "captured",
         "applicationVersion": "9",
         "sourceCleanupState": "pending"
       },
-      "hex": "010000007000000000000000010000000000000002000000000000000200000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900"
+      "hex": "010000007100000000000000010000000000000002000000000000000200000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900"
     },
     {
       "name": "multiParticipantSpotAgreement",
@@ -264,11 +272,12 @@
         "coordinatorLeaseGeneration": "7",
         "coordinatorNodeRidHex": "71",
         "coordinatorNodeGeneration": "8",
+        "coordinatorExpectedStoreVersion": "",
         "phase": "captured",
         "applicationVersion": "9",
         "sourceCleanupState": "pending"
       },
-      "hex": "010000007000000000000000010000000000000002000000000000000200000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900"
+      "hex": "010000007100000000000000010000000000000002000000000000000200000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900"
     },
     {
       "name": "maximumIssuedAggregateGeneration",
@@ -292,11 +301,12 @@
         "coordinatorLeaseGeneration": "7",
         "coordinatorNodeRidHex": "71",
         "coordinatorNodeGeneration": "8",
+        "coordinatorExpectedStoreVersion": "",
         "phase": "captured",
         "applicationVersion": "9",
         "sourceCleanupState": "pending"
       },
-      "hex": "0100000070000000000000000100000000000000027ffffffffffffffe00000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900"
+      "hex": "0100000071000000000000000100000000000000027ffffffffffffffe00000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900"
     }
   ],
   "invalid": [
@@ -304,21 +314,21 @@
       "name": "exhaustedAggregateGenerationSentinel",
       "rootAggregateGeneration": "9223372036854775807",
       "offsetLayout": "canonicalEmptyTarget",
-      "hex": "0100000070000000000000000100000000000000027fffffffffffffff00000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900",
+      "hex": "0100000071000000000000000100000000000000027fffffffffffffff00000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900",
       "error": "exhausted-sentinel"
     },
     {
       "name": "zeroAggregateGenerationAfterRoot",
       "rootAggregateGeneration": "2",
       "offsetLayout": "canonicalEmptyTarget",
-      "hex": "010000007000000000000000010000000000000002000000000000000000000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900",
+      "hex": "010000007100000000000000010000000000000002000000000000000000000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900",
       "error": "zero-after-root"
     },
     {
       "name": "swappedAggregateAndTargetAttempt",
       "rootAggregateGeneration": "2",
       "offsetLayout": "canonicalPreparedTarget",
-      "hex": "010000007200000000000000010000000000000002000000000000000300000000000000020006726f6f742f310102030401730000000000000003016f00000000000000040174000000000000000501700000000000000006016300000000000000070171000000000000000803000000000000000900",
+      "hex": "010000007500000000000000010000000000000002000000000000000300000000000000020006726f6f742f310102030401730000000000000003016f00000000000000040174000000000000000501700000000000000006016300000000000000070171000000000000000802763003000000000000000900",
       "error": "root-disagreement"
     },
     {
@@ -339,7 +349,7 @@
       "name": "slotRootAggregateGenerationMismatch",
       "rootAggregateGeneration": "5",
       "offsetLayout": "canonicalEmptyTarget",
-      "hex": "010000007000000000000000010000000000000002000000000000000400000000000000000006726f6f742f310102030401730000000000000003016f0000000000000004000000000000000000000000000000000000016300000000000000070171000000000000000802000000000000000900",
+      "hex": "010000007100000000000000010000000000000002000000000000000400000000000000000006726f6f742f310102030401730000000000000003016f000000000000000400000000000000000000000000000000000001630000000000000007017100000000000000080002000000000000000900",
       "error": "root-disagreement"
     }
   ]

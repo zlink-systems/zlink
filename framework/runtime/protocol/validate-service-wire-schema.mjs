@@ -1177,6 +1177,10 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         },
         rootAgreement: "must-equal-maintenance-aggregate-v1.aggregateGeneration-when-root-exists",
         participantAgreement: "all-authority-slots-in-one-aggregate-must-agree",
+        coordinatorExpectedStoreVersion: {
+          presence: "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
+          comparison: "opaque-token-exact-equality-only-never-ordered-or-derived",
+        },
       },
       replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
       orphanCleanup: "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
@@ -2429,6 +2433,7 @@ function decodeGoldenBody(formatName, bytes) {
         coordinatorLeaseGeneration: relocationBody.u64(),
         coordinatorNodeRidUtf8Fixture: relocationBody.text8(),
         coordinatorNodeGeneration: relocationBody.u64(),
+        coordinatorExpectedStoreVersion: relocationBody.text8(),
         phase: fixtureEnum(FIXTURE_ENUMS.relocationPhase, relocationBody.u8(), "relocation phase"),
         applicationVersion: relocationBody.i64(),
         sourceCleanupState: fixtureEnum(
@@ -2786,6 +2791,7 @@ function encodeGoldenBody(formatName, decoded) {
         .u64(decoded.relocationState.coordinatorLeaseGeneration)
         .text8(decoded.relocationState.coordinatorNodeRidUtf8Fixture)
         .u64(decoded.relocationState.coordinatorNodeGeneration)
+        .text8(decoded.relocationState.coordinatorExpectedStoreVersion)
         .u8(fixtureEnumValue(FIXTURE_ENUMS.relocationPhase, decoded.relocationState.phase, "relocation phase"));
       relocation.i64(decoded.relocationState.applicationVersion);
       relocation.u8(fixtureEnumValue(
@@ -3268,6 +3274,7 @@ function decodeAuthorityRelocationStateFixture(hex, rootAggregateGeneration) {
   const coordinatorLeaseGeneration = nonzero();
   const coordinatorNodeRidHex = sizedBytes8(true);
   const coordinatorNodeGeneration = nonzero();
+  const coordinatorExpectedStoreVersion = text8(false);
   const phaseValue = u8();
   const phase = fixtureEnum(FIXTURE_ENUMS.relocationPhase, phaseValue, "relocation phase");
   if (phase === "none") authorityRelocationFixtureError("invalid-phase");
@@ -3325,6 +3332,7 @@ function decodeAuthorityRelocationStateFixture(hex, rootAggregateGeneration) {
     coordinatorLeaseGeneration: coordinatorLeaseGeneration.toString(),
     coordinatorNodeRidHex,
     coordinatorNodeGeneration: coordinatorNodeGeneration.toString(),
+    coordinatorExpectedStoreVersion,
     phase,
     applicationVersion: applicationVersion.toString(),
     sourceCleanupState,
@@ -3349,6 +3357,7 @@ function encodeAuthorityRelocationStateFixture(decoded) {
     .u64(decoded.coordinatorLeaseGeneration);
   writeBytes8(decoded.coordinatorNodeRidHex);
   body.u64(decoded.coordinatorNodeGeneration)
+    .text8(decoded.coordinatorExpectedStoreVersion)
     .u8(fixtureEnumValue(FIXTURE_ENUMS.relocationPhase, decoded.phase, "relocation phase"))
     .i64(decoded.applicationVersion)
     .u8(fixtureEnumValue(
@@ -5200,10 +5209,11 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "coordinatorLeaseGeneration", $ref: "nonzero-u64" },
     { name: "coordinatorNodeRid", $ref: "rid" },
     { name: "coordinatorNodeGeneration", $ref: "nonzero-u64" },
+    { name: "coordinatorExpectedStoreVersion", $ref: "optional-text8" },
     { name: "phase", $ref: "relocation-phase" },
     { name: "applicationVersion", $ref: "application-version" },
     { name: "sourceCleanupState", $ref: "source-cleanup-state" },
-  ], "$.types", "early relocation phases must allow an absent target fence until Prepared");
+  ], "$.types", "authority relocation present case must keep its closed 21-field layout and allow an absent target fence until Prepared");
   if (relocationCase?.fields?.find((field) => field.name === "aggregateGeneration")?.maximum
       !== "9223372036854775806") {
     fail("$.types", "authority relocation aggregate generation must exclude the exhausted sentinel");
@@ -6692,6 +6702,21 @@ function runSelfTests(schema) {
       const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
       const fields = relocation.cases.find((entry) => entry.when.hasRelocation === "true").fields;
       [fields[1], fields[2]] = [fields[2], fields[1]];
+    }],
+    ["authority relocation coordinator expected store version omitted", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const present = relocation.cases.find((entry) => entry.when.hasRelocation === "true");
+      present.fields = present.fields.filter(
+        (field) => field.name !== "coordinatorExpectedStoreVersion",
+      );
+    }],
+    ["authority relocation coordinator expected store version misplaced", (candidate) => {
+      const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
+      const fields = relocation.cases.find((entry) => entry.when.hasRelocation === "true").fields;
+      const index = fields.findIndex((field) => field.name === "coordinatorExpectedStoreVersion");
+      const [field] = fields.splice(index, 1);
+      const phaseIndex = fields.findIndex((entry) => entry.name === "phase");
+      fields.splice(phaseIndex + 1, 0, field);
     }],
     ["authority relocation zero allowed after root", (candidate) => {
       const integrity = candidate.semanticConstraints.find(
