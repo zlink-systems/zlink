@@ -116,6 +116,16 @@ wait_log_while_running() {
   done
   return 1
 }
+wait_b8_evidence_while_running() {
+  local pattern=$1 pid=$2 limit=${3:-600}
+  shift 3
+  for ((i=0;i<limit;i++)); do
+    grep -Fq "$pattern" "$@" 2>/dev/null && return 0
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep .1
+  done
+  return 1
+}
 routing_id() {
   local log=$1 first=${2:-1}
   tail -n +"$first" "$LOG_DIR/$log.log" \
@@ -183,11 +193,27 @@ fail() { echo "scenario $1 failed" | tee -a "$RUNNER_LOG" >&2; echo "    $2" >&2
 
 if [[ "$B8_CHILD" == 1 ]]; then
   first="$(next_line "$LOG_DIR/client.log")"; run_client ZW-B8 & client_pid=$!
-  wait_log_while_running client 'scenario ZW-B8 armed' "$first" "$client_pid" 900 \
+  wait_log_while_running client 'scenario ZW-B8 armed actor=' "$first" "$client_pid" 900 \
     || { wait "$client_pid" || true; exit 1; }
+  armed_line="$(tail -n +"$first" "$LOG_DIR/client.log" | grep -F 'scenario ZW-B8 armed actor=' | tail -1)"
+  actor="${armed_line#*actor=}"; actor="${actor%% target=*}"; target="${armed_line##* target=}"
   : >"$RUN_DIR/b8-block-command-44"
-  wait "$client_pid"
-  grep -q blocked-command-44 "$LOG_DIR"/proxy-*.log
+  if ! wait_b8_evidence_while_running blocked-command-44 "$client_pid" 600 "$LOG_DIR"/proxy-*.log; then
+    wait "$client_pid" || true
+    echo "scenario ZW-B8 failed: precondition unmet: fault proxy did not intercept command 44" >&2
+    exit 1
+  fi
+  commit_pattern="zone actor joined zone=$target actor=$actor "
+  if ! wait_b8_evidence_while_running "$commit_pattern" "$client_pid" 600 "$LOG_DIR"/zone-node-[12].log; then
+    wait "$client_pid" || true
+    echo "scenario ZW-B8 failed: precondition unmet: target relocation commit was not observed for actor $actor in $target" >&2
+    exit 1
+  fi
+  rm -f "$RUN_DIR/b8-block-command-44"
+  if ! wait "$client_pid"; then
+    echo "scenario ZW-B8 failed: post-boundary reconnect did not rebind the existing relocated Actor" >&2
+    exit 1
+  fi
   pass ZW-B8; exit 0
 fi
 

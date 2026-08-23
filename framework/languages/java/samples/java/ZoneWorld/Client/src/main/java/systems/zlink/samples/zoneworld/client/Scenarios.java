@@ -546,7 +546,8 @@ final class Scenarios {
                     disconnected.complete(event.closeReason().toString());
                     return CompletableFuture.completedFuture(null);
                 });
-                System.out.println("scenario ZW-B8 armed");
+                System.out.println("scenario ZW-B8 armed actor=" + id
+                    + " target=" + pair.targetZoneId());
                 Path arm = Path.of(options.faultArmFile());
                 for (int i = 0; !Files.exists(arm); i++) {
                     if (i >= 200) throw new IllegalStateException("runner did not arm command 44 block");
@@ -555,10 +556,17 @@ final class Scenarios {
                 player.move(edge.target().x(), edge.target().y());
                 String reason = disconnected.orTimeout(60, java.util.concurrent.TimeUnit.SECONDS).join();
                 System.out.println("scenario ZW-B8 disconnected reason=" + reason);
+                for (int i = 0; Files.exists(arm); i++) {
+                    if (i >= 600) throw new IllegalStateException(
+                        "ZW-B8 precondition unmet: runner did not prove command-44 interception "
+                            + "and target relocation commit");
+                    delay(Duration.ofMillis(100));
+                }
                 player.connector.connect().submit().toCompletableFuture().join();
                 Messages.JoinWorldRes rebound = player.join();
-                ensure(id.equals(rebound.playerId()) && pair.targetZoneId().equals(rebound.zoneId()),
-                    "reconnect rebinds the relocated actor");
+                ensure(id.equals(rebound.playerId()), "reconnect preserves the PlayerId");
+                ensure(pair.targetZoneId().equals(rebound.zoneId()),
+                    "reconnect rebinds the existing relocated actor at the target zone");
             }
         }
     }

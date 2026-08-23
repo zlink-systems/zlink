@@ -450,17 +450,21 @@ internal object Scenarios {
                 player.connector.onDisconnected { event ->
                     disconnected.complete(event.closeReason().toString()); CompletableFuture.completedFuture(null)
                 }.use {
-                    println("scenario ZW-B8 armed")
-                    repeat(200) {
-                        if (Files.exists(Path.of(options.faultArmFile))) return@repeat
-                        delay(50)
-                    }
-                    ensure(Files.exists(Path.of(options.faultArmFile)), "runner did not arm command 44 block")
+                    println("scenario ZW-B8 armed actor=$id target=${pair.targetZoneId}")
+                    val arm = Path.of(options.faultArmFile)
+                    var armAttempts = 0
+                    while (!Files.exists(arm) && armAttempts++ < 200) delay(50)
+                    ensure(Files.exists(arm), "runner did not arm command 44 block")
                     player.move(crossing.target.x, crossing.target.y)
                     println("scenario ZW-B8 disconnected reason=${disconnected.orTimeout(60, java.util.concurrent.TimeUnit.SECONDS).await()}")
+                    var proofAttempts = 0
+                    while (Files.exists(arm) && proofAttempts++ < 600) delay(100)
+                    ensure(!Files.exists(arm),
+                        "ZW-B8 precondition unmet: runner did not prove command-44 interception and target relocation commit")
                     player.connector.connect().await(); val rebound = player.join()
-                    ensure(rebound.playerId == id && rebound.zoneId == pair.targetZoneId,
-                        "reconnect rebinds the relocated actor")
+                    ensure(rebound.playerId == id, "reconnect preserves the PlayerId")
+                    ensure(rebound.zoneId == pair.targetZoneId,
+                        "reconnect rebinds the existing relocated actor at the target zone")
                 }
             }
         }
