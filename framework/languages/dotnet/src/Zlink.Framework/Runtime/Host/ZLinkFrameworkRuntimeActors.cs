@@ -3112,11 +3112,11 @@ internal sealed partial class ZLinkFrameworkRuntime
             }
             try
             {
-                // Entry Spot callbacks are invoked from the routed handoff
-                // completion path, not from the actor dispatch mailbox. Mark
-                // the callback as the actor's lifecycle owner so a callback
-                // that requests DestroyActorAsync defers terminal cleanup
-                // until the callback returns instead of waiting on itself.
+                // Routed handoff completion is relocation infrastructure. It
+                // must not wait for an application Actor turn: the relocation
+                // path may already own or be waiting on the mailbox barrier.
+                // Entry lifecycle dispatch detects the ambient ownership and
+                // preserves the existing relocation-owned execution here.
                 using var dispatch = actorState.EnterDeferredJoinExecution();
                 await _spots.EntrySpotActors.NotifyJoinedForRelocationAsync(
                         state,

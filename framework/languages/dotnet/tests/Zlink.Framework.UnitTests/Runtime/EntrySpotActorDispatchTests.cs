@@ -5652,6 +5652,58 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task LocalEntrySpotJoin_DestroyFromJoinedCallback_DefersNativeDestroyUntilCallbackReturns()
+    {
+        var callbackReturned = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var destroyStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDestroy = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var destroyObservedReturnedCallback = false;
+        var node = new CapturingSpotNode
+        {
+            DestroyHandler = async (_, cancellationToken) =>
+            {
+                destroyObservedReturnedCallback = callbackReturned.Task.IsCompleted;
+                destroyStarted.TrySetResult();
+                await releaseDestroy.Task.WaitAsync(cancellationToken);
+            }
+        };
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            entrySpotType: typeof(LocalJoinProbeEntrySpot));
+        runtime.Services.GetRequiredService<LocalEntryJoinProbe>().JoinedHandler =
+            async (context, actor, cancellationToken) =>
+            {
+                await context.DestroyActorAsync(actor, cancellationToken);
+                callbackReturned.TrySetResult();
+            };
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var join = runtime.JoinActorEntrySpotAsync(
+                    RoutingId.From("entry-node"),
+                    actor,
+                    ZLinkMessage.Empty,
+                    CancellationToken.None)
+                .AsTask();
+
+            await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(
+                destroyObservedReturnedCallback,
+                "Native destroy started while the local Entry Spot joined callback still owned the Actor lifecycle.");
+            releaseDestroy.TrySetResult();
+            await join.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releaseDestroy.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task LocalEntrySpotJoin_MissingActivation_DoesNotCreateANativeActor()
     {
         var node = new CapturingSpotNode();
@@ -8617,6 +8669,10 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public Func<CancellationToken, ValueTask<ZLinkSpotActorJoinResult>> Handler { get; set; } =
             _ => ValueTask.FromResult(ZLinkSpotActorJoinResult.Reject());
+
+        public Func<IZLinkEntrySpotContext, ProbeActor, CancellationToken, ValueTask>
+            JoinedHandler { get; set; } =
+            static (_, _, _) => ValueTask.CompletedTask;
     }
 
     private sealed class LocalJoinProbeEntrySpot(
@@ -8639,8 +8695,10 @@ public sealed partial class EntrySpotActorDispatchTests
             return probe.Handler(cancellationToken);
         }
 
-        public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken) =>
+            probe.JoinedHandler(Context, actor, cancellationToken);
 
         public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;
