@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -38,8 +39,6 @@ internal static partial class ZLinkRelocationTreeStore
     private const int MaxManifestBytes = 64 * 1024 * 1024;
     private const int MaxReferenceBytes = 4096;
     private static readonly TimeSpan RenewThreshold = TimeSpan.FromHours(12);
-    private static readonly byte[] ChunkMagic = "ZLTC"u8.ToArray();
-    private static readonly byte[] ManifestMagic = "ZLTM"u8.ToArray();
 
     internal static async ValueTask<ZLinkRelocationTreeStored> PutAsync(
         IZLinkRelocationRepository store,
@@ -105,37 +104,24 @@ internal static partial class ZLinkRelocationTreeStore
                     var dataLength = checked((int)Math.Min(
                         ChunkBytes,
                         logicalLength - input.Position));
-                    var encoded = new byte[
+                    var encodedLength = checked(
                         FrameHeaderBytes + ChunkBodyPrefixBytes
-                        + dataLength + FrameChecksumBytes];
+                        + dataLength + FrameChecksumBytes);
                     if (batch.Count != 0
                         && batchBytes
-                        > MaxComponentIoBytes - encoded.LongLength)
+                        > MaxComponentIoBytes - encodedLength)
                         break;
-                    WriteFrameHeader(
-                        encoded,
-                        ChunkMagic,
-                        checked((uint)(ChunkBodyPrefixBytes + dataLength)));
-                    BinaryPrimitives.WriteUInt32BigEndian(
-                        encoded.AsSpan(FrameHeaderBytes, 4),
-                        checked((uint)order));
-                    BinaryPrimitives.WriteUInt32BigEndian(
-                        encoded.AsSpan(FrameHeaderBytes + 4, 4),
-                        checked((uint)dataLength));
+                    var data = new byte[dataLength];
                     await input.ReadExactlyAsync(
-                            encoded.AsMemory(
-                                FrameHeaderBytes + ChunkBodyPrefixBytes,
-                                dataLength),
+                            data,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    var dataOffset =
-                        FrameHeaderBytes + ChunkBodyPrefixBytes;
-                    var dataChecksum = ZLinkCrc32C.Compute(
-                        encoded.AsSpan(dataOffset, dataLength));
-                    ZLinkCrc32C.Append(
-                        ref logicalCrcState,
-                        encoded.AsSpan(dataOffset, dataLength));
-                    WriteFrameChecksum(encoded);
+                    var dataChecksum = ZLinkCrc32C.Compute(data);
+                    ZLinkCrc32C.Append(ref logicalCrcState, data);
+                    var encoded = ServiceWirePilotCodec
+                        .EncodeRelocationDataChunkV1(new(
+                            checked((uint)order),
+                            data));
                     batch.Add(new EncodedChunk(
                         order,
                         dataLength,
@@ -521,12 +507,7 @@ internal static partial class ZLinkRelocationTreeStore
         if (read is not ZLinkRelocationReadResult.Found chunk)
             throw DataLost(
                 $"Relocation chunk '{entry.Reference}' is unavailable.");
-        var dataLength = DecodeChunk(chunk.Payload.Span, entry);
-        return new DecodedChunk(
-            entry.Order,
-            chunk.Payload.Slice(
-                FrameHeaderBytes + ChunkBodyPrefixBytes,
-                dataLength));
+        return DecodeChunk(chunk.Payload, entry);
     }
 
     private static byte[] EncodeManifest(
@@ -535,116 +516,86 @@ internal static partial class ZLinkRelocationTreeStore
         ReadOnlySpan<byte> inventoryDigest,
         IReadOnlyList<ChunkEntry> chunks)
     {
-        var references = chunks
-            .Select(static entry => Encoding.UTF8.GetBytes(entry.Reference))
-            .ToArray();
-        if (references.Any(static value =>
-                value.Length is < 1 or > MaxReferenceBytes))
-            throw new InvalidOperationException(
-                "A relocation reference exceeds its UTF-8 bound.");
-        var bodyLength = checked(
-            1 + 8 + 4 + 1 + InventoryDigestBytes + 4
-            + chunks.Select((entry, index) =>
-                    4 + 2 + references[index].Length + 8 + 4)
-                .Sum());
-        var encoded = new byte[
-            FrameHeaderBytes + bodyLength + FrameChecksumBytes];
-        WriteFrameHeader(encoded, ManifestMagic, checked((uint)bodyLength));
-        var offset = FrameHeaderBytes;
-        encoded[offset++] = 1;
-        BinaryPrimitives.WriteUInt64BigEndian(
-            encoded.AsSpan(offset, 8), logicalLength);
-        offset += 8;
-        BinaryPrimitives.WriteUInt32BigEndian(
-            encoded.AsSpan(offset, 4), logicalChecksum);
-        offset += 4;
-        encoded[offset++] = InventoryDigestBytes;
-        inventoryDigest.CopyTo(encoded.AsSpan(offset, InventoryDigestBytes));
-        offset += InventoryDigestBytes;
-        BinaryPrimitives.WriteUInt32BigEndian(
-            encoded.AsSpan(offset, 4), checked((uint)chunks.Count));
-        offset += 4;
-        for (var index = 0; index < chunks.Count; index++)
-        {
-            var entry = chunks[index];
-            BinaryPrimitives.WriteUInt32BigEndian(
-                encoded.AsSpan(offset, 4), entry.Order);
-            offset += 4;
-            BinaryPrimitives.WriteUInt16BigEndian(
-                encoded.AsSpan(offset, 2),
-                checked((ushort)references[index].Length));
-            offset += 2;
-            references[index].CopyTo(encoded.AsSpan(offset));
-            offset += references[index].Length;
-            BinaryPrimitives.WriteUInt64BigEndian(
-                encoded.AsSpan(offset, 8), entry.Length);
-            offset += 8;
-            BinaryPrimitives.WriteUInt32BigEndian(
-                encoded.AsSpan(offset, 4), entry.ChecksumCrc32c);
-            offset += 4;
-        }
-        WriteFrameChecksum(encoded);
-        if (encoded.Length > MaxManifestBytes)
-            throw new InvalidOperationException(
-                "Relocation manifest exceeds 64 MiB.");
-        return encoded;
+        return ServiceWirePilotCodec.EncodeRelocationManifestV1(new(
+            LogicalFormatVersion: 1,
+            TotalLength: logicalLength,
+            TotalChecksumCrc32c: logicalChecksum,
+            InventoryDigestSha256: inventoryDigest.ToArray(),
+            Chunks: chunks.Select(static entry =>
+                    new ServiceWirePilotCodec.RelocationChunkEntryV1(
+                        entry.Order,
+                        entry.Reference,
+                        entry.Length,
+                        entry.ChecksumCrc32c))
+                .ToArray()));
     }
 
     private static Manifest DecodeManifest(ReadOnlySpan<byte> encoded)
     {
-        var body = DecodeFrame(encoded, ManifestMagic);
-        var offset = 0;
-        if (ReadByte(body, ref offset) != 1)
-            throw DataLost("Relocation manifest logical version is invalid.");
-        var logicalLength = ReadUInt64(body, ref offset);
-        var logicalChecksum = ReadUInt32(body, ref offset);
-        if (ReadByte(body, ref offset) != InventoryDigestBytes)
-            throw DataLost("Relocation manifest inventory digest is invalid.");
-        var digest = ReadBytes(body, ref offset, InventoryDigestBytes).ToArray();
-        var count = ReadUInt32(body, ref offset);
-        if (logicalLength is 0 or > MaxLogicalBytes
-            || count is 0 or > MaxChunks)
+        ServiceWirePilotCodec.RelocationManifestV1 generated;
+        try
+        {
+            generated = ServiceWirePilotCodec.DecodeRelocationManifestV1(
+                encoded.ToArray());
+        }
+        catch (Exception error) when (error is InvalidDataException
+                                      or EndOfStreamException
+                                      or OverflowException)
+        {
+            throw DataLost("Relocation manifest frame is invalid.");
+        }
+        if (generated.TotalLength is 0 or > MaxLogicalBytes
+            || generated.Chunks.Count is 0 or > MaxChunks)
             throw DataLost("Relocation manifest bounds are invalid.");
-        var chunks = new ChunkEntry[checked((int)count)];
+        var chunks = new ChunkEntry[generated.Chunks.Count];
         ulong total = 0;
         for (var index = 0; index < chunks.Length; index++)
         {
-            var order = ReadUInt32(body, ref offset);
-            var referenceLength = ReadUInt16(body, ref offset);
-            if (order != (uint)index
-                || referenceLength is 0 or > MaxReferenceBytes)
+            var entry = generated.Chunks[index];
+            if (entry.Order != (uint)index)
                 throw DataLost("Relocation manifest chunk order is invalid.");
-            var reference = new UTF8Encoding(false, true).GetString(
-                ReadBytes(body, ref offset, referenceLength));
-            var length = ReadUInt64(body, ref offset);
-            var checksum = ReadUInt32(body, ref offset);
-            if (length is 0 or > ChunkBytes
-                || index < chunks.Length - 1 && length != ChunkBytes)
+            if (entry.Length is 0 or > ChunkBytes
+                || index < chunks.Length - 1 && entry.Length != ChunkBytes)
                 throw DataLost("Relocation manifest chunk length is invalid.");
-            total = checked(total + length);
-            chunks[index] = new ChunkEntry(order, reference, length, checksum);
+            total = checked(total + entry.Length);
+            chunks[index] = new ChunkEntry(
+                entry.Order,
+                entry.Reference,
+                entry.Length,
+                entry.ChecksumCrc32c);
         }
-        if (offset != body.Length || total != logicalLength)
+        if (total != generated.TotalLength)
             throw DataLost("Relocation manifest length is invalid.");
-        return new Manifest(logicalLength, logicalChecksum, digest, chunks);
+        return new Manifest(
+            generated.TotalLength,
+            generated.TotalChecksumCrc32c,
+            generated.InventoryDigestSha256,
+            chunks);
     }
 
-    private static int DecodeChunk(
-        ReadOnlySpan<byte> encoded,
+    private static DecodedChunk DecodeChunk(
+        ReadOnlyMemory<byte> encoded,
         ChunkEntry expected)
     {
-        var body = DecodeFrame(encoded, ChunkMagic);
-        var offset = 0;
-        var order = ReadUInt32(body, ref offset);
-        var length = ReadUInt32(body, ref offset);
-        if (order != expected.Order || length != expected.Length
-            || length is 0 or > ChunkBytes
-            || body.Length - offset != checked((int)length))
+        ServiceWirePilotCodec.RelocationDataChunkV1 generated;
+        try
+        {
+            generated = ServiceWirePilotCodec.DecodeRelocationDataChunkV1(
+                encoded.ToArray());
+        }
+        catch (Exception error) when (error is InvalidDataException
+                                      or EndOfStreamException
+                                      or OverflowException)
+        {
+            throw DataLost("Relocation chunk frame is invalid.");
+        }
+        if (generated.Order != expected.Order
+            || (ulong)generated.Data.LongLength != expected.Length
+            || generated.Data.Length is 0 or > ChunkBytes)
             throw DataLost("Relocation chunk envelope is invalid.");
-        var data = body[offset..];
-        if (ZLinkCrc32C.Compute(data) != expected.ChecksumCrc32c)
+        if (ZLinkCrc32C.Compute(generated.Data) != expected.ChecksumCrc32c)
             throw DataLost("Relocation chunk data checksum is invalid.");
-        return data.Length;
+        return new DecodedChunk(generated.Order, generated.Data);
     }
 
     private static void WriteFrameHeader(

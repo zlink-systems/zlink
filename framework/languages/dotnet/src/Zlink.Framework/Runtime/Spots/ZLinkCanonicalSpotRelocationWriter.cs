@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -28,116 +29,115 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         if (spot.ObjectKind is not (ZLinkPlacementObjectKind.UserSpot
                 or ZLinkPlacementObjectKind.InstanceSpot))
             throw new ArgumentException("Canonical SPOT relocation has no root SPOT.", nameof(inventory));
-        using var stream = new MemoryStream();
-        var id = inventory.AggregateId.ToByteArray(bigEndian: true);
-        stream.Write(id);
-        stream.WriteByte(spot.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
-            ? (byte)3 : (byte)2);
-        using (var identity = new MemoryStream())
+        ServiceWirePilotCodec.RelocationObjectIdentity identity;
+        if (spot.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot)
         {
-            if (spot.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot)
-            {
-                Text8(identity, stableType);
-                Text8(identity, spotId);
-                U64(identity, spot.ObjectGeneration);
-            }
-            else
-            {
-                Text8(identity, spotId);
-                U64(identity, spot.ObjectGeneration);
-                U64(identity, spot.AuthorityOwnerGeneration);
-            }
-            U16(stream, checked((ushort)identity.Length));
-            identity.Position = 0;
-            identity.CopyTo(stream);
+            identity = new ServiceWirePilotCodec.RelocationInstanceSpotIdentity(
+                stableType,
+                spotId,
+                spot.ObjectGeneration);
         }
-        I64(stream, applicationVersion);
-        U32(stream, checked((uint)ordered.Length));
-        for (var index = 0; index < ordered.Length; index++)
+        else
         {
-            U64(stream, checked((ulong)index + 1));
-            stream.WriteByte(ordered[index].RecoveryPayload.IsEmpty
-                ? (byte)1 : (byte)2);
-            using var state = new MemoryStream();
-            U64(state, checked((ulong)ordered[index].ApplicationState.Length));
-            state.Write(ordered[index].ApplicationState.Span);
-            if (!ordered[index].RecoveryPayload.IsEmpty)
-            {
-                U64(state, checked((ulong)ordered[index].RecoveryPayload.Length));
-                state.Write(ordered[index].RecoveryPayload.Span);
-            }
-            U64(stream, checked((ulong)state.Length));
-            state.Position = 0;
-            state.CopyTo(stream);
+            identity = new ServiceWirePilotCodec.RelocationUserSpotIdentity(
+                spotId,
+                spot.ObjectGeneration,
+                spot.AuthorityOwnerGeneration);
         }
-        U32(stream, checked((uint)ordered.Sum(
-            static participant => participant.AcceptedJobs.Count)));
+        var states = ordered.Select((participant, index) =>
+                new ServiceWirePilotCodec.RelocationApplicationState(
+                    checked((ulong)index + 1),
+                    HasState: true,
+                    participant.ApplicationState.ToArray()))
+            .ToArray();
+        var savedWork = new List<ServiceWirePilotCodec.RelocationSavedWork>();
         for (var index = 0; index < ordered.Length; index++)
         {
             var participant = ordered[index];
             foreach (var job in participant.AcceptedJobs.OrderBy(
                          static job => job.AcceptedSequence))
             {
-                U64(stream, checked((ulong)index + 1));
-                U64(stream, job.AcceptedSequence);
+                byte[] frozenRecord;
                 if (index == 0)
                 {
+                    using var record = new MemoryStream();
                     WriteAcceptedRequest(
-                        stream,
+                        record,
                         job,
                         spotId,
                         spot,
                         targetNodeRid);
-                    continue;
+                    frozenRecord = record.ToArray();
                 }
-                if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
-                        job.Payload.Span))
-                    throw new ZLinkRelocationDataLostException(
-                        $"Actor participant '{participant.AuthorityKey.Value}' accepted journal is malformed.");
-                stream.Write(job.Payload.Span);
+                else
+                {
+                    if (!ZLinkRelocationEnvelopeCodec
+                            .TryValidateCanonicalFrozenRecord(job.Payload.Span))
+                        throw new ZLinkRelocationDataLostException(
+                            $"Actor participant '{participant.AuthorityKey.Value}' accepted journal is malformed.");
+                    frozenRecord = job.Payload.ToArray();
+                }
+                savedWork.Add(new ServiceWirePilotCodec.RelocationSavedWork(
+                    checked((ulong)index + 1),
+                    job.AcceptedSequence,
+                    frozenRecord));
             }
         }
         var snapshots = spot.LogicalTimers
             .Select(timer => (Timer: timer,
                 Snapshot: ZLinkSpotTimerRelocationCodec.Decode(timer)))
             .ToArray();
-        U32(stream, checked((uint)snapshots.Length));
-        foreach (var item in snapshots.OrderBy(static item => item.Timer.TimerId,
-                     StringComparer.Ordinal))
-        {
-            var timer = item.Snapshot.Timer;
-            U64(stream, 1);
-            Text8(stream, timer.Name);
-            Text8(stream, item.Snapshot.HandlerType.AssemblyQualifiedName
-                          ?? item.Snapshot.HandlerType.FullName
-                          ?? item.Snapshot.HandlerType.Name);
-            U64(stream, checked((ulong)Math.Max(1,
-                Math.Ceiling(timer.Period.TotalMilliseconds))));
-            stream.WriteByte((byte)timer.Options.OverrunPolicy);
-            U64(stream, checked((ulong)Math.Max(1, timer.Options.MaxCatchUpTicks)));
-            stream.WriteByte(timer.Options.StopOnUnhandledException ? (byte)1 : (byte)0);
-            U64(stream, timer.DeliveryIndex);
-            U64(stream, timer.LastScheduledIndex);
-            U64(stream, checked((ulong)(timer.NextScheduledAt
-                ?? timer.StartedAt + timer.Period).ToUnixTimeMilliseconds()));
-        }
-        var pending = snapshots.Where(static item =>
-                item.Snapshot.Timer.PendingTick.HasValue)
-            .OrderBy(static item => item.Timer.PendingAcceptedSequence)
+        var timers = snapshots
+            .OrderBy(static item => item.Timer.TimerId, StringComparer.Ordinal)
+            .Select(static item =>
+            {
+                var timer = item.Snapshot.Timer;
+                return new ServiceWirePilotCodec.RelocationTimerRegistration(
+                    ParticipantId: 1,
+                    timer.Name,
+                    item.Snapshot.HandlerType.AssemblyQualifiedName
+                    ?? item.Snapshot.HandlerType.FullName
+                    ?? item.Snapshot.HandlerType.Name,
+                    checked((ulong)Math.Max(1,
+                        Math.Ceiling(timer.Period.TotalMilliseconds))),
+                    (byte)timer.Options.OverrunPolicy,
+                    checked((ulong)Math.Max(1,
+                        timer.Options.MaxCatchUpTicks)),
+                    timer.Options.StopOnUnhandledException,
+                    timer.DeliveryIndex,
+                    timer.LastScheduledIndex,
+                    checked((ulong)(timer.NextScheduledAt
+                        ?? timer.StartedAt + timer.Period)
+                        .ToUnixTimeMilliseconds()));
+            })
             .ToArray();
-        U32(stream, checked((uint)pending.Length));
-        foreach (var item in pending)
-        {
-            var tick = item.Snapshot.Timer.PendingTick!.Value;
-            U64(stream, 1);
-            U64(stream, item.Timer.PendingAcceptedSequence);
-            Text8(stream, item.Timer.TimerId);
-            U64(stream, tick.DeliveryIndex);
-            U64(stream, tick.ScheduledIndex);
-            U64(stream, checked((ulong)tick.ScheduledAt.ToUnixTimeMilliseconds()));
-            U64(stream, tick.SkippedTicks);
-        }
-        stream.Position = 0;
+        var pending = snapshots
+            .Where(static item => item.Snapshot.Timer.PendingTick.HasValue)
+            .OrderBy(static item => item.Timer.PendingAcceptedSequence)
+            .Select(static item =>
+            {
+                var tick = item.Snapshot.Timer.PendingTick!.Value;
+                return new ServiceWirePilotCodec.RelocationPendingTimerTick(
+                    ParticipantId: 1,
+                    item.Timer.PendingAcceptedSequence,
+                    item.Timer.TimerId,
+                    tick.DeliveryIndex,
+                    tick.ScheduledIndex,
+                    checked((ulong)tick.ScheduledAt.ToUnixTimeMilliseconds()),
+                    tick.SkippedTicks);
+            })
+            .ToArray();
+        var aggregateId = inventory.AggregateId.ToByteArray(bigEndian: true);
+        var encoded = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(new(
+            BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(0, 8)),
+            BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(8, 8)),
+            identity,
+            applicationVersion,
+            states,
+            savedWork,
+            timers,
+            pending));
+        using var stream = new MemoryStream(encoded, writable: false);
         var canonical = ZLinkRelocationEnvelopeCodec.Decode(
             stream, inventory.InventoryDigest);
         var projected = ordered.Select((participant, index) =>
@@ -289,12 +289,6 @@ internal static class ZLinkCanonicalSpotRelocationWriter
     {
         Span<byte> bytes = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
-        stream.Write(bytes);
-    }
-    private static void I64(Stream stream, long value)
-    {
-        Span<byte> bytes = stackalloc byte[8];
-        BinaryPrimitives.WriteInt64BigEndian(bytes, value);
         stream.Write(bytes);
     }
 }

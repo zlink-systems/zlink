@@ -168,7 +168,12 @@ public sealed class MessagePayloadOwnershipConvergenceTests
 
         Assert.Same(decoded, message.Decode<object>());
         Assert.Throws<InvalidCastException>(() => message.Decode<OtherProbe>());
-        Assert.Equal(1, serializer.DeserializeCalls);
+        var canonicalReply = ZLinkMessage.FromCanonicalActorJoinReply(
+            "application/x-zlink-multipart",
+            "recovered"u8.ToArray(),
+            codecs);
+        Assert.Equal("recovered", canonicalReply.Decode<Probe>().Value);
+        Assert.Equal(2, serializer.DeserializeCalls);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -142,28 +143,18 @@ internal static partial class ZLinkRelocationTreeStore
                         && pendingBytes > MaxComponentIoBytes - encodedLength)
                         await FlushAsync().ConfigureAwait(false);
 
-                    var encoded = new byte[encodedLength];
-                    WriteFrameHeader(
-                        encoded,
-                        ChunkMagic,
-                        checked((uint)(ChunkBodyPrefixBytes + dataLength)));
-                    BinaryPrimitives.WriteUInt32BigEndian(
-                        encoded.AsSpan(FrameHeaderBytes, 4),
-                        checked((uint)globalOrder));
-                    BinaryPrimitives.WriteUInt32BigEndian(
-                        encoded.AsSpan(FrameHeaderBytes + 4, 4),
-                        checked((uint)dataLength));
-                    var data = encoded.AsMemory(
-                        FrameHeaderBytes + ChunkBodyPrefixBytes,
-                        dataLength);
+                    var data = new byte[dataLength];
                     await input.ReadExactlyAsync(data, cancellationToken)
                         .ConfigureAwait(false);
-                    var dataChecksum = ZLinkCrc32C.Compute(data.Span);
+                    var dataChecksum = ZLinkCrc32C.Compute(data);
                     ZLinkCrc32C.Append(
                         ref componentCrcState,
-                        data.Span);
-                    ZLinkCrc32C.Append(ref logicalCrcState, data.Span);
-                    WriteFrameChecksum(encoded);
+                        data);
+                    ZLinkCrc32C.Append(ref logicalCrcState, data);
+                    var encoded = ServiceWirePilotCodec
+                        .EncodeRelocationDataChunkV1(new(
+                            checked((uint)globalOrder),
+                            data));
                     pending.Add(new ParticipantEncodedChunk(
                         source.Order,
                         localChunkOrder++,

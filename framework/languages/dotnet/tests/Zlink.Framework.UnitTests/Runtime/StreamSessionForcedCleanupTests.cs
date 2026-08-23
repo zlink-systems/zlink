@@ -287,6 +287,12 @@ public sealed class StreamSessionForcedCleanupTests
             await lifetime.WaitDispatchStartedAsync(first);
             Assert.False(lifetime.IsDispatchCompleted(first));
 
+            // A packet accepted before the disconnect terminal must retain its
+            // place ahead of that terminal even while an earlier callback is
+            // still occupying the session's serial executor.
+            EmitJson(socket, first, new SessionOrderingMessage());
+            await WaitUntilAsync(() => socket.DequeuedPartCount >= 2);
+
             // A separate session has a separate serial executor and therefore
             // completes while the first session remains blocked.
             EmitJson(socket, second, new SessionOrderingMessage());
@@ -310,6 +316,8 @@ public sealed class StreamSessionForcedCleanupTests
                 new[]
                 {
                     "connected",
+                    "dispatch-start",
+                    "dispatch-end",
                     "dispatch-start",
                     "dispatch-end",
                     "error",

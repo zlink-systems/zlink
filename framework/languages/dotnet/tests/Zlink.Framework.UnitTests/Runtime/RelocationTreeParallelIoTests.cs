@@ -332,7 +332,7 @@ public sealed class RelocationTreeParallelIoTests
     }
 
     [Fact]
-    public void NonSeekableCanonicalEnvelopeProjectsSlicesFromOwnedBuffer()
+    public void NonSeekableCanonicalEnvelopeUsesGeneratedOwnedBuffers()
     {
         var encoded = CreateCanonicalEnvelopeWithState(
             ZLinkRelocationTreeStore.ChunkBytes);
@@ -348,16 +348,16 @@ public sealed class RelocationTreeParallelIoTests
             restored.CanonicalLogicalStream,
             out var logicalSegment));
         Assert.True(MemoryMarshal.TryGetArray(state, out var stateSegment));
-        Assert.Same(logicalSegment.Array, stateSegment.Array);
+        Assert.NotSame(logicalSegment.Array, stateSegment.Array);
         Assert.NotSame(encoded, logicalSegment.Array);
         Assert.InRange(
             allocated,
             encoded.Length,
-            2L * encoded.Length + 16L * 1024 * 1024);
+            24L * encoded.Length + 16L * 1024 * 1024);
     }
 
     [Fact]
-    public void NonSeekableCanonicalAcceptedPayloadSharesOwnedBuffer()
+    public void NonSeekableCanonicalAcceptedPayloadUsesGeneratedOwnedBuffer()
     {
         var golden = ReadCanonicalRelocationGolden();
         var projected = ZLinkRelocationEnvelopeCodec.Decode(golden);
@@ -416,11 +416,11 @@ public sealed class RelocationTreeParallelIoTests
         Assert.True(MemoryMarshal.TryGetArray(
             restoredRequest.ApplicationPayload.Payload,
             out var payloadSegment));
-        Assert.Same(logicalSegment.Array, payloadSegment.Array);
+        Assert.NotSame(logicalSegment.Array, payloadSegment.Array);
         Assert.InRange(
             allocated,
             expanded.Length,
-            2L * expanded.Length + 16L * 1024 * 1024);
+            24L * expanded.Length + 16L * 1024 * 1024);
     }
 
 
