@@ -2265,7 +2265,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             request.TargetSpotId,
             request.TargetSpotGeneration,
             request.ContentType);
-        var head = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+        var head = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(
             new ActorJoinRequest(
                 operation.OperationId.Low,
                 actor,
@@ -3290,7 +3290,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 targetSpotId,
                 targetSpotGeneration,
                 ZLinkEnvelopeCodec.DefaultContentType);
-            var head = ZLinkServiceWireCodec.EncodeActorJoinRequest(
+            var head = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(
                 new ActorJoinRequest(
                     operation.OperationId.Low, actorRef, _lifecycleGeneration,
                     remoteActor.AuthorityOwnerGeneration, actorLease, entry,
@@ -5457,11 +5457,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
             var nativeReply = received.Reply();
             var nativeReplyPeerEpoch = CaptureNativeReplyPeerEpoch(sourceRid);
-            if (!ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
-                    head,
-                    _meshName,
-                    out var actorJoin,
-                    out _))
+            var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
+                received.Parts,
+                _meshName);
+            if (canonical is null)
             {
                 if (TryReadCanonicalActorJoinCorrelation(head, out var correlation))
                     SendCanonicalActorJoinTerminal(
@@ -5473,27 +5472,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
                 return false;
             }
-
-            // The generated multipart decoder is the canonical recognizer.
-            var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
-                received.Parts,
-                _meshName);
-            if (canonical is null)
-            {
-                SendCanonicalActorJoinTerminal(
-                    sourceRid,
-                    nativeReply,
-                    nativeReplyPeerEpoch,
-                    actorJoin.Request.Correlation,
-                    RequestResult.ProtocolError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
-                return false;
-            }
             return ProcessCanonicalActorJoin(
                 sourceRid,
                 nativeReply,
                 nativeReplyPeerEpoch,
-                actorJoin,
+                canonical.Request,
                 ownership);
         }
         if (ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(

@@ -10,6 +10,11 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // the actor/lifecycle/join plane already consumes.
 internal static class ZLinkMeshRecordAdapters
 {
+    // Command 28's generated codec owns its wire body.  These adapters only
+    // translate between its generated DTO and the framework's admission DTO.
+    internal static byte[] EncodeCanonicalActorJoinHead(ActorJoinRequest request) =>
+        ServiceWirePilotCodec.EncodeActorJoin28(ToGeneratedActorJoin(request))[0];
+
     public static ZLinkBackendActorJoinRequest ToActorJoinRequest(
         MeshReceiveBatch batch, int index, MeshReceiveRecord record)
     {
@@ -48,24 +53,7 @@ internal static class ZLinkMeshRecordAdapters
             // command 28 traffic.
             var decoded = ServiceWirePilotCodec.DecodeActorJoin28(
                 parts.Select(static part => part.AsReadOnlyMemory().ToArray()).ToArray());
-            var request = new ZLinkServiceWireCodec.ActorJoinRequestRecord(
-                new ActorJoinRequest(
-                    decoded.Correlation,
-                    new ActorRef(
-                        decoded.Actor.Id,
-                        decoded.Actor.Generation,
-                        meshName,
-                        RoutingId.From(decoded.Actor.TargetNodeRid)),
-                    decoded.Actor.TargetNodeGeneration,
-                    decoded.Actor.ExpectedAuthorityOwnerGeneration,
-                    decoded.Actor.ExpectedOwnerLeaseGeneration,
-                    decoded.Entry,
-                    decoded.TargetSpot.Id,
-                    decoded.TargetSpot.Generation,
-                    RoutingId.From(decoded.TargetSpot.TargetNodeRid),
-                    decoded.TargetSpot.TargetNodeGeneration,
-                    decoded.TargetSpot.ExpectedAuthorityOwnerGeneration,
-                    decoded.TargetSpot.ExpectedOwnerLeaseGeneration));
+            var request = ToActorJoinRequestRecord(decoded, meshName);
             ZLinkApplicationPayloadEnvelope? payload = decoded.Payload is { } value
                 ? new ZLinkApplicationPayloadEnvelope(
                     value.PacketName,
@@ -82,6 +70,47 @@ internal static class ZLinkMeshRecordAdapters
             return null;
         }
     }
+
+    private static ServiceWirePilotCodec.ActorJoin28 ToGeneratedActorJoin(
+        ActorJoinRequest request) => new(
+        request.Correlation,
+        new ServiceWirePilotCodec.Fence(
+            request.Actor.ActorId,
+            request.Actor.ObjectGeneration,
+            request.Actor.NodeRid.ToBytes().ToArray(),
+            request.ActorNodeGeneration,
+            request.ActorAuthorityOwnerGeneration,
+            request.ActorOwnerLeaseGeneration),
+        request.Entry,
+        new ServiceWirePilotCodec.Fence(
+            request.TargetSpotId,
+            request.TargetSpotGeneration,
+            request.TargetNodeRid.ToBytes().ToArray(),
+            request.TargetNodeGeneration,
+            request.TargetAuthorityOwnerGeneration,
+            request.TargetOwnerLeaseGeneration));
+
+    private static ZLinkServiceWireCodec.ActorJoinRequestRecord
+        ToActorJoinRequestRecord(
+            ServiceWirePilotCodec.ActorJoin28 decoded,
+            string meshName) =>
+        new(new ActorJoinRequest(
+            decoded.Correlation,
+            new ActorRef(
+                decoded.Actor.Id,
+                decoded.Actor.Generation,
+                meshName,
+                RoutingId.From(decoded.Actor.TargetNodeRid)),
+            decoded.Actor.TargetNodeGeneration,
+            decoded.Actor.ExpectedAuthorityOwnerGeneration,
+            decoded.Actor.ExpectedOwnerLeaseGeneration,
+            decoded.Entry,
+            decoded.TargetSpot.Id,
+            decoded.TargetSpot.Generation,
+            RoutingId.From(decoded.TargetSpot.TargetNodeRid),
+            decoded.TargetSpot.TargetNodeGeneration,
+            decoded.TargetSpot.ExpectedAuthorityOwnerGeneration,
+            decoded.TargetSpot.ExpectedOwnerLeaseGeneration));
 
     public static ZLinkBackendSpotActorLifecycleEvent? ToLifecycleEvent(
         ActorControlRecord control)

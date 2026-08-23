@@ -61,13 +61,10 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
     {
         await using var fixture = await WireAdmissionFixture.CreateAsync();
         var request = fixture.CreateRequest();
-        var malformed = ZLinkServiceWireCodec.EncodeActorJoinRequest(request);
+        var malformed = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request);
         Array.Resize(ref malformed, malformed.Length - 1);
-        Assert.False(ZLinkServiceWireCodec.TryDecodeActorJoinRequest(
-            malformed,
-            "wire-admission",
-            out _,
-            out _));
+        Assert.Throws<EndOfStreamException>(() =>
+            ServiceWirePilotCodec.DecodeActorJoin28([malformed]));
 
         var reply = await fixture.SendAsync(request, malformed);
 
@@ -165,7 +162,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         ActorJoinRequest request)
     {
         using var head = Message.From(
-            ZLinkServiceWireCodec.EncodeActorJoinRequest(request));
+            ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request));
         using var payload = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 "JoinRequest",
@@ -423,7 +420,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             byte[]? head = null)
         {
             using var requestHead = Message.From(
-                head ?? ZLinkServiceWireCodec.EncodeActorJoinRequest(request));
+                head ?? ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request));
             using var payload = Message.From(
                 ZLinkApplicationPayloadEnvelopeCodec.Encode(
                     "JoinRequest",

@@ -257,7 +257,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var protocolErrors = monitor.Status().ProtocolErrors;
         var oneWayRequest = acceptedRequest with { Correlation = 44 };
         using (var head = Message.From(
-                   ZLinkServiceWireCodec.EncodeActorJoinRequest(oneWayRequest)))
+                   ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(oneWayRequest)))
         using (var payload = Message.From(
                    ZLinkApplicationPayloadEnvelopeCodec.Encode(
                        "ZLinkFrameworkActorJoinRequest",
@@ -612,7 +612,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         ActorJoinRequest request)
     {
         using var head = Message.From(
-            ZLinkServiceWireCodec.EncodeActorJoinRequest(request));
+            ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request));
         using var payload = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 "ZLinkFrameworkActorJoinRequest",
