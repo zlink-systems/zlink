@@ -2810,14 +2810,20 @@ export class DefaultZLinkSpotManager {
       }
       return;
     }
-    const admittedContentType = admittedReply.byteLength === 0
+    const outerReplyContentType = admittedReply.byteLength === 0
       ? recovery.replyContentType
       : SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
-    if (recovery.replyContentType !== admittedContentType) {
+    if (recovery.replyContentType !== outerReplyContentType) {
       throw new Error(
         `Actor Join recovery '${recovery.request.handoffId}' changed its reply content type.`
       );
     }
+    // Command 28 carries a present reply in one outer framework-multipart
+    // part. The accepted target admission still owns the inner typed content
+    // type, which the durable completion must retain for application decode.
+    const admittedContentType = admittedReply.byteLength === 0
+      ? recovery.replyContentType
+      : outcome.replyContentType;
     const transfer = this.options.actorTransferRuntime;
     if (transfer === undefined) {
       throw new Error('Canonical Actor Join recovery requires the Actor transfer runtime.');
@@ -2827,7 +2833,7 @@ export class DefaultZLinkSpotManager {
       recovery.operationId,
       admitted.actorRef,
       recovery.reply,
-      recovery.replyContentType,
+      admittedContentType,
       signal,
       canonicalInventoryDigest
     );

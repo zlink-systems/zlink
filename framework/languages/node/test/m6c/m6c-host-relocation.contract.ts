@@ -45,7 +45,10 @@ import {
   ServiceStatefulRuntime,
   type ServiceStatefulMailboxData
 } from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
-import { SERVICE_WIRE_REQUIRED_CAPABILITY } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
+import {
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_WIRE_REQUIRED_CAPABILITY
+} from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
@@ -1326,6 +1329,93 @@ test('canonical ActorJoin admission recovery crosses command 28 into command 40 
     ]);
   } finally {
     await harness.dispose();
+  }
+});
+
+test('canonical ActorJoin recovery retains the admitted typed reply content type inside outer multipart', async () => {
+  const actorRef = {
+    actorId: 'actor-canonical-reply-type',
+    objectGeneration: 5n,
+    meshName: 'mesh-a',
+    nodeRid: 'source'
+  };
+  const handoffId = '00112233445566778899aabbccddeeff';
+  const request = Buffer.from('canonical-request');
+  const reply = Buffer.from('{"accepted":true}');
+  const admissions = new ZLinkFormalRemoteActorAdmissionRegistry();
+  admissions.begin({
+    actorId: actorRef.actorId,
+    actorType: 'Player',
+    actorRef,
+    spotId: 'room-target',
+    targetSpotGeneration: 6n,
+    expectedMembershipEpoch: 1n,
+    requestFingerprint: request.toString('base64'),
+    transferId: handoffId,
+    sourceActorNodeRid: 'source'
+  });
+  admissions.complete(handoffId, {
+    accepted: true,
+    actorRef,
+    reply,
+    replyContentType: 'application/json'
+  });
+  let preparedContentType: string | undefined;
+  const manager = {
+    formalRemoteActorAdmissions: admissions,
+    options: {
+      actorTransferRuntime: {
+        async prepareDeferredJoinAccepted(
+          _actorId: string,
+          _operationId: unknown,
+          _actor: unknown,
+          _reply: Uint8Array,
+          replyContentType?: string
+        ) {
+          preparedContentType = replyContentType;
+          return { actor: actorRef };
+        }
+      }
+    }
+  };
+  const recovery: CanonicalActorJoinRecovery = {
+    source: {
+      nodeRid: 'source',
+      nodeGeneration: 2n,
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 3n
+    },
+    request: {
+      actorId: actorRef.actorId,
+      actorType: 'Player',
+      handoffId,
+      sourceSpotId: 'source-room',
+      sourceNodeRid: Buffer.from('source'),
+      actorGeneration: actorRef.objectGeneration,
+      actorAuthorityOwnerGeneration: 11n,
+      relocationAggregateId: '00112233-4455-6677-8899-aabbccddeeff',
+      requestContentType: 'application/json',
+      request,
+      reservationToken: handoffId,
+      reservedPayloadBytes: 1n
+    },
+    targetSpotId: 'room-target',
+    targetNodeRid: Buffer.from('target'),
+    targetNodeGeneration: 6n,
+    targetSpotGeneration: 6n,
+    targetAuthorityOwnerGeneration: 12n,
+    operationId: { high: 7n, low: 8n },
+    replyContentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+    reply
+  };
+  try {
+    await DefaultZLinkSpotManager.prototype.restoreCanonicalActorJoinRecovery.call(
+      manager as never,
+      recovery
+    );
+    assert.equal(preparedContentType, 'application/json');
+  } finally {
+    admissions.delete(handoffId);
   }
 });
 
