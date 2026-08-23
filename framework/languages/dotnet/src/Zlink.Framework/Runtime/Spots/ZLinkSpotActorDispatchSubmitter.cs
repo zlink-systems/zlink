@@ -112,6 +112,12 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         CancellationToken cancellationToken)
     {
         using var currentPayload = state.Payload;
+        // The Actor mailbox owns the outer turn, but the Spot serial executor
+        // deliberately runs application callbacks on its own execution
+        // context. Carry the exact Actor ownership across that queue boundary
+        // so lifecycle calls such as DestroyActorAsync can defer native
+        // terminal work until the outer delivery returns.
+        using var dispatch = state.RuntimeState.EnterForwardedDispatchExecution();
         await state.Dispatcher.DispatchAsync(
                 state.Actor,
                 state.RuntimeState,
@@ -127,6 +133,7 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         CancellationToken cancellationToken)
     {
         using var currentPayload = state.Payload;
+        using var dispatch = state.RuntimeState.EnterForwardedDispatchExecution();
         state.Reply = await state.Dispatcher.DispatchForReplyAsync(
                 state.Actor,
                 state.RuntimeState,

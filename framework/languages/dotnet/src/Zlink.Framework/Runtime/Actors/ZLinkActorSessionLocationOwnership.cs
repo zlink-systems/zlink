@@ -167,6 +167,21 @@ internal sealed partial class ZLinkActorSessionManager
             return;
         }
 
+        if (state.OwnsCurrentDispatch)
+        {
+            var terminal = state.BeginHandlerActivationAsyncCompletion(
+                () => CompleteActorTeardownAfterCurrentDispatchAsync(
+                    state,
+                    nativeActor,
+                    transaction,
+                    cancellationToken));
+            _ = ObserveDeferredActorTeardownAsync(
+                state,
+                nativeActor,
+                terminal.Completion);
+            return;
+        }
+
         var nativeDestroyed = transaction.NativeAlreadyDestroyed;
         var terminalStateCommitted = false;
         try
@@ -237,6 +252,98 @@ internal sealed partial class ZLinkActorSessionManager
                     CancellationToken.None)
                 .ConfigureAwait(false);
             throw;
+        }
+    }
+
+    private async ValueTask<ZLinkActorBoundSession?>
+        CompleteActorTeardownAfterCurrentDispatchAsync(
+        ZLinkActorRuntimeState state,
+        ZLinkBackendActorRef nativeActor,
+        ZLinkActorTeardownOperation transaction,
+        CancellationToken cancellationToken)
+    {
+        var nativeDestroyed = transaction.NativeAlreadyDestroyed;
+        var terminalStateCommitted = false;
+        try
+        {
+            if (!nativeDestroyed)
+            {
+                var node = getActorSpotNode()
+                           ?? throw new InvalidOperationException(
+                               $"Actor '{state.ActorId}' teardown cannot confirm native destruction without a SpotNode.");
+                try
+                {
+                    await node.DestroyActorAsync(
+                            nativeActor,
+                            runtime.Registration.DefaultRequestTimeout,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (ZlinkRequestException exception)
+                    when (exception.Result == ZlinkRequestException.ErrorCode.NotFound)
+                {
+                }
+
+                await state.ExecuteLockedAsync(
+                        () => state.MarkNativeDestroyed(transaction),
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                nativeDestroyed = true;
+            }
+
+            if (LocationLifecycle is { } lifecycle)
+                await lifecycle.ActorOwnership.ReleaseActorAsync(
+                        state.RuntimeActorId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+            return await state.ExecuteLockedAsync(
+                    () =>
+                    {
+                        var result = state.CompleteTeardownAttempt(transaction);
+                        terminalStateCommitted = true;
+                        return result;
+                    },
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            if (terminalStateCommitted)
+                throw;
+            await state.ExecuteLockedAsync(
+                    () => state.FailTeardownAttempt(
+                        transaction,
+                        nativeDestroyed,
+                        failure),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task ObserveDeferredActorTeardownAsync(
+        ZLinkActorRuntimeState state,
+        ZLinkBackendActorRef nativeActor,
+        Task<ZLinkActorBoundSession?> completion)
+    {
+        try
+        {
+            var boundSession = await completion.ConfigureAwait(false);
+            if (boundSession is { } session)
+                runtime.RemoveActorSessionBinding(
+                    state.ActorId,
+                    session.BindingToken);
+            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
+        }
+        catch (Exception failure)
+        {
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"deferred actor teardown failed for '{state.ActorId}': {failure.Message}");
+            StartActorTeardownReconciliation(
+                state,
+                nativeActor,
+                "actor-self-teardown");
         }
     }
 

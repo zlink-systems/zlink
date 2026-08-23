@@ -1006,7 +1006,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task ConcurrentActorDestroy_CallersAwaitOneTeardownTransaction()
+    public async Task ConcurrentActorDestroy_FromCurrentTurn_CallersAwaitOneTeardownTransaction()
     {
         var services = new ServiceCollection().BuildServiceProvider();
         var node = new CapturingSpotNode();
@@ -1045,8 +1045,18 @@ public sealed partial class EntrySpotActorDispatchTests
         state.BindActorInstance(actor);
         state.BindNativeActorRef(new ZLinkBackendActorRef(node.RoutingId, state.ActorId, 1));
 
-        var first = sessions.DestroyActorAsync(node.RoutingId, actor).AsTask();
+        var first = state.ExecuteDispatchAsync(
+                CreateHeader("destroy-from-turn"),
+                async _ =>
+                {
+                    await sessions.DestroyActorAsync(node.RoutingId, actor);
+                    Assert.False(destroyStarted.Task.IsCompleted);
+                },
+                CancellationToken.None)
+            .AsTask();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
         await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(state.IsTeardownPending);
         var second = sessions.DestroyActorAsync(node.RoutingId, actor).AsTask();
         releaseDestroy.TrySetResult();
 

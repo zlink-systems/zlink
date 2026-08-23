@@ -494,7 +494,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         using (header)
             using (payload)
             {
-                if (IsClosing) return;
                 if (!await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false))
                     return;
                 ZlinkStreamHeader decoded;

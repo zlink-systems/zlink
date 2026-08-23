@@ -1068,7 +1068,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                      $"Actor '{request.ActorId}' has no current reference for Join completion.");
                 var reply = recovery.Reply.Length != 0
                             && recovery.ReplyContentType is { } contentType
-                    ? ZLinkMessage.FromEncoded(
+                    ? ZLinkMessage.FromCanonicalActorJoinReply(
                         contentType,
                         recovery.Reply,
                         Registration.Codecs)
@@ -1381,7 +1381,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                                    $"Actor '{request.ActorId}' has no current reference for Join completion.");
                 var reply = request.Reply is { Length: > 0 } payload
                             && request.ReplyContentType is { } contentType
-                    ? ZLinkMessage.FromEncoded(contentType, payload, Registration.Codecs)
+                    ? ZLinkMessage.FromCanonicalActorJoinReply(
+                        contentType,
+                        payload,
+                        Registration.Codecs)
                     : null;
                 await actorState.ExecuteRelocationCompletionAsync(
                         currentRef.Generation,

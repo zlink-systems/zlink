@@ -145,6 +145,31 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
+    internal ZLinkActorHandlerTerminalCompletion<T>
+        BeginHandlerActivationAsyncCompletion<T>(
+        Func<ValueTask<T>> terminalTransition)
+    {
+        ArgumentNullException.ThrowIfNull(terminalTransition);
+        lock (_terminalLifecycleGate)
+        {
+            CloseHandlerActivation();
+            var requiresDispatchRelease = OwnsCurrentDispatch;
+            var barrier =
+                _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
+            var completion = CompleteHandlerActivationAsyncCoreAsync(
+                barrier,
+                terminalTransition);
+            _terminalLifecycleCompletion = completion;
+            return new ZLinkActorHandlerTerminalCompletion<T>(
+                completion,
+                requiresDispatchRelease);
+        }
+    }
+
+    internal bool OwnsCurrentDispatch =>
+        AmbientDispatch.Value is { IsActive: true } ownership
+        && ReferenceEquals(ownership.State, this);
+
     private async Task<T> CompleteHandlerActivationCoreAsync<T>(
         ZLinkActorDispatchMailbox.BarrierReservation barrier,
         Func<T> terminalTransition)
@@ -154,6 +179,21 @@ internal sealed class ZLinkActorRuntimeState(
                 terminalTransition,
                 CancellationToken.None)
             .ConfigureAwait(false);
+        await DisposeHandlerActivationAsync().ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task<T> CompleteHandlerActivationAsyncCoreAsync<T>(
+        ZLinkActorDispatchMailbox.BarrierReservation barrier,
+        Func<ValueTask<T>> terminalTransition)
+    {
+        // The barrier is a drain fence for turns accepted before teardown.
+        // Native terminal work may itself need Core lifecycle delivery, so it
+        // must not run while the managed Actor mailbox turn remains claimed.
+        using (await barrier.ClaimAsync().ConfigureAwait(false))
+        {
+        }
+        var result = await terminalTransition().ConfigureAwait(false);
         await DisposeHandlerActivationAsync().ConfigureAwait(false);
         return result;
     }
@@ -1754,6 +1794,9 @@ internal sealed class ZLinkActorRuntimeState(
             previousAmbient,
             ownership);
     }
+
+    public DispatchScope EnterForwardedDispatchExecution() =>
+        EnterDeferredJoinExecution();
 
     private async Task ClearActorCreationTaskWhenCompletedAsync(Task<IZLinkActor> creationTask)
     {
