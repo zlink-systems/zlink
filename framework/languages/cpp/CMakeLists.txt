@@ -1016,7 +1016,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_compile_definitions(test_cpp_framework_actor_authority_payload PRIVATE
-    ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/durable-authority-v1.json")
+    ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/durable-authority-v1.json"
+    ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/authority-relocation-state-v1.json")
   target_link_libraries(test_cpp_framework_actor_authority_payload PRIVATE
     nlohmann_json::nlohmann_json
     zlink::framework)

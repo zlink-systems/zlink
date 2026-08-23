@@ -167,12 +167,6 @@ inline void append_u64be (std::vector<std::byte> &bytes, std::uint64_t value)
         append_u8 (bytes, static_cast<std::uint8_t> (value >> shift));
 }
 
-inline void append_u32le (std::vector<std::byte> &bytes, std::uint32_t value)
-{
-    for (int shift = 0; shift <= 24; shift += 8)
-        append_u8 (bytes, static_cast<std::uint8_t> (value >> shift));
-}
-
 inline void append_bytes (std::vector<std::byte> &bytes, std::span<const std::byte> value)
 {
     bytes.insert (bytes.end (), value.begin (), value.end ());
@@ -210,16 +204,14 @@ class reader_t
           | std::to_integer<std::uint8_t> (value[1]));
     }
 
-    std::uint16_t u16le ()
+    std::uint32_t u32be ()
     {
-        const auto value = take (2);
-        return static_cast<std::uint16_t> (
-          std::to_integer<std::uint8_t> (value[0])
-          | (std::to_integer<std::uint8_t> (value[1]) << 8));
+        const auto value = take (4);
+        std::uint32_t result = 0;
+        for (const auto byte : value)
+            result = (result << 8) | std::to_integer<std::uint8_t> (byte);
+        return result;
     }
-
-    std::uint32_t u32be () { return u32 (true); }
-    std::uint32_t u32le () { return u32 (false); }
 
     std::uint64_t u64be ()
     {
@@ -227,15 +219,6 @@ class reader_t
         std::uint64_t result = 0;
         for (const auto byte : value)
             result = (result << 8) | std::to_integer<std::uint8_t> (byte);
-        return result;
-    }
-
-    std::uint64_t u64le ()
-    {
-        const auto value = take (8);
-        std::uint64_t result = 0;
-        for (int index = 7; index >= 0; --index)
-            result = (result << 8) | std::to_integer<std::uint8_t> (value[index]);
         return result;
     }
 
@@ -260,9 +243,9 @@ class reader_t
         return text;
     }
 
-    std::string text16le ()
+    std::string text16be ()
     {
-        const auto value = take (u16le ());
+        const auto value = take (u16be ());
         std::string text;
         text.reserve (value.size ());
         for (const auto byte : value)
@@ -273,21 +256,6 @@ class reader_t
     }
 
   private:
-    std::uint32_t u32 (bool big_endian)
-    {
-        const auto value = take (4);
-        std::uint32_t result = 0;
-        if (big_endian) {
-            for (const auto byte : value)
-                result = (result << 8) | std::to_integer<std::uint8_t> (byte);
-        }
-        else {
-            for (int index = 3; index >= 0; --index)
-                result = (result << 8) | std::to_integer<std::uint8_t> (value[index]);
-        }
-        return result;
-    }
-
     std::span<const std::byte> _bytes;
     std::size_t _offset = 0;
 };
@@ -309,7 +277,9 @@ inline bool read_optional_text8 (reader_t &reader, bool *present = nullptr)
 /* The durable authority's relocation slot is independent of the steady
  * application authority.  Read and validate it before projecting the latter;
  * in particular, a source-only Preparing/Captured slot has no target fence. */
-inline bool read_actor_authority_relocation_state (reader_t &body_reader)
+inline bool read_actor_authority_relocation_state (
+  reader_t &body_reader,
+  std::optional<std::uint64_t> root_aggregate_generation = std::nullopt)
 {
     const auto has_relocation = body_reader.u8 ();
     if (has_relocation > 1)
@@ -321,9 +291,12 @@ inline bool read_actor_authority_relocation_state (reader_t &body_reader)
     reader_t relocation_reader (state);
     const auto relocation_high = relocation_reader.u64be ();
     const auto relocation_low = relocation_reader.u64be ();
+    const auto aggregate_generation = relocation_reader.u64be ();
     const auto target_attempt_generation = relocation_reader.u64be ();
     if (relocation_high == 0 && relocation_low == 0)
         return false;
+    (void) relocation_reader.text16be ();
+    (void) relocation_reader.u32be ();
     if (relocation_reader.take (relocation_reader.u8 ()).empty ())
         return false;
     if (relocation_reader.u64be () == 0)
@@ -342,32 +315,30 @@ inline bool read_actor_authority_relocation_state (reader_t &body_reader)
         || relocation_reader.take (relocation_reader.u8 ()).empty ()
         || relocation_reader.u64be () == 0)
         return false;
+    if (!read_optional_text8 (relocation_reader))
+        return false;
     const auto phase = relocation_reader.u8 ();
     if (phase == 0 || phase > 9
         || (relocation_reader.u64be () & (std::uint64_t{1} << 63)) != 0
         || relocation_reader.u8 () > 2)
         return false;
+    if (!relocation_reader.done ())
+        return false;
 
-    /* .NET's canonical writer appends its versioned, runtime-local progress
-     * extension after the schema-owned source-cleanup byte. */
-    if (!relocation_reader.done ()) {
-        if (relocation_reader.u8 () != 1)
-            return false;
-        (void) relocation_reader.u64be ();
-        if (!relocation_reader.done () && !read_optional_text8 (relocation_reader))
-            return false;
-        if (!relocation_reader.done ()) {
-            const auto has_pointer = relocation_reader.u8 ();
-            if (has_pointer > 1)
-                return false;
-            if (has_pointer == 1) {
-                (void) relocation_reader.text16le ();
-                (void) relocation_reader.u32be ();
-            }
-        }
-        if (!relocation_reader.done ())
+    constexpr auto aggregate_generation_exhausted =
+      std::numeric_limits<std::int64_t>::max ();
+    if (aggregate_generation > aggregate_generation_exhausted
+        || target_attempt_generation > aggregate_generation_exhausted)
+        return false;
+    if (phase == 1) {
+        if (aggregate_generation != 0 || root_aggregate_generation.has_value ())
             return false;
     }
+    else if (aggregate_generation == 0
+             || aggregate_generation == aggregate_generation_exhausted
+             || (root_aggregate_generation
+                 && aggregate_generation != *root_aggregate_generation))
+        return false;
 
     const auto source_only = phase == 1 || phase == 2;
     const auto has_target = target_attempt_generation != 0 && !target_node_rid.empty ()
@@ -377,7 +348,7 @@ inline bool read_actor_authority_relocation_state (reader_t &body_reader)
         return !has_target && target_attempt_generation == 0 && target_node_rid.empty ()
                && target_node_generation == 0 && !target_owner_present
                && target_owner_lease_generation == 0;
-    return phase == 9 || has_target;
+    return has_target;
 }
 
 } // namespace actor_authority_detail

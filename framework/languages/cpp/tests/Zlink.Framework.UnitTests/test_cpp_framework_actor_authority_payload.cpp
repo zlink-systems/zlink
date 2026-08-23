@@ -62,12 +62,18 @@ void append_rid (std::vector<std::byte> &bytes, std::string_view value)
 }
 
 std::vector<std::byte> relocation_slot (std::uint8_t phase,
+                                        std::uint64_t aggregate_generation,
                                         std::uint64_t target_attempt_generation)
 {
     std::vector<std::byte> slot;
     actor_authority_detail::append_u64be (slot, 1);
     actor_authority_detail::append_u64be (slot, 2);
+    actor_authority_detail::append_u64be (slot, aggregate_generation);
     actor_authority_detail::append_u64be (slot, target_attempt_generation);
+    actor_authority_detail::append_u16be (slot, 6);
+    for (const auto byte : std::string_view{"root/1"})
+        actor_authority_detail::append_u8 (slot, static_cast<std::uint8_t> (byte));
+    actor_authority_detail::append_u32be (slot, 0x01020304);
     append_rid (slot, "source-node");
     actor_authority_detail::append_u64be (slot, 3);
     actor_authority_detail::append_text8 (slot, "source-owner");
@@ -88,12 +94,100 @@ std::vector<std::byte> relocation_slot (std::uint8_t phase,
     actor_authority_detail::append_u64be (slot, 7);
     append_rid (slot, "coordinator-node");
     actor_authority_detail::append_u64be (slot, 8);
+    actor_authority_detail::append_u8 (slot, 0); // coordinatorExpectedStoreVersion absent
     actor_authority_detail::append_u8 (slot, phase);
     actor_authority_detail::append_u64be (slot, 0); // applicationVersion i64
     actor_authority_detail::append_u8 (slot, 0); // sourceCleanupState pending
-    actor_authority_detail::append_u8 (slot, 1); // .NET private extension marker
-    actor_authority_detail::append_u64be (slot, 0); // aggregateGeneration
     return slot;
+}
+
+std::vector<std::byte> relocation_state (const nlohmann::json &decoded)
+{
+    const auto &relocation = decoded.at ("relocation");
+    const auto phase = decoded.at ("phase").get<std::string> ();
+    const auto source_cleanup = decoded.at ("sourceCleanupState").get<std::string> ();
+    const auto phase_value = phase == "preparing" ? 1
+                           : phase == "captured" ? 2
+                           : phase == "prepared" ? 3
+                           : phase == "committed" ? 4
+                           : phase == "activating" ? 5
+                           : phase == "activated" ? 6
+                           : phase == "cleaning" ? 7
+                           : phase == "completed" ? 8
+                           : phase == "aborted" ? 9
+                                                : 0;
+    const auto cleanup_value = source_cleanup == "pending" ? 0
+                             : source_cleanup == "completed" ? 1
+                             : source_cleanup == "sourceLeaseExpired" ? 2
+                                                                  : 3;
+    const auto hex_bytes = [] (const nlohmann::json &value) {
+        return from_hex (value.get<std::string> ());
+    };
+    const auto append_rid_hex = [&] (std::vector<std::byte> &bytes,
+                                     const nlohmann::json &value) {
+        const auto rid = hex_bytes (value);
+        actor_authority_detail::append_u8 (bytes, static_cast<std::uint8_t> (rid.size ()));
+        actor_authority_detail::append_bytes (bytes, rid);
+    };
+    const auto u64 = [] (const nlohmann::json &value) {
+        return std::stoull (value.get<std::string> ());
+    };
+
+    std::vector<std::byte> body;
+    actor_authority_detail::append_u64be (body, u64 (relocation.at ("high")));
+    actor_authority_detail::append_u64be (body, u64 (relocation.at ("low")));
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("aggregateGeneration")));
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("targetAttemptGeneration")));
+    const auto reference = decoded.at ("relocationReference").get<std::string> ();
+    actor_authority_detail::append_u16be (body, static_cast<std::uint16_t> (reference.size ()));
+    for (const auto byte : reference)
+        actor_authority_detail::append_u8 (body, static_cast<std::uint8_t> (byte));
+    actor_authority_detail::append_u32be (
+      body, decoded.at ("relocationChecksumCrc32c").get<std::uint32_t> ());
+    append_rid_hex (body, decoded.at ("sourceNodeRidHex"));
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("sourceNodeGeneration")));
+    actor_authority_detail::append_text8 (body, decoded.at ("sourceOwnerId").get<std::string> ());
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("sourceOwnerLeaseGeneration")));
+    append_rid_hex (body, decoded.at ("targetNodeRidHex"));
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("targetNodeGeneration")));
+    const auto target_owner = decoded.at ("targetOwnerId").get<std::string> ();
+    if (target_owner.empty ())
+        actor_authority_detail::append_u8 (body, 0);
+    else
+        actor_authority_detail::append_text8 (body, target_owner);
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("targetOwnerLeaseGeneration")));
+    actor_authority_detail::append_text8 (body, decoded.at ("coordinatorOwnerId").get<std::string> ());
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("coordinatorLeaseGeneration")));
+    append_rid_hex (body, decoded.at ("coordinatorNodeRidHex"));
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("coordinatorNodeGeneration")));
+    const auto expected_version = decoded.at ("coordinatorExpectedStoreVersion").get<std::string> ();
+    if (expected_version.empty ())
+        actor_authority_detail::append_u8 (body, 0);
+    else
+        actor_authority_detail::append_text8 (body, expected_version);
+    actor_authority_detail::append_u8 (body, static_cast<std::uint8_t> (phase_value));
+    actor_authority_detail::append_u64be (body, u64 (decoded.at ("applicationVersion")));
+    actor_authority_detail::append_u8 (body, static_cast<std::uint8_t> (cleanup_value));
+
+    std::vector<std::byte> state;
+    actor_authority_detail::append_u8 (state, 1);
+    actor_authority_detail::append_u32be (state, static_cast<std::uint32_t> (body.size ()));
+    actor_authority_detail::append_bytes (state, body);
+    return state;
+}
+
+bool accepts_relocation_state (std::span<const std::byte> state,
+                               std::optional<std::uint64_t> root_generation)
+{
+    try {
+        actor_authority_detail::reader_t reader (state);
+        return actor_authority_detail::read_actor_authority_relocation_state (
+                 reader, root_generation)
+          && reader.done ();
+    }
+    catch (...) {
+        return false;
+    }
 }
 
 std::vector<std::byte> with_relocation_slot (const std::vector<std::byte> &authority,
@@ -156,7 +250,7 @@ int main ()
     // .NET source phase 2 carries an allocated relocation slot before target
     // selection: targetAttemptGeneration and every target fence are zero.
     const auto source_phase_authority =
-      with_relocation_slot (actor, relocation_slot (2, 0));
+      with_relocation_slot (actor, relocation_slot (2, 2, 0));
     const auto source_phase = decode_actor_authority_payload (source_phase_authority, 17);
     assert (source_phase && source_phase->actor.actor_id ().value () == "B"
             && equals_text (source_phase->spot_id, "C")
@@ -164,13 +258,36 @@ int main ()
             && source_phase->owner_id == "D");
 
     const auto target_phase_authority =
-      with_relocation_slot (actor, relocation_slot (3, 9));
+      with_relocation_slot (actor, relocation_slot (3, 2, 9));
     const auto target_phase = decode_actor_authority_payload (target_phase_authority, 17);
     const auto target_phase_canonical =
       decode_canonical_authority_payload (target_phase_authority);
     assert (target_phase && target_phase_canonical
             && encode_canonical_authority_payload (*target_phase_canonical)
                  == target_phase_authority);
+
+    std::ifstream relocation_fixture (ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH);
+    assert (relocation_fixture.good ());
+    nlohmann::json relocation_golden;
+    relocation_fixture >> relocation_golden;
+    assert (relocation_golden.at ("format") == "authority-relocation-state-v1");
+    for (const auto &entry : relocation_golden.at ("valid")) {
+        const auto state = relocation_state (entry.at ("decoded"));
+        assert (hex (state) == entry.at ("hex").get<std::string> ());
+        const auto root_generation = entry.at ("rootAggregateGeneration").is_null ()
+          ? std::optional<std::uint64_t>{}
+          : std::optional<std::uint64_t>{std::stoull (
+              entry.at ("rootAggregateGeneration").get<std::string> ())};
+        assert (accepts_relocation_state (state, root_generation));
+        assert (decode_actor_authority_payload (
+          with_relocation_slot (actor, std::vector<std::byte> (state.begin () + 5, state.end ())), 17));
+    }
+    for (const auto &entry : relocation_golden.at ("invalid")) {
+        const auto state = from_hex (entry.at ("hex").get<std::string> ());
+        const auto root_generation = std::stoull (
+          entry.at ("rootAggregateGeneration").get<std::string> ());
+        assert (!accepts_relocation_state (state, root_generation));
+    }
 
     constexpr std::string_view user_spot_hex =
       "5a4c41550100000000002c"
