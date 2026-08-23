@@ -92,6 +92,41 @@ function selectedRelocationBody(hex) {
   return selected.subarray(5);
 }
 
+function withCanonicalRelocationSlot(payload, slot) {
+  const bytes = Buffer.from(payload);
+  assert.equal(bytes.subarray(0, 4).toString('ascii'), 'ZLAU');
+  assert.equal(bytes[4], 1);
+  const bodyLength = bytes.readUInt32BE(7);
+  const bodyStart = 11;
+  const bodyEnd = bodyStart + bodyLength;
+  let offset = bodyStart + 2;
+  offset += 2 + bytes.readUInt16BE(offset);
+  offset += 1 + bytes[offset];
+  offset += 8;
+  offset += 1 + bytes[offset];
+  offset += 1 + bytes[offset];
+  offset += 8;
+  const presence = bytes[offset];
+  const oldSlotLength = bytes.readUInt32BE(offset + 1);
+  assert.ok(presence === 0 || presence === 1);
+  assert.equal(presence === 0, oldSlotLength === 0);
+  const replacementLength = Buffer.alloc(4);
+  replacementLength.writeUInt32BE(slot.byteLength);
+  const body = Buffer.concat([
+    bytes.subarray(bodyStart, offset),
+    Buffer.of(1),
+    replacementLength,
+    slot,
+    bytes.subarray(offset + 5 + oldSlotLength, bodyEnd)
+  ]);
+  const header = Buffer.from(bytes.subarray(0, bodyStart));
+  header.writeUInt32BE(body.byteLength, 7);
+  const envelope = Buffer.concat([header, body]);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32c(envelope));
+  return Buffer.concat([envelope, checksum]);
+}
+
 test('authority-relocation-state-v1 golden matches the production 21-field slot codec', () => {
   const fixture = JSON.parse(readFileSync(path.resolve(
     __dirname,
@@ -137,6 +172,104 @@ test('authority-relocation-state-v1 golden matches the production 21-field slot 
       vector.name
     );
   }
+});
+
+test('preparing canonical slot is not read as a published deferred Join root', async () => {
+  const preparing = encodeCanonicalRelocationSlot({
+    aggregateId: relocationPublication.aggregateId,
+    aggregateGeneration: 0n,
+    targetAttemptGeneration: 0n,
+    reference: 'pending',
+    checksumCrc32c: 0,
+    sourceNodeRid: 'node-a',
+    sourceNodeGeneration: 1n,
+    sourceOwnerId: 'owner-a',
+    sourceOwnerLeaseGeneration: 5n,
+    targetNodeRid: '',
+    targetNodeGeneration: 0n,
+    targetOwnerId: '',
+    targetOwnerLeaseGeneration: 0n,
+    coordinatorOwnerId: 'owner-a',
+    coordinatorLeaseGeneration: 5n,
+    coordinatorNodeRid: 'node-a',
+    coordinatorNodeGeneration: 1n,
+    coordinatorExpectedStoreVersion: '1',
+    phase: relocationPhases.preparing,
+    applicationVersion: 0n,
+    sourceCleanupState: sourceCleanupStates.pending
+  });
+  const context = harness({
+    mutateAuthorityPayload: payload => withCanonicalRelocationSlot(payload, preparing)
+  });
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+
+  const root = await context.journal.prepare(
+    actorRef.actorId,
+    { high: 11n, low: 12n },
+    actorRef,
+    Buffer.from('reply'),
+    undefined,
+    undefined,
+    'b'.repeat(64)
+  );
+
+  assert.notEqual(root.reference.value, 'pending');
+  assert.equal(context.roots.has('pending'), false);
+  assert.equal(context.events.includes('authority-cas'), false);
+});
+
+test('captured direct-transfer slot is not read as a deferred Join Store root', async () => {
+  const captured = encodeCanonicalRelocationSlot({
+    aggregateId: relocationPublication.aggregateId,
+    aggregateGeneration: 2n,
+    targetAttemptGeneration: 0n,
+    reference: 'pending',
+    checksumCrc32c: 123,
+    sourceNodeRid: 'node-a',
+    sourceNodeGeneration: 1n,
+    sourceOwnerId: 'owner-a',
+    sourceOwnerLeaseGeneration: 5n,
+    targetNodeRid: '',
+    targetNodeGeneration: 0n,
+    targetOwnerId: '',
+    targetOwnerLeaseGeneration: 0n,
+    coordinatorOwnerId: 'owner-a',
+    coordinatorLeaseGeneration: 5n,
+    coordinatorNodeRid: 'node-a',
+    coordinatorNodeGeneration: 1n,
+    coordinatorExpectedStoreVersion: '1',
+    phase: relocationPhases.captured,
+    applicationVersion: 0n,
+    sourceCleanupState: sourceCleanupStates.pending
+  });
+  const context = harness({
+    mutateAuthorityPayload: payload => withCanonicalRelocationSlot(payload, captured)
+  });
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+
+  const root = await context.journal.prepare(
+    actorRef.actorId,
+    { high: 11n, low: 12n },
+    actorRef,
+    Buffer.from('reply'),
+    undefined,
+    undefined,
+    'b'.repeat(64)
+  );
+
+  assert.notEqual(root.reference.value, 'pending');
+  assert.equal(context.roots.has('pending'), false);
+  assert.equal(context.events.includes('authority-cas'), false);
 });
 
 function harness(options = {}) {

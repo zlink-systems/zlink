@@ -541,6 +541,11 @@ export class ZLinkDeferredJoinAcceptedJournal {
   ): Promise<ZLinkDeferredJoinAcceptedRoot | undefined> {
     const publication = decodeAuthorityPublication(authority.payload);
     if (publication === undefined) return undefined;
+    // Preparing has no relocation root, while Captured still names the
+    // source-memory direct-transfer payload. Neither pre-target-publication
+    // phase can contain a Relocation Store backed deferred Join root.
+    const canonicalPhase = publication.canonicalPublication?.canonicalPhase;
+    if (canonicalPhase === 1 || canonicalPhase === 2) return undefined;
     const read = await this.relocation.read(publication.reference, signal);
     if (read.kind !== 'found' && publication.canonical === true
       && publication.reference.value.startsWith('zlink-direct:')) {
