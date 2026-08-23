@@ -45,7 +45,8 @@ final class RetainedHwmCreditContractTest {
 
             try (Message outbound = Message.allocate(1024)) {
                 outbound.fill((byte) 0x6a);
-                assertTrue(sender.send().message(outbound).submit());
+                sender.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             TestSupport.awaitCondition(() -> context.coreHwmBudgetSnapshot()
                 .coreQueueAccountedBytes() > 0L);
@@ -74,11 +75,13 @@ final class RetainedHwmCreditContractTest {
 
             try (Received reusable = new Received()) {
                 try (Message first = Message.from("retained-first")) {
-                    assertTrue(sender.send().message(first).submit());
+                    sender.send().message(first).submit()
+                        .toCompletableFuture().join();
                 }
                 assertTrue(receiver.recvRetained(reusable, RecvFlags.NONE));
                 try (Message second = Message.from("retained-second")) {
-                    assertTrue(sender.send().message(second).submit());
+                    sender.send().message(second).submit()
+                        .toCompletableFuture().join();
                 }
                 assertTrue(receiver.recvRetained(reusable, RecvFlags.NONE));
                 assertEquals("retained-second",
@@ -90,7 +93,8 @@ final class RetainedHwmCreditContractTest {
                 .outstandingApplicationLeaseCount());
 
             try (Message ordinary = Message.from("ordinary")) {
-                assertTrue(sender.send().message(ordinary).submit());
+                sender.send().message(ordinary).submit()
+                    .toCompletableFuture().join();
             }
             try (Received ordinary = new Received()) {
                 assertTrue(receiver.recv(ordinary, RecvFlags.NONE));
@@ -241,8 +245,8 @@ final class RetainedHwmCreditContractTest {
 
             try (Message first = Message.from("alpha");
                  Message second = Message.from("beta")) {
-                assertTrue(publisher.publish("orders").message(first)
-                    .message(second).submit());
+                publisher.publish("orders").message(first)
+                    .message(second).submit();
             }
             try (TopicMessage received = new TopicMessage()) {
                 assertTrue(subscriber.subscribeRetained(received,

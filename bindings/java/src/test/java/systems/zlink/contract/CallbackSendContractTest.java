@@ -143,7 +143,8 @@ public class CallbackSendContractTest {
                     assertEquals("ping",
                         new String(data, StandardCharsets.UTF_8));
                     try (Message reply = Message.from("pong")) {
-                        right.send().message(reply).flags(SendFlags.DONT_WAIT).submit();
+                        right.send().message(reply).submit()
+                            .toCompletableFuture().join();
                     }
                 } catch (Throwable t) {
                     callbackError.set(t);
@@ -165,7 +166,8 @@ public class CallbackSendContractTest {
             leftThread.start();
 
             try (Message request = Message.from("ping")) {
-                left.send().message(request).submit();
+                left.send().message(request).submit()
+                    .toCompletableFuture().join();
             }
 
             assertTrue(replyReceived.await(

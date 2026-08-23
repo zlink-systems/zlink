@@ -4,37 +4,40 @@ package systems.zlink.contract;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.messaging.AsyncSendOperation;
-import systems.zlink.contracts.messaging.AsyncSendSubmitOperation;
+import systems.zlink.contracts.messaging.PublishOperation;
+import systems.zlink.contracts.messaging.PublishSubmitOperation;
 import systems.zlink.contracts.sockets.PubSocket;
 import systems.zlink.contracts.sockets.XPubSocket;
 
 class PublisherAsyncCompletionSurfaceContractTest {
     @Test
-    void publisherAsyncUsesTheCanonicalCompletionStageTerminal()
+    void publisherExposesOnlyTheSynchronousSubmitTerminal()
         throws NoSuchMethodException {
-        assertEquals(AsyncSendOperation.class,
-            PubSocket.class.getMethod("publishAsync", String.class)
+        assertEquals(PublishOperation.class,
+            PubSocket.class.getMethod("publish", String.class)
                 .getReturnType());
-        assertEquals(AsyncSendOperation.class,
-            XPubSocket.class.getMethod("publishAsync", String.class)
+        assertEquals(PublishOperation.class,
+            XPubSocket.class.getMethod("publish", String.class)
                 .getReturnType());
+        assertThrows(NoSuchMethodException.class,
+            () -> PubSocket.class.getMethod("publishAsync", String.class));
+        assertThrows(NoSuchMethodException.class,
+            () -> XPubSocket.class.getMethod("publishAsync", String.class));
 
-        Method[] methods = AsyncSendSubmitOperation.class.getMethods();
-        assertFalse(Arrays.stream(methods)
+        Method[] methods = PublishSubmitOperation.class.getMethods();
+        assertTrue(Arrays.stream(methods)
             .anyMatch(method -> method.getName().equals("flags")));
         Method[] submits = Arrays.stream(methods)
             .filter(method -> method.getName().equals("submit"))
             .toArray(Method[]::new);
         assertEquals(1, submits.length);
         assertEquals(0, submits[0].getParameterCount());
-        assertTrue(CompletionStage.class.isAssignableFrom(
-            submits[0].getReturnType()));
+        assertEquals(void.class, submits[0].getReturnType());
     }
 }

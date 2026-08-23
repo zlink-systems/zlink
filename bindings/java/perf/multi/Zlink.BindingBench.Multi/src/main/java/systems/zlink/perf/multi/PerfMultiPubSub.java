@@ -192,12 +192,11 @@ final class PerfMultiPubSub {
                                                     Message message) {
         while (true) {
             try {
-                if (pub.publish(TOPIC)
+                pub.publish(TOPIC)
                     .message(message)
                     .flags(SendFlags.DONT_WAIT)
-                    .submit()) {
-                    return;
-                }
+                    .submit();
+                return;
             } catch (ZlinkSubmitException ex) {
                 if (!isTransientSubmit(ex)) {
                     throw ex;
@@ -252,12 +251,11 @@ final class PerfMultiPubSub {
     private static void publishStopToken(PubSocket pub) {
         while (true) {
             try (Message stop = PerfStopToken.newMessage()) {
-                if (pub.publish(TOPIC)
-                        .message(stop)
-                        .flags(SendFlags.NONE)
-                        .submit()) {
-                    return;
-                }
+                pub.publish(TOPIC)
+                    .message(stop)
+                    .flags(SendFlags.NONE)
+                    .submit();
+                return;
             } catch (ZlinkSubmitException ex) {
                 if (!isTransientSubmit(ex)) {
                     throw ex;

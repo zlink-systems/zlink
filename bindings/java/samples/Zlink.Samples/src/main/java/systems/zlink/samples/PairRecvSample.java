@@ -25,7 +25,8 @@ public final class PairRecvSample {
             SampleSupport.waitConnected(serverMonitor, clientMonitor);
 
             try (Message outbound = Message.from(SampleSupport.PAIR_PAYLOAD)) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
 
             try (systems.zlink.contracts.messaging.Received received = new systems.zlink.contracts.messaging.Received()) {

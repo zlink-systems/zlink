@@ -113,7 +113,8 @@ public class SocketPollingContractTest {
             poller.add(server, 7L, PollEventFlags.POLLIN);
 
             try (Message outbound = Message.from("poller")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
 
             PollEvents events = new PollEvents(4);
@@ -323,8 +324,10 @@ public class SocketPollingContractTest {
 
             try (Message a = Message.from("a");
                  Message b = Message.from("b")) {
-                sender1.send().message(a).submit();
-                sender2.send().message(b).submit();
+                sender1.send().message(a).submit()
+                    .toCompletableFuture().join();
+                sender2.send().message(b).submit()
+                    .toCompletableFuture().join();
             }
 
             PollEvents events = new PollEvents(1);
@@ -365,7 +368,8 @@ public class SocketPollingContractTest {
             poller.modify(receiver);
 
             try (Message hidden = Message.from("hidden")) {
-                sender.send().message(hidden).submit();
+                sender.send().message(hidden).submit()
+                    .toCompletableFuture().join();
             }
 
             PollEvents events = new PollEvents(1);
@@ -379,7 +383,8 @@ public class SocketPollingContractTest {
 
             assertTrue(poller.remove(receiver));
             try (Message removed = Message.from("removed")) {
-                sender.send().message(removed).submit();
+                sender.send().message(removed).submit()
+                    .toCompletableFuture().join();
             }
             assertEquals(0, poller.wait(events, Duration.ZERO));
         }
@@ -401,7 +406,8 @@ public class SocketPollingContractTest {
             poller.add(timer, 42L);
 
             try (Message socket = Message.from("socket")) {
-                sender.send().message(socket).submit();
+                sender.send().message(socket).submit()
+                    .toCompletableFuture().join();
             }
             timer.start(Duration.ofMillis(5), 1L);
 

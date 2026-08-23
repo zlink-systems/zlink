@@ -8,6 +8,7 @@ public final class NativeErrorCodes {
     public static final int EINTR = 4;
     public static final int EBADF = 9;
     public static final int EAGAIN = 11;
+    public static final int EDEADLK = 35;
     public static final int ENOMEM = 12;
     public static final int EFAULT = 14;
     public static final int EBUSY = 16;
@@ -17,6 +18,11 @@ public final class NativeErrorCodes {
     public static final int ENOTCONN = 107;
     public static final int ECONNREFUSED = 111;
     public static final int EHOSTUNREACH = 113;
+    public static final int ESHUTDOWN = 108;
+    public static final int ETIMEDOUT = 110;
+    public static final int ECANCELED = 125;
+    /** Linux zlink context-termination errno, not part of POSIX errno.h. */
+    public static final int ETERM = 156384765;
     public static final int EWOULDBLOCK_WIN = 10035;
     public static final int ENOTCONN_WIN = 10057;
     public static final int ECONNREFUSED_WIN = 10061;

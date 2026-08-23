@@ -31,12 +31,8 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     private final StreamSocketOptions options = ContractAccess.streamSocketOptions(this);
     private final OutboundRecordAttemptGate outboundRecordAttempts =
         new OutboundRecordAttemptGate();
-    private final StreamAdmission streamAdmission;
-
     NativeStreamSocket(Context ctx) {
         super(ctx, SocketType.STREAM);
-        streamAdmission = new StreamAdmission(
-            runtime(), outboundRecordAttempts);
     }
 
     public void bind(String endpoint) { runtime().bind(endpoint); }
@@ -88,11 +84,7 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
         RoutingId routingId,
         List<Message> parts,
         Duration timeout) {
-        int timeoutMillis = timeout == null
-            ? runtime().getOption(
-                systems.zlink.internal.sockets.SocketOptions.SNDTIMEO)
-            : normalizedTimeoutMillis(timeout);
-        return streamAdmission.send(routingId, parts, timeoutMillis);
+        return runtime().sendAsync(routingId, parts, timeout);
     }
     /** Receives into caller-provided storage. */
     public boolean recv(Received result, RecvFlags flags) {
@@ -118,9 +110,6 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
                     SendFlag.fromValue(sendFlags.value()))));
         return true;
     }
-    public void setSendReadyHandler(SendReadyHandler handler) {
-        streamAdmission.setObserver(handler);
-    }
     public void onPacket(StreamPacketHandler handler) {
         Objects.requireNonNull(handler, "handler");
         runtime().attachStreamPacket((StreamFramedPacketHandler)
@@ -138,38 +127,8 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     }
     @Override
     public void close() {
-        streamAdmission.prepareClose();
-        boolean closed = false;
-        try {
-            outboundRecordAttempts.run(runtime()::close);
-            closed = true;
-            streamAdmission.commitClose();
-        } finally {
-            if (closed) {
-                streamAdmission.finishClose();
-            } else {
-                streamAdmission.abortClose();
-            }
-        }
+        outboundRecordAttempts.run(runtime()::close);
     }
     @Override public StreamSocketOptions options() { return options; }
 
-    private static int normalizedTimeoutMillis(Duration timeout) {
-        if (timeout.isZero() || timeout.isNegative()) {
-            throw new IllegalArgumentException(
-                "STREAM submission timeout must be positive");
-        }
-        long seconds = timeout.getSeconds();
-        if (seconds > Integer.MAX_VALUE / 1000L) {
-            throw new IllegalArgumentException(
-                "STREAM submission timeout exceeds Integer.MAX_VALUE ms");
-        }
-        long millis = seconds * 1000L
-            + (timeout.getNano() + 999_999L) / 1_000_000L;
-        if (millis < 1L || millis > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException(
-                "STREAM submission timeout must normalize to 1..Integer.MAX_VALUE ms");
-        }
-        return (int) millis;
-    }
 }

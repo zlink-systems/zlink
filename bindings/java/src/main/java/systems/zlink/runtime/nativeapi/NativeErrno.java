@@ -11,6 +11,7 @@ public final class NativeErrno {
     public static final int EINTR = NativeErrorCodes.EINTR;
     public static final int EBADF = NativeErrorCodes.EBADF;
     public static final int EAGAIN = NativeErrorCodes.EAGAIN;
+    public static final int EDEADLK = NativeErrorCodes.EDEADLK;
     public static final int ENOMEM = NativeErrorCodes.ENOMEM;
     public static final int EFAULT = NativeErrorCodes.EFAULT;
     public static final int EBUSY = NativeErrorCodes.EBUSY;
@@ -20,6 +21,10 @@ public final class NativeErrno {
     public static final int ENOTSUP = NativeErrorCodes.ENOTSUP;
     public static final int ENOTCONN = NativeErrorCodes.ENOTCONN;
     public static final int EHOSTUNREACH = NativeErrorCodes.EHOSTUNREACH;
+    public static final int ESHUTDOWN = NativeErrorCodes.ESHUTDOWN;
+    public static final int ETIMEDOUT = NativeErrorCodes.ETIMEDOUT;
+    public static final int ECANCELED = NativeErrorCodes.ECANCELED;
+    public static final int ETERM = NativeErrorCodes.ETERM;
     public static final int EWOULDBLOCK_WIN = NativeErrorCodes.EWOULDBLOCK_WIN;
     public static final int ECONNREFUSED_WIN = NativeErrorCodes.ECONNREFUSED_WIN;
     public static final int ENOTCONN_WIN = NativeErrorCodes.ENOTCONN_WIN;

@@ -4,7 +4,7 @@ package systems.zlink.contracts.sockets;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.AsyncSendOperation;
 
 /** An exclusive one-to-one peering socket with no routing. */
 public interface PairSocket extends Socket {
@@ -13,7 +13,7 @@ public interface PairSocket extends Socket {
     void unbind(String endpoint);
     void disconnect(String endpoint);
     void disconnectRid(RoutingId routingId);
-    SendOperation send();
+    AsyncSendOperation send();
     boolean recv(Received result, RecvFlags flags);
     /**
      * Receives for a Framework backend and retains the origin Core HWM credit

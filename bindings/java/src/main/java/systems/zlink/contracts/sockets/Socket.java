@@ -26,8 +26,6 @@ public interface Socket extends AutoCloseable {
 
     void setTlsClient(String caCertPem, String hostname, boolean trustSystem);
 
-    void setSendReadyHandler(SendReadyHandler handler);
-
     @Override
     void close();
 }

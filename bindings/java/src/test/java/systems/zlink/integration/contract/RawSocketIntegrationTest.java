@@ -30,7 +30,8 @@ public class RawSocketIntegrationTest {
 
             byte[] payload = "raw-jvm-11".getBytes(StandardCharsets.UTF_8);
             try (Message message = Message.from(payload)) {
-                sender.send().message(message).submit();
+                sender.send().message(message).submit()
+                    .toCompletableFuture().join();
             }
 
             try (Received received = new Received()) {
@@ -55,7 +56,8 @@ public class RawSocketIntegrationTest {
 
             try (Message first = Message.from("first");
                  Message second = Message.from("second")) {
-                sender.send().message(first).message(second).submit();
+                sender.send().message(first).message(second).submit()
+                    .toCompletableFuture().join();
             }
 
             try (Received received = new Received()) {
@@ -82,7 +84,8 @@ public class RawSocketIntegrationTest {
             receiver.connect(endpoint);
 
             try (Message first = Message.from("first")) {
-                sender.send().message(first).submit();
+                sender.send().message(first).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
             assertArrayEquals("first".getBytes(StandardCharsets.UTF_8),
@@ -93,7 +96,8 @@ public class RawSocketIntegrationTest {
                 received.singlePartOrThrow().toByteArray());
 
             try (Message second = Message.from("second")) {
-                sender.send().message(second).submit();
+                sender.send().message(second).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
             assertArrayEquals("second".getBytes(StandardCharsets.UTF_8),
@@ -101,7 +105,8 @@ public class RawSocketIntegrationTest {
 
             try (Message third = Message.from("third");
                  Message fourth = Message.from("fourth")) {
-                sender.send().message(third).message(fourth).submit();
+                sender.send().message(third).message(fourth).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
             assertTrue(received.parts().size() == 2);

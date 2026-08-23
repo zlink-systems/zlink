@@ -7,7 +7,6 @@ import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.StreamSocket;
 import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.sockets.XPubSocket;
@@ -32,10 +31,8 @@ public class NativeContractTest {
 
             byte[] payload = "native".getBytes(StandardCharsets.UTF_8);
             try (Message outbound = Message.from(payload)) {
-                assertTrue(right.send()
-                    .message(outbound)
-                    .flags(SendFlags.NONE)
-                    .submit());
+                right.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
 
             try (systems.zlink.contracts.messaging.Received inbound = new systems.zlink.contracts.messaging.Received()) {

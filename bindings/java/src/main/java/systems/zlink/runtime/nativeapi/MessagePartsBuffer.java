@@ -76,6 +76,45 @@ public final class MessagePartsBuffer {
         }
     }
 
+    /**
+     * Moves every message into a Core-owned multipart array. The source
+     * messages are restored if materialization itself fails; the caller must
+     * restore them when a subsequent native submit rejects the array.
+     */
+    public MemorySegment transferToNativeArray(Arena arena) {
+        Objects.requireNonNull(arena, "arena");
+        int count = size();
+        if (count == 0)
+            return MemorySegment.NULL;
+        MemorySegment out = arena.allocate(NativeLayouts.MESSAGE_LAYOUT, count);
+        long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+        int moved = 0;
+        try {
+            for (int i = 0; i < count; i++) {
+                InternalAccess.messageTransferTo(get(i),
+                    out.asSlice(i * stride, stride));
+                moved++;
+            }
+            return out;
+        } catch (RuntimeException | Error failure) {
+            restoreFromNativeArray(out, moved);
+            throw failure;
+        }
+    }
+
+    /** Restores source ownership after a native operation rejected the array. */
+    public void restoreFromNativeArray(MemorySegment nativeParts, int count) {
+        if (nativeParts == MemorySegment.NULL || count <= 0)
+            return;
+        int bounded = Math.min(count, size());
+        long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+        for (int i = 0; i < bounded; i++) {
+            InternalAccess.messageRestoreFromNative(get(i),
+                nativeParts.asSlice(i * stride, stride), i + 1 < bounded,
+                null);
+        }
+    }
+
     public static void closeNativeArray(MemorySegment parts, int count) {
         if (parts == MemorySegment.NULL || count <= 0)
             return;

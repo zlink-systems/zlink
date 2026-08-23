@@ -16,13 +16,12 @@ import systems.zlink.runtime.messaging.MessageOperations;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import java.util.List;
 import java.util.Objects;
-import systems.zlink.internal.sockets.SocketOptions;
 
 final class NativeRouterSocket extends NativeSocketBase implements RouterSocket {
     private final RouterSocketOptions options = ContractAccess.routerSocketOptions(this);
     private final OutboundRecordAttemptGate outboundRecordAttempts =
         new OutboundRecordAttemptGate();
-    private final RoutedAdmission routedAdmission;
+    private final CoreRequestSupport requestSupport;
     private final Object routedRequests =
       InternalAccess.routerReceiveSupport(this, false);
     private final ContractAccess.RoutedSingleSendInvoker receivedSingleSender =
@@ -33,7 +32,7 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     NativeRouterSocket(Context ctx) {
         super(ctx, SocketType.ROUTER);
         try {
-            routedAdmission = new RoutedAdmission(handle(), false,
+            requestSupport = new CoreRequestSupport(runtime(), false,
                 outboundRecordAttempts);
         } catch (RuntimeException error) {
             try {
@@ -61,8 +60,8 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
 
     public RoutedSendOperation send(RoutingId rid) {
         Objects.requireNonNull(rid, "rid");
-        return MessageOperations.routedSend(parts -> routedAdmission.send(
-            rid, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
+        return MessageOperations.routedSend((parts, timeout) ->
+            runtime().sendAsync(rid, parts, timeout));
     }
 
     public RoutedSendOperation send(RoutingId rid,
@@ -72,10 +71,9 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
             throw new IllegalArgumentException(
                 "transport pair identity must be non-zero");
         }
-        RoutedAdmission.Target target = new RoutedAdmission.Target(rid,
-            transportPairId, transportPairGeneration);
-        return MessageOperations.routedSend(parts -> routedAdmission.send(
-            target, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
+        return MessageOperations.routedSend((parts, timeout) ->
+            runtime().sendAsync(rid, transportPairId, transportPairGeneration,
+                parts, timeout));
     }
 
     private boolean sendInternal(RoutingId rid, Message part, SendFlags flags) {
@@ -136,12 +134,11 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         ContractAccess.receivedSetSingleSendSender(result, (part, flags) ->
             sendInternal(nodeRid, part, flags));
     }
-    public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
-
     public RequestOperation request(RoutingId rid) {
         Objects.requireNonNull(rid, "rid");
         return MessageOperations.request((parts, timeout) ->
-            routedAdmission.request(rid, parts, timeout));
+            runtime().requestAsync(requestSupport, rid, 0L, 0L, parts,
+                timeout));
     }
 
     public RequestOperation request(RoutingId rid,
@@ -151,10 +148,9 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
             throw new IllegalArgumentException(
                 "transport pair identity must be non-zero");
         }
-        RoutedAdmission.Target target = new RoutedAdmission.Target(rid,
-            transportPairId, transportPairGeneration);
         return MessageOperations.request((parts, timeout) ->
-            routedAdmission.request(target, parts, timeout));
+            runtime().requestAsync(requestSupport, rid, transportPairId,
+                transportPairGeneration, parts, timeout));
     }
 
     public ReplyOperation reply(RoutingId rid, long requestSequence) {
@@ -170,19 +166,15 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
 
     @Override
     public void close() {
-        routedAdmission.prepareClose();
         boolean closed = false;
         try {
             outboundRecordAttempts.run(runtime()::close);
             closed = true;
-            routedAdmission.commitClose();
-            InternalAccess.routerReceiveBeginClose(routedRequests);
         } finally {
+            requestSupport.close();
             if (closed) {
-                routedAdmission.finishClose();
+                InternalAccess.routerReceiveBeginClose(routedRequests);
                 InternalAccess.routerReceiveFinishClose(routedRequests);
-            } else {
-                routedAdmission.abortClose();
             }
         }
     }

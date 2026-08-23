@@ -24,9 +24,11 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.*;
 import systems.zlink.contracts.errors.ZlinkException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.runtime.eventing.NativeMonitorSocket;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
+import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeMessage;
 import systems.zlink.runtime.nativeapi.RuntimeResources;
@@ -35,15 +37,13 @@ final class SocketCore {
     private static final FunctionDescriptor FD_RECV_CALLBACK =
       FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
         ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
-    private static final FunctionDescriptor FD_SEND_READY_CALLBACK =
-      FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS);
     private static final FunctionDescriptor FD_STREAM_PACKET_CALLBACK =
       FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
 
     /**
      * Tracks whether the current thread is executing inside a native callback
-     * (recv handler, subscribe handler, or send-ready handler).
+     * (recv handler, subscribe handler, or stream packet handler).
      *
      * <p>Blocking sends from a callback can deadlock the socket I/O thread.
      * The public blocking send APIs therefore reject callback usage explicitly
@@ -69,20 +69,25 @@ final class SocketCore {
     private MemorySegment sendScratch = MemorySegment.NULL;
     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
     private SocketMessageHandler receiveHandler;
-    private SendReadyHandler sendReadyHandler;
+    private final SendCompletionRegistry sendCompletions;
     private StreamFramedPacketHandler streamFramedPacketHandler;
     private StreamUInt32FramedPacketHandler streamUInt32FramedPacketHandler;
     private StreamUInt32FramedNativeHandler streamUInt32FramedNativeHandler;
     private final SocketCallbackSupport callbackSupport =
       new SocketCallbackSupport(this);
     private Arena receiveCallbackArena;
-    private Arena sendReadyCallbackArena;
     private Arena streamPacketCallbackArena;
     private final ConcurrentHashMap<Integer, RoutingId> routingIdCache =
       new ConcurrentHashMap<>();
 
     SocketCore(NativeSocketRuntime socket) {
         this.socket = socket;
+        SocketType type = socket.socketTypeHint();
+        this.sendCompletions = type == SocketType.PAIR
+            || type == SocketType.DEALER
+            || type == SocketType.ROUTER
+            || type == SocketType.STREAM
+            ? new SendCompletionRegistry(socket) : null;
     }
 
     void bind(String endpoint) {
@@ -280,17 +285,15 @@ final class SocketCore {
         receiveHandler = handler;
     }
 
-    void setSendReadyHandler(SendReadyHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        Arena arena = installCallback("handleSendReadyCallback",
-            MethodType.methodType(void.class,
-                MemorySegment.class, MemorySegment.class),
-            FD_SEND_READY_CALLBACK, "zlink_send_ready_handler",
-            stub -> Native.sendReadyHandler(socket.handle(), stub,
-                MemorySegment.NULL));
-        RuntimeResources.closeArena(sendReadyCallbackArena);
-        sendReadyCallbackArena = arena;
-        sendReadyHandler = handler;
+    java.util.concurrent.CompletionStage<Void> sendAsync(
+            java.util.List<Message> parts,
+            java.time.Duration timeout,
+            MemorySegment target) {
+        if (sendCompletions == null) {
+            throw new ZlinkSubmitException(SubmitResult.NOT_SUPPORTED,
+                NativeErrno.ENOTSUP);
+        }
+        return sendCompletions.submit(parts, timeout, target);
     }
 
     void attachStreamPacket(StreamFramedPacketHandler handler) {
@@ -360,16 +363,15 @@ final class SocketCore {
 
     void closeCommonState() {
         receiveHandler = null;
-        sendReadyHandler = null;
         streamFramedPacketHandler = null;
         streamUInt32FramedPacketHandler = null;
         streamUInt32FramedNativeHandler = null;
         callbackSupport.close();
+        if (sendCompletions != null)
+            sendCompletions.close();
         RuntimeResources.closeArena(receiveCallbackArena);
-        RuntimeResources.closeArena(sendReadyCallbackArena);
         RuntimeResources.closeArena(streamPacketCallbackArena);
         receiveCallbackArena = null;
-        sendReadyCallbackArena = null;
         streamPacketCallbackArena = null;
         RuntimeResources.closeArena(sendScratchArena);
         sendScratchArena = null;
@@ -430,30 +432,6 @@ final class SocketCore {
             }
         } catch (RuntimeException ex) {
             recordCallbackFailure(ex);
-        }
-    }
-
-    private void handleSendReadyCallback(MemorySegment subject,
-                                         MemorySegment userdata) {
-        SendReadyHandler handler = sendReadyHandler;
-        ExecutorService executor = callbackSupport.executor();
-        if (handler == null || executor == null)
-            return;
-        try {
-            executor.execute(() -> dispatchSendReady(handler));
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        }
-    }
-
-    private void dispatchSendReady(SendReadyHandler handler) {
-        enterCallback();
-        try {
-            handler.onReady();
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            leaveCallback();
         }
     }
 

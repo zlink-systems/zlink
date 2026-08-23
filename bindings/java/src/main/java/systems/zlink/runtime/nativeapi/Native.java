@@ -89,14 +89,19 @@ public final class Native {
             "zlink_recv_handler",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle MH_SEND_READY_HANDLER = downcall(
-            "zlink_send_ready_handler",
+    private static final MethodHandle MH_SEND_ASYNC = downcall(
+            "zlink_send_async",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_SEND_COMPLETE_HANDLER = downcall(
+            "zlink_send_complete_handler",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle MH_ROUTED_SEND_READY_HANDLER = downcall(
-            "zlink_routed_send_ready_handler",
+    private static final MethodHandle MH_SEND_ASYNC_CANCEL = downcall(
+            "zlink_send_async_cancel",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+                    ValueLayout.JAVA_LONG));
     private static final MethodHandle MH_SELECT_ROUTED_SUBMIT_TARGET = downcall(
             "zlink_select_routed_submit_target",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
@@ -657,26 +662,36 @@ public final class Native {
         }
     }
 
-    public static int sendReadyHandler(MemorySegment handle,
-                                       MemorySegment handler,
-                                       MemorySegment userdata) {
+    public static int sendAsync(MemorySegment handle,
+                                MemorySegment parts,
+                                long partCount,
+                                MemorySegment options,
+                                MemorySegment opIdOut) {
         try {
-            return (int) MH_SEND_READY_HANDLER.invokeExact(handle, handler,
-                userdata);
+            return (int) MH_SEND_ASYNC.invokeExact(handle, parts, partCount,
+                options, opIdOut);
         } catch (Throwable t) {
-            throw new RuntimeException("zlink_send_ready_handler failed", t);
+            throw new RuntimeException("zlink_send_async failed", t);
         }
     }
 
-    public static int routedSendReadyHandler(MemorySegment handle,
-                                             MemorySegment handler,
-                                             MemorySegment userdata) {
+    public static int sendCompleteHandler(MemorySegment handle,
+                                          MemorySegment handler,
+                                          MemorySegment userdata) {
         try {
-            return (int) MH_ROUTED_SEND_READY_HANDLER.invokeExact(handle,
+            return (int) MH_SEND_COMPLETE_HANDLER.invokeExact(handle,
                 handler, userdata);
         } catch (Throwable t) {
             throw new RuntimeException(
-                "zlink_routed_send_ready_handler failed", t);
+                "zlink_send_complete_handler failed", t);
+        }
+    }
+
+    public static int sendAsyncCancel(MemorySegment handle, long opId) {
+        try {
+            return (int) MH_SEND_ASYNC_CANCEL.invokeExact(handle, opId);
+        } catch (Throwable t) {
+            throw new RuntimeException("zlink_send_async_cancel failed", t);
         }
     }
 

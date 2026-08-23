@@ -156,10 +156,9 @@ final class PerfPair {
 
     private static boolean trySendBlocking(PairSocket sender, Message active) {
         try {
-            return sender.send()
-                .message(active)
-                .flags(SendFlags.NONE)
-                .submit();
+            sender.send().message(active).submit()
+                .toCompletableFuture().join();
+            return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()
                 == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
@@ -177,10 +176,9 @@ final class PerfPair {
 
     private static boolean trySendStop(PairSocket sender) {
         try (Message stop = PerfStopToken.newMessage()) {
-            return sender.send()
-                .message(stop)
-                .flags(SendFlags.DONT_WAIT)
-                .submit();
+            sender.send().message(stop).submit()
+                .toCompletableFuture().join();
+            return true;
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED) {
                 return false;

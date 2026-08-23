@@ -28,14 +28,17 @@ import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
+import systems.zlink.runtime.nativeapi.NativeRoutingIds;
 import io.netty.buffer.ByteBuf;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 
 /**
  * Abstract common socket base for zlink typed socket facades.
@@ -75,6 +78,10 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     public static void leaveCallbackContext() {
         SocketCore.leaveCallback();
+    }
+
+    SocketType socketTypeHint() {
+        return socketTypeHint;
     }
 
     NativeSocketRuntime(Context ctx, SocketType type) {
@@ -263,6 +270,110 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     public boolean send(List<Message> parts) {
         return send(parts, SendFlag.NONE);
+    }
+
+    CompletionStage<Void> sendAsync(List<Message> parts, Duration timeout) {
+        Objects.requireNonNull(parts, "parts");
+        ensureOpen();
+        return socketCore.sendAsync(parts, timeout, MemorySegment.NULL);
+    }
+
+    CompletionStage<Void> sendAsync(RoutingId routingId,
+                                    List<Message> parts,
+                                    Duration timeout) {
+        Objects.requireNonNull(routingId, "routingId");
+        Objects.requireNonNull(parts, "parts");
+        ensureOpen();
+        if (socketTypeHint == SocketType.STREAM) {
+            try (Arena arena = Arena.ofConfined()) {
+                // STREAM requires the current transport-pair identity for
+                // its exact route; selecting it does not claim send credit.
+                MemorySegment target = selectRoutedTarget(arena, routingId);
+                return socketCore.sendAsync(parts, timeout, target);
+            }
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment target = selectRoutedTarget(arena, routingId);
+            return socketCore.sendAsync(parts, timeout, target);
+        }
+    }
+
+    CompletionStage<Void> sendAsync(RoutingId routingId,
+                                    long transportPairId,
+                                    long transportPairGeneration,
+                                    List<Message> parts,
+                                    Duration timeout) {
+        Objects.requireNonNull(routingId, "routingId");
+        if (transportPairId == 0L || transportPairGeneration == 0L) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        Objects.requireNonNull(parts, "parts");
+        ensureOpen();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment target = allocateExactTarget(arena, routingId,
+                transportPairId, transportPairGeneration);
+            return socketCore.sendAsync(parts, timeout, target);
+        }
+    }
+
+    CompletionStage<List<Message>> requestAsync(CoreRequestSupport support,
+                                                RoutingId routingId,
+                                                long transportPairId,
+                                                long transportPairGeneration,
+                                                List<Message> parts,
+                                                Duration timeout) {
+        Objects.requireNonNull(support, "support");
+        Objects.requireNonNull(parts, "parts");
+        ensureOpen();
+        if (socketTypeHint == SocketType.ROUTER && routingId == null) {
+            throw new IllegalArgumentException("routingId is required");
+        }
+        boolean exact = transportPairId != 0L || transportPairGeneration != 0L;
+        if (exact && (transportPairId == 0L || transportPairGeneration == 0L)) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment target = exact
+                ? allocateExactTarget(arena, routingId, transportPairId,
+                    transportPairGeneration)
+                : selectRoutedTarget(arena, routingId);
+            return support.submit(parts, timeout, target);
+        }
+    }
+
+    private MemorySegment selectRoutedTarget(Arena arena, RoutingId routingId) {
+        MemorySegment selector = routingId == null
+            ? MemorySegment.NULL : NativeRoutingIds.allocate(arena, routingId);
+        MemorySegment target = arena.allocate(
+            NativeLayouts.ROUTED_SUBMIT_TARGET_LAYOUT);
+        int rc = Native.selectRoutedSubmitTarget(handle, selector, target);
+        if (rc != SubmitResult.OK.value()) {
+            int errno = Native.errno();
+            try {
+                throw new ZlinkSubmitException(SubmitResult.fromValue(rc), errno);
+            } catch (IllegalArgumentException ignored) {
+                throw ZlinkException.fromErrno(
+                    systems.zlink.contracts.errors.ErrorCategory.SUBMIT,
+                    errno);
+            }
+        }
+        return target;
+    }
+
+    private static MemorySegment allocateExactTarget(Arena arena,
+                                                      RoutingId routingId,
+                                                      long pairId,
+                                                      long generation) {
+        MemorySegment target = arena.allocate(
+            NativeLayouts.ROUTED_SUBMIT_TARGET_LAYOUT);
+        NativeRoutingIds.write(target, routingId);
+        target.set(ValueLayout.JAVA_LONG,
+            NativeLayouts.ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET, pairId);
+        target.set(ValueLayout.JAVA_LONG,
+            NativeLayouts.ROUTED_SUBMIT_TARGET_GENERATION_OFFSET, generation);
+        return target;
     }
 
     boolean send(List<Message> parts, SendFlag flags) {
@@ -518,10 +629,6 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     public void onReceive(SocketMessageHandler handler) {
         socketCore.onReceive(handler);
-    }
-
-    public void setSendReadyHandler(SendReadyHandler handler) {
-        socketCore.setSendReadyHandler(handler);
     }
 
     int send(byte[] data, int offset, int length, int sendFlags) {

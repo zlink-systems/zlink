@@ -13,18 +13,17 @@ import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import java.util.List;
-import systems.zlink.internal.sockets.SocketOptions;
 
 final class NativeDealerSocket extends NativeSocketBase implements DealerSocket {
     private final DealerSocketOptions options = ContractAccess.dealerSocketOptions(this);
     private final OutboundRecordAttemptGate outboundRecordAttempts =
         new OutboundRecordAttemptGate();
-    private final RoutedAdmission routedAdmission;
+    private final CoreRequestSupport requestSupport;
 
     NativeDealerSocket(Context ctx) {
         super(ctx, SocketType.DEALER);
         try {
-            routedAdmission = new RoutedAdmission(handle(), true,
+            requestSupport = new CoreRequestSupport(runtime(), true,
                 outboundRecordAttempts);
         } catch (RuntimeException error) {
             try {
@@ -46,9 +45,8 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
     public RoutedSendOperation send() {
-        return MessageOperations.routedSend(parts -> routedAdmission.send(
-            (RoutingId) null, parts,
-            runtime().getOption(SocketOptions.SNDTIMEO)));
+        return MessageOperations.routedSend((parts, timeout) ->
+            runtime().sendAsync(parts, timeout));
     }
     SendResult sendNoWaitResult(Message part) {
         return outboundRecordAttempts.call(
@@ -79,25 +77,17 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
         return runtime().recvRetainedInto(result,
             ReceiveFlag.fromValue(flags.value()));
     }
-    public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
     public RequestOperation request() {
         return MessageOperations.request((parts, timeout) ->
-            routedAdmission.request((RoutingId) null, parts, timeout));
+            runtime().requestAsync(requestSupport, null, 0L, 0L, parts,
+                timeout));
     }
     @Override
     public void close() {
-        routedAdmission.prepareClose();
-        boolean closed = false;
         try {
             outboundRecordAttempts.run(runtime()::close);
-            closed = true;
-            routedAdmission.commitClose();
         } finally {
-            if (closed) {
-                routedAdmission.finishClose();
-            } else {
-                routedAdmission.abortClose();
-            }
+            requestSupport.close();
         }
     }
     @Override public DealerSocketOptions options() { return options; }

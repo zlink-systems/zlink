@@ -190,10 +190,11 @@ final class PerfPubSub {
     private static boolean tryPublish(PubSocket pub, Message message,
                                       SendFlags flags) {
         try {
-            return pub.publish(TOPIC)
+            pub.publish(TOPIC)
                 .message(message)
                 .flags(flags)
                 .submit();
+            return true;
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED) {
                 return false;

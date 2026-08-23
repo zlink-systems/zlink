@@ -8,15 +8,10 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.AsyncSendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import java.util.List;
 final class NativePairSocket extends NativeSocketBase implements PairSocket {
-    private final MessageOperations.SingleSendInvoker singleSend =
-        (part, flags) -> runtime().send(part, SendFlag.fromValue(flags.value()));
-    private final MessageOperations.SendInvoker multipartSend =
-        (parts, flags) -> runtime().send(parts, SendFlag.fromValue(flags.value()));
-
     NativePairSocket(Context ctx) {
         super(ctx, SocketType.PAIR);
     }
@@ -29,8 +24,9 @@ final class NativePairSocket extends NativeSocketBase implements PairSocket {
         runtime().disconnectRid(routingId);
     }
 
-    public SendOperation send() {
-        return MessageOperations.send(singleSend, multipartSend);
+    public AsyncSendOperation send() {
+        return MessageOperations.asyncSend((parts, timeout) ->
+            runtime().sendAsync(parts, timeout));
     }
     SendResult sendNoWaitResult(Message part) { return runtime().sendNoWaitResult(part); }
     SendResult sendNoWaitResult(List<Message> parts) { return runtime().sendNoWaitResult(parts); }
@@ -53,5 +49,4 @@ final class NativePairSocket extends NativeSocketBase implements PairSocket {
         return runtime().recvRetainedInto(result,
             ReceiveFlag.fromValue(flags.value()));
     }
-    public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
 }

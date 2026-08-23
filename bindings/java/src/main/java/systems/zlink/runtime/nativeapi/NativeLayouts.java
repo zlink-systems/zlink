@@ -32,25 +32,46 @@ public final class NativeLayouts {
             ROUTED_SUBMIT_TARGET_LAYOUT.byteOffset(
                     PathElement.groupElement("transport_pair_generation"));
 
-    public static final MemoryLayout ROUTED_SEND_READY_EVENT_LAYOUT =
+    public static final MemoryLayout SEND_ASYNC_OPTIONS_LAYOUT =
             MemoryLayout.structLayout(
+                    ValueLayout.JAVA_INT.withName("struct_size"),
+                    ValueLayout.JAVA_INT.withName("timeout_ms"),
+                    ValueLayout.ADDRESS.withName("userdata"),
+                    ValueLayout.ADDRESS.withName("target"));
+    public static final long SEND_ASYNC_OPTIONS_STRUCT_SIZE_OFFSET =
+            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
+                    PathElement.groupElement("struct_size"));
+    public static final long SEND_ASYNC_OPTIONS_TIMEOUT_MS_OFFSET =
+            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
+                    PathElement.groupElement("timeout_ms"));
+    public static final long SEND_ASYNC_OPTIONS_USERDATA_OFFSET =
+            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
+                    PathElement.groupElement("userdata"));
+    public static final long SEND_ASYNC_OPTIONS_TARGET_OFFSET =
+            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
+                    PathElement.groupElement("target"));
+
+    public static final MemoryLayout SEND_COMPLETE_EVENT_LAYOUT =
+            MemoryLayout.structLayout(
+                    ValueLayout.JAVA_LONG.withName("op_id"),
+                    ValueLayout.ADDRESS.withName("userdata"),
                     ROUTING_ID_LAYOUT.withName("peer_rid"),
                     ValueLayout.JAVA_LONG.withName("transport_pair_id"),
                     ValueLayout.JAVA_LONG.withName(
                             "transport_pair_generation"),
-                    ValueLayout.JAVA_INT.withName("state"),
+                    ValueLayout.JAVA_INT.withName("result"),
                     ValueLayout.JAVA_INT.withName("terminal_errno"));
-    public static final long ROUTED_SEND_READY_PAIR_ID_OFFSET =
-            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("transport_pair_id"));
-    public static final long ROUTED_SEND_READY_GENERATION_OFFSET =
-            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("transport_pair_generation"));
-    public static final long ROUTED_SEND_READY_STATE_OFFSET =
-            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("state"));
-    public static final long ROUTED_SEND_READY_ERRNO_OFFSET =
-            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
+    public static final long SEND_COMPLETE_OP_ID_OFFSET =
+            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("op_id"));
+    public static final long SEND_COMPLETE_USERDATA_OFFSET =
+            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("userdata"));
+    public static final long SEND_COMPLETE_RESULT_OFFSET =
+            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("result"));
+    public static final long SEND_COMPLETE_ERRNO_OFFSET =
+            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
                     PathElement.groupElement("terminal_errno"));
 
     public static final MemoryLayout CORE_HWM_BUDGET_SNAPSHOT_LAYOUT =

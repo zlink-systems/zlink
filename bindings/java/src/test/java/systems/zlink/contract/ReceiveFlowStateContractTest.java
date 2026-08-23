@@ -101,7 +101,8 @@ final class ReceiveFlowStateContractTest {
                 () -> left.options().receiveFlowState(ReceiveFlowState.PAUSED));
 
             try (Message outbound = Message.from("still-works")) {
-                assertTrue(left.send().message(outbound).submit());
+                left.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             Received received = new Received();
             TestSupport.awaitCondition(() -> {

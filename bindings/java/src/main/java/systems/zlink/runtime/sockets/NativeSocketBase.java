@@ -195,7 +195,6 @@ abstract class NativeSocketBase implements Socket {
                                    boolean requireClientCert) { runtime.setTlsServer(certPem, keyPem, requireClientCert); }
     public final void setTlsClient(String caCertPem, String hostname,
                                    boolean trustSystem) { runtime.setTlsClient(caCertPem, hostname, trustSystem); }
-    public void setSendReadyHandler(SendReadyHandler handler) { runtime.setSendReadyHandler(handler); }
     @Override public void close() { runtime.close(); }
 
     MemorySegment nativeHandle() { return runtime.handle(); }

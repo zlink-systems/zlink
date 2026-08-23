@@ -6,6 +6,8 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.messaging.AsyncSendOperation;
 import systems.zlink.contracts.messaging.AsyncSendSubmitOperation;
+import systems.zlink.contracts.messaging.PublishOperation;
+import systems.zlink.contracts.messaging.PublishSubmitOperation;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.ReplySubmitOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
@@ -45,6 +47,10 @@ public final class MessageOperations {
         return new AsyncSendBuilder(invoker);
     }
 
+    public static PublishOperation publish(PublishInvoker invoker) {
+        return new PublishBuilder(invoker);
+    }
+
     public static RequestOperation request(RequestAsyncInvoker asyncInvoker) {
         return new RequestBuilder(asyncInvoker);
     }
@@ -65,18 +71,24 @@ public final class MessageOperations {
 
     @FunctionalInterface
     public interface RoutedSendInvoker {
-        CompletionStage<Void> submit(List<Message> parts);
+        CompletionStage<Void> submit(List<Message> parts, Duration timeout);
     }
 
     @FunctionalInterface
     public interface AsyncSendInvoker {
-        CompletionStage<Void> submit(List<Message> parts);
+        CompletionStage<Void> submit(List<Message> parts, Duration timeout);
+    }
+
+    @FunctionalInterface
+    public interface PublishInvoker {
+        void submit(List<Message> parts, SendFlags flags);
     }
 
     private static final class AsyncSendBuilder
       implements AsyncSendOperation, AsyncSendSubmitOperation {
         private final AsyncSendInvoker invoker;
         private final MessagePartsBuffer parts = new MessagePartsBuffer();
+        private Duration timeout;
         private boolean submitted;
 
         private AsyncSendBuilder(AsyncSendInvoker invoker) {
@@ -91,12 +103,19 @@ public final class MessageOperations {
         }
 
         @Override
+        public AsyncSendSubmitOperation timeout(Duration value) {
+            ensureNotSubmitted();
+            timeout = validateTimeout(value);
+            return this;
+        }
+
+        @Override
         public CompletionStage<Void> submit() {
             ensureNotSubmitted();
             if (parts.isEmpty())
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
-            return invoker.submit(parts.asList());
+            return invoker.submit(parts.asList(), timeout);
         }
 
         private void ensureNotSubmitted() {
@@ -115,6 +134,7 @@ public final class MessageOperations {
       implements RoutedSendOperation, RoutedSendSubmitOperation {
         private final RoutedSendInvoker invoker;
         private final MessagePartsBuffer parts = new MessagePartsBuffer();
+        private Duration timeout;
         private boolean submitted;
 
         private RoutedSendBuilder(RoutedSendInvoker invoker) {
@@ -129,12 +149,59 @@ public final class MessageOperations {
         }
 
         @Override
+        public RoutedSendSubmitOperation timeout(Duration value) {
+            ensureNotSubmitted();
+            timeout = validateTimeout(value);
+            return this;
+        }
+
+        @Override
         public CompletionStage<Void> submit() {
             ensureNotSubmitted();
             if (parts.isEmpty())
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
-            return invoker.submit(parts.asList());
+            return invoker.submit(parts.asList(), timeout);
+        }
+
+        private void ensureNotSubmitted() {
+            if (submitted)
+                throw new IllegalStateException("operation already submitted");
+        }
+    }
+
+    private static final class PublishBuilder
+      implements PublishOperation, PublishSubmitOperation {
+        private final PublishInvoker invoker;
+        private final MessagePartsBuffer parts = new MessagePartsBuffer();
+        private SendFlags flags = SendFlags.NONE;
+        private boolean submitted;
+
+        private PublishBuilder(PublishInvoker invoker) {
+            this.invoker = Objects.requireNonNull(invoker, "invoker");
+        }
+
+        @Override
+        public PublishSubmitOperation message(Message part) {
+            ensureNotSubmitted();
+            parts.add(Objects.requireNonNull(part, "part"));
+            return this;
+        }
+
+        @Override
+        public PublishSubmitOperation flags(SendFlags value) {
+            ensureNotSubmitted();
+            flags = Objects.requireNonNull(value, "flags");
+            return this;
+        }
+
+        @Override
+        public void submit() {
+            ensureNotSubmitted();
+            if (parts.isEmpty())
+                throw new IllegalArgumentException("at least one message required");
+            submitted = true;
+            invoker.submit(parts.asList(), flags);
         }
 
         private void ensureNotSubmitted() {
@@ -309,5 +376,11 @@ public final class MessageOperations {
             if (submitted)
                 throw new IllegalStateException("operation already submitted");
         }
+    }
+
+    private static Duration validateTimeout(Duration value) {
+        if (value != null && value.isNegative())
+            throw new IllegalArgumentException("timeout must not be negative");
+        return value;
     }
 }

@@ -2,10 +2,7 @@
 
 package systems.zlink.contracts.messaging;
 
-/**
- * Builds a multipart send whose terminal waits asynchronously for local Core
- * admission.
- */
+/** Builds a PAIR send whose terminal is completed by Core send completion. */
 public interface AsyncSendOperation
   extends MessageBuilderStage<AsyncSendSubmitOperation> {
     /** Adds the first message part. */

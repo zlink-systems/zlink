@@ -7,25 +7,22 @@ import systems.zlink.internal.ContractAccess;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.AsyncSendOperation;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.internal.sockets.SocketOptions;
 import systems.zlink.runtime.messaging.MessageOperations;
+import systems.zlink.runtime.nativeapi.Native;
 import java.util.List;
 final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
     private final PubSocketOptions options = ContractAccess.pubSocketOptions(this);
     private final OutboundRecordAttemptGate outboundRecordAttempts =
         new OutboundRecordAttemptGate();
-    private final PublisherAdmission publisherAdmission;
     private TopicSendInvoker cachedTopicInvoker;
 
     NativeXPubSocket(Context ctx) {
         super(ctx, SocketType.XPUB);
-        publisherAdmission = new PublisherAdmission(
-            runtime(), outboundRecordAttempts);
     }
 
     public void bind(String endpoint) { runtime().bind(endpoint); }
@@ -37,21 +34,16 @@ final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
     }
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
 
-    public SendOperation publish(String topicId) {
+    public PublishOperation publish(String topicId) {
         TopicSendInvoker invoker = cachedTopicInvoker;
         if (invoker == null || !invoker.matches(topicId)) {
             invoker = new TopicSendInvoker(topicId);
             cachedTopicInvoker = invoker;
         }
-        return MessageOperations.send(invoker, invoker);
-    }
-    public AsyncSendOperation publishAsync(String topicId) {
-        return MessageOperations.asyncSend(parts -> publisherAdmission.publish(
-            topicId, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
+        return MessageOperations.publish(invoker);
     }
     private final class TopicSendInvoker
-      implements MessageOperations.SingleSendInvoker,
-                 MessageOperations.SendInvoker {
+      implements MessageOperations.PublishInvoker {
         private final String topicId;
 
         private TopicSendInvoker(String topicId) {
@@ -64,35 +56,21 @@ final class NativeXPubSocket extends NativeSocketBase implements XPubSocket {
         }
 
         @Override
-        public boolean submit(Message part, SendFlags flags) {
-            return outboundRecordAttempts.call(() -> runtime().publish(
-                topicId, part, SendFlag.fromValue(flags.value())));
-        }
-
-        @Override
-        public boolean submit(List<Message> parts, SendFlags flags) {
-            return outboundRecordAttempts.call(() -> runtime().publish(
-                topicId, parts, SendFlag.fromValue(flags.value())));
+        public void submit(List<Message> parts, SendFlags flags) {
+            SendResult result = outboundRecordAttempts.call(() ->
+                runtime().publishNoWaitResult(topicId, parts));
+            if (result == SendResult.SENT)
+                return;
+            int errno = Native.errno();
+            throw result == SendResult.BACKPRESSURED
+                ? new ZlinkSubmitException(SubmitResult.BACKPRESSURED, errno)
+                : new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, errno);
         }
     }
     public boolean receiveSubscriptionEvent(SubscriptionEvent result, RecvFlags flags) { return runtime().receiveSubscriptionEvent(result, ReceiveFlag.fromValue(flags.value())); }
-    public void setSendReadyHandler(SendReadyHandler handler) {
-        publisherAdmission.setObserver(handler);
-    }
     @Override
     public void close() {
-        publisherAdmission.prepareClose();
-        boolean closed = false;
-        try {
-            outboundRecordAttempts.run(runtime()::close);
-            closed = true;
-            publisherAdmission.commitClose();
-        } finally {
-            if (closed)
-                publisherAdmission.finishClose();
-            else
-                publisherAdmission.abortClose();
-        }
+        outboundRecordAttempts.run(runtime()::close);
     }
     @Override public PubSocketOptions options() { return options; }
 }

@@ -132,8 +132,8 @@ final class PerfMultiStream {
                                        Object stopSignal) {
         // C runs a dedicated pending-send loop: a queued reply waits for the
         // STREAM socket's POLLOUT readiness and is then drained until it
-        // backpressures again. Do not use send_ready_handler here; that would
-        // move the benchmark's backpressure work to a runtime callback.
+        // backpressures again. Keep this benchmark's explicit polling loop;
+        // the runtime does not own a readiness scheduler for the operation.
         try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
                  List.of(server), PollEventFlags.POLLOUT)) {
             while (!stopRequested.get()) {
