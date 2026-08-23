@@ -185,8 +185,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     captured,
                     targetOwner,
                     prepare),
-                cancellationToken,
-                retryAuxiliaryConflicts: true)
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -332,8 +331,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         ZLinkAuthoritySnapshot expected,
         ZLinkAuthorityMutation.Put mutation,
         Func<ZLinkAuthoritySnapshot, bool> reconcile,
-        CancellationToken cancellationToken,
-        bool retryAuxiliaryConflicts = false)
+        CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
         {
@@ -372,8 +370,13 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 }
                 && reconcile(current.Snapshot))
                 return current.Snapshot;
-            if (retryAuxiliaryConflicts
-                && result is ZLinkAuthorityCompareExchangeResult.Conflict
+            // Provider CAS also fences auxiliary live-owner/capacity rows.
+            // Their version can change while the authority row remains the
+            // exact Store-confirmed value we expected. That conflict did not
+            // select another relocation or owner, so retry this same local
+            // precommit transition. A changed authority StoreVersion still
+            // leaves this path immediately and is never overwritten.
+            if (result is ZLinkAuthorityCompareExchangeResult.Conflict
                 {
                     Current: ZLinkAuthorityReadResult.Found unchanged
                 }
