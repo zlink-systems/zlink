@@ -3458,6 +3458,448 @@ function validateAuthorityRelocationStateFixture(schemaPath) {
   return 1;
 }
 
+function byteOracleError(code) {
+  const error = new Error(code);
+  error.code = code;
+  throw error;
+}
+
+function oracleTake(reader, size) {
+  if (!Number.isSafeInteger(size) || size < 0 || reader.offset + size > reader.bytes.length) {
+    byteOracleError("truncated-field");
+  }
+  const value = reader.bytes.subarray(reader.offset, reader.offset + size);
+  reader.offset += size;
+  return value;
+}
+
+function oracleInteger(reader, encoding) {
+  if (encoding === "u8") return BigInt(oracleTake(reader, 1)[0]);
+  if (encoding === "u16") return BigInt(oracleTake(reader, 2).readUInt16BE());
+  if (encoding === "u32") return BigInt(oracleTake(reader, 4).readUInt32BE());
+  if (encoding === "u64") return oracleTake(reader, 8).readBigUInt64BE();
+  if (encoding === "i64") return oracleTake(reader, 8).readBigInt64BE();
+  byteOracleError("invalid-field");
+}
+
+function oracleWriteInteger(writer, encoding, value) {
+  const integer = BigInt(value);
+  if (encoding === "u8") writer.u8(integer);
+  else if (encoding === "u16") writer.u16(integer);
+  else if (encoding === "u32") writer.u32(integer);
+  else if (encoding === "u64") writer.u64(integer);
+  else if (encoding === "i64") writer.i64(integer);
+  else byteOracleError("invalid-field");
+}
+
+function oracleBound(value, bounds) {
+  const resolved = resolveInteger(value, bounds);
+  if (resolved === null) byteOracleError("invalid-field");
+  return resolved;
+}
+
+function decodeOracleType(typeName, reader, types, bounds) {
+  const type = types.get(typeName);
+  if (!type) byteOracleError("invalid-field");
+  if (type.kind === "integer") {
+    const value = oracleInteger(reader, type.encoding);
+    if (value < oracleBound(type.minimum, bounds) || value > oracleBound(type.maximum, bounds)) {
+      byteOracleError("invalid-field");
+    }
+    return value.toString();
+  }
+  if (type.kind === "length-prefixed-bytes" || type.kind === "length-prefixed-text") {
+    const length = oracleInteger(reader, types.get(type.lengthType?.$ref)?.encoding);
+    const minimum = oracleBound(type.minimumBytes, bounds);
+    const maximum = oracleBound(type.maximumBytes, bounds);
+    if (length < minimum || length > maximum || length > BigInt(Number.MAX_SAFE_INTEGER)) {
+      byteOracleError("invalid-field");
+    }
+    const bytes = oracleTake(reader, Number(length));
+    if (type.kind === "length-prefixed-bytes") return bytes.toString("hex");
+    const text = bytes.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(bytes) || (type.nul === "forbidden" && text.includes("\0"))) {
+      byteOracleError("invalid-field");
+    }
+    return text;
+  }
+  if (type.kind === "struct") {
+    const decoded = {};
+    for (const field of type.fields ?? []) {
+      decoded[field.name] = decodeOracleType(field.$ref, reader, types, bounds);
+    }
+    if ((type.constraints ?? []).some((constraint) => constraint.kind === "not-both-zero")
+        && BigInt(decoded.high) === 0n && BigInt(decoded.low) === 0n) {
+      byteOracleError("invalid-field");
+    }
+    return decoded;
+  }
+  if (type.kind === "versioned-length-delimited") {
+    const version = oracleInteger(reader, types.get(type.version?.$ref)?.encoding);
+    if (version !== BigInt(type.version?.constant)) byteOracleError("invalid-field");
+    const length = oracleInteger(reader, types.get(type.length?.$ref)?.encoding);
+    if (length > BigInt(Number.MAX_SAFE_INTEGER)) byteOracleError("invalid-body-length");
+    const body = new FixtureReader(oracleTake(reader, Number(length)));
+    const decoded = { version: version.toString() };
+    try {
+      for (const field of type.body ?? []) {
+        decoded[field.name] = decodeOracleType(field.$ref, body, types, bounds);
+      }
+      if (body.offset !== body.bytes.length) byteOracleError("invalid-body-length");
+    } catch (error) {
+      if (error.code === "truncated-field" || error.code === "trailing-byte") {
+        byteOracleError("invalid-body-length");
+      }
+      throw error;
+    }
+    return decoded;
+  }
+  byteOracleError("invalid-field");
+}
+
+function encodeOracleType(typeName, value, writer, types, bounds) {
+  const type = types.get(typeName);
+  if (!type) byteOracleError("invalid-field");
+  if (type.kind === "integer") {
+    const integer = BigInt(value);
+    if (integer < oracleBound(type.minimum, bounds) || integer > oracleBound(type.maximum, bounds)) {
+      byteOracleError("invalid-field");
+    }
+    oracleWriteInteger(writer, type.encoding, integer);
+    return;
+  }
+  if (type.kind === "length-prefixed-bytes" || type.kind === "length-prefixed-text") {
+    if (type.kind === "length-prefixed-bytes"
+        && (typeof value !== "string" || !/^(?:[0-9a-f]{2})+$/.test(value))) {
+      byteOracleError("invalid-field");
+    }
+    const bytes = type.kind === "length-prefixed-bytes"
+      ? Buffer.from(value, "hex") : Buffer.from(value, "utf8");
+    if (BigInt(bytes.length) < oracleBound(type.minimumBytes, bounds)
+        || BigInt(bytes.length) > oracleBound(type.maximumBytes, bounds)
+        || (type.nul === "forbidden" && bytes.includes(0))) {
+      byteOracleError("invalid-field");
+    }
+    oracleWriteInteger(writer, types.get(type.lengthType?.$ref)?.encoding, bytes.length);
+    writer.raw(bytes);
+    return;
+  }
+  if (type.kind === "struct") {
+    for (const field of type.fields ?? []) {
+      encodeOracleType(field.$ref, value[field.name], writer, types, bounds);
+    }
+    if ((type.constraints ?? []).some((constraint) => constraint.kind === "not-both-zero")
+        && BigInt(value.high) === 0n && BigInt(value.low) === 0n) {
+      byteOracleError("invalid-field");
+    }
+    return;
+  }
+  if (type.kind === "versioned-length-delimited") {
+    if (BigInt(value.version) !== BigInt(type.version?.constant)) byteOracleError("invalid-field");
+    const body = new FixtureWriter();
+    for (const field of type.body ?? []) {
+      encodeOracleType(field.$ref, value[field.name], body, types, bounds);
+    }
+    const bodyBytes = body.finish();
+    oracleWriteInteger(writer, types.get(type.version?.$ref)?.encoding, value.version);
+    oracleWriteInteger(writer, types.get(type.length?.$ref)?.encoding, bodyBytes.length);
+    writer.raw(bodyBytes);
+    return;
+  }
+  byteOracleError("invalid-field");
+}
+
+function decodeCommandByteOracle(schema, command, hex) {
+  if (typeof hex !== "string" || !/^(?:[0-9a-f]{2})+$/.test(hex)) byteOracleError("invalid-hex");
+  const reader = new FixtureReader(Buffer.from(hex, "hex"));
+  if (!oracleTake(reader, 2).equals(Buffer.from(schema.protocol.magic))
+      || oracleInteger(reader, "u8") !== BigInt(schema.protocol.wireMajor)
+      || oracleInteger(reader, "u8") !== BigInt(command.id)
+      || oracleInteger(reader, "u8") !== 0n) byteOracleError("invalid-header");
+  const types = new Map(schema.types.map((type) => [type.name, type]));
+  const bounds = new Map(schema.bounds.map((bound) => [bound.name, bound]));
+  const decoded = {};
+  for (const field of command.body ?? []) {
+    decoded[field.name] = decodeOracleType(field.$ref, reader, types, bounds);
+  }
+  if (reader.offset !== reader.bytes.length) byteOracleError("trailing-byte");
+  return decoded;
+}
+
+function encodeCommandByteOracle(schema, command, decoded) {
+  const writer = new FixtureWriter();
+  writer.raw(schema.protocol.magic).u8(schema.protocol.wireMajor).u8(command.id).u8(0);
+  const types = new Map(schema.types.map((type) => [type.name, type]));
+  const bounds = new Map(schema.bounds.map((bound) => [bound.name, bound]));
+  for (const field of command.body ?? []) {
+    encodeOracleType(field.$ref, decoded[field.name], writer, types, bounds);
+  }
+  return writer.finish();
+}
+
+const COMMAND_BYTE_ORACLES = [
+  ["user-spot-create-v1", "userSpotCreate", 47],
+  ["user-spot-close-v1", "userSpotClose", 48],
+  ["actor-create-v1", "actorCreate", 49],
+];
+
+function validateCommandByteOracleFixtures(schema, schemaPath) {
+  const errors = [];
+  let count = 0;
+  for (const [format, commandName, commandId] of COMMAND_BYTE_ORACLES) {
+    const fail = (message) => errors.push(`fixture:${format}: ${message}`);
+    const fixture = JSON.parse(fs.readFileSync(
+      path.resolve(path.dirname(schemaPath), `golden/${format}.json`), "utf8",
+    ));
+    const command = schema.commands.find((entry) => entry.name === commandName && entry.id === commandId);
+    if (!command || command.payload !== "forbidden") fail("schema command contract");
+    if (fixture.format !== format || fixture.commandId !== commandId
+        || JSON.stringify(fixture.consumers) !== JSON.stringify(["cpp", "dotnet", "jvm", "node"])) {
+      fail("format, command or consumers");
+    }
+    if (!Array.isArray(fixture.notes?.offsets) || fixture.notes.offsets.length === 0
+        || fixture.notes.offsetConvention !== "inclusive zero-based byte offsets") fail("offset notes");
+    try {
+      const decoded = decodeCommandByteOracle(schema, command, fixture.canonical?.hex);
+      if (JSON.stringify(decoded) !== JSON.stringify(fixture.canonical?.decoded)) {
+        fail("canonical decoded value mismatch");
+      }
+      if (!encodeCommandByteOracle(schema, command, fixture.canonical.decoded)
+        .equals(Buffer.from(fixture.canonical.hex, "hex"))) fail("canonical does not re-encode byte-exactly");
+    } catch (error) {
+      fail(`canonical rejected as ${error.code ?? error.message}`);
+    }
+    const malformedNames = fixture.malformed?.map((entry) => entry.name);
+    if (!Array.isArray(malformedNames) || malformedNames.length < 3
+        || new Set(malformedNames).size !== malformedNames.length) fail("malformed matrix");
+    for (const entry of fixture.malformed ?? []) {
+      try {
+        decodeCommandByteOracle(schema, command, entry.hex);
+        fail(`${entry.name} was accepted`);
+      } catch (error) {
+        if (error.code !== entry.error) {
+          fail(`${entry.name} expected ${entry.error} but got ${error.code ?? error.message}`);
+        }
+      }
+    }
+    count += 1;
+  }
+  if (errors.length > 0) throw new SchemaValidationError(errors);
+  return count;
+}
+
+function validateZljrSchemaShape(schema) {
+  const types = new Map(schema.types.map((type) => [type.name, type]));
+  const frozenFields = types.get("frozen-record")?.fields?.map((field) => [field.name, field.$ref]);
+  const nodeSource = types.get("frozen-source-identity")?.cases
+    ?.find((entry) => entry.when?.sourceKind === "node")?.fields
+    ?.map((field) => [field.name, field.$ref]);
+  const nodeSend = types.get("frozen-record-body")?.cases
+    ?.find((entry) => entry.when?.recordKind === "nodeSend")?.fields
+    ?.map((field) => [field.name, field.$ref]);
+  const payload = types.get("application-payload-envelope-v1");
+  const payloadFields = payload?.body?.map((field) => [field.name, field.$ref]);
+  if (JSON.stringify(frozenFields) !== JSON.stringify([
+    ["recordKind", "mesh-record-kind"], ["source", "frozen-source-identity"],
+    ["hasMetadata", "bool8"], ["metadata", "metadata-frame"],
+    ["operationId", "operation-id"], ["operationKind", "mesh-operation-kind"],
+    ["replyRoute", "frozen-reply-route"], ["body", "frozen-record-body"],
+  ]) || JSON.stringify(nodeSource) !== JSON.stringify([
+    ["sourceNodeRid", "rid"], ["sourceNodeGeneration", "nonzero-u64"],
+    ["sourceOwnerId", "text8"], ["sourceOwnerLeaseGeneration", "nonzero-u64"],
+  ]) || JSON.stringify(nodeSend) !== JSON.stringify([["payload", "application-payload-envelope-v1"]])
+      || payload?.version?.constant !== 1 || payload?.length?.$ref !== "u32"
+      || JSON.stringify(payloadFields) !== JSON.stringify([
+        ["packetName", "packet-name"], ["contentType", "content-type"],
+        ["payload", "application-payload-bytes"],
+      ])) byteOracleError("schema-zljr-envelope-shape");
+}
+
+function oracleText8(reader) {
+  const length = Number(oracleInteger(reader, "u8"));
+  if (length === 0) byteOracleError("invalid-field");
+  const bytes = oracleTake(reader, length);
+  const value = bytes.toString("utf8");
+  if (!Buffer.from(value, "utf8").equals(bytes) || value.includes("\0")) {
+    byteOracleError("invalid-field");
+  }
+  return value;
+}
+
+function decodeZljrByteOracle(schema, hex) {
+  validateZljrSchemaShape(schema);
+  if (typeof hex !== "string" || !/^(?:[0-9a-f]{2})+$/.test(hex)) byteOracleError("invalid-hex");
+  const reader = new FixtureReader(Buffer.from(hex, "hex"));
+  if (oracleInteger(reader, "u8") !== 1n || oracleInteger(reader, "u8") !== 1n) {
+    byteOracleError("invalid-field");
+  }
+  const sourceLength = oracleInteger(reader, "u16");
+  if (sourceLength > BigInt(Number.MAX_SAFE_INTEGER)) byteOracleError("invalid-body-length");
+  const sourceReader = new FixtureReader(oracleTake(reader, Number(sourceLength)));
+  const source = {
+    nodeRid: oracleText8(sourceReader),
+    nodeGeneration: oracleInteger(sourceReader, "u64").toString(),
+    ownerId: oracleText8(sourceReader),
+    ownerLeaseGeneration: oracleInteger(sourceReader, "u64").toString(),
+  };
+  if (BigInt(source.nodeGeneration) === 0n || BigInt(source.ownerLeaseGeneration) === 0n
+      || sourceReader.offset !== sourceReader.bytes.length) byteOracleError("invalid-body-length");
+  if (oracleInteger(reader, "u8") !== 0n
+      || oracleInteger(reader, "u64") !== 0n || oracleInteger(reader, "u64") !== 0n
+      || oracleInteger(reader, "u32") !== 0n || oracleInteger(reader, "u16") !== 0n) {
+    byteOracleError("invalid-field");
+  }
+  if (oracleInteger(reader, "u8") !== 1n) byteOracleError("invalid-field");
+  const applicationLength = oracleInteger(reader, "u32");
+  if (applicationLength > BigInt(Number.MAX_SAFE_INTEGER)) byteOracleError("invalid-body-length");
+  const application = new FixtureReader(oracleTake(reader, Number(applicationLength)));
+  const packetName = oracleText8(application);
+  const contentType = oracleText8(application);
+  const payloadLength = oracleInteger(application, "u32");
+  if (payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) byteOracleError("invalid-zljr-length");
+  const payload = oracleTake(application, Number(payloadLength));
+  if (application.offset !== application.bytes.length) byteOracleError("invalid-body-length");
+  if (reader.offset !== reader.bytes.length) byteOracleError("trailing-byte");
+  const inner = new FixtureReader(payload);
+  if (oracleInteger(inner, "u32") !== 0x5a4c4a52n || oracleInteger(inner, "u8") !== 1n) {
+    byteOracleError("invalid-zljr-header");
+  }
+  const metadataLength = oracleInteger(inner, "u32");
+  const requestLength = oracleInteger(inner, "u32");
+  const replyLength = oracleInteger(inner, "u32");
+  if (metadataLength + requestLength + replyLength !== BigInt(inner.bytes.length - inner.offset)
+      || metadataLength > 256n * 1024n || requestLength > 1024n * 1024n
+      || replyLength > 1024n * 1024n) byteOracleError("invalid-zljr-length");
+  const metadataBytes = oracleTake(inner, Number(metadataLength));
+  const request = oracleTake(inner, Number(requestLength));
+  const reply = oracleTake(inner, Number(replyLength));
+  let metadata;
+  try {
+    metadata = JSON.parse(metadataBytes.toString("utf8"));
+  } catch {
+    byteOracleError("invalid-zljr-metadata");
+  }
+  if (!Buffer.from(JSON.stringify(metadata), "utf8").equals(metadataBytes)) {
+    byteOracleError("invalid-zljr-metadata");
+  }
+  return {
+    source, packetName, contentType, metadata,
+    requestHex: request.toString("hex"), replyHex: reply.toString("hex"),
+  };
+}
+
+function encodeZljrByteOracle(schema, decoded) {
+  validateZljrSchemaShape(schema);
+  const metadata = Buffer.from(JSON.stringify(decoded.metadata), "utf8");
+  const request = Buffer.from(decoded.requestHex, "hex");
+  const reply = Buffer.from(decoded.replyHex, "hex");
+  const inner = new FixtureWriter();
+  inner.u32(0x5a4c4a52).u8(1).u32(metadata.length).u32(request.length).u32(reply.length)
+    .raw(metadata).raw(request).raw(reply);
+  const sourceBody = new FixtureWriter();
+  sourceBody.text8(decoded.source.nodeRid).u64(decoded.source.nodeGeneration)
+    .text8(decoded.source.ownerId).u64(decoded.source.ownerLeaseGeneration);
+  const payloadBody = new FixtureWriter();
+  payloadBody.text8(decoded.packetName).text8(decoded.contentType).bytes32(inner.finish());
+  const writer = new FixtureWriter();
+  const sourceBytes = sourceBody.finish();
+  const payloadBytes = payloadBody.finish();
+  writer.u8(1).u8(1).u16(sourceBytes.length).raw(sourceBytes).u8(0)
+    .u64(0).u64(0).u32(0).u16(0).u8(1).u32(payloadBytes.length).raw(payloadBytes);
+  return writer.finish();
+}
+
+function validateZljrFixture(schema, schemaPath) {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.resolve(path.dirname(schemaPath), "golden/zljr-v1.json"), "utf8",
+  ));
+  const errors = [];
+  const fail = (message) => errors.push(`fixture:zljr-v1: ${message}`);
+  if (fixture.format !== "zljr-v1"
+      || JSON.stringify(fixture.consumers) !== JSON.stringify(["cpp", "dotnet", "jvm", "node"])) {
+    fail("format or consumers");
+  }
+  if (!Array.isArray(fixture.notes?.offsets) || fixture.notes.offsets.length === 0
+      || fixture.notes.offsetConvention !== "inclusive zero-based byte offsets") fail("offset notes");
+  try {
+    const bytes = Buffer.from(fixture.canonical?.hex ?? "", "hex");
+    const decoded = decodeZljrByteOracle(schema, fixture.canonical?.hex);
+    if (JSON.stringify(decoded) !== JSON.stringify(fixture.canonical?.decoded)) {
+      fail("canonical decoded value mismatch");
+    }
+    if (!encodeZljrByteOracle(schema, fixture.canonical.decoded).equals(bytes)) {
+      fail("canonical does not re-encode byte-exactly");
+    }
+    if (bytes.length !== 1958
+        || crypto.createHash("sha256").update(bytes).digest("hex") !== fixture.notes?.sha256
+        || fixture.notes.sha256 !== "0c8cd156c73c23e785dc63fb2979041cbae63511fa046edfd6bb76ce6adbe08a") {
+      fail("canonical does not match the pinned cross-language Node vector digest");
+    }
+  } catch (error) {
+    fail(`canonical rejected as ${error.code ?? error.message}`);
+  }
+  const malformedNames = fixture.malformed?.map((entry) => entry.name);
+  if (!Array.isArray(malformedNames) || malformedNames.length < 3
+      || new Set(malformedNames).size !== malformedNames.length) fail("malformed matrix");
+  for (const entry of fixture.malformed ?? []) {
+    try {
+      decodeZljrByteOracle(schema, entry.hex);
+      fail(`${entry.name} was accepted`);
+    } catch (error) {
+      if (error.code !== entry.error) {
+        fail(`${entry.name} expected ${entry.error} but got ${error.code ?? error.message}`);
+      }
+    }
+  }
+  if (errors.length > 0) throw new SchemaValidationError(errors);
+  return 1;
+}
+
+function runByteOracleFixtureSelfTests(schema, schemaPath) {
+  const tests = [];
+  for (const [format, commandName, commandId] of COMMAND_BYTE_ORACLES) {
+    const fixture = JSON.parse(fs.readFileSync(
+      path.resolve(path.dirname(schemaPath), `golden/${format}.json`), "utf8",
+    ));
+    const command = schema.commands.find((entry) => entry.name === commandName && entry.id === commandId);
+    tests.push([`${format} canonical semantic drift`, () => {
+      const candidate = clone(fixture);
+      candidate.canonical.decoded.correlation = "11";
+      return JSON.stringify(decodeCommandByteOracle(schema, command, candidate.canonical.hex))
+        !== JSON.stringify(candidate.canonical.decoded);
+    }]);
+    tests.push([`${format} malformed vector accepted`, () => {
+      try {
+        decodeCommandByteOracle(schema, command, fixture.malformed[0].hex);
+        return false;
+      } catch (error) {
+        return error.code === fixture.malformed[0].error;
+      }
+    }]);
+  }
+  const zljr = JSON.parse(fs.readFileSync(
+    path.resolve(path.dirname(schemaPath), "golden/zljr-v1.json"), "utf8",
+  ));
+  tests.push(["zljr-v1 canonical semantic drift", () => {
+    const candidate = clone(zljr);
+    candidate.canonical.decoded.requestHex = "00";
+    return JSON.stringify(decodeZljrByteOracle(schema, candidate.canonical.hex))
+      !== JSON.stringify(candidate.canonical.decoded);
+  }]);
+  tests.push(["zljr-v1 malformed vector accepted", () => {
+    try {
+      decodeZljrByteOracle(schema, zljr.malformed[0].hex);
+      return false;
+    } catch (error) {
+      return error.code === zljr.malformed[0].error;
+    }
+  }]);
+  for (const [label, rejected] of tests) {
+    if (!rejected()) throw new Error(`negative self-test did not fail: ${label}`);
+  }
+  return tests.length;
+}
+
 function validateRelocationLogicalFixture(schema, schemaPath) {
   const errors = [];
   const fail = (location, message) => errors.push(`${location}: ${message}`);
@@ -7633,11 +8075,14 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
     const authorityKeyFixtureCount = validateAuthorityKeyFixture(schema, schemaPath);
     const amendmentFixtureCount = validateContractAmendmentFixture(schemaPath);
     const actorJoinFixtureCount = validateActorJoinRequestFixture(schema, schemaPath);
+    const commandByteOracleFixtureCount = validateCommandByteOracleFixtures(schema, schemaPath);
+    const zljrFixtureCount = validateZljrFixture(schema, schemaPath);
     const selfTestCount = selfTest
       ? runSelfTests(schema) + runGoldenFixtureSelfTests(schema, schemaPath)
         + runRelocationLogicalFixtureSelfTests(schema, schemaPath)
         + runAuthorityKeyFixtureSelfTests(schema, schemaPath)
         + runContractAmendmentFixtureSelfTests(schemaPath)
+        + runByteOracleFixtureSelfTests(schema, schemaPath)
       : 0;
     const suffix = selfTest ? `; ${selfTestCount} negative self-tests passed` : "";
     console.log(
@@ -7648,7 +8093,9 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
         + `${authorityKeyFixtureCount} authority key fixture, `
         + `${authorityRelocationFixtureCount} authority relocation fixture, `
         + `${amendmentFixtureCount} amendment fixture, `
-        + `${actorJoinFixtureCount} actorJoin request fixture${suffix}`,
+        + `${actorJoinFixtureCount} actorJoin request fixture, `
+        + `${commandByteOracleFixtureCount} command byte oracle fixtures, `
+        + `${zljrFixtureCount} ZLJR fixture${suffix}`,
     );
   } catch (error) {
     printFailure(error);
