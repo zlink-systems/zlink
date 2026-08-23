@@ -149,8 +149,9 @@ raw frame 조합, codec table 또는 maintenance field를 노출하지 않는다
 
 여러 Framework message part를 하나의 application payload로 전달하는 service messaging command에서는 outer
 application envelope에 공통 profile을 사용한다. 이 envelope의 packet name은 `ZLinkFrameworkMultipart`이고 content type은
-`application/x-zlink-multipart`로 고정한다. 실제 application message의 packet name과 bytes는 envelope의
-payload 안에 있는 part 순서로 보존한다.
+`application/x-zlink-multipart`로 고정한다. 실제 application message의 bytes는 envelope의 payload 안에
+있는 part 순서로 그대로 보존한다. part는 opaque bytes이며, 이 profile은 part별 packet name이나
+content type을 wire에 싣지 않는다.
 
 Actor creation처럼 command 자체가 별도의 application-payload envelope를 정의한 operation은 이 profile의
 대상이 아니다. 그 operation의 packet name과 content type은 해당 operation 계약을 따른다.
@@ -479,12 +480,15 @@ semantics는 language-internal id가 아니라 이 body에 실린 actor identity
 
 Join 수락 reply에 application reply가 있으면 target은 그것을
 [Framework multipart application profile](#framework-multipart-application-profile)로 감싸
-reply leg에 싣는다. Part는 정확히 하나이며, 그 part의 packet name과 content type은 handler가
-만든 application reply message의 것을 그대로 보존한다. Application reply가 없으면 multipart
-envelope 자체를 싣지 않는다. Source는 이 profile을 언랩해 sole part를 application reply로
-전달하며, part bytes를 다시 다른 envelope로 해석하지 않는다. 이 profile 외의 프레이밍 —
-part를 중첩 envelope로 감싸거나, 언랩하지 않은 inner bytes를 그대로 노출하는 것 — 은 이
-operation의 계약 밖이다.
+reply leg에 싣는다. Part는 정확히 하나이며, 그 part는 handler가 만든 application reply
+message의 bytes를 그대로 싣는다. 이 profile은 part별 packet name이나 content type을 wire에
+싣지 않는다 — envelope의 packet name과 content type은 profile 고정값이며, part bytes의
+해석은 계층별 규범 형식 원칙에 따라 application 계층의 소관이다. Application reply가 없으면
+multipart envelope 자체를 싣지 않는다. Source는 이 profile을 언랩해 sole part를 application
+reply로 전달하며, part bytes를 다시 다른 envelope로 해석하지 않는다. Source가 caller에
+노출하는 reply metadata는 profile 고정 outer content type이거나 없음이다 — request의 content
+type 등 다른 값으로 재구성하지 않는다. 이 profile 외의 프레이밍 — part를 중첩 envelope로
+감싸거나, 언랩하지 않은 inner bytes를 그대로 노출하는 것 — 은 이 operation의 계약 밖이다.
 
 #### 수신자 stable-type 해석
 

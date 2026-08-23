@@ -165,8 +165,9 @@ Service messaging commands that carry several Framework message parts as a
 single application payload use a common profile for the outer application
 envelope. This envelope's packet name is fixed as `ZLinkFrameworkMultipart`
 and its content type as `application/x-zlink-multipart`. The actual
-application message's packet name and bytes are preserved by part order
-inside the envelope's payload.
+application message's bytes are preserved verbatim by part order inside the
+envelope's payload. Parts are opaque bytes; this profile does not carry a
+per-part packet name or content type on the wire.
 
 Operations where the command itself defines a separate
 application-payload envelope, such as Actor creation, are not subject to
@@ -527,13 +528,18 @@ key on the actor identity carried in this body, not on any language-internal id.
 
 When the join-accepted reply carries an application reply, the target wraps it in the
 [Framework multipart application profile](#framework-multipart-application-profile) on the
-reply leg. There is exactly one part, and that part preserves the packet name and content
-type of the application reply message the handler produced. When there is no application
+reply leg. There is exactly one part, and that part carries the bytes of the application
+reply message the handler produced, verbatim. This profile does not carry a per-part
+packet name or content type on the wire — the envelope's packet name and content type are
+the profile's fixed values, and interpreting the part bytes belongs to the application
+layer under the per-layer normative-format principle. When there is no application
 reply, no multipart envelope is carried at all. The source unwraps this profile and
 delivers the sole part as the application reply, without interpreting the part bytes as
-another envelope. Framing other than this profile — nesting the part in an additional
-envelope, or exposing un-unwrapped inner bytes directly — is outside this operation's
-contract.
+another envelope. The only reply metadata the source exposes to the caller is the
+profile's fixed outer content type, or none — it must not reconstruct another value, such
+as the request's content type. Framing other than this profile — nesting the part in an
+additional envelope, or exposing un-unwrapped inner bytes directly — is outside this
+operation's contract.
 
 #### Receiver Stable-Type Resolution
 

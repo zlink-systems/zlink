@@ -62,11 +62,18 @@ headless runner는 server별 self-check를 실행하며, 브라우저 client는 
 - 인접 zone snapshot은 FromZoneId별 최신 Tick으로 교체하며 3 tick 동안 새 snapshot이 없으면
   제거한다.
 - cross-node zone 이동은 같은 PlayerId와 ObjectGeneration을 유지하고 owner generation만
-  변경한다. client WebSocket connection은 유지한다.
+  변경한다. client WebSocket connection은 session route 갱신이 seal timeout 안에 적용되는
+  정상 경로에서 유지된다. timeout이 지나면 Framework가 physical connection을 닫으며, client는
+  관측 가능한 disconnect 뒤 재연결한다(§7.5).
 - border sync와 announce는 publish이며 target handler 완료를 성공 기준으로 사용하지 않는다.
 - 점검 모드는 desired state를 store에 기록하고 fanout으로 전 node에 알린다. target Spot의
-  admission이 최종 판정을 하며 stale cache는 최종 판정자가 아니다.
+  `OnActorJoin` admission이 **유일한** 최종 판정자다. source/Entry의 maintenance cache는
+  관측·최적화 용도로만 쓰며 그 값으로 client-facing terminal 결과를 만들지 않는다. 점검 중
+  허용 범위는 같은 zone 내부 이동뿐이다(같은 NodeId의 다른 zone 이동도 거부한다).
 - runtime node 상태는 polling이 아니라 runtime event와 explicit report로 관찰한다.
+  Registered는 ZoneNode explicit report 기반이며, 마지막 report 후 15초(report 주기 5초의
+  3배)가 지나면 false로 관찰한다. crash된 node는 false report를 보낼 수 없으므로 이 TTL이
+  유일한 false 전환 규칙이다.
 - Ready owner 장애는 자동 replacement가 아니며 해당 operation은 Unavailable로 끝난다.
 
 ### 2.3 표면 선택 기준
@@ -108,11 +115,19 @@ flowchart LR
 ```
 
 - Gateway만 player-facing game STREAM을 제공하고 Ops만 control STREAM을 제공한다.
-- ZoneNode A/B는 같은 executable capability로 실행하며 네 zone type, Player Actor factory,
-  zone Channel과 report channel을 등록한다.
+- ZoneNode A/B는 같은 executable capability로 실행하며 Zone Spot factory(stable type
+  `zoneworld.zone`, ZoneId별 네 Spot instance), Player Actor factory(stable type
+  `zoneworld.player`), zone Channel과 report channel을 등록한다. 모든 언어가 이 canonical
+  stable type 문자열을 동일하게 등록한다(actorJoin은 stable type을 wire에 싣지 않고 Location
+  Store authority row로 해석하므로 이름이 갈리면 cross-language join이 실패한다).
+- 각 ZoneNode는 Zone Spot capacity를 2로 선언한다. 네 zone은 capacity에 의해 두 node에
+  2/2로 분산되며, 2x2 격자의 어떤 2/2 분할도 서로 다른 owner의 인접 zone pair를 보장한다.
+  runner는 zone→NodeId를 가정하지 않고 Ops probe로 실제 owner 배치를 발견해 cross-owner
+  경계를 선택한다. fixture나 test가 특정 zone을 특정 NodeId에 고정 배치하는 것은 금지한다.
 - zoneworld.mesh는 ChannelName, Spot·Actor direct message와 Logical Multicast를 운반한다.
 - zoneworld.broadcast는 mesh와 독립된 classic fanout publisher/subscriber 연결이다.
-- ZoneNode의 owner는 Location Store가 선택한다. NodeId와 transport RID는 별도 domain이다.
+- Zone Spot·Player Actor 같은 object의 owner는 Location Store placement가 선택한다.
+  NodeId와 transport RID는 별도 domain이다.
 - Client에는 Gateway와 Ops endpoint만 제공하며 ZoneNode endpoint를 노출하지 않는다.
 
 | Resource | 책임 | 준비 |
@@ -145,7 +160,7 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 |---|---|---|
 | ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
 | PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/server/14-actor-model.ko.md) |
-| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Spot·Actor membership §4.2](../../spec/server/15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서) |
+| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. relocation 전체 순서(owner 전환·relay·target queue·CAS)의 단일 권위는 [Relocation flow](../../spec/server/28-relocation-flow.ko.md)이고, target admission·membership·lifecycle은 [Spot·Actor membership §4.2](../../spec/server/15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서)가 소유한다. |
 | 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/server/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
 | 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/server/03-interaction-model.ko.md#5-spot-logical-multicast) |
 | 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/server/03-interaction-model.ko.md#6-classic-fanout) |
@@ -162,6 +177,23 @@ Framework가 보존하는 queue, accepted journal, logical timer, membership과,
 
 ZoneWorld는 typed JSON codec을 사용한다. 아래 declaration은 .NET, Node.js와 shared TypeScript
 browser가 유지할 JSON wire 이름과 optional·null 의미다.
+
+Player-facing wire는 **logical-only**다: NodeId, transport RID, relocation 발생 여부
+(`transferred` 류 flag), owner 정보를 game message에 싣지 않는다. 이런 physical 관측이
+필요한 화면(HUD·데모)은 Ops contract(WatchNodes/Diagnostics)에서 공급받는다. shared browser를
+포함한 어떤 client도 이 declaration에 physical field를 추가하지 않는다.
+
+업무 실패는 다음 typed 매핑으로만 관측한다(자유 문자열로 언어별 예외 텍스트를 노출하지
+않는다):
+
+| 실패 | client 관측 |
+|---|---|
+| 이동 거부(OutOfRange/TooFar/DiagonalCrossing/ZoneMaintenance) | `MoveRejectedNotify.reason`의 해당 코드 |
+| JoinWorld의 zone admission 거부(점검 등) | `JoinWorldRes.error`의 typed 코드(예: `ZoneMaintenance`) |
+| 그 외 Framework Join/request 실패 | 해당 `error` field에 [Spot·Actor membership §4](../../spec/server/15-spot-actor.ko.md#4-actor의-spot-join)의 public failure kind 이름을 **그대로**(예: `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — 이 폐쇄 집합 밖 문자열 금지 |
+| target owner crash로 인한 operation 종료 | `JoinWorldRes.error`/해당 request의 `error` = `Unavailable` |
+| request deadline 초과 | 해당 request의 `error` = `DeadlineExceeded` |
+| session route 갱신 timeout | WebSocket close(별도 message 없음, §7.5) |
 
 ### 6.1 Game STREAM message
 
@@ -388,6 +420,13 @@ ReportNodeStatusMsg는 ZoneNode가 Ops channel에 보내는 one-way message다. 
 연결한 상태다. JoinWorld는 (25,25)의 zone-nw로 시작한다. actor가 같은 zone 안에서 이동하면
 Actor가 좌표를 갱신하고 Zone Spot에 UpdatePositionMsg를 보내 사본을 갱신한다.
 
+Zone join은 Framework Actor Join이므로 handler 안에서 동기적으로 완료되지 않는다. Actor는
+join을 `Defer()`로 등록하고 현재 handler를 정상 종료하며, join 결과는 completion callback으로
+도착한다([Spot·Actor membership §3](../../spec/server/15-spot-actor.ko.md#3-membership)). 따라서
+`JoinWorldRes`는 join completion callback에서 발신한다 — **JoinWorldRes 성공 = target zone
+admission까지 완료**가 이 시나리오의 규범 의미이며, admission 이전 상태(cache 등)로
+JoinWorldRes terminal을 만드는 구현은 비적합이다.
+
 ```mermaid
 sequenceDiagram
     participant C as Game Browser
@@ -397,9 +436,10 @@ sequenceDiagram
 
     C->>G: JoinWorldReq
     G->>A: create or get Player Actor
+    A->>A: Defer() zone join, handler 종료
     A->>Z: EnterZoneReq(zone-nw)
-    Z-->>A: EnterZoneRes
-    A-->>G: JoinWorldRes(25,25)
+    Z-->>A: EnterZoneRes (join completion callback)
+    A-->>G: JoinWorldRes(25,25) — completion에서 발신
     G-->>C: JoinWorldRes
     C->>G: MoveMsg(28,27)
     G->>A: MoveMsg
@@ -495,10 +535,16 @@ sequenceDiagram
     Z2->>Z2: apply only matching NodeId
 ```
 
-Target zone owner가 maintenance=true이면 OnActorJoin admission이 ZoneMaintenance로
-거부한다. 같은 zone 내부 이동은 허용한다. fanout cache가 stale해도 target admission이
-최종 판정한다. Ops는 desired state를 maintenance store에 기록하므로 ZoneNode 재시작 뒤
-같은 NodeId의 maintenance state를 복원한다.
+Target zone owner가 maintenance=true이면 target Zone Spot의 OnActorJoin admission이
+ZoneMaintenance로 거부한다. 허용 범위는 같은 zone 내부 이동뿐이다(같은 NodeId의 다른 zone
+이동도 신규 admission이므로 거부한다). fanout cache가 stale해도 target admission이 유일한
+최종 판정자이며 source/Entry cache는 terminal을 만들지 않는다. Ops는 desired state를
+maintenance store에 기록하므로 ZoneNode 재시작 뒤 같은 NodeId의 maintenance state를 복원한다.
+
+이 maintenance는 application admission desired state이며 [Host relocation flow]
+(../../spec/server/30-host-relocation-flow.ko.md)의 `Relocate(PlannedMaintenance)`를 호출하지
+않는다 — ZW-E는 Spec 30 host relocation의 검증 대상이 아니다(그 커버리지는 별도 harness가
+소유한다).
 
 ### 7.5 Failure와 failover 경계
 
@@ -506,6 +552,15 @@ Ready ZoneNode owner process가 종료되면 현재 Actor·Spot operation은 Una
 Framework는 다른 ZoneNode에서 새 Actor incarnation을 자동으로 만들지 않는다. planned
 relocation은 target-only Location Store CAS commit 규칙을 따르는 별도 operation이며 crash
 failover가 아니다.
+
+relocation 중 bound session route 갱신이 seal timeout 안에 적용되지 않으면 Framework는
+physical connection을 닫는다. client의 관측 결과는 WebSocket close이며, client는 재연결 후
+JoinWorld를 다시 수행한다(같은 PlayerId로 기존 Actor에 재바인딩). 이 실패 경로는 §9.1의
+self-check 항목으로 관측한다.
+
+"crash replacement"는 같은 NodeId로 **새 process(새 transport RID)** 를 시작해 새 object를
+수용할 수 있게 되는 것을 뜻한다. 이전 Ready owner가 소유하던 object의 자동 복원·재생성이
+아니며, 그 object들의 미완 operation은 Unavailable 경계로 끝난 상태가 유지된다.
 
 ## 8. 구현 구조
 
@@ -638,7 +693,9 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 - MeshNode RID는 zn-<lowercase-canonical-uuid-v4> 형식이며 고정 RID 설정과 SetRoutingId 호출이 없다.
 - ChannelName, Spot과 Actor가 별도 transport RID를 만들지 않는다.
 - process 시작 순서, 정상 교체와 crash 교체에서 global ZoneId routing은 NodeId와 독립적으로
-  동작한다.
+  동작한다. 여기서 "동작"은 새 process가 새 RID로 같은 NodeId report를 내고 이후의 **새**
+  object 생성·routing이 정상이라는 뜻이다. crash 이전 owner object의 자동 복구를 뜻하지
+  않는다(§7.5).
 - 관측용 OwnerNodeRid는 probe evidence에만 사용하고 application message 또는 placement
   input으로 전달하지 않는다.
 
@@ -695,3 +752,50 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 | ZW-E | maintenance: 대상 지정 enable/disable, 입장 거부, 재시작 지속성, diagnostics |
 | ZW-F | bot: client 없는 이동, population, client push 부재, rejection 시 방향 반전 |
 | ZW-G | node identity와 교체: NodeId와 transport RID 구분, routing ID gate, replacement |
+
+### 11.2 개별 시나리오 정의 (canonical)
+
+모든 언어 runner는 아래 개별 정의를 구현하고, `zoneworld=completed`는 구현한 전체 ID의
+판정 AND로만 출력한다. 전제(P)는 명시하지 않으면 "§10 순서로 전 구성 요소 ready + browser
+또는 headless client가 Gateway에 연결"이다.
+
+| ID | 전제 | 행동 | 단언 |
+| --- | --- | --- | --- |
+| ZW-A1 | 기본 | JoinWorldReq | JoinWorldRes = zone-nw,(25,25); §7.1 규범대로 admission 완료 후 응답 |
+| ZW-A2 | A1 | 같은 zone MoveMsg | ZoneStateNotify에 갱신 좌표·ZoneId |
+| ZW-A3 | A1 | 범위 밖·6칸 초과·대각선·점검 이동 각 1회 | MoveRejectedNotify reason이 OutOfRange→TooFar→DiagonalCrossing→ZoneMaintenance 고정 순서 |
+| ZW-A4 | player 2명 같은 zone | 각자 Move | 동일 ZoneStateNotify에 두 player 존재 |
+| ZW-A5 | A4 | ZoneStateNotify 수신 | Players가 PlayerId UTF-8 byte 오름차순, 자기 zone 값 우선 |
+| ZW-B1 | 경계 band 내 player | tick 대기 | 인접 zone에만 border snapshot 도착, 대각선 zone 미도착 |
+| ZW-B2 | cross-owner 인접 pair(§3 capacity 분산, probe로 발견) | 경계 넘는 MoveMsg | relocation 완료, ZoneChangedNotify, 같은 WebSocket으로 후속 notify |
+| ZW-B3 | B2 직후 | ActorLocationProbe | 같은 ActorId·ObjectGeneration, owner generation만 전진 |
+| ZW-B4 | B1 상태에서 publish 중단 | 3 tick 경과 | 해당 FromZoneId snapshot 제거(expiry) |
+| ZW-B5 | B2 | 이전 owner route로 one-way probe | committed target에서 정확히 1회 처리(Follow), 재제출 없음 |
+| ZW-B6 | B2 | 이전 owner route로 request probe | operation id·generation·payload·reply route 보존, source Store 재조회·hidden retry 없음 |
+| ZW-B7 | B2 | 역방향 이동으로 원래 owner 복귀(A→B→A) | 동일 identity·binding 유지 |
+| ZW-B8 | B2 가능 상태 | runner가 session route 갱신 전달을 seal timeout 이상 지연/차단(주입) 후 경계 이동 | Framework가 physical connection을 닫음(WebSocket close 관측), client 재연결·JoinWorld 재수행으로 같은 PlayerId의 기존 Actor에 재바인딩(§7.5) |
+| ZW-C1 | 기본 | Ops WatchNodesReq | 두 ZoneNode의 Registered·Connected 각각 정확 |
+| ZW-C2 | C1 | ZoneNode 정상 종료 | Connected=false 관측(runtime event, polling 아님) |
+| ZW-C3 | C2 | report TTL 15초 경과 | Registered=false 관측(§2.2 TTL 규칙) |
+| ZW-C4 | 기본 | zone tick timer 실패 주입(runner) | spot event report로 실패 관측, zone 정지 없음 |
+| ZW-D1 | 기본 | AnnounceWorldReq | 모든 node·zone의 game client에 AnnouncementId 중복 없이 1회 도달 |
+| ZW-D2 | D1 + 제3 subscriber 추가 | 재announce | 새 subscriber 포함 전원 수신(publisher 목록 하드코딩 없음 증명) |
+| ZW-E1 | 기본 | SetMaintenanceReq(node,true) | 해당 NodeId만 desired state 변경, store 기록 |
+| ZW-E2 | E1 | 점검 node의 zone으로 신규 join | target OnActorJoin이 ZoneMaintenance 거부(§7.4 단독 판정) |
+| ZW-E3 | E1 | 점검 zone 내부 이동 | 허용 |
+| ZW-E4 | E1 | 점검 node의 다른 zone으로 이동 | ZoneMaintenance 거부(same-zone만 허용) |
+| ZW-E5 | E1 | ZoneNode 재시작 | 같은 NodeId의 maintenance state 복원 |
+| ZW-E6 | 기본 | NodeDiagnosticsReq | 최신 zone 목록·player count·maintenance 반환 |
+| ZW-F1 | 기본 | bot 관찰 | 8 bot이 §7.3 고정 초기값·궤적으로 이동 |
+| ZW-F2 | F1 | X-bot 경계 도달 | cross-owner bot relocation 완주(binding 없음) |
+| ZW-F3 | F1 | bot 이동 거부 유도 | 방향 반전 |
+| ZW-F4 | F1 | client push 관찰 | bot 대상 push 부재(음성 증거) |
+| ZW-G1 | 기본 | RID 관측(probe) | `zn-<lowercase-uuid-v4>` 형식 실검사(문자열 marker 출력만으로는 불충분), 노드 간 상이 |
+| ZW-G2 | 기본 | 시작 순서 변형 실행 | readiness·routing 정상 |
+| ZW-G3 | 기본 | 정상 교체(stop→start) | 새 RID·같은 NodeId report, 새 object 정상 |
+| ZW-G4 | 기본 | crash 교체(kill→start) | §7.5 의미의 교체: 이전 operation Unavailable 경계 유지 + 새 process 정상 |
+| ZW-G5 | G3/G4 | routing ID gate | §9.3 전 항목 |
+
+언어별 runner가 일부 ID를 runner-driven으로 구현할 수는 있으나(예: C4 fault 주입), ID의
+전제·행동·단언 의미는 바꾸지 않는다. 이 표에 없는 ID를 새로 만들 때는 이 문서에 먼저
+추가한다.

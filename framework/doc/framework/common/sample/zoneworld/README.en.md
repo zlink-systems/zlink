@@ -64,12 +64,20 @@ all-node announcements, and maintenance changes. The following are excluded.
 - An adjacent zone snapshot is replaced by the latest Tick per FromZoneId, and is removed if no new
   snapshot arrives for 3 ticks.
 - A cross-node zone move keeps the same PlayerId and ObjectGeneration, changing only the owner
-  generation. The client WebSocket connection is kept.
+  generation. The client WebSocket connection is kept on the normal path where the session route
+  update is applied within the seal timeout; past the timeout the Framework closes the physical
+  connection, and the client observes a disconnect and reconnects (§7.5).
 - Border sync and announce are publishes, and target-handler completion isn't used as a success
   criterion.
 - Maintenance mode records desired state to the store and notifies every node via fanout. The
-  target Spot's admission is the final ruling, and stale cache is never the final decider.
+  target Spot's `OnActorJoin` admission is the **sole** final decider; source/Entry maintenance
+  caches are observation/optimization only and never produce a client-facing terminal result.
+  During maintenance only same-zone movement is allowed (moving to a different zone on the same
+  NodeId is also rejected).
 - Runtime node status is observed via runtime events and explicit reports, not polling.
+  Registered is based on the ZoneNode's explicit report and is observed as false once 15 seconds
+  (three 5-second report intervals) pass after the last report. A crashed node cannot send a
+  false report, so this TTL is the only false-transition rule.
 - A Ready owner failure is not automatic replacement, and that operation ends as Unavailable.
 
 ### 2.3 Surface Selection Criteria
@@ -112,12 +120,21 @@ flowchart LR
 ```
 
 - Only Gateway provides the player-facing game STREAM, and only Ops provides the control STREAM.
-- ZoneNode A/B run with the same executable capability, registering the four zone types, the
-  Player Actor factory, the zone Channel, and the report channel.
+- ZoneNode A/B run with the same executable capability, registering the Zone Spot factory
+  (stable type `zoneworld.zone`, four Spot instances by ZoneId), the Player Actor factory
+  (stable type `zoneworld.player`), the zone Channel, and the report channel. Every language
+  registers these canonical stable type strings identically (actorJoin does not carry the stable
+  type on the wire — it is resolved from the Location Store authority row, so diverging names
+  break cross-language joins).
+- Each ZoneNode declares a Zone Spot capacity of 2. The four zones are therefore spread 2/2
+  across the two nodes by capacity, and any 2/2 split of the 2x2 grid guarantees an adjacent
+  zone pair with different owners. The runner never assumes a zone→NodeId mapping: it discovers
+  the actual owner layout via Ops probes and picks the cross-owner boundary from that. Fixtures
+  or tests that pin a specific zone to a specific NodeId are forbidden.
 - `zoneworld.mesh` carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.
 - `zoneworld.broadcast` is a classic fanout publisher/subscriber connection independent of the mesh.
-- The Location Store selects each ZoneNode's owner. NodeId and the transport RID are separate
-  domains.
+- Location Store placement selects the owner of objects such as Zone Spots and Player Actors.
+  NodeId and the transport RID are separate domains.
 - Only the Gateway and Ops endpoints are provided to the Client; the ZoneNode endpoint isn't
   exposed.
 
@@ -151,7 +168,7 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 |---|---|---|
 | Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
 | Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/14-actor-model.en.md) |
-| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Spot and Actor membership §4.2](../../spec/server/15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
+| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. The single authority for the full relocation order (owner transition, relay, target queue, CAS) is [Relocation flow](../../spec/server/28-relocation-flow.en.md); target admission, membership, and lifecycle are owned by [Spot and Actor membership §4.2](../../spec/server/15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
 | Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
 | Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
 | Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/03-interaction-model.en.md#6-classic-fanout) |
@@ -170,6 +187,23 @@ change. Zone Spot factories that don't move select
 
 ZoneWorld uses a typed JSON codec. The declarations below are the JSON wire names and
 optional/null semantics that .NET, Node.js, and the shared TypeScript browser must keep.
+
+The player-facing wire is **logical-only**: game messages never carry a NodeId, transport RID,
+relocation-occurrence flag (such as `transferred`), or owner information. Screens that need such
+physical observation (HUD/demo) obtain it from the Ops contract (WatchNodes/Diagnostics). No
+client, including the shared browser, adds physical fields to these declarations.
+
+Business failures are observed only through the following typed mapping (no free-form strings
+that would expose per-language exception text):
+
+| Failure | Client observation |
+|---|---|
+| Move rejection (OutOfRange/TooFar/DiagonalCrossing/ZoneMaintenance) | the matching code in `MoveRejectedNotify.reason` |
+| JoinWorld zone-admission rejection (maintenance etc.) | a typed code in `JoinWorldRes.error` (e.g. `ZoneMaintenance`) |
+| Any other Framework Join/request failure | the public failure kind name from [Spot and Actor membership §4](../../spec/server/15-spot-actor.en.md#4-joining-an-actor-to-a-spot) **verbatim** in the `error` field (e.g. `NotFound`, `CapacityExceeded`, `InternalFailure`, `DataLost`, `InvalidOperation`, `ShuttingDown`) — no strings outside this closed set |
+| Operation ended by target owner crash | `JoinWorldRes.error` / the request's `error` = `Unavailable` |
+| Request deadline exceeded | the request's `error` = `DeadlineExceeded` |
+| Session route-update timeout | WebSocket close (no message; §7.5) |
 
 ### 6.1 Game STREAM Messages
 
@@ -398,6 +432,14 @@ browser has connected a STREAM to Gateway. JoinWorld starts at (25,25) in zone-n
 moves within the same zone, the Actor updates the coordinates and sends `UpdatePositionMsg` to the
 Zone Spot to update the copy.
 
+A zone join is a Framework Actor Join, so it does not complete synchronously inside a handler.
+The Actor registers the join with `Defer()`, ends the current handler normally, and the join
+result arrives in a completion callback ([Spot and Actor membership §3](../../spec/server/15-spot-actor.en.md#3-membership)).
+`JoinWorldRes` is therefore sent from the join completion callback — **a successful JoinWorldRes
+means target zone admission has completed** is the normative meaning in this scenario, and an
+implementation that produces the JoinWorldRes terminal from pre-admission state (such as a
+cache) is non-conforming.
+
 ```mermaid
 sequenceDiagram
     participant C as Game Browser
@@ -407,9 +449,10 @@ sequenceDiagram
 
     C->>G: JoinWorldReq
     G->>A: create or get Player Actor
+    A->>A: Defer() zone join, end handler
     A->>Z: EnterZoneReq(zone-nw)
-    Z-->>A: EnterZoneRes
-    A-->>G: JoinWorldRes(25,25)
+    Z-->>A: EnterZoneRes (join completion callback)
+    A-->>G: JoinWorldRes(25,25) — sent from completion
     G-->>C: JoinWorldRes
     C->>G: MoveMsg(28,27)
     G->>A: MoveMsg
@@ -507,10 +550,17 @@ sequenceDiagram
     Z2->>Z2: apply only matching NodeId
 ```
 
-If the target zone owner has `maintenance=true`, `OnActorJoin` admission rejects with
-ZoneMaintenance. Movement within the same zone is still allowed. Even if the fanout cache is stale,
-target admission makes the final ruling. Ops records desired state to the maintenance store, so the
-maintenance state for the same NodeId is restored after a ZoneNode restart.
+If the target zone owner has `maintenance=true`, the target Zone Spot's `OnActorJoin` admission
+rejects with ZoneMaintenance. Only movement within the same zone is allowed (moving to a
+different zone on the same NodeId is a new admission and is rejected too). Even if the fanout
+cache is stale, target admission is the sole final decider and source/Entry caches never produce
+a terminal. Ops records desired state to the maintenance store, so the maintenance state for the
+same NodeId is restored after a ZoneNode restart.
+
+This maintenance is application admission desired state and does not invoke
+[Host relocation flow](../../spec/server/30-host-relocation-flow.en.md)'s
+`Relocate(PlannedMaintenance)` — ZW-E is not a verification target for Spec 30 host relocation
+(that coverage is owned by a separate harness).
 
 ### 7.5 Failure And Failover Boundary
 
@@ -518,6 +568,16 @@ If the Ready ZoneNode owner process terminates, the current Actor/Spot operation
 Unavailable. The Framework doesn't automatically create a new Actor incarnation on a different
 ZoneNode. Planned relocation is a separate operation following the target-only Location Store CAS commit
 rule, and is not crash failover.
+
+If the bound-session route update is not applied within the seal timeout during relocation, the
+Framework closes the physical connection. The client's observable result is a WebSocket close;
+the client reconnects and performs JoinWorld again (rebinding to the existing Actor with the same
+PlayerId). This failure path is observed by a §9.1 self-check item.
+
+"Crash replacement" means starting a **new process (new transport RID)** under the same NodeId
+so that new objects can be hosted. It is not automatic restoration or re-creation of the objects
+the previous Ready owner held; their incomplete operations remain ended at the Unavailable
+boundary.
 
 ## 8. Implementation Structure
 
@@ -655,7 +715,9 @@ registration method and doesn't change the message or processing responsibility.
   configuration or `SetRoutingId` call.
 - ChannelName, Spot, and Actor don't create separate transport RIDs.
 - Global ZoneId routing operates independently of NodeId across process start order, graceful
-  replacement, and crash replacement.
+  replacement, and crash replacement. Here "operates" means the new process reports the same
+  NodeId under a new RID and subsequent **new** object creation/routing is normal; it does not
+  mean automatic recovery of the objects owned before the crash (§7.5).
 - The observational OwnerNodeRid is only used in probe evidence and is never passed as application
   message or placement input.
 
@@ -718,3 +780,51 @@ criteria above; the runner's evidence names the individual IDs.
 | ZW-E | Maintenance: targeted enable/disable, entry refusal, restart persistence, diagnostics |
 | ZW-F | Bots: unattended movement, population, no client push, reversal on rejection |
 | ZW-G | Node identity and replacement: NodeId vs transport RID, routing ID gate, replacement |
+
+### 11.2 Individual Scenario Definitions (canonical)
+
+Every language runner implements the individual definitions below, and prints
+`zoneworld=completed` only as the AND of the verdicts of all implemented IDs. Unless stated, the
+precondition (P) is "all components ready in §10 order + a browser or headless client connected
+to the Gateway".
+
+| ID | Precondition | Action | Assertion |
+| --- | --- | --- | --- |
+| ZW-A1 | base | JoinWorldReq | JoinWorldRes = zone-nw,(25,25); replied after admission per the §7.1 norm |
+| ZW-A2 | A1 | same-zone MoveMsg | updated coordinates and ZoneId in ZoneStateNotify |
+| ZW-A3 | A1 | one out-of-range, one over-distance, one diagonal, one maintenance move | MoveRejectedNotify reasons in the fixed OutOfRange→TooFar→DiagonalCrossing→ZoneMaintenance order |
+| ZW-A4 | two players in one zone | each moves | both players present in the same ZoneStateNotify |
+| ZW-A5 | A4 | receive ZoneStateNotify | Players sorted ascending by PlayerId UTF-8 bytes, own-zone value preferred |
+| ZW-B1 | player inside the border band | wait ticks | border snapshot arrives only at adjacent zones, never diagonal ones |
+| ZW-B2 | cross-owner adjacent pair (capacity spread per §3, discovered by probe) | border-crossing MoveMsg | relocation completes, ZoneChangedNotify, subsequent notifies on the same WebSocket |
+| ZW-B3 | right after B2 | ActorLocationProbe | same ActorId/ObjectGeneration, only owner generation advanced |
+| ZW-B4 | B1 with publishing stopped | 3 ticks pass | that FromZoneId snapshot is removed (expiry) |
+| ZW-B5 | B2 | one-way probe to the old owner route | processed exactly once at the committed target (Follow), no resubmission |
+| ZW-B6 | B2 | request probe to the old owner route | operation id/generation/payload/reply route preserved, no source Store re-read or hidden retry |
+| ZW-B7 | B2 | move back to the original owner (A→B→A) | same identity and binding kept |
+| ZW-B8 | B2-capable state | runner delays/blocks the session route-update delivery beyond the seal timeout (injection), then a border move | the Framework closes the physical connection (WebSocket close observed); the client reconnects and performs JoinWorld again, rebinding to the existing Actor with the same PlayerId (§7.5) |
+| ZW-C1 | base | Ops WatchNodesReq | Registered and Connected each accurate for both ZoneNodes |
+| ZW-C2 | C1 | graceful ZoneNode shutdown | Connected=false observed (runtime event, not polling) |
+| ZW-C3 | C2 | 15-second report TTL passes | Registered=false observed (§2.2 TTL rule) |
+| ZW-C4 | base | zone tick timer fault injection (runner) | failure observed via spot event report, no zone stall |
+| ZW-D1 | base | AnnounceWorldReq | AnnouncementId reaches every node/zone game client exactly once |
+| ZW-D2 | D1 + third subscriber added | announce again | everyone including the new subscriber receives it (proves no hardcoded publisher list) |
+| ZW-E1 | base | SetMaintenanceReq(node,true) | only that NodeId's desired state changes, recorded in the store |
+| ZW-E2 | E1 | new join into a zone on the maintenance node | rejected ZoneMaintenance by target OnActorJoin (§7.4 sole decider) |
+| ZW-E3 | E1 | movement inside a maintenance zone | allowed |
+| ZW-E4 | E1 | move to a different zone on the maintenance node | rejected ZoneMaintenance (same-zone only) |
+| ZW-E5 | E1 | ZoneNode restart | maintenance state restored for the same NodeId |
+| ZW-E6 | base | NodeDiagnosticsReq | latest zone list, player counts, maintenance returned |
+| ZW-F1 | base | observe bots | 8 bots move with the fixed §7.3 initial values/trajectories |
+| ZW-F2 | F1 | X-bot reaches the boundary | cross-owner bot relocation completes (no binding) |
+| ZW-F3 | F1 | induce a bot move rejection | direction reverses |
+| ZW-F4 | F1 | observe client pushes | no push targeted at bots (negative evidence) |
+| ZW-G1 | base | RID observation (probe) | actual `zn-<lowercase-uuid-v4>` format check (a printed marker alone is insufficient), distinct across nodes |
+| ZW-G2 | base | varied start order | readiness and routing normal |
+| ZW-G3 | base | graceful replacement (stop→start) | new RID with the same NodeId report, new objects normal |
+| ZW-G4 | base | crash replacement (kill→start) | replacement per §7.5: previous operations keep the Unavailable boundary + the new process is normal |
+| ZW-G5 | G3/G4 | routing ID gate | every §9.3 item |
+
+A per-language runner may implement some IDs runner-driven (e.g. the C4 fault injection), but it
+must not change an ID's precondition/action/assertion semantics. A new ID is added to this
+document first before any runner introduces it.
