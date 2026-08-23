@@ -23,7 +23,7 @@ fn main() {
     drop(client_mon);
 
     let msg = Message::try_from(b"hello-pair").expect("message creation failed");
-    client.send().message(msg).submit().expect("send failed");
+    sample_support::block_on(client.send().message(msg).submit()).expect("send failed");
 
     let mut received = zlink::Received::empty();
     server

@@ -61,7 +61,7 @@ fn main() {
         std::thread::spawn(move || {
             common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
                 match pub_sock.publish("P").message(msg).submit() {
-                    Ok(sent) => sent,
+                    Ok(()) => true,
                     Err(err) if err.code() == SubmitResult::NotConnected => false,
                     Err(err) => panic!("active publish: {err}"),
                 }
@@ -72,6 +72,7 @@ fn main() {
                     .message(msg)
                     .flags(zlink::SendFlags::DONT_WAIT)
                     .submit()
+                    .map(|()| true)
             });
         });
 

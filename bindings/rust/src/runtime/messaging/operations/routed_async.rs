@@ -1,35 +1,34 @@
 // SPDX-License-Identifier: MPL-2.0
 
+//! HWM-managed request terminal.
+//!
+//! Core already owns the point that drives a request to completion: the reply
+//! handler callback and `ZLINK_REQUEST_TIMED_OUT`. The binding only wires that
+//! point to the `Future`'s completion. It owns no retry queue, no deadline
+//! timer and no thread, and the `Future` resumes in whatever context Core
+//! delivered the reply on.
+
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::error::{RequestError, RequestResult, SubmitError, SubmitResult, ZlinkError};
 use crate::ffi;
-use crate::internal::{
-    DeadlineToken, RoutedAdmission, RoutedRole, RoutedTargetKey, RoutedWake, RoutedWakeOutcome,
-    duration_until,
-};
+use crate::internal::{RoutedHandle, RoutedRole};
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{
-    Empty, MessageParts, RequestOp, RequestOpStorage, RoutedSendOpStorage,
+    Empty, MessageParts, RequestOp, RequestOpStorage,
 };
 use crate::native_errors::{request_error_from_result, submit_error_from_errno};
 
-pub(crate) fn submit_routed_send(
-    operation: RoutedSendOpStorage,
-) -> impl Future<Output = Result<(), SubmitError>> + Send {
-    RoutedSendFuture::new(operation)
-}
-
-pub(crate) fn dealer_request_op(admission: Arc<RoutedAdmission>) -> RequestOp<Empty> {
+pub(crate) fn dealer_request_op(routed: Arc<RoutedHandle>) -> RequestOp<Empty> {
     RequestOp {
         inner: RequestOpStorage {
-            admission,
+            routed,
             peer_rid: None,
             parts: MessageParts::default(),
             timeout: Duration::ZERO,
@@ -39,12 +38,12 @@ pub(crate) fn dealer_request_op(admission: Arc<RoutedAdmission>) -> RequestOp<Em
 }
 
 pub(crate) fn router_request_op(
-    admission: Arc<RoutedAdmission>,
+    routed: Arc<RoutedHandle>,
     peer_rid: RoutingId,
 ) -> RequestOp<Empty> {
     RequestOp {
         inner: RequestOpStorage {
-            admission,
+            routed,
             peer_rid: Some(peer_rid),
             parts: MessageParts::default(),
             timeout: Duration::ZERO,
@@ -57,176 +56,6 @@ pub(crate) fn submit_routed_request(
     operation: RequestOpStorage,
 ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
     RoutedRequestFuture::new(operation)
-}
-
-struct PendingTarget {
-    target: ffi::zlink_routed_submit_target_t,
-    key: RoutedTargetKey,
-}
-
-struct RoutedSendFuture {
-    operation: Option<RoutedSendOpStorage>,
-    pending: Option<PendingTarget>,
-    wake: Arc<RoutedWake>,
-    deadline: Option<Instant>,
-    deadline_token: Option<Arc<DeadlineToken>>,
-    timeout_error: Option<SubmitError>,
-    waiting: bool,
-    attempted_once: bool,
-    finished: bool,
-}
-
-impl RoutedSendFuture {
-    fn new(operation: RoutedSendOpStorage) -> Self {
-        let started = Instant::now();
-        let (deadline, timeout_error) = match operation.admission.send_timeout() {
-            Ok(timeout) => (Some(started + timeout), None),
-            Err(error) => (None, Some(error)),
-        };
-        Self {
-            operation: Some(operation),
-            pending: None,
-            wake: RoutedWake::new(),
-            deadline,
-            deadline_token: None,
-            timeout_error,
-            waiting: false,
-            attempted_once: false,
-            finished: false,
-        }
-    }
-
-    fn unregister(&mut self) {
-        if let (Some(operation), Some(pending)) = (&self.operation, &self.pending) {
-            operation.admission.unregister(pending.key, &self.wake);
-        }
-        if let Some(token) = self.deadline_token.take() {
-            token.cancel();
-        }
-        self.pending = None;
-    }
-
-    fn finish(&mut self) {
-        self.unregister();
-        self.operation.take();
-        self.finished = true;
-    }
-
-    fn ensure_target(&mut self) -> Result<(), SubmitError> {
-        if self.pending.is_some() {
-            return Ok(());
-        }
-        let operation = self.operation.as_ref().expect("active routed send");
-        let (rc, target) = operation.admission.select_target(operation.target.as_ref());
-        if rc != 0 {
-            return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
-        }
-        let key = RoutedTargetKey::from_target(&target);
-        operation.admission.register(key, &self.wake);
-        self.pending = Some(PendingTarget { target, key });
-        Ok(())
-    }
-
-    fn attempt(&mut self) -> Result<i32, SubmitError> {
-        let operation = self.operation.as_ref().expect("active routed send");
-        let mut parts = clone_parts(&operation.parts)?;
-        let target = self.pending.as_ref().expect("selected target").target;
-        let role = operation.admission.role();
-        operation
-            .admission
-            .with_attempt_gate(|handle| {
-                submit_exact_send(handle, role, operation.target.as_ref(), &target, &mut parts)
-            })
-            .ok_or_else(|| submit_error_from_errno(libc::ECANCELED))
-    }
-}
-
-impl Future for RoutedSendFuture {
-    type Output = Result<(), SubmitError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.finished {
-            panic!("routed send Future polled after completion");
-        }
-        if let Some(error) = self.timeout_error.take() {
-            self.finish();
-            return Poll::Ready(Err(error));
-        }
-
-        let outcome = self.wake.register_waker(cx.waker());
-        match outcome {
-            RoutedWakeOutcome::Terminal(errno) => {
-                self.finish();
-                return Poll::Ready(Err(submit_error_from_errno(errno)));
-            }
-            RoutedWakeOutcome::Deadline if self.attempted_once => {
-                self.finish();
-                return Poll::Ready(Err(timeout_submit_error()));
-            }
-            _ => {}
-        }
-
-        if self.waiting {
-            match self.wake.take_ready() {
-                RoutedWakeOutcome::Ready => self.waiting = false,
-                RoutedWakeOutcome::Terminal(errno) => {
-                    self.finish();
-                    return Poll::Ready(Err(submit_error_from_errno(errno)));
-                }
-                RoutedWakeOutcome::Deadline => {
-                    self.finish();
-                    return Poll::Ready(Err(timeout_submit_error()));
-                }
-                RoutedWakeOutcome::Waiting => return Poll::Pending,
-            }
-        }
-
-        if let Err(error) = self.ensure_target() {
-            self.finish();
-            return Poll::Ready(Err(error));
-        }
-
-        self.attempted_once = true;
-        let rc = match self.attempt() {
-            Ok(rc) => rc,
-            Err(error) => {
-                self.finish();
-                return Poll::Ready(Err(error));
-            }
-        };
-        if rc == SubmitResult::Ok as i32 {
-            self.finish();
-            return Poll::Ready(Ok(()));
-        }
-        if rc != SubmitResult::Backpressured as i32 {
-            let error = submit_error_from_errno(unsafe { ffi::zlink_errno() });
-            self.finish();
-            return Poll::Ready(Err(error));
-        }
-
-        if self
-            .deadline
-            .is_some_and(|deadline| deadline <= Instant::now())
-        {
-            self.finish();
-            return Poll::Ready(Err(timeout_submit_error()));
-        }
-        if self.deadline_token.is_none() {
-            self.deadline_token = self
-                .deadline
-                .map(|deadline| DeadlineToken::schedule(deadline, &self.wake));
-        }
-        self.waiting = true;
-        Poll::Pending
-    }
-}
-
-impl Drop for RoutedSendFuture {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.unregister();
-        }
-    }
 }
 
 struct RequestCompletionState {
@@ -287,121 +116,89 @@ impl RequestCompletion {
     }
 }
 
+/// Consumer side of one Core-owned request.
+///
+/// The first poll performs exactly one submit against one exact target. Core
+/// owns the HWM contract for that submit and the reply deadline; on acceptance
+/// the Core reply callback completes this Future.
 struct RoutedRequestFuture {
     operation: Option<RequestOpStorage>,
-    pending: Option<PendingTarget>,
-    wake: Arc<RoutedWake>,
     completion: Arc<RequestCompletion>,
-    deadline: Option<Instant>,
-    deadline_token: Option<Arc<DeadlineToken>>,
-    init_error: Option<SubmitError>,
-    waiting: bool,
-    attempted_once: bool,
     accepted: bool,
     finished: bool,
 }
 
 impl RoutedRequestFuture {
     fn new(operation: RequestOpStorage) -> Self {
-        let started = Instant::now();
-        let timeout = if operation.timeout.is_zero() {
-            operation.admission.request_timeout()
-        } else {
-            Ok(operation.timeout)
-        };
-        let (deadline, init_error) = match timeout {
-            Ok(timeout) => (Some(started + timeout), None),
-            Err(error) => (None, Some(error)),
-        };
         Self {
             operation: Some(operation),
-            pending: None,
-            wake: RoutedWake::new(),
             completion: RequestCompletion::new(),
-            deadline,
-            deadline_token: None,
-            init_error,
-            waiting: false,
-            attempted_once: false,
             accepted: false,
             finished: false,
         }
     }
 
-    fn unregister(&mut self) {
-        if let (Some(operation), Some(pending)) = (&self.operation, &self.pending) {
-            operation.admission.unregister(pending.key, &self.wake);
+    fn start(&mut self) -> Result<(), ZlinkError> {
+        let operation = self.operation.take().expect("active routed request");
+        if operation.parts.is_empty() {
+            return Err(SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL).into());
         }
-        if let Some(token) = self.deadline_token.take() {
-            token.cancel();
-        }
-        self.pending = None;
-    }
 
-    fn finish(&mut self) {
-        self.unregister();
-        self.operation.take();
-        self.finished = true;
-    }
+        let timeout = if operation.timeout.is_zero() {
+            operation.routed.request_timeout()?
+        } else {
+            operation.timeout
+        };
+        let timeout_ms = duration_to_timeout_ms(timeout);
 
-    fn ensure_target(&mut self) -> Result<(), SubmitError> {
-        if self.pending.is_some() {
-            return Ok(());
-        }
-        let operation = self.operation.as_ref().expect("active routed request");
-        let (rc, target) = operation
-            .admission
-            .select_target(operation.peer_rid.as_ref());
+        let role = operation.routed.role();
+        let router_rid = match role {
+            RoutedRole::Dealer => None,
+            RoutedRole::Router => Some(
+                operation
+                    .peer_rid
+                    .as_ref()
+                    .ok_or_else(|| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))?,
+            ),
+        };
+        let (rc, target) = operation.routed.select_target(router_rid);
         if rc != 0 {
-            return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
-        }
-        let key = RoutedTargetKey::from_target(&target);
-        operation.admission.register(key, &self.wake);
-        self.pending = Some(PendingTarget { target, key });
-        Ok(())
-    }
-
-    fn attempt(&mut self) -> Result<i32, SubmitError> {
-        let operation = self.operation.as_ref().expect("active routed request");
-        let mut parts = clone_parts(&operation.parts)?;
-        let target = self.pending.as_ref().expect("selected target").target;
-        let role = operation.admission.role();
-        let remaining = self
-            .deadline
-            .map(duration_until)
-            .map(duration_to_timeout_ms)
-            .unwrap_or(0);
-        if remaining == 0 && self.attempted_once {
-            return Ok(SubmitResult::Backpressured as i32);
+            return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }).into());
         }
 
+        let mut parts = operation.parts.into_vec();
         let callback_owner = Arc::into_raw(Arc::clone(&self.completion));
-        let result = operation.admission.with_attempt_gate(|handle| {
+        let result = operation.routed.with_submit_gate(|handle| {
             submit_exact_request(
                 handle,
                 role,
                 operation.peer_rid.as_ref(),
                 &target,
                 &mut parts,
-                remaining,
+                timeout_ms,
                 callback_owner.cast_mut().cast(),
             )
         });
         let rc = match result {
             Some(rc) => rc,
             None => {
-                unsafe {
-                    drop(Arc::from_raw(callback_owner));
-                }
-                return Err(submit_error_from_errno(libc::ECANCELED));
+                unsafe { drop(Arc::from_raw(callback_owner)) };
+                return Err(submit_error_from_errno(libc::ECANCELED).into());
             }
         };
         if rc != SubmitResult::Ok as i32 {
-            unsafe {
-                drop(Arc::from_raw(callback_owner));
+            unsafe { drop(Arc::from_raw(callback_owner)) };
+            let errno = unsafe { ffi::zlink_errno() };
+            // Core reports its own request-domain outcomes through the same
+            // submit result; keep the timeout / cancel detail in that domain.
+            if errno == libc::ETIMEDOUT {
+                return Err(timeout_request_error().into());
             }
+            return Err(submit_error_from_errno(errno).into());
         }
-        Ok(rc)
+        // Core owns the request from here: the reply callback completes it.
+        self.accepted = true;
+        Ok(())
     }
 }
 
@@ -412,117 +209,32 @@ impl Future for RoutedRequestFuture {
         if self.finished {
             panic!("routed request Future polled after completion");
         }
-        if self.accepted {
-            return match self.completion.poll(cx.waker()) {
-                Poll::Ready(Ok(parts)) => {
-                    self.finished = true;
-                    Poll::Ready(Ok(parts))
-                }
-                Poll::Ready(Err(error)) => {
-                    self.finished = true;
-                    Poll::Ready(Err(error.into()))
-                }
-                Poll::Pending => Poll::Pending,
-            };
-        }
-        if let Some(error) = self.init_error.take() {
-            self.finish();
-            return Poll::Ready(Err(error.into()));
-        }
-        if !self.attempted_once
-            && self
-                .deadline
-                .is_some_and(|deadline| deadline <= Instant::now())
-        {
-            self.finish();
-            return Poll::Ready(Err(timeout_request_error().into()));
-        }
-
-        let outcome = self.wake.register_waker(cx.waker());
-        match outcome {
-            RoutedWakeOutcome::Terminal(errno) => {
-                self.finish();
-                return Poll::Ready(Err(submit_error_from_errno(errno).into()));
-            }
-            RoutedWakeOutcome::Deadline if self.attempted_once => {
-                self.finish();
-                return Poll::Ready(Err(timeout_request_error().into()));
-            }
-            _ => {}
-        }
-        if self.waiting {
-            match self.wake.take_ready() {
-                RoutedWakeOutcome::Ready => self.waiting = false,
-                RoutedWakeOutcome::Terminal(errno) => {
-                    self.finish();
-                    return Poll::Ready(Err(submit_error_from_errno(errno).into()));
-                }
-                RoutedWakeOutcome::Deadline => {
-                    self.finish();
-                    return Poll::Ready(Err(timeout_request_error().into()));
-                }
-                RoutedWakeOutcome::Waiting => return Poll::Pending,
+        if !self.accepted {
+            if let Err(error) = self.start() {
+                self.finished = true;
+                return Poll::Ready(Err(error));
             }
         }
-
-        if let Err(error) = self.ensure_target() {
-            self.finish();
-            return Poll::Ready(Err(error.into()));
-        }
-
-        let rc = match self.attempt() {
-            Ok(rc) => rc,
-            Err(error) => {
-                self.finish();
-                return Poll::Ready(Err(error.into()));
+        match self.completion.poll(cx.waker()) {
+            Poll::Ready(Ok(parts)) => {
+                self.finished = true;
+                Poll::Ready(Ok(parts))
             }
-        };
-        self.attempted_once = true;
-        if rc == SubmitResult::Ok as i32 {
-            self.unregister();
-            self.operation.take();
-            self.accepted = true;
-            return match self.completion.poll(cx.waker()) {
-                Poll::Ready(Ok(parts)) => {
-                    self.finished = true;
-                    Poll::Ready(Ok(parts))
-                }
-                Poll::Ready(Err(error)) => {
-                    self.finished = true;
-                    Poll::Ready(Err(error.into()))
-                }
-                Poll::Pending => Poll::Pending,
-            };
+            Poll::Ready(Err(error)) => {
+                self.finished = true;
+                Poll::Ready(Err(error.into()))
+            }
+            Poll::Pending => Poll::Pending,
         }
-        if rc != SubmitResult::Backpressured as i32 {
-            let error = submit_error_from_errno(unsafe { ffi::zlink_errno() });
-            self.finish();
-            return Poll::Ready(Err(error.into()));
-        }
-
-        if self
-            .deadline
-            .is_some_and(|deadline| deadline <= Instant::now())
-        {
-            self.finish();
-            return Poll::Ready(Err(timeout_request_error().into()));
-        }
-        if self.deadline_token.is_none() {
-            self.deadline_token = self
-                .deadline
-                .map(|deadline| DeadlineToken::schedule(deadline, &self.wake));
-        }
-        self.waiting = true;
-        Poll::Pending
     }
 }
 
 impl Drop for RoutedRequestFuture {
     fn drop(&mut self) {
-        if self.accepted {
+        if self.accepted && !self.finished {
+            // The request is Core's; only the consumer detaches. Core still
+            // completes the reply or the timeout exactly once.
             self.completion.detach();
-        } else if !self.finished {
-            self.unregister();
         }
     }
 }
@@ -552,62 +264,6 @@ unsafe extern "C" fn routed_reply_callback(
     completion.complete(outcome);
 }
 
-fn clone_parts(parts: &MessageParts) -> Result<Vec<Message>, SubmitError> {
-    parts
-        .iter()
-        .map(|part| {
-            part.try_clone().map_err(|error| {
-                submit_error_from_errno(if error.native_errno() == 0 {
-                    libc::ENOMEM
-                } else {
-                    error.native_errno()
-                })
-            })
-        })
-        .collect()
-}
-
-fn submit_exact_send(
-    handle: *mut c_void,
-    role: RoutedRole,
-    router_rid: Option<&RoutingId>,
-    target: &ffi::zlink_routed_submit_target_t,
-    parts: &mut [Message],
-) -> i32 {
-    let count = parts.len();
-    for (index, part) in parts.iter_mut().enumerate() {
-        let flag = if index + 1 == count {
-            ffi::zlink_part_flag_t::ZLINK_PART_FINAL
-        } else {
-            ffi::zlink_part_flag_t::ZLINK_PART_MORE
-        };
-        let rc = unsafe {
-            match role {
-                RoutedRole::Dealer => ffi::zlink_dealer_send_transport_pair_part(
-                    handle,
-                    target,
-                    part.raw_mut(),
-                    ffi::ZLINK_DONTWAIT,
-                    flag,
-                ),
-                RoutedRole::Router => ffi::zlink_send_part_transport_pair(
-                    handle,
-                    router_rid.expect("router target").as_raw(),
-                    target.transport_pair_id,
-                    target.transport_pair_generation,
-                    part.raw_mut(),
-                    ffi::ZLINK_DONTWAIT,
-                    flag,
-                ),
-            }
-        };
-        if rc != SubmitResult::Ok as i32 {
-            return rc;
-        }
-    }
-    SubmitResult::Ok as i32
-}
-
 fn submit_exact_request(
     handle: *mut c_void,
     role: RoutedRole,
@@ -631,13 +287,15 @@ fn submit_exact_request(
         } else {
             std::ptr::null_mut()
         };
+        // Core owns the HWM contract for this submit: it waits internally,
+        // bounds the wait with SNDTIMEO, and reports the outcome once.
         let rc = unsafe {
             match role {
                 RoutedRole::Dealer => ffi::zlink_dealer_request_transport_pair_part(
                     handle,
                     target,
                     part.raw_mut(),
-                    ffi::ZLINK_DONTWAIT,
+                    0,
                     flag,
                     if final_part { timeout_ms } else { 0 },
                     handler,
@@ -649,7 +307,7 @@ fn submit_exact_request(
                     target.transport_pair_id,
                     target.transport_pair_generation,
                     part.raw_mut(),
-                    ffi::ZLINK_DONTWAIT,
+                    0,
                     flag,
                     if final_part { timeout_ms } else { 0 },
                     handler,
@@ -669,10 +327,6 @@ fn duration_to_timeout_ms(duration: Duration) -> u32 {
         return 0;
     }
     duration.as_millis().clamp(1, u32::MAX as u128) as u32
-}
-
-fn timeout_submit_error() -> SubmitError {
-    SubmitError::new(SubmitResult::Backpressured, libc::ETIMEDOUT)
 }
 
 fn timeout_request_error() -> RequestError {

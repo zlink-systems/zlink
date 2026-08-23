@@ -22,7 +22,13 @@ fn blocking_send_failure_surfaces_error() {
 
     let rid = RoutingId::from(b"nonexistent-peer");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let result = test_support::block_on(router.send(&rid).message(msg).submit());
+    let result = test_support::block_on(
+        router
+            .send(&rid)
+            .message(msg)
+            .timeout(Duration::from_millis(200))
+            .submit(),
+    );
 
     // Must be an error, not silently swallowed
     assert!(
@@ -59,22 +65,30 @@ fn blocking_publish_failure_surfaces_error() {
 }
 
 #[test]
-fn try_send_returns_not_ready_or_backpressured() {
+fn send_without_peer_completes_through_the_core_deadline() {
+    // 0.13.0: `send()` has no flags stage. `zlink_send_async` never blocks, so
+    // an unroutable record stays a Core-owned pending operation until the
+    // per-operation deadline expires and the completion resolves the Future.
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://sf-try-send-nr").unwrap();
     // No peer connected
 
     let msg = Message::try_from(b"data").unwrap();
-    let _ = sock
-        .send()
-        .message(msg)
-        .flags(SendFlags::DONT_WAIT)
-        .submit();
+    let result = test_support::block_on(
+        sock.send()
+            .message(msg)
+            .timeout(Duration::from_millis(200))
+            .submit(),
+    );
+    assert!(
+        result.is_err(),
+        "an unroutable send must resolve as a failure, not silently succeed"
+    );
 }
 
 #[test]
-fn try_send_backpressure() {
+fn send_backpressure_is_absorbed_by_core_not_by_the_binding() {
     let ctx = Context::new().unwrap();
     let a = ctx.pair_socket().unwrap();
     a.common_options().set_send_high_water_mark(1).unwrap();
@@ -84,19 +98,21 @@ fn try_send_backpressure() {
     b.connect("inproc://sf-try-send-bp").unwrap();
     std::thread::sleep(Duration::from_millis(50));
 
-    // Fill the HWM
-    for _ in 0..100 {
+    // Nothing drains `b`, so the pipe reaches its HWM. Every record still
+    // completes exactly once: either Core admits it, or the per-operation
+    // deadline turns it into a failure. The binding never retries.
+    let mut outcomes = 0usize;
+    for _ in 0..32 {
         let msg = Message::try_from(b"fill-buffer").unwrap();
-        if a.send()
-            .message(msg)
-            .flags(SendFlags::DONT_WAIT)
-            .submit()
-            .is_err()
-        {
-            break;
-        }
+        let _ = test_support::block_on(
+            a.send()
+                .message(msg)
+                .timeout(Duration::from_millis(200))
+                .submit(),
+        );
+        outcomes += 1;
     }
-    // At some point we should see Backpressured or error - not silently dropping
+    assert_eq!(outcomes, 32, "every submitted record must complete exactly once");
 }
 
 #[test]
@@ -122,11 +138,12 @@ fn try_send_not_ready() {
     // No peer connected – socket is not ready to send
 
     let msg = Message::try_from(b"no-peer").unwrap();
-    let _ = sock
-        .send()
-        .message(msg)
-        .flags(SendFlags::DONT_WAIT)
-        .submit();
+    let _ = test_support::block_on(
+        sock.send()
+            .message(msg)
+            .timeout(Duration::from_millis(200))
+            .submit(),
+    );
 }
 
 #[test]
@@ -176,11 +193,12 @@ fn try_send_non_eagain_error_not_swallowed() {
     ctx.shutdown().unwrap();
 
     let msg = Message::try_from(b"after-shutdown").unwrap();
-    let result = sock
-        .send()
-        .message(msg)
-        .flags(SendFlags::DONT_WAIT)
-        .submit();
+    let result = test_support::block_on(
+        sock.send()
+            .message(msg)
+            .timeout(Duration::from_millis(200))
+            .submit(),
+    );
     // ETERM is not EAGAIN – must be Err
     assert!(result.is_err(), "non-EAGAIN error must surface as Err");
 }

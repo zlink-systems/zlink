@@ -56,13 +56,8 @@ fn main() {
             active_deadline,
             config.size,
             common::PHASE_ACTIVE,
-            |msg| match sender
-                .send()
-                .message(msg)
-                .flags(zlink::SendFlags::DONT_WAIT)
-                .submit()
-            {
-                Ok(sent) => sent,
+            |msg| match common::block_on(sender.send().message(msg).submit()) {
+                Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) => panic!("active send: {err}"),
             },
@@ -70,7 +65,7 @@ fn main() {
         common::send_stop_token(|msg| {
             // Match C perf: the phase terminator must be queued after every
             // accepted payload even when the data path has reached its HWM.
-            sender.send().message(msg).submit()
+            common::block_on(sender.send().message(msg).submit()).map(|()| true)
         });
     });
 

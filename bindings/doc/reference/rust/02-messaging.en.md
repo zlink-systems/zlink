@@ -195,15 +195,18 @@ received.reply().message(Message::try_from("ok")?).submit()?;
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `SendOp<Empty>` | `.message(self, Message) -> SendOp<Ready>` | starts the chain, consumes `self`, returns the next-stage type |
-| `SendOp<Ready>` | `.message(...)` / `.flags(self, SendFlags) -> Self` / `.submit(self) -> Result<bool, SubmitError>` | add parts, set flags, terminal |
+| `SendOp<Ready>` | `.message(...)` / `.timeout(self, Duration) -> Self` / `.submit(self) -> impl Future<Output = Result<(), SubmitError>>` | add parts, set the per-operation Core deadline, terminal. There is no flags stage: `zlink_send_async` never blocks, so `DONT_WAIT` has no meaning here |
+| `PublishOp<Empty>` → `PublishOp<Ready>` | `.message(...)` / `.flags(self, SendFlags) -> Self` / `.submit(self) -> Result<(), SubmitError>` | PUB/XPUB only; synchronous because PUB is lossy and never waits at a HWM |
 | `RequestOp<Empty>` → `RequestOp<Ready>` | same as `SendOp` + `.timeout(self, Duration) -> Self` | mirrors the send chain, adding a reply-wait timeout |
 | `RequestOp<Ready>.flags(self, SendFlags)` | narrows to `RequestOp<CallbackReady>` | exposes the same `message`/`timeout`/`flags`/`submit` methods again — flags may be set more than once at that stage |
 | `RequestOp<Ready>::submit` / `RequestOp<CallbackReady>::submit` | `submit<F>(self, callback: F) -> Result<(), SubmitError> where F: FnOnce(Result<Vec<Message>, RequestError>) + Send + 'static` | **both callback-only** — there is no `Future`/async-returning overload in this binding's public contract, unlike every other language covered so far |
 | `ReplyOp<Empty>` → `ReplyOp<Ready>` | mirrors `SendOp`, `.submit(self) -> Result<(), SubmitError>` | no flags-narrowing behavior of its own beyond `.flags(self, SendFlags) -> Self` |
 
-**Completion result.** `SendOp::submit()` returns `Result<bool, SubmitError>` — the inner `bool` is
-`false` only when `SendFlags::DONT_WAIT` was set and the send would have blocked (back-pressure);
-any other failure is the `Err` variant. `ReplyOp::submit()` returns `Result<(), SubmitError>`.
+**Completion result.** `SendOp::submit()` returns a runtime-independent `Future` resolving to
+`Result<(), SubmitError>`; the Core send-completion callback drives it, and a non-admitted terminal
+completion (timeout, cancel, close, route failure) surfaces as `SubmitResult::NotAdmitted` with the
+Core errno. Dropping the Future before completion requests `zlink_send_async_cancel`.
+`PublishOp::submit()` and `ReplyOp::submit()` return `Result<(), SubmitError>` synchronously.
 `RequestOp::submit(callback)` returns `Result<(), SubmitError>` for the *dispatch* itself (whether
 the request was successfully submitted) — the actual reply-or-failure is delivered later to
 `callback` as `Result<Vec<Message>, RequestError>`, on a background dispatch thread. Every builder

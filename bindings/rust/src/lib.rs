@@ -100,7 +100,9 @@ pub use flags::{
 pub use message::Message;
 pub use message_socket_contracts::{DealerSocket, PairSocket};
 pub use messaging_operation_contracts::SendResult;
-pub use messaging_operations::{Empty, Ready, ReplyOp, RequestOp, RoutedSendOp, SendOp};
+pub use messaging_operations::{
+    Empty, PublishOp, Ready, ReplyOp, RequestOp, RoutedSendOp, SendOp,
+};
 pub use messaging_subscription_event::SubscriptionEvent;
 pub use monitor_contracts::{
     MONITOR_EVENT_ALL, MONITOR_EVENT_CONNECTION_READY, MonitorEvent, MonitorEventFlags,

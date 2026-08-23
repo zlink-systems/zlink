@@ -31,7 +31,8 @@ pub(crate) fn router_inner_mut(socket: &mut RouterSocket) -> &mut SocketInner {
 
 pub(crate) fn recv_router_once(
     handle: *mut c_void,
-    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+    routed: std::sync::Arc<crate::internal::RoutedHandle>,
+    completions: std::sync::Arc<crate::internal::SendCompletions>,
     flags: u32,
     out: &mut Received,
 ) -> Result<bool, RecvError> {
@@ -97,7 +98,7 @@ pub(crate) fn recv_router_once(
     };
 
     if let Some((routing_id, request_seq)) = received {
-        out.replace_router_parts(handle, admission, routing_id, request_seq);
+        out.replace_router_parts(handle, routed, completions, routing_id, request_seq);
         Ok(true)
     } else {
         Ok(false)
@@ -106,7 +107,8 @@ pub(crate) fn recv_router_once(
 
 pub(crate) fn recv_router_retained_once(
     handle: *mut c_void,
-    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+    routed: std::sync::Arc<crate::internal::RoutedHandle>,
+    completions: std::sync::Arc<crate::internal::SendCompletions>,
     flags: u32,
     out: &mut Received,
 ) -> Result<bool, RecvError> {
@@ -179,7 +181,14 @@ pub(crate) fn recv_router_retained_once(
     };
 
     if let Some((routing_id, request_seq, leases)) = received {
-        out.replace_router_retained_parts(handle, admission, routing_id, request_seq, leases);
+        out.replace_router_retained_parts(
+            handle,
+            routed,
+            completions,
+            routing_id,
+            request_seq,
+            leases,
+        );
         Ok(true)
     } else {
         Ok(false)

@@ -393,30 +393,38 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   let reply = dealer.request().message(request).submit().await?;
   ```
 
-  DEALER와 ROUTER의 routed send `submit()`은 runtime 비종속
+  HWM-managed **send**(PAIR `send()`, STREAM `send(target)`, `Received::send()`,
+  DEALER/ROUTER routed send)의 `submit()`은 runtime 비종속
   `Future<Output = Result<(), SubmitError>>`를 반환하고, request `submit()`은
-  `Future<Output = Result<Vec<Message>, ZlinkError>>`를 반환한다. Poll 중에는 native
-  blocking submit이나 HWM 회복 대기로 runtime worker를 점유하지 않는다. HWM이
-  회복되면 처음 선택한 exact target에만 다시 시도하며, 다른 target의 작업은 독립적으로
-  진행할 수 있다.
-- Socket runtime은 비동기 operation을 받기 전에 Core routed-target readiness handler를
-  장기 등록한다. Future state는 최초 poll 시도 전에 정확한 `(socket, RID, transport pair
-  ID, generation)` key와 complete record를 pending에 넣고 같은 target에 `DONTWAIT`로
-  시도한다. Callback은 그 key만 ready로 표시하며 native retry는 callback 밖의 pump가
-  수행한다. Pair generation이 다른 event는 stale wake로 무시한다. 같은 native handle의
-  outbound 경로는 첫 part부터 `FINAL`까지 한 attempt만 보호하는 짧은 gate를 공유하고
-  readiness 대기 전에 반환한다.
+  `Future<Output = Result<Vec<Message>, ZlinkError>>`를 반환한다. **publish**는
+  이 분류에 포함되지 않으며 동기 `submit() -> Result<(), SubmitError>`가
+  terminal이다(lossy PUB 의미론, `ZLINK_PUB_OPT_NODROP`에서는 즉시
+  `Backpressured` 오류).
+- Send Future의 완료는 Core send-completion 통지가 구동한다. Socket runtime은
+  `zlink_send_async` 가 지원하는 subject(PAIR, DEALER, ROUTER, STREAM)마다
+  socket당 하나의 `zlink_send_complete_handler`를 소켓 수명 동안 등록하고,
+  Future는 최초 poll에서 record 전체를 `zlink_send_async`로 한 번 넘긴다.
+  Core가 즉시 admit하면 completion이 inline으로 실행되어 그 poll이 곧바로
+  `Ready`가 된다. Completion callback은 결과를 저장하고 waker를 깨우는 일만
+  하며(Core는 callback 안에서의 submit을 `EDEADLK`로 거부한다), 재개는 Core가
+  완료를 전달한 컨텍스트에서 일어난다. `timeout(...)`은
+  `zlink_send_async_options_t::timeout_ms`(per-operation deadline)로 전달한다.
+  바인딩은 park queue, WRITABLE 재시도, deadline timer, dispatcher thread를
+  두지 않는다 — `send_ready` readiness-hint 표면은 폐지되었고 소켓 타입의
+  `on_send_ready`도 함께 제거되었다.
 - Routed send/request builder에는 callback, blocking wait, progress polling terminal을
-  함께 제공하지 않는다. PAIR·PUB·STREAM의 즉시 submit과 ROUTER reply는 별도의 동기
+  함께 제공하지 않는다. PUB/XPUB `publish`와 ROUTER reply는 별도의 동기
   operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`인 one-shot이다. Native reply를
   HWM 없는 completion lane에 한 번 호출해 terminal reply 또는 error reply를 제출한다.
   HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `Err(SubmitError)`로 반환한다.
-- Future가 native acceptance 전에 drop되면 해당 pending operation을 취소한다.
-  Request가 acceptance된 뒤 Future가 drop되면 소비자만 분리하며, 이미 수용된 request의
-  reply 또는 timeout 정리는 계속 완료된다. Completion은 정확히 한 번만 확정된다. 같은
-  target의 엄격한 FIFO 순서는 public 계약이 아니다.
+- Send Future가 완료 전에 drop되면 `zlink_send_async_cancel`로 취소를 요청한다.
+  Core는 취소된 operation도 정확히 한 번 완료하므로, 바인딩은 그 completion이
+  도착할 때까지 op state를 socket-scoped registry에 살려 두며 op id로 ABA를
+  방지한다. Request가 acceptance된 뒤 Future가 drop되면 소비자만 분리하며, 이미
+  수용된 request의 reply 또는 timeout 정리는 Core가 계속 완료한다. Completion은
+  정확히 한 번만 확정된다. 같은 target의 엄격한 FIFO 순서는 public 계약이 아니다.
 
 ## Crate 레이아웃
 

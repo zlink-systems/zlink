@@ -104,9 +104,8 @@ if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 
 | Member | 의미 |
 | --- | --- |
-| `send(&self) -> SendOp<Empty>` | 공유 `SendOp` builder를 시작 |
+| `send(&self) -> SendOp<Empty>` | 공유 `SendOp` builder를 시작; `submit()`은 Core send-completion callback이 완료를 구동하는 `Future`를 반환 |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 메시지로 채움 |
-| `on_send_ready<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn() + Send + 'static` | back-pressure 해제 콜백을 등록 |
 | `common_options() -> CommonSocketOptions<'_>` | 공유 option facade |
 
 **Completion result.** `recv`는 `RecvFlags::DONT_WAIT`가 설정되고
@@ -164,11 +163,10 @@ router.send(&peer_rid).message(Message::try_from("hello")?)?.submit()?;
 
 | Member | 의미 |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작 |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작; `submit()`은 Core send-completion callback이 완료를 구동하는 `Future`를 반환 |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 메시지로 채움 |
 | `request(&self, peer_rid: &RoutingId) -> RequestOp<Empty>` | Messaging category의 `RequestOp`, 특정 peer로 향함 |
 | `reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty>` | Messaging category의 `ReplyOp`, 해당 peer의 request에 응답 |
-| `on_send_ready<F>(...)` | back-pressure 해제 콜백을 등록 |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `common_options()` | 공유 option facade |
 | `router_options() -> RouterSocketOptions<'_>` | 타입별 option facade 반환: `set_mandatory(bool)` — set-only; `set_probe(bool)` — set-only; `set_connect_routing_id(&RoutingId)` — set-only(**이 binding엔 할당된 connect routing id의 getter가 없다**, dotnet/cpp의 읽기 전용 `ConnectRoutingId`/`connect_routing_id()` property와 다름); `weight()`/`set_weight(u32)`; `request_timeout()`/`set_request_timeout(Duration)` — Dealer와 달리 양방향 모두 |
@@ -195,7 +193,7 @@ publish하고, SUB는 구독을 socket option으로 설정하는 방식으로
 
 ```rust
 let pub_socket = ctx.pub_socket()?;
-pub_socket.publish("prices").message(Message::try_from(tick)?)?.submit()?;
+pub_socket.publish("prices").message(Message::try_from(tick)?).submit()?;
 
 let sub = ctx.sub_socket()?;
 sub.set_subscription("prices.")?;
@@ -207,8 +205,7 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 
 | 타입 | Member | 의미 |
 | --- | --- | --- |
-| `PubSocket` | `publish(&self, topic: &str) -> SendOp<Empty>` | 공유 `SendOp` builder를 시작; `topic`이 내부 고정 크기 검사를 통과하지 못하면 panic(`fixed_topic_or_panic`을 통해) |
-| | `on_send_ready<F>(...)` | back-pressure 해제 콜백을 등록 |
+| `PubSocket` | `publish(&self, topic: &str) -> PublishOp<Empty>` | `PublishOp` builder를 시작; PUB는 lossy이고 HWM에서 대기하지 않으므로 `submit()`은 동기 `Result<(), SubmitError>`; `topic`이 내부 고정 크기 검사를 통과하지 못하면 panic(`fixed_topic_or_panic`을 통해) |
 | | `common_options()` | 공유 option facade |
 | | `pub_options() -> PubSocketOptions<'_>` | 타입별 option facade |
 | `SubSocket` / `XSubSocket` | `subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 매칭 publish로 채움 |
@@ -250,11 +247,10 @@ stream.on_packet(|routing_id, header, body| { /* header/body 소유 */ })?;
 
 | Member | 의미 |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작 |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작; `submit()`은 Core send-completion callback이 완료를 구동하는 `Future`를 반환 |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 packet으로 채움; 이 binding의 `recv`는 추가로 source routing id를 `out`의 send/reply context로 포착해서, 이후 `out.send()`가 packet을 보낸 쪽으로 향하게 한다 — 다른 언어에선 이렇게 명시적으로 문서화되지 않은 STREAM 고유 보강 |
 | `disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError>` | 직접 선언됨, `StreamSocket`엔 `connect`/`disconnect`가 전혀 없다 — 다른 socket type이 공유하는 connect/disconnect/disconnect_rid 삼총사를 아예 선언하지 않는다 |
 | `on_packet<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(RoutingId, Message, Message) + Send + 'static` | callback 기반 packet loop를 등록; handler가 `header`와 `body`를 둘 다 소유하며, 반환하면 drop됨 |
-| `on_send_ready<F>(...)` | back-pressure 해제 콜백을 등록 |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `common_options()` | 공유 option facade |
 | `stream_options() -> StreamSocketOptions<'_>` | 타입별 option facade: `set_notify(bool)`/`notify()` — 활성화 시 peer connect/disconnect를 application 메시지로 전달 |

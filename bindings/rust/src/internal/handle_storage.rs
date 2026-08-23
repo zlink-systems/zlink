@@ -43,9 +43,11 @@ unsafe impl Send for MonitorStorage {}
 
 pub(crate) struct SocketStorage {
     pub(crate) handle: *mut c_void,
-    pub(crate) send_ready_cb: Option<CallbackBox>,
-    pub(crate) routed_ready_cb: Option<CallbackBox>,
-    pub(crate) routed_admission: Option<Arc<super::RoutedAdmission>>,
+    /// Long-lived registration of the Core send-completion handler. Present
+    /// for every socket type `zlink_send_async` supports.
+    pub(crate) send_complete_cb: Option<CallbackBox>,
+    pub(crate) send_completions: Option<Arc<super::SendCompletions>>,
+    pub(crate) routed_handle: Option<Arc<super::RoutedHandle>>,
     pub(crate) packet_cb: Option<CallbackBox>,
 }
 

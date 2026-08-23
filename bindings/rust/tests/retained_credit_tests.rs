@@ -41,21 +41,25 @@ fn ordinary_pair_recv_returns_credit_and_retained_releases_on_reuse_and_drop() {
     sender.connect("inproc://rust-retained-pair").unwrap();
     thread::sleep(Duration::from_millis(50));
 
-    sender
-        .send()
-        .message(Message::try_from(b"ordinary").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        sender
+            .send()
+            .message(Message::try_from(b"ordinary").unwrap())
+            .submit(),
+    )
+    .unwrap();
     let mut ordinary = Received::empty();
     assert!(receiver.recv(&mut ordinary, RecvFlags::NONE).unwrap());
     assert_eq!(lease_count(&ctx), 0);
 
-    sender
-        .send()
-        .message(Message::try_from(b"retained-1").unwrap())
-        .message(Message::try_from(b"retained-2").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        sender
+            .send()
+            .message(Message::try_from(b"retained-1").unwrap())
+            .message(Message::try_from(b"retained-2").unwrap())
+            .submit(),
+    )
+    .unwrap();
     let mut retained = Received::empty();
     assert!(
         receiver
@@ -72,11 +76,13 @@ fn ordinary_pair_recv_returns_credit_and_retained_releases_on_reuse_and_drop() {
     );
     assert_eq!(lease_count(&ctx), 0);
 
-    sender
-        .send()
-        .message(Message::try_from(b"drop-release").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        sender
+            .send()
+            .message(Message::try_from(b"drop-release").unwrap())
+            .submit(),
+    )
+    .unwrap();
     assert!(
         receiver
             .recv_retained(&mut retained, RecvFlags::NONE)

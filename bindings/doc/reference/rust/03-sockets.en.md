@@ -98,9 +98,8 @@ if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 
 | Member | Meaning |
 | --- | --- |
-| `send(&self) -> SendOp<Empty>` | starts the shared `SendOp` builder |
+| `send(&self) -> SendOp<Empty>` | starts the shared `SendOp` builder; its `submit()` returns a `Future` completed by the Core send-completion callback |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next message |
-| `on_send_ready<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn() + Send + 'static` | registers a back-pressure-cleared callback |
 | `common_options() -> CommonSocketOptions<'_>` | the shared options facade |
 
 **Completion result.** `recv` returns `Ok(false)` only when `RecvFlags::DONT_WAIT` is set and no
@@ -153,11 +152,10 @@ independently, same as every other socket type here), plus:
 
 | Member | Meaning |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer; its `submit()` returns a `Future` completed by the Core send-completion callback |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next message |
 | `request(&self, peer_rid: &RoutingId) -> RequestOp<Empty>` | Messaging category's `RequestOp`, addressed to a specific peer |
 | `reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty>` | Messaging category's `ReplyOp`, answering that peer's request |
-| `on_send_ready<F>(...)` | registers a back-pressure-cleared callback |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `common_options()` | the shared options facade |
 | `router_options() -> RouterSocketOptions<'_>` | returns the per-type options facade: `set_mandatory(bool)` — set-only; `set_probe(bool)` — set-only; `set_connect_routing_id(&RoutingId)` — set-only (**no getter for the assigned connect routing id in this binding**, unlike dotnet's/cpp's read-only `ConnectRoutingId`/`connect_routing_id()` property); `weight()`/`set_weight(u32)`; `request_timeout()`/`set_request_timeout(Duration)` — both directions, unlike Dealer's |
@@ -181,7 +179,7 @@ internal `impl_pubsub_common!` macro rather than a public trait.
 
 ```rust
 let pub_socket = ctx.pub_socket()?;
-pub_socket.publish("prices").message(Message::try_from(tick)?)?.submit()?;
+pub_socket.publish("prices").message(Message::try_from(tick)?).submit()?;
 
 let sub = ctx.sub_socket()?;
 sub.set_subscription("prices.")?;
@@ -193,8 +191,7 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 
 | Type | Member | Meaning |
 | --- | --- | --- |
-| `PubSocket` | `publish(&self, topic: &str) -> SendOp<Empty>` | starts the shared `SendOp` builder; panics if `topic` fails an internal fixed-size check (via `fixed_topic_or_panic`) |
-| | `on_send_ready<F>(...)` | registers a back-pressure-cleared callback |
+| `PubSocket` | `publish(&self, topic: &str) -> PublishOp<Empty>` | starts the `PublishOp` builder; its `submit()` is synchronous (`Result<(), SubmitError>`) because PUB is lossy and never waits at a HWM; panics if `topic` fails an internal fixed-size check (via `fixed_topic_or_panic`) |
 | | `common_options()` | the shared options facade |
 | | `pub_options() -> PubSocketOptions<'_>` | the per-type options facade |
 | `SubSocket` / `XSubSocket` | `subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next matching publish |
@@ -234,11 +231,10 @@ stream.on_packet(|routing_id, header, body| { /* owns header/body */ })?;
 
 | Member | Meaning |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer; its `submit()` returns a `Future` completed by the Core send-completion callback |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next packet; this binding's `recv` additionally captures the source routing id as a send/reply context on `out`, so a subsequent `out.send()` addresses the packet's sender — a STREAM-specific enrichment not documented as such on other languages |
 | `disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError>` | declared directly, since `StreamSocket` has no `connect`/`disconnect` at all — it never declares the connect/disconnect/disconnect_rid trio the other socket types share |
 | `on_packet<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(RoutingId, Message, Message) + Send + 'static` | registers a callback-driven packet loop; the handler owns both `header` and `body`, dropped when it returns |
-| `on_send_ready<F>(...)` | registers a back-pressure-cleared callback |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `common_options()` | the shared options facade |
 | `stream_options() -> StreamSocketOptions<'_>` | the per-type options facade: `set_notify(bool)`/`notify()` — delivers peer connect/disconnect as application messages when enabled |

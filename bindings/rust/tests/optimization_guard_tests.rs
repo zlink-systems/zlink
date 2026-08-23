@@ -31,7 +31,9 @@ const REQUIRED_PART_SYMBOLS: &[&str] = &[
     "zlink_router_recv_part_v2_with_hwm_budget_lease",
     "zlink_subscribe_part_with_hwm_budget_lease",
     "zlink_hwm_budget_lease_release",
-    "zlink_routed_send_ready_handler",
+    "zlink_send_complete_handler",
+    "zlink_send_async",
+    "zlink_send_async_cancel",
     "zlink_select_routed_submit_target",
     "zlink_send_part_transport_pair",
     "zlink_dealer_send_transport_pair_part",
@@ -148,6 +150,75 @@ fn routed_async_uses_the_existing_exact_part_contract() {
     assert!(!all.contains("zlink_routed_request_parts"));
     assert!(!all.contains("submit_async"));
     assert!(!all.contains("RequestCallback"));
+}
+
+/// The 0.13.0 contract removed the `send_ready` readiness-hint surface. Nothing
+/// in the binding may reference it any more.
+#[test]
+fn binding_has_no_send_ready_surface() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    for path in source_files(&root) {
+        let body = fs::read_to_string(&path).unwrap();
+        if body.contains("send_ready") {
+            violations.push(path.display().to_string());
+        }
+    }
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+/// `bindings/doc/spec/async-coroutine-policy.ko.md` (3rd revision): the binding
+/// owns no thread, no park queue, no retry policy and no deadline timer. Core
+/// drives every completion.
+#[test]
+fn binding_owns_no_thread_queue_or_deadline_machinery() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let forbidden = [
+        "thread::spawn",
+        "thread::Builder",
+        "std::sync::mpsc",
+        "BinaryHeap",
+        "RoutedAdmission",
+        "DeadlineToken",
+        "RoutedWake",
+    ];
+    // `deferred_cleanup.rs` owns the one pre-existing worker in the binding.
+    // It exists for the C callback-lifetime contract (`Drop` cannot report a
+    // busy native close, and callback userdata must outlive Core's last use),
+    // not for send admission, retry or deadlines.
+    let lifecycle_worker = root.join("internal").join("deferred_cleanup.rs");
+    let mut violations = Vec::new();
+    for path in source_files(&root) {
+        if path == lifecycle_worker {
+            continue;
+        }
+        let body = fs::read_to_string(&path).unwrap();
+        // The callback-lifecycle unit test spawns a thread to stand in for a
+        // Core callback arriving on a foreign thread. That is test scaffolding,
+        // not a binding-owned worker.
+        let body = match body.find("#[cfg(test)]") {
+            Some(offset) => body[..offset].to_string(),
+            None => body,
+        };
+        for token in forbidden {
+            if body.contains(token) {
+                violations.push(format!("{}:{token}", path.display()));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+/// Publish is synchronous-only: PUB semantics are lossy and `zlink_send_async`
+/// answers `ENOTSUP` for PUB/XPUB.
+#[test]
+fn publish_terminal_is_synchronous() {
+    let body = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/contracts/messaging/operations.rs"),
+    )
+    .unwrap();
+    assert!(body.contains("pub fn submit(self) -> Result<(), SubmitError> {"));
+    assert!(!body.contains("PublishOp<Ready>::submit_async"));
 }
 
 #[test]

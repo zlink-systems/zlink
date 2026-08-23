@@ -20,6 +20,28 @@ typedef enum zlink_monitor_transport_lane_e
 /** Set when a CONNECTION_READY event changes a connection from not-ready to ready. */
 #define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)
 
+/**
+ * Set on ZLINK_EVENT_SEND_FLOW_RESUMED when clearing the remote pause left the
+ * pipe actually writable. Clear when another cause - byte HWM, transport wait
+ * or termination - still blocks it. `value` carries the flow epoch.
+ */
+#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)
+
+/**
+ * Set on ZLINK_EVENT_FLOW_STATE_STALE when the frame named a different
+ * connection generation. `value` then carries the received generation, and
+ * `transport_pair_generation` carries the current one.
+ */
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2)
+
+/**
+ * Set on ZLINK_EVENT_FLOW_STATE_STALE when the epoch did not advance inside the
+ * current generation. `value` then carries the received epoch; the current
+ * epoch is the one reported by the preceding SEND_FLOW_PAUSED or
+ * SEND_FLOW_RESUMED event for the same pair.
+ */
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)
+
 typedef struct
 {
     uint64_t event;

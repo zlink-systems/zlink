@@ -1,38 +1,83 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::ffi::c_void;
+//! Send and publish terminals for the Core 0.13.0 contract.
+//!
+//! HWM-managed send (PAIR send, DEALER/ROUTER routed send, and the routed send
+//! addressed at a received envelope) is asynchronous: one `zlink_send_async`
+//! call hands the whole record to Core and the registered
+//! `zlink_send_complete_handler` completes the returned `Future`. The binding
+//! owns no thread, no park queue, no retry and no deadline timer.
+//!
+//! Publish is synchronous: PUB semantics are lossy, the publisher never waits
+//! at a HWM, and `zlink_send_async` answers `ENOTSUP` for PUB/XPUB.
 
-use crate::error::SubmitError;
+use std::ffi::c_void;
+use std::future::Future;
+use std::mem::MaybeUninit;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
+
+use crate::error::{SubmitError, SubmitResult};
 use crate::ffi;
+use crate::internal::{RoutedHandle, SendCompletionSlot, SendCompletions};
+use crate::message::Message;
 use crate::messaging_operations::{
-    MessageParts, RoutedSendOp, RoutedSendOpStorage, SendOp, SendOpKind, SendOpStorage,
+    Empty, MessageParts, PublishOp, PublishOpStorage, RoutedSendOp, RoutedSendOpStorage, SendOp,
+    SendOpKind, SendOpStorage,
 };
-use crate::native_errors::check_submit_rc;
+use crate::native_errors::{check_submit_rc, submit_error_from_errno, submit_validation_error};
 use crate::socket::submit_part_sequence;
 
-pub(crate) fn socket_send_op(handle: *mut c_void) -> SendOp<crate::messaging_operations::Empty> {
+// -- Builder factories -------------------------------------------------------
+
+pub(crate) fn socket_send_op(
+    handle: *mut c_void,
+    completions: Option<Arc<SendCompletions>>,
+) -> SendOp<Empty> {
     SendOp {
         inner: SendOpStorage {
             handle,
-            admission: None,
+            routed: None,
+            completions,
             kind: SendOpKind::Plain,
             target: None,
             parts: MessageParts::default(),
-            flags: crate::flags::SendFlags::NONE,
+            timeout: Duration::ZERO,
         },
         _state: std::marker::PhantomData,
     }
 }
 
 pub(crate) fn socket_routed_send_op(
-    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+    routed: Arc<RoutedHandle>,
+    completions: Arc<SendCompletions>,
     target: crate::message::RoutingId,
-) -> RoutedSendOp<crate::messaging_operations::Empty> {
+) -> RoutedSendOp<Empty> {
     RoutedSendOp {
         inner: RoutedSendOpStorage {
-            admission,
+            routed,
+            completions,
             target: Some(target),
             parts: MessageParts::default(),
+            timeout: Duration::ZERO,
+        },
+        _state: std::marker::PhantomData,
+    }
+}
+
+pub(crate) fn dealer_routed_send_op(
+    routed: Arc<RoutedHandle>,
+    completions: Arc<SendCompletions>,
+) -> RoutedSendOp<Empty> {
+    RoutedSendOp {
+        inner: RoutedSendOpStorage {
+            routed,
+            completions,
+            target: None,
+            parts: MessageParts::default(),
+            timeout: Duration::ZERO,
         },
         _state: std::marker::PhantomData,
     }
@@ -40,61 +85,47 @@ pub(crate) fn socket_routed_send_op(
 
 pub(crate) fn stream_send_to_op(
     handle: *mut c_void,
+    completions: Option<Arc<SendCompletions>>,
     target: crate::message::RoutingId,
-) -> SendOp<crate::messaging_operations::Empty> {
+) -> SendOp<Empty> {
     SendOp {
         inner: SendOpStorage {
             handle,
-            admission: None,
+            routed: None,
+            completions,
             kind: SendOpKind::StreamRouted,
             target: Some(target),
             parts: MessageParts::default(),
-            flags: crate::flags::SendFlags::NONE,
+            timeout: Duration::ZERO,
         },
         _state: std::marker::PhantomData,
     }
 }
 
-pub(crate) fn immediate_routed_send_op(
-    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+pub(crate) fn received_routed_send_op(
+    routed: Arc<RoutedHandle>,
+    completions: Arc<SendCompletions>,
     target: crate::message::RoutingId,
-) -> SendOp<crate::messaging_operations::Empty> {
+) -> SendOp<Empty> {
     SendOp {
         inner: SendOpStorage {
-            handle: admission.handle(),
-            admission: Some(admission),
-            kind: SendOpKind::ImmediateRouted,
+            handle: routed.handle(),
+            routed: Some(routed),
+            completions: Some(completions),
+            kind: SendOpKind::Routed,
             target: Some(target),
             parts: MessageParts::default(),
-            flags: crate::flags::SendFlags::NONE,
+            timeout: Duration::ZERO,
         },
         _state: std::marker::PhantomData,
     }
 }
 
-pub(crate) fn dealer_routed_send_op(
-    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
-) -> RoutedSendOp<crate::messaging_operations::Empty> {
-    RoutedSendOp {
-        inner: RoutedSendOpStorage {
-            admission,
-            target: None,
-            parts: MessageParts::default(),
-        },
-        _state: std::marker::PhantomData,
-    }
-}
-
-pub(crate) fn socket_publish_op(
-    handle: *mut c_void,
-    topic: smol_str::SmolStr,
-) -> SendOp<crate::messaging_operations::Empty> {
-    SendOp {
-        inner: SendOpStorage {
+pub(crate) fn socket_publish_op(handle: *mut c_void, topic: smol_str::SmolStr) -> PublishOp<Empty> {
+    PublishOp {
+        inner: PublishOpStorage {
             handle,
-            admission: None,
-            kind: SendOpKind::Published { topic },
-            target: None,
+            topic,
             parts: MessageParts::default(),
             flags: crate::flags::SendFlags::NONE,
         },
@@ -102,49 +133,255 @@ pub(crate) fn socket_publish_op(
     }
 }
 
-pub(crate) fn submit_send(mut op: SendOpStorage) -> Result<bool, SubmitError> {
+// -- Publish (synchronous) ---------------------------------------------------
+
+pub(crate) fn submit_publish(mut op: PublishOpStorage) -> Result<(), SubmitError> {
     let flags = op.flags.bits();
-    let rc = match &op.kind {
-        SendOpKind::Plain => submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-            ffi::zlink_send_part(op.handle, part, flags, part_flag)
-        })?,
-        SendOpKind::StreamRouted => {
-            let target = op.target.as_ref().expect("STREAM send target");
-            submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-                ffi::zlink_send_part_rid(op.handle, target.as_raw(), part, flags, part_flag)
-            })?
+    let mut topic_buf = [0u8; 256];
+    let topic_bytes = op.topic.as_str().as_bytes();
+    topic_buf[..topic_bytes.len()].copy_from_slice(topic_bytes);
+    let handle = op.handle;
+    let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
+        ffi::zlink_publish_part(handle, topic_buf.as_ptr().cast(), part, flags, part_flag)
+    })?;
+    drop(op.parts);
+    check_submit_rc(rc)
+}
+
+// -- HWM-managed send (asynchronous) -----------------------------------------
+
+pub(crate) fn submit_send(op: SendOpStorage) -> impl Future<Output = Result<(), SubmitError>> + Send {
+    SendFuture::new(op)
+}
+
+pub(crate) fn submit_routed_send(
+    op: RoutedSendOpStorage,
+) -> impl Future<Output = Result<(), SubmitError>> + Send {
+    SendFuture::new(SendOpStorage {
+        handle: op.routed.handle(),
+        routed: Some(op.routed),
+        completions: Some(op.completions),
+        kind: SendOpKind::Routed,
+        target: op.target,
+        parts: op.parts,
+        timeout: op.timeout,
+    })
+}
+
+/// Consumer side of one Core send operation.
+///
+/// The Future is inert until first polled. On that poll it performs exactly one
+/// `zlink_send_async`; when Core admits the record immediately the completion
+/// runs inline and the same poll returns `Ready`. Otherwise Core owns the wait
+/// and the completion callback wakes this Future in whatever context Core
+/// delivered the completion on.
+struct SendFuture {
+    operation: Option<SendOpStorage>,
+    slot: Option<Arc<SendCompletionSlot>>,
+    handle: *mut c_void,
+    finished: bool,
+}
+
+// The native handle is only dereferenced by Core calls; the storage itself is
+// move-safe across threads, exactly like `SendOpStorage`.
+unsafe impl Send for SendFuture {}
+
+impl SendFuture {
+    fn new(operation: SendOpStorage) -> Self {
+        Self {
+            handle: operation.handle,
+            operation: Some(operation),
+            slot: None,
+            finished: false,
         }
-        SendOpKind::ImmediateRouted => {
-            let target = op.target.as_ref().expect("routed send target");
-            let admission = op.admission.as_ref().expect("routed admission");
-            admission
-                .with_attempt_gate(|handle| {
-                    submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-                        ffi::zlink_send_part_rid(handle, target.as_raw(), part, flags, part_flag)
-                    })
-                })
-                .ok_or_else(|| crate::native_errors::submit_error_from_errno(libc::ECANCELED))??
+    }
+}
+
+impl Future for SendFuture {
+    type Output = Result<(), SubmitError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.finished {
+            panic!("send Future polled after completion");
         }
-        SendOpKind::Published { topic } => {
-            let mut topic_buf = [0u8; 256];
-            let topic_bytes = topic.as_str().as_bytes();
-            topic_buf[..topic_bytes.len()].copy_from_slice(topic_bytes);
-            submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-                ffi::zlink_publish_part(
-                    op.handle,
-                    topic_buf.as_ptr().cast(),
-                    part,
-                    flags,
-                    part_flag,
-                )
-            })?
+        if let Some(slot) = self.slot.clone() {
+            let outcome = slot.poll(cx.waker());
+            if outcome.is_ready() {
+                self.finished = true;
+            }
+            return outcome;
         }
+
+        let operation = self.operation.take().expect("active send");
+        match start_send(operation) {
+            Err(error) => {
+                self.finished = true;
+                Poll::Ready(Err(error))
+            }
+            Ok(StartedSend::Completed) => {
+                self.finished = true;
+                Poll::Ready(Ok(()))
+            }
+            Ok(StartedSend::Pending { slot, handle }) => {
+                self.handle = handle;
+                let outcome = slot.poll(cx.waker());
+                if outcome.is_ready() {
+                    self.finished = true;
+                    return outcome;
+                }
+                self.slot = Some(slot);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl Drop for SendFuture {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let Some(slot) = self.slot.take() else {
+            return;
+        };
+        // Ask Core to cancel. The operation still completes exactly once; the
+        // socket-scoped registry keeps the slot alive until it does, and the
+        // op id makes the cancel ABA-safe.
+        let op_id = slot.op_id();
+        slot.detach();
+        if op_id != 0 && !self.handle.is_null() {
+            unsafe {
+                ffi::zlink_send_async_cancel(self.handle, op_id);
+            }
+        }
+    }
+}
+
+enum StartedSend {
+    /// A synchronous lane finished inside the first poll.
+    Completed,
+    Pending {
+        slot: Arc<SendCompletionSlot>,
+        handle: *mut c_void,
+    },
+}
+
+fn start_send(mut op: SendOpStorage) -> Result<StartedSend, SubmitError> {
+    if op.parts.is_empty() {
+        return Err(submit_validation_error());
+    }
+
+    if matches!(op.kind, SendOpKind::StreamRouted) {
+        // STREAM addresses one exact raw peer through the rid lane. Core owns
+        // the HWM wait inside this one call, so the Future resolves on its
+        // first poll.
+        let handle = op.handle;
+        let target = op.target.as_ref().expect("STREAM send target");
+        let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
+            ffi::zlink_send_part_rid(handle, target.as_raw(), part, 0, part_flag)
+        })?;
+        drop(op.parts);
+        return check_submit_rc(rc).map(|()| StartedSend::Completed);
+    }
+
+    let completions = op
+        .completions
+        .clone()
+        .ok_or_else(|| SubmitError::new(SubmitResult::NotSupported, libc::ENOTSUP))?;
+
+    // Exact routed target. ROUTER must name one; DEALER passes none and lets
+    // Core commit one selection at submit time.
+    let target = match op.routed.as_ref() {
+        // ROUTER names the peer; DEALER passes none and Core commits one
+        // weighted selection. Either way the record is pinned to one exact
+        // physical pipe, so a multipart record cannot straddle two pipes.
+        Some(routed) => {
+            let (rc, selected) = routed.select_target(op.target.as_ref());
+            if rc != 0 {
+                return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
+            }
+            Some(selected)
+        }
+        None => None,
+    };
+    let target_ptr: *const ffi::zlink_routed_submit_target_t = match target.as_ref() {
+        Some(target) => target,
+        None => std::ptr::null(),
     };
 
-    drop(op.parts);
-    match check_submit_rc(rc) {
-        Ok(()) => Ok(true),
-        Err(error) if error.code() == crate::error::SubmitResult::Backpressured => Ok(false),
-        Err(error) => Err(error),
+    let handle = match op.routed.as_ref() {
+        Some(routed) => routed.handle(),
+        None => op.handle,
+    };
+    if handle.is_null() {
+        return Err(submit_error_from_errno(libc::ECANCELED));
     }
+
+    let timeout_ms = duration_to_timeout_ms(op.timeout);
+    let (slot, userdata) = completions.register();
+    let options = ffi::zlink_send_async_options_t {
+        struct_size: std::mem::size_of::<ffi::zlink_send_async_options_t>() as u32,
+        timeout_ms,
+        userdata,
+        target: target_ptr,
+    };
+
+    let mut parts: Vec<Message> = op.parts.into_vec();
+    let mut op_id: ffi::zlink_send_op_id_t = 0;
+    let rc = with_moved_native_parts(&mut parts, |native, count| unsafe {
+        ffi::zlink_send_async(handle, native, count, &options, &mut op_id)
+    });
+
+    if rc != SubmitResult::Ok as i32 {
+        completions.discard(userdata);
+        return Err(check_submit_rc(rc).expect_err("failed send submit"));
+    }
+    // On ZLINK_SUBMIT_OK Core owns every native part; the moved-from `Message`
+    // values left behind are empty frames that close to nothing.
+    drop(parts);
+
+    if op_id == 0 {
+        // Core promises a non-zero id for every accepted operation. Surface an
+        // impossible contract instead of installing an uncancellable Future.
+        completions.discard(userdata);
+        return Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO));
+    }
+    slot.arm(op_id);
+    Ok(StartedSend::Pending { slot, handle })
+}
+
+fn duration_to_timeout_ms(duration: Duration) -> u32 {
+    if duration.is_zero() {
+        return 0;
+    }
+    duration.as_millis().clamp(1, u32::MAX as u128) as u32
+}
+
+/// Moves every part into one contiguous native array, runs `call`, and moves
+/// the parts back when Core refused the record. `zlink_send_async` takes
+/// ownership of `parts_[0 .. count)` only on `ZLINK_SUBMIT_OK`.
+fn with_moved_native_parts(
+    parts: &mut [Message],
+    call: impl FnOnce(*mut ffi::zlink_msg_t, usize) -> i32,
+) -> i32 {
+    let mut native: Vec<ffi::zlink_msg_t> = Vec::with_capacity(parts.len());
+    unsafe {
+        for part in parts.iter_mut() {
+            let mut slot = MaybeUninit::<ffi::zlink_msg_t>::uninit();
+            ffi::zlink_msg_init(slot.as_mut_ptr());
+            ffi::zlink_msg_move(slot.as_mut_ptr(), part.raw_mut());
+            native.push(slot.assume_init());
+        }
+    }
+    let count = native.len();
+    let rc = call(native.as_mut_ptr(), count);
+    if rc != SubmitResult::Ok as i32 {
+        unsafe {
+            for (slot, part) in native.iter_mut().zip(parts.iter_mut()) {
+                ffi::zlink_msg_move(part.raw_mut(), slot);
+                ffi::zlink_msg_close(slot);
+            }
+        }
+    }
+    rc
 }

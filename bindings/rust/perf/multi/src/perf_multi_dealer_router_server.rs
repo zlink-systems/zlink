@@ -116,14 +116,14 @@ fn main() {
                     };
                     let reply_bytes = common::message_payload(received.parts()).to_vec();
                     if pending.is_empty() {
-                        match received
-                            .send()
-                            .message(Message::try_from(&reply_bytes).expect("reply"))
-                            .flags(SendFlags::DONT_WAIT)
-                            .submit()
-                        {
-                            Ok(true) => continue,
-                            Ok(false) => {}
+                        match common::block_on(
+                            received
+                                .send()
+                                .message(Message::try_from(&reply_bytes).expect("reply"))
+                                .submit(),
+                        ) {
+                            Ok(()) => continue,
+                            Err(err) if err.code() == SubmitResult::Backpressured => {}
                             Err(err) => panic!("received send failed: {err}"),
                         }
                     }

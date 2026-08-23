@@ -27,7 +27,7 @@ use std::time::Duration;
 use crate::ctx::{context_handle, duration_to_millis};
 use crate::domain::Received;
 use crate::error::{
-    BindError, CloseError, ConfigError, ConnectError, HandlerError, RecvError, RecvResult,
+    BindError, CloseError, ConfigError, ConnectError, RecvError, RecvResult,
     SubmitError,
 };
 use crate::ffi;
@@ -35,7 +35,7 @@ use crate::flags::RecvFlags;
 use crate::message::{Message, RoutingId};
 use crate::messaging_subscription_event::SubscriptionEvent;
 use crate::native_errors::{
-    check_bind_rc, check_close_rc, check_config_rc, check_connect_rc, check_handler_rc,
+    check_bind_rc, check_close_rc, check_config_rc, check_connect_rc,
     check_recv_rc, config_validation_error, last_errno, submit_validation_error,
 };
 use crate::topic_message_contract::TopicMessage;

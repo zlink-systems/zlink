@@ -77,10 +77,9 @@ fn main() {
             .flags(SendFlags::DONT_WAIT)
             .submit()
         {
-            Ok(true) => {
+            Ok(()) => {
                 seq += 1;
             }
-            Ok(false) => {}
             Err(err) if err.code() == SubmitResult::Backpressured => {}
             Err(err) => panic!("publish failed: {err}"),
         }
@@ -93,11 +92,8 @@ fn main() {
     while accepted_stop_tokens < STOP_TOKEN_BURST {
         let token = Message::try_from(common::STOP_TOKEN).expect("stop token");
         match pub_sock.publish(TOPIC).message(token).submit() {
-            Ok(true) => {
+            Ok(()) => {
                 accepted_stop_tokens += 1;
-            }
-            Ok(false) => {
-                continue;
             }
             Err(err)
                 if matches!(

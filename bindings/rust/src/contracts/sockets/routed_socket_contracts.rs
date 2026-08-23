@@ -2,7 +2,7 @@
 
 use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, HandlerError, Received, RecvError,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, Received, RecvError,
     RecvFlags, RouterSocketOptions,
 };
 use crate::{Empty, ReplyOp, RequestOp, RoutedSendOp, RoutingId};
@@ -21,11 +21,13 @@ impl RouterSocket {
     /// builder, then submit. A part is consumed on a successful submit (see
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> RoutedSendOp<Empty> {
+        let inner = crate::socket::router_inner(self);
         crate::operations::socket_routed_send_op(
-            crate::socket::router_inner(self)
-                .routed_admission
+            inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
+            inner
+                .send_completions
                 .as_ref()
-                .expect("ROUTER routed admission")
+                .expect("ROUTER send completions")
                 .clone(),
             *target,
         )
@@ -39,10 +41,11 @@ impl RouterSocket {
         let inner = crate::socket::router_inner(self);
         crate::socket::recv_router_once(
             inner.handle,
+            inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
-                .routed_admission
+                .send_completions
                 .as_ref()
-                .expect("ROUTER routed admission")
+                .expect("ROUTER send completions")
                 .clone(),
             flags.bits(),
             out,
@@ -55,10 +58,11 @@ impl RouterSocket {
         let inner = crate::socket::router_inner(self);
         crate::socket::recv_router_retained_once(
             inner.handle,
+            inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
-                .routed_admission
+                .send_completions
                 .as_ref()
-                .expect("ROUTER routed admission")
+                .expect("ROUTER send completions")
                 .clone(),
             flags.bits(),
             out,
@@ -70,9 +74,9 @@ impl RouterSocket {
     pub fn request(&self, peer_rid: &RoutingId) -> RequestOp<Empty> {
         crate::operations::router_request_op(
             crate::socket::router_inner(self)
-                .routed_admission
+                .routed_handle
                 .as_ref()
-                .expect("ROUTER routed admission")
+                .expect("ROUTER handle")
                 .clone(),
             *peer_rid,
         )
@@ -83,23 +87,15 @@ impl RouterSocket {
     pub fn reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty> {
         crate::operations::router_reply_op(
             crate::socket::router_inner(self)
-                .routed_admission
+                .routed_handle
                 .as_ref()
-                .expect("ROUTER routed admission")
+                .expect("ROUTER handle")
                 .clone(),
             *rid,
             request_seq,
         )
     }
 
-    /// Registers a callback invoked when the socket can accept more sends after
-    /// back-pressure. The callback runs on a background dispatch thread.
-    pub fn on_send_ready<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn() + Send + 'static,
-    {
-        crate::socket::router_inner_mut(self).on_send_ready(handler)
-    }
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {

@@ -5,6 +5,10 @@
 //! - Typed option surfaces exist (no raw option bags)
 //! - Monitor canonical surface exists (recv)
 
+mod test_support;
+
+use std::time::Duration;
+
 use zlink::{
     AtomicCounter, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
     RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SocketMonitor, Stopwatch, StreamSocket,
@@ -33,13 +37,14 @@ fn pair_socket_has_send_recv() {
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://surface-pair").unwrap();
 
-    // PairSocket exposes: send, recv
+    // PairSocket exposes: send (async terminal), recv
     let msg = Message::try_from(b"test").unwrap();
-    let _ = sock
-        .send()
-        .message(msg)
-        .flags(SendFlags::DONT_WAIT)
-        .submit();
+    let _ = test_support::block_on(
+        sock.send()
+            .message(msg)
+            .timeout(Duration::from_millis(100))
+            .submit(),
+    );
     let mut received = Received::empty();
     let _ = sock.recv(&mut received, RecvFlags::DONT_WAIT);
 }
@@ -135,7 +140,7 @@ fn stream_socket_send_requires_routing_id() {
 
     let rid = RoutingId::from(b"client-001");
     let msg = Message::try_from(b"data").unwrap();
-    let _ = sock.send(&rid).message(msg).submit();
+    let _ = test_support::block_on(sock.send(&rid).message(msg).submit());
 }
 
 #[test]
@@ -144,10 +149,11 @@ fn xpub_socket_has_subscription_event() {
     let sock = ctx.xpub_socket().unwrap();
     sock.bind("inproc://surface-xpub").unwrap();
 
-    // XPubSocket: publish, receive_subscription_event, on_send_ready
+    // XPubSocket: publish (synchronous terminal), receive_subscription_event.
+    // `on_send_ready` is gone: Core 0.13.0 dropped the readiness-hint surface.
     let mut event = SubscriptionEvent::empty();
     let _ = sock.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT);
-    let _method = XPubSocket::on_send_ready::<fn()>;
+    let _publish = XPubSocket::publish;
 }
 
 #[test]

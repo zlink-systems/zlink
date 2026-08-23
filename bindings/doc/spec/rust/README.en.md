@@ -343,35 +343,45 @@ public crate items and re-exports.
   let reply = dealer.request().message(request).submit().await?;
   ```
 
-  For DEALER and ROUTER routed send, `submit()` returns a runtime-independent
-  `Future<Output = Result<(), SubmitError>>`; request `submit()` returns
-  `Future<Output = Result<Vec<Message>, ZlinkError>>`. Polling never occupies a
-  runtime worker with native blocking submit or an HWM recovery wait. After HWM
-  recovers, the operation retries only its originally selected exact target,
-  while work for other targets can progress independently.
-- Before accepting asynchronous operations, the socket runtime registers
-  Core's long-lived routed-target readiness handler. Before its first poll
-  attempt, Future state places the exact `(socket, RID, transport pair ID,
-  generation)` key and complete record in pending state, then attempts
-  `DONTWAIT` on that target. The callback marks only that key ready; a pump
-  outside the callback performs native retry. An event for another pair
-  generation is a stale wake and is ignored. Outbound paths on one native
-  handle share a short gate for one attempt from the first part through
-  `FINAL`, then release it before readiness waiting.
+  HWM-managed **send** (PAIR `send()`, STREAM `send(target)`,
+  `Received::send()`, and DEALER/ROUTER routed send) returns a
+  runtime-independent `Future<Output = Result<(), SubmitError>>` from
+  `submit()`; request `submit()` returns
+  `Future<Output = Result<Vec<Message>, ZlinkError>>`. **publish** is not in
+  that classification: its terminal is the synchronous
+  `submit() -> Result<(), SubmitError>` (lossy PUB semantics; with
+  `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces `Backpressured`
+  immediately).
+- The Core send-completion notification drives a send Future to completion.
+  The socket runtime registers one long-lived `zlink_send_complete_handler`
+  per socket for every subject `zlink_send_async` supports (PAIR, DEALER,
+  ROUTER, STREAM), and the Future hands the whole record to `zlink_send_async`
+  in one call on its first poll. When Core admits the record immediately the
+  completion runs inline and that same poll returns `Ready`. The completion
+  callback only stores the result and wakes the waker — Core refuses a submit
+  from inside a completion with `EDEADLK` — and resumption happens in the
+  context Core delivered the completion on. `timeout(...)` maps to
+  `zlink_send_async_options_t::timeout_ms`, a per-operation deadline. The
+  binding keeps no park queue, no WRITABLE retry, no deadline timer and no
+  dispatcher thread: the `send_ready` readiness-hint surface is retired, and
+  the per-socket-type `on_send_ready` was removed with it.
 - Routed send/request builders do not also expose callback, blocking-wait, or
-  progress-polling terminals. Immediate PAIR, PUB, and STREAM submit and ROUTER
-  reply remain separate synchronous operation contracts. The raw
+  progress-polling terminals. PUB/XPUB `publish` and ROUTER reply remain
+  separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal
   reply or error reply to the HWM-free completion lane with one native call.
   HWM backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`, and other non-HWM submit failures return immediately as
   `Err(SubmitError)`.
-- Dropping a Future before native acceptance cancels its pending operation.
-  Dropping an accepted request Future detaches only its consumer; reply or
-  timeout cleanup for the accepted request still completes. Completion is
-  resolved exactly once. Strict FIFO ordering among operations for the same
-  target is not a public contract.
+- Dropping a send Future before completion requests `zlink_send_async_cancel`.
+  Core still completes a cancelled operation exactly once, so the binding keeps
+  the operation state alive in its socket-scoped registry until that completion
+  arrives, and the Core op id makes the cancel ABA-safe. Dropping an accepted
+  request Future detaches only its consumer; Core still completes the reply or
+  the timeout for the accepted request. Completion is resolved exactly once.
+  Strict FIFO ordering among operations for the same target is not a public
+  contract.
 
 ## Crate layout
 

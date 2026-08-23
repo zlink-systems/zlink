@@ -2,7 +2,7 @@
 
 use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions, HandlerError,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions,
     Received, RecvError, RecvFlags,
 };
 use crate::{Empty, RequestOp, RoutedSendOp, RoutingId, SendOp};
@@ -27,7 +27,8 @@ impl PairSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
     /// A part is consumed on a successful submit (see [`SendOp`]).
     pub fn send(&self) -> SendOp<Empty> {
-        crate::operations::socket_send_op(crate::socket::pair_handle(self))
+        let inner = crate::socket::pair_inner(self);
+        crate::operations::socket_send_op(inner.handle, inner.send_completions.clone())
     }
 
     /// Receives a message into caller-provided `out` storage, reusable across
@@ -45,14 +46,6 @@ impl PairSocket {
         crate::socket::pair_inner(self).recv_retained(out, flags)
     }
 
-    /// Registers a callback invoked when the socket can accept more sends after
-    /// back-pressure. The callback runs on a background dispatch thread.
-    pub fn on_send_ready<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn() + Send + 'static,
-    {
-        crate::socket::pair_inner_mut(self).on_send_ready(handler)
-    }
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {
@@ -161,11 +154,13 @@ impl DealerSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
     /// A part is consumed on a successful submit (see [`SendOp`]).
     pub fn send(&self) -> RoutedSendOp<Empty> {
+        let inner = crate::socket::dealer_inner(self);
         crate::operations::dealer_routed_send_op(
-            crate::socket::dealer_inner(self)
-                .routed_admission
+            inner.routed_handle.as_ref().expect("DEALER handle").clone(),
+            inner
+                .send_completions
                 .as_ref()
-                .expect("DEALER routed admission")
+                .expect("DEALER send completions")
                 .clone(),
         )
     }
@@ -190,21 +185,13 @@ impl DealerSocket {
     pub fn request(&self) -> RequestOp<Empty> {
         crate::operations::dealer_request_op(
             crate::socket::dealer_inner(self)
-                .routed_admission
+                .routed_handle
                 .as_ref()
-                .expect("DEALER routed admission")
+                .expect("DEALER handle")
                 .clone(),
         )
     }
 
-    /// Registers a callback invoked when the socket can accept more sends after
-    /// back-pressure. The callback runs on a background dispatch thread.
-    pub fn on_send_ready<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn() + Send + 'static,
-    {
-        crate::socket::dealer_inner_mut(self).on_send_ready(handler)
-    }
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {

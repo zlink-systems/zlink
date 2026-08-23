@@ -8,7 +8,8 @@ mod deferred_cleanup;
 mod handle_storage;
 mod hwm_budget_lease_owner;
 mod message_storage;
-mod routed_admission;
+mod routed_handle;
+mod send_completion;
 
 pub(crate) use callback_lifecycle::CallbackBox;
 pub(crate) use deferred_cleanup::{DeferredCloseKind, defer_native_close, release_callbacks};
@@ -17,7 +18,7 @@ pub(crate) use handle_storage::{
 };
 pub(crate) use hwm_budget_lease_owner::HwmBudgetLeaseOwner;
 pub(crate) use message_storage::MessageStorage;
-pub(crate) use routed_admission::{
-    DeadlineToken, RoutedAdmission, RoutedRole, RoutedTargetKey, RoutedWake, RoutedWakeOutcome,
-    duration_until, routed_ready_trampoline,
+pub(crate) use routed_handle::{RoutedHandle, RoutedRole};
+pub(crate) use send_completion::{
+    SendCompletionSlot, SendCompletions, send_complete_trampoline,
 };

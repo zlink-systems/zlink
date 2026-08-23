@@ -42,8 +42,13 @@ impl MessageParts {
         self.first.iter_mut().chain(self.rest.iter_mut())
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Message> {
-        self.first.iter().chain(self.rest.iter())
+    /// Flattens the parts into one contiguous vector for the single-call
+    /// `zlink_send_async` record submit.
+    pub(crate) fn into_vec(self) -> Vec<Message> {
+        let mut out = Vec::with_capacity(usize::from(self.first.is_some()) + self.rest.len());
+        out.extend(self.first);
+        out.extend(self.rest);
+        out
     }
 }
 
@@ -56,6 +61,13 @@ impl MessageParts {
 /// and reply builders in this module share this same consume-on-submit
 /// ownership model.
 ///
+/// HWM-managed send is classified ASYNC by
+/// `bindings/doc/spec/async-coroutine-policy.ko.md`, so [`submit`] returns a
+/// runtime-independent [`Future`](std::future::Future) whose completion is
+/// driven by the Core send-completion callback. There is no flags stage: Core
+/// never blocks in `zlink_send_async`, and the retry that a full queue needs
+/// belongs to Core.
+///
 /// The `State` type parameter is a typestate ([`Empty`] or [`Ready`]) that
 /// statically tracks whether at least one part has been added.
 pub struct SendOp<State> {
@@ -65,21 +77,42 @@ pub struct SendOp<State> {
 
 pub(crate) struct SendOpStorage {
     pub(crate) handle: *mut c_void,
-    pub(crate) admission: Option<Arc<crate::internal::RoutedAdmission>>,
+    pub(crate) routed: Option<Arc<crate::internal::RoutedHandle>>,
+    pub(crate) completions: Option<Arc<crate::internal::SendCompletions>>,
     pub(crate) kind: SendOpKind,
     pub(crate) target: Option<RoutingId>,
+    pub(crate) parts: MessageParts,
+    pub(crate) timeout: Duration,
+}
+
+pub(crate) enum SendOpKind {
+    /// PAIR send. Core picks the single pipe.
+    Plain,
+    /// STREAM send addressed at one exact raw peer.
+    StreamRouted,
+    /// DEALER/ROUTER routed send addressed at one exact peer.
+    Routed,
+}
+
+unsafe impl Send for SendOpStorage {}
+
+/// A PUB/XPUB publish builder. Publish is lossy and never waits on a HWM, so
+/// its terminal is synchronous (`bindings/doc/spec/async-coroutine-policy.ko.md`
+/// 3rd revision). With `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces an
+/// immediate `Backpressured` error instead.
+pub struct PublishOp<State> {
+    pub(crate) inner: PublishOpStorage,
+    pub(crate) _state: PhantomData<State>,
+}
+
+pub(crate) struct PublishOpStorage {
+    pub(crate) handle: *mut c_void,
+    pub(crate) topic: smol_str::SmolStr,
     pub(crate) parts: MessageParts,
     pub(crate) flags: SendFlags,
 }
 
-pub(crate) enum SendOpKind {
-    Plain,
-    Published { topic: smol_str::SmolStr },
-    StreamRouted,
-    ImmediateRouted,
-}
-
-unsafe impl Send for SendOpStorage {}
+unsafe impl Send for PublishOpStorage {}
 
 /// An HWM-managed routed send builder. Its [`submit`](RoutedSendOp::submit)
 /// terminal returns a runtime-independent [`Future`](std::future::Future).
@@ -89,9 +122,11 @@ pub struct RoutedSendOp<State> {
 }
 
 pub(crate) struct RoutedSendOpStorage {
-    pub(crate) admission: Arc<crate::internal::RoutedAdmission>,
+    pub(crate) routed: Arc<crate::internal::RoutedHandle>,
+    pub(crate) completions: Arc<crate::internal::SendCompletions>,
     pub(crate) target: Option<RoutingId>,
     pub(crate) parts: MessageParts,
+    pub(crate) timeout: Duration,
 }
 
 /// A request builder: add parts, then submit and await a reply. Parts are
@@ -102,7 +137,7 @@ pub struct RequestOp<State> {
 }
 
 pub(crate) struct RequestOpStorage {
-    pub(crate) admission: Arc<crate::internal::RoutedAdmission>,
+    pub(crate) routed: Arc<crate::internal::RoutedHandle>,
     pub(crate) peer_rid: Option<RoutingId>,
     pub(crate) parts: MessageParts,
     pub(crate) timeout: Duration,
@@ -118,7 +153,7 @@ pub struct ReplyOp<State> {
 }
 
 pub(crate) struct ReplyOpStorage {
-    pub(crate) admission: Arc<crate::internal::RoutedAdmission>,
+    pub(crate) routed: Arc<crate::internal::RoutedHandle>,
     pub(crate) kind: ReplyOpKind,
     pub(crate) parts: MessageParts,
     pub(crate) flags: SendFlags,
@@ -134,20 +169,10 @@ impl SendOp<Empty> {
     /// Adds the first message part, transitioning the builder to the ready
     /// state. The part is consumed on a successful submit (see [`SendOp`]).
     pub fn message(self, message: Message) -> SendOp<Ready> {
-        let SendOp { inner, .. } = self;
+        let SendOp { mut inner, .. } = self;
+        inner.parts.push(message);
         SendOp {
-            inner: SendOpStorage {
-                handle: inner.handle,
-                admission: inner.admission,
-                kind: inner.kind,
-                target: inner.target,
-                parts: {
-                    let mut parts = inner.parts;
-                    parts.push(message);
-                    parts
-                },
-                flags: inner.flags,
-            },
+            inner,
             _state: PhantomData,
         }
     }
@@ -161,33 +186,69 @@ impl SendOp<Ready> {
         self
     }
 
-    /// Sets the send flags applied at submit time.
-    pub fn flags(self, flags: SendFlags) -> Self {
-        let mut operation = self;
-        operation.inner.flags = flags;
-        operation
+    /// Sets the per-operation deadline handed to Core. Zero (the default)
+    /// falls back to the socket's `SNDTIMEO`.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.inner.timeout = timeout;
+        self
     }
 
-    /// Submits the accumulated parts.
-    pub fn submit(self) -> Result<bool, SubmitError> {
+    /// Starts the HWM-managed send.
+    ///
+    /// The returned Future is runtime-independent and is completed by the Core
+    /// send-completion callback. When Core admits the record immediately the
+    /// first poll returns `Ready`. Dropping the Future before completion
+    /// requests `zlink_send_async_cancel`; the operation still completes
+    /// exactly once inside Core.
+    pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
         crate::operations::submit_send(self.inner)
+    }
+}
+
+impl PublishOp<Empty> {
+    /// Adds the first message part, transitioning the builder to the ready
+    /// state.
+    pub fn message(self, message: Message) -> PublishOp<Ready> {
+        let PublishOp { mut inner, .. } = self;
+        inner.parts.push(message);
+        PublishOp {
+            inner,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl PublishOp<Ready> {
+    /// Adds another message part.
+    pub fn message(mut self, message: Message) -> Self {
+        self.inner.parts.push(message);
+        self
+    }
+
+    /// Sets the send flags applied at submit time.
+    pub fn flags(mut self, flags: SendFlags) -> Self {
+        self.inner.flags = flags;
+        self
+    }
+
+    /// Publishes the accumulated parts and returns synchronously.
+    ///
+    /// Default PUB semantics are lossy: a subscriber at its HWM loses its copy
+    /// and the publisher proceeds. With `ZLINK_PUB_OPT_NODROP` a full
+    /// subscriber makes this call fail with `SubmitResult::Backpressured`, and
+    /// the retry policy belongs to the application.
+    pub fn submit(self) -> Result<(), SubmitError> {
+        crate::operations::submit_publish(self.inner)
     }
 }
 
 impl RoutedSendOp<Empty> {
     /// Adds the first routed message part.
     pub fn message(self, message: Message) -> RoutedSendOp<Ready> {
-        let RoutedSendOp { inner, .. } = self;
+        let RoutedSendOp { mut inner, .. } = self;
+        inner.parts.push(message);
         RoutedSendOp {
-            inner: RoutedSendOpStorage {
-                admission: inner.admission,
-                target: inner.target,
-                parts: {
-                    let mut parts = inner.parts;
-                    parts.push(message);
-                    parts
-                },
-            },
+            inner,
             _state: PhantomData,
         }
     }
@@ -200,12 +261,19 @@ impl RoutedSendOp<Ready> {
         self
     }
 
-    /// Starts the exact-target HWM-managed send.
+    /// Sets the per-operation deadline handed to Core. Zero (the default)
+    /// falls back to the socket's `SNDTIMEO`.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.inner.timeout = timeout;
+        self
+    }
+
+    /// Starts the HWM-managed routed send.
     ///
-    /// The returned Future never performs a blocking native submit. When Core
-    /// reports backpressure it yields `Pending` until that exact physical
-    /// target becomes writable, disconnects, closes, or reaches the socket's
-    /// absolute send deadline.
+    /// The returned Future is runtime-independent and is completed by the Core
+    /// send-completion callback: Core owns the HWM wait, the deadline and the
+    /// retry. Dropping the Future before completion requests
+    /// `zlink_send_async_cancel`.
     pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
         crate::operations::submit_routed_send(self.inner)
     }
@@ -215,18 +283,10 @@ impl RequestOp<Empty> {
     /// Adds the first request part, transitioning the builder to the ready
     /// state. The part is consumed on a successful submit (see [`SendOp`]).
     pub fn message(self, message: Message) -> RequestOp<Ready> {
-        let RequestOp { inner, .. } = self;
+        let RequestOp { mut inner, .. } = self;
+        inner.parts.push(message);
         RequestOp {
-            inner: RequestOpStorage {
-                admission: inner.admission,
-                peer_rid: inner.peer_rid,
-                parts: {
-                    let mut parts = inner.parts;
-                    parts.push(message);
-                    parts
-                },
-                timeout: inner.timeout,
-            },
+            inner,
             _state: PhantomData,
         }
     }
@@ -262,18 +322,10 @@ impl ReplyOp<Empty> {
     /// Adds the first reply part, transitioning the builder to the ready state.
     /// The part is consumed on a successful submit (see [`SendOp`]).
     pub fn message(self, message: Message) -> ReplyOp<Ready> {
-        let ReplyOp { inner, .. } = self;
+        let ReplyOp { mut inner, .. } = self;
+        inner.parts.push(message);
         ReplyOp {
-            inner: ReplyOpStorage {
-                admission: inner.admission,
-                kind: inner.kind,
-                parts: {
-                    let mut parts = inner.parts;
-                    parts.push(message);
-                    parts
-                },
-                flags: inner.flags,
-            },
+            inner,
             _state: PhantomData,
         }
     }

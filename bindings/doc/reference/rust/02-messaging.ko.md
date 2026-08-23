@@ -209,16 +209,19 @@ received.reply().message(Message::try_from("ok")?).submit()?;
 | Stage | Member | 의미 |
 | --- | --- | --- |
 | `SendOp<Empty>` | `.message(self, Message) -> SendOp<Ready>` | chain을 시작, `self`를 소비하고 다음 단계 타입을 반환 |
-| `SendOp<Ready>` | `.message(...)` / `.flags(self, SendFlags) -> Self` / `.submit(self) -> Result<bool, SubmitError>` | part 추가, flag 설정, terminal |
+| `SendOp<Ready>` | `.message(...)` / `.timeout(self, Duration) -> Self` / `.submit(self) -> impl Future<Output = Result<(), SubmitError>>` | part 추가, per-operation Core deadline 설정, terminal. flag 단계는 없다 — `zlink_send_async`는 절대 blocking하지 않으므로 `DONT_WAIT`이 의미를 갖지 않는다 |
+| `PublishOp<Empty>` → `PublishOp<Ready>` | `.message(...)` / `.flags(self, SendFlags) -> Self` / `.submit(self) -> Result<(), SubmitError>` | PUB/XPUB 전용; PUB는 lossy이고 HWM에서 대기하지 않으므로 동기 |
 | `RequestOp<Empty>` → `RequestOp<Ready>` | `SendOp`와 같음 + `.timeout(self, Duration) -> Self` | send chain을 미러링하며 reply-wait timeout을 더함 |
 | `RequestOp<Ready>.flags(self, SendFlags)` | `RequestOp<CallbackReady>`로 좁혀짐 | 같은 `message`/`timeout`/`flags`/`submit` 메서드를 다시 노출 — 그 단계에서 flag를 여러 번 설정할 수 있다 |
 | `RequestOp<Ready>::submit` / `RequestOp<CallbackReady>::submit` | `submit<F>(self, callback: F) -> Result<(), SubmitError> where F: FnOnce(Result<Vec<Message>, RequestError>) + Send + 'static` | **둘 다 callback 전용** — 지금까지 다룬 다른 모든 언어와 달리 이 binding의 public contract엔 `Future`/async를 반환하는 overload가 없다 |
 | `ReplyOp<Empty>` → `ReplyOp<Ready>` | `SendOp`를 반영, `.submit(self) -> Result<(), SubmitError>` | `.flags(self, SendFlags) -> Self` 외엔 자신만의 flags-narrowing 동작이 없다 |
 
-**Completion result.** `SendOp::submit()`은 `Result<bool, SubmitError>`
-를 반환한다 — 내부 `bool`은 `SendFlags::DONT_WAIT`가 설정되고 send가
-block됐을 때만 `false`다(back-pressure) — 다른 모든 실패는 `Err`
-variant다. `ReplyOp::submit()`은 `Result<(), SubmitError>`를 반환한다.
+**Completion result.** `SendOp::submit()`은 runtime 비종속 `Future`를 반환하고
+그 출력은 `Result<(), SubmitError>`다. 완료는 Core send-completion callback이
+구동하며, admit되지 못한 terminal completion(timeout, cancel, close, route 실패)은
+Core errno와 함께 `SubmitResult::NotAdmitted`로 표면화한다. 완료 전에 Future를
+drop하면 `zlink_send_async_cancel`로 취소를 요청한다. `PublishOp::submit()`과
+`ReplyOp::submit()`은 동기적으로 `Result<(), SubmitError>`를 반환한다.
 `RequestOp::submit(callback)`은 *dispatch* 자체(request가 성공적으로
 제출됐는지)에 대해 `Result<(), SubmitError>`를 반환한다 — 실제
 reply나 실패는 나중에 background dispatch 스레드에서 `callback`에

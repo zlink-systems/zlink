@@ -12,7 +12,8 @@ use crate::messaging_operations::{Empty, ReplyOp, SendOp};
 #[derive(Clone)]
 pub(crate) struct ReceivedRoute {
     handle: Option<*mut c_void>,
-    admission: Option<std::sync::Arc<crate::internal::RoutedAdmission>>,
+    routed: Option<std::sync::Arc<crate::internal::RoutedHandle>>,
+    completions: Option<std::sync::Arc<crate::internal::SendCompletions>>,
     routing_id: RoutingId,
 }
 
@@ -65,7 +66,8 @@ impl Received {
     pub(crate) fn replace_received_parts(&mut self, routing_id: Option<RoutingId>) {
         self.route = routing_id.map(|routing_id| ReceivedRoute {
             handle: None,
-            admission: None,
+            routed: None,
+            completions: None,
             routing_id,
         });
         self.request_seq = None;
@@ -80,7 +82,8 @@ impl Received {
     ) {
         self.route = routing_id.map(|routing_id| ReceivedRoute {
             handle: None,
-            admission: None,
+            routed: None,
+            completions: None,
             routing_id,
         });
         self.request_seq = request_seq;
@@ -91,13 +94,15 @@ impl Received {
     pub(crate) fn replace_router_parts(
         &mut self,
         handle: *mut c_void,
-        admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+        routed: std::sync::Arc<crate::internal::RoutedHandle>,
+        completions: std::sync::Arc<crate::internal::SendCompletions>,
         routing_id: RoutingId,
         request_seq: u64,
     ) {
         self.route = Some(ReceivedRoute {
             handle: Some(handle),
-            admission: Some(admission),
+            routed: Some(routed),
+            completions: Some(completions),
             routing_id,
         });
         self.request_seq = (request_seq != 0).then_some(request_seq);
@@ -107,7 +112,8 @@ impl Received {
     pub(crate) fn replace_router_retained_parts(
         &mut self,
         handle: *mut c_void,
-        admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+        routed: std::sync::Arc<crate::internal::RoutedHandle>,
+        completions: std::sync::Arc<crate::internal::SendCompletions>,
         routing_id: RoutingId,
         request_seq: u64,
         leases: HwmBudgetLeaseOwner,
@@ -119,7 +125,8 @@ impl Received {
         );
         if let Some(route) = self.route.as_mut() {
             route.handle = Some(handle);
-            route.admission = Some(admission);
+            route.routed = Some(routed);
+            route.completions = Some(completions);
         }
     }
 
@@ -194,35 +201,48 @@ impl Received {
         crate::received_operations::received_send(self)
     }
 
-    pub(crate) fn set_router_send_context(&mut self, handle: *mut c_void, routing_id: RoutingId) {
+    pub(crate) fn set_stream_send_context(
+        &mut self,
+        handle: *mut c_void,
+        completions: Option<std::sync::Arc<crate::internal::SendCompletions>>,
+        routing_id: RoutingId,
+    ) {
         self.route = Some(ReceivedRoute {
             handle: Some(handle),
-            admission: None,
+            routed: None,
+            completions,
             routing_id,
         });
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn send_target(
         &self,
     ) -> Option<(
         *mut c_void,
-        Option<std::sync::Arc<crate::internal::RoutedAdmission>>,
+        Option<std::sync::Arc<crate::internal::RoutedHandle>>,
+        Option<std::sync::Arc<crate::internal::SendCompletions>>,
         RoutingId,
     )> {
         let route = self.route.as_ref()?;
-        Some((route.handle?, route.admission.clone(), route.routing_id))
+        Some((
+            route.handle?,
+            route.routed.clone(),
+            route.completions.clone(),
+            route.routing_id,
+        ))
     }
 
     pub(crate) fn reply_target(
         &self,
     ) -> Option<(
-        std::sync::Arc<crate::internal::RoutedAdmission>,
+        std::sync::Arc<crate::internal::RoutedHandle>,
         RoutingId,
         u64,
     )> {
         let route = self.route.as_ref()?;
         Some((
-            route.admission.as_ref()?.clone(),
+            route.routed.as_ref()?.clone(),
             route.routing_id,
             self.request_seq?,
         ))

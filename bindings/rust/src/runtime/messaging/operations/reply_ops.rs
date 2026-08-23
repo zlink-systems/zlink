@@ -11,13 +11,13 @@ use crate::native_errors::{check_submit_rc, submit_not_supported_error};
 use crate::socket::submit_part_sequence;
 
 pub(crate) fn router_reply_op(
-    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+    routed: std::sync::Arc<crate::internal::RoutedHandle>,
     rid: RoutingId,
     request_seq: u64,
 ) -> ReplyOp<Empty> {
     ReplyOp {
         inner: ReplyOpStorage {
-            admission,
+            routed,
             kind: ReplyOpKind::RouterReply { rid, request_seq },
             parts: MessageParts::default(),
             flags: SendFlags::NONE,
@@ -34,8 +34,8 @@ pub(crate) fn submit_reply(mut op: ReplyOpStorage) -> Result<(), SubmitError> {
     let ReplyOpKind::RouterReply { rid, request_seq } = &op.kind;
     let rid = rid.as_raw() as *const ffi::zlink_routing_id_t;
     let rc = op
-        .admission
-        .with_attempt_gate(|handle| {
+        .routed
+        .with_submit_gate(|handle| {
             submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
                 ffi::zlink_router_reply_part(handle, rid, *request_seq, part, part_flag)
             })

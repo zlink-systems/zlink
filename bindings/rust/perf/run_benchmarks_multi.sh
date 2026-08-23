@@ -820,11 +820,14 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                 fi
                 if ! ensure_nofile_limit "${CASE_CLIENTS}"; then
-                    printf '%s,%s,%s,%s,%s\n' "${pat}" "${transport}" "${size}" "skip" "nofile_guard:${NOFILE_SKIP_REASON}" >> "${TMP_CASES}"
+                    # The reason carries key=value pairs; the case file is CSV,
+                    # so the separators have to be neutralised exactly like the
+                    # other case_reason writers do.
+                    printf '%s,%s,%s,%s,%s\n' "${pat}" "${transport}" "${size}" "skip" "nofile_guard:${NOFILE_SKIP_REASON//,/;}" >> "${TMP_CASES}"
                     continue
                 fi
                 if ! ensure_memory_budget "${CASE_CLIENTS}"; then
-                    printf '%s,%s,%s,%s,%s\n' "${pat}" "${transport}" "${size}" "skip" "memory_guard:${MEMORY_SKIP_REASON}" >> "${TMP_CASES}"
+                    printf '%s,%s,%s,%s,%s\n' "${pat}" "${transport}" "${size}" "skip" "memory_guard:${MEMORY_SKIP_REASON//,/;}" >> "${TMP_CASES}"
                     continue
                 fi
                 CLIENT_TIMEOUT_SECONDS="$(resolve_client_timeout_seconds "${pat}" "${transport}" "${size}" "${DURATION}")"

@@ -106,6 +106,8 @@ typedef enum zlink_option_t
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
     ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039,
+    ZLINK_OPT_SEND_PENDING_MAX_MSGS = 0x303A,
+    ZLINK_OPT_SEND_PENDING_MAX_BYTES = 0x303B,
 
     /* Introspection and protocol metadata */
     ZLINK_OPT_FD = 0x3007,

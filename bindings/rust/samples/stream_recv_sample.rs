@@ -33,11 +33,13 @@ fn main() {
         .recv(&mut received, zlink::RecvFlags::NONE)
         .expect("server recv failed");
     assert_eq!(received.parts()[0].as_bytes(), b"hello-stream");
-    received
-        .send()
-        .message(zlink::Message::try_from(b"hello-stream").expect("reply message failed"))
-        .submit()
-        .expect("stream reply failed");
+    sample_support::block_on(
+        received
+            .send()
+            .message(zlink::Message::try_from(b"hello-stream").expect("reply message failed"))
+            .submit(),
+    )
+    .expect("stream reply failed");
     let mut response = [0u8; 12];
     tcp_client
         .read_exact(&mut response)

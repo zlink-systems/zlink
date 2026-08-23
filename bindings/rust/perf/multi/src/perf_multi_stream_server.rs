@@ -88,8 +88,8 @@ fn main() {
         }
         while let Ok((routing_id, header, body)) = echo_rx.try_recv() {
             let msg = build_packet_frame(&header, &body);
-            match stream.send(&routing_id).message(msg).submit() {
-                Ok(_) => {}
+            match common::block_on(stream.send(&routing_id).message(msg).submit()) {
+                Ok(()) => {}
                 Err(err) if err.code() == SubmitResult::Backpressured => {
                     let _ = echo_tx.send((routing_id, header, body));
                     break;

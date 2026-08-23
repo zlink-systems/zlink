@@ -33,12 +33,20 @@ pub struct zlink_routed_submit_target_t {
     pub transport_pair_generation: u64,
 }
 
+/// Outcome of one Core-owned asynchronous send operation
+/// (`core/include/zlink/socket/api.h`). The value carries success or final
+/// failure only; Core owns any retry, so a completion is the last word on the
+/// operation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum zlink_routed_send_ready_state_t {
-    ZLINK_ROUTED_SEND_WRITABLE = 1,
-    ZLINK_ROUTED_SEND_TERMINAL = 2,
+pub enum zlink_send_complete_result_t {
+    ZLINK_SEND_ADMITTED = 0,
+    ZLINK_SEND_TIMED_OUT = 201,
+    ZLINK_SEND_TERMINAL = 202,
 }
+
+/// Core-assigned, socket-local operation id. 0 is never a valid id.
+pub type zlink_send_op_id_t = u64;
 
 /// Receive-flow state for the paired DEALER/ROUTER completion lane
 /// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
@@ -51,14 +59,34 @@ pub enum zlink_receive_flow_state_t {
     ZLINK_RECEIVE_FLOW_PAUSED = 1,
 }
 
+/// One Core send completion. `ZLINK_SEND_ADMITTED` means the record entered
+/// the Core send queue; it is not a peer delivery confirmation.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct zlink_routed_send_ready_event_t {
+pub struct zlink_send_complete_event_t {
+    pub op_id: zlink_send_op_id_t,
+    pub userdata: *mut c_void,
     pub peer_rid: zlink_routing_id_t,
     pub transport_pair_id: u64,
     pub transport_pair_generation: u64,
-    pub state: zlink_routed_send_ready_state_t,
+    pub result: zlink_send_complete_result_t,
     pub terminal_errno: c_int,
+}
+
+/// Submit options for one Core asynchronous send.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct zlink_send_async_options_t {
+    /// Must be `size_of::<zlink_send_async_options_t>()`.
+    pub struct_size: u32,
+    /// Per-operation deadline in milliseconds. 0 means no deadline. This is a
+    /// per-operation value and is unrelated to `ZLINK_OPT_SNDTIMEO`.
+    pub timeout_ms: u32,
+    /// Returned unchanged in the completion event.
+    pub userdata: *mut c_void,
+    /// Exact routed target, or null. ROUTER requires a target; DEALER may pass
+    /// null and let Core commit one selection at submit time.
+    pub target: *const zlink_routed_submit_target_t,
 }
 
 #[repr(C)]
@@ -493,12 +521,14 @@ pub type zlink_stream_packet_handler_fn = unsafe extern "C" fn(
     userdata: *mut c_void,
 );
 
-pub type zlink_send_ready_handler_fn =
-    unsafe extern "C" fn(subject: *mut c_void, userdata: *mut c_void);
-
-pub type zlink_routed_send_ready_handler_fn = unsafe extern "C" fn(
+/// Core send completion callback. Exactly one completion runs for every
+/// operation that returned `ZLINK_SUBMIT_OK`, including operations admitted
+/// immediately (the callback can run inline inside `zlink_send_async`). The
+/// callback must only hand the completion to application state: calling any
+/// send, publish, or request entry point from inside it fails with `EDEADLK`.
+pub type zlink_send_complete_handler_fn = unsafe extern "C" fn(
     subject: *mut c_void,
-    event: *const zlink_routed_send_ready_event_t,
+    event: *const zlink_send_complete_event_t,
     userdata: *mut c_void,
 );
 
@@ -572,16 +602,19 @@ unsafe extern "C" {
         handler: zlink_stream_packet_handler_fn,
         userdata: *mut c_void,
     ) -> c_int;
-    pub fn zlink_send_ready_handler(
+    pub fn zlink_send_complete_handler(
         socket: *mut c_void,
-        handler: zlink_send_ready_handler_fn,
+        handler: zlink_send_complete_handler_fn,
         userdata: *mut c_void,
     ) -> c_int;
-    pub fn zlink_routed_send_ready_handler(
+    pub fn zlink_send_async(
         socket: *mut c_void,
-        handler: zlink_routed_send_ready_handler_fn,
-        userdata: *mut c_void,
+        parts: *mut zlink_msg_t,
+        part_count: usize,
+        options: *const zlink_send_async_options_t,
+        op_id_out: *mut zlink_send_op_id_t,
     ) -> c_int;
+    pub fn zlink_send_async_cancel(socket: *mut c_void, op_id: zlink_send_op_id_t) -> c_int;
     pub fn zlink_select_routed_submit_target(
         socket: *mut c_void,
         router_rid_or_null: *const zlink_routing_id_t,

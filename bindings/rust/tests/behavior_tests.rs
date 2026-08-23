@@ -21,7 +21,7 @@ fn pair_send_recv_roundtrip() {
     client.connect("inproc://beh-pair").unwrap();
 
     let msg = Message::try_from(b"pair-payload-42").unwrap();
-    client.send().message(msg).submit().unwrap();
+    test_support::block_on(client.send().message(msg).submit()).unwrap();
 
     let mut received = Received::empty();
     server.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -48,7 +48,7 @@ fn pair_multipart_send_recv() {
     for part in iter {
         op = op.message(part);
     }
-    op.submit().unwrap();
+    test_support::block_on(op.submit()).unwrap();
 
     let mut received = Received::empty();
     a.recv(&mut received, RecvFlags::NONE).unwrap();
@@ -178,14 +178,16 @@ fn try_send_explicit_outcome() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://beh-try-send").unwrap();
-    // No peer connected, so non-blocking send should fail explicitly.
+    // No peer connected. Core parks the record and the per-operation deadline
+    // is what resolves the Future -- the binding neither waits nor retries.
 
     let msg = Message::try_from(b"test").unwrap();
-    let _ = sock
-        .send()
-        .message(msg)
-        .flags(SendFlags::DONT_WAIT)
-        .submit();
+    let _ = test_support::block_on(
+        sock.send()
+            .message(msg)
+            .timeout(Duration::from_millis(200))
+            .submit(),
+    );
 }
 
 #[test]
@@ -294,16 +296,18 @@ fn pair_send_from_callback() {
     drop(client_mon);
 
     // Client sends and receives.
-    client
-        .send()
-        .message(Message::try_from(b"ping-pair").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        client
+            .send()
+            .message(Message::try_from(b"ping-pair").unwrap())
+            .submit(),
+    )
+    .unwrap();
     let mut received = Received::empty();
     server.recv(&mut received, RecvFlags::NONE).unwrap();
     assert_eq!(received.parts()[0].as_bytes(), b"ping-pair");
     let reply = Message::try_from(b"pong-pair").unwrap();
-    server.send().message(reply).submit().unwrap();
+    test_support::block_on(server.send().message(reply).submit()).unwrap();
     client
         .common_options()
         .set_receive_timeout(Duration::from_secs(5))

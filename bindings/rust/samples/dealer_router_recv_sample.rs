@@ -35,10 +35,7 @@ fn main() {
     assert_eq!(received.parts()[0].as_str().unwrap(), "ping");
 
     let resp = Message::try_from(b"pong").expect("message failed");
-    received
-        .send()
-        .message(resp)
-        .submit()
+    sample_support::block_on(received.send().message(resp).submit())
         .expect("received send failed");
 
     let mut response = zlink::Received::empty();

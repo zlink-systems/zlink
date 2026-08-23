@@ -20,7 +20,8 @@ impl StreamSocket {
     /// builder, then submit. A part is consumed on a successful submit (see
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
-        crate::operations::stream_send_to_op(crate::socket::stream_inner(self).handle, *target)
+        let inner = crate::socket::stream_inner(self);
+        crate::operations::stream_send_to_op(inner.handle, inner.send_completions.clone(), *target)
     }
 
     /// Receives a message into caller-provided `out` storage.
@@ -31,7 +32,12 @@ impl StreamSocket {
         let received = crate::socket::stream_inner(self).recv(out, flags)?;
         if received {
             if let Some(routing_id) = out.routing_id().copied() {
-                out.set_router_send_context(crate::socket::stream_inner(self).handle, routing_id);
+                let inner = crate::socket::stream_inner(self);
+                out.set_stream_send_context(
+                    inner.handle,
+                    inner.send_completions.clone(),
+                    routing_id,
+                );
             }
         }
         Ok(received)
@@ -43,7 +49,12 @@ impl StreamSocket {
         let received = crate::socket::stream_inner(self).recv_retained(out, flags)?;
         if received {
             if let Some(routing_id) = out.routing_id().copied() {
-                out.set_router_send_context(crate::socket::stream_inner(self).handle, routing_id);
+                let inner = crate::socket::stream_inner(self);
+                out.set_stream_send_context(
+                    inner.handle,
+                    inner.send_completions.clone(),
+                    routing_id,
+                );
             }
         }
         Ok(received)
@@ -65,14 +76,6 @@ impl StreamSocket {
         crate::socket::stream_on_packet(self, handler)
     }
 
-    /// Registers a callback invoked when the socket can accept more sends after
-    /// back-pressure. The callback runs on a background dispatch thread.
-    pub fn on_send_ready<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn() + Send + 'static,
-    {
-        crate::socket::stream_inner_mut(self).on_send_ready(handler)
-    }
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {

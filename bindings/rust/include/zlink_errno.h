@@ -153,14 +153,14 @@ typedef enum zlink_recv_result_t
 } zlink_recv_result_t;
 
 /*  Handler registration result (301+).                                      */
-/*  Applies to recv_handler, send_ready_handler, and monitor_handler.        */
+/*  Applies to recv_handler, send_complete_handler, and monitor_handler.    */
 typedef enum zlink_handler_result_t
 {
     ZLINK_HANDLER_OK = 0,
     ZLINK_HANDLER_INVALID_ARGUMENT = 301, /* EINVAL    — NULL handler */
     ZLINK_HANDLER_BUSY = 302,             /* EBUSY     — handler already attached */
     ZLINK_HANDLER_NOT_SUPPORTED = 303,    /* ENOTSUP   — unsupported subject */
-    ZLINK_HANDLER_DEADLOCK = 304,         /* EDEADLK   — reentrant call (send_ready only) */
+    ZLINK_HANDLER_DEADLOCK = 304,         /* EDEADLK   — reentrant call (callback-scope only) */
     ZLINK_HANDLER_INVALID_HANDLE = 305,   /* EFAULT    — NULL or invalid handle */
     ZLINK_HANDLER_INTERNAL_ERROR = 306    /* internal errno that has no finer handler bucket */
 } zlink_handler_result_t;
