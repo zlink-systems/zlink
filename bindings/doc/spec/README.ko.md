@@ -1299,7 +1299,10 @@ message에는 이 예외를 적용하지 않는다.
 Pending message count는 표시용 진단이며 admission 기준이 아니다. Planned, applied,
 deferred HWM과 pending/accounted 값은 byte 단위이고, binding은 Core ABI 값과 flag를 그대로 보존한다.
 
-##### Retained credit과 비동기 최초 수용
+##### Retained credit과 routed 완료 (2026-08-23 개정)
+
+> 이 절은 2026-08-23 소유자 결정으로 개정됐다. 근거와 폐지된 이전 설계는
+> `doc/plan/cpp-routed-async-contract-issue.ko.md` §3.2를 참고한다.
 
 Terminal reply와 error reply는 HWM이 없는 completion lane으로 전송한다. Binding은 이
 completion submit에 SNDHWM·RCVHWM, HWM readiness 대기나 backpressure retry를 적용하지 않는다.
@@ -1316,36 +1319,35 @@ ABI를 추가하지 않는다. Multipart job은 각 receive 결과와 함께 받
 반환한다. Binding은 일반 receive의 의미를 조용히 바꾸지 않고 언어 naming convention에 맞는
 `recvRetained`·`subscribeRetained` 계열 진입점을 제공하되 raw lease handle은 공개하지 않는다.
 
-Binding은 routed 비동기 operation을 받기 전에 Core routed-target readiness handler를 socket에
-장기 등록한다. Handler event의 `(socket, target RID, transport pair ID, generation)`을 정확한 key로
-사용하고, binding 내부에 `pendingByTarget`, `readyTargets`, `readySet`에 해당하는 상태를 둔다. 이
-상태는 공개 scheduler가 아니라 Task, Future, Promise 또는 coroutine을 재개하기 위한 내부 구현이다.
-
-Routed send와 request builder의 비동기 실행은 native blocking submit을 호출한 다음 완료 객체를
-만들지 않는다. Operation을 pending state에 먼저 넣고 같은 target으로 complete multipart를 Core에
-`DONTWAIT` 제출한다. 수용되면 pending에서 제거하고 send operation을 완료한다. Backpressure면 exact
-target event가 그 key만 ready 상태로 만들고 binding pump가 callback thread 밖에서 같은 target으로
-`DONTWAIT` 제출을 다시 시도한다. Request는 최초 수용 뒤 기존 reply correlation을 계속 소유하고
-reply 또는 timeout·disconnect·termination·cancellation으로 끝난다. 최초 deadline은 대기 중
-연장하지 않는다.
+Routed DEALER/ROUTER **send**는 Core send를 직접 감싸는 동기 `submit()` terminal이다.
+HWM 대기·재개·timeout 의미론은 전부 Core가 소유한다: blocking 모드는 Core 내부에서
+대기하다 Core 신호로 재개하고, `SNDTIMEO`가 대기 상한을 정하며, `DONTWAIT`은 즉시
+`EAGAIN`을 반환한다. 백프레셔 정책의 소유자는 어플리케이션이다. 바인딩은 park queue,
+WRITABLE-callback 재시도, deadline timer, dispatcher thread 같은 admission 기계장치를
+두지 않는다. "HWM-managed routed는 async 전용" 규칙과 그 구현이던 장기 readiness handler
+등록, `pendingByTarget`/`readyTargets`/`readySet` 상태, binding pump의 callback-외부
+`DONTWAIT` 재시도는 전부 폐지됐다.
 
 Part 단위 Core API를 사용하는 binding은 같은 native handle의 모든 outbound 경로가 공유하는 짧은
 complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part API를 첫 part부터 `FINAL`까지
-호출하고 한 번의 attempt가 끝나면 즉시 해제한다. Readiness 대기 중에는 gate를 보유하지 않으며 별도
+호출하고, Core 내부 blocking 대기를 포함한 한 번의 attempt가 끝나면 즉시 해제한다. 별도
 multipart ABI나 public transaction abstraction을 추가하지 않는다.
 
-장기 handler 등록, pending-before-submit과 generation 검증으로 writable edge를 잃거나 stale route를
-깨우지 않는다. A RID의 대기는 같은 socket의 B·C·D submit을 막거나 공용 submit lock을 점유하지
-않는다. Pipe detach, socket close, context 종료, timeout과 cancellation 경쟁은 해당 operation을
-정확히 한 번 terminal로 만든다. Framework에 RID map, retry deque, ready ring, 고정 주기 polling 또는
-별도 retry capacity를 요구하지 않는다. 기존 socket-wide send-ready는 routed 비동기 admission에
-사용하지 않는다.
+**Request**는 다르다: reply 완료는 Core가 구동한다. reply handler callback이 suspension을
+완료하고, 완료가 발생한 컨텍스트에서 재개된다. Request는 최초 제출 뒤 기존 reply
+correlation을 유지하며 reply, timeout, disconnect, termination, cancellation 중 하나로
+끝난다 — timeout은 이미 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). 최초 deadline은 대기 중
+연장하지 않는다. 바인딩은 request 완료 표면 제공을 위해서도 자체 스레드나 재시도 큐를
+두지 않는다.
 
-언어별 canonical terminal은 C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
-`submit()`, Kotlin `submit().await()`, Go `Submit(ctx)`가 반환하는 completion channel이다.
-Rust의 canonical 사용은 `submit().await?`이다. HWM-managed routed builder에는 callback·blocking
-호환 terminal이나 `submit_async()`를 함께 두지 않으며 `request_async` 같은 새 operation 시작점도
-만들지 않는다.
+Routed **send**의 언어별 canonical terminal은 raw reply의 동기 submit과 같은 형태다:
+C++ `submit()`(`submit_error_t`를 던짐), .NET `Submit()`(던짐), Java `submit()`(던짐), Node
+`submit()`(던짐), Go `Submit(ctx) error`, Python `submit()`(예외 발생), Rust
+`submit() -> Result<(), SubmitError>`. **Request**의 canonical terminal은 언어 native
+suspension 표면을 유지한다: C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
+`submit()`(async 반환 타입), Kotlin `submit().await()`, Go `Submit(ctx)`가 반환하는 completion
+channel. Request builder에는 callback·blocking 호환 terminal을 함께 두지 않으며
+`request_async` 같은 새 operation 시작점도 만들지 않는다.
 
 언어별 HWM 값 표현과 범위는 다음과 같다.
 

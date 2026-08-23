@@ -1531,7 +1531,11 @@ Pending message counts are display diagnostics, not admission inputs. Planned,
 applied, and deferred HWM and pending/accounted values use bytes. A binding
 preserves Core ABI values and flags unchanged.
 
-##### Retained credit and asynchronous first admission
+##### Retained credit and routed completion (revised 2026-08-23)
+
+> This section was revised by owner decision on 2026-08-23. For the rationale
+> and the superseded prior design, see
+> `doc/plan/cpp-routed-async-contract-issue.ko.md` §3.2.
 
 Terminal replies and error replies use the HWM-free completion lane. A binding
 applies no SNDHWM, RCVHWM, HWM-readiness wait, or backpressure retry to this
@@ -1552,44 +1556,43 @@ does not silently change ordinary receive semantics; it exposes a
 language-idiomatic `recvRetained`/`subscribeRetained` family without exposing a
 raw lease handle.
 
-Before accepting asynchronous routed operations, a binding registers Core's
-long-lived routed-target readiness handler on the socket. It uses the event's
-exact `(socket, target RID, transport pair ID, generation)` key and keeps
-internal state corresponding to `pendingByTarget`, `readyTargets`, and
-`readySet`. This is private machinery for resuming a Task, Future, Promise, or
-coroutine, not a public scheduler.
-
-An asynchronous routed send or request builder never performs a native blocking
-submit before constructing its completion object. It first records the
-operation as pending, then submits the complete multipart to the same target
-with `DONTWAIT`. Admission removes it from pending and completes a send. On
-backpressure, the exact target event marks only that key ready, and a binding
-pump retries `DONTWAIT` for the same target outside the callback thread. After
-first admission, a request keeps the existing reply correlation until reply,
-timeout, disconnect, termination, or cancellation. Waiting never extends the
-original deadline.
+Routed DEALER/ROUTER **send** is a synchronous `submit()` terminal that wraps
+the Core send directly. HWM wait, resume, and timeout semantics are entirely
+Core-owned: blocking mode waits inside Core and resumes on Core's signal,
+`SNDTIMEO` bounds the wait, and `DONTWAIT` returns `EAGAIN` immediately.
+Backpressure policy belongs to the application. A binding keeps no park queue,
+WRITABLE-callback retry, deadline timer, or dispatcher thread. The
+"HWM-managed routed is async-only" rule, and the machinery that implemented
+it — long-lived readiness-handler registration, `pendingByTarget`/
+`readyTargets`/`readySet` state, and a binding pump retrying `DONTWAIT` outside
+the callback thread — are all abolished.
 
 A binding that uses part-level Core APIs has a short complete-record attempt
 gate shared by every outbound path on the same native handle. Inside the gate
 it calls the existing exact-target part API from the first part through
-`FINAL`, then releases the gate immediately after that attempt. It never holds
-the gate while waiting for readiness, and adds no multipart ABI or public
+`FINAL`, then releases the gate immediately after that attempt, including any
+blocking wait Core performs inside it. It adds no multipart ABI or public
 transaction abstraction.
 
-Long-lived handler registration, pending-before-submit, and generation checks
-prevent lost writable edges and stale-route wakes. Waiting for RID A neither
-blocks submits for B, C, or D on the same socket nor retains a shared submit
-lock. Pipe detach, socket close, context termination, timeout, and cancellation
-races resolve that operation to exactly one terminal completion. Framework owns
-no RID map, retry deque, ready ring, fixed-interval polling, or separate retry
-capacity. Socket-wide send-ready is not used for routed asynchronous admission.
+**Request** is different: Core drives reply completion. A reply handler
+callback completes the suspension, and resumption happens in the context where
+that completion occurred. A request keeps the existing reply correlation after
+its initial submit until reply, timeout, disconnect, termination, or
+cancellation — timeout is already Core-owned (`ZLINK_REQUEST_TIMED_OUT`).
+Waiting never extends the original deadline. A binding owns no thread or retry
+queue for the request completion surface either.
 
-The canonical terminals are C++ `async()`, .NET `Async(...)`, Java/Node/Python/
-Rust `submit()`, Kotlin `submit().await()`, and the completion channel returned
-by Go `Submit(ctx)`. Canonical Rust usage is `submit().await?`. An HWM-managed
-routed builder does not pair that terminal with callback or blocking
-compatibility terminals or `submit_async()`, and no language adds a new
-operation start point such as `request_async`.
+Routed **send**'s language canonical terminal takes the same synchronous form
+as raw reply's submit: C++ `submit()` (throws `submit_error_t`), .NET
+`Submit()` (throws), Java `submit()` (throws), Node `submit()` (throws), Go
+`Submit(ctx) error`, Python `submit()` (raises), and Rust
+`submit() -> Result<(), SubmitError>`. **Request**'s canonical terminal keeps
+the language-native suspension surface: C++ `async()`, .NET `Async(...)`,
+Java/Node/Python/Rust `submit()` (an async return type), Kotlin
+`submit().await()`, and the completion channel returned by Go `Submit(ctx)`. A
+request builder does not pair that terminal with callback or blocking
+compatibility terminals, and no language adds a new operation start point such
+as `request_async`.
 
 Each binding maps HWM values as follows.
 
