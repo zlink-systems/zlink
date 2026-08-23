@@ -3,6 +3,7 @@
 
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <service_wire_pilot_codec.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -67,47 +68,6 @@ struct actor_join_recovery_t
 
 namespace actor_join_recovery_detail
 {
-
-inline void append_u16 (std::vector<std::uint8_t> &out, std::uint16_t value)
-{
-    out.push_back (static_cast<std::uint8_t> (value >> 8u));
-    out.push_back (static_cast<std::uint8_t> (value));
-}
-
-inline void append_u32 (std::vector<std::uint8_t> &out, std::uint32_t value)
-{
-    for (int shift = 24; shift >= 0; shift -= 8)
-        out.push_back (static_cast<std::uint8_t> (value >> shift));
-}
-
-inline void append_u64 (std::vector<std::uint8_t> &out, std::uint64_t value)
-{
-    for (int shift = 56; shift >= 0; shift -= 8)
-        out.push_back (static_cast<std::uint8_t> (value >> shift));
-}
-
-inline std::uint32_t read_u32 (std::span<const std::uint8_t> bytes,
-                               std::size_t &offset)
-{
-    if (bytes.size () - offset < 4)
-        throw service_wire_error_t ("Actor Join recovery length is truncated");
-    const auto value = (static_cast<std::uint32_t> (bytes[offset]) << 24u)
-                       | (static_cast<std::uint32_t> (bytes[offset + 1]) << 16u)
-                       | (static_cast<std::uint32_t> (bytes[offset + 2]) << 8u)
-                       | static_cast<std::uint32_t> (bytes[offset + 3]);
-    offset += 4;
-    return value;
-}
-
-inline void append_text8 (std::vector<std::uint8_t> &out,
-                          std::string_view value)
-{
-    if (value.empty () || value.size () > 255
-        || value.find ('\0') != std::string_view::npos)
-        throw service_wire_error_t ("Actor Join recovery text8 is invalid");
-    out.push_back (static_cast<std::uint8_t> (value.size ()));
-    out.insert (out.end (), value.begin (), value.end ());
-}
 
 inline std::string hex (std::span<const std::uint8_t> bytes)
 {
@@ -386,45 +346,24 @@ inline frozen_record_t encode_actor_join_recovery_saved_work (
     if (metadata_text.size () > 256u * 1024u)
         throw service_wire_error_t ("Actor Join recovery metadata exceeds 256 KiB");
 
-    std::vector<std::uint8_t> zlir;
-    zlir.reserve (17 + metadata_text.size () + value.request.size ()
-                  + value.reply.size ());
-    append_u32 (zlir, 0x5a4c4a52u);
-    zlir.push_back (1);
-    append_u32 (zlir, static_cast<std::uint32_t> (metadata_text.size ()));
-    append_u32 (zlir, static_cast<std::uint32_t> (value.request.size ()));
-    append_u32 (zlir, static_cast<std::uint32_t> (value.reply.size ()));
-    zlir.insert (zlir.end (), metadata_text.begin (), metadata_text.end ());
-    zlir.insert (zlir.end (), value.request.begin (), value.request.end ());
-    zlir.insert (zlir.end (), value.reply.begin (), value.reply.end ());
-
-    std::vector<std::uint8_t> source;
-    append_text8 (source, hex (value.source_node_routing_id));
-    append_u64 (source, value.actor_node_generation);
-    append_text8 (source, value.coordinator.owner_id);
-    append_u64 (source, value.coordinator.lease_generation);
-    if (source.size () > std::numeric_limits<std::uint16_t>::max ())
-        throw service_wire_error_t ("Actor Join recovery source is too large");
-
-    const application_payload_t application{
-      std::string (actor_join_recovery_packet_name),
-      std::string (actor_join_recovery_content_type), std::move (zlir)};
-    const auto encoded_application = encode_application_payload (application);
-    std::vector<std::uint8_t> frozen;
-    frozen.reserve (2 + 2 + source.size () + 1 + 8 + 8 + 4 + 2
-                    + encoded_application.size ());
-    frozen.push_back (static_cast<std::uint8_t> (frozen_record_kind_t::node_send));
-    frozen.push_back (static_cast<std::uint8_t> (frozen_source_kind_t::node));
-    append_u16 (frozen, static_cast<std::uint16_t> (source.size ()));
-    frozen.insert (frozen.end (), source.begin (), source.end ());
-    frozen.push_back (0);
-    append_u64 (frozen, 0);
-    append_u64 (frozen, 0);
-    append_u32 (frozen, 0);
-    append_u16 (frozen, 0);
-    frozen.insert (frozen.end (), encoded_application.begin (),
-                   encoded_application.end ());
-    return decode_frozen_record (frozen);
+    try {
+        const auto source_routing_id = hex (value.source_node_routing_id);
+        const auto frozen = encode_zljr_record_v1 ({
+          {{source_routing_id.begin (), source_routing_id.end ()},
+           value.actor_node_generation,
+           value.coordinator.owner_id,
+           value.coordinator.lease_generation},
+          {0, 0},
+          {metadata_text.begin (), metadata_text.end ()},
+          value.request,
+          value.reply});
+        return decode_frozen_record (frozen);
+    }
+    catch (const std::invalid_argument &error) {
+        throw service_wire_error_t (
+          std::string ("generated ZLJR codec rejected record: ")
+          + error.what ());
+    }
 }
 
 inline std::optional<actor_join_recovery_t>
@@ -451,31 +390,29 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
         || candidate->application->content_type
              != actor_join_recovery_content_type)
         return std::nullopt;
-    const auto &bytes = candidate->application->payload;
-    if (bytes.size () < 17)
-        throw service_wire_error_t ("Actor Join recovery payload is truncated");
-    std::size_t offset = 0;
-    if (read_u32 (bytes, offset) != 0x5a4c4a52u || bytes[offset++] != 1)
-        throw service_wire_error_t ("Actor Join recovery header is invalid");
-    const auto metadata_length = read_u32 (bytes, offset);
-    const auto request_length = read_u32 (bytes, offset);
-    const auto reply_length = read_u32 (bytes, offset);
-    if (metadata_length > 256u * 1024u || request_length > 1024u * 1024u
-        || reply_length > 1024u * 1024u
-        || bytes.size () - offset
-             != static_cast<std::size_t> (metadata_length) + request_length
-                  + reply_length)
-        throw service_wire_error_t ("Actor Join recovery length is invalid");
-    const auto metadata_begin = bytes.begin () + static_cast<std::ptrdiff_t> (offset);
-    const auto metadata_end = metadata_begin + metadata_length;
+    service_wire_pilot_zljr_record_v1 generated;
+    try {
+        generated = decode_zljr_record_v1 (
+          candidate->canonical_bytes.empty ()
+            ? encode_frozen_record (*candidate)
+            : candidate->canonical_bytes);
+    }
+    catch (const std::invalid_argument &error) {
+        throw service_wire_error_t (
+          std::string ("generated ZLJR codec rejected record: ")
+          + error.what ());
+    }
+    if (generated.operation.high != 0 || generated.operation.low != 0)
+        throw service_wire_error_t (
+          "Actor Join recovery frozen operation is invalid");
     nlohmann::json metadata;
     try {
-        metadata = nlohmann::json::parse (metadata_begin, metadata_end);
+        metadata = nlohmann::json::parse (
+          generated.metadata.begin (), generated.metadata.end ());
     }
     catch (...) {
         throw service_wire_error_t ("Actor Join recovery metadata is malformed");
     }
-    offset += metadata_length;
     actor_join_recovery_t result;
     const auto &request = metadata.at ("Request");
     result.actor_id = required_text (request.at ("ActorId"), "ActorId");
@@ -539,15 +476,14 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
       metadata.at ("OperationIdLow"), "OperationIdLow");
     result.reply_content_type = required_text (
       metadata.at ("ReplyContentType"), "ReplyContentType");
-    result.request.assign (
-      bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-      bytes.begin () + static_cast<std::ptrdiff_t> (offset + request_length));
-    offset += request_length;
-    result.reply.assign (bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-                         bytes.end ());
+    result.request = generated.request;
+    result.reply = generated.reply;
 
     const auto request_target = decode_base64 (required_text (
       request.at ("TargetNodeRid"), "Request.TargetNodeRid"));
+    const auto expected_source_routing_id = hex (result.source_node_routing_id);
+    const std::vector<std::uint8_t> expected_source_storage (
+      expected_source_routing_id.begin (), expected_source_routing_id.end ());
     if (result.actor_generation == 0
         || result.actor_authority_owner_generation == 0
         || result.actor_node_generation == 0
@@ -559,9 +495,10 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
         || result.reserved_payload_bytes == 0
         || (result.operation.high == 0 && result.operation.low == 0)
         || request_target != result.target_node_routing_id
-        || candidate->source.node_generation != result.actor_node_generation
-        || candidate->source.owner_id != result.coordinator.owner_id
-        || candidate->source.lease_generation
+        || generated.source.node_rid != expected_source_storage
+        || generated.source.node_generation != result.actor_node_generation
+        || generated.source.owner_id != result.coordinator.owner_id
+        || generated.source.owner_lease_generation
              != result.coordinator.lease_generation)
         throw service_wire_error_t ("Actor Join recovery identity is invalid");
     return result;

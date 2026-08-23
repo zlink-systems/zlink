@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <service_wire_pilot_codec.hpp>
@@ -182,10 +183,250 @@ std::vector<std::uint8_t> make_frozen_record (
     result.insert (result.end (), body.begin (), body.end ());
     return result;
 }
+
+nlohmann::json load_fixture (const char *path)
+{
+    std::ifstream input (path);
+    assert (input.good ());
+    return nlohmann::json::parse (input);
+}
+
+void verify_generated_service_roundtrip (const std::vector<std::uint8_t> &bytes)
+{
+    assert (bytes.size () >= 5);
+    switch (bytes[3]) {
+        case 30:
+            assert (protocol::encode_relocation_ready_30 (
+                      protocol::decode_relocation_ready_30 (bytes))
+                    == bytes);
+            break;
+        case 31:
+            assert (protocol::encode_relocation_data_31 (
+                      protocol::decode_relocation_data_31 (bytes))
+                    == bytes);
+            break;
+        case 33: {
+            const auto encoded = protocol::encode_reply_relay_33 (
+              protocol::decode_reply_relay_33 ({bytes}));
+            assert (encoded.size () == 1 && encoded.front () == bytes);
+            break;
+        }
+        case 34:
+            assert (protocol::encode_relocation_cutover_34 (
+                      protocol::decode_relocation_cutover_34 (bytes))
+                    == bytes);
+            break;
+        case 40:
+            assert (protocol::encode_relocation_prepare_40 (
+                      protocol::decode_relocation_prepare_40 (bytes))
+                    == bytes);
+            break;
+        case 42:
+            assert (protocol::encode_session_relocation_seal_42 (
+                      protocol::decode_session_relocation_seal_42 (bytes))
+                    == bytes);
+            break;
+        case 43:
+            assert (protocol::encode_session_relocation_sealed_43 (
+                      protocol::decode_session_relocation_sealed_43 (bytes))
+                    == bytes);
+            break;
+        case 44:
+            assert (protocol::encode_session_relocation_route_44 (
+                      protocol::decode_session_relocation_route_44 (bytes))
+                    == bytes);
+            break;
+        case 46:
+            assert (protocol::encode_reply_relay_ack_46 (
+                      protocol::decode_reply_relay_ack_46 (bytes))
+                    == bytes);
+            break;
+        case 47:
+            assert (protocol::encode_user_spot_create_47 (
+                      protocol::decode_user_spot_create_47 (bytes))
+                    == bytes);
+            break;
+        case 48:
+            assert (protocol::encode_user_spot_close_48 (
+                      protocol::decode_user_spot_close_48 (bytes))
+                    == bytes);
+            break;
+        case 49:
+            assert (protocol::encode_actor_create_49 (
+                      protocol::decode_actor_create_49 (bytes))
+                    == bytes);
+            break;
+        case 52:
+            assert (protocol::encode_relocation_state_52 (
+                      protocol::decode_relocation_state_52 (bytes))
+                    == bytes);
+            break;
+        case 53:
+            assert (protocol::encode_relocation_failed_53 (
+                      protocol::decode_relocation_failed_53 (bytes))
+                    == bytes);
+            break;
+        default:
+            assert (false);
+    }
+}
+
+void verify_runtime_service_roundtrip (const std::vector<std::uint8_t> &bytes)
+{
+    switch (static_cast<protocol::command> (bytes[3])) {
+        case protocol::command::replyRelay:
+            assert (protocol::encode_reply_relay (
+                      protocol::decode_reply_relay (bytes))
+                    == bytes);
+            break;
+        case protocol::command::replyRelayAck:
+            assert (protocol::encode_reply_relay_ack (
+                      protocol::decode_reply_relay_ack (bytes))
+                    == bytes);
+            break;
+        case protocol::command::relocationReady:
+        case protocol::command::relocationData:
+        case protocol::command::relocationCutover:
+        case protocol::command::relocationPrepare:
+        case protocol::command::relocationState:
+        case protocol::command::relocationFailed:
+            assert (protocol::encode_relocation_control (
+                      protocol::decode_relocation_control (bytes))
+                    == bytes);
+            break;
+        case protocol::command::sessionRelocationSeal:
+            assert (protocol::encode_session_relocation_seal (
+                      protocol::decode_session_relocation_seal (bytes))
+                    == bytes);
+            break;
+        case protocol::command::sessionRelocationSealed:
+            assert (protocol::encode_session_relocation_sealed (
+                      protocol::decode_session_relocation_sealed (bytes))
+                    == bytes);
+            break;
+        case protocol::command::sessionRelocationRoute:
+            assert (protocol::encode_session_relocation_route (
+                      protocol::decode_session_relocation_route (bytes))
+                    == bytes);
+            break;
+        case protocol::command::userSpotCreate:
+            assert (protocol::encode_user_spot_create_header (
+                      protocol::decode_user_spot_create_header (bytes))
+                    == bytes);
+            break;
+        case protocol::command::userSpotClose:
+            assert (protocol::encode_user_spot_close_header (
+                      protocol::decode_user_spot_close_header (bytes))
+                    == bytes);
+            break;
+        case protocol::command::actorCreate:
+            assert (protocol::encode_actor_create_header (
+                      protocol::decode_actor_create_header (bytes))
+                    == bytes);
+            break;
+        default:
+            assert (false);
+    }
+}
+
+bool generated_service_rejects (const std::vector<std::uint8_t> &bytes)
+{
+    try {
+        verify_generated_service_roundtrip (bytes);
+    }
+    catch (const std::invalid_argument &) {
+        return true;
+    }
+    return false;
+}
+
+bool runtime_service_rejects (const std::vector<std::uint8_t> &bytes)
+{
+    try {
+        verify_runtime_service_roundtrip (bytes);
+    }
+    catch (const protocol::service_wire_error_t &) {
+        return true;
+    }
+    return false;
+}
+
+void verify_generated_adoption_goldens ()
+{
+    for (const auto path : {ZLINK_REPLY_RELAY_GOLDEN_PATH,
+                            ZLINK_RELOCATION_CONTROL_GOLDEN_PATH,
+                            ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH}) {
+        const auto fixture = load_fixture (path);
+        for (const auto &item : fixture.at ("canonical")) {
+            const auto bytes = from_hex (item.at ("hex").get<std::string> ());
+            verify_generated_service_roundtrip (bytes);
+            verify_runtime_service_roundtrip (bytes);
+        }
+        if (fixture.contains ("malformed")) {
+            for (const auto &item : fixture.at ("malformed")) {
+                const auto bytes = from_hex (
+                  item.at ("hex").get<std::string> ());
+                assert (generated_service_rejects (bytes));
+                assert (runtime_service_rejects (bytes));
+            }
+        }
+    }
+
+    for (const auto path : {ZLINK_USER_SPOT_CREATE_GOLDEN_PATH,
+                            ZLINK_USER_SPOT_CLOSE_GOLDEN_PATH,
+                            ZLINK_ACTOR_CREATE_GOLDEN_PATH}) {
+        const auto fixture = load_fixture (path);
+        const auto canonical = from_hex (
+          fixture.at ("canonical").at ("hex").get<std::string> ());
+        verify_generated_service_roundtrip (canonical);
+        verify_runtime_service_roundtrip (canonical);
+        for (const auto &item : fixture.at ("malformed")) {
+            const auto bytes = from_hex (item.at ("hex").get<std::string> ());
+            assert (generated_service_rejects (bytes));
+            assert (runtime_service_rejects (bytes));
+        }
+    }
+
+    const auto zljr = load_fixture (ZLINK_ZLJR_GOLDEN_PATH);
+    const auto canonical = from_hex (
+      zljr.at ("canonical").at ("hex").get<std::string> ());
+    const auto generated = protocol::decode_zljr_record_v1 (canonical);
+    assert (protocol::encode_zljr_record_v1 (generated) == canonical);
+    const auto frozen = protocol::decode_frozen_record (canonical);
+    const auto recovery = protocol::decode_actor_join_recovery_saved_work (
+      frozen);
+    assert (recovery.has_value ());
+    assert (protocol::encode_actor_join_recovery_saved_work (*recovery)
+              .canonical_bytes
+            == canonical);
+    for (const auto &item : zljr.at ("malformed")) {
+        const auto bytes = from_hex (item.at ("hex").get<std::string> ());
+        bool generated_rejected = false;
+        try {
+            static_cast<void> (protocol::decode_zljr_record_v1 (bytes));
+        }
+        catch (const std::invalid_argument &) {
+            generated_rejected = true;
+        }
+        assert (generated_rejected);
+        bool runtime_rejected = false;
+        try {
+            const auto malformed_frozen = protocol::decode_frozen_record (bytes);
+            runtime_rejected = !protocol::decode_actor_join_recovery_saved_work (
+                                  malformed_frozen)
+                                  .has_value ();
+        }
+        catch (const protocol::service_wire_error_t &) {
+            runtime_rejected = true;
+        }
+        assert (runtime_rejected);
+    }
+}
 }
 
 int main ()
 {
+    verify_generated_adoption_goldens ();
     const protocol::actor_route_fence_t bound_actor{
       .actor_id = "actor-a",
       .object_generation = 1,

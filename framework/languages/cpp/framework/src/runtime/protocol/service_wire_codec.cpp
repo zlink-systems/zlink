@@ -4,6 +4,8 @@
 
 #include "runtime/transport/endpoint_notation.hpp"
 
+#include <service_wire_pilot_codec.hpp>
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -1045,398 +1047,134 @@ decode_message_follow (std::span<const std::uint8_t> bytes)
     return notice;
 }
 
+namespace
+{
+template <typename Action>
+auto generated_codec_call (Action &&action)
+{
+    try {
+        return std::forward<Action> (action) ();
+    }
+    catch (const std::invalid_argument &error) {
+        throw service_wire_error_t (
+          std::string ("generated service-wire codec rejected record: ")
+          + error.what ());
+    }
+}
+
+std::vector<std::uint8_t> wire_bytes (std::span<const std::uint8_t> bytes);
+service_wire_pilot_relocation_id to_generated (const relocation_id_t &value);
+service_wire_pilot_coordinator_fence to_generated (
+  const relocation_coordinator_fence_t &value);
+service_wire_pilot_relocation_role to_generated (relocation_role_t value);
+relocation_role_t from_generated (service_wire_pilot_relocation_role value);
+service_wire_pilot_fence to_generated (const actor_route_fence_t &value);
+actor_route_fence_t from_generated (const service_wire_pilot_fence &value);
+relocation_id_t from_generated (const service_wire_pilot_relocation_id &value);
+relocation_coordinator_fence_t from_generated (
+  const service_wire_pilot_coordinator_fence &value);
+service_wire_pilot_session_route_update to_generated (
+  const session_relocation_route_update_t &value);
+session_relocation_route_update_t from_generated (
+  const service_wire_pilot_session_route_update &value);
+template <typename Record>
+service_wire_pilot_session_identity to_generated_session (const Record &value);
+template <typename Record>
+void from_generated_session (Record &record,
+                             const service_wire_pilot_session_identity &value);
+void validate_session_relocation_route (
+  const session_relocation_route_t &record);
+}
+
 std::vector<std::uint8_t> encode_session_relocation_route (
   const session_relocation_route_t &record)
 {
-    if ((record.relocation.high == 0 && record.relocation.low == 0)
-        || record.coordinator.lease_generation == 0
-        || record.coordinator.node_generation == 0
-        || (record.sender_role != relocation_role_t::target
-            && record.sender_role != relocation_role_t::source
-            && record.sender_role != relocation_role_t::coordinator)
-        || record.actor.object_generation == 0
-        || record.session_owner_node_generation == 0
-        || record.session_owner_lease_generation == 0
-        || record.binding_generation == 0) {
-        throw service_wire_error_t (
-          "Session relocation route contains a zero or invalid exact fence");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::sessionRelocationRoute), 0};
-    append_u64 (bytes, record.relocation.high);
-    append_u64 (bytes, record.relocation.low);
-    append_text8 (bytes, record.coordinator.owner_id,
-                  "coordinator owner ID");
-    append_u64 (bytes, record.coordinator.lease_generation);
-    append_bytes8 (bytes, record.coordinator.node_routing_id,
-                   "coordinator node RID");
-    append_u64 (bytes, record.coordinator.node_generation);
-    append_text16 (bytes,
-                   record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    bytes.push_back (static_cast<std::uint8_t> (record.sender_role));
-    append_text8 (bytes, record.actor.actor_id, "Actor ID");
-    append_u64 (bytes, record.actor.object_generation);
-    append_bytes8 (bytes, record.session_owner_node_routing_id,
-                   "session owner node RID");
-    append_u64 (bytes, record.session_owner_node_generation);
-    append_text8 (bytes, record.session_owner_id, "session owner ID");
-    append_u64 (bytes, record.session_owner_lease_generation);
-    append_bytes8 (bytes, record.session_routing_id, "Session RID");
-    append_u64 (bytes, record.binding_generation);
-
-    std::vector<std::uint8_t> route;
-    if (record.route.action == session_relocation_route_action_t::commit) {
-        if ((record.sender_role != relocation_role_t::target
-             && record.sender_role != relocation_role_t::coordinator)
-            || record.route.previous_authority_owner_generation == 0
-            || record.route.target_authority_owner_generation
-                 <= record.route.previous_authority_owner_generation
-            || record.route.target_node_generation == 0
-            || record.route.current_authority_owner_generation != 0) {
-            throw service_wire_error_t (
-              "Session relocation commit route has an invalid authority fence");
-        }
-        append_u64 (route,
-                    record.route.previous_authority_owner_generation);
-        append_u64 (route,
-                    record.route.target_authority_owner_generation);
-        append_bytes8 (route, record.route.target_node_routing_id,
-                       "target node RID");
-        append_u64 (route, record.route.target_node_generation);
-    }
-    else if (record.route.action
-             == session_relocation_route_action_t::abort) {
-        if ((record.sender_role != relocation_role_t::source
-             && record.sender_role != relocation_role_t::coordinator)
-            || record.route.current_authority_owner_generation == 0
-            || record.route.previous_authority_owner_generation != 0
-            || record.route.target_authority_owner_generation != 0
-            || !record.route.target_node_routing_id.empty ()
-            || record.route.target_node_generation != 0) {
-            throw service_wire_error_t (
-              "Session relocation abort route has an invalid authority fence");
-        }
-        append_u64 (route,
-                    record.route.current_authority_owner_generation);
-    }
-    else {
-        throw service_wire_error_t (
-          "Session relocation route action is invalid");
-    }
-    bytes.push_back (static_cast<std::uint8_t> (record.route.action));
-    append_u16 (bytes, static_cast<std::uint16_t> (route.size ()));
-    bytes.insert (bytes.end (), route.begin (), route.end ());
-    return bytes;
+    validate_session_relocation_route (record);
+    return generated_codec_call ([&] {
+        return encode_session_relocation_route_44 ({
+          to_generated (record.relocation),
+          to_generated (record.coordinator),
+          to_generated (record.sender_role),
+          {record.actor.actor_id, record.actor.object_generation},
+          to_generated_session (record),
+          to_generated (record.route)});
+    });
 }
 
 std::vector<std::uint8_t> encode_session_relocation_seal (
   const session_relocation_seal_t &record)
 {
-    if ((record.relocation.high == 0 && record.relocation.low == 0)
-        || record.coordinator.lease_generation == 0
-        || record.coordinator.node_generation == 0
-        || (record.sender_role != relocation_role_t::source
-            && record.sender_role != relocation_role_t::coordinator)
-        || record.actor.object_generation == 0
-        || record.actor.target_node_generation == 0
-        || record.actor.authority_owner_generation == 0
-        || record.actor.owner_lease_generation == 0
-        || record.session_owner_node_generation == 0
-        || record.session_owner_lease_generation == 0
-        || record.binding_generation == 0) {
-        throw service_wire_error_t (
-          "Session relocation seal contains a zero or invalid exact fence");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::sessionRelocationSeal), 0};
-    append_u64 (bytes, record.relocation.high);
-    append_u64 (bytes, record.relocation.low);
-    append_text8 (bytes, record.coordinator.owner_id,
-                  "coordinator owner ID");
-    append_u64 (bytes, record.coordinator.lease_generation);
-    append_bytes8 (bytes, record.coordinator.node_routing_id,
-                   "coordinator node RID");
-    append_u64 (bytes, record.coordinator.node_generation);
-    append_text16 (bytes,
-                   record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    bytes.push_back (static_cast<std::uint8_t> (record.sender_role));
-    append_text8 (bytes, record.actor.actor_id, "Actor ID");
-    append_u64 (bytes, record.actor.object_generation);
-    append_bytes8 (bytes, record.actor.target_node_routing_id,
-                   "Actor owner node RID");
-    append_u64 (bytes, record.actor.target_node_generation);
-    append_u64 (bytes, record.actor.authority_owner_generation);
-    append_u64 (bytes, record.actor.owner_lease_generation);
-    append_bytes8 (bytes, record.session_owner_node_routing_id,
-                   "session owner node RID");
-    append_u64 (bytes, record.session_owner_node_generation);
-    append_text8 (bytes, record.session_owner_id, "session owner ID");
-    append_u64 (bytes, record.session_owner_lease_generation);
-    append_bytes8 (bytes, record.session_routing_id, "Session RID");
-    append_u64 (bytes, record.binding_generation);
-    return bytes;
+    return generated_codec_call ([&] {
+        return encode_session_relocation_seal_42 ({
+          to_generated (record.relocation),
+          to_generated (record.coordinator),
+          to_generated (record.sender_role),
+          to_generated (record.actor),
+          to_generated_session (record)});
+    });
 }
 
 session_relocation_seal_t decode_session_relocation_seal (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::sessionRelocationSeal
-        || header.flags != 0)
-        throw service_wire_error_t (
-          "record is not a Session relocation seal command");
-    std::size_t offset = prefix_size;
+    const auto generated = generated_codec_call ([&] {
+        return decode_session_relocation_seal_42 (wire_bytes (bytes));
+    });
     session_relocation_seal_t record;
-    record.relocation.high = read_u64 (bytes, offset);
-    record.relocation.low = read_u64 (bytes, offset);
-    record.coordinator.owner_id =
-      read_text8 (bytes, offset, "coordinator owner ID");
-    record.coordinator.lease_generation = read_u64 (bytes, offset);
-    record.coordinator.node_routing_id =
-      read_bytes8 (bytes, offset, "coordinator node RID");
-    record.coordinator.node_generation = read_u64 (bytes, offset);
-    record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    if (offset >= bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation seal sender role is truncated");
-    record.sender_role = static_cast<relocation_role_t> (bytes[offset++]);
-    record.actor.actor_id = read_text8 (bytes, offset, "Actor ID");
-    record.actor.object_generation = read_u64 (bytes, offset);
-    record.actor.target_node_routing_id =
-      read_bytes8 (bytes, offset, "Actor owner node RID");
-    record.actor.target_node_generation = read_u64 (bytes, offset);
-    record.actor.authority_owner_generation = read_u64 (bytes, offset);
-    record.actor.owner_lease_generation = read_u64 (bytes, offset);
-    record.session_owner_node_routing_id =
-      read_bytes8 (bytes, offset, "session owner node RID");
-    record.session_owner_node_generation = read_u64 (bytes, offset);
-    record.session_owner_id =
-      read_text8 (bytes, offset, "session owner ID");
-    record.session_owner_lease_generation = read_u64 (bytes, offset);
-    record.session_routing_id =
-      read_bytes8 (bytes, offset, "Session RID");
-    record.binding_generation = read_u64 (bytes, offset);
-    if (offset != bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation seal has trailing bytes");
-    (void) encode_session_relocation_seal (record);
+    record.relocation = from_generated (generated.relocation);
+    record.coordinator = from_generated (generated.coordinator);
+    record.sender_role = from_generated (generated.sender_role);
+    record.actor = from_generated (generated.actor);
+    from_generated_session (record, generated.session);
     return record;
 }
 
 std::vector<std::uint8_t> encode_session_relocation_sealed (
   const session_relocation_sealed_t &record)
 {
-    if ((record.relocation.high == 0 && record.relocation.low == 0)
-        || record.coordinator.lease_generation == 0
-        || record.coordinator.node_generation == 0
-        || record.actor.object_generation == 0
-        || record.actor.target_node_generation == 0
-        || record.actor.authority_owner_generation == 0
-        || record.actor.owner_lease_generation == 0
-        || record.session_owner_node_generation == 0
-        || record.session_owner_lease_generation == 0
-        || record.binding_generation == 0) {
-        throw service_wire_error_t (
-          "Session relocation sealed ACK contains an invalid exact fence");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::sessionRelocationSealed), 0};
-    append_u64 (bytes, record.relocation.high);
-    append_u64 (bytes, record.relocation.low);
-    append_text8 (bytes, record.coordinator.owner_id,
-                  "coordinator owner ID");
-    append_u64 (bytes, record.coordinator.lease_generation);
-    append_bytes8 (bytes, record.coordinator.node_routing_id,
-                   "coordinator node RID");
-    append_u64 (bytes, record.coordinator.node_generation);
-    append_text16 (bytes,
-                   record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    append_text8 (bytes, record.actor.actor_id, "Actor ID");
-    append_u64 (bytes, record.actor.object_generation);
-    append_bytes8 (bytes, record.actor.target_node_routing_id,
-                   "Actor owner node RID");
-    append_u64 (bytes, record.actor.target_node_generation);
-    append_u64 (bytes, record.actor.authority_owner_generation);
-    append_u64 (bytes, record.actor.owner_lease_generation);
-    append_bytes8 (bytes, record.session_owner_node_routing_id,
-                   "session owner node RID");
-    append_u64 (bytes, record.session_owner_node_generation);
-    append_text8 (bytes, record.session_owner_id, "session owner ID");
-    append_u64 (bytes, record.session_owner_lease_generation);
-    append_bytes8 (bytes, record.session_routing_id, "Session RID");
-    append_u64 (bytes, record.binding_generation);
-    return bytes;
+    return generated_codec_call ([&] {
+        return encode_session_relocation_sealed_43 ({
+          to_generated (record.relocation),
+          to_generated (record.coordinator),
+          to_generated (record.actor),
+          to_generated_session (record)});
+    });
 }
 
 session_relocation_sealed_t decode_session_relocation_sealed (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::sessionRelocationSealed
-        || header.flags != 0)
-        throw service_wire_error_t (
-          "record is not a Session relocation sealed ACK");
-    std::size_t offset = prefix_size;
+    const auto generated = generated_codec_call ([&] {
+        return decode_session_relocation_sealed_43 (wire_bytes (bytes));
+    });
     session_relocation_sealed_t record;
-    record.relocation.high = read_u64 (bytes, offset);
-    record.relocation.low = read_u64 (bytes, offset);
-    record.coordinator.owner_id =
-      read_text8 (bytes, offset, "coordinator owner ID");
-    record.coordinator.lease_generation = read_u64 (bytes, offset);
-    record.coordinator.node_routing_id =
-      read_bytes8 (bytes, offset, "coordinator node RID");
-    record.coordinator.node_generation = read_u64 (bytes, offset);
-    record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    record.actor.actor_id = read_text8 (bytes, offset, "Actor ID");
-    record.actor.object_generation = read_u64 (bytes, offset);
-    record.actor.target_node_routing_id =
-      read_bytes8 (bytes, offset, "Actor owner node RID");
-    record.actor.target_node_generation = read_u64 (bytes, offset);
-    record.actor.authority_owner_generation = read_u64 (bytes, offset);
-    record.actor.owner_lease_generation = read_u64 (bytes, offset);
-    record.session_owner_node_routing_id =
-      read_bytes8 (bytes, offset, "session owner node RID");
-    record.session_owner_node_generation = read_u64 (bytes, offset);
-    record.session_owner_id =
-      read_text8 (bytes, offset, "session owner ID");
-    record.session_owner_lease_generation = read_u64 (bytes, offset);
-    record.session_routing_id =
-      read_bytes8 (bytes, offset, "Session RID");
-    record.binding_generation = read_u64 (bytes, offset);
-    if (offset != bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation sealed ACK has trailing bytes");
-    (void) encode_session_relocation_sealed (record);
+    record.relocation = from_generated (generated.relocation);
+    record.coordinator = from_generated (generated.coordinator);
+    record.actor = from_generated (generated.actor);
+    from_generated_session (record, generated.session);
     return record;
 }
 
 session_relocation_route_t decode_session_relocation_route (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::sessionRelocationRoute
-        || header.flags != 0) {
-        throw service_wire_error_t (
-          "record is not a Session relocation route command");
-    }
-    std::size_t offset = prefix_size;
+    const auto generated = generated_codec_call ([&] {
+        return decode_session_relocation_route_44 (wire_bytes (bytes));
+    });
     session_relocation_route_t record;
-    record.relocation.high = read_u64 (bytes, offset);
-    record.relocation.low = read_u64 (bytes, offset);
-    record.coordinator.owner_id =
-      read_text8 (bytes, offset, "coordinator owner ID");
-    record.coordinator.lease_generation = read_u64 (bytes, offset);
-    record.coordinator.node_routing_id =
-      read_bytes8 (bytes, offset, "coordinator node RID");
-    record.coordinator.node_generation = read_u64 (bytes, offset);
-    record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    if (offset >= bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation sender role is truncated");
-    record.sender_role = static_cast<relocation_role_t> (bytes[offset++]);
-    record.actor.actor_id = read_text8 (bytes, offset, "Actor ID");
-    record.actor.object_generation = read_u64 (bytes, offset);
-    record.session_owner_node_routing_id =
-      read_bytes8 (bytes, offset, "session owner node RID");
-    record.session_owner_node_generation = read_u64 (bytes, offset);
-    record.session_owner_id =
-      read_text8 (bytes, offset, "session owner ID");
-    record.session_owner_lease_generation = read_u64 (bytes, offset);
-    record.session_routing_id =
-      read_bytes8 (bytes, offset, "Session RID");
-    record.binding_generation = read_u64 (bytes, offset);
-    if (offset >= bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation route action is truncated");
-    record.route.action =
-      static_cast<session_relocation_route_action_t> (bytes[offset++]);
-    const auto route_length = read_u16 (bytes, offset);
-    if (bytes.size () - offset != route_length)
-        throw service_wire_error_t (
-          "Session relocation route length does not match");
-    const auto route = bytes.subspan (offset, route_length);
-    std::size_t route_offset = 0;
-    if (record.route.action
-        == session_relocation_route_action_t::commit) {
-        record.route.previous_authority_owner_generation =
-          read_u64 (route, route_offset);
-        record.route.target_authority_owner_generation =
-          read_u64 (route, route_offset);
-        record.route.target_node_routing_id =
-          read_bytes8 (route, route_offset, "target node RID");
-        record.route.target_node_generation =
-          read_u64 (route, route_offset);
-    }
-    else if (record.route.action
-             == session_relocation_route_action_t::abort) {
-        record.route.current_authority_owner_generation =
-          read_u64 (route, route_offset);
-    }
-    else {
-        throw service_wire_error_t (
-          "Session relocation route action is invalid");
-    }
-    if (route_offset != route.size ())
-        throw service_wire_error_t (
-          "Session relocation route has trailing bytes");
-    (void) encode_session_relocation_route (record);
+    record.relocation = from_generated (generated.relocation);
+    record.coordinator = from_generated (generated.coordinator);
+    record.sender_role = from_generated (generated.sender_role);
+    record.actor = {generated.actor.actor_id,
+                    generated.actor.object_generation};
+    from_generated_session (record, generated.session);
+    record.route = from_generated (generated.route);
+    validate_session_relocation_route (record);
     return record;
 }
 
 namespace
 {
-void append_coordinator (std::vector<std::uint8_t> &bytes,
-                         const relocation_coordinator_fence_t &coordinator)
-{
-    if (coordinator.lease_generation == 0
-        || coordinator.node_generation == 0) {
-        throw service_wire_error_t (
-          "relocation coordinator contains a zero required fence");
-    }
-    append_text8 (bytes, coordinator.owner_id, "coordinator owner ID");
-    append_u64 (bytes, coordinator.lease_generation);
-    append_bytes8 (bytes, coordinator.node_routing_id,
-                   "coordinator node RID");
-    append_u64 (bytes, coordinator.node_generation);
-    append_text16 (bytes, coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-}
-
-relocation_coordinator_fence_t read_coordinator (
-  std::span<const std::uint8_t> bytes,
-  std::size_t &offset)
-{
-    relocation_coordinator_fence_t result;
-    result.owner_id = read_text8 (bytes, offset, "coordinator owner ID");
-    result.lease_generation = read_u64 (bytes, offset);
-    result.node_routing_id =
-      read_bytes8 (bytes, offset, "coordinator node RID");
-    result.node_generation = read_u64 (bytes, offset);
-    result.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    if (result.lease_generation == 0 || result.node_generation == 0)
-        throw service_wire_error_t (
-          "relocation coordinator contains a zero required fence");
-    return result;
-}
-
 void append_nonzero_u64 (std::vector<std::uint8_t> &bytes,
                          std::uint64_t value,
                          const char *field)
@@ -1456,38 +1194,6 @@ std::uint64_t read_nonzero_u64 (std::span<const std::uint8_t> bytes,
     return value;
 }
 
-void append_ordinal (std::vector<std::uint8_t> &bytes,
-                     std::uint64_t value,
-                     const char *field)
-{
-    if (value > static_cast<std::uint64_t> (
-                  std::numeric_limits<std::int64_t>::max ()))
-        throw service_wire_error_t (std::string (field)
-                                    + " exceeds the signed ordinal range");
-    append_u64 (bytes, value);
-}
-
-std::uint64_t read_ordinal (std::span<const std::uint8_t> bytes,
-                            std::size_t &offset,
-                            const char *field)
-{
-    const auto value = read_u64 (bytes, offset);
-    if (value > static_cast<std::uint64_t> (
-                  std::numeric_limits<std::int64_t>::max ()))
-        throw service_wire_error_t (std::string (field)
-                                    + " exceeds the signed ordinal range");
-    return value;
-}
-
-void append_relocation_id (std::vector<std::uint8_t> &bytes,
-                           const relocation_id_t &value)
-{
-    if (value.high == 0 && value.low == 0)
-        throw service_wire_error_t ("relocation ID must not be zero");
-    append_u64 (bytes, value.high);
-    append_u64 (bytes, value.low);
-}
-
 relocation_id_t read_relocation_id (std::span<const std::uint8_t> bytes,
                                     std::size_t &offset)
 {
@@ -1495,16 +1201,6 @@ relocation_id_t read_relocation_id (std::span<const std::uint8_t> bytes,
     if (result.high == 0 && result.low == 0)
         throw service_wire_error_t ("relocation ID must not be zero");
     return result;
-}
-
-void append_role (std::vector<std::uint8_t> &bytes,
-                  relocation_role_t role)
-{
-    if (role != relocation_role_t::source
-        && role != relocation_role_t::target
-        && role != relocation_role_t::coordinator)
-        throw service_wire_error_t ("invalid relocation role");
-    bytes.push_back (static_cast<std::uint8_t> (role));
 }
 
 relocation_role_t read_role (std::span<const std::uint8_t> bytes,
@@ -1518,64 +1214,6 @@ relocation_role_t read_role (std::span<const std::uint8_t> bytes,
         && role != relocation_role_t::coordinator)
         throw service_wire_error_t ("invalid relocation role");
     return role;
-}
-
-void append_target (std::vector<std::uint8_t> &bytes,
-                    const relocation_target_fence_t &value)
-{
-    append_bytes8 (bytes, value.target_node_routing_id, "target node RID");
-    append_nonzero_u64 (bytes, value.target_node_generation,
-                        "target node generation");
-    append_text8 (bytes, value.target_owner_id, "target owner ID");
-    append_nonzero_u64 (bytes, value.target_owner_lease_generation,
-                        "target owner lease generation");
-}
-
-relocation_target_fence_t read_target (
-  std::span<const std::uint8_t> bytes, std::size_t &offset)
-{
-    relocation_target_fence_t result;
-    result.target_node_routing_id = read_bytes8 (
-      bytes, offset, "target node RID");
-    result.target_node_generation = read_nonzero_u64 (
-      bytes, offset, "target node generation");
-    result.target_owner_id = read_text8 (bytes, offset, "target owner ID");
-    result.target_owner_lease_generation = read_nonzero_u64 (
-      bytes, offset, "target owner lease generation");
-    return result;
-}
-
-void append_object (std::vector<std::uint8_t> &bytes,
-                    const relocation_object_t &value)
-{
-    std::vector<std::uint8_t> body;
-    switch (value.kind) {
-        case relocation_object_kind_t::actor:
-        case relocation_object_kind_t::user_spot:
-            append_text8 (body, value.object_id, "relocation object ID");
-            append_nonzero_u64 (body, value.object_generation,
-                                "relocation object generation");
-            append_nonzero_u64 (body,
-                                value.expected_authority_owner_generation,
-                                "expected authority owner generation");
-            break;
-        case relocation_object_kind_t::instance_spot:
-            append_text8 (body, value.stable_type, "Instance Spot type");
-            append_text8 (body, value.object_id, "Instance Spot ID");
-            append_nonzero_u64 (body, value.object_generation,
-                                "Instance Spot generation");
-            if (value.expected_authority_owner_generation != 0)
-                throw service_wire_error_t (
-                  "Instance Spot identity cannot contain an authority generation");
-            break;
-        default:
-            throw service_wire_error_t ("invalid relocation object kind");
-    }
-    if (body.size () > std::numeric_limits<std::uint16_t>::max ())
-        throw service_wire_error_t ("relocation object body exceeds u16");
-    bytes.push_back (static_cast<std::uint8_t> (value.kind));
-    append_u16 (bytes, static_cast<std::uint16_t> (body.size ()));
-    bytes.insert (bytes.end (), body.begin (), body.end ());
 }
 
 relocation_object_t read_object (std::span<const std::uint8_t> bytes,
@@ -1617,212 +1255,324 @@ relocation_object_t read_object (std::span<const std::uint8_t> bytes,
     return result;
 }
 
-void append_payload_manifest (std::vector<std::uint8_t> &bytes,
-                              const relocation_prepare_t &record)
+std::vector<std::uint8_t> wire_bytes (std::span<const std::uint8_t> bytes)
 {
-    if (record.payload_total_length > relocationLogicalBytes)
-        throw service_wire_error_t (
-          "relocation payload total length exceeds the logical bound");
-    if (record.payload_chunk_count > relocationChunkCount)
-        throw service_wire_error_t (
-          "relocation payload chunk count exceeds the chunk bound");
-    append_u64 (bytes, record.payload_total_length);
-    append_u32 (bytes, record.payload_chunk_count);
-    append_u32 (bytes, record.payload_checksum_crc32c);
+    return {bytes.begin (), bytes.end ()};
 }
 
-void read_payload_manifest (std::span<const std::uint8_t> bytes,
-                            std::size_t &offset,
-                            relocation_prepare_t &record)
+service_wire_pilot_operation_id to_generated (
+  const wire_operation_id_t &value)
 {
-    record.payload_total_length = read_u64 (bytes, offset);
-    if (record.payload_total_length > relocationLogicalBytes)
-        throw service_wire_error_t (
-          "relocation payload total length exceeds the logical bound");
-    record.payload_chunk_count = read_u32 (bytes, offset);
-    if (record.payload_chunk_count > relocationChunkCount)
-        throw service_wire_error_t (
-          "relocation payload chunk count exceeds the chunk bound");
-    record.payload_checksum_crc32c = read_u32 (bytes, offset);
+    return {value.high, value.low};
 }
 
-template <typename Record>
-void append_relocation_base (std::vector<std::uint8_t> &bytes,
-                             const Record &record)
+wire_operation_id_t from_generated (
+  const service_wire_pilot_operation_id &value)
 {
-    append_relocation_id (bytes, record.relocation);
-    append_nonzero_u64 (bytes, record.target_attempt_generation,
-                        "target attempt generation");
-    append_coordinator (bytes, record.coordinator);
+    return {value.high, value.low};
 }
 
-template <typename Record>
-void read_relocation_base (std::span<const std::uint8_t> bytes,
-                           std::size_t &offset,
-                           Record &record)
+service_wire_pilot_relocation_id to_generated (const relocation_id_t &value)
 {
-    record.relocation = read_relocation_id (bytes, offset);
-    record.target_attempt_generation = read_nonzero_u64 (
-      bytes, offset, "target attempt generation");
-    record.coordinator = read_coordinator (bytes, offset);
+    return {value.high, value.low};
 }
 
-void append_request_source (std::vector<std::uint8_t> &bytes,
-                            const request_source_fence_t &source)
+relocation_id_t from_generated (const service_wire_pilot_relocation_id &value)
 {
-    append_text8 (bytes, source.owner_id, "source owner ID");
-    append_nonzero_u64 (bytes, source.lease_generation,
-                        "source owner lease generation");
-    append_bytes8 (bytes, source.node_routing_id, "source node RID");
-    append_nonzero_u64 (bytes, source.node_generation,
-                        "source node generation");
+    return {value.high, value.low};
 }
 
-request_source_fence_t read_request_source (
-  std::span<const std::uint8_t> bytes, std::size_t &offset)
+service_wire_pilot_coordinator_fence to_generated (
+  const relocation_coordinator_fence_t &value)
 {
-    request_source_fence_t result;
-    result.owner_id = read_text8 (bytes, offset, "source owner ID");
-    result.lease_generation = read_nonzero_u64 (
-      bytes, offset, "source owner lease generation");
-    result.node_routing_id = read_bytes8 (bytes, offset, "source node RID");
-    result.node_generation = read_nonzero_u64 (
-      bytes, offset, "source node generation");
+    return {value.owner_id, value.lease_generation, value.node_routing_id,
+            value.node_generation, value.expected_authority_store_version};
+}
+
+relocation_coordinator_fence_t from_generated (
+  const service_wire_pilot_coordinator_fence &value)
+{
+    return {value.coordinator_owner_id, value.coordinator_lease_generation,
+            value.coordinator_node_rid, value.coordinator_node_generation,
+            value.expected_authority_store_version};
+}
+
+service_wire_pilot_target_fence to_generated (
+  const relocation_target_fence_t &value)
+{
+    return {value.target_node_routing_id, value.target_node_generation,
+            value.target_owner_id, value.target_owner_lease_generation};
+}
+
+relocation_target_fence_t from_generated (
+  const service_wire_pilot_target_fence &value)
+{
+    return {value.target_node_rid, value.target_node_generation,
+            value.target_owner_id, value.target_owner_lease_generation};
+}
+
+service_wire_pilot_request_source_fence to_generated (
+  const request_source_fence_t &value)
+{
+    return {value.owner_id, value.lease_generation, value.node_routing_id,
+            value.node_generation};
+}
+
+request_source_fence_t from_generated (
+  const service_wire_pilot_request_source_fence &value)
+{
+    return {value.source_owner_id, value.source_owner_lease_generation,
+            value.source_node_rid, value.source_node_generation};
+}
+
+service_wire_pilot_relocation_role to_generated (relocation_role_t value)
+{
+    return static_cast<service_wire_pilot_relocation_role> (value);
+}
+
+relocation_role_t from_generated (service_wire_pilot_relocation_role value)
+{
+    return static_cast<relocation_role_t> (value);
+}
+
+service_wire_pilot_relocation_object_identity to_generated (
+  const relocation_object_t &value)
+{
+    service_wire_pilot_relocation_object_identity result;
+    result.kind = static_cast<service_wire_pilot_relocation_object_kind> (
+      value.kind);
+    result.object_generation = value.object_generation;
+    result.expected_authority_owner_generation =
+      value.expected_authority_owner_generation;
+    switch (value.kind) {
+        case relocation_object_kind_t::actor:
+            result.primary_id = value.object_id;
+            break;
+        case relocation_object_kind_t::user_spot:
+            result.spot_id = value.object_id;
+            break;
+        case relocation_object_kind_t::instance_spot:
+            result.primary_id = value.stable_type;
+            result.spot_id = value.object_id;
+            break;
+        default:
+            break;
+    }
     return result;
+}
+
+relocation_object_t from_generated (
+  const service_wire_pilot_relocation_object_identity &value)
+{
+    relocation_object_t result;
+    result.kind = static_cast<relocation_object_kind_t> (value.kind);
+    result.object_generation = value.object_generation;
+    result.expected_authority_owner_generation =
+      value.expected_authority_owner_generation;
+    switch (value.kind) {
+        case service_wire_pilot_relocation_object_kind::actor:
+            result.object_id = value.primary_id;
+            break;
+        case service_wire_pilot_relocation_object_kind::user_spot:
+            result.object_id = value.spot_id;
+            break;
+        case service_wire_pilot_relocation_object_kind::instance_spot:
+            result.stable_type = value.primary_id;
+            result.object_id = value.spot_id;
+            break;
+        default:
+            throw service_wire_error_t (
+              "generated relocation object kind is invalid");
+    }
+    return result;
+}
+
+service_wire_pilot_fence to_generated (const actor_route_fence_t &value)
+{
+    return {value.actor_id, value.object_generation,
+            value.target_node_routing_id, value.target_node_generation,
+            value.authority_owner_generation, value.owner_lease_generation};
+}
+
+actor_route_fence_t from_generated (const service_wire_pilot_fence &value)
+{
+    return {value.id, value.generation, value.target_node_rid,
+            value.target_node_generation,
+            value.expected_authority_owner_generation,
+            value.expected_owner_lease_generation};
+}
+
+service_wire_pilot_session_identity to_generated_session (
+  const std::vector<std::uint8_t> &owner_node_routing_id,
+  std::uint64_t owner_node_generation,
+  const std::string &owner_id,
+  std::uint64_t owner_lease_generation,
+  const std::vector<std::uint8_t> &session_routing_id,
+  std::uint64_t binding_generation)
+{
+    return {owner_node_routing_id, owner_node_generation, owner_id,
+            owner_lease_generation, session_routing_id, binding_generation};
+}
+
+template <typename Record>
+service_wire_pilot_session_identity to_generated_session (const Record &value)
+{
+    return to_generated_session (
+      value.session_owner_node_routing_id,
+      value.session_owner_node_generation,
+      value.session_owner_id,
+      value.session_owner_lease_generation,
+      value.session_routing_id,
+      value.binding_generation);
+}
+
+template <typename Record>
+void from_generated_session (Record &record,
+                             const service_wire_pilot_session_identity &value)
+{
+    record.session_owner_node_routing_id = value.session_owner_node_rid;
+    record.session_owner_node_generation = value.session_owner_node_generation;
+    record.session_owner_id = value.session_owner_id;
+    record.session_owner_lease_generation = value.session_owner_lease_generation;
+    record.session_routing_id = value.session_rid;
+    record.binding_generation = value.binding_generation;
+}
+
+service_wire_pilot_session_route_update to_generated (
+  const session_relocation_route_update_t &value)
+{
+    return {static_cast<service_wire_pilot_session_route_action> (value.action),
+            value.previous_authority_owner_generation,
+            value.target_authority_owner_generation,
+            value.target_node_routing_id,
+            value.target_node_generation,
+            value.current_authority_owner_generation};
+}
+
+session_relocation_route_update_t from_generated (
+  const service_wire_pilot_session_route_update &value)
+{
+    return {static_cast<session_relocation_route_action_t> (value.action),
+            value.previous_authority_owner_generation,
+            value.target_authority_owner_generation,
+            value.target_node_rid,
+            value.target_node_generation,
+            value.current_authority_owner_generation};
+}
+
+void validate_session_relocation_route (
+  const session_relocation_route_t &record)
+{
+    if (record.route.action == session_relocation_route_action_t::commit) {
+        if (record.sender_role != relocation_role_t::target
+            || record.route.previous_authority_owner_generation == 0
+            || record.route.target_authority_owner_generation
+                 <= record.route.previous_authority_owner_generation
+            || record.route.target_node_generation == 0
+            || record.route.current_authority_owner_generation != 0)
+            throw service_wire_error_t (
+              "Session relocation commit route has an invalid authority fence");
+        return;
+    }
+    if (record.route.action != session_relocation_route_action_t::abort
+        || record.sender_role != relocation_role_t::source
+        || record.route.current_authority_owner_generation == 0
+        || record.route.previous_authority_owner_generation != 0
+        || record.route.target_authority_owner_generation != 0
+        || !record.route.target_node_routing_id.empty ()
+        || record.route.target_node_generation != 0)
+        throw service_wire_error_t (
+          "Session relocation abort route has an invalid authority fence");
+}
+
+service_wire_pilot_object_reservation_fence to_generated (
+  const object_reservation_fence_t &value)
+{
+    return {value.reservation_id, value.expected_store_version,
+            value.object_generation, value.authority_owner_generation,
+            value.target_node_routing_id, value.target_node_generation,
+            value.target_owner_id, value.target_owner_lease_generation,
+            value.pending_capacity_delta};
+}
+
+object_reservation_fence_t from_generated (
+  const service_wire_pilot_object_reservation_fence &value)
+{
+    return {value.reservation_id, value.expected_store_version,
+            value.object_generation, value.authority_owner_generation,
+            value.target_node_rid, value.target_node_generation,
+            value.target_owner_id, value.target_owner_lease_generation,
+            value.pending_capacity_delta};
 }
 }
 
 std::vector<std::uint8_t> encode_reply_relay (const reply_relay_t &record)
 {
-    if ((record.operation.high == 0 && record.operation.low == 0)
-        || record.reply_route_id == 0
-        || (record.relocation.high == 0 && record.relocation.low == 0)
-        || record.target_attempt_generation == 0
-        || record.participant_id == 0 || record.sequence == 0
-        || !valid_terminal_failure (record.terminal_result,
-                                    record.failure_code)) {
+    auto encoded = generated_codec_call ([&] {
+        service_wire_pilot_reply_context context;
+        context.kind =
+          service_wire_pilot_reply_context_kind::maintenance_relocation;
+        context.relocation = to_generated (record.relocation);
+        context.target_attempt_generation = record.target_attempt_generation;
+        context.coordinator = to_generated (record.coordinator);
+        context.participant_id = record.participant_id;
+        context.sequence = record.sequence;
+        return encode_reply_relay_33 ({
+          to_generated (record.operation), record.reply_route_id,
+          std::move (context), record.terminal_result,
+          static_cast<std::uint32_t> (record.failure_code), std::nullopt});
+    });
+    if (encoded.size () != 1)
         throw service_wire_error_t (
-          "reply relay contains an invalid required field");
-    }
-    std::vector<std::uint8_t> context;
-    append_u64 (context, record.relocation.high);
-    append_u64 (context, record.relocation.low);
-    append_u64 (context, record.target_attempt_generation);
-    append_coordinator (context, record.coordinator);
-    append_u64 (context, record.participant_id);
-    append_u64 (context, record.sequence);
-    if (context.size () > std::numeric_limits<std::uint16_t>::max ())
-        throw service_wire_error_t ("reply relay context exceeds u16");
-
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::replyRelay), 0};
-    append_u64 (bytes, record.operation.high);
-    append_u64 (bytes, record.operation.low);
-    append_u64 (bytes, record.reply_route_id);
-    bytes.push_back (2);
-    append_u16 (bytes, static_cast<std::uint16_t> (context.size ()));
-    bytes.insert (bytes.end (), context.begin (), context.end ());
-    append_u32 (bytes, record.terminal_result);
-    append_u32 (bytes, static_cast<std::uint32_t> (record.failure_code));
-    return bytes;
+          "generated maintenance reply relay unexpectedly has a payload frame");
+    return std::move (encoded.front ());
 }
 
 reply_relay_t decode_reply_relay (std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::replyRelay || header.flags != 0)
-        throw service_wire_error_t ("record is not a reply relay");
-    std::size_t offset = prefix_size;
-    reply_relay_t record;
-    record.operation.high = read_u64 (bytes, offset);
-    record.operation.low = read_u64 (bytes, offset);
-    record.reply_route_id = read_u64 (bytes, offset);
-    if (offset >= bytes.size () || bytes[offset++] != 2)
+    const auto generated = generated_codec_call ([&] {
+        return decode_reply_relay_33 ({wire_bytes (bytes)});
+    });
+    if (generated.context.kind
+          != service_wire_pilot_reply_context_kind::maintenance_relocation
+        || generated.payload)
         throw service_wire_error_t (
-          "reply relay context is not maintenance relocation");
-    const auto context_length = read_u16 (bytes, offset);
-    if (bytes.size () - offset < context_length)
-        throw service_wire_error_t ("reply relay context is truncated");
-    const auto context = bytes.subspan (offset, context_length);
-    offset += context_length;
-    std::size_t context_offset = 0;
-    record.relocation.high = read_u64 (context, context_offset);
-    record.relocation.low = read_u64 (context, context_offset);
-    record.target_attempt_generation = read_u64 (context, context_offset);
-    record.coordinator = read_coordinator (context, context_offset);
-    record.participant_id = read_u64 (context, context_offset);
-    record.sequence = read_u64 (context, context_offset);
-    if (context_offset != context.size ())
-        throw service_wire_error_t ("reply relay context has trailing bytes");
-    record.terminal_result = read_u32 (bytes, offset);
-    record.failure_code =
-      static_cast<framework_error_code> (read_u32 (bytes, offset));
-    if (offset != bytes.size ())
-        throw service_wire_error_t ("reply relay has trailing bytes");
-    (void) encode_reply_relay (record);
-    return record;
+          "reply relay context is not payload-free maintenance relocation");
+    return {from_generated (generated.operation), generated.reply_route_id,
+            from_generated (generated.context.relocation),
+            generated.context.target_attempt_generation,
+            from_generated (generated.context.coordinator),
+            generated.context.participant_id, generated.context.sequence,
+            generated.terminal_result,
+            static_cast<framework_error_code> (generated.failure_code)};
 }
 
 std::vector<std::uint8_t> encode_reply_relay_ack (
   const reply_relay_ack_t &record)
 {
-    if ((record.relocation.high == 0 && record.relocation.low == 0)
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.reply_route_id == 0
-        || record.request_source.lease_generation == 0
-        || record.request_source.node_generation == 0
-        || (record.status != reply_relay_ack_status_t::terminal_received
-            && record.status != reply_relay_ack_status_t::already_terminal)) {
-        throw service_wire_error_t (
-          "reply relay ACK contains an invalid required field");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::replyRelayAck), 0};
-    append_u64 (bytes, record.relocation.high);
-    append_u64 (bytes, record.relocation.low);
-    append_coordinator (bytes, record.coordinator);
-    append_u64 (bytes, record.operation.high);
-    append_u64 (bytes, record.operation.low);
-    append_u64 (bytes, record.reply_route_id);
-    append_text8 (bytes, record.request_source.owner_id,
-                  "request source owner ID");
-    append_u64 (bytes, record.request_source.lease_generation);
-    append_bytes8 (bytes, record.request_source.node_routing_id,
-                   "request source node RID");
-    append_u64 (bytes, record.request_source.node_generation);
-    bytes.push_back (static_cast<std::uint8_t> (record.status));
-    return bytes;
+    return generated_codec_call ([&] {
+        return encode_reply_relay_ack_46 ({
+          to_generated (record.relocation),
+          to_generated (record.coordinator),
+          to_generated (record.operation),
+          record.reply_route_id,
+          to_generated (record.request_source),
+          static_cast<std::uint8_t> (record.status)});
+    });
 }
 
 reply_relay_ack_t decode_reply_relay_ack (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::replyRelayAck || header.flags != 0)
-        throw service_wire_error_t ("record is not a reply relay ACK");
-    std::size_t offset = prefix_size;
-    reply_relay_ack_t record;
-    record.relocation.high = read_u64 (bytes, offset);
-    record.relocation.low = read_u64 (bytes, offset);
-    record.coordinator = read_coordinator (bytes, offset);
-    record.operation.high = read_u64 (bytes, offset);
-    record.operation.low = read_u64 (bytes, offset);
-    record.reply_route_id = read_u64 (bytes, offset);
-    record.request_source.owner_id =
-      read_text8 (bytes, offset, "request source owner ID");
-    record.request_source.lease_generation = read_u64 (bytes, offset);
-    record.request_source.node_routing_id =
-      read_bytes8 (bytes, offset, "request source node RID");
-    record.request_source.node_generation = read_u64 (bytes, offset);
-    if (offset >= bytes.size ())
-        throw service_wire_error_t ("reply relay ACK status is truncated");
-    record.status = static_cast<reply_relay_ack_status_t> (bytes[offset++]);
-    if (offset != bytes.size ())
-        throw service_wire_error_t ("reply relay ACK has trailing bytes");
-    (void) encode_reply_relay_ack (record);
-    return record;
+    const auto generated = generated_codec_call ([&] {
+        return decode_reply_relay_ack_46 (wire_bytes (bytes));
+    });
+    return {from_generated (generated.relocation),
+            from_generated (generated.coordinator),
+            from_generated (generated.operation),
+            generated.reply_route_id,
+            from_generated (generated.request_source),
+            static_cast<reply_relay_ack_status_t> (generated.status)};
 }
 
 std::vector<std::uint8_t> encode_relocation_control (
@@ -1830,92 +1580,86 @@ std::vector<std::uint8_t> encode_relocation_control (
 {
     return std::visit ([] (const auto &value) {
         using record_t = std::decay_t<decltype (value)>;
-        command kind;
-        std::uint8_t flags = 0;
-        if constexpr (std::is_same_v<record_t, relocation_prepare_t>)
-            kind = command::relocationPrepare;
-        else if constexpr (std::is_same_v<record_t, relocation_ready_t>)
-            kind = command::relocationReady;
-        else if constexpr (std::is_same_v<record_t, relocation_failed_t>)
-            kind = command::relocationFailed;
-        else if constexpr (std::is_same_v<record_t, relocation_data_t>)
-            kind = command::relocationData;
-        else if constexpr (std::is_same_v<record_t, relocation_state_t>)
-            kind = command::relocationState;
-        else
-            kind = command::relocationCutover;
-
-        std::vector<std::uint8_t> bytes{
-          magic[0], magic[1], wire_major,
-          static_cast<std::uint8_t> (kind), flags};
-
         if constexpr (std::is_same_v<record_t, relocation_prepare_t>) {
-            append_relocation_id (bytes, value.relocation);
-            append_nonzero_u64 (bytes, value.target_attempt_generation,
-                                "target attempt generation");
-            append_coordinator (bytes, value.coordinator);
-            append_target (bytes, value.target);
-            append_role (bytes, value.initiator_role);
-            append_object (bytes, value.object);
-            append_bytes8 (bytes, value.source_node_routing_id,
-                           "source node RID");
-            append_nonzero_u64 (bytes, value.source_node_generation,
-                                "source node generation");
-            append_payload_manifest (bytes, value);
-            append_ordinal (bytes, value.application_version,
-                            "application version");
+            if (value.application_version
+                > static_cast<std::uint64_t> (
+                  std::numeric_limits<std::int64_t>::max ()))
+                throw service_wire_error_t (
+                  "application version exceeds the signed ordinal range");
+            return generated_codec_call ([&] {
+                return encode_relocation_prepare_40 ({
+                  to_generated (value.relocation),
+                  value.target_attempt_generation,
+                  to_generated (value.coordinator),
+                  to_generated (value.target),
+                  to_generated (value.initiator_role),
+                  to_generated (value.object),
+                  value.source_node_routing_id,
+                  value.source_node_generation,
+                  value.payload_total_length,
+                  value.payload_chunk_count,
+                  value.payload_checksum_crc32c,
+                  static_cast<std::int64_t> (value.application_version)});
+            });
         }
         else if constexpr (std::is_same_v<record_t, relocation_ready_t>) {
-            append_relocation_id (bytes, value.relocation);
-            append_nonzero_u64 (bytes, value.target_attempt_generation,
-                                "target attempt generation");
-            append_coordinator (bytes, value.coordinator);
-            append_target (bytes, value.target);
-            append_object (bytes, value.object);
-            append_role (bytes, value.sender_role);
+            return generated_codec_call ([&] {
+                return encode_relocation_ready_30 ({
+                  to_generated (value.relocation),
+                  value.target_attempt_generation,
+                  to_generated (value.coordinator),
+                  to_generated (value.target),
+                  to_generated (value.object),
+                  to_generated (value.sender_role)});
+            });
         }
         else if constexpr (std::is_same_v<record_t, relocation_failed_t>) {
-            if (value.failure_code == 0)
-                throw service_wire_error_t (
-                  "relocation failure code must be non-zero");
-            append_relocation_id (bytes, value.relocation);
-            append_nonzero_u64 (bytes, value.target_attempt_generation,
-                                "target attempt generation");
-            append_coordinator (bytes, value.coordinator);
-            append_target (bytes, value.target);
-            append_object (bytes, value.object);
-            append_role (bytes, value.sender_role);
-            append_u32 (bytes, value.failure_code);
+            return generated_codec_call ([&] {
+                return encode_relocation_failed_53 ({
+                  to_generated (value.relocation),
+                  value.target_attempt_generation,
+                  to_generated (value.coordinator),
+                  to_generated (value.target),
+                  to_generated (value.object),
+                  to_generated (value.sender_role),
+                  value.failure_code});
+            });
         }
         else if constexpr (std::is_same_v<record_t, relocation_data_t>) {
-            append_relocation_base (bytes, value);
-            append_role (bytes, value.sender_role);
-            append_object (bytes, value.object);
-            const auto frozen = encode_frozen_record (value.record);
-            bytes.insert (bytes.end (), frozen.begin (), frozen.end ());
+            return generated_codec_call ([&] {
+                return encode_relocation_data_31 ({
+                  to_generated (value.relocation),
+                  value.target_attempt_generation,
+                  to_generated (value.coordinator),
+                  to_generated (value.sender_role),
+                  to_generated (value.object),
+                  encode_frozen_record (value.record)});
+            });
         }
         else if constexpr (std::is_same_v<record_t, relocation_state_t>) {
-            append_relocation_base (bytes, value);
-            append_role (bytes, value.sender_role);
-            append_object (bytes, value.object);
-            append_u32 (bytes, value.chunk_ordinal);
-            if (value.chunk_data.size () > relocationChunkBytes)
-                throw service_wire_error_t (
-                  "relocation state chunk exceeds the chunk byte bound");
-            append_u32 (bytes,
-                        static_cast<std::uint32_t> (value.chunk_data.size ()));
-            bytes.insert (bytes.end (), value.chunk_data.begin (),
-                          value.chunk_data.end ());
+            return generated_codec_call ([&] {
+                return encode_relocation_state_52 ({
+                  to_generated (value.relocation),
+                  value.target_attempt_generation,
+                  to_generated (value.coordinator),
+                  to_generated (value.sender_role),
+                  to_generated (value.object),
+                  value.chunk_ordinal,
+                  value.chunk_data});
+            });
         }
         else {
-            append_relocation_base (bytes, value);
-            append_role (bytes, value.sender_role);
-            append_object (bytes, value.object);
-            append_ordinal (bytes, value.boundary_record_count,
-                            "boundary record count");
-            append_u32 (bytes, value.boundary_checksum_crc32c);
+            return generated_codec_call ([&] {
+                return encode_relocation_cutover_34 ({
+                  to_generated (value.relocation),
+                  value.target_attempt_generation,
+                  to_generated (value.coordinator),
+                  to_generated (value.sender_role),
+                  to_generated (value.object),
+                  value.boundary_record_count,
+                  value.boundary_checksum_crc32c});
+            });
         }
-        return bytes;
     }, record);
 }
 
@@ -1925,106 +1669,87 @@ relocation_control_t decode_relocation_control (
     const auto header = decode_header (bytes);
     if (header.flags != 0)
         throw service_wire_error_t ("invalid relocation control flags");
-    std::size_t offset = prefix_size;
     switch (header.kind) {
         case command::relocationPrepare: {
-            relocation_prepare_t result;
-            result.relocation = read_relocation_id (bytes, offset);
-            result.target_attempt_generation = read_nonzero_u64 (
-              bytes, offset, "target attempt generation");
-            result.coordinator = read_coordinator (bytes, offset);
-            result.target = read_target (bytes, offset);
-            result.initiator_role = read_role (bytes, offset);
-            result.object = read_object (bytes, offset);
-            result.source_node_routing_id = read_bytes8 (
-              bytes, offset, "source node RID");
-            result.source_node_generation = read_nonzero_u64 (
-              bytes, offset, "source node generation");
-            read_payload_manifest (bytes, offset, result);
-            result.application_version = read_ordinal (
-              bytes, offset, "application version");
-            if (offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation prepare has trailing bytes");
-            return result;
+            const auto generated = generated_codec_call ([&] {
+                return decode_relocation_prepare_40 (wire_bytes (bytes));
+            });
+            return relocation_prepare_t{
+              from_generated (generated.relocation),
+              generated.target_attempt_generation,
+              from_generated (generated.coordinator),
+              from_generated (generated.target),
+              from_generated (generated.initiator_role),
+              from_generated (generated.object),
+              generated.source_node_rid,
+              generated.source_node_generation,
+              generated.payload_total_length,
+              generated.payload_chunk_count,
+              generated.payload_checksum_crc32c,
+              static_cast<std::uint64_t> (generated.application_version)};
         }
         case command::relocationReady: {
-            relocation_ready_t result;
-            result.relocation = read_relocation_id (bytes, offset);
-            result.target_attempt_generation = read_nonzero_u64 (
-              bytes, offset, "target attempt generation");
-            result.coordinator = read_coordinator (bytes, offset);
-            result.target = read_target (bytes, offset);
-            result.object = read_object (bytes, offset);
-            result.sender_role = read_role (bytes, offset);
-            if (offset != bytes.size ())
-                throw service_wire_error_t ("relocation ready has trailing bytes");
-            return result;
+            const auto generated = generated_codec_call ([&] {
+                return decode_relocation_ready_30 (wire_bytes (bytes));
+            });
+            return relocation_ready_t{
+              from_generated (generated.relocation),
+              generated.target_attempt_generation,
+              from_generated (generated.coordinator),
+              from_generated (generated.target),
+              from_generated (generated.object),
+              from_generated (generated.sender_role)};
         }
         case command::relocationFailed: {
-            relocation_failed_t result;
-            result.relocation = read_relocation_id (bytes, offset);
-            result.target_attempt_generation = read_nonzero_u64 (
-              bytes, offset, "target attempt generation");
-            result.coordinator = read_coordinator (bytes, offset);
-            result.target = read_target (bytes, offset);
-            result.object = read_object (bytes, offset);
-            result.sender_role = read_role (bytes, offset);
-            result.failure_code = read_u32 (bytes, offset);
-            if (result.failure_code == 0)
-                throw service_wire_error_t (
-                  "relocation failure code must be non-zero");
-            if (offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation failure has trailing bytes");
-            return result;
+            const auto generated = generated_codec_call ([&] {
+                return decode_relocation_failed_53 (wire_bytes (bytes));
+            });
+            return relocation_failed_t{
+              from_generated (generated.relocation),
+              generated.target_attempt_generation,
+              from_generated (generated.coordinator),
+              from_generated (generated.target),
+              from_generated (generated.object),
+              from_generated (generated.sender_role),
+              generated.failure_code};
         }
         case command::relocationData: {
-            relocation_data_t result;
-            read_relocation_base (bytes, offset, result);
-            result.sender_role = read_role (bytes, offset);
-            result.object = read_object (bytes, offset);
-            if (offset >= bytes.size ())
-                throw service_wire_error_t (
-                  "relocation data frozen record is truncated");
-            result.record = decode_frozen_record (bytes.subspan (offset));
-            return result;
+            const auto generated = generated_codec_call ([&] {
+                return decode_relocation_data_31 (wire_bytes (bytes));
+            });
+            return relocation_data_t{
+              from_generated (generated.relocation),
+              generated.target_attempt_generation,
+              from_generated (generated.coordinator),
+              from_generated (generated.sender_role),
+              from_generated (generated.object),
+              decode_frozen_record (generated.record)};
         }
         case command::relocationCutover: {
-            relocation_cutover_t result;
-            read_relocation_base (bytes, offset, result);
-            result.sender_role = read_role (bytes, offset);
-            result.object = read_object (bytes, offset);
-            result.boundary_record_count = read_ordinal (
-              bytes, offset, "boundary record count");
-            result.boundary_checksum_crc32c = read_u32 (bytes, offset);
-            if (offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation cutover has trailing bytes");
-            return result;
+            const auto generated = generated_codec_call ([&] {
+                return decode_relocation_cutover_34 (wire_bytes (bytes));
+            });
+            return relocation_cutover_t{
+              from_generated (generated.relocation),
+              generated.target_attempt_generation,
+              from_generated (generated.coordinator),
+              from_generated (generated.sender_role),
+              from_generated (generated.object),
+              generated.boundary_record_count,
+              generated.boundary_checksum_crc32c};
         }
         case command::relocationState: {
-            relocation_state_t result;
-            read_relocation_base (bytes, offset, result);
-            result.sender_role = read_role (bytes, offset);
-            result.object = read_object (bytes, offset);
-            result.chunk_ordinal = read_u32 (bytes, offset);
-            const auto chunk_length = read_u32 (bytes, offset);
-            if (chunk_length > relocationChunkBytes)
-                throw service_wire_error_t (
-                  "relocation state chunk exceeds the chunk byte bound");
-            if (bytes.size () - offset < chunk_length)
-                throw service_wire_error_t (
-                  "relocation state chunk data is truncated");
-            result.chunk_data.assign (
-              bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-              bytes.begin () + static_cast<std::ptrdiff_t> (offset)
-                + chunk_length);
-            offset += chunk_length;
-            if (offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation state has trailing bytes");
-            return result;
+            const auto generated = generated_codec_call ([&] {
+                return decode_relocation_state_52 (wire_bytes (bytes));
+            });
+            return relocation_state_t{
+              from_generated (generated.relocation),
+              generated.target_attempt_generation,
+              from_generated (generated.coordinator),
+              from_generated (generated.sender_role),
+              from_generated (generated.object),
+              generated.chunk_ordinal,
+              generated.chunk_data};
         }
         default:
             throw service_wire_error_t (
@@ -3058,293 +2783,103 @@ instance_activation_recovery_t decode_instance_activation_recovery (
 std::vector<std::uint8_t> encode_user_spot_create_header (
   const user_spot_create_header_t &record)
 {
-    if (record.correlation == 0
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.source_node_generation == 0
-        || record.reservation.object_generation == 0
-        || record.reservation.authority_owner_generation == 0
-        || record.reservation.target_node_generation == 0
-        || record.reservation.target_owner_lease_generation == 0
-        || record.reservation.pending_capacity_delta == 0
-        || record.deadline_unix_ms == 0) {
-        throw service_wire_error_t (
-          "user Spot create contains a zero required fence");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::userSpotCreate), 0};
-    append_u64 (bytes, record.correlation);
-    append_u64 (bytes, record.operation.high);
-    append_u64 (bytes, record.operation.low);
-    append_bytes8 (
-      bytes, record.source_node_routing_id, "source node RID");
-    append_u64 (bytes, record.source_node_generation);
-    append_text8 (bytes, record.spot_id, "spot ID");
-    append_text8 (bytes, record.stable_type, "stable type");
-    append_text8 (
-      bytes, record.reservation.reservation_id, "reservation ID");
-    append_text16 (
-      bytes, record.reservation.expected_store_version,
-      "expected StoreVersion", authorityStoreVersionBytes);
-    append_u64 (bytes, record.reservation.object_generation);
-    append_u64 (
-      bytes, record.reservation.authority_owner_generation);
-    append_bytes8 (
-      bytes, record.reservation.target_node_routing_id,
-      "target node RID");
-    append_u64 (bytes, record.reservation.target_node_generation);
-    append_text8 (
-      bytes, record.reservation.target_owner_id, "target owner ID");
-    append_u64 (
-      bytes, record.reservation.target_owner_lease_generation);
-    append_u32 (bytes, record.reservation.pending_capacity_delta);
-    append_u64 (bytes, record.deadline_unix_ms);
-    return bytes;
+    return generated_codec_call ([&] {
+        return encode_user_spot_create_47 ({
+          record.correlation,
+          to_generated (record.operation),
+          record.source_node_routing_id,
+          record.source_node_generation,
+          record.spot_id,
+          record.stable_type,
+          to_generated (record.reservation),
+          record.deadline_unix_ms});
+    });
 }
 
 user_spot_create_header_t decode_user_spot_create_header (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::userSpotCreate || header.flags != 0) {
-        throw service_wire_error_t (
-          "record is not a User Spot create command");
-    }
-    std::size_t offset = prefix_size;
-    user_spot_create_header_t record;
-    record.correlation = read_u64 (bytes, offset);
-    record.operation.high = read_u64 (bytes, offset);
-    record.operation.low = read_u64 (bytes, offset);
-    record.source_node_routing_id =
-      read_bytes8 (bytes, offset, "source node RID");
-    record.source_node_generation = read_u64 (bytes, offset);
-    record.spot_id = read_text8 (bytes, offset, "spot ID");
-    record.stable_type = read_text8 (bytes, offset, "stable type");
-    record.reservation.reservation_id =
-      read_text8 (bytes, offset, "reservation ID");
-    record.reservation.expected_store_version =
-      read_text16 (bytes, offset, "expected StoreVersion",
-                   authorityStoreVersionBytes);
-    record.reservation.object_generation = read_u64 (bytes, offset);
-    record.reservation.authority_owner_generation =
-      read_u64 (bytes, offset);
-    record.reservation.target_node_routing_id =
-      read_bytes8 (bytes, offset, "target node RID");
-    record.reservation.target_node_generation =
-      read_u64 (bytes, offset);
-    record.reservation.target_owner_id =
-      read_text8 (bytes, offset, "target owner ID");
-    record.reservation.target_owner_lease_generation =
-      read_u64 (bytes, offset);
-    record.reservation.pending_capacity_delta =
-      read_u32 (bytes, offset);
-    record.deadline_unix_ms = read_u64 (bytes, offset);
-    if (offset != bytes.size ()) {
-        throw service_wire_error_t (
-          "User Spot create command has trailing bytes");
-    }
-    if (record.correlation == 0
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.source_node_generation == 0
-        || record.reservation.object_generation == 0
-        || record.reservation.authority_owner_generation == 0
-        || record.reservation.target_node_generation == 0
-        || record.reservation.target_owner_lease_generation == 0
-        || record.reservation.pending_capacity_delta == 0
-        || record.deadline_unix_ms == 0) {
-        throw service_wire_error_t (
-          "user Spot create contains a zero required fence");
-    }
-    return record;
+    const auto generated = generated_codec_call ([&] {
+        return decode_user_spot_create_47 (wire_bytes (bytes));
+    });
+    return {generated.correlation,
+            from_generated (generated.operation),
+            generated.source_node_rid,
+            generated.source_node_generation,
+            generated.spot_id,
+            generated.stable_type,
+            from_generated (generated.reservation),
+            generated.deadline_unix_ms};
 }
 
 std::vector<std::uint8_t> encode_actor_create_header (
   const actor_create_header_t &record)
 {
-    if (record.correlation == 0
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.source_node_generation == 0
-        || record.reservation.object_generation == 0
-        || record.reservation.authority_owner_generation == 0
-        || record.reservation.target_node_generation == 0
-        || record.reservation.target_owner_lease_generation == 0
-        || record.reservation.pending_capacity_delta == 0
-        || record.deadline_unix_ms == 0)
-        throw service_wire_error_t (
-          "Actor create contains a zero required fence");
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::actorCreate), 0};
-    append_u64 (bytes, record.correlation);
-    append_u64 (bytes, record.operation.high);
-    append_u64 (bytes, record.operation.low);
-    append_bytes8 (bytes, record.source_node_routing_id,
-                   "source node RID");
-    append_u64 (bytes, record.source_node_generation);
-    append_text8 (bytes, record.actor_id, "actor ID");
-    append_text8 (bytes, record.stable_type, "stable type");
-    append_text8 (bytes, record.reservation.reservation_id,
-                  "reservation ID");
-    append_text16 (bytes, record.reservation.expected_store_version,
-                   "expected StoreVersion", authorityStoreVersionBytes);
-    append_u64 (bytes, record.reservation.object_generation);
-    append_u64 (bytes, record.reservation.authority_owner_generation);
-    append_bytes8 (bytes, record.reservation.target_node_routing_id,
-                   "target node RID");
-    append_u64 (bytes, record.reservation.target_node_generation);
-    append_text8 (bytes, record.reservation.target_owner_id,
-                  "target owner ID");
-    append_u64 (bytes,
-                record.reservation.target_owner_lease_generation);
-    append_u32 (bytes, record.reservation.pending_capacity_delta);
-    append_u64 (bytes, record.deadline_unix_ms);
-    return bytes;
+    return generated_codec_call ([&] {
+        return encode_actor_create_49 ({
+          record.correlation,
+          to_generated (record.operation),
+          record.source_node_routing_id,
+          record.source_node_generation,
+          record.actor_id,
+          record.stable_type,
+          to_generated (record.reservation),
+          record.deadline_unix_ms});
+    });
 }
 
 actor_create_header_t decode_actor_create_header (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::actorCreate || header.flags != 0)
-        throw service_wire_error_t (
-          "record is not an Actor create command");
-    std::size_t offset = prefix_size;
-    actor_create_header_t record;
-    record.correlation = read_u64 (bytes, offset);
-    record.operation.high = read_u64 (bytes, offset);
-    record.operation.low = read_u64 (bytes, offset);
-    record.source_node_routing_id =
-      read_bytes8 (bytes, offset, "source node RID");
-    record.source_node_generation = read_u64 (bytes, offset);
-    record.actor_id = read_text8 (bytes, offset, "actor ID");
-    record.stable_type = read_text8 (bytes, offset, "stable type");
-    record.reservation.reservation_id =
-      read_text8 (bytes, offset, "reservation ID");
-    record.reservation.expected_store_version =
-      read_text16 (bytes, offset, "expected StoreVersion",
-                   authorityStoreVersionBytes);
-    record.reservation.object_generation = read_u64 (bytes, offset);
-    record.reservation.authority_owner_generation =
-      read_u64 (bytes, offset);
-    record.reservation.target_node_routing_id =
-      read_bytes8 (bytes, offset, "target node RID");
-    record.reservation.target_node_generation =
-      read_u64 (bytes, offset);
-    record.reservation.target_owner_id =
-      read_text8 (bytes, offset, "target owner ID");
-    record.reservation.target_owner_lease_generation =
-      read_u64 (bytes, offset);
-    record.reservation.pending_capacity_delta =
-      read_u32 (bytes, offset);
-    record.deadline_unix_ms = read_u64 (bytes, offset);
-    if (offset != bytes.size ())
-        throw service_wire_error_t (
-          "Actor create command has trailing bytes");
-    (void) encode_actor_create_header (record);
-    return record;
+    const auto generated = generated_codec_call ([&] {
+        return decode_actor_create_49 (wire_bytes (bytes));
+    });
+    return {generated.correlation,
+            from_generated (generated.operation),
+            generated.source_node_rid,
+            generated.source_node_generation,
+            generated.actor_id,
+            generated.stable_type,
+            from_generated (generated.reservation),
+            generated.deadline_unix_ms};
 }
 
 std::vector<std::uint8_t> encode_user_spot_close_header (
   const user_spot_close_header_t &record)
 {
-    if (record.correlation == 0
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.source_node_generation == 0
-        || record.target.object_generation == 0
-        || record.target.target_node_generation == 0
-        || record.target.authority_owner_generation == 0
-        || record.deadline_unix_ms == 0) {
-        throw service_wire_error_t (
-          "user Spot close contains a zero required fence");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::userSpotClose), 0};
-    append_u64 (bytes, record.correlation);
-    append_u64 (bytes, record.operation.high);
-    append_u64 (bytes, record.operation.low);
-    append_bytes8 (
-      bytes, record.source_node_routing_id, "source node RID");
-    append_u64 (bytes, record.source_node_generation);
-    std::vector<std::uint8_t> fence;
-    append_text8 (fence, record.target.spot_id, "spot ID");
-    append_u64 (fence, record.target.object_generation);
-    append_bytes8 (
-      fence, record.target.target_node_routing_id, "target node RID");
-    append_u64 (fence, record.target.target_node_generation);
-    append_u64 (fence, record.target.authority_owner_generation);
-    append_text16 (
-      fence, record.target.expected_store_version,
-      "expected StoreVersion", authorityStoreVersionBytes);
-    if (fence.size () > std::numeric_limits<std::uint16_t>::max ()) {
-        throw service_wire_error_t ("User Spot close fence is too large");
-    }
-    bytes.push_back (1);
-    append_u16 (bytes, static_cast<std::uint16_t> (fence.size ()));
-    bytes.insert (bytes.end (), fence.begin (), fence.end ());
-    append_u64 (bytes, record.deadline_unix_ms);
-    return bytes;
+    return generated_codec_call ([&] {
+        return encode_user_spot_close_48 ({
+          record.correlation,
+          to_generated (record.operation),
+          record.source_node_routing_id,
+          record.source_node_generation,
+          {record.target.spot_id,
+           record.target.object_generation,
+           record.target.target_node_routing_id,
+           record.target.target_node_generation,
+           record.target.authority_owner_generation,
+           record.target.expected_store_version},
+          record.deadline_unix_ms});
+    });
 }
 
 user_spot_close_header_t decode_user_spot_close_header (
   std::span<const std::uint8_t> bytes)
 {
-    const auto header = decode_header (bytes);
-    if (header.kind != command::userSpotClose || header.flags != 0) {
-        throw service_wire_error_t (
-          "record is not a User Spot close command");
-    }
-    std::size_t offset = prefix_size;
-    user_spot_close_header_t record;
-    record.correlation = read_u64 (bytes, offset);
-    record.operation.high = read_u64 (bytes, offset);
-    record.operation.low = read_u64 (bytes, offset);
-    record.source_node_routing_id =
-      read_bytes8 (bytes, offset, "source node RID");
-    record.source_node_generation = read_u64 (bytes, offset);
-    if (offset >= bytes.size () || bytes[offset++] != 1) {
-        throw service_wire_error_t (
-          "unsupported User Spot close fence version");
-    }
-    const auto fence_size = read_u16 (bytes, offset);
-    if (bytes.size () - offset < fence_size) {
-        throw service_wire_error_t (
-          "truncated User Spot close fence");
-    }
-    const auto fence_end = offset + fence_size;
-    const auto fence_bytes = bytes.first (fence_end);
-    record.target.spot_id =
-      read_text8 (fence_bytes, offset, "spot ID");
-    record.target.object_generation = read_u64 (fence_bytes, offset);
-    record.target.target_node_routing_id =
-      read_bytes8 (fence_bytes, offset, "target node RID");
-    record.target.target_node_generation =
-      read_u64 (fence_bytes, offset);
-    record.target.authority_owner_generation =
-      read_u64 (fence_bytes, offset);
-    record.target.expected_store_version =
-      read_text16 (fence_bytes, offset, "expected StoreVersion",
-                   authorityStoreVersionBytes);
-    if (offset != fence_end) {
-        throw service_wire_error_t (
-          "User Spot close fence has trailing bytes");
-    }
-    record.deadline_unix_ms = read_u64 (bytes, offset);
-    if (offset != bytes.size ()) {
-        throw service_wire_error_t (
-          "User Spot close command has trailing bytes");
-    }
-    if (record.correlation == 0
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.source_node_generation == 0
-        || record.target.object_generation == 0
-        || record.target.target_node_generation == 0
-        || record.target.authority_owner_generation == 0
-        || record.deadline_unix_ms == 0) {
-        throw service_wire_error_t (
-          "user Spot close contains a zero required fence");
-    }
-    return record;
+    const auto generated = generated_codec_call ([&] {
+        return decode_user_spot_close_48 (wire_bytes (bytes));
+    });
+    return {generated.correlation,
+            from_generated (generated.operation),
+            generated.source_node_rid,
+            generated.source_node_generation,
+            {generated.target.spot_id,
+             generated.target.object_generation,
+             generated.target.target_node_rid,
+             generated.target.target_node_generation,
+             generated.target.expected_authority_owner_generation,
+             generated.target.expected_store_version},
+            generated.deadline_unix_ms};
 }
 
 service_wire_header_t decode_header (std::span<const std::uint8_t> bytes)
