@@ -2,7 +2,7 @@
 title: "Context"
 ---
 
-[English](01-context.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/01-context/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: 공개 계약 관리](00-public-contract-governance.ko.md) | [다음: Message](02-message.ko.md)

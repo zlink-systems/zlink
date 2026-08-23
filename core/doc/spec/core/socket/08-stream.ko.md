@@ -2,7 +2,7 @@
 title: "소켓 — STREAM"
 ---
 
-[English](08-stream.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/socket/08-stream/) | 한국어
 
 <!-- zlink-nav:start -->
 [소켓 목차](README.ko.md) | [이전: ROUTER](07-router.ko.md) | [다음: 프로토콜 개요](../protocol/README.ko.md)

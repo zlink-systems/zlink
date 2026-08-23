@@ -1,4 +1,4 @@
-[한국어](05-polling.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/05-polling/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Events](04-events.en.md) | [Next: Monitoring](06-monitoring.en.md)

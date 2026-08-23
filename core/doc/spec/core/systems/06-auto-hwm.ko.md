@@ -2,7 +2,7 @@
 title: "Auto HWM 내부 설계"
 ---
 
-[English](06-auto-hwm.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/systems/06-auto-hwm/) | 한국어
 
 <!-- zlink-nav:start -->
 [시스템 목차](README.ko.md) | [이전: Connection별 memory](05-connection-memory.ko.md) | [다음: Source layout](07-core-source-layout.ko.md)

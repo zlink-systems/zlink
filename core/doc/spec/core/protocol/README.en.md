@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/protocol/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](../README.en.md) | [Previous: STREAM](../socket/08-stream.en.md) | [Next: ZMP Protocol Details](01-zmp.en.md)

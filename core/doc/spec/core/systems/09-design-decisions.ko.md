@@ -2,7 +2,7 @@
 title: "Core 설계 결정"
 ---
 
-[English](09-design-decisions.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/systems/09-design-decisions/) | 한국어
 
 <!-- zlink-nav:start -->
 [시스템 목차](README.ko.md) | [이전: POSD module 구조](08-posd-module-structure.ko.md)

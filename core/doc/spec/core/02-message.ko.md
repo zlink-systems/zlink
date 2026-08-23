@@ -2,7 +2,7 @@
 title: "메시지 API 레퍼런스"
 ---
 
-[English](02-message.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/02-message/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Context](01-context.ko.md) | [다음: Errors](03-errors.ko.md)

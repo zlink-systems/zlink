@@ -1,4 +1,4 @@
-[한국어](06-dealer.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/06-dealer/) | English
 
 <!-- zlink-nav:start -->
 [Socket Index](README.en.md) | [Previous: XSUB](05-xsub.en.md) | [Next: ROUTER](07-router.en.md)

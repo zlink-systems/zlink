@@ -1,4 +1,4 @@
-[한국어](08-stream.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/08-stream/) | English
 
 <!-- zlink-nav:start -->
 [Socket Index](README.en.md) | [Previous: ROUTER](07-router.en.md) | [Next: Protocol Overview](../protocol/README.en.md)

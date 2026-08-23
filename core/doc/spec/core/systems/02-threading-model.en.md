@@ -1,4 +1,4 @@
-[한국어](02-threading-model.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/02-threading-model/) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: Architecture](01-architecture.en.md) | [Next: I/O Thread](03-io-thread.en.md)

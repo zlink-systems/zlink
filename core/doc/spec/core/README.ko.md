@@ -2,7 +2,7 @@
 title: "ZLink Core 스펙"
 ---
 
-[English](README.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/) | 한국어
 
 <!-- zlink-nav:start -->
 [스펙 목차](../README.ko.md) | [다음: Public Contract Governance](00-public-contract-governance.ko.md)

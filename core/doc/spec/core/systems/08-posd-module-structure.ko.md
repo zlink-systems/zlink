@@ -2,7 +2,7 @@
 title: "Core POSD module 구조"
 ---
 
-[English](08-posd-module-structure.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/systems/08-posd-module-structure/) | 한국어
 
 <!-- zlink-nav:start -->
 [시스템 목차](README.ko.md) | [이전: Source layout](07-core-source-layout.ko.md) | [다음: 설계 결정](09-design-decisions.ko.md)

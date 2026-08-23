@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](../README.en.md) | [Previous: RAW (STREAM) Protocol Details](../protocol/02-raw.en.md) | [Next: Architecture](01-architecture.en.md)

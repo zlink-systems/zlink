@@ -1,4 +1,4 @@
-[한국어](03-io-thread.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/03-io-thread/) | English
 
 <!-- zlink-nav:start -->
 [Systems Index](README.en.md) | [Previous: Threading Model](02-threading-model.en.md) | [Next: Thread Safety](04-thread-safety.en.md)

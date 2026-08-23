@@ -2,7 +2,7 @@
 title: "프로토콜 — 목차"
 ---
 
-[English](README.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/protocol/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](../README.ko.md) | [이전: STREAM](../socket/08-stream.ko.md) | [다음: ZMP 프로토콜 상세](01-zmp.ko.md)

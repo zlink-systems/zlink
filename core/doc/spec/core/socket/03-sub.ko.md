@@ -2,7 +2,7 @@
 title: "소켓 — SUB"
 ---
 
-[English](03-sub.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/socket/03-sub/) | 한국어
 
 <!-- zlink-nav:start -->
 [소켓 목차](README.ko.md) | [이전: PUB](02-pub.ko.md) | [다음: XPUB](04-xpub.ko.md)

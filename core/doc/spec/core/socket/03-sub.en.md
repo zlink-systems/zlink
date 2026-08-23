@@ -1,4 +1,4 @@
-[한국어](03-sub.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/03-sub/) | English
 
 <!-- zlink-nav:start -->
 [Socket Index](README.en.md) | [Previous: PUB](02-pub.en.md) | [Next: XPUB](04-xpub.en.md)

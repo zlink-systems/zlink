@@ -1,4 +1,4 @@
-[한국어](03-errors.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/03-errors/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Message](02-message.en.md) | [Next: Events](04-events.en.md)

@@ -2,7 +2,7 @@
 title: "소켓 — PAIR"
 ---
 
-[English](01-pair.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/socket/01-pair/) | 한국어
 
 <!-- zlink-nav:start -->
 [소켓 목차](README.ko.md) | [이전: 소켓 개요](README.ko.md) | [다음: PUB](02-pub.ko.md)

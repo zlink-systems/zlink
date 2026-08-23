@@ -1,4 +1,4 @@
-[한국어](01-context.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/01-context/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Public-Contract Governance](00-public-contract-governance.en.md) | [Next: Message](02-message.en.md)

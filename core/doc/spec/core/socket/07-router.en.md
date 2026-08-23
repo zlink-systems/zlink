@@ -1,4 +1,4 @@
-[한국어](07-router.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/07-router/) | English
 
 <!-- zlink-nav:start -->
 [Socket Index](README.en.md) | [Previous: DEALER](06-dealer.en.md) | [Next: STREAM](08-stream.en.md)

@@ -2,7 +2,7 @@
 title: "RAW (STREAM) 프로토콜 상세"
 ---
 
-[English](02-raw.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/protocol/02-raw/) | 한국어
 
 <!-- zlink-nav:start -->
 [프로토콜 목차](README.ko.md) | [이전: ZMP 프로토콜 상세](01-zmp.ko.md) | [다음: 시스템 개요](../systems/README.ko.md)

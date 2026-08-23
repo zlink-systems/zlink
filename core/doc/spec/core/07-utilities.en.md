@@ -1,4 +1,4 @@
-[한국어](07-utilities.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/07-utilities/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Monitoring](06-monitoring.en.md) | [Next: Runtime Boundary](08-runtime-boundary.en.md)

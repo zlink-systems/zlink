@@ -2,7 +2,7 @@
 title: "시스템 — 목차"
 ---
 
-[English](README.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/systems/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](../README.ko.md) | [이전: RAW (STREAM) 프로토콜 상세](../protocol/02-raw.ko.md) | [다음: Architecture](01-architecture.ko.md)

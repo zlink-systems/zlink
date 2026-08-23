@@ -2,7 +2,7 @@
 title: "오류, 결과 enum과 버전"
 ---
 
-[English](03-errors.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/03-errors/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Message](02-message.ko.md) | [다음: Events](04-events.ko.md)

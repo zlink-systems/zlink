@@ -2,7 +2,7 @@
 title: "Event와 readiness 카탈로그"
 ---
 
-[English](04-events.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/04-events/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Errors](03-errors.ko.md) | [다음: Polling](05-polling.ko.md)
