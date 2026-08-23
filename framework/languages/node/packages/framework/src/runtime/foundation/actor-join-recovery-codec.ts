@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { RoutingId, ZLinkActorJoinOperationId } from '../../contracts';
-import { encodeRoutingIdStorageHex } from '../routing-id';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
+import {
+  decodeZljrRecordV1 as decodeGeneratedZljrRecordV1,
+  encodeZljrRecordV1 as encodeGeneratedZljrRecordV1
+} from '../protocol/service_wire_pilot_codec.generated';
 import { decodeServiceWireFrozenRecord } from './service-stateful-wire-codec';
 
 const RECOVERY_PACKET_NAME = '__zlink.actor.routed_join.recovery';
 const RECOVERY_CONTENT_TYPE = 'application/x-zlink-actor-routed-join-recovery-v1';
-const ZLJR_MAGIC = 0x5a4c4a52;
-const ZLJR_VERSION = 1;
 const MAXIMUM_METADATA_BYTES = 256 * 1024;
 const MAXIMUM_MESSAGE_BYTES = 1024 * 1024;
 const FRAMEWORK_METADATA_UPPER_BOUND_BYTES = 64 * 1024;
@@ -207,72 +209,48 @@ export function encodeCanonicalActorJoinRecoverySavedWork(
   if (metadata.byteLength > MAXIMUM_METADATA_BYTES) {
     throw new RangeError('Actor Join recovery metadata exceeds 256 KiB.');
   }
-  const zlir = Buffer.concat([
-    u32(ZLJR_MAGIC),
-    Buffer.of(ZLJR_VERSION),
-    u32(metadata.byteLength),
-    u32(request.byteLength),
-    u32(reply.byteLength),
+  return Buffer.from(encodeGeneratedZljrRecordV1({
+    source: {
+      nodeRid: Buffer.from(encodeRoutingIdStorageHex(input.sourceNodeRid), 'utf8'),
+      nodeGeneration: nonZeroU64(input.actorNodeGeneration, 'source node generation'),
+      ownerId: input.coordinator.ownerId,
+      ownerLeaseGeneration: nonZeroU64(
+        input.coordinator.leaseGeneration,
+        'source owner lease generation'
+      )
+    },
+    operation: { high: 0n, low: 0n },
     metadata,
     request,
     reply
-  ]);
-  const sourceBody = Buffer.concat([
-    text8(encodeRoutingIdStorageHex(input.sourceNodeRid), 'source node routing id'),
-    u64(nonZeroU64(input.actorNodeGeneration, 'source node generation')),
-    text8(input.coordinator.ownerId, 'source owner id'),
-    u64(nonZeroU64(input.coordinator.leaseGeneration, 'source owner lease generation'))
-  ]);
-  const payloadBody = Buffer.concat([
-    text8(RECOVERY_PACKET_NAME, 'recovery packet name'),
-    text8(RECOVERY_CONTENT_TYPE, 'recovery content type'),
-    u32(zlir.byteLength),
-    zlir
-  ]);
-  return Buffer.concat([
-    Buffer.of(1, 1),
-    u16(sourceBody.byteLength),
-    sourceBody,
-    Buffer.of(0),
-    u64(0n), u64(0n), u32(0), u16(0),
-    Buffer.of(1), u32(payloadBody.byteLength), payloadBody
-  ]);
+  }));
 }
 
 export function decodeCanonicalActorJoinRecoverySavedWork(
   encoded: Uint8Array
 ): CanonicalActorJoinRecovery | undefined {
-  let frozen;
+  let record;
   try {
-    frozen = decodeServiceWireFrozenRecord(encoded);
-  } catch {
-    return undefined;
+    record = decodeGeneratedZljrRecordV1(encoded);
+  } catch (error) {
+    let frozen;
+    try {
+      frozen = decodeServiceWireFrozenRecord(encoded);
+    } catch {
+      return undefined;
+    }
+    const payload = frozen.applicationPayload;
+    if (
+      frozen.recordKind !== 1
+      || frozen.sourceKind !== 1
+      || payload?.packetName !== RECOVERY_PACKET_NAME
+      || payload.contentType !== RECOVERY_CONTENT_TYPE
+    ) {
+      return undefined;
+    }
+    throw error;
   }
-  const payload = frozen.applicationPayload;
-  if (
-    frozen.recordKind !== 1
-    || frozen.sourceKind !== 1
-    || payload?.packetName !== RECOVERY_PACKET_NAME
-    || payload.contentType !== RECOVERY_CONTENT_TYPE
-  ) {
-    return undefined;
-  }
-  const bytes = Buffer.from(payload.bytes);
-  if (bytes.byteLength < 17 || bytes.readUInt32BE(0) !== ZLJR_MAGIC || bytes[4] !== ZLJR_VERSION) {
-    throw new TypeError('Canonical Actor Join recovery payload header is invalid.');
-  }
-  const metadataLength = bytes.readUInt32BE(5);
-  const requestLength = bytes.readUInt32BE(9);
-  const replyLength = bytes.readUInt32BE(13);
-  if (
-    metadataLength > MAXIMUM_METADATA_BYTES
-    || requestLength > MAXIMUM_MESSAGE_BYTES
-    || replyLength > MAXIMUM_MESSAGE_BYTES
-    || 17 + metadataLength + requestLength + replyLength !== bytes.byteLength
-  ) {
-    throw new TypeError('Canonical Actor Join recovery payload length is invalid.');
-  }
-  const metadataBytes = bytes.subarray(17, 17 + metadataLength);
+  const metadataBytes = Buffer.from(record.metadata);
   const metadata = JSON.parse(quoteJsonIntegers(metadataBytes.toString('utf8'))) as Record<string, unknown>;
   const requestValue = object(metadata.Request, 'Request');
   const handoffId = text(requestValue.HandoffId, 'Request.HandoffId');
@@ -290,11 +268,8 @@ export function decodeCanonicalActorJoinRecoverySavedWork(
   ) {
     throw new TypeError('Canonical Actor Join recovery reservation identity changed.');
   }
-  const request = Buffer.from(bytes.subarray(
-    17 + metadataLength,
-    17 + metadataLength + requestLength
-  ));
-  const reply = Buffer.from(bytes.subarray(17 + metadataLength + requestLength));
+  const request = Buffer.from(record.request);
+  const reply = Buffer.from(record.reply);
   const operationHigh = integer(metadata.OperationIdHigh, 'OperationIdHigh');
   const operationLow = integer(metadata.OperationIdLow, 'OperationIdLow');
   const hasOperation = operationHigh !== 0n || operationLow !== 0n;
@@ -309,10 +284,13 @@ export function decodeCanonicalActorJoinRecoverySavedWork(
   }
   return {
     source: {
-      nodeRid: frozen.source.nodeRid,
-      nodeGeneration: frozen.source.nodeGeneration,
-      ownerId: frozen.source.ownerId,
-      ownerLeaseGeneration: frozen.source.leaseGeneration
+      nodeRid: decodeRoutingId(
+        Buffer.from(record.source.nodeRid).toString('utf8'),
+        Buffer.from(record.source.nodeRid).toString('hex')
+      ) as string,
+      nodeGeneration: record.source.nodeGeneration,
+      ownerId: record.source.ownerId,
+      ownerLeaseGeneration: record.source.ownerLeaseGeneration
     },
     request: {
       actorId: text(requestValue.ActorId, 'Request.ActorId'),
@@ -426,12 +404,6 @@ function textBytes(value: string, name: string): Buffer {
   return result;
 }
 
-function text8(value: string, name: string): Buffer {
-  const bytes = textBytes(value, name);
-  if (bytes.byteLength > 0xff) throw new RangeError(`${name} exceeds text8.`);
-  return Buffer.concat([Buffer.of(bytes.byteLength), bytes]);
-}
-
 function requireText(value: string | undefined, name: string): string {
   if (value === undefined || value.length === 0) throw new TypeError(`${name} must not be empty.`);
   return value;
@@ -446,13 +418,6 @@ function u16(value: number): Buffer {
   if (!Number.isInteger(value) || value < 0 || value > 0xffff) throw new RangeError('u16');
   const result = Buffer.alloc(2);
   result.writeUInt16BE(value);
-  return result;
-}
-
-function u32(value: number): Buffer {
-  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) throw new RangeError('u32');
-  const result = Buffer.alloc(4);
-  result.writeUInt32BE(value);
   return result;
 }
 

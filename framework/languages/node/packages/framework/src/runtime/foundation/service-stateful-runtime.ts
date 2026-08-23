@@ -3829,6 +3829,7 @@ export class ServiceStatefulRuntime {
       ingress.requestSequence === undefined
       || record.sourceNodeRid !== ingress.sourceRoutingId
       || record.sourceNodeGeneration !== this.peerGeneration(ingress.sourceRoutingId)
+      || (record.kind === 'actorCreate' && record.reservation.pendingCapacityDelta !== 1)
     ) {
       return 'protocolError';
     }

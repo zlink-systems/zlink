@@ -825,6 +825,18 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
     }), 'infrastructure');
     await new Promise(resolve => setImmediate(resolve));
   }
+  const invalidReservation = encodeActorCreateHeader({
+    ...request,
+    correlation: 37n,
+    reservation: { ...request.reservation, pendingCapacityDelta: 9 }
+  });
+  assert.equal(await ingress({
+    command: M6bServiceWireCommand.actorCreate,
+    flags: 0,
+    sourceRoutingId: 'source',
+    requestSequence: 3n,
+    parts: [invalidReservation]
+  }), 'protocolError');
   assert.equal(executions, 1);
   assert.equal(replies.length, 2);
   for (const [index, correlation] of [29n, 31n].entries()) {
