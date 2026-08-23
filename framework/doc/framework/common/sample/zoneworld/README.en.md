@@ -131,6 +131,12 @@ flowchart LR
   zone pair with different owners. The runner never assumes a zone→NodeId mapping: it discovers
   the actual owner layout via Ops probes and picks the cross-owner boundary from that. Fixtures
   or tests that pin a specific zone to a specific NodeId are forbidden.
+  Each ZoneNode's bootstrap claims its first zone, then **prefers an adjacent zone** for its
+  second claim (contiguous-region preference). A 2/2 split therefore always forms two contiguous
+  regions, so both a cross-owner adjacent pair and a same-owner adjacent pair (ZW-E4's
+  precondition) deterministically exist — a diagonal split ({nw,se}/{ne,sw}) has no same-owner
+  adjacent pair and would make E4 unsatisfiable, so it is excluded. The preference is only the
+  claim-attempt ORDER, not owner computation; placement remains owned by Framework capacity.
 - `zoneworld.mesh` carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.
 - `zoneworld.broadcast` is a classic fanout publisher/subscriber connection independent of the mesh.
 - Location Store placement selects the owner of objects such as Zone Spots and Player Actors.

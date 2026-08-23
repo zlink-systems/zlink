@@ -124,6 +124,11 @@ flowchart LR
   2/2로 분산되며, 2x2 격자의 어떤 2/2 분할도 서로 다른 owner의 인접 zone pair를 보장한다.
   runner는 zone→NodeId를 가정하지 않고 Ops probe로 실제 owner 배치를 발견해 cross-owner
   경계를 선택한다. fixture나 test가 특정 zone을 특정 NodeId에 고정 배치하는 것은 금지한다.
+  각 ZoneNode의 bootstrap은 첫 zone을 claim한 뒤 두 번째 claim에서 **그 인접 zone을 우선**
+  한다(연속영역 선호). 이로써 2/2 분할이 항상 두 연속 영역이 되어 cross-owner 인접쌍과
+  same-owner 인접쌍(ZW-E4의 전제)이 모두 결정적으로 존재한다 — 대각 분할({nw,se}/{ne,sw})은
+  same-owner 인접쌍이 없어 E4를 불충족으로 만들므로 배제한다. 선호는 claim 시도 순서일 뿐
+  owner 계산이 아니며, placement 판정은 여전히 Framework capacity가 소유한다.
 - zoneworld.mesh는 ChannelName, Spot·Actor direct message와 Logical Multicast를 운반한다.
 - zoneworld.broadcast는 mesh와 독립된 classic fanout publisher/subscriber 연결이다.
 - Zone Spot·Player Actor 같은 object의 owner는 Location Store placement가 선택한다.
