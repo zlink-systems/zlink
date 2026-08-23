@@ -499,7 +499,9 @@ final class ZLinkChannelHandlerInvoker {
             ZLinkRouteMessageContext context =
                 new DefaultRouteSendContext(
                     routeMeshName(channelName),
-                    null,
+                    meshName == null || meshName.isBlank()
+                        ? null
+                        : channelName,
                     registration.packetName(),
                     sourceRoutingId,
                     contentTypeFor(registration.messageType(), wireContentType),

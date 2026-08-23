@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.lang.reflect.Proxy;
+import java.util.concurrent.CompletableFuture;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -20,6 +22,8 @@ import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.locations.ZLinkLocationPage;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
@@ -28,6 +32,12 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 final class ZLinkSpotRuntimeTargetSelectionTest {
     private static final RoutingId CONNECTED =
@@ -130,6 +140,52 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     }
 
     @Test
+    void replacementPlacementExcludesServingDescriptorWhoseOwnerExpired() {
+        ZLinkMeshNodeDescriptor stale = zoneNode(
+            RoutingId.from("stale-rid"),
+            ZLinkFrameworkRuntimeState.SERVING,
+            0,
+            100,
+            "stale-owner");
+        ZLinkMeshNodeDescriptor replacement = zoneNode(
+            REPLACEMENT,
+            ZLinkFrameworkRuntimeState.SERVING,
+            0,
+            100,
+            "replacement-owner");
+        ZLinkLocationRepository store = (ZLinkLocationRepository)
+            Proxy.newProxyInstance(
+                getClass().getClassLoader(),
+                new Class<?>[] {ZLinkLocationRepository.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "listMeshNodes" -> CompletableFuture.completedFuture(
+                        new ZLinkLocationPage<>(
+                            List.of(stale, replacement), null));
+                    case "readOwnerLease" ->
+                        "replacement-owner".equals(arguments[0])
+                            ? CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseFound(
+                                    new ZLinkLocationOwnerToken(
+                                        "replacement-owner", 1),
+                                    NOW.plusSeconds(30),
+                                    NOW))
+                            : CompletableFuture.completedFuture(
+                                new ZLinkOwnerLeaseMissing());
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        var resolvers = new ZLinkStoreLocationResolvers(
+            ZLinkRegisteredLocationStores.fromUnified(store),
+            new ZLinkLocationOptions());
+
+        var placementRows = ZLinkSpotRuntime.listUserSpotPlacementNodes(
+                store, resolvers, "mesh")
+            .toCompletableFuture().join();
+
+        assertEquals(List.of(replacement), placementRows);
+    }
+
+    @Test
     void aServingNodeWithRoomWhoseRouteIsNotAdmittedYetKeepsRetrying() {
         assertEquals(
             ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
@@ -192,6 +248,20 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         ZLinkFrameworkRuntimeState state,
         int activeSpotsOfType,
         int placementWeight) {
+        return zoneNode(
+            rid,
+            state,
+            activeSpotsOfType,
+            placementWeight,
+            "owner");
+    }
+
+    private static ZLinkMeshNodeDescriptor zoneNode(
+        RoutingId rid,
+        ZLinkFrameworkRuntimeState state,
+        int activeSpotsOfType,
+        int placementWeight,
+        String ownerId) {
         return new ZLinkMeshNodeDescriptor(
             "mesh",
             rid,
@@ -220,7 +290,7 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
             Optional.empty(),
             state,
             "security",
-            "owner",
+            ownerId,
             1,
             NOW);
     }

@@ -202,6 +202,22 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     }
 
     @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        Objects.requireNonNull(actorId, "actorId");
+        return host.enqueueActorDispatch(
+            actorId,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            () -> runApplicationExecution(actorId, false, operation),
+            relocationRelease);
+    }
+
+    @Override
     public <T> ZLinkWorkerCall<T> runCpuWorker(ZLinkWorkerTask<T> work) {
         Objects.requireNonNull(work, "work");
         return new DefaultZLinkWorkerCall<>(workerPool, work);
@@ -653,6 +669,30 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         // A shared Spot turn may submit an Actor turn to the same gate. Yield
         // the current turn while that Actor turn acquires the gate; otherwise
         // the Actor queue would wait for the turn that is waiting for it.
+        return sharedSpotGate() && dispatchQueue.isCurrent()
+            ? ZLinkAsyncSerialQueue.yieldCurrent(queued)
+            : queued;
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        Objects.requireNonNull(actorId, "actorId");
+        Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
+        Objects.requireNonNull(relocationRelease, "relocationRelease");
+        CompletionStage<Void> queued = host.enqueueActorDispatch(
+            actorId,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            () -> sharedSpotGate()
+                ? dispatchQueue.enqueue(
+                    () -> runActorApplication(actorId, true, operation))
+                : runActorApplication(actorId, false, operation),
+            relocationRelease);
         return sharedSpotGate() && dispatchQueue.isCurrent()
             ? ZLinkAsyncSerialQueue.yieldCurrent(queued)
             : queued;

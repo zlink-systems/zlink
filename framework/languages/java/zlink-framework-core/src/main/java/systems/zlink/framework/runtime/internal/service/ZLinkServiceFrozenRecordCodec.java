@@ -77,6 +77,7 @@ public final class ZLinkServiceFrozenRecordCodec {
             replyRoute,
             metadata.encoded(),
             payload.packetName(),
+            payload.contentType(),
             payload.payload(),
             targetSpotId,
             objectGeneration);
@@ -349,6 +350,7 @@ public final class ZLinkServiceFrozenRecordCodec {
         Optional<Long> replyRouteId,
         byte[] metadataFrame,
         String packetName,
+        String contentType,
         byte[] payload,
         String targetSpotId,
         long objectGeneration) {

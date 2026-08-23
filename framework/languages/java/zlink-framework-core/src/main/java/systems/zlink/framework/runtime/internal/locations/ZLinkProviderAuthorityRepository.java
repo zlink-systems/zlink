@@ -388,22 +388,30 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreKey key = authorityKey(request.authorityKey());
         return provider.read(key, opaqueCancellation).thenCompose(read -> {
             if (read instanceof ZLinkStoreReadFound found) {
+                AuthorityRecord record = decode(found.value().bytes());
                 ZLinkAuthoritySnapshot current = snapshot(found.value());
-                if (decode(found.value().bytes()).aggregate() != null) {
+                if (record.aggregate() != null) {
                     return projectRead(read, opaqueCancellation)
                         .thenApply(visible -> new ZLinkObjectConflict(
                             (ZLinkAuthoritySnapshot) visible));
                 }
-                return completed(
-                    current.allocation().stableType().equals(
-                        request.stableType())
-                        && current.allocation().state()
-                            == ZLinkPlacementAllocationState.ACTIVE
-                        ? new ZLinkObjectAlreadyExists(current)
-                        : current.allocation().stableType().equals(
-                            request.stableType())
-                            ? new ZLinkObjectConflict(current)
-                            : new ZLinkObjectTypeMismatch(current));
+                return tryReclaimStaleAuthority(
+                        key, found, record, opaqueCancellation)
+                    .thenCompose(reclaim -> switch (reclaim) {
+                        case RECLAIMED -> reserve(request, cancellation);
+                        case CONFLICT, RECOVERY_REQUIRED -> completed(
+                            new ZLinkObjectConflict(current));
+                        case OWNER_LIVE -> completed(
+                            current.allocation().stableType().equals(
+                                request.stableType())
+                                && current.allocation().state()
+                                    == ZLinkPlacementAllocationState.ACTIVE
+                                ? new ZLinkObjectAlreadyExists(current)
+                                : current.allocation().stableType().equals(
+                                    request.stableType())
+                                    ? new ZLinkObjectConflict(current)
+                                    : new ZLinkObjectTypeMismatch(current));
+                    });
             }
             List<ZLinkStoreCondition> conditions = new ArrayList<>();
             conditions.add(new ZLinkStoreMissingCondition(key));
@@ -498,6 +506,104 @@ final class ZLinkProviderAuthorityRepository {
                         });
                 });
         });
+    }
+
+    private CompletionStage<StaleAuthorityReclaim> tryReclaimStaleAuthority(
+        ZLinkStoreKey authorityKey,
+        ZLinkStoreReadFound authority,
+        AuthorityRecord current,
+        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+            cancellation) {
+        ZLinkStoreKey staleOwnerKey = ownerKey(current.ownerId());
+        return provider.read(staleOwnerKey, cancellation).thenCompose(ownerRead -> {
+            ZLinkStoreCondition ownerCondition;
+            if (ownerRead instanceof ZLinkStoreReadFound ownerFound) {
+                if (ownerGeneration(ownerFound.value().bytes())
+                    == current.ownerLeaseGeneration()) {
+                    return completed(StaleAuthorityReclaim.OWNER_LIVE);
+                }
+                ownerCondition = new ZLinkStoreVersionCondition(
+                    staleOwnerKey, ownerFound.value().version());
+            } else {
+                ownerCondition = new ZLinkStoreMissingCondition(staleOwnerKey);
+            }
+            if (current.aggregate() != null
+                || ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+                    current.payload()) != null) {
+                return completed(StaleAuthorityReclaim.RECOVERY_REQUIRED);
+            }
+            return readCapacity(current.allocation(), cancellation)
+                .thenCompose(capacity -> {
+                    CapacitySnapshot stored = capacity.orElse(null);
+                    CapacityRecord next = stored == null
+                        ? null
+                        : current.allocation().state()
+                            == ZLinkPlacementAllocationState.ACTIVE
+                            ? stored.record().adjustActive(
+                                current.allocation().capacityBundle(), -1)
+                            : stored.record().adjustPending(
+                                current.allocation().capacityBundle(), -1);
+                    if (next == null) {
+                        // Node replacement removes the dead owner's descriptor
+                        // and capacity rows, so by the time the orphan is
+                        // reclaimed the counter is either gone or has been
+                        // recreated from zero by the replacement. Either way it
+                        // no longer accounts for this allocation and there is
+                        // nothing to give back - a decrement would just
+                        // underflow. The exact stale authority version plus the
+                        // owner-lease condition (missing, or pinned to the
+                        // version whose generation already disagrees) still
+                        // fence the delete, so a resurrected owner loses the
+                        // race instead of the row leaking.
+                        return deleteOrphanAuthority(
+                            authorityKey,
+                            authority,
+                            ownerCondition,
+                            cancellation);
+                    }
+                    return provider.write(
+                            new ZLinkStoreWriteRequest(
+                                List.of(
+                                    new ZLinkStoreVersionCondition(
+                                        authorityKey,
+                                        authority.value().version()),
+                                    ownerCondition,
+                                    new ZLinkStoreVersionCondition(
+                                        stored.key(),
+                                        stored.value().version())),
+                                List.of(
+                                    new ZLinkStoreDelete(authorityKey),
+                                    new ZLinkStorePut(
+                                        stored.key(),
+                                        encodeCapacity(next),
+                                        null))),
+                            cancellation)
+                        .thenApply(result -> result
+                            instanceof ZLinkStoreWriteApplied
+                            ? StaleAuthorityReclaim.RECLAIMED
+                            : StaleAuthorityReclaim.CONFLICT);
+                });
+        });
+    }
+
+    private CompletionStage<StaleAuthorityReclaim> deleteOrphanAuthority(
+        ZLinkStoreKey authorityKey,
+        ZLinkStoreReadFound authority,
+        ZLinkStoreCondition ownerCondition,
+        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+            cancellation) {
+        return provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(
+                        new ZLinkStoreVersionCondition(
+                            authorityKey,
+                            authority.value().version()),
+                        ownerCondition),
+                    List.of(new ZLinkStoreDelete(authorityKey))),
+                cancellation)
+            .thenApply(result -> result instanceof ZLinkStoreWriteApplied
+                ? StaleAuthorityReclaim.RECLAIMED
+                : StaleAuthorityReclaim.CONFLICT);
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(
@@ -2713,6 +2819,13 @@ final class ZLinkProviderAuthorityRepository {
         UNAVAILABLE,
         EXHAUSTED,
         ACCEPTED
+    }
+
+    private enum StaleAuthorityReclaim {
+        OWNER_LIVE,
+        RECLAIMED,
+        CONFLICT,
+        RECOVERY_REQUIRED
     }
 
     private record CapacityPlan(

@@ -1,6 +1,7 @@
 package systems.zlink.framework.configuration;
 
 import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 
 public interface ZLinkMeshChannelServerBuilder {
@@ -10,6 +11,11 @@ public interface ZLinkMeshChannelServerBuilder {
 
     <THandler extends ZLinkSendHandler<TMessage>, TMessage>
     ZLinkMeshChannelServerBuilder addSendHandler(
+        Class<THandler> handlerType,
+        Class<TMessage> messageType);
+
+    <THandler extends ZLinkRouteSendHandler<TMessage>, TMessage>
+    ZLinkMeshChannelServerBuilder addRouteSendHandler(
         Class<THandler> handlerType,
         Class<TMessage> messageType);
 

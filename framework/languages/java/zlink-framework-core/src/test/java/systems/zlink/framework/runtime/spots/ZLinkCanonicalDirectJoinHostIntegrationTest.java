@@ -156,6 +156,17 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 repository.read(
                     ZLinkAuthorityKeyCodec.actor(ACTOR_ID), OPEN)
                     .toCompletableFuture().get());
+            // Authority owner generations are provider-wide monotonic
+            // allocations, not per-object source + 1 values. Advance the
+            // provider sequence before this Actor commits at the target so
+            // command 29 must carry and accept a non-adjacent generation.
+            for (int index = 0; index < 3; index++) {
+                assertInstanceOf(
+                    ZLinkActorCreateResult.Created.class,
+                    sourceHost.actorManager()
+                        .create("generation-gap-" + index, ACTOR_TYPE)
+                        .submit().toCompletableFuture().get());
+            }
 
             var sourceRegistration =
                 sourceOptions.registration().meshNodes().getFirst();
@@ -498,6 +509,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 return;
             }
             assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+            assertTrue(
+                link.lastLeft.currentAuthorityOwnerGeneration()
+                    > sourceAuthority.authorityOwnerGeneration() + 1,
+                "command 29 must preserve the Store-issued owner generation");
             var savedWork = ZLinkServiceRelocationEnvelopeCodec.decode(
                 link.targetRequest.get().relocationPayload()).savedWork();
             assertEquals(List.of(3L, 4L), savedWork.stream()

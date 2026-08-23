@@ -45,10 +45,12 @@ final class ZLinkMeshApplicationDispatcherTest {
     void resetHandlers() {
         NodeHandler.received = new CompletableFuture<>();
         ChannelHandler.received = new CompletableFuture<>();
+        ChannelRouteHandler.received = new CompletableFuture<>();
         NodeHandler.metadata = new CompletableFuture<>();
         NodeHandler.contentType = new CompletableFuture<>();
         ChannelHandler.metadata = new CompletableFuture<>();
         ScannedChannelHandler.received = new CompletableFuture<>();
+        ScannedChannelRouteHandler.received = new CompletableFuture<>();
         GatedNodeHandler.started = new CompletableFuture<>();
         GatedNodeHandler.release = new CompletableFuture<>();
         GatedNodeHandler.completedCount = new AtomicInteger();
@@ -111,6 +113,53 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertEquals(
             Map.of("tenant", "blue"),
             ChannelHandler.metadata.get(2, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void channelRouteSendHandlerObservesAuthenticatedSourceNodeRid()
+        throws Exception {
+        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-dispatch-channel-route");
+        mesh.channelName("play").server()
+            .addRouteSendHandler(ChannelRouteHandler.class, String.class);
+        ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
+
+        dispatcher.accept(record(
+            RecordKind.CHANNEL_SEND,
+            "play",
+            "channel-route-value",
+            Map.of()));
+
+        assertEquals(
+            "channel-route-value@source-node@play",
+            ChannelRouteHandler.received.get(2, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void channelHandlerGroupAcceptsRouteSendHandlerWithSourceNodeRid()
+        throws Exception {
+        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-dispatch-scanned-channel-route");
+        mesh.channelName("report").server().addHandlerGroup("ops");
+        ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+        framework.handlerPackageMarkers().add(ZLinkMeshApplicationDispatcherTest.class);
+        ZLinkMeshApplicationDispatcher dispatcher = new ZLinkMeshApplicationDispatcher(
+            mesh,
+            new ZLinkStringMessageSerializer(),
+            framework,
+            ZLinkHandlerActivator.reflection(),
+            (token, parts) -> {
+                throw new AssertionError("send dispatch must not reply");
+            });
+
+        dispatcher.accept(record(
+            RecordKind.CHANNEL_SEND,
+            "report",
+            "group-route-value"));
+
+        assertEquals(
+            "group-route-value@source-node@report",
+            ScannedChannelRouteHandler.received.get(2, TimeUnit.SECONDS));
     }
 
     @Test
@@ -493,6 +542,37 @@ final class ZLinkMeshApplicationDispatcherTest {
             ZLinkMessageContext context) {
             received.complete(message + "@" + context.channelName().orElse(""));
             metadata.complete(context.metadata());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class ChannelRouteHandler
+        implements ZLinkRouteSendHandler<String> {
+        private static CompletableFuture<String> received;
+
+        @Override
+        public CompletionStage<Void> handle(
+            String message,
+            ZLinkRouteMessageContext context) {
+            received.complete(
+                message + "@" + context.sourceNodeRid()
+                    + "@" + context.channelName().orElse(""));
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @ZLinkHandlerGroup("ops")
+    public static final class ScannedChannelRouteHandler
+        implements ZLinkRouteSendHandler<String> {
+        private static CompletableFuture<String> received;
+
+        @Override
+        public CompletionStage<Void> handle(
+            String message,
+            ZLinkRouteMessageContext context) {
+            received.complete(
+                message + "@" + context.sourceNodeRid()
+                    + "@" + context.channelName().orElse(""));
             return CompletableFuture.completedFuture(null);
         }
     }

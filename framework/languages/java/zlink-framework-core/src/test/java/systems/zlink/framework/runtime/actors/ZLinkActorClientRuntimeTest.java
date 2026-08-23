@@ -189,6 +189,30 @@ final class ZLinkActorClientRuntimeTest {
     }
 
     @Test
+    void cachedRouteCannotRegressNewerKnownActorAuthority() {
+        RecordingSpotNode node = new RecordingSpotNode();
+        node.knownAuthorityOwnerGeneration = 21;
+        node.knownOwnerLeaseGeneration = 3;
+        ZLinkActorClientRuntime client = new ZLinkActorClientRuntime(
+            () -> node,
+            new ZLinkStoreLocationResolvers(
+                ZLinkRegisteredLocationStores.fromUnified(
+                    storeWithActor("actor-1")),
+                new ZLinkLocationOptions()),
+            new ZLinkJsonMessageSerializer(),
+            Duration.ofSeconds(5),
+            ZLinkTestAdmissionFactory.create());
+
+        client.sendToActor("actor-1", new Ping("hello"))
+            .submit()
+            .toCompletableFuture()
+            .join();
+
+        assertEquals(21, node.knownAuthorityOwnerGeneration);
+        assertEquals(3, node.knownOwnerLeaseGeneration);
+    }
+
+    @Test
     void globalActorIdRequiresCanonicalAuthorityResolution() {
         RecordingSpotNode node = new RecordingSpotNode(reply("pong"));
         ZLinkActorClientRuntime client = new ZLinkActorClientRuntime(
@@ -612,6 +636,8 @@ final class ZLinkActorClientRuntimeTest {
         int sendAttempts;
         SubmitResult sendFailure;
         boolean acceptSend = true;
+        long knownAuthorityOwnerGeneration;
+        long knownOwnerLeaseGeneration;
         private Consumer<systems.zlink.framework.runtime.internal.backend
             .ZLinkBackendAdmissionKey> admissionReady = ignored -> { };
 
@@ -624,6 +650,21 @@ final class ZLinkActorClientRuntimeTest {
         }
 
         @Override public RoutingId routingId() { return RoutingId.from("caller"); }
+        @Override public long actorAuthorityOwnerGeneration(
+            ZLinkBackendActorRef actor) {
+            return knownAuthorityOwnerGeneration;
+        }
+        @Override public long actorAuthorityOwnerLeaseGeneration(
+            ZLinkBackendActorRef actor) {
+            return knownOwnerLeaseGeneration;
+        }
+        @Override public void rememberActorAuthority(
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration) {
+            knownAuthorityOwnerGeneration = authorityOwnerGeneration;
+            knownOwnerLeaseGeneration = ownerLeaseGeneration;
+        }
         @Override public void setAdmissionReadyHandler(
             Consumer<systems.zlink.framework.runtime.internal.backend
                 .ZLinkBackendAdmissionKey> handler) {

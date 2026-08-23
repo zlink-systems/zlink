@@ -21,6 +21,8 @@ import systems.zlink.stream.connector.ZLinkStreamMessage;
 final class Scenarios {
     @FunctionalInterface interface Scenario { void run(ClientOptions options) throws Exception; }
 
+    private static final Duration TOPOLOGY_SETTLE_TIMEOUT = Duration.ofSeconds(5);
+
     private Scenarios() {}
 
     static Map<String, Scenario> clientDriven() {
@@ -316,14 +318,30 @@ final class Scenarios {
 
     private static void e4(ClientOptions options) {
         try (Ops ops = new Ops(options); Game player = new Game(options, unique("e4"))) {
-            resetMaintenance(ops); Messages.WatchNodesRes nodes = ops.watch();
+            resetMaintenance(ops);
             List<List<String>> pairs = List.of(List.of("zone-nw", "zone-ne"), List.of("zone-nw", "zone-sw"),
                 List.of("zone-ne", "zone-se"), List.of("zone-sw", "zone-se"));
-            List<String> selected = pairs.stream().filter(pair -> nodes.nodes().stream().anyMatch(node ->
-                node.registered() && node.zones().containsAll(pair))).findFirst().orElseThrow();
-            String node = nodes.nodes().stream().filter(value -> value.zones().containsAll(selected))
-                .findFirst().orElseThrow().nodeId(); Edge edge = edge(selected.get(0), selected.get(1));
-            player.join(); player.moveTo(edge.source().x(), edge.source().y()); ops.maintenance(node, true);
+            // Registration settles asynchronously, so re-read the roster for a moment before giving
+            // up. The zone Spots are placed by a race between the zone nodes, so a diagonal split
+            // (nw+se / ne+sw) leaves no node owning two adjacent zones and this scenario cannot be
+            // set up at all - name that precondition instead of dying on an empty Optional.
+            long deadline = System.nanoTime() + TOPOLOGY_SETTLE_TIMEOUT.toNanos();
+            Messages.WatchNodesRes nodes; List<String> selected;
+            while (true) {
+                Messages.WatchNodesRes observed = ops.watch();
+                selected = pairs.stream().filter(pair -> observed.nodes().stream().anyMatch(node ->
+                    node.registered() && node.zones().containsAll(pair))).findFirst().orElse(null);
+                if (selected != null) { nodes = observed; break; }
+                ensure(System.nanoTime() - deadline < 0,
+                    "ZW-E4 requires two adjacent zones currently owned by the same ZoneNode");
+                delay(Duration.ofMillis(100));
+            }
+            List<String> pair = selected;
+            String node = nodes.nodes().stream().filter(value -> value.registered()
+                && value.zones().containsAll(pair)).findFirst().orElseThrow().nodeId();
+            Edge edge = edge(pair.get(0), pair.get(1));
+            player.join(); player.moveTo(edge.source().x(), edge.source().y());
+            ops.maintenance(node, true);
             try { reject(player, edge.target().x(), edge.target().y(), "ZoneMaintenance"); }
             finally { ops.maintenance(node, false); }
         }

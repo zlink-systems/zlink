@@ -1,8 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11,6 +14,8 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 
@@ -35,24 +40,16 @@ final class ZLinkActorAcceptedJournal {
             .ZLinkServiceFrozenRecordCodec.isCanonical(encoded)) {
             var decoded = systems.zlink.framework.runtime.internal.service
                 .ZLinkServiceFrozenRecordCodec.decodeActor(encoded);
+            DecodedApplication application = decodeApplication(
+                decoded.packetName(),
+                decoded.contentType(),
+                decoded.payload(),
+                decoded.replyRouteId(),
+                decoded.metadata());
             return new Record(
                 decoded.actorId(),
-                new ZLinkStreamHeader(
-                    decoded.replyRouteId().isPresent()
-                        ? systems.zlink.framework.streams
-                            .ZLinkStreamMessageKind.REQUEST
-                        : systems.zlink.framework.streams
-                            .ZLinkStreamMessageKind.SEND,
-                    decoded.contentType().contains("json")
-                        ? ZLinkStreamCodec.JSON
-                        : ZLinkStreamCodec.RAW,
-                    EnumSet.noneOf(
-                        systems.zlink.framework.runtime.streams
-                            .ZLinkStreamHeaderFlag.class),
-                    decoded.replyRouteId(),
-                    decoded.packetName(),
-                    decoded.metadata()),
-                decoded.payload(),
+                application.header(),
+                application.payload(),
                 decoded.sourceNodeRid(),
                 decoded.sourceNodeGeneration(),
                 decoded.sourceOwnerId(),
@@ -67,6 +64,61 @@ final class ZLinkActorAcceptedJournal {
         }
         throw new IllegalArgumentException(
             "accepted Actor journal record is not canonical service-wire-v1");
+    }
+
+    private static DecodedApplication decodeApplication(
+        String packetName,
+        String contentType,
+        byte[] payload,
+        Optional<Long> replyRouteId,
+        Map<String, String> metadata) {
+        boolean request = replyRouteId.isPresent();
+        if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(
+                packetName)) {
+            return new DecodedApplication(
+                new ZLinkStreamHeader(
+                    request
+                        ? ZLinkStreamMessageKind.REQUEST
+                        : ZLinkStreamMessageKind.SEND,
+                    contentType.contains("json")
+                        ? ZLinkStreamCodec.JSON
+                        : ZLinkStreamCodec.RAW,
+                    EnumSet.noneOf(
+                        systems.zlink.framework.runtime.streams
+                            .ZLinkStreamHeaderFlag.class),
+                    replyRouteId,
+                    packetName,
+                    metadata),
+                payload);
+        }
+
+        List<Message> parts = ZLinkServiceM6AWireCodec
+            .decodeFrameworkMultipart(
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                    packetName, contentType, payload));
+        try {
+            if (parts.size() != 2) {
+                throw new IllegalArgumentException(
+                    "accepted Actor framework multipart must contain two parts");
+            }
+            ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(
+                parts.getFirst().toByteArray());
+            if (request != (header.kind() == ZLinkStreamMessageKind.REQUEST)
+                || header.kind() != ZLinkStreamMessageKind.REQUEST
+                    && header.kind() != ZLinkStreamMessageKind.SEND) {
+                throw new IllegalArgumentException(
+                    "accepted Actor message kind does not match record kind");
+            }
+            return new DecodedApplication(
+                header, parts.get(1).toByteArray());
+        } finally {
+            parts.forEach(Message::close);
+        }
+    }
+
+    private record DecodedApplication(
+        ZLinkStreamHeader header,
+        byte[] payload) {
     }
 
     private static void write(

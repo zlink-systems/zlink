@@ -228,8 +228,37 @@ final class ZLinkJavaRawSpotNode
         ZLinkServiceM6BWireCodec.ActorRouteFence source,
         ZLinkServiceM6BWireCodec.ActorRouteFence target,
         Duration retention) {
-        installRelocationForward(
-            relocationActorForwards, source, target, retention);
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(target, "target");
+        Objects.requireNonNull(retention, "retention");
+        if (retention.isNegative() || retention.isZero()) {
+            throw new IllegalArgumentException(
+                "relocation forward retention must be positive");
+        }
+        relocationActorForwards.compute(source, (ignored, previous) -> {
+            if (previous == null || previous.equals(target)) {
+                return target;
+            }
+            boolean sameCommittedTarget =
+                previous.actor().equals(target.actor())
+                    && previous.targetNodeGeneration()
+                        == target.targetNodeGeneration()
+                    && previous.ownerLeaseGeneration()
+                        == target.ownerLeaseGeneration();
+            if (!sameCommittedTarget
+                || target.authorityOwnerGeneration()
+                    <= previous.authorityOwnerGeneration()) {
+                throw new IllegalStateException(
+                    "relocation forward source already has another target");
+            }
+            // The provider allocates AuthorityOwnerGeneration from a global
+            // monotonic sequence, so the source's provisional +1 fence must
+            // be refreshed with the generation returned by the target CAS.
+            return target;
+        });
+        CompletableFuture.delayedExecutor(
+                retention.toMillis(), TimeUnit.MILLISECONDS)
+            .execute(() -> relocationActorForwards.remove(source, target));
     }
 
     private static <T> void installRelocationForward(

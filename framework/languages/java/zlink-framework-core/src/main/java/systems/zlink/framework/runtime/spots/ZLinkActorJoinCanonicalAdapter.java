@@ -189,10 +189,12 @@ final class ZLinkActorJoinCanonicalAdapter
             () -> {
                 sources.remove(
                     attempt.goal().sourceActor().actorId(), attempt);
-                attempt.prepared().authorityMovedToTarget()
-                    .thenCompose(moved -> moved
+                attempt.prepared().committedTargetAuthorityOwnerGeneration()
+                    .thenCompose(generation -> generation.isPresent()
                             && attempt.leaveClaimed().compareAndSet(false, true)
-                        ? completeSourceLeave(attempt, actorLeft(attempt))
+                        ? completeSourceLeave(
+                            attempt,
+                            actorLeft(attempt, generation.orElseThrow()))
                         : CompletableFuture.completedFuture(null))
                     .exceptionally(failure -> {
                         LOGGER.warning(
@@ -668,15 +670,17 @@ final class ZLinkActorJoinCanonicalAdapter
             || left.previousSpotGeneration()
                 != attempt.prepared().sourceSpotGeneration()
             || left.currentAuthorityOwnerGeneration()
-                != attempt.prepared()
-                    .expectedTargetAuthorityOwnerGeneration()) {
+                <= attempt.prepared().sourceAuthorityOwnerGeneration()) {
             return CompletableFuture.completedFuture(null);
         }
-        if (!attempt.leaveClaimed().compareAndSet(false, true)) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return attempt.committed().thenCompose(ignored ->
-            completeSourceLeave(attempt, left));
+        return attempt.committed().thenCompose(ignored -> {
+            if (!attempt.leaveClaimed().compareAndSet(false, true)) {
+                return CompletableFuture.completedFuture(null);
+            }
+            attempt.prepared().acceptTargetAuthorityOwnerGeneration(
+                left.currentAuthorityOwnerGeneration());
+            return completeSourceLeave(attempt, left);
+        });
     }
 
     private CompletionStage<Void> completeSourceLeave(
@@ -704,14 +708,15 @@ final class ZLinkActorJoinCanonicalAdapter
     }
 
     private static ZLinkServiceM6BWireCodec.ActorLeft actorLeft(
-        SourceAttempt attempt) {
+        SourceAttempt attempt,
+        long targetAuthorityOwnerGeneration) {
         return new ZLinkServiceM6BWireCodec.ActorLeft(
             new ZLinkServiceM6BWireCodec.ActorIdentity(
                 attempt.goal().sourceActor().actorId(),
                 attempt.goal().sourceActor().generation()),
             attempt.prepared().sourceSpotId(),
             attempt.prepared().sourceSpotGeneration(),
-            attempt.prepared().expectedTargetAuthorityOwnerGeneration());
+            targetAuthorityOwnerGeneration);
     }
 
     private static ZLinkActorRuntime.PreparedTransferredActor prepared(

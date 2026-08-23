@@ -929,33 +929,46 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             return owned.authority().currentSpotGeneration();
         }
 
-        long expectedTargetAuthorityOwnerGeneration() {
-            return Math.addExact(
-                owned.snapshot().authorityOwnerGeneration(), 1L);
+        long sourceAuthorityOwnerGeneration() {
+            return owned.snapshot().authorityOwnerGeneration();
         }
 
-        CompletionStage<Boolean> authorityMovedToTarget() {
+        CompletionStage<Optional<Long>> committedTargetAuthorityOwnerGeneration() {
             return locations.read(owned.authorityKey(), () -> false)
                 .thenApply(read -> {
                     if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                         || snapshot.authorityOwnerGeneration()
-                            != expectedTargetAuthorityOwnerGeneration()
+                            <= sourceAuthorityOwnerGeneration()
                         || !snapshot.allocation().descriptor().equals(
                             new ZLinkMeshNodeDescriptorKey(
                                 target.meshName(), target.rid()))
                         || snapshot.allocation()
                             .descriptorLifecycleGeneration()
                             != target.lifecycleGeneration()) {
-                        return false;
+                        return Optional.empty();
                     }
-                    return new ZLinkActorAuthorityPayloadCodec()
+                    boolean targetPayload = new ZLinkActorAuthorityPayloadCodec()
                         .decode(snapshot.payload())
                         .filter(value -> value.nodeRid().equals(target.rid())
                             && value.nodeGeneration()
                                 == target.lifecycleGeneration()
                             && value.currentSpotId().equals(targetSpotId))
                         .isPresent();
+                    return targetPayload
+                        ? Optional.of(snapshot.authorityOwnerGeneration())
+                        : Optional.empty();
                 });
+        }
+
+        synchronized void acceptTargetAuthorityOwnerGeneration(
+            long targetAuthorityOwnerGeneration) {
+            if (!committed
+                || targetAuthorityOwnerGeneration
+                    <= sourceAuthorityOwnerGeneration()) {
+                throw new IllegalStateException(
+                    "Actor relocation target owner generation is invalid");
+            }
+            installRelocationForward(targetAuthorityOwnerGeneration);
         }
 
         CompletionStage<Void> relayCapturedIngress(

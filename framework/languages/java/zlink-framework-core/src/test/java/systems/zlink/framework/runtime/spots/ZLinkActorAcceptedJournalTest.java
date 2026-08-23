@@ -42,4 +42,24 @@ final class ZLinkActorAcceptedJournalTest {
             assertArrayEquals(new byte[] {1, 2, 3}, record.payload());
         }
     }
+
+    @Test
+    void acceptedRemoteMultipartRestoresInnerActorHeaderAndPayload() {
+        ZLinkStreamHeader header = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.SEND,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.empty(),
+            "ZoneChangedNotify",
+            Map.of("flow", "relocation"));
+        byte[] payload = new byte[] {4, 5, 6};
+
+        ZLinkActorAcceptedJournal.Record record =
+            ZLinkActorAcceptedJournal.decode(
+                ZLinkAcceptedJournalTestRecords.actorMultipart(
+                    "actor-1", header, payload));
+
+        assertEquals(header, record.header());
+        assertArrayEquals(payload, record.payload());
+    }
 }

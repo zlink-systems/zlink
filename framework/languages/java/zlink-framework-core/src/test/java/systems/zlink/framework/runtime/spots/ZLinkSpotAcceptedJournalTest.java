@@ -47,4 +47,23 @@ final class ZLinkSpotAcceptedJournalTest {
         assertArrayEquals(new byte[] {6, 7}, record.parts().get(1));
         received.close();
     }
+
+    @Test
+    void acceptedRemoteMultipartRestoresOriginalParts() {
+        try (Message first = Message.from("packet");
+             Message second = Message.from(new byte[] {8, 9})) {
+            ZLinkSpotAcceptedJournal.Record record =
+                ZLinkSpotAcceptedJournal.decode(
+                    ZLinkAcceptedJournalTestRecords.spotMultipart(
+                        "source-spot",
+                        "target-spot",
+                        0,
+                        List.of(first, second)));
+
+            assertArrayEquals(
+                "packet".getBytes(StandardCharsets.UTF_8),
+                record.parts().get(0));
+            assertArrayEquals(new byte[] {8, 9}, record.parts().get(1));
+        }
+    }
 }

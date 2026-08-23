@@ -19,6 +19,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.configuration.ZLinkMeshChannelBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshChannelClientBuilder;
@@ -430,7 +431,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         routeHandlers.add(new DispatchHandler(
             Objects.requireNonNull(handlerType, "handlerType"),
             Objects.requireNonNull(messageType, "messageType"),
-            null));
+            null,
+            true));
         return this;
     }
 
@@ -443,7 +445,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         routeHandlers.add(new DispatchHandler(
             Objects.requireNonNull(handlerType, "handlerType"),
             Objects.requireNonNull(requestType, "requestType"),
-            Objects.requireNonNull(replyType, "replyType")));
+            Objects.requireNonNull(replyType, "replyType"),
+            true));
         return this;
     }
 
@@ -669,7 +672,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     public record DispatchHandler(
         Class<?> handlerType,
         Class<?> messageType,
-        Class<?> replyType) {
+        Class<?> replyType,
+        boolean routeContext) {
         public boolean request() {
             return replyType != null;
         }
@@ -934,7 +938,21 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
             handlers.add(new DispatchHandler(
                 Objects.requireNonNull(handlerType, "handlerType"),
                 Objects.requireNonNull(messageType, "messageType"),
-                null));
+                null,
+                false));
+            return this;
+        }
+
+        @Override
+        public <THandler extends ZLinkRouteSendHandler<TMessage>, TMessage>
+        ZLinkMeshChannelServerBuilder addRouteSendHandler(
+            Class<THandler> handlerType,
+            Class<TMessage> messageType) {
+            handlers.add(new DispatchHandler(
+                Objects.requireNonNull(handlerType, "handlerType"),
+                Objects.requireNonNull(messageType, "messageType"),
+                null,
+                true));
             return this;
         }
 
@@ -947,7 +965,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
             handlers.add(new DispatchHandler(
                 Objects.requireNonNull(handlerType, "handlerType"),
                 Objects.requireNonNull(requestType, "requestType"),
-                Objects.requireNonNull(replyType, "replyType")));
+                Objects.requireNonNull(replyType, "replyType"),
+                false));
             return this;
         }
 

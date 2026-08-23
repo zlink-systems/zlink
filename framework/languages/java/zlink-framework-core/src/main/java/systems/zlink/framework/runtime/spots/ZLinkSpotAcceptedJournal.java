@@ -16,6 +16,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 final class ZLinkSpotAcceptedJournal {
     private ZLinkSpotAcceptedJournal() {
@@ -41,9 +43,9 @@ final class ZLinkSpotAcceptedJournal {
                 decoded.sourceSpotId(),
                 decoded.replyRouteId(),
                 decoded.metadataFrame(),
-                List.of(
-                    decoded.packetName().getBytes(
-                        StandardCharsets.UTF_8),
+                decodeApplicationParts(
+                    decoded.packetName(),
+                    decoded.contentType(),
                     decoded.payload()),
                 decoded.operationHigh(),
                 decoded.operationLow(),
@@ -54,6 +56,26 @@ final class ZLinkSpotAcceptedJournal {
         }
         throw new IllegalArgumentException(
             "accepted Spot journal record is not canonical service-wire-v1");
+    }
+
+    private static List<byte[]> decodeApplicationParts(
+        String packetName,
+        String contentType,
+        byte[] payload) {
+        if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(
+                packetName)) {
+            return List.of(
+                packetName.getBytes(StandardCharsets.UTF_8), payload);
+        }
+        List<Message> parts = ZLinkServiceM6AWireCodec
+            .decodeFrameworkMultipart(
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                    packetName, contentType, payload));
+        try {
+            return parts.stream().map(Message::toByteArray).toList();
+        } finally {
+            parts.forEach(Message::close);
+        }
     }
 
     private static void writeRoutingId(
