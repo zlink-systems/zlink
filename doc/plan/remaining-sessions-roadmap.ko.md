@@ -444,7 +444,13 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
     durable 마이그레이션 판정(dotnet Legacy_* red 2건과 동일 판정) ③ 28 reply content-type 보존
     조항 충족성 4언어 교차 검증 ④ **[x] 결정성 스윕 — 12셀 2연속 전 그린(2026-08-23, fresh host
     재빌드 포함, run-log 보존)** → 단계-마감 sol 리뷰만 잔여.
-- [ ] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어`
+- [~] **단계 4 — [C1] W-3 생성 코덱 스왑(H-6)** `4언어` — **대폭 진행(2026-08-23)**:
+  B1(28) ✅4언어(cpp f9515f0277·java 02e0126ecb 0x01 retire·dotnet 7bf39913e5 NUL 집행+
+  whitespace 사설 제거·node 기존). B2(envelope/durable) ✅java 618986be28·cpp e354685afc·
+  node c159b59413, dotnet 진행 — 교차참조 규칙 3건(membership·timer-name·nonempty)을 판정해
+  생성기 4언어 방출. B3(control-plane) 모델 ba23ee383c + ✅node 669ffa6735, 3언어 스왑 대기.
+  B4 oracle 4b973acf18(ZLJR=고정 Node 벡터 1958B 승격)+모델 8d9c84b797 + ✅node b996d6b7df.
+  **Node 전 배치 완결.** slot 21필드 정본화 4언어 완결+12셀 그린(별도 스트림).
 - [ ] **단계 5 — [B0] 하니스 안정화** `혼합` — 3건 병렬 착수(2026-08-22, canonical과 독립이므로
   단계 6 최단경로로 선행 투입)
   - [x] H-10 dotnet→java relocation 레이스 (dotnet+java) — **판정(2026-08-22)**: 22회 반복(수정 전
@@ -556,8 +562,21 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
   - **[x] [해소] cpp SpotActorTransfer e2e HEAD red(5/5 결정적)**: stale e2e 바이너리가 가리던
     실패 — 재빌드 후 ST-C4/D2 `get_actor_ref` 404(원격 Join 후 target actor_directory find 실패),
     ST-C2 session bind 실패. 용의: `ea7805d54b`(cpp ZLAU 정렬) 또는 `dd234c3110`. 회귀 판정 진행 중.
-- [ ] **단계 6 — [D2] 6샘플 × 4언어 결정적 green** `4언어`
-- [ ] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어` — **recon 완료(2026-08-23,
+- [~] **단계 6 — [D2] 7샘플 × 4언어 결정적 green** `4언어` — **node 7/7 ✅**(TTT inner
+  content-type 소실 수정 `3b26bed38b` 후 게이트 exit 0) · **dotnet 7/7 ✅**(self-teardown
+  순환대기+disconnect 순서 수정 `93cf627a9e` 후 exit 0, browser 포함; 잔존 카드: "actor destroy
+  completion" 1/8 별개 서명, run 보존) · java·cpp는 ZW 프레임워크 수정 후 게이트 실행 예정.
+  단계 5 잔여도 사실상 흡수: ST-C4 ✅`5bf825cafb`(cpp 53 라이브 terminal 수정 동반), Bingo
+  target_closed ✅`720e19a43b`.
+- [~] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어` — **진행(2026-08-23)**: 시나리오 v2
+  확정(`56603668a1` — 판정 8건+ZW 34개 개별 정의 표) → **.NET 정본 CONFORMANT ✅
+  `9d9c43c0ad`**(34 ID 2연속, browser 기본) → **Node ✅**(33판정 2연속 완주, shared browser
+  정렬 `6acc4c7d38`+재시작 §7.5 정합 `ec2fd0c174`+프레임워크 B7/E2 수정) → **Java 포팅 구조
+  완성 `206e60bbe2`**(18 PASS 포함 B2/B7/B8; 잔여는 java 프레임워크 결함 2건 — ①channel
+  send handler의 신뢰 source RID 공개 표면 부재 ②동일 NodeId 교체 후 placement 미정착
+  zones=[] — 수정 진행 중) → **cpp 포팅 구조 완성(미커밋)**: 9 PASS, 잔여는 cpp 프레임워크
+  결함 2건(①bound-session 지연 join 응답 미완주 ②public spot-event monitoring 표면 부재 —
+  수정 진행 중). kotlin은 java 프레임워크 수정+포팅 그린 후 착수. — 기존 recon 기록(2026-08-23,
   `doc/plan/zoneworld-stage7-recon.md`)**: ① "게이트 제외"는 stale — 4언어 러너 모두 이미
   ZoneWorld 포함(JVM samples/README만 6샘플 서술 잔존), 실 문제는 **완주 판정 엄밀성 격차**
   (.NET만 ZW-A~G 전 판정 AND 게이트; Java/Kotlin은 A2·B7 grep뿐, C++는 7개 체크로 광역 완료
