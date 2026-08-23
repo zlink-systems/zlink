@@ -1431,22 +1431,15 @@ internal static partial class ZLinkServiceWireCodec
             || string.IsNullOrWhiteSpace(operation.StableType))
             throw new ArgumentOutOfRangeException(nameof(operation));
         ValidateReservation(operation.Reservation);
-
-        var body = new WireWriter();
-        body.U64(operation.Correlation);
-        WriteOperationId(body, operation.OperationId);
-        body.Rid(operation.SourceNodeRid);
-        body.U64(operation.SourceNodeGeneration);
-        body.Text8(operation.SpotId);
-        body.Text8(operation.StableType);
-        WriteReservation(body, operation.Reservation);
-        body.U64(operation.DeadlineUnixMs);
-        var result = Prefix(
-            ServiceWireConstants.Command.UserSpotCreate,
-            ServiceWireConstants.Flag.None,
-            body.Count);
-        body.CopyTo(result.AsSpan(5));
-        return result;
+        return ServiceWirePilotCodec.EncodeUserSpotCreate47(new(
+            operation.Correlation,
+            ToGenerated(operation.OperationId),
+            operation.SourceNodeRid.ToBytes().ToArray(),
+            operation.SourceNodeGeneration,
+            operation.SpotId,
+            operation.StableType,
+            ToGenerated(operation.Reservation),
+            operation.DeadlineUnixMs));
     }
 
     internal static byte[] EncodeUserSpotClose(UserSpotCloseOperation operation)
@@ -1458,30 +1451,13 @@ internal static partial class ZLinkServiceWireCodec
             operation.SourceNodeGeneration,
             operation.DeadlineUnixMs);
         ValidateCloseFence(operation.Target);
-
-        var fenceBody = new WireWriter();
-        fenceBody.Text8(operation.Target.SpotId);
-        fenceBody.U64(operation.Target.ObjectGeneration);
-        fenceBody.Rid(operation.Target.TargetNodeRid);
-        fenceBody.U64(operation.Target.TargetNodeGeneration);
-        fenceBody.U64(operation.Target.AuthorityOwnerGeneration);
-        fenceBody.Text16(operation.Target.ExpectedStoreVersion, requireNonEmpty: true);
-
-        var body = new WireWriter();
-        body.U64(operation.Correlation);
-        WriteOperationId(body, operation.OperationId);
-        body.Rid(operation.SourceNodeRid);
-        body.U64(operation.SourceNodeGeneration);
-        body.U8(1);
-        body.U16(checked((ushort)fenceBody.Count));
-        body.Bytes(fenceBody.ToArray());
-        body.U64(operation.DeadlineUnixMs);
-        var result = Prefix(
-            ServiceWireConstants.Command.UserSpotClose,
-            ServiceWireConstants.Flag.None,
-            body.Count);
-        body.CopyTo(result.AsSpan(5));
-        return result;
+        return ServiceWirePilotCodec.EncodeUserSpotClose48(new(
+            operation.Correlation,
+            ToGenerated(operation.OperationId),
+            operation.SourceNodeRid.ToBytes().ToArray(),
+            operation.SourceNodeGeneration,
+            ToGenerated(operation.Target),
+            operation.DeadlineUnixMs));
     }
 
     internal static byte[] EncodeActorCreate(ActorCreateOperation operation)
@@ -1496,22 +1472,15 @@ internal static partial class ZLinkServiceWireCodec
             || string.IsNullOrWhiteSpace(operation.StableType))
             throw new ArgumentOutOfRangeException(nameof(operation));
         ValidateReservation(operation.Reservation);
-
-        var body = new WireWriter();
-        body.U64(operation.Correlation);
-        WriteOperationId(body, operation.OperationId);
-        body.Rid(operation.SourceNodeRid);
-        body.U64(operation.SourceNodeGeneration);
-        body.Text8(operation.ActorId);
-        body.Text8(operation.StableType);
-        WriteReservation(body, operation.Reservation);
-        body.U64(operation.DeadlineUnixMs);
-        var result = Prefix(
-            ServiceWireConstants.Command.ActorCreate,
-            ServiceWireConstants.Flag.None,
-            body.Count);
-        body.CopyTo(result.AsSpan(5));
-        return result;
+        return ServiceWirePilotCodec.EncodeActorCreate49(new(
+            operation.Correlation,
+            ToGenerated(operation.OperationId),
+            operation.SourceNodeRid.ToBytes().ToArray(),
+            operation.SourceNodeGeneration,
+            operation.ActorId,
+            operation.StableType,
+            ToGenerated(operation.Reservation),
+            operation.DeadlineUnixMs));
     }
 
     internal static bool TryDecodeActorCreateOperation(
@@ -1520,52 +1489,25 @@ internal static partial class ZLinkServiceWireCodec
         out DecodeError error)
     {
         record = default;
-        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.ActorCreate,
+                ServiceWirePilotCodec.DecodeActorCreate49,
+                out var generated, out error))
             return false;
-        if (command != ServiceWireConstants.Command.ActorCreate)
+        if (generated.DeadlineUnixMs > long.MaxValue)
         {
-            error = DecodeError.UnknownCommand;
+            error = DecodeError.InvalidField;
             return false;
         }
-        if (flags != ServiceWireConstants.Flag.None)
-        {
-            error = DecodeError.ForbiddenFlag;
-            return false;
-        }
-
-        var reader = new WireReader(bytes[5..]);
-        if (!reader.TryU64(out var correlation)
-            || correlation == 0
-            || !TryReadOperationId(ref reader, out var operationId)
-            || !reader.TryRid(out var sourceNodeRid)
-            || !reader.TryU64(out var sourceNodeGeneration)
-            || sourceNodeGeneration == 0
-            || !reader.TryText8(out var actorId)
-            || !reader.TryText8(out var stableType)
-            || !TryReadReservation(ref reader, out var reservation)
-            || !reader.TryU64(out var deadlineUnixMs)
-            || deadlineUnixMs is 0 or > long.MaxValue
-            || reader.Remaining != 0)
-        {
-            error = reader.Truncated
-                ? DecodeError.TruncatedField
-                : reader.Remaining != 0
-                    ? DecodeError.TrailingByte
-                    : DecodeError.InvalidField;
-            return false;
-        }
-
-        record = new ActorCreateOperationRecord(
-            new ActorCreateOperation(
-                correlation,
-                operationId,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                actorId,
-                stableType,
-                reservation,
-                deadlineUnixMs));
-        error = DecodeError.None;
+        record = new ActorCreateOperationRecord(new ActorCreateOperation(
+            generated.Correlation,
+            FromGenerated(generated.Operation),
+            RoutingId.From(generated.SourceNodeRid),
+            generated.SourceNodeGeneration,
+            generated.ActorId,
+            generated.StableType,
+            FromGenerated(generated.Reservation),
+            generated.DeadlineUnixMs));
         return true;
     }
 
@@ -1575,113 +1517,55 @@ internal static partial class ZLinkServiceWireCodec
         out DecodeError error)
     {
         record = default;
-        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
+        if (!TryDecodePrefix(bytes, out var command, out _, out error))
             return false;
-        if (command is not (ServiceWireConstants.Command.UserSpotCreate
-            or ServiceWireConstants.Command.UserSpotClose))
-        {
-            error = DecodeError.UnknownCommand;
-            return false;
-        }
-        if (flags != ServiceWireConstants.Flag.None)
-        {
-            error = DecodeError.ForbiddenFlag;
-            return false;
-        }
-
-        var reader = new WireReader(bytes[5..]);
-        if (!reader.TryU64(out var correlation)
-            || correlation == 0
-            || !TryReadOperationId(ref reader, out var operationId)
-            || !reader.TryRid(out var sourceNodeRid)
-            || !reader.TryU64(out var sourceNodeGeneration)
-            || sourceNodeGeneration == 0)
-        {
-            error = reader.Truncated ? DecodeError.TruncatedField : DecodeError.InvalidField;
-            return false;
-        }
-
         if (command == ServiceWireConstants.Command.UserSpotCreate)
         {
-            if (!reader.TryText8(out var spotId)
-                || !reader.TryText8(out var stableType)
-                || !TryReadReservation(ref reader, out var reservation)
-                || !reader.TryU64(out var deadlineUnixMs)
-                || deadlineUnixMs is 0 or > long.MaxValue
-                || reader.Remaining != 0)
+            if (!TryDecodeGenerated(bytes, command,
+                    ServiceWirePilotCodec.DecodeUserSpotCreate47,
+                    out var generated, out error))
+                return false;
+            if (generated.DeadlineUnixMs > long.MaxValue)
             {
-                error = reader.Truncated
-                    ? DecodeError.TruncatedField
-                    : reader.Remaining != 0
-                        ? DecodeError.TrailingByte
-                        : DecodeError.InvalidField;
+                error = DecodeError.InvalidField;
                 return false;
             }
-            record = new UserSpotOperationRecord(
-                command,
+            record = new UserSpotOperationRecord(command,
                 new UserSpotCreateOperation(
-                    correlation,
-                    operationId,
-                    sourceNodeRid,
-                    sourceNodeGeneration,
-                    spotId,
-                    stableType,
-                    reservation,
-                    deadlineUnixMs),
+                    generated.Correlation,
+                    FromGenerated(generated.Operation),
+                    RoutingId.From(generated.SourceNodeRid),
+                    generated.SourceNodeGeneration,
+                    generated.SpotId,
+                    generated.StableType,
+                    FromGenerated(generated.Reservation),
+                    generated.DeadlineUnixMs),
                 default);
+            return true;
         }
-        else
+        if (command == ServiceWireConstants.Command.UserSpotClose)
         {
-            if (!reader.TryU8(out var version)
-                || version != 1
-                || !reader.TryU16(out var fenceLength)
-                || !reader.TrySlice(fenceLength, out var fenceBytes))
+            if (!TryDecodeGenerated(bytes, command,
+                    ServiceWirePilotCodec.DecodeUserSpotClose48,
+                    out var generated, out error))
+                return false;
+            if (generated.DeadlineUnixMs > long.MaxValue)
             {
-                error = reader.Truncated ? DecodeError.TruncatedField : DecodeError.InvalidField;
+                error = DecodeError.InvalidField;
                 return false;
             }
-            var fenceReader = new WireReader(fenceBytes);
-            if (!fenceReader.TryText8(out var spotId)
-                || !fenceReader.TryU64(out var objectGeneration)
-                || objectGeneration == 0
-                || !fenceReader.TryRid(out var targetNodeRid)
-                || !fenceReader.TryU64(out var targetNodeGeneration)
-                || targetNodeGeneration == 0
-                || !fenceReader.TryU64(out var authorityOwnerGeneration)
-                || authorityOwnerGeneration == 0
-                || !fenceReader.TryText16(out var expectedStoreVersion, requireNonEmpty: true)
-                || fenceReader.Remaining != 0
-                || !reader.TryU64(out var deadlineUnixMs)
-                || deadlineUnixMs is 0 or > long.MaxValue
-                || reader.Remaining != 0)
-            {
-                error = reader.Truncated || fenceReader.Truncated
-                    ? DecodeError.TruncatedField
-                    : reader.Remaining != 0 || fenceReader.Remaining != 0
-                        ? DecodeError.TrailingByte
-                        : DecodeError.InvalidField;
-                return false;
-            }
-            record = new UserSpotOperationRecord(
-                command,
-                default,
+            record = new UserSpotOperationRecord(command, default,
                 new UserSpotCloseOperation(
-                    correlation,
-                    operationId,
-                    sourceNodeRid,
-                    sourceNodeGeneration,
-                    new UserSpotCloseFence(
-                        spotId,
-                        objectGeneration,
-                        targetNodeRid,
-                        targetNodeGeneration,
-                        authorityOwnerGeneration,
-                        expectedStoreVersion),
-                    deadlineUnixMs));
+                    generated.Correlation,
+                    FromGenerated(generated.Operation),
+                    RoutingId.From(generated.SourceNodeRid),
+                    generated.SourceNodeGeneration,
+                    FromGenerated(generated.Target),
+                    generated.DeadlineUnixMs));
+            return true;
         }
-
-        error = DecodeError.None;
-        return true;
+        error = DecodeError.UnknownCommand;
+        return false;
     }
 
     internal static byte[] EncodeRouteAdmission(
@@ -1907,6 +1791,48 @@ internal static partial class ZLinkServiceWireCodec
             throw new ArgumentOutOfRangeException(nameof(target));
     }
 
+    private static ServiceWirePilotCodec.ObjectReservationFence ToGenerated(
+        ObjectReservationFence value) => new(
+        value.ReservationId,
+        value.ExpectedStoreVersion,
+        value.ObjectGeneration,
+        value.AuthorityOwnerGeneration,
+        value.TargetNodeRid.ToBytes().ToArray(),
+        value.TargetNodeGeneration,
+        value.TargetOwnerId,
+        value.TargetOwnerLeaseGeneration,
+        value.PendingCapacityDelta);
+
+    private static ObjectReservationFence FromGenerated(
+        ServiceWirePilotCodec.ObjectReservationFence value) => new(
+        value.ReservationId,
+        value.ExpectedStoreVersion,
+        value.ObjectGeneration,
+        value.AuthorityOwnerGeneration,
+        RoutingId.From(value.TargetNodeRid),
+        value.TargetNodeGeneration,
+        value.TargetOwnerId,
+        value.TargetOwnerLeaseGeneration,
+        value.PendingCapacityDelta);
+
+    private static ServiceWirePilotCodec.UserSpotCloseFenceV1 ToGenerated(
+        UserSpotCloseFence value) => new(
+        value.SpotId,
+        value.ObjectGeneration,
+        value.TargetNodeRid.ToBytes().ToArray(),
+        value.TargetNodeGeneration,
+        value.AuthorityOwnerGeneration,
+        value.ExpectedStoreVersion);
+
+    private static UserSpotCloseFence FromGenerated(
+        ServiceWirePilotCodec.UserSpotCloseFenceV1 value) => new(
+        value.SpotId,
+        value.ObjectGeneration,
+        RoutingId.From(value.TargetNodeRid),
+        value.TargetNodeGeneration,
+        value.ExpectedAuthorityOwnerGeneration,
+        value.ExpectedStoreVersion);
+
     private static void WriteOperationId(WireWriter writer, MeshOperationId operationId)
     {
         writer.U64(operationId.High);
@@ -1924,21 +1850,6 @@ internal static partial class ZLinkServiceWireCodec
             return false;
         operationId = new MeshOperationId(high, low);
         return true;
-    }
-
-    private static void WriteReservation(
-        WireWriter writer,
-        ObjectReservationFence reservation)
-    {
-        writer.Text8(reservation.ReservationId);
-        writer.Text16(reservation.ExpectedStoreVersion, requireNonEmpty: true);
-        writer.U64(reservation.ObjectGeneration);
-        writer.U64(reservation.AuthorityOwnerGeneration);
-        writer.Rid(reservation.TargetNodeRid);
-        writer.U64(reservation.TargetNodeGeneration);
-        writer.Text8(reservation.TargetOwnerId);
-        writer.U64(reservation.TargetOwnerLeaseGeneration);
-        writer.U32(reservation.PendingCapacityDelta);
     }
 
     private static void ValidateInstanceActivation(
@@ -1970,37 +1881,53 @@ internal static partial class ZLinkServiceWireCodec
         writer.Text8(value);
     }
 
-    private static bool TryReadReservation(
-        ref WireReader reader,
-        out ObjectReservationFence reservation)
+    private static bool TryDecodeGenerated<T>(
+        ReadOnlySpan<byte> bytes,
+        ServiceWireConstants.Command expectedCommand,
+        Func<byte[], T> decode,
+        out T value,
+        out DecodeError error)
     {
-        reservation = default;
-        if (!reader.TryText8(out var reservationId)
-            || !reader.TryText16(out var expectedStoreVersion, requireNonEmpty: true)
-            || !reader.TryU64(out var objectGeneration)
-            || objectGeneration == 0
-            || !reader.TryU64(out var authorityOwnerGeneration)
-            || authorityOwnerGeneration == 0
-            || !reader.TryRid(out var targetNodeRid)
-            || !reader.TryU64(out var targetNodeGeneration)
-            || targetNodeGeneration == 0
-            || !reader.TryText8(out var targetOwnerId)
-            || !reader.TryU64(out var targetOwnerLeaseGeneration)
-            || targetOwnerLeaseGeneration == 0
-            || !reader.TryU32(out var pendingCapacityDelta)
-            || pendingCapacityDelta == 0)
+        value = default!;
+        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
             return false;
-        reservation = new ObjectReservationFence(
-            reservationId,
-            expectedStoreVersion,
-            objectGeneration,
-            authorityOwnerGeneration,
-            targetNodeRid,
-            targetNodeGeneration,
-            targetOwnerId,
-            targetOwnerLeaseGeneration,
-            pendingCapacityDelta);
-        return true;
+        if (command != expectedCommand)
+        {
+            error = DecodeError.UnknownCommand;
+            return false;
+        }
+        if (flags != ServiceWireConstants.Flag.None)
+        {
+            error = DecodeError.ForbiddenFlag;
+            return false;
+        }
+        try
+        {
+            value = decode(bytes.ToArray());
+            error = DecodeError.None;
+            return true;
+        }
+        catch (EndOfStreamException)
+        {
+            error = DecodeError.TruncatedField;
+            return false;
+        }
+        catch (InvalidDataException exception)
+        {
+            error = exception.Message.Contains(
+                "trailing", StringComparison.OrdinalIgnoreCase)
+                ? DecodeError.TrailingByte
+                : DecodeError.InvalidField;
+            return false;
+        }
+        catch (Exception exception) when (exception is DecoderFallbackException
+                                          or ArgumentException
+                                          or OverflowException
+                                          or IndexOutOfRangeException)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
     }
 
     private static byte[] Prefix(

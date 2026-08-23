@@ -99,28 +99,27 @@ internal static partial class ZLinkServiceWireCodec
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
         ValidateTarget(record.Target);
-        ValidateRole(record.InitiatorRole);
+        if (record.InitiatorRole != 1)
+            throw new ArgumentOutOfRangeException(nameof(record));
+        _ = ToGenerated(record.Object);
         if (record.SourceNodeRid.IsEmpty || record.SourceNodeGeneration == 0
             || record.ApplicationVersion > long.MaxValue
             || record.PayloadTotalLength > RelocationLogicalBytesBound
             || record.PayloadChunkCount > RelocationChunkCountBound)
             throw new ArgumentOutOfRangeException(nameof(record));
-
-        var body = new WireWriter();
-        WriteRelocationId(body, record.RelocationId);
-        body.U64(record.TargetAttemptGeneration);
-        WriteCoordinator(body, record.Coordinator);
-        WriteTarget(body, record.Target);
-        body.U8(record.InitiatorRole);
-        WriteRelocationObject(body, record.Object);
-        body.Rid(record.SourceNodeRid);
-        body.U64(record.SourceNodeGeneration);
-        body.U64(record.PayloadTotalLength);
-        body.U32(record.PayloadChunkCount);
-        body.U32(record.PayloadChecksumCrc32c);
-        body.U64(record.ApplicationVersion);
-        return Finish(ServiceWireConstants.Command.RelocationPrepare,
-            ServiceWireConstants.Flag.None, body);
+        return ServiceWirePilotCodec.EncodeRelocationPrepare40(new(
+            ToGenerated(record.RelocationId),
+            record.TargetAttemptGeneration,
+            ToGenerated(record.Coordinator),
+            ToGenerated(record.Target),
+            ServiceWirePilotCodec.RelocationRole.Source,
+            ToGenerated(record.Object),
+            record.SourceNodeRid.ToBytes().ToArray(),
+            record.SourceNodeGeneration,
+            record.PayloadTotalLength,
+            record.PayloadChunkCount,
+            record.PayloadChecksumCrc32c,
+            checked((long)record.ApplicationVersion)));
     }
 
     internal static byte[] EncodeRelocationReady(RelocationReadyRecord record)
@@ -128,17 +127,16 @@ internal static partial class ZLinkServiceWireCodec
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
         ValidateTarget(record.Target);
-        ValidateRole(record.SenderRole);
-
-        var body = new WireWriter();
-        WriteRelocationId(body, record.RelocationId);
-        body.U64(record.TargetAttemptGeneration);
-        WriteCoordinator(body, record.Coordinator);
-        WriteTarget(body, record.Target);
-        WriteRelocationObject(body, record.Object);
-        body.U8(record.SenderRole);
-        return Finish(ServiceWireConstants.Command.RelocationReady,
-            ServiceWireConstants.Flag.None, body);
+        if (record.SenderRole != 2)
+            throw new ArgumentOutOfRangeException(nameof(record));
+        _ = ToGenerated(record.Object);
+        return ServiceWirePilotCodec.EncodeRelocationReady30(new(
+            ToGenerated(record.RelocationId),
+            record.TargetAttemptGeneration,
+            ToGenerated(record.Coordinator),
+            ToGenerated(record.Target),
+            ToGenerated(record.Object),
+            ServiceWirePilotCodec.RelocationRole.Target));
     }
 
     internal static byte[] EncodeRelocationFailed(RelocationFailedRecord record)
@@ -146,220 +144,209 @@ internal static partial class ZLinkServiceWireCodec
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
         ValidateTarget(record.Target);
-        ValidateRole(record.SenderRole);
-        if (record.FailureCode == ServiceWireConstants.FrameworkErrorCode.None)
+        if (record.SenderRole != 2
+            || record.FailureCode == ServiceWireConstants.FrameworkErrorCode.None)
             throw new ArgumentOutOfRangeException(nameof(record));
-
-        var body = new WireWriter();
-        WriteRelocationId(body, record.RelocationId);
-        body.U64(record.TargetAttemptGeneration);
-        WriteCoordinator(body, record.Coordinator);
-        WriteTarget(body, record.Target);
-        WriteRelocationObject(body, record.Object);
-        body.U8(record.SenderRole);
-        body.U32((uint)record.FailureCode);
-        return Finish(ServiceWireConstants.Command.RelocationFailed,
-            ServiceWireConstants.Flag.None, body);
+        _ = ToGenerated(record.Object);
+        try
+        {
+            return ServiceWirePilotCodec.EncodeRelocationFailed53(new(
+                ToGenerated(record.RelocationId),
+                record.TargetAttemptGeneration,
+                ToGenerated(record.Coordinator),
+                ToGenerated(record.Target),
+                ToGenerated(record.Object),
+                ServiceWirePilotCodec.RelocationRole.Target,
+                (uint)record.FailureCode));
+        }
+        catch (InvalidDataException error)
+        {
+            throw new ArgumentOutOfRangeException(nameof(record), error);
+        }
     }
 
     internal static byte[] EncodeRelocationData(RelocationDataRecord record)
     {
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
-        ValidateRole(record.SenderRole);
+        if (record.SenderRole != 1)
+            throw new ArgumentOutOfRangeException(nameof(record));
+        _ = ToGenerated(record.Object);
         if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
                 record.FrozenRecord.Encoded.Span))
             throw new ArgumentOutOfRangeException(nameof(record));
-
-        var body = new WireWriter();
-        WriteRelocationId(body, record.RelocationId);
-        body.U64(record.TargetAttemptGeneration);
-        WriteCoordinator(body, record.Coordinator);
-        body.U8(record.SenderRole);
-        WriteRelocationObject(body, record.Object);
-        body.Bytes(record.FrozenRecord.Encoded.Span);
-        return Finish(ServiceWireConstants.Command.RelocationData,
-            ServiceWireConstants.Flag.None, body);
+        return ServiceWirePilotCodec.EncodeRelocationData31(new(
+            ToGenerated(record.RelocationId),
+            record.TargetAttemptGeneration,
+            ToGenerated(record.Coordinator),
+            ServiceWirePilotCodec.RelocationRole.Source,
+            ToGenerated(record.Object),
+            record.FrozenRecord.Encoded.ToArray()));
     }
 
     internal static byte[] EncodeRelocationCutover(RelocationCutoverRecord record)
     {
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
-        ValidateRole(record.SenderRole);
+        if (record.SenderRole != 1)
+            throw new ArgumentOutOfRangeException(nameof(record));
+        _ = ToGenerated(record.Object);
         if (record.BoundaryRecordCount > long.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(record));
-
-        var body = new WireWriter();
-        WriteRelocationId(body, record.RelocationId);
-        body.U64(record.TargetAttemptGeneration);
-        WriteCoordinator(body, record.Coordinator);
-        body.U8(record.SenderRole);
-        WriteRelocationObject(body, record.Object);
-        body.U64(record.BoundaryRecordCount);
-        body.U32(record.BoundaryChecksumCrc32c);
-        return Finish(ServiceWireConstants.Command.RelocationCutover,
-            ServiceWireConstants.Flag.None, body);
+        return ServiceWirePilotCodec.EncodeRelocationCutover34(new(
+            ToGenerated(record.RelocationId),
+            record.TargetAttemptGeneration,
+            ToGenerated(record.Coordinator),
+            ServiceWirePilotCodec.RelocationRole.Source,
+            ToGenerated(record.Object),
+            record.BoundaryRecordCount,
+            record.BoundaryChecksumCrc32c));
     }
 
     internal static byte[] EncodeRelocationState(RelocationStateRecord record)
     {
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
-        ValidateRole(record.SenderRole);
+        if (record.SenderRole != 1)
+            throw new ArgumentOutOfRangeException(nameof(record));
+        _ = ToGenerated(record.Object);
         if (record.ChunkData.Length > RelocationChunkBytesBound)
             throw new ArgumentOutOfRangeException(nameof(record));
-
-        var body = new WireWriter();
-        WriteRelocationId(body, record.RelocationId);
-        body.U64(record.TargetAttemptGeneration);
-        WriteCoordinator(body, record.Coordinator);
-        body.U8(record.SenderRole);
-        WriteRelocationObject(body, record.Object);
-        body.U32(record.ChunkOrdinal);
-        body.U32((uint)record.ChunkData.Length);
-        body.Bytes(record.ChunkData.Span);
-        return Finish(ServiceWireConstants.Command.RelocationState,
-            ServiceWireConstants.Flag.None, body);
+        return ServiceWirePilotCodec.EncodeRelocationState52(new(
+            ToGenerated(record.RelocationId),
+            record.TargetAttemptGeneration,
+            ToGenerated(record.Coordinator),
+            ServiceWirePilotCodec.RelocationRole.Source,
+            ToGenerated(record.Object),
+            record.ChunkOrdinal,
+            record.ChunkData.ToArray()));
     }
 
     internal static bool TryDecodeRelocationPrepare(ReadOnlySpan<byte> bytes,
         out RelocationPrepareRecord record, out DecodeError error)
     {
         record = null!;
-        if (!Begin(bytes, ServiceWireConstants.Command.RelocationPrepare,
-                ServiceWireConstants.Flag.None, out var reader, out error))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.RelocationPrepare,
+                ServiceWirePilotCodec.DecodeRelocationPrepare40,
+                out var generated, out error))
             return false;
-        if (!TryRelocationId(ref reader, out var id)
-            || !reader.TryU64(out var attempt) || attempt == 0
-            || !TryCoordinator(ref reader, out var coordinator)
-            || !TryTarget(ref reader, out var target)
-            || !reader.TryU8(out var role) || !IsRole(role)
-            || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TryRid(out var sourceRid)
-            || !reader.TryU64(out var sourceGeneration) || sourceGeneration == 0
-            || !reader.TryU64(out var payloadTotalLength)
-            || payloadTotalLength > RelocationLogicalBytesBound
-            || !reader.TryU32(out var payloadChunkCount)
-            || payloadChunkCount > RelocationChunkCountBound
-            || !reader.TryU32(out var payloadChecksum)
-            || !reader.TryU64(out var applicationVersion)
-            || applicationVersion > long.MaxValue)
-            return DecodeFailure(ref reader, out error);
-        record = new RelocationPrepareRecord(id, attempt, coordinator, target,
-            role, relocationObject, sourceRid, sourceGeneration,
-            payloadTotalLength, payloadChunkCount, payloadChecksum,
-            applicationVersion);
-        return End(ref reader, out error);
+        record = new RelocationPrepareRecord(
+            FromGenerated(generated.Relocation),
+            generated.TargetAttemptGeneration,
+            FromGenerated(generated.Coordinator),
+            FromGenerated(generated.Target),
+            FromGeneratedRole(generated.InitiatorRole),
+            FromGenerated(generated.Object),
+            RoutingId.From(generated.SourceNodeRid),
+            generated.SourceNodeGeneration,
+            generated.PayloadTotalLength,
+            generated.PayloadChunkCount,
+            generated.PayloadChecksumCrc32c,
+            checked((ulong)generated.ApplicationVersion));
+        return true;
     }
 
     internal static bool TryDecodeRelocationReady(ReadOnlySpan<byte> bytes,
         out RelocationReadyRecord record, out DecodeError error)
     {
         record = null!;
-        if (!Begin(bytes, ServiceWireConstants.Command.RelocationReady,
-                ServiceWireConstants.Flag.None, out var reader, out error))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.RelocationReady,
+                ServiceWirePilotCodec.DecodeRelocationReady30,
+                out var generated, out error))
             return false;
-        if (!TryRelocationId(ref reader, out var id)
-            || !reader.TryU64(out var attempt) || attempt == 0
-            || !TryCoordinator(ref reader, out var coordinator)
-            || !TryTarget(ref reader, out var target)
-            || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TryU8(out var role) || !IsRole(role))
-            return DecodeFailure(ref reader, out error);
-        record = new RelocationReadyRecord(id, attempt, coordinator, target,
-            relocationObject, role);
-        return End(ref reader, out error);
+        record = new RelocationReadyRecord(
+            FromGenerated(generated.Relocation),
+            generated.TargetAttemptGeneration,
+            FromGenerated(generated.Coordinator),
+            FromGenerated(generated.Target),
+            FromGenerated(generated.Object),
+            FromGeneratedRole(generated.SenderRole));
+        return true;
     }
 
     internal static bool TryDecodeRelocationFailed(ReadOnlySpan<byte> bytes,
         out RelocationFailedRecord record, out DecodeError error)
     {
         record = null!;
-        if (!Begin(bytes, ServiceWireConstants.Command.RelocationFailed,
-                ServiceWireConstants.Flag.None, out var reader, out error))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.RelocationFailed,
+                ServiceWirePilotCodec.DecodeRelocationFailed53,
+                out var generated, out error))
             return false;
-        if (!TryRelocationId(ref reader, out var id)
-            || !reader.TryU64(out var attempt) || attempt == 0
-            || !TryCoordinator(ref reader, out var coordinator)
-            || !TryTarget(ref reader, out var target)
-            || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TryU8(out var role) || !IsRole(role)
-            || !reader.TryU32(out var failureValue) || failureValue == 0)
-            return DecodeFailure(ref reader, out error);
-        record = new RelocationFailedRecord(id, attempt, coordinator, target,
-            relocationObject, role,
-            (ServiceWireConstants.FrameworkErrorCode)failureValue);
-        return End(ref reader, out error);
+        record = new RelocationFailedRecord(
+            FromGenerated(generated.Relocation),
+            generated.TargetAttemptGeneration,
+            FromGenerated(generated.Coordinator),
+            FromGenerated(generated.Target),
+            FromGenerated(generated.Object),
+            FromGeneratedRole(generated.SenderRole),
+            (ServiceWireConstants.FrameworkErrorCode)generated.FailureCode);
+        return true;
     }
 
     internal static bool TryDecodeRelocationData(ReadOnlySpan<byte> bytes,
         out RelocationDataRecord record, out DecodeError error)
     {
         record = null!;
-        if (!Begin(bytes, ServiceWireConstants.Command.RelocationData,
-                ServiceWireConstants.Flag.None, out var reader, out error))
-            return false;
-        if (!TryRelocationId(ref reader, out var id)
-            || !reader.TryU64(out var attempt) || attempt == 0
-            || !TryCoordinator(ref reader, out var coordinator)
-            || !reader.TryU8(out var role) || !IsRole(role)
-            || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TrySlice(reader.Remaining, out var frozenBytes))
-            return DecodeFailure(ref reader, out error);
-        if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
-                frozenBytes, out var frozenTruncated))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.RelocationData,
+                ServiceWirePilotCodec.DecodeRelocationData31,
+                out var generated, out error))
         {
-            if (frozenTruncated)
-                reader.MarkTruncated();
-            return DecodeFailure(ref reader, out error);
+            if (error == DecodeError.TrailingByte)
+                error = DecodeError.InvalidField;
+            return false;
         }
-        record = new RelocationDataRecord(id, attempt, coordinator, role,
-            relocationObject, new FrozenRecord(frozenBytes.ToArray()));
-        return End(ref reader, out error);
+        record = new RelocationDataRecord(
+            FromGenerated(generated.Relocation),
+            generated.TargetAttemptGeneration,
+            FromGenerated(generated.Coordinator),
+            FromGeneratedRole(generated.SenderRole),
+            FromGenerated(generated.Object),
+            new FrozenRecord(generated.Record));
+        return true;
     }
 
     internal static bool TryDecodeRelocationCutover(ReadOnlySpan<byte> bytes,
         out RelocationCutoverRecord record, out DecodeError error)
     {
         record = null!;
-        if (!Begin(bytes, ServiceWireConstants.Command.RelocationCutover,
-                ServiceWireConstants.Flag.None, out var reader, out error))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.RelocationCutover,
+                ServiceWirePilotCodec.DecodeRelocationCutover34,
+                out var generated, out error))
             return false;
-        if (!TryRelocationId(ref reader, out var id)
-            || !reader.TryU64(out var attempt) || attempt == 0
-            || !TryCoordinator(ref reader, out var coordinator)
-            || !reader.TryU8(out var role) || !IsRole(role)
-            || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TryU64(out var boundaryRecordCount)
-            || boundaryRecordCount > long.MaxValue
-            || !reader.TryU32(out var boundaryChecksum))
-            return DecodeFailure(ref reader, out error);
-        record = new RelocationCutoverRecord(id, attempt, coordinator, role,
-            relocationObject, boundaryRecordCount, boundaryChecksum);
-        return End(ref reader, out error);
+        record = new RelocationCutoverRecord(
+            FromGenerated(generated.Relocation),
+            generated.TargetAttemptGeneration,
+            FromGenerated(generated.Coordinator),
+            FromGeneratedRole(generated.SenderRole),
+            FromGenerated(generated.Object),
+            generated.BoundaryRecordCount,
+            generated.BoundaryChecksumCrc32c);
+        return true;
     }
 
     internal static bool TryDecodeRelocationState(ReadOnlySpan<byte> bytes,
         out RelocationStateRecord record, out DecodeError error)
     {
         record = null!;
-        if (!Begin(bytes, ServiceWireConstants.Command.RelocationState,
-                ServiceWireConstants.Flag.None, out var reader, out error))
+        if (!TryDecodeGenerated(bytes,
+                ServiceWireConstants.Command.RelocationState,
+                ServiceWirePilotCodec.DecodeRelocationState52,
+                out var generated, out error))
             return false;
-        if (!TryRelocationId(ref reader, out var id)
-            || !reader.TryU64(out var attempt) || attempt == 0
-            || !TryCoordinator(ref reader, out var coordinator)
-            || !reader.TryU8(out var role) || !IsRole(role)
-            || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TryU32(out var chunkOrdinal)
-            || !reader.TryU32(out var chunkLength)
-            || chunkLength > RelocationChunkBytesBound
-            || !reader.TrySlice(checked((int)chunkLength), out var chunkBytes))
-            return DecodeFailure(ref reader, out error);
-        record = new RelocationStateRecord(id, attempt, coordinator, role,
-            relocationObject, chunkOrdinal, chunkBytes.ToArray());
-        return End(ref reader, out error);
+        record = new RelocationStateRecord(
+            FromGenerated(generated.Relocation),
+            generated.TargetAttemptGeneration,
+            FromGenerated(generated.Coordinator),
+            FromGeneratedRole(generated.SenderRole),
+            FromGenerated(generated.Object),
+            generated.ChunkOrdinal,
+            generated.ChunkData);
+        return true;
     }
 
     private static void WriteRelocationId(WireWriter writer, RelocationWireId id)
@@ -368,30 +355,6 @@ internal static partial class ZLinkServiceWireCodec
             throw new ArgumentOutOfRangeException(nameof(id));
         writer.U64(id.High);
         writer.U64(id.Low);
-    }
-
-    private static void WriteTarget(WireWriter writer,
-        RelocationTargetRecord target)
-    {
-        ValidateTarget(target);
-        writer.Rid(target.NodeRid);
-        writer.U64(target.NodeGeneration);
-        writer.Text8(target.OwnerId);
-        writer.U64(target.OwnerLeaseGeneration);
-    }
-
-    private static bool TryTarget(ref WireReader reader,
-        out RelocationTargetRecord target)
-    {
-        target = null!;
-        if (!reader.TryRid(out var rid)
-            || !reader.TryU64(out var generation) || generation == 0
-            || !reader.TryText8(out var owner)
-            || string.IsNullOrEmpty(owner)
-            || !reader.TryU64(out var lease) || lease == 0)
-            return false;
-        target = new RelocationTargetRecord(rid, generation, owner, lease);
-        return true;
     }
 
     private static void WriteRelocationObject(WireWriter writer,
@@ -543,28 +506,6 @@ internal static partial class ZLinkServiceWireCodec
         return true;
     }
 
-    private static bool Begin(ReadOnlySpan<byte> bytes,
-        ServiceWireConstants.Command expectedCommand,
-        ServiceWireConstants.Flag expectedFlags, out WireReader reader,
-        out DecodeError error)
-    {
-        reader = default;
-        if (!TryDecodePrefix(bytes, out var command, out var flags, out error))
-            return false;
-        if (command != expectedCommand)
-        {
-            error = DecodeError.UnknownCommand;
-            return false;
-        }
-        if (flags != expectedFlags)
-        {
-            error = DecodeError.ForbiddenFlag;
-            return false;
-        }
-        reader = new WireReader(bytes[5..]);
-        return true;
-    }
-
     private static bool End(ref WireReader reader, out DecodeError error)
     {
         if (reader.Remaining != 0)
@@ -585,14 +526,6 @@ internal static partial class ZLinkServiceWireCodec
         return false;
     }
 
-    private static byte[] Finish(ServiceWireConstants.Command command,
-        ServiceWireConstants.Flag flags, WireWriter body)
-    {
-        var result = Prefix(command, flags, body.Count);
-        body.CopyTo(result.AsSpan(5));
-        return result;
-    }
-
     private static void ValidateRelocationCommon(RelocationWireId id,
         ulong attempt, RelocationCoordinatorFence coordinator)
     {
@@ -608,12 +541,6 @@ internal static partial class ZLinkServiceWireCodec
         if (target.NodeRid.IsEmpty || target.NodeGeneration == 0
             || target.OwnerLeaseGeneration == 0)
             throw new ArgumentOutOfRangeException(nameof(target));
-    }
-
-    private static void ValidateRole(byte role)
-    {
-        if (!IsRole(role))
-            throw new ArgumentOutOfRangeException(nameof(role));
     }
 
     private static bool IsRole(byte role) => role is >= 1 and <= 3;

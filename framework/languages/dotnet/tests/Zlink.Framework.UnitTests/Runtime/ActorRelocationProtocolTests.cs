@@ -802,7 +802,15 @@ public sealed class ActorRelocationProtocolTests
                 TargetNodeGeneration: 11,
                 TargetSpotGeneration: 5,
                 TargetAuthorityOwnerGeneration: 4,
-                TargetSpotAuthorityOwnerGeneration: 2),
+                TargetSpotAuthorityOwnerGeneration: 2,
+                RelocationCoordinatorOwnerId: "source-owner",
+                RelocationCoordinatorLeaseGeneration: 3,
+                RelocationCoordinatorNodeRid:
+                    RoutingId.From("source-node").ToBytes().ToArray(),
+                RelocationCoordinatorNodeGeneration: 7,
+                RelocationCoordinatorExpectedAuthorityStoreVersion: "v1",
+                ActorNodeGeneration: 7,
+                ExpectedOwnerLeaseGeneration: 3),
             "target-spot",
             targetRid,
             11,
@@ -844,7 +852,15 @@ public sealed class ActorRelocationProtocolTests
             TargetNodeGeneration: 11,
             TargetSpotGeneration: 5,
             TargetAuthorityOwnerGeneration: 4,
-            TargetSpotAuthorityOwnerGeneration: 2);
+            TargetSpotAuthorityOwnerGeneration: 2,
+            RelocationCoordinatorOwnerId: "source-owner",
+            RelocationCoordinatorLeaseGeneration: 3,
+            RelocationCoordinatorNodeRid:
+                RoutingId.From("source-node").ToBytes().ToArray(),
+            RelocationCoordinatorNodeGeneration: 7,
+            RelocationCoordinatorExpectedAuthorityStoreVersion: "v1",
+            ActorNodeGeneration: 7,
+            ExpectedOwnerLeaseGeneration: 3);
         var recovery = new ZLinkActorRelocationRecoveryRecord(
             request,
             "target-spot",

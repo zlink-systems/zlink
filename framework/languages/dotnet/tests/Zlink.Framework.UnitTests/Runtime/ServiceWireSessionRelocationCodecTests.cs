@@ -81,11 +81,12 @@ public sealed class ServiceWireSessionRelocationCodecTests
     }
 
     [Fact]
-    public void Session_relocation_roles_follow_the_source_target_union()
+    public void Session_relocation_roles_follow_the_exact_source_target_contract()
     {
         var seal = Seal();
-        _ = ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
-            seal with { SenderRole = 3 });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
+                seal with { SenderRole = 3 }));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ZLinkServiceWireCodec.EncodeSessionRelocationSeal(
                 seal with { SenderRole = 2 }));
@@ -94,8 +95,9 @@ public sealed class ServiceWireSessionRelocationCodecTests
             2,
             ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
                 11, 12, RoutingId.From("target"), 4));
-        _ = ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
-            commit with { SenderRole = 3 });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
+                commit with { SenderRole = 3 }));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
                 commit with { SenderRole = 1 }));
@@ -103,8 +105,9 @@ public sealed class ServiceWireSessionRelocationCodecTests
         var abort = Route(
             1,
             ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(11));
-        _ = ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
-            abort with { SenderRole = 3 });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
+                abort with { SenderRole = 3 }));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ZLinkServiceWireCodec.EncodeSessionRelocationRoute(
                 abort with { SenderRole = 2 }));

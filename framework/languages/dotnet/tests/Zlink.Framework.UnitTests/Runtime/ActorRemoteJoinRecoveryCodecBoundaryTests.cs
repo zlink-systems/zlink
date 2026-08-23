@@ -105,8 +105,10 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     {
         var encoded = ZLinkActorRemoteJoinRecoveryCodec.Encode(
             CreateRecovery([1, 2, 3], [4, 5, 6]));
+        var zljrOffset = encoded.AsSpan().IndexOf("ZLJR"u8);
+        Assert.True(zljrOffset >= 0);
         BinaryPrimitives.WriteUInt32BigEndian(
-            encoded.AsSpan(9, sizeof(uint)),
+            encoded.AsSpan(zljrOffset + 9, sizeof(uint)),
             MaximumMessageBytes + 1U);
 
         Assert.Throws<InvalidDataException>(
@@ -216,7 +218,14 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
                 TargetNodeGeneration: 11,
                 TargetSpotGeneration: 5,
                 TargetAuthorityOwnerGeneration: 4,
-                TargetSpotAuthorityOwnerGeneration: 2),
+                TargetSpotAuthorityOwnerGeneration: 2,
+                RelocationCoordinatorOwnerId: "source-owner",
+                RelocationCoordinatorLeaseGeneration: 17,
+                RelocationCoordinatorNodeRid: sourceRid,
+                RelocationCoordinatorNodeGeneration: 13,
+                RelocationCoordinatorExpectedAuthorityStoreVersion: "store-v1",
+                ActorNodeGeneration: 13,
+                ExpectedOwnerLeaseGeneration: 17),
             "target-spot",
             targetRid,
             11,
