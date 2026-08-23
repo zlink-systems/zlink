@@ -248,11 +248,11 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
 - [~] **canon-A1-real-wire-admission-integration-test**: happy path는 12셀 매트릭스가 실경로로
   커버(3b). 잔여 = 음성 케이스 unit(Authority-row fence mismatch·TypeMismatch·malformed→
   ProtocolError·mailbox-full). sol #10(LOW/비차단) 유지.
-- [ ] **단계 2 — canonical 수신·발신 활성화**
+- [x] **단계 2 — canonical 수신·발신 활성화** (2a/2b/2c 전부 완료)
   - [x] 2a [A3] .NET canonical 28 발신 `dotnet단일` — `b67385822e` (포맷만·canonical reply tail 소비; 회귀 해소·게이트 1809/3·cross-harness 통과; #6 app-reply는 3b서)
   - [x] 2b [A2] C++ 수신자 완성(H-12) + chunk limit(H-14) `cpp단일` — `5f22587b0b` (포맷만·thin transport·Store fence .NET parity·H-14 연결·legacy 판별; sol 3건 해소, ctest green, relocation 로직 무변경)
   - [x] 2c [A4] C++ 발신 — `cpp단일` `7ca95170ac` (production canonical 활성화; continuation bridge·off-wire handoff id .NET byte-parity·app payload·generation equality·terminal 보존·allow-list; sol 구현+리뷰, 6/6 검증·샘플 통과·CAS 무변경. deferred: 수신자 app-reply 전달=3b)
-- [ ] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거**
+- [x] **단계 3 — attempt-lifecycle · 매트릭스 · dialect 제거** (3a/3b/3c 전부 완료)
   - [x] 3a [A5] attempt-lifecycle / bound Session(S4d·S4d-b) `혼합` — **완료(2026-08-22)**: Property 2(bound
     Session) canonical parity PASS + Property 1(multi-attempt) **실제 ingress 실증으로 판정 완료**
     (`327c2b86c1` probe + sol 정합 분석): later-attempt-wins는 admission registry 계층서 동작,
