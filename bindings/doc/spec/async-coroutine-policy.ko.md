@@ -154,9 +154,12 @@ framework나 framework 언어 wrapper가 소유한다.
 - C++ bindings는 managed routed send/request의 `async()`로 move-only
   `async_result_t<T>`를 제공하고 사용자와 framework coroutine은 이를 직접
   `co_await`한다.
-- standalone coroutine은 binding completion thread에서 재개될 수 있다. Framework
-  `task_t` promise는 optional continuation scheduler hook으로 현재 serial turn과 ambient
-  context만 handoff한다. admission retry queue는 binding이 계속 소유한다.
+- standalone coroutine은 완료가 발생한 컨텍스트(Core 이벤트 콜백 등)에서
+  재개될 수 있다. 이는 바인딩이 완료·재개를 위한 자체 스레드, dispatcher,
+  scheduler를 생성해도 된다는 뜻이 아니다 — 실행 자원 소유는 framework의
+  몫이다. Framework `task_t` promise는 optional continuation scheduler hook으로
+  현재 serial turn과 ambient context만 handoff한다. admission retry queue의
+  상태는 binding이 계속 소유하되, 재시도 실행은 Core 이벤트 콜백에서 구동한다.
 - bindings public API에 coroutine 전용 `request_async`, `request_coroutine`, framework
   executor 인자, framework dispatcher 인자를 추가하지 않는다.
 

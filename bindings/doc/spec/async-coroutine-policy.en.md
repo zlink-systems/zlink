@@ -154,7 +154,7 @@ the framework's language wrapper.
 - C++ bindings provides move-only `async_result_t<T>` through managed routed
   send/request `async()`, and user and framework coroutines `co_await` it
   directly.
-- A standalone coroutine may resume on the binding completion thread. The Framework `task_t` promise uses an optional continuation-scheduler hook to hand off only the current serial turn and ambient context. Admission retry remains binding-owned.
+- A standalone coroutine may resume in the context where its completion occurred (such as a Core event callback). This does not permit the binding to create its own threads, dispatchers, or schedulers for completion or resumption — execution resources belong to the framework. The Framework `task_t` promise uses an optional continuation-scheduler hook to hand off only the current serial turn and ambient context. Admission retry queue state remains binding-owned, but retry execution is driven from Core event callbacks.
 - The bindings public API does not add a coroutine-only `request_async` or `request_coroutine`, a framework executor argument, or a framework dispatcher argument.
 
 ### Other language frameworks

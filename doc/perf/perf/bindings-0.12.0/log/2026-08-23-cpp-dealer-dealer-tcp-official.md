@@ -255,3 +255,174 @@ binding 자체의 기존 특성이다.
 이번 세션에서 코드는 수정하지 않았다(측정만 수행). commit·push도 수행하지
 않았다. working tree는 이전 `PAIR`/`PUBSUB` 공식 측정 시점과 동일한
 상태(HEAD `8a5a0361da`, clean)를 유지했다.
+
+---
+
+## 재측정 (수정 후) — 2026-08-23
+
+> 대상: 위 §1~§7의 첫 공식 측정(`19.02%`)은 **무효**로 확정됐다 —
+> `routed_admission_state.cpp:145 enqueue()`가 DEALER/ROUTER 비동기 send의
+> 물리 admission을 백프레셔가 없는 정상 케이스에도 항상 reactor 스레드에
+> 위임해 메시지마다 스레드 왕복 2회(admission reactor + continuation
+> dispatcher)가 직렬화되던 바인딩 내부 결함이 원인이었다(진단
+> `log/2026-08-23-cpp-dealer-dealer-ceiling.md`). D1 caller-thread fast
+> path 수정(첫 operation이 target의 유일한 pending work일 때만 호출
+> 스레드에서 `pump()`를 직접 실행)이 HEAD `dbad74ddd2`에 반영된 뒤,
+> 같은 절차(§7.1 smoke → §7.2 전체 크기 `--runs 3`)로 공식 release
+> runtime 재측정을 수행했다. 코드는 이번 세션에서 수정하지 않았고
+> (재측정 전 이미 반영된 HEAD 기준), commit·push도 하지 않았다.
+
+### R.1 환경 manifest
+
+| 항목 | 값 |
+|------|-----|
+| 작업 브랜치 / commit | `codex/bindings-0.12.0-performance` / `dbad74ddd2`(HEAD, D1 caller-thread fast path 수정 포함) |
+| working tree | 커밋 없음, 수정 없음(`git status --short` clean) |
+| Core runtime 소스 | release (`--core-version 0.12.0`) |
+| Core provenance source revision | `f99703c2190b0f6c670be49f67315d904886c742`(HEAD와 일치, `dirty: false`, C report META로 확인) |
+| host 상태(재측정 시작) | `load average 0.07/0.71/0.81`, memory 10Gi free — 조용한 host |
+| session tag | `bindings-0.12.0-official-dd2-20260823` |
+
+### R.2 실행한 명령
+
+```bash
+# smoke (§7.1)
+PERF_FAIL_FAST=1 bash bindings/c/perf/run_benchmarks.sh \
+  --core-version 0.12.0 \
+  --pattern DEALER_DEALER --transports tcp --msg-sizes 64 --duration 1 --runs 1 \
+  --results-tag bindings-0.12.0-official-dd2-20260823
+
+PERF_FAIL_FAST=1 bash bindings/cpp/perf/run_binding_single.sh \
+  --core-version 0.12.0 \
+  --pattern DEALER_DEALER --transports tcp --msg-sizes 64 --duration 1 --runs 1 \
+  --results-tag bindings-0.12.0-official-dd2-20260823
+
+# 전체 크기 (§7.2 후보 판정 단계, --runs 3)
+PERF_FAIL_FAST=1 bash bindings/c/perf/run_benchmarks.sh \
+  --core-version 0.12.0 \
+  --pattern DEALER_DEALER --transports tcp \
+  --msg-sizes 64,256,1024,65536,131072,262144 --runs 3 \
+  --results-tag bindings-0.12.0-official-dd2-20260823
+
+PERF_FAIL_FAST=1 bash bindings/cpp/perf/run_binding_single.sh \
+  --core-version 0.12.0 \
+  --pattern DEALER_DEALER --transports tcp \
+  --msg-sizes 64,256,1024,65536,131072,262144 --runs 3 \
+  --results-tag bindings-0.12.0-official-dd2-20260823
+```
+
+C를 먼저 완주(`status: complete`)시킨 뒤 바로 이어서 C++를 같은 조건·같은
+session tag로 실행했다(§7.3). 다른 perf 프로세스는 동시에 실행하지
+않았다.
+
+**smoke 결과** (둘 다 `status: complete`):
+
+| 대상 | 결과 파일 | status | throughput | latency mean |
+|------|-----------|--------|-----------:|--------------:|
+| C | `perf_c_single_linux_20260823_160132_bindings-0.12.0-official-dd2-20260823.txt` | complete | 2,586,714.000 msg/s | 51.139 ms |
+| C++ | `perf_cpp_single_linux_20260823_160137_bindings-0.12.0-official-dd2-20260823.txt` | complete | 565,597.000 msg/s | 0.107 ms |
+
+64B smoke throughput 비율 ≈ **21.87%**(첫 회 결함 상태 0.38% 대비 대폭
+회복) — smoke 판정: **통과**. C report META로 release runtime 확인
+(`META,core_source,release` / `META,core_revision,f99703c219…` /
+`META,core_dirty,0` / `META,core_release_tag,core/v0.12.0`).
+
+**전체 크기 결과** (둘 다 `status: complete`, 30/30):
+
+| 대상 | 결과 파일 | status |
+|------|-----------|--------|
+| C | `perf_c_single_linux_20260823_160218_bindings-0.12.0-official-dd2-20260823.txt` | complete |
+| C++ | `perf_cpp_single_linux_20260823_160354_bindings-0.12.0-official-dd2-20260823.txt` | complete |
+
+Effective Options(`lang` 제외 전체)가 두 report에서 완전히 일치함을
+확인했다(`diff` exit 0).
+
+### R.3 크기별 median 값 (report `RESULT` median)
+
+#### C (release core, `DEALER_DEALER`/`tcp`)
+
+| Size | median throughput (msg/s) | median latency mean (ms) |
+|-----:|----------------------------:|----------------------------:|
+| 64B | 2,672,572.600 | 51.642 |
+| 256B | 1,998,150.200 | 19.142 |
+| 1024B | 1,154,762.200 | 8.548 |
+| 65536B | 45,844.400 | 3.367 |
+| 131072B | 27,498.800 | 2.828 |
+| 262144B | 16,131.000 | 2.431 |
+
+#### C++ (release core, D1 caller-thread fast path 반영, `DEALER_DEALER`/`tcp`)
+
+| Size | median throughput (msg/s) | median latency mean (ms) |
+|-----:|----------------------------:|----------------------------:|
+| 64B | 530,236.000 | 0.127 |
+| 256B | 515,505.600 | 35.114 |
+| 1024B | 474,704.000 | 12.125 |
+| 65536B | 32,899.600 | 4.672 |
+| 131072B | 22,028.000 | 3.494 |
+| 262144B | 13,376.400 | 2.764 |
+
+### R.4 비율과 aggregate mean
+
+| Size | C median throughput | C++ median throughput | throughput 비율(C++/C) | C median latency | C++ median latency | latency 비율(C++/C) |
+|-----:|---------------------:|------------------------:|--------------------------:|-------------------:|----------------------:|------------------------:|
+| 64B | 2,672,572.600 | 530,236.000 | **19.84%** | 51.642 ms | 0.127 ms | **0.0025배** |
+| 256B | 1,998,150.200 | 515,505.600 | **25.80%** | 19.142 ms | 35.114 ms | **1.8344배** |
+| 1024B | 1,154,762.200 | 474,704.000 | **41.11%** | 8.548 ms | 12.125 ms | **1.4185배** |
+| 65536B | 45,844.400 | 32,899.600 | **71.76%** | 3.367 ms | 4.672 ms | **1.3876배** |
+| 131072B | 27,498.800 | 22,028.000 | **80.11%** | 2.828 ms | 3.494 ms | **1.2355배** |
+| 262144B | 16,131.000 | 13,376.400 | **82.92%** | 2.431 ms | 2.764 ms | **1.1370배** |
+
+- throughput ratio aggregate mean = **53.59%**
+- latency ratio aggregate mean = **1.169배**(상한 2.0배 이내)
+
+### R.5 판정
+
+`DEALER_DEALER`는 계획서 §2.1의 "단순 one-way" 그룹에 속한다. C++ 목표는
+최소 기준 85%(개별 크기) / aggregate mean 목표 95%(완화 90%), latency
+상한은 C 대비 최대 2.0배다.
+
+**Throughput**: aggregate mean **53.59%**는 기본 목표 95%와 완화 목표
+90%를 크게 밑돈다. 개별 최소 기준(85%)도 6개 크기 전부 미달이다 —
+가장 높은 262144B조차 82.92%로 85%에 못 미친다.
+
+**Latency**: aggregate mean **1.169배**는 상한 2.0배 이내로 통과. 개별
+크기도 모두 2.0배 이내(최댓값 256B 1.8344배)다. 첫 회(무효)에서 latency가
+0.031배로 C보다 훨씬 낮았던 부작용(요청 상한에 걸려 in-flight가 거의
+없던 현상)은 사라졌다 — D1 수정으로 실제 파이프라이닝이 회복되면서
+latency 비율이 다른 단순 one-way pattern(`PAIR` 1.201배, `PUBSUB`
+1.095배)과 비슷한 범위로 돌아왔다.
+
+**65536B dip 여부**: throughput 비율이 64B(19.84%) → 256B(25.80%) →
+1024B(41.11%) → 65536B(71.76%) → 131072B(80.11%) → 262144B(82.92%)로
+**단조 증가**한다. `PAIR`/`PUBSUB`에서 관측된 65536B만의 국소적 하락과는
+반대로, 여기서는 65536B가 이웃 크기보다 낮지 않고 증가 추세의 중간
+지점일 뿐이다(로컬 core 탐색 측정 `log/2026-08-23-cpp-dealer-dealer-ceiling.md`
+§5.3의 65536B ×3.1, C 대비 71.18%와도 부합). 따라서 `/usr/bin/time -v`
+환경-지배 재확인 절차(§6)는 이번 셀에도 적용하지 않는다 — dip 패턴 자체가
+관측되지 않았다.
+
+**종합 판정: 미달(throughput aggregate mean 53.59%)**. D1 수정으로
+64B~262144B 전 구간에서 대폭 개선됐지만(첫 회 대비 최대 +약 150배,
+262144B는 55.77%→82.92%로 상대 개선), 여전히 §8의 통과 조건(aggregate
+mean이 pattern 그룹 목표를 충족)을 만족하지 못한다. `보류`로 기록하지
+않는 이유는 §5(위 첫 회 판정)와 동일하다 — `DEALER_DEALER` 전용 자체
+개선 pass와 Sol 리뷰 pass가 아직 수행되지 않았으므로 계획서 §7.4 순서상
+`보류` 전환 조건을 충족하지 못한다.
+
+### R.6 다음 조치
+
+1. `DEALER_DEALER`/`tcp`에 대한 pattern 전용 자체 개선 pass(§7.4)를
+   수행한다 — D1로 구조적 결함(스레드 왕복 상한)은 제거됐으므로, 이제
+   `PAIR`/`PUBSUB`에서 다뤘던 것과 같은 종류의 hot path 미세 최적화
+   후보(builder/pooled state, recv guard 등)를 조사 대상으로 삼는다.
+2. 자체 pass 뒤에도 미달이면 Sol에 read-only review를 요청하고, 계약을
+   보존하는 후보가 있으면 두 번째 개선 pass를 수행해 after를 다시 공식
+   release runtime으로 측정한다.
+3. 두 pass를 모두 마쳤는데도 계약 보존 후보가 없으면 §8 규칙에 따라
+   `보류`로 pattern 결과를 확정한다.
+
+### R.7 코드·commit 상태
+
+이번 재측정 세션에서 코드는 수정하지 않았다(측정만 수행, D1 수정은
+이미 재측정 시작 전 HEAD `dbad74ddd2`에 반영돼 있었다). commit·push도
+수행하지 않았다. working tree는 재측정 시작·종료 시점 모두 clean이었다.

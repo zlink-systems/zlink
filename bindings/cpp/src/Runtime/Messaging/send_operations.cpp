@@ -18,7 +18,7 @@ namespace zlink
 namespace
 {
 
-struct managed_send_attempt_t
+struct managed_send_attempt_t final : detail::routed_admission_request_t
 {
     void *socket = nullptr;
     std::shared_ptr<detail::socket_callback_state_t> callbacks;
@@ -26,8 +26,12 @@ struct managed_send_attempt_t
     bool dealer = false;
     bool router = false;
     std::vector<message_t> parts;
+    std::shared_ptr<detail::async_operation_state_t<void>> completion;
+    std::chrono::steady_clock::time_point started{};
+    std::chrono::milliseconds requested_timeout{};
+    bool timeout_explicit = false;
 
-    detail::routed_attempt_result_t attempt ()
+    detail::routed_attempt_result_t attempt () override
     {
         errno = 0;
         std::unique_lock<std::mutex> attempt_lock (
@@ -60,6 +64,34 @@ struct managed_send_attempt_t
         if (raw_rc == -1)
             return {submit_result_t::internal_error, result_errno};
         return {static_cast<submit_result_t> (raw_rc), result_errno};
+    }
+
+    void accepted () override
+    {
+        parts.clear ();
+        completion->complete ();
+    }
+
+    void terminal (submit_result_t result_, int error_) override
+    {
+        parts.clear ();
+        completion->fail (
+          std::make_exception_ptr (submit_error_t (result_, error_)));
+    }
+
+    // The send timeout only decides how long a backpressured send waits, so
+    // it is read from the socket when the send actually has to wait. The
+    // deadline stays anchored at the instant the operation started.
+    std::chrono::steady_clock::time_point deadline () override
+    {
+        const auto configured =
+          timeout_explicit ? requested_timeout.count ()
+                           : std::chrono::milliseconds::rep (
+                               detail::get_typed_option_value<int> (
+                                 socket, detail::socket_option_id::sndtimeo));
+        if (configured < 0)
+            return std::chrono::steady_clock::time_point::max ();
+        return started + std::chrono::milliseconds (configured);
     }
 };
 
@@ -140,16 +172,6 @@ managed_send_start_t start_managed_send (
         target = detail::select_routed_submit_target (
           state_.raw.socket, router ? router_rid : nullptr);
     }
-    const int socket_timeout = detail::get_typed_option_value<int> (
-      state_.raw.socket, detail::socket_option_id::sndtimeo);
-    const auto configured_timeout = state_.timeout_explicit
-                                      ? state_.timeout.count ()
-                                      : socket_timeout;
-    const auto deadline = configured_timeout < 0
-                            ? std::chrono::steady_clock::time_point::max ()
-                            : operation_started
-                                + std::chrono::milliseconds (configured_timeout);
-
     std::shared_ptr<managed_send_attempt_t> operation =
       std::make_shared<managed_send_attempt_t> ();
     operation->socket = state_.raw.socket;
@@ -157,23 +179,13 @@ managed_send_start_t start_managed_send (
     operation->target = target;
     operation->dealer = dealer;
     operation->router = router;
+    operation->completion = completion_;
+    operation->started = operation_started;
+    operation->requested_timeout = state_.timeout;
+    operation->timeout_explicit = state_.timeout_explicit;
     operation->parts = detail::take_send_parts (state_);
     try {
-        const detail::routed_admission_ticket_t ticket =
-          detail::enqueue_routed_admission (
-            admission, target,
-            [operation] { return operation->attempt (); },
-            [operation, completion_] {
-                operation->parts.clear ();
-                completion_->complete ();
-            },
-            [operation, completion_] (submit_result_t result_, int error_) {
-                operation->parts.clear ();
-                completion_->fail (std::make_exception_ptr (
-                  submit_error_t (result_, error_)));
-            },
-            deadline, configured_timeout == 0);
-        return {ticket};
+        return {detail::enqueue_routed_admission (admission, target, operation)};
     }
     catch (...) {
         detail::restore_single_send_part_to_source (state_, operation->parts);
@@ -392,7 +404,10 @@ async_result_t<void> send_submit_operation_t::async () &&
     if (state.kind == detail::operation_kind_t::raw_send
         || state.kind == detail::operation_kind_t::raw_routed_send) {
         const managed_send_start_t start = start_managed_send (state, completion);
-        completion->set_cancel ([ticket = start.ticket] { return ticket.cancel (); });
+        // A send Core already accepted has no pending record to cancel.
+        if (start.ticket.valid ())
+            completion->set_cancel (
+              [ticket = start.ticket] { return ticket.cancel (); });
     } else if (state.kind == detail::operation_kind_t::raw_publish) {
         const managed_publish_start_t start =
           start_managed_publish (state, completion);
@@ -413,7 +428,9 @@ async_result_t<void> routed_send_submit_operation_t::async () &&
     const auto completion =
       std::make_shared<detail::async_operation_state_t<void>> ();
     const managed_send_start_t start = start_managed_send (state, completion);
-    completion->set_cancel ([ticket = start.ticket] { return ticket.cancel (); });
+    // A send Core already accepted has no pending record to cancel.
+    if (start.ticket.valid ())
+        completion->set_cancel ([ticket = start.ticket] { return ticket.cancel (); });
     return detail::async_result_access_t::make<void> (completion);
 }
 

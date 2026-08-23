@@ -147,23 +147,23 @@ void managed_request_trampoline (zlink_request_result_t result_,
     (*bridge_ref)->finish (result_, parts_, part_count_);
 }
 
-struct managed_request_attempt_t
+struct managed_request_attempt_t final : detail::routed_admission_request_t
 {
     void *socket = nullptr;
     std::shared_ptr<detail::socket_callback_state_t> callbacks;
     zlink_routed_submit_target_t target{};
     bool dealer = false;
-    std::chrono::steady_clock::time_point deadline;
+    std::chrono::steady_clock::time_point deadline_at;
     std::vector<message_t> parts;
     std::shared_ptr<detail::async_operation_state_t<std::vector<message_t>>> completion;
 
-    detail::routed_attempt_result_t attempt ()
+    detail::routed_attempt_result_t attempt () override
     {
         const auto now = std::chrono::steady_clock::now ();
-        if (now >= deadline)
+        if (now >= deadline_at)
             return {submit_result_t::backpressured, ETIMEDOUT};
         const auto remaining =
-          std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
+          std::chrono::duration_cast<std::chrono::milliseconds> (deadline_at - now);
         const uint32_t timeout = detail::native_timeout_ms (
           remaining.count () > 0 ? remaining : std::chrono::milliseconds (1));
 
@@ -217,6 +217,29 @@ struct managed_request_attempt_t
         if (raw_rc == -1)
             return {submit_result_t::internal_error, result_errno};
         return {static_cast<submit_result_t> (raw_rc), result_errno};
+    }
+
+    // The reply is delivered by the armed bridge, so admission only has to
+    // release the request parts once Core owns them.
+    void accepted () override { parts.clear (); }
+
+    void terminal (submit_result_t result_, int error_) override
+    {
+        parts.clear ();
+        const request_result_t request_result =
+          request_result_from_submit (result_, error_);
+        if (error_ == ETIMEDOUT || error_ == ECANCELED) {
+            completion->fail (std::make_exception_ptr (
+              request_error_t (request_result, error_)));
+        } else {
+            completion->fail (
+              std::make_exception_ptr (submit_error_t (result_, error_)));
+        }
+    }
+
+    std::chrono::steady_clock::time_point deadline () override
+    {
+        return deadline_at;
     }
 };
 
@@ -279,29 +302,11 @@ managed_request_start_t start_managed_request (
     operation->callbacks = callbacks;
     operation->target = target;
     operation->dealer = dealer;
-    operation->deadline = deadline;
+    operation->deadline_at = deadline;
     operation->completion = completion_;
     operation->parts = detail::take_send_parts (state_);
     try {
-        const detail::routed_admission_ticket_t ticket =
-          detail::enqueue_routed_admission (
-            admission, target,
-            [operation] { return operation->attempt (); },
-            [operation] { operation->parts.clear (); },
-            [operation, completion_] (submit_result_t result_, int error_) {
-                operation->parts.clear ();
-                const request_result_t request_result =
-                  request_result_from_submit (result_, error_);
-                if (error_ == ETIMEDOUT || error_ == ECANCELED) {
-                    completion_->fail (std::make_exception_ptr (
-                      request_error_t (request_result, error_)));
-                } else {
-                    completion_->fail (std::make_exception_ptr (
-                      submit_error_t (result_, error_)));
-                }
-            },
-            deadline);
-        return {ticket};
+        return {detail::enqueue_routed_admission (admission, target, operation)};
     }
     catch (...) {
         detail::restore_single_send_part_to_source (state_, operation->parts);
@@ -332,7 +337,10 @@ submit_raw_request_awaitable (detail::operation_state_t &state_)
       detail::async_operation_state_t<std::vector<message_t>>> ();
     const managed_request_start_t start =
       start_managed_request (state_, completion);
-    completion->set_cancel ([ticket = start.ticket] { return ticket.cancel (); });
+    // A request Core already accepted has no pending admission record left to
+    // cancel; its reply is owned by the armed bridge.
+    if (start.ticket.valid ())
+        completion->set_cancel ([ticket = start.ticket] { return ticket.cancel (); });
     return detail::async_result_access_t::make<std::vector<message_t>> (
       completion);
 }

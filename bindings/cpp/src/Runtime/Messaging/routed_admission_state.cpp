@@ -14,7 +14,6 @@
 #include <map>
 #include <mutex>
 #include <queue>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -62,6 +61,37 @@ submit_result_t terminal_submit_result (int error_) noexcept
     return submit_result_t::not_connected;
 }
 
+// Everything the admission state tracks per routed target. One record replaces
+// the parallel queue/wake-version/ready-set maps the state used to key by the
+// same target, so admitting a send touches one node instead of four.
+struct routed_target_state_t
+{
+    std::deque<uint64_t> queue;
+    uint64_t wake_version = 0;
+    // Terminal events are counted, not just applied to registered records, so
+    // a caller-thread attempt that runs without a pending record can still see
+    // the terminal it raced.
+    uint64_t terminal_epoch = 0;
+    int terminal_error = 0;
+    size_t inline_attempts = 0;
+    bool ready_marked = false;
+
+    bool idle () const noexcept
+    {
+        return queue.empty () && inline_attempts == 0 && !ready_marked;
+    }
+};
+
+using routed_targets_t = std::map<routed_target_key_t, routed_target_state_t>;
+using routed_target_iterator_t = routed_targets_t::iterator;
+
+// Target records outlive their work so a steady send stream reuses one node
+// and its queue storage. Only a socket that churns through more distinct
+// transport pairs than this keeps idle records around long enough to prune.
+constexpr size_t k_retained_target_records = 32;
+
+
+
 struct pending_operation_t
 {
     enum class state_t
@@ -73,18 +103,14 @@ struct pending_operation_t
     };
 
     uint64_t id = 0;
-    zlink_routed_submit_target_t target{};
-    routed_target_key_t key;
+    routed_target_iterator_t target{};
     state_t state = state_t::ready;
     uint64_t observed_wake = 0;
     std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max ();
-    routed_attempt_fn_t attempt;
-    routed_accepted_fn_t accepted;
-    routed_terminal_fn_t terminal;
+    std::shared_ptr<routed_admission_request_t> request;
     bool forced_terminal = false;
     submit_result_t forced_result = submit_result_t::internal_error;
     int forced_error = 0;
-    bool attempt_before_expiry = false;
     bool deadline_registered = false;
 };
 
@@ -142,64 +168,55 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
   public:
     routed_admission_state_t () = default;
 
+    // Admits one routed request.
+    //
+    // A request whose target has nothing queued ahead of it is attempted on
+    // the caller thread before any pending record exists. Core accepts that
+    // attempt in the uncongested case, so the request reaches its terminal
+    // without ever allocating a pending record, a deadline entry or a queue
+    // slot; only a request that has to wait is materialised.
     routed_admission_ticket_t enqueue (const zlink_routed_submit_target_t &target_,
-                                       routed_attempt_fn_t attempt_,
-                                       routed_accepted_fn_t accepted_,
-                                       routed_terminal_fn_t terminal_,
-                                       std::chrono::steady_clock::time_point deadline_,
-                                       bool attempt_before_expiry_)
+                                       std::shared_ptr<routed_admission_request_t> request_)
     {
-        std::shared_ptr<pending_operation_t> operation = std::make_shared<pending_operation_t> ();
-        operation->target = target_;
-        operation->key = target_key (target_);
-        operation->deadline = deadline_;
-        operation->attempt_before_expiry = attempt_before_expiry_;
-        operation->attempt = std::move (attempt_);
-        operation->accepted = std::move (accepted_);
-        operation->terminal = std::move (terminal_);
+        if (!request_)
+            throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
-        uint64_t inline_generation = 0;
-        bool run_inline = false;
+        routed_target_iterator_t target;
+        uint64_t observed_wake = 0;
+        uint64_t observed_terminal = 0;
+        bool admit_inline = false;
+        std::shared_ptr<pending_operation_t> queued;
         {
             std::lock_guard<std::mutex> lock (_mutex);
             if (_closed)
                 throw submit_error_t (submit_result_t::terminated, ETERM);
-            operation->id = ++_next_id;
-            _operations.emplace (operation->id, operation);
-            std::deque<uint64_t> &target_queue = _pending_by_target[operation->key];
-            const bool first_for_target = target_queue.empty ();
-            operation->state = first_for_target ? pending_operation_t::state_t::ready
-                                                : pending_operation_t::state_t::queued;
-            if (!first_for_target)
-                operation->attempt_before_expiry = false;
-            target_queue.push_back (operation->id);
-            if (operation->state == pending_operation_t::state_t::ready)
-                mark_target_ready_locked (operation->key);
-            if (!operation->attempt_before_expiry)
-                register_deadline_locked (*operation);
-            // Physical admission fast path. Nothing is queued ahead of this
-            // operation for its target, so running the first attempt on the
-            // caller thread cannot reorder that target's FIFO stream. The
-            // attempt itself is a non-blocking Core submit, so the caller is
-            // never occupied while HWM credit is unavailable: a backpressured
-            // attempt just parks the operation in the waiting state exactly as
-            // the reactor would. When Core accepts immediately the operation
-            // reaches its terminal before the awaiter can suspend, which turns
-            // the common send into a suspension-free await instead of a
-            // reactor-thread hop plus a continuation-dispatcher hop per
-            // message.
-            if (operation->state == pending_operation_t::state_t::ready) {
-                _scheduled = true;
-                _scheduled_due = std::chrono::steady_clock::now ();
-                inline_generation = ++_schedule_generation;
-                run_inline = true;
+            target = ensure_target_locked (target_);
+            if (target->second.queue.empty () && target->second.inline_attempts == 0) {
+                // Reserve the target for the caller thread. A concurrent
+                // enqueue for the same target sees the reservation and queues
+                // behind it, so the target's FIFO stream is preserved.
+                ++target->second.inline_attempts;
+                ++_active_pumps;
+                observed_wake = target->second.wake_version;
+                observed_terminal = target->second.terminal_epoch;
+                admit_inline = true;
             } else {
+                queued = std::make_shared<pending_operation_t> ();
+                queued->id = ++_next_id;
+                queued->target = target;
+                queued->request = std::move (request_);
+                queued->state = pending_operation_t::state_t::queued;
+                target->second.queue.push_back (queued->id);
+                _operations.emplace (queued->id, queued);
                 refresh_schedule_locked ();
             }
         }
-        if (run_inline)
-            pump (inline_generation);
-        return routed_admission_ticket_t (shared_from_this (), operation->id);
+        if (!admit_inline) {
+            arm_deadline (queued);
+            return routed_admission_ticket_t (weak_from_this (), queued->id);
+        }
+        return admit_on_caller_thread (target, std::move (request_), observed_wake,
+                                       observed_terminal);
     }
 
     bool cancel (uint64_t id_) noexcept
@@ -220,78 +237,56 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
             remove_operation_locked (operation);
             refresh_schedule_locked ();
         }
-        invoke_terminal (operation, submit_result_t::terminated, ECANCELED);
+        invoke_terminal (*operation->request, submit_result_t::terminated, ECANCELED);
         return true;
     }
 
     void on_event (const zlink_routed_send_ready_event_t &event_) noexcept
     {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_closed)
+            return;
+        const routed_target_key_t key = target_key (zlink_routed_submit_target_t{
+          event_.peer_rid, event_.transport_pair_id, event_.transport_pair_generation});
         bool changed = false;
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            if (_closed)
-                return;
-            const routed_target_key_t key = target_key (zlink_routed_submit_target_t{
-              event_.peer_rid, event_.transport_pair_id, event_.transport_pair_generation});
-            if (event_.state == ZLINK_ROUTED_SEND_TERMINAL) {
-                const auto queue = _pending_by_target.find (key);
-                if (queue != _pending_by_target.end ()) {
-                    for (const uint64_t id : queue->second) {
-                        const auto entry = _operations.find (id);
-                        if (entry == _operations.end ())
-                            continue;
-                        entry->second->forced_terminal = true;
-                        entry->second->forced_result =
-                          terminal_submit_result (event_.terminal_errno);
-                        entry->second->forced_error = event_.terminal_errno;
-                    }
-                    const auto front = _operations.find (queue->second.front ());
+        const auto target = _targets.find (key);
+        if (event_.state == ZLINK_ROUTED_SEND_TERMINAL) {
+            if (target != _targets.end ()) {
+                ++target->second.terminal_epoch;
+                target->second.terminal_error = event_.terminal_errno;
+                for (const uint64_t id : target->second.queue) {
+                    const auto entry = _operations.find (id);
+                    if (entry == _operations.end ())
+                        continue;
+                    entry->second->forced_terminal = true;
+                    entry->second->forced_result =
+                      terminal_submit_result (event_.terminal_errno);
+                    entry->second->forced_error = event_.terminal_errno;
+                }
+                if (!target->second.queue.empty ()) {
+                    const auto front = _operations.find (target->second.queue.front ());
                     if (front != _operations.end ()
                         && front->second->state != pending_operation_t::state_t::in_flight) {
                         front->second->state = pending_operation_t::state_t::ready;
                         unregister_deadline_locked (*front->second);
-                        mark_target_ready_locked (key);
+                        mark_target_ready_locked (target);
                     }
                     changed = true;
                 }
-            } else {
-                const auto queue = _pending_by_target.find (key);
-                if (queue != _pending_by_target.end () && !queue->second.empty ()) {
-                    ++_wake_versions[key];
-                    const auto front = _operations.find (queue->second.front ());
-                    if (front != _operations.end ()
-                        && front->second->state == pending_operation_t::state_t::waiting) {
-                        front->second->state = pending_operation_t::state_t::ready;
-                        unregister_deadline_locked (*front->second);
-                        mark_target_ready_locked (key);
-                        changed = true;
-                    }
-                }
-                // A DEALER operation can be accepted before Core has a
-                // concrete transport-pair target.  Such work is keyed by the
-                // empty target and any writable routed edge is its exact
-                // signal to select a current pair and retry once.
-                const routed_target_key_t generic_key{};
-                const auto generic = _pending_by_target.find (generic_key);
-                if (generic != _pending_by_target.end ()
-                    && !generic->second.empty ()) {
-                    ++_wake_versions[generic_key];
-                    const auto front =
-                      _operations.find (generic->second.front ());
-                    if (front != _operations.end ()
-                        && front->second->state
-                             == pending_operation_t::state_t::waiting) {
-                        front->second->state =
-                          pending_operation_t::state_t::ready;
-                        unregister_deadline_locked (*front->second);
-                        mark_target_ready_locked (generic_key);
-                        changed = true;
-                    }
-                }
             }
-            if (changed)
-                refresh_schedule_locked ();
+        } else {
+            if (target != _targets.end ())
+                changed = wake_target_locked (target);
+            // A DEALER operation can be accepted before Core has a
+            // concrete transport-pair target.  Such work is keyed by the
+            // empty target and any writable routed edge is its exact
+            // signal to select a current pair and retry once.
+            const auto generic = _targets.find (routed_target_key_t{});
+            if (generic != _targets.end () && generic != target)
+                changed = wake_target_locked (generic) || changed;
         }
+        if (changed)
+            refresh_schedule_locked ();
     }
 
     void on_generic_ready () noexcept
@@ -299,19 +294,10 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
         std::lock_guard<std::mutex> lock (_mutex);
         if (_closed)
             return;
-        const routed_target_key_t key{};
-        const auto queue = _pending_by_target.find (key);
-        if (queue == _pending_by_target.end () || queue->second.empty ())
+        const auto generic = _targets.find (routed_target_key_t{});
+        if (generic == _targets.end ())
             return;
-        ++_wake_versions[key];
-        const auto front = _operations.find (queue->second.front ());
-        if (front != _operations.end ()
-            && front->second->state
-                 == pending_operation_t::state_t::waiting) {
-            front->second->state = pending_operation_t::state_t::ready;
-            unregister_deadline_locked (*front->second);
-            mark_target_ready_locked (key);
-        }
+        (void) wake_target_locked (generic);
         refresh_schedule_locked ();
     }
 
@@ -319,13 +305,12 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
     {
         struct terminal_action_t
         {
-            routed_terminal_fn_t callback;
+            std::shared_ptr<routed_admission_request_t> request;
             submit_result_t result;
             int error;
         };
         std::vector<std::shared_ptr<pending_operation_t>> attempts;
-        std::vector<std::shared_ptr<pending_operation_t>> forced;
-        std::vector<routed_accepted_fn_t> accepted_actions;
+        std::vector<std::shared_ptr<routed_admission_request_t>> accepted_actions;
         std::vector<terminal_action_t> terminal_actions;
         {
             std::lock_guard<std::mutex> lock (_mutex);
@@ -337,80 +322,68 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
             expire_due_locked (now, terminal_actions);
             const size_t ready_target_count = _ready_targets.size ();
             for (size_t i = 0; i < ready_target_count; ++i) {
-                const routed_target_key_t key = std::move (_ready_targets.front ());
+                const routed_target_iterator_t target = _ready_targets.front ();
                 _ready_targets.pop_front ();
-                _ready_set.erase (key);
-                const auto queue = _pending_by_target.find (key);
-                if (queue == _pending_by_target.end () || queue->second.empty ())
+                target->second.ready_marked = false;
+                if (target->second.queue.empty ())
                     continue;
-                const auto found = _operations.find (queue->second.front ());
+                const auto found = _operations.find (target->second.queue.front ());
                 if (found == _operations.end ()
                     || found->second->state != pending_operation_t::state_t::ready)
                     continue;
                 if (found->second->forced_terminal) {
-                    forced.push_back (found->second);
+                    terminal_actions.push_back ({found->second->request,
+                                                 found->second->forced_result,
+                                                 found->second->forced_error});
                     remove_operation_locked (found->second);
                     continue;
                 }
                 found->second->state = pending_operation_t::state_t::in_flight;
-                found->second->observed_wake = _wake_versions[found->second->key];
+                found->second->observed_wake = target->second.wake_version;
                 unregister_deadline_locked (*found->second);
                 attempts.push_back (found->second);
             }
         }
 
-        for (const auto &operation : forced)
-            terminal_actions.push_back (
-              {std::move (operation->terminal), operation->forced_result, operation->forced_error});
-
         for (const auto &operation : attempts) {
-            routed_attempt_result_t result;
-            try {
-                result = operation->attempt ();
-            }
-            catch (const submit_error_t &error) {
-                result = {error.result (), error.internal_errno ()};
-            }
-            catch (...) {
-                result = {submit_result_t::internal_error, EIO};
-            }
+            routed_attempt_result_t result = run_attempt (*operation->request);
 
-            routed_accepted_fn_t accepted;
-            routed_terminal_fn_t terminal;
+            std::shared_ptr<routed_admission_request_t> accepted;
+            std::shared_ptr<routed_admission_request_t> terminal;
             {
                 std::lock_guard<std::mutex> lock (_mutex);
                 const auto found = _operations.find (operation->id);
                 if (found == _operations.end ())
                     continue;
                 if (_closed) {
-                    terminal = std::move (operation->terminal);
+                    terminal = operation->request;
                     remove_operation_locked (operation);
                     result = {submit_result_t::terminated, ETERM};
                 } else if (operation->forced_terminal) {
-                    terminal = std::move (operation->terminal);
+                    terminal = operation->request;
                     remove_operation_locked (operation);
                     result = {operation->forced_result, operation->forced_error};
                 } else if (result.result == submit_result_t::ok) {
-                    accepted = std::move (operation->accepted);
+                    accepted = operation->request;
                     remove_operation_locked (operation);
                 } else if (result.result == submit_result_t::backpressured) {
                     const auto now = std::chrono::steady_clock::now ();
                     if (operation->deadline
                           != std::chrono::steady_clock::time_point::max ()
                         && now >= operation->deadline) {
-                        terminal = std::move (operation->terminal);
+                        terminal = operation->request;
                         remove_operation_locked (operation);
                         result.error = ETIMEDOUT;
-                    } else if (_wake_versions[operation->key]
+                    } else if (operation->target->second.wake_version
                                > operation->observed_wake) {
                         operation->state = pending_operation_t::state_t::ready;
-                        mark_target_ready_locked (operation->key);
+                        mark_target_ready_locked (operation->target);
                     } else {
                         operation->state = pending_operation_t::state_t::waiting;
                         register_deadline_locked (*operation);
                     }
                 } else {
-                    terminal = std::move (operation->terminal);
+                    terminal = operation->request;
                     remove_operation_locked (operation);
                 }
             }
@@ -427,9 +400,9 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
             _quiesced.notify_all ();
         }
         for (auto &accepted : accepted_actions)
-            invoke_accepted (accepted);
+            invoke_accepted (*accepted);
         for (auto &terminal : terminal_actions)
-            invoke_terminal (terminal.callback, terminal.result, terminal.error);
+            invoke_terminal (*terminal.request, terminal.result, terminal.error);
     }
 
     void shutdown () noexcept
@@ -442,23 +415,183 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
             for (auto &entry : _operations)
                 pending.push_back (std::move (entry.second));
             _operations.clear ();
-            _pending_by_target.clear ();
+            _targets.clear ();
             _ready_targets.clear ();
-            _ready_set.clear ();
             _deadlines.clear ();
-            _wake_versions.clear ();
             _scheduled = false;
             ++_schedule_generation;
         }
         for (const auto &operation : pending)
-            invoke_terminal (operation, submit_result_t::terminated, ETERM);
+            invoke_terminal (*operation->request, submit_result_t::terminated, ETERM);
     }
 
   private:
-    void mark_target_ready_locked (const routed_target_key_t &key_)
+    // Runs the first attempt for a reserved target on the caller thread.
+    routed_admission_ticket_t admit_on_caller_thread (
+      routed_target_iterator_t target_,
+      std::shared_ptr<routed_admission_request_t> request_,
+      uint64_t observed_wake_,
+      uint64_t observed_terminal_)
     {
-        if (_ready_set.insert (key_).second)
-            _ready_targets.push_back (key_);
+        routed_admission_request_t &request = *request_;
+        routed_attempt_result_t result = run_attempt (request);
+
+        // Resolving the deadline is the request's own work and may call into
+        // Core, so it runs outside the admission lock -- and only for a
+        // request that did not get through on its first attempt.
+        std::chrono::steady_clock::time_point deadline =
+          std::chrono::steady_clock::time_point::max ();
+        bool deadline_failed = false;
+        if (result.result == submit_result_t::backpressured) {
+            try {
+                deadline = request.deadline ();
+            }
+            catch (...) {
+                deadline_failed = true;
+            }
+        }
+
+        std::shared_ptr<pending_operation_t> parked;
+        bool accepted = false;
+        bool has_terminal = false;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            --target_->second.inline_attempts;
+            if (_closed) {
+                result = {submit_result_t::terminated, ETERM};
+                has_terminal = true;
+            } else if (target_->second.terminal_epoch != observed_terminal_) {
+                const int error = target_->second.terminal_error;
+                result = {terminal_submit_result (error), error};
+                has_terminal = true;
+            } else if (result.result == submit_result_t::ok) {
+                accepted = true;
+            } else if (result.result == submit_result_t::backpressured) {
+                const auto now = std::chrono::steady_clock::now ();
+                const bool expired =
+                  deadline_failed
+                  || (deadline != std::chrono::steady_clock::time_point::max ()
+                      && now >= deadline);
+                if (expired) {
+                    result.error = ETIMEDOUT;
+                    has_terminal = true;
+                } else {
+                    parked = park_locked (target_, std::move (request_),
+                                          deadline, observed_wake_);
+                }
+            } else {
+                has_terminal = true;
+            }
+            promote_front_locked (target_);
+            prune_target_locked (target_);
+            refresh_schedule_locked ();
+            --_active_pumps;
+            _quiesced.notify_all ();
+        }
+        if (accepted)
+            invoke_accepted (request);
+        else if (has_terminal)
+            invoke_terminal (request, result.result, result.error);
+        if (parked)
+            return routed_admission_ticket_t (weak_from_this (), parked->id);
+        return {};
+    }
+
+    // Materialises the pending record for a request whose caller-thread
+    // attempt was backpressured. The request keeps the front of its target
+    // queue: anything enqueued during the attempt was queued behind it.
+    std::shared_ptr<pending_operation_t> park_locked (
+      routed_target_iterator_t target_,
+      std::shared_ptr<routed_admission_request_t> request_,
+      std::chrono::steady_clock::time_point deadline_,
+      uint64_t observed_wake_)
+    {
+        std::shared_ptr<pending_operation_t> operation =
+          std::make_shared<pending_operation_t> ();
+        operation->id = ++_next_id;
+        operation->target = target_;
+        operation->request = std::move (request_);
+        operation->deadline = deadline_;
+        operation->observed_wake = observed_wake_;
+        const bool woken = target_->second.wake_version > observed_wake_;
+        operation->state = woken ? pending_operation_t::state_t::ready
+                                 : pending_operation_t::state_t::waiting;
+        target_->second.queue.push_front (operation->id);
+        _operations.emplace (operation->id, operation);
+        if (woken)
+            mark_target_ready_locked (target_);
+        else
+            register_deadline_locked (*operation);
+        return operation;
+    }
+
+    // Arms the deadline of a request that was queued behind other work. The
+    // request resolves its own timeout, which can call into Core, so this
+    // runs outside the admission lock and re-checks the record.
+    void arm_deadline (const std::shared_ptr<pending_operation_t> &operation_) noexcept
+    {
+        std::chrono::steady_clock::time_point deadline;
+        try {
+            deadline = operation_->request->deadline ();
+        }
+        catch (...) {
+            deadline = std::chrono::steady_clock::now ();
+        }
+        if (deadline == std::chrono::steady_clock::time_point::max ())
+            return;
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_closed || _operations.find (operation_->id) == _operations.end ())
+            return;
+        if (operation_->deadline != std::chrono::steady_clock::time_point::max ())
+            return;
+        operation_->deadline = deadline;
+        if (operation_->state != pending_operation_t::state_t::in_flight)
+            register_deadline_locked (*operation_);
+        refresh_schedule_locked ();
+    }
+
+    routed_target_iterator_t ensure_target_locked (
+      const zlink_routed_submit_target_t &target_)
+    {
+        routed_target_key_t key = target_key (target_);
+        const auto found = _targets.lower_bound (key);
+        if (found != _targets.end () && !(key < found->first))
+            return found;
+        return _targets.emplace_hint (found, std::move (key), routed_target_state_t{});
+    }
+
+    // Records a writable edge for one target and releases its front record if
+    // that record was waiting for exactly this signal.
+    bool wake_target_locked (routed_target_iterator_t target_)
+    {
+        if (target_->second.queue.empty () && target_->second.inline_attempts == 0)
+            return false;
+        ++target_->second.wake_version;
+        if (target_->second.queue.empty ())
+            return false;
+        const auto front = _operations.find (target_->second.queue.front ());
+        if (front == _operations.end ()
+            || front->second->state != pending_operation_t::state_t::waiting)
+            return false;
+        front->second->state = pending_operation_t::state_t::ready;
+        unregister_deadline_locked (*front->second);
+        mark_target_ready_locked (target_);
+        return true;
+    }
+
+    void mark_target_ready_locked (routed_target_iterator_t target_)
+    {
+        if (target_->second.ready_marked)
+            return;
+        target_->second.ready_marked = true;
+        _ready_targets.push_back (target_);
+    }
+
+    void prune_target_locked (routed_target_iterator_t target_)
+    {
+        if (_targets.size () <= k_retained_target_records || !target_->second.idle ())
+            return;
+        _targets.erase (target_);
     }
 
     void unregister_deadline_locked (pending_operation_t &operation_)
@@ -484,37 +617,32 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
         operation_.deadline_registered = true;
     }
 
-    void promote_front_locked (const routed_target_key_t &key_)
+    void promote_front_locked (routed_target_iterator_t target_)
     {
-        const auto queue = _pending_by_target.find (key_);
-        if (queue == _pending_by_target.end () || queue->second.empty ())
+        if (target_->second.queue.empty ())
             return;
-        const auto operation = _operations.find (queue->second.front ());
+        const auto operation = _operations.find (target_->second.queue.front ());
         if (operation == _operations.end ())
             return;
         if (operation->second->state == pending_operation_t::state_t::queued)
             operation->second->state = pending_operation_t::state_t::ready;
         if (operation->second->state == pending_operation_t::state_t::ready)
-            mark_target_ready_locked (key_);
+            mark_target_ready_locked (target_);
     }
 
     void remove_operation_locked (const std::shared_ptr<pending_operation_t> &operation_)
     {
         unregister_deadline_locked (*operation_);
-        const auto queue = _pending_by_target.find (operation_->key);
-        if (queue != _pending_by_target.end ()) {
-            auto id = std::find (queue->second.begin (), queue->second.end (), operation_->id);
-            const bool was_front = id == queue->second.begin ();
-            if (id != queue->second.end ())
-                queue->second.erase (id);
-            if (queue->second.empty ()) {
-                _pending_by_target.erase (queue);
-                _wake_versions.erase (operation_->key);
-                _ready_set.erase (operation_->key);
-            } else if (was_front) {
-                promote_front_locked (operation_->key);
-            }
-        }
+        const routed_target_iterator_t target = operation_->target;
+        std::deque<uint64_t> &queue = target->second.queue;
+        const auto id = std::find (queue.begin (), queue.end (), operation_->id);
+        const bool was_front = id == queue.begin ();
+        if (id != queue.end ())
+            queue.erase (id);
+        if (queue.empty ())
+            prune_target_locked (target);
+        else if (was_front)
+            promote_front_locked (target);
         _operations.erase (operation_->id);
     }
 
@@ -531,10 +659,10 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
             }
             operation->second->deadline_registered = false;
             _deadlines.erase (_deadlines.begin ());
-            routed_terminal_fn_t terminal = std::move (operation->second->terminal);
+            std::shared_ptr<routed_admission_request_t> request = operation->second->request;
             remove_operation_locked (operation->second);
             terminal_actions_.push_back (
-              {std::move (terminal), submit_result_t::backpressured, ETIMEDOUT});
+              {std::move (request), submit_result_t::backpressured, ETIMEDOUT});
         }
     }
 
@@ -542,7 +670,7 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
     {
         if (_closed)
             return;
-        const bool ready = !_ready_set.empty ();
+        const bool ready = !_ready_targets.empty ();
         if (!ready && _deadlines.empty ()) {
             if (_scheduled) {
                 _scheduled = false;
@@ -564,28 +692,34 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
         admission_reactor ().schedule (shared_from_this (), due, generation);
     }
 
-    static void invoke_accepted (routed_accepted_fn_t &accepted_) noexcept
+    static routed_attempt_result_t run_attempt (routed_admission_request_t &request_) noexcept
     {
         try {
-            accepted_ ();
+            return request_.attempt ();
+        }
+        catch (const submit_error_t &error) {
+            return {error.result (), error.internal_errno ()};
+        }
+        catch (...) {
+            return {submit_result_t::internal_error, EIO};
+        }
+    }
+
+    static void invoke_accepted (routed_admission_request_t &request_) noexcept
+    {
+        try {
+            request_.accepted ();
         }
         catch (...) {
         }
     }
 
-    static void invoke_terminal (const std::shared_ptr<pending_operation_t> &operation_,
+    static void invoke_terminal (routed_admission_request_t &request_,
                                  submit_result_t result_,
                                  int error_) noexcept
     {
-        invoke_terminal (operation_->terminal, result_, error_);
-    }
-
-    static void
-    invoke_terminal (routed_terminal_fn_t &terminal_, submit_result_t result_, int error_) noexcept
-    {
         try {
-            if (terminal_)
-                terminal_ (result_, error_);
+            request_.terminal (result_, error_);
         }
         catch (...) {
         }
@@ -594,11 +728,9 @@ class routed_admission_state_t : public std::enable_shared_from_this<routed_admi
     std::mutex _mutex;
     std::condition_variable _quiesced;
     std::map<uint64_t, std::shared_ptr<pending_operation_t>> _operations;
-    std::map<routed_target_key_t, std::deque<uint64_t>> _pending_by_target;
-    std::deque<routed_target_key_t> _ready_targets;
-    std::set<routed_target_key_t> _ready_set;
+    routed_targets_t _targets;
+    std::deque<routed_target_iterator_t> _ready_targets;
     std::multimap<std::chrono::steady_clock::time_point, uint64_t> _deadlines;
-    std::map<routed_target_key_t, uint64_t> _wake_versions;
     uint64_t _next_id = 0;
     size_t _active_pumps = 0;
     bool _closed = false;
@@ -772,16 +904,11 @@ select_routed_submit_target (void *socket_, const zlink_routing_id_t *router_rid
 routed_admission_ticket_t
 enqueue_routed_admission (const std::shared_ptr<routed_admission_state_t> &owner_,
                           const zlink_routed_submit_target_t &target_,
-                          routed_attempt_fn_t attempt_,
-                          routed_accepted_fn_t accepted_,
-                          routed_terminal_fn_t terminal_,
-                          std::chrono::steady_clock::time_point deadline_,
-                          bool attempt_before_expiry_)
+                          std::shared_ptr<routed_admission_request_t> request_)
 {
     if (!owner_)
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
-    return owner_->enqueue (target_, std::move (attempt_), std::move (accepted_),
-                            std::move (terminal_), deadline_, attempt_before_expiry_);
+    return owner_->enqueue (target_, std::move (request_));
 }
 
 } // namespace detail
