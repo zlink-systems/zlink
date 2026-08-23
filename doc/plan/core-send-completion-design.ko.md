@@ -274,12 +274,9 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
   const zlink_send_async_options_t *options_,
   zlink_send_op_id_t *op_id_out_);
 
-/** @brief PUB/XPUB 토픽 발행의 async 형태. 완료 계약은 동일하다. */
-ZLINK_EXPORT zlink_submit_result_t zlink_publish_async (
-  void *subject_, const char *topic_id_,
-  zlink_msg_t *parts_, size_t part_count_,
-  const zlink_send_async_options_t *options_,
-  zlink_send_op_id_t *op_id_out_);
+/* (2026-08-24 폐기) zlink_publish_async는 도입하지 않는다. 3차 policy 개정으로
+ * publish는 synchronous-only다 — 기본 PUB은 lossy(HWM 대기 없음)이고, Core
+ * zlink_send_async는 PUB/XPUB에 ENOTSUP이다. */
 
 /**
  * @brief 완료 콜백 채널을 설치/교체한다 (D3-a). replace-only.
@@ -891,9 +888,9 @@ events"* 한다고 서술하지만, 실제 구현
 
 | 언어 | send | publish | request | raw reply | 근거/변경 |
 |---|---|---|---|---|---|
-| **C** | `zlink_send_part*` (동기) + `zlink_send_async` | `zlink_publish_part` + `zlink_publish_async` | `zlink_dealer_request_part` 등 | `zlink_*_reply_part` | C ABI는 builder 정책 미적용 |
-| **C++** | `submit()` 블로킹 **+ `async()` 코루틴** | `submit()` **+ `async()`** | `submit()` 블로킹 반환 **+ `submit(callback)` + `async()`** | `submit()` 동기 | `async()` **재추가**. 현재 sync 기반(`operation_contracts.hpp:203,217-239`)에 얹는다. request의 3-terminal은 D6이 명시적으로 기존 금지를 폐기한 부분 |
-| **.NET** | `Async()` 단일 | `Async()` | `Async()` | `Submit()` 동기 | HWM-managed op는 `Async()` 하나. 현재 형태 유지, 내부만 Core 위임으로 교체 |
+| **C** | `zlink_send_part*` (동기) + `zlink_send_async` | `zlink_publish_part` (동기 전용) | `zlink_dealer_request_part` 등 | `zlink_*_reply_part` | C ABI는 builder 정책 미적용 |
+| **C++** | `submit()` 블로킹 **+ `async()` 코루틴** | `submit()` 동기 전용 | `submit()` 블로킹 반환 **+ `submit(callback)` + `async()`** | `submit()` 동기 | `async()` **재추가**. 현재 sync 기반(`operation_contracts.hpp:203,217-239`)에 얹는다. request의 3-terminal은 D6이 명시적으로 기존 금지를 폐기한 부분 |
+| **.NET** | `Async()` 단일 | `Submit()` 동기 전용 | `Async()` | `Submit()` 동기 | HWM-managed op는 `Async()` 하나. 현재 형태 유지, 내부만 Core 위임으로 교체 |
 | **Java** | `submit()` → `CompletionStage<Void>` | 동일 | `submit()` → `CompletionStage<List<Message>>` | `submit()` → `void` | 표면 불변, 구현이 `RoutedAdmission` → Core completion |
 | **Kotlin** | `submit()` (Java 표면) | 동일 | 동일 | 동일 | canonical: `submit().await()` |
 | **Node** | `submit()` → `Promise<void>` | 동일 | `submit()` → `Promise<Message[]>` | `submit()` → `void` | 표면 불변 |
@@ -997,7 +994,7 @@ target별 writability 관측이 없다"는 간극은, 새 질의 API가 아니�
 **제거되는 공개 enum 1개 + enumerator 2개**: `zlink_routed_send_ready_state_t`,
 `ZLINK_ROUTED_SEND_WRITABLE`, `ZLINK_ROUTED_SEND_TERMINAL`.
 
-**추가되는 공개 심볼 (초안)**: `zlink_send_async`, `zlink_publish_async`,
+**추가되는 공개 심볼 (초안)**: `zlink_send_async`,
 `zlink_send_complete_handler`, `zlink_send_async_cancel`.
 `zlink_send_complete_recv`와 `zlink_routed_target_writable`은 **추가하지
 않는다** (각각 Q10, Q6, §13 해결 — §5.2, §11.3).
@@ -1061,7 +1058,7 @@ readiness 표면이 하나로 줄어드는 것이 이 변경의 표면 측 순�
    `05-events.*.md`, `07-monitoring.*.md`).
 2. 헤더 + 구현: pending 레코드 큐(소켓당, §4.7), admit 루프(async mailbox 통합),
    deadline 위임, 콜백 디스패치, 취소. PAIR/PUB/XPUB/DEALER/ROUTER/STREAM
-   전체에 `zlink_send_async`/`zlink_publish_async`/`zlink_send_complete_handler`를
+   전체에 `zlink_send_async`/`zlink_send_complete_handler`를
    연다 (Q8, §13 해결).
 3. `ZLINK_POLLCOMPLETION` 등록 가능 소켓 타입 검사(`zlink.cpp:249-253`)를
    "reply completion 또는 send completion이 있는 소켓" 기준으로 넓힌다
@@ -1166,7 +1163,7 @@ Phase 2 이후는 8개 언어가 동시에 깨지므로 전진만 가능하다.
 - §13 Q1~Q10 전부 (2026-08-23 소유자 결정으로 해결·기록됨).
 
 **이 문서가 제안한 것 (미구현)**
-- `zlink_send_async` / `zlink_publish_async` 배열 제출 API와 그 계약 전부
+- `zlink_send_async` 배열 제출 API와 그 계약 전부 (publish_async는 3차 개정으로 도입 안 함)
   (identity, 순서, 취소, close, timeout, pending 상한), PAIR/PUB/XPUB/
   DEALER/ROUTER/STREAM 전체 대상(Q8).
 - `zlink_send_complete_event_t`의 구체 필드 배치와 `zlink_send_complete_handler`

@@ -243,7 +243,6 @@ send_submit_operation_t send_operation_t::message (message_t &&part_) &&
 {
     state ().message.single_part.emplace (std::move (part_));
     state ().message.single_part_source = nullptr;
-    state ().message.discard_single_part_on_backpressure = true;
     return send_submit_operation_t (release_state_ptr ());
 }
 
@@ -275,7 +274,6 @@ routed_send_operation_t::message (message_t &&part_) &&
 {
     state ().message.single_part.emplace (std::move (part_));
     state ().message.single_part_source = nullptr;
-    state ().message.discard_single_part_on_backpressure = true;
     return routed_send_submit_operation_t (release_state_ptr ());
 }
 
@@ -412,7 +410,6 @@ publish_submit_operation_t publish_operation_t::message (message_t &&part_) &&
 {
     state ().message.single_part.emplace (std::move (part_));
     state ().message.single_part_source = nullptr;
-    state ().message.discard_single_part_on_backpressure = true;
     return publish_submit_operation_t (release_state_ptr ());
 }
 

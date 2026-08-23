@@ -155,7 +155,7 @@ Each invokes the language's canonical terminal on the builder returned by the
 same operation entrypoint. It adds no separate name such as `send_async` or
 `sendCoroutine`.
 
-- **C++**: exposes both `submit()` (blocking — returns `void` or throws
+- **C++**: exposes both `submit()` (blocking — returns `bool` or throws
   `submit_error_t`, waiting inside Core and resuming on Core's signal) and
   `async()` (coroutine-only — returns a move-only `async_result_t<T>`). This
   follows the naming-distinction rule, separating the plain-thread call from
@@ -213,6 +213,15 @@ surface. Auto-HWM budget, per-queue caps, and manually configured `sndhwm`
 still apply fully as each subscriber's drop threshold and memory bound; they do
 not make the publisher wait. The normative table below gives publish the same
 synchronous submit shape and failure representation as raw reply.
+
+- **C++ async failure mapping (normative).** When an `async()` completion
+  reports `TIMED_OUT` or `TERMINAL`, it surfaces as
+  `submit_error_t(submit_result_t::not_admitted, terminal_errno)` — the
+  operation never reached admission, and `terminal_errno` preserves the
+  cause.
+- **Flags are for the synchronous `submit()` only.** Submit flags such as
+  `DONTWAIT` are meaningless on an async terminal, so C++ `async()` rejects
+  non-zero flags with `EINVAL`.
 
 ## Request completion surface and C++'s three terminals
 
@@ -273,7 +282,7 @@ another execution model, but it must not grow the bindings public API's names.
 | Binding | HWM-managed send | Publish | Request | Raw reply |
 |---|---|---|---|---|
 | C | Not applicable — the C ABI does not apply builder policy and follows the functional contract in `core/include/zlink.h` | Not applicable | Not applicable | Not applicable |
-| C++ | `submit()` (blocking) → `void`; throws `submit_error_t` on failure. `async()` → move-only `async_result_t<T>` | `submit()` → synchronous `void`; throws `submit_error_t` on failure | `submit()` (blocking) → the reply, throws on failure. `submit(callback)` → returns immediately, completion delivered via callback. `async()` → `async_result_t<T>` (framework canonical) | `submit()` → `void`; throws `submit_error_t` on failure |
+| C++ | `submit()` (blocking) → `bool` for PAIR/STREAM, `void` for routed; all failures throw `submit_error_t`. `async()` → move-only `async_result_t<T>` | `submit()` → synchronous `bool`; throws `submit_error_t` on failure | `submit()` (blocking) → the reply, throws on failure. `submit(callback)` → returns immediately, completion delivered via callback. `async()` → `async_result_t<T>` (framework canonical) | `submit()` → `void`; throws `submit_error_t` on failure |
 | .NET | `Async()` → `Task`/`ValueTask`/`Task<T>`/`ValueTask<T>` | `Submit()` → synchronous `void`; throws `ZlinkSubmitException` on failure | `Async(...)` → same as above | `Submit()` → synchronous `void`; throws `ZlinkSubmitException` on failure |
 | Java, Kotlin | `submit()` → `CompletionStage<T>` | `submit()` → synchronous `void`; throws `ZlinkSubmitException` on failure | `submit()` → `CompletionStage<T>` (same as above) | `submit()` → synchronous `void`; throws `ZlinkSubmitException` on failure |
 | Node | `submit()` → `Promise<T>` (or `Promise<void>`) | `submit()` → synchronous `void`; throws `SubmitError` on failure | `submit()` → `Promise<T>` (same as above) | `submit()` → synchronous `void`; throws `SubmitError` on failure |

@@ -64,7 +64,6 @@ struct operation_state_t
     {
         std::optional<message_t> single_part;
         message_t *single_part_source = nullptr;
-        bool discard_single_part_on_backpressure = false;
         std::vector<message_t> parts;
         // Parallel to `parts`: for every part added from an lvalue message_t,
         // the caller object it was moved out of; nullptr for parts added from
@@ -78,7 +77,6 @@ struct operation_state_t
         {
             single_part.reset ();
             single_part_source = nullptr;
-            discard_single_part_on_backpressure = false;
             parts.clear ();
             part_sources.clear ();
         }

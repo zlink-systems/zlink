@@ -415,7 +415,6 @@ request_submit_operation_t request_operation_t::message (message_t &&part_) &&
 {
     state ().message.single_part.emplace (std::move (part_));
     state ().message.single_part_source = nullptr;
-    state ().message.discard_single_part_on_backpressure = true;
     return request_submit_operation_t (release_state_ptr ());
 }
 
@@ -441,8 +440,12 @@ std::vector<message_t> request_submit_operation_t::submit () &&
 
     const auto bridge = std::make_shared<managed_request_bridge_t> ();
     bridge->blocking = true;
-    submit_raw_request (state, bridge);
+    // Register the blocking consumer before Core can deliver an inline reply.
+    // `arm()` rechecks `terminal` while holding the bridge mutex, so a reply
+    // that wins the race with this registration is still delivered exactly
+    // once and remains visible to the predicate in `wait()`.
     bridge->arm ();
+    submit_raw_request (state, bridge);
     return bridge->wait ();
 }
 

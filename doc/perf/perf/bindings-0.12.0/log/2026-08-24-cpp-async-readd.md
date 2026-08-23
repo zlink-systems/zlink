@@ -59,3 +59,34 @@
 - Core completion 실패를 C++에서 `submit_result_t::not_admitted`로 매핑하는
   별도 normative C++ result 문구는 문서에서 확인하지 못했다. 현재 구현은
   `terminal_errno`/`ETIMEDOUT`을 보존하는 이 매핑을 사용한다.
+
+## hang 수정 (2026-08-24)
+
+- 대상 test case는 새 blocking terminal의 첫 round-trip인
+  `test_request_blocking_submit_returns_reply`다. 이 경로는
+  `request_submit_operation_t::submit()`에서 Core request를 먼저 제출한 뒤
+  `managed_request_bridge_t`를 arm하고 `wait()`했다.
+- 소스 stack path는
+  `request_submit_operation_t::submit()` →
+  `managed_request_bridge_t::wait()` → `condition_variable::wait()`이며,
+  Core reply path는 `managed_request_trampoline()` → `finish()` →
+  `deliver_terminal()`이다. 기존 순서는 Core가 submit 중 reply를 완료하면
+  blocking consumer가 아직 arm되지 않은 window를 만들었다. `finish()`가
+  terminal을 저장하더라도 consumer 등록 순서가 Core delivery 뒤인 것은
+  blocking terminal 계약과 맞지 않았다. send-complete handler 등록은
+  `send_completion_mutex`로 보호되어 있어 이 hang의 원인으로 판정하지
+  않았다.
+- 수정은 `bindings/cpp/src/Runtime/Messaging/request_reply.cpp:441-449`에서
+  blocking bridge를 `submit_raw_request()` 전에 arm하는 것이다. `arm()`과
+  `finish()` 모두 bridge mutex 안에서 terminal을 재확인하고, `wait()`는
+  `armed && terminal` predicate를 사용하므로 inline completion과 spurious
+  wake-up을 모두 terminal 상태로 재확인한다. 기존 working-tree의
+  `discard_single_part_on_backpressure` member 삭제는 그대로 유지했다.
+- 이 실행 환경에서는 `AF_INET` socket 생성이 seccomp로 차단된다. 수정 전
+  직접 실행 20회와 수정 후 직접 실행 5회 모두 test case에 진입하기 전에
+  `boost::asio::reactive_socket_service::open: Operation not permitted`로
+  abort했으며, 따라서 이 세션에서는 실제 hung process의 `gdb -p` stack이나
+  의미 있는 30회 green 결과를 확보할 수 없었다. Release contract는
+  `11/14` pass, sanitizer contract는 `11/14` pass였고, request/reply와
+  monitor/behavior는 같은 socket 권한 제한으로 중단됐다. socket contract의
+  HWM accounting assertion은 기존 실패로 남았다.

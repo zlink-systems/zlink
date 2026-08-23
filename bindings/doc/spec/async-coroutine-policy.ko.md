@@ -159,7 +159,7 @@ PAIR의 **send**와 DEALER/ROUTER의 **routed send**는 [분류 원칙](#분류-
 entrypoint가 반환하는 builder에서 언어별 canonical terminal을 호출한다.
 `send_async`, `sendCoroutine` 같은 별도 이름은 만들지 않는다.
 
-- **C++**: `submit()`(blocking, `void`를 반환하거나 `submit_error_t`를
+- **C++**: `submit()`(blocking, `bool`을 반환하거나 `submit_error_t`를
   던지고 끝난다 — Core 내부에서 대기하다 Core 신호로 재개한다)과 `async()`
   (coroutine용, move-only `async_result_t<T>`를 반환한다) 두 terminal을 모두
   노출한다. 이름 구분 원칙에 따라 plain-thread 호출과 coroutine 호출을
@@ -213,6 +213,14 @@ publish async 표면은 없다. auto-HWM budget, per-queue caps, 수동
 `sndhwm` 설정은 모두 subscriber별 drop threshold와 memory bound로 적용되며,
 publisher 대기를 의미하지 않는다. 각 언어의 publish terminal과 실패 표현은
 아래 정규 표의 raw reply 열과 같은 동기 submit 형태를 따른다.
+
+- **C++ async 실패 매핑 (규범).** `async()`의 completion 결과가 `TIMED_OUT`
+  또는 `TERMINAL`이면 `submit_error_t(submit_result_t::not_admitted,
+  terminal_errno)`로 전달한다 — admission에 도달하지 못한 실패이므로
+  `not_admitted`가 맞고, 원인은 `terminal_errno`가 보존한다.
+- **flags는 동기 `submit()` 전용.** `DONTWAIT` 등 submit flags는 async
+  terminal에서 의미가 없으므로 C++ `async()`는 non-zero flags를
+  `EINVAL`로 거부한다.
 
 ## Request 완료 표면과 C++ 세 terminal
 
@@ -271,7 +279,7 @@ bindings public API 이름을 늘리면 안 된다.
 | Binding | HWM-managed send | Publish | Request | Raw reply |
 |---|---|---|---|---|
 | C | 해당 없음 — C ABI는 builder 정책을 적용하지 않으며 `core/include/zlink.h`의 함수형 계약을 따른다 | 해당 없음 | 해당 없음 | 해당 없음 |
-| C++ | `submit()`(blocking) → `void`, 실패 시 `submit_error_t`를 던진다. `async()` → move-only `async_result_t<T>` | `submit()` → 동기 `void`, 실패 시 `submit_error_t`를 던진다 | `submit()`(blocking) → reply, 실패 시 예외. `submit(callback)` → 즉시 반환, completion은 callback으로 전달. `async()` → `async_result_t<T>`(framework canonical) | `submit()` → `void`, 실패 시 `submit_error_t`를 던진다 |
+| C++ | `submit()`(blocking) → PAIR/STREAM은 `bool`, routed는 `void`, 실패는 모두 `submit_error_t`를 던진다. `async()` → move-only `async_result_t<T>` | `submit()` → 동기 `bool`, 실패 시 `submit_error_t`를 던진다 | `submit()`(blocking) → reply, 실패 시 예외. `submit(callback)` → 즉시 반환, completion은 callback으로 전달. `async()` → `async_result_t<T>`(framework canonical) | `submit()` → `void`, 실패 시 `submit_error_t`를 던진다 |
 | .NET | `Async()` → `Task`/`ValueTask`/`Task<T>`/`ValueTask<T>` | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | `Async(...)` → 위와 동일 | `Submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
 | Java, Kotlin | `submit()` → `CompletionStage<T>` | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 | `submit()` → `CompletionStage<T>` (위와 동일) | `submit()` → 동기 `void`, 실패 시 `ZlinkSubmitException`을 던진다 |
 | Node | `submit()` → `Promise<T>`(또는 `Promise<void>`) | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 | `submit()` → `Promise<T>` (위와 동일) | `submit()` → 동기 `void`, 실패 시 `SubmitError`를 던진다 |
