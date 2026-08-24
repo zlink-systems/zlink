@@ -2298,6 +2298,30 @@ test('node cross-language smoke covers bidirectional channel fanout route stream
   assert.deepEqual(missing, []);
 });
 
+test('node to dotnet channel stage uses the ClientServer transport contract', () => {
+  const smoke = fs.readFileSync(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'), 'utf8');
+  const stage = smoke.match(
+    /async function nodeClientToDotnetChannelServer\(tempDir\) \{([\s\S]*?)\n\}\n\nasync function nodePublisherToDotnetFanoutSubscriber/
+  )?.[1];
+
+  assert.notEqual(stage, undefined);
+  assert.match(stage, /addClientServerChannel\('profiles'\)\.client\(\)\.connect\(endpoint\)/);
+  assert.match(stage, /ZLINK_CHANNEL_CLIENT/);
+  assert.match(stage, /ZLINK_CLIENT_SERVER_RUNTIME/);
+  assert.doesNotMatch(stage, /addRouteMesh\('profiles'\)/);
+});
+
+test('dotnet to node channel stage uses the ClientServer transport contract', () => {
+  const smoke = fs.readFileSync(path.join(workspaceRoot, 'cross-language', 'node_dotnet_smoke.js'), 'utf8');
+  const stage = smoke.match(
+    /async function dotnetClientToNodeChannelServer\(tempDir\) \{([\s\S]*?)\n\}\n\nasync function nodeRouteClientToDotnetRouteServer/
+  )?.[1];
+
+  assert.notEqual(stage, undefined);
+  assert.match(stage, /addClientServerChannel\('profiles'\)\.server\(\)/);
+  assert.doesNotMatch(stage, /addRouteMesh\('profiles'\)/);
+});
+
 function sampleSourceFiles(root) {
   const files = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
