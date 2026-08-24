@@ -1,0 +1,6 @@
+entry-spot-create|status=created
+entry-spot-owner-before|node=cross.relocation-8b119318-d994-44a5-a71c-a1992469eae6
+relocate-attempt|attempt=0|outcome=Blocked|reason=TargetUnavailable
+relocate-attempt|attempt=1|outcome=Blocked|reason=TargetUnavailable
+relocate-attempt|attempt=2|outcome=Blocked|reason=TargetUnavailable
+relocate-attempt|attempt=3|outcome=Blocked|reason=TargetUnavailable

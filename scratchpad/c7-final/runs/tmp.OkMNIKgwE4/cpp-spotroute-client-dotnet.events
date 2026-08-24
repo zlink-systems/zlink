@@ -1,0 +1,3 @@
+spot-route-reply|cpp-to-dotnet-spot|dotnet
+spot-route-missing|kind=not_found|origin=unspecified
+spot-route-app-error|kind=rejected|origin=unspecified

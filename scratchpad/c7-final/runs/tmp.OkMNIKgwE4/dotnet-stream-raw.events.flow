@@ -1,0 +1,2 @@
+zlink flow: label=dotnet-test-host phase=received surface=stream kind=request packet=RawPing flow=01a0199e-a2ed-7a03-9f3c-028efdfa0b01 origin=application
+zlink flow: label=dotnet-test-host phase=replied surface=stream kind=response packet= flow=01a0199e-a2ed-7a03-9f3c-028efdfa0b01 origin=application

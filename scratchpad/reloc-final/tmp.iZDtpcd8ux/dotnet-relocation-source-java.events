@@ -1,0 +1,6 @@
+entry-spot-create|status=created
+entry-spot-owner-before|node=cross.relocation-afd8db7d-d64c-4508-9b24-1349a8833350
+relocate-attempt|attempt=0|outcome=Blocked|reason=DeadlineExceeded
+relocate-attempt|attempt=1|outcome=Blocked|reason=DeadlineExceeded
+relocate-attempt|attempt=2|outcome=Blocked|reason=DeadlineExceeded
+relocate-attempt|attempt=3|outcome=Blocked|reason=DeadlineExceeded

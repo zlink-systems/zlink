@@ -1,0 +1,4 @@
+entry-spot-create|status=created
+entry-spot-owner-before|node=node-relocation-source
+relocate-attempt|attempt=0|outcome=Relocated|reason=None
+relocate-result|outcome=Relocated|reason=None
