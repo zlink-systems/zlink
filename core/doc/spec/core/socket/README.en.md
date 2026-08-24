@@ -12,14 +12,14 @@ behavioral details) live in separate files.
 
 | Socket Type | Spec |
 |-------------|------|
-| PAIR | [pair.md](01-pair.en.md) |
-| DEALER | [dealer.md](06-dealer.en.md) |
-| ROUTER | [router.md](07-router.en.md) |
-| PUB | [pub.md](02-pub.en.md) |
-| SUB | [sub.md](03-sub.en.md) |
-| XPUB | [xpub.md](04-xpub.en.md) |
-| XSUB | [xsub.md](05-xsub.en.md) |
-| STREAM | [stream.md](08-stream.en.md) |
+| 01. PAIR | [pair.md](01-pair.en.md) |
+| 02. PUB | [pub.md](02-pub.en.md) |
+| 03. SUB | [sub.md](03-sub.en.md) |
+| 04. XPUB | [xpub.md](04-xpub.en.md) |
+| 05. XSUB | [xsub.md](05-xsub.en.md) |
+| 06. DEALER | [dealer.md](06-dealer.en.md) |
+| 07. ROUTER | [router.md](07-router.en.md) |
+| 08. STREAM | [stream.md](08-stream.en.md) |
 
 ## Thread-Safety Summary
 

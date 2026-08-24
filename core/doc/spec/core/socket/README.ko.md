@@ -19,14 +19,14 @@ title: "소켓 — 공통 명세"
 
 | 소켓 타입 | 명세 |
 |-----------|------|
-| PAIR | [pair.ko.md](01-pair.ko.md) |
-| DEALER | [dealer.ko.md](06-dealer.ko.md) |
-| ROUTER | [router.ko.md](07-router.ko.md) |
-| PUB | [pub.ko.md](02-pub.ko.md) |
-| SUB | [sub.ko.md](03-sub.ko.md) |
-| XPUB | [xpub.ko.md](04-xpub.ko.md) |
-| XSUB | [xsub.ko.md](05-xsub.ko.md) |
-| STREAM | [stream.ko.md](08-stream.ko.md) |
+| 01. PAIR | [pair.ko.md](01-pair.ko.md) |
+| 02. PUB | [pub.ko.md](02-pub.ko.md) |
+| 03. SUB | [sub.ko.md](03-sub.ko.md) |
+| 04. XPUB | [xpub.ko.md](04-xpub.ko.md) |
+| 05. XSUB | [xsub.ko.md](05-xsub.ko.md) |
+| 06. DEALER | [dealer.ko.md](06-dealer.ko.md) |
+| 07. ROUTER | [router.ko.md](07-router.ko.md) |
+| 08. STREAM | [stream.ko.md](08-stream.ko.md) |
 
 ## 스레드 안전성 요약
 

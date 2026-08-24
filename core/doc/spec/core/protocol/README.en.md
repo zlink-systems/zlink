@@ -12,5 +12,5 @@ and the internal procedure that produces it.
 
 | Protocol | Spec |
 |---|---|
-| ZMP | [zmp.en.md](01-zmp.en.md) |
-| RAW (STREAM) | [raw.en.md](02-raw.en.md) |
+| 01. ZMP | [zmp.en.md](01-zmp.en.md) |
+| 02. RAW (STREAM) | [raw.en.md](02-raw.en.md) |

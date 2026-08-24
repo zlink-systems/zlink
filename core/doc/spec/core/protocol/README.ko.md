@@ -17,5 +17,5 @@ title: "프로토콜 — 목차"
 
 | 프로토콜 | 명세 |
 |---|---|
-| ZMP | [zmp.ko.md](01-zmp.ko.md) |
-| RAW (STREAM) | [raw.ko.md](02-raw.ko.md) |
+| 01. ZMP | [zmp.ko.md](01-zmp.ko.md) |
+| 02. RAW (STREAM) | [raw.ko.md](02-raw.ko.md) |

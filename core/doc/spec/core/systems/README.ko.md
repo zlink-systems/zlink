@@ -19,12 +19,12 @@ title: "시스템 — 목차"
 
 | 문서 | 내용 |
 |---|---|
-| [Architecture](01-architecture.ko.md) | Public API부터 I/O thread까지의 내부 구성요소와 경계 |
-| [Threading model](02-threading-model.ko.md) | thread 종류와 책임 |
-| [I/O thread](03-io-thread.ko.md) | I/O thread의 생성과 작업 분배 |
-| [Thread safety](04-thread-safety.ko.md) | 3단 thread-safety 계약의 구현 |
-| [Connection별 memory](05-connection-memory.ko.md) | connection당 메모리 구성 요소 |
-| [Auto HWM 내부 설계](06-auto-hwm.ko.md) | Auto HWM 내부 상태와 계산 |
-| [Core source layout](07-core-source-layout.ko.md) | source directory 구성과 include 방향 |
-| [Core POSD module 구조](08-posd-module-structure.ko.md) | 계층별 책임 분리 |
-| [Core 설계 결정](09-design-decisions.ko.md) | 주요 설계 결정 사항 |
+| [01. Architecture](01-architecture.ko.md) | Public API부터 I/O thread까지의 내부 구성요소와 경계 |
+| [02. Threading model](02-threading-model.ko.md) | thread 종류와 책임 |
+| [03. I/O thread](03-io-thread.ko.md) | I/O thread의 생성과 작업 분배 |
+| [04. Thread safety](04-thread-safety.ko.md) | 3단 thread-safety 계약의 구현 |
+| [05. Connection별 memory](05-connection-memory.ko.md) | connection당 메모리 구성 요소 |
+| [06. Auto HWM 내부 설계](06-auto-hwm.ko.md) | Auto HWM 내부 상태와 계산 |
+| [07. Core source layout](07-core-source-layout.ko.md) | source directory 구성과 include 방향 |
+| [08. Core POSD module 구조](08-posd-module-structure.ko.md) | 계층별 책임 분리 |
+| [09. Core 설계 결정](09-design-decisions.ko.md) | 주요 설계 결정 사항 |
