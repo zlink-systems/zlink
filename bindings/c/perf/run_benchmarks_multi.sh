@@ -558,7 +558,7 @@ Options:
                          override it with PERF_MULTI_STREAM_MSG_SIZES.
   --transports LIST      Comma-separated transports.
   --duration N           Optional override for multi duration seconds (default 5).
-  --clients N            Override client count (default: 100, stream=10000).
+  --clients N            Override client count (default: 100).
   --hwm BYTES            Debug-only byte override PERF_MULTI_HWM.
                          Requires PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
   --send-hwm BYTES       Debug-only byte override PERF_MULTI_SNDHWM (fallback: --hwm).
@@ -731,7 +731,7 @@ BUILD_MODE_EXPLICIT=0
 DURATION_SECONDS="${PERF_MULTI_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-5}}"
 CLIENTS="${PERF_MULTI_CLIENTS:-${PERF_CLIENTS:-}}"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
-EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
+EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
 HWM="${PERF_MULTI_HWM:-${PERF_HWM:-}}"
 SNDHWM="${PERF_MULTI_SNDHWM:-${PERF_SNDHWM:-}}"
 RCVHWM="${PERF_MULTI_RCVHWM:-${PERF_RCVHWM:-}}"

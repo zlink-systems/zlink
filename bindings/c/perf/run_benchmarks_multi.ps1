@@ -68,7 +68,7 @@ Options:
   -Transports LIST             Comma-separated transports.
   -PinCpu                      Enable PERF_TASKSET=1.
   -Duration N                  Override PERF_MULTI_DURATION_SECONDS.
-  -Clients N                   Override PERF_MULTI_CLIENTS (default: 100, stream=10000).
+  -Clients N                   Override PERF_MULTI_CLIENTS (default: 100).
   -Hwm N                       Debug-only override PERF_MULTI_HWM.
                                Requires PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
   -SendHwm N                   Debug-only override PERF_MULTI_SNDHWM (fallback: -Hwm).
