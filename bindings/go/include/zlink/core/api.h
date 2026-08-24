@@ -74,7 +74,7 @@ typedef struct zlink_auto_hwm_budget_snapshot_t
     uint64_t total_applied_hwm_bytes;
     uint64_t manual_reserved_hwm_bytes;
     uint64_t core_queue_accounted_bytes;
-    uint64_t application_accounted_bytes;
+    uint64_t application_accounted_bytes; /* reserved (always 0) */
     uint64_t current_accounted_bytes;
     uint64_t provisional_accounted_bytes;
     uint64_t peak_accounted_bytes;
@@ -92,9 +92,9 @@ typedef struct zlink_auto_hwm_budget_snapshot_t
     uint64_t active_completion_directional_queue_count;
     uint64_t active_send_queue_count;
     uint64_t active_receive_queue_count;
-    uint64_t outstanding_application_lease_count;
-    uint64_t retired_queue_count;
-    uint64_t deferred_origin_credit_bytes;
+    uint64_t outstanding_application_lease_count; /* reserved (always 0) */
+    uint64_t retired_queue_count; /* reserved (always 0) */
+    uint64_t deferred_origin_credit_bytes; /* reserved (always 0) */
     uint64_t unlimited_manual_queue_count;
     uint32_t blocked_ratio_ppm;
     uint32_t flags;
@@ -214,7 +214,6 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_reset_auto_hwm_budget_metrics (void
 
 /** @brief Start a built-in proxy between frontend and backend sockets. */
 ZLINK_EXPORT zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *capture_);
-
 
 /** @brief Check if the library supports a given capability (e.g. "ipc", "tls"). */
 ZLINK_EXPORT bool zlink_has (const char *capability_);
