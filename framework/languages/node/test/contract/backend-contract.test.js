@@ -24,6 +24,9 @@ const {
 const {
   releaseApplicationJobPermitBeforeHandler
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
+const {
+  ZLinkSpotSerialExecutor
+} = require('../../packages/framework/dist/runtime/spots');
 
 function applicationJobQueue(maxQueuedApplicationJobs) {
   return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
@@ -998,6 +1001,74 @@ test('backend mesh dispatch pump drains ready work queued before an async handle
     assert.equal(drainedBatches, 2);
   } finally {
     resolveFirstDispatch();
+    await pump.dispose();
+  }
+});
+
+test('backend mesh dispatch pump does not inherit the Spot turn that signaled ready', async () => {
+  let readyHandler;
+  let received = false;
+  let releaseOwner;
+  const ownerHeld = new Promise((resolve) => { releaseOwner = resolve; });
+  let dispatchStarted;
+  const started = new Promise((resolve) => { dispatchStarted = resolve; });
+  let dispatchCompleted;
+  const completed = new Promise((resolve) => { dispatchCompleted = resolve; });
+  let reportedError;
+  const claim = {
+    recvBatch() {
+      if (received) return { ok: false, records: [] };
+      received = true;
+      return { ok: true, records: [{ parts: [] }] };
+    },
+    release() {}
+  };
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return { reset() {}, takeClaim() { return claim; }, close() {} };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady() {
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Spot }]
+      };
+    }
+  };
+  const serial = new ZLinkSpotSerialExecutor();
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
+    async dispatch() {
+      dispatchStarted();
+      await serial.execute(() => dispatchCompleted());
+    },
+    reportError(error) { reportedError = error; }
+  });
+
+  try {
+    pump.start();
+    const owner = serial.execute(async () => {
+      readyHandler(framework.ReadyDomain.Infrastructure);
+      await ownerHeld;
+    });
+    await started;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reportedError, undefined);
+    releaseOwner();
+    await owner;
+    await Promise.race([
+      completed,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Detached Mesh dispatch did not enter the Spot owner.')),
+        1_000
+      ))
+    ]);
+  } finally {
+    releaseOwner();
     await pump.dispose();
   }
 });
