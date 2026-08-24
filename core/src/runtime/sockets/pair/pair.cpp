@@ -105,6 +105,13 @@ int zlink::pair_t::xsend (
     return 0;
 }
 
+int zlink::pair_t::xrollback ()
+{
+    if (_pipe)
+        _pipe->rollback ();
+    return 0;
+}
+
 int zlink::pair_t::xrecv (msg_t *msg_)
 {
     //  Deallocate old content of the message.

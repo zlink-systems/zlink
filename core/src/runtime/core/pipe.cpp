@@ -1317,7 +1317,8 @@ bool zlink::pipe_t::apply_remote_flow_state (
         //  Resuming removes only the remote-pause cause. Termination and the
         //  transport-pair hold keep their own state, so the send-ready edge is
         //  published only when every cause is clear.
-        if (!paused && _state == active && !_transport_pair_write_held) {
+        if (!paused && _state == active && !_transport_pair_write_held
+            && _out_active) {
             //  A send refused by the remote cause never evaluated the HWM, so
             //  no cause currently owns the pending wake. Hand it to the
             //  byte-credit cause using the classic lost-wakeup discipline:
@@ -1336,6 +1337,11 @@ bool zlink::pipe_t::apply_remote_flow_state (
             //  half of this pair - it publishes credit before reading the
             //  waiter - lives in the inbound accounting path and needs the
             //  matching barrier there; see the worklog.
+            //
+            //  If _out_active was already false, byte-HWM admission owns the
+            //  wake. A remote resume must not replace that decision with the
+            //  coarser current-in-flight check: no peer credit was returned,
+            //  and the part that reached HWM can still be rejected.
             _out_active = false;
             _waiting_for_byte_credit.store (true, std::memory_order_release);
             std::atomic_thread_fence (std::memory_order_seq_cst);
