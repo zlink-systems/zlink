@@ -99,25 +99,51 @@ public final class RoutedRequestSupport {
             closeParts(parts, partCount);
             return;
         }
+        Runnable completion;
+        Runnable rejectedCompletion;
         pending.callbackLifecycle().enter();
         try {
             if (result != RequestResult.OK.value()) {
-                pending.future().completeExceptionally(
-                    new ZlinkRequestException(requestResult(result), result));
-                return;
-            }
-            Message[] frames = InternalAccess.messageFromOwnedMessageVectorShared(
-                parts, partCount);
-            List<Message> reply = frames.length == 0
-                ? List.of() : Arrays.asList(frames);
-            if (!pending.future().complete(reply)) {
-                Message.closeAll(frames);
+                ZlinkRequestException failure = new ZlinkRequestException(
+                    requestResult(result), result);
+                completion = () -> pending.future().completeExceptionally(
+                    failure);
+                rejectedCompletion = completion;
+            } else {
+                Message[] frames =
+                    InternalAccess.messageFromOwnedMessageVectorShared(
+                        parts, partCount);
+                List<Message> reply = frames.length == 0
+                    ? List.of() : Arrays.asList(frames);
+                completion = () -> {
+                    if (!pending.future().complete(reply)) {
+                        Message.closeAll(frames);
+                    }
+                };
+                rejectedCompletion = () -> {
+                    try {
+                        Message.closeAll(frames);
+                    } finally {
+                        pending.future().completeExceptionally(
+                            new ZlinkRequestException(RequestResult.TERMINATED,
+                                NativeErrno.ECANCELED));
+                    }
+                };
             }
         } catch (Throwable failure) {
-            pending.future().completeExceptionally(failure);
+            completion = () -> pending.future().completeExceptionally(failure);
+            rejectedCompletion = completion;
         } finally {
             closeParts(parts, partCount);
             pending.callbackLifecycle().exit();
+        }
+        try {
+            pending.callbackLifecycle().dispatch(completion);
+        } catch (RuntimeException rejected) {
+            // Socket close cannot normally reject while the Core callback is
+            // active: native close reports BUSY until the callback returns.
+            // Keep the defensive path off the callback thread as well.
+            CompletableFuture.runAsync(rejectedCompletion);
         }
     }
 
@@ -143,6 +169,8 @@ public final class RoutedRequestSupport {
         void enter();
 
         void exit();
+
+        void dispatch(Runnable completion);
     }
 
     private record PendingReply(CompletableFuture<List<Message>> future,

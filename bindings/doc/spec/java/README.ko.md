@@ -698,17 +698,20 @@ Raw ROUTER/`Received` reply의 terminal은
 - `submit()`은 Core 호출 전에 CompletionStage와 binding-owned opaque userdata
   token을 strong pending table에 등록한다. Core가 `zlink_send_async` 안에서
   callback을 inline 호출해도 안전하며, callback은 table에서 항목을 한 번만 꺼내
-  stage를 완료한다.
-- Completion callback은 Core가 호출한 JVM thread에서 completion만 전달한다.
-  필요한 JVM attach/detach는 허용되지만 binding은 admission용 thread, queue,
-  scheduler, retry를 만들지 않는다. deadline은 per-operation Core option이다.
+  terminal을 snapshot한다.
+- Native completion callback은 Core가 호출한 JVM thread에서 event와 payload 소유권만
+  snapshot하고, 같은 socket의 기존 completion dispatcher가 native callback thread 밖에서
+  stage를 완료한다. 이 경계는 Core callback 안에서 inline `CompletionStage` continuation이 다시 native submit하는 재진입을
+  막는다. Binding은 admission용 thread·queue, readiness scheduler 또는 retry를 만들지
+  않고 deadline은 per-operation Core option으로 유지한다.
 - `TIMED_OUT`와 `TERMINAL`은 `terminal_errno`를 보존한
   `ZlinkSubmitException`으로 stage를 예외 완료한다. 취소는
   `zlink_send_async_cancel`을 요청하며 Core completion은 여전히 정확히 한 번
   전달된다. callback 안에서 다시 submit하는 것은 Core 계약상 `EDEADLK`다.
-- Request는 request callback table을 마지막 request part보다 먼저 설치하고,
-  Core reply callback이 반환 stage를 직접 완료한다. timeout scheduler나
-  completion executor를 binding이 소유하지 않는다.
+- Request는 request callback table을 마지막 request part보다 먼저 설치한다. Core
+  reply callback은 reply를 한 번만 인수하고 위의 기존 socket completion dispatcher로
+  반환 stage 완료를 넘긴다. Request만을 위한 executor·timeout scheduler·retry queue는
+  추가하지 않는다.
 - 현재 Core의 ROUTER multipart abort와 DEALER generic-target-fail 결함 때문에
   Java multipart-async contract 검증은 한 part record로 제한한다. Core 수정 후
   multipart assertion을 복원한다.

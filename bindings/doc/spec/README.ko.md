@@ -1327,12 +1327,14 @@ complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part 
 호출하고, Core 내부 blocking 대기를 포함한 한 번의 attempt가 끝나면 즉시 해제한다. 별도
 multipart ABI나 public transaction abstraction을 추가하지 않는다.
 
-**Request**는 다르다: reply 완료는 Core가 구동한다. reply handler callback이 suspension을
-완료하고, 완료가 발생한 컨텍스트에서 재개된다. Request는 최초 제출 뒤 기존 reply
+**Request**는 다르다: reply 완료는 Core가 구동한다. Reply handler callback은
+terminal을 한 번만 인수한다. 언어 future·promise가 completion 호출 thread에서 user
+continuation을 inline으로 실행할 수 있으면, binding은 이미 존재하는 socket completion
+dispatcher로 completion을 넘겨 native callback thread 밖에서 재개한다. Request는 최초 제출 뒤 기존 reply
 correlation을 유지하며 reply, timeout, disconnect, termination, cancellation 중 하나로
 끝난다 — timeout은 이미 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). 최초 deadline은 대기 중
-연장하지 않는다. 바인딩은 request 완료 표면 제공을 위해서도 자체 스레드나 재시도 큐를
-두지 않는다.
+연장하지 않는다. Request만을 위한 스레드, admission·재시도 queue나 timer를 추가하지
+않는다.
 
 Routed **send**의 언어별 비동기 terminal은 C++ `async()`, .NET `Async(...)`,
 Java·Node·Python·Rust `submit()`이다. C++는 plain-thread용 blocking `submit()`도

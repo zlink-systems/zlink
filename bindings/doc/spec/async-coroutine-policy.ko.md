@@ -24,8 +24,9 @@ DEALER/ROUTER **routed send**의 async 완료, PUB/XPUB **publish**의 동기
 virtual thread 실행, event loop 연결, handler dispatcher 연결은 framework가
 맡는다.
 
-**bindings 라이브러리는 스레드를 하나도 소유하지 않는다.** HWM-managed
-send와 routed send의 수용 대기와 재시도는 Core가 소유한다. C++의 blocking
+**bindings 라이브러리는 admission 대기·재시도용 스레드나 queue를 소유하지
+않는다.** HWM-managed send와 routed send의 수용 대기와 재시도는 Core가
+소유한다. C++의 blocking
 `submit()`과 Go의 `Submit(ctx)`는 Core 안에서 대기하고, 그 밖의 언어별 비동기
 terminal은 `zlink_send_async`를 제출한 뒤 `zlink_send_complete_handler`가 전달하는
 최종 완료로 awaitable을 끝낸다. Core가 수용한 operation은
@@ -35,10 +36,11 @@ terminal은 `zlink_send_async`를 제출한 뒤 `zlink_send_complete_handler`가
 경우에만 어플리케이션이 재시도 여부를 정한다. `publish`는 HWM에서 대기하지
 않으므로 동기 `submit()`으로 완료한다. request는 이미 Core 자신이 완료를
 구동하는 지점(reply handler callback, `ZLINK_REQUEST_TIMED_OUT`)이 있으므로,
-바인딩은 그 지점이 suspension·callback·completion channel을 완료하도록
-연결할 뿐 자체 재시도나 스레드를 두지 않는다. suspension 재개는 Core가
-완료를 전달한 컨텍스트에서 일어난다. bindings 라이브러리는 coroutine
-executor나 scheduler를 직접 소유하지 않는다. 다만 언어 관용의 suspension
+바인딩은 그 terminal을 suspension·callback·completion channel에 연결할 뿐
+자체 재시도나 admission queue를 두지 않는다. 완료 호출이 user continuation을
+inline 실행할 수 있는 언어는 이미 있는 completion dispatcher를 사용해 native
+callback thread 밖에서 완료할 수 있다. 이는 request 전용 executor나 scheduler를
+추가한다는 뜻이 아니다. 다만 언어 관용의 suspension
 객체는 binding 계약에 포함한다. Python request builder의 `submit()`은 await
 가능한 coroutine object를, Rust request builder의 `submit()`은 runtime
 비종속 `Future`를 반환한다. 이는 새 operation 시작점이나 framework
@@ -89,10 +91,12 @@ executor가 아니다.
   operation builder를 반환한다.
 - payload와 timeout은 operation 시작점 인자가 아니라 builder 단계에서
   표현한다.
-- bindings 라이브러리는 coroutine scheduler, Kotlin `CoroutineScope`, C++ executor,
-  framework dispatcher를 소유하지 않는다. **바인딩 라이브러리는 자체 스레드,
-  대기열, 재시도 정책도 소유하지 않는다** — send, publish, routed send,
-  request든 마찬가지다.
+- bindings 라이브러리는 framework coroutine scheduler, Kotlin `CoroutineScope`,
+  C++ framework executor를 소유하지 않는다. **바인딩 라이브러리는 admission
+  대기열이나 재시도 정책도 소유하지 않는다** — send, publish, routed send,
+  request든 마찬가지다. 언어 future·promise의 inline continuation이 Core callback에
+  재진입하지 않도록 이미 있는 completion dispatcher에서 terminal을 전달하는 것은
+  허용하지만, operation별 executor·queue·timer를 추가하지 않는다.
 - coroutine 전용 recv, virtual thread 전용 recv, framework dispatcher 전용 submit 같은
   별도 public API를 bindings 계약에 추가하지 않는다.
 - builder는 한 번 submit된 뒤 다시 submit될 수 없다. 언어가 ownership 타입이나 typestate를
@@ -220,10 +224,12 @@ C++ request builder는 세 개의 terminal을 노출한다.
 terminal이 반환하는 awaitable이 이미 모든 소비 방식(await/join/block_on/
 channel recv)을 지원하므로 별도 terminal을 늘릴 이유가 없다.
 
-reply 완료는 Core가 구동한다: reply handler callback이 suspension·callback·
-completion channel을 완료하고, 재개는 완료가 발생한 컨텍스트에서 일어난다.
-request timeout은 이미 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). 바인딩은 이
-완료 표면을 위해 재시도 큐나 전용 스레드를 두지 않는다.
+reply 완료는 Core가 구동한다. Reply handler callback은 terminal과 payload를 한 번만
+인수한다. 언어 future·promise가 완료 호출 thread에서 user continuation을 inline으로
+실행할 수 있으면, binding은 이미 있는 completion dispatcher에 terminal 전달을 넘겨
+native callback thread 밖에서 완료한다. Request timeout은 이미 Core 소유다
+(`ZLINK_REQUEST_TIMED_OUT`). 바인딩은 이 완료 표면을 위해 admission·재시도 queue,
+operation별 executor나 timer를 추가하지 않는다.
 
 | 구분 | bindings 완료 표면 |
 |---|---|
@@ -235,7 +241,7 @@ request timeout은 이미 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). 바인딩�
 | timeout | builder의 `timeout(...)` 단계. 만료는 Core가 `ZLINK_REQUEST_TIMED_OUT`으로 통지한다 |
 | submit 실패 | failed task/future/promise, error result, 예외 (C++ `submit()`은 던지는 예외) |
 | reply 실패 | 같은 완료 표면의 실패 |
-| 재개 컨텍스트 | Core가 완료를 전달한 컨텍스트(reply handler callback). 이후 실행 모델 연결은 framework 몫이다 |
+| 재개 컨텍스트 | 언어 binding의 completion 컨텍스트. Inline continuation 언어는 native reply callback 밖의 기존 completion dispatcher에서 완료할 수 있으며, 이후 실행 모델 연결은 framework 몫이다 |
 
 ## Send·Publish·Request·Raw reply 언어별 정규 표
 
@@ -308,7 +314,7 @@ source-local admission을 관찰하는 awaitable이다.
 framework는 bindings가 제공하는 완료 경계를 자기 실행 모델로 변환한다.
 **framework는 coroutine-mandatory다** — 모든 framework 언어는 coroutine
 또는 이에 준하는 async 실행 모델만 지원하며, blocking 실행 모델을 위한
-별도 표면을 두지 않는다. **bindings는 executor를 제공하지 않지만,
+별도 표면을 두지 않는다. **bindings는 framework executor를 제공하지 않지만,
 HWM-managed send를 위해 framework가 executor를 새로 만들 필요도 없다** —
 send의 awaitable(C++는 `async()`, 다른 언어는 `submit()`이 반환하는
 awaitable)은 이미 Core send-completion 통지로 완료되므로, framework는 그
@@ -389,5 +395,6 @@ request도 이미 언어 native awaitable(또는 C++의 `async()`)을 반환하�
   동기 `submit()`을 직접 호출한다.
 
 이 방식이면 bindings는 C API wrapper로서의 책임을 유지하고, framework는 자기 실행 모델에
-맞는 coroutine 지원을 독립적으로 제공할 수 있다. bindings는 어느 경우에도 스레드를
-소유하지 않는다.
+맞는 coroutine 지원을 독립적으로 제공할 수 있다. bindings는 admission 대기·재시도를
+위한 스레드나 queue를 소유하지 않는다. 언어 runtime상 필요한 기존 completion
+dispatcher는 Core callback 밖에서 terminal을 전달하는 경계만 소유한다.

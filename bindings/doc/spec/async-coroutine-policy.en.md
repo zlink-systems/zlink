@@ -25,8 +25,9 @@ per-language completion boundary on top of the core C API. Coroutine execution,
 virtual thread execution, event loop wiring, and handler dispatcher wiring are
 the framework's responsibility.
 
-**The bindings library owns no threads at all.** Core owns admission waiting
-and retry for HWM-managed send and routed send. C++'s blocking `submit()` and
+**The bindings library owns no thread or queue for admission waiting or
+retry.** Core owns admission waiting and retry for HWM-managed send and routed
+send. C++'s blocking `submit()` and
 Go's `Submit(ctx)` wait inside Core. Every other language's asynchronous
 terminal submits through `zlink_send_async`, then completes its awaitable from
 the final event delivered by `zlink_send_complete_handler`. Every accepted
@@ -37,11 +38,12 @@ application chooses policy only when Core rejects the initial submit because
 the pending-operation bound is full. PUB/XPUB `publish` never waits on HWM and
 completes through synchronous `submit()`. Request
 already has a point where Core itself drives completion (the reply handler
-callback, `ZLINK_REQUEST_TIMED_OUT`), so a binding only wires that point to
-complete the suspension, callback, or completion channel; it adds no retry
-logic or thread of its own. Suspension resumption happens in the context
-where Core delivered the completion. The bindings library owns no coroutine
-executor or scheduler. It still provides a language-native suspension
+callback, `ZLINK_REQUEST_TIMED_OUT`), so a binding only wires that terminal to
+the suspension, callback, or completion channel; it adds no retry logic or
+admission queue. In a language whose completion primitive may run user
+continuations inline, an existing completion dispatcher may deliver the
+terminal outside the native callback thread. This does not add a request-specific
+executor or scheduler. The binding still provides a language-native suspension
 object: a Python request builder's `submit()` returns an awaitable coroutine
 object, and a Rust request builder's `submit()` returns a runtime-independent
 `Future`. Neither is a new operation starting point or a framework executor.
@@ -91,7 +93,7 @@ object, and a Rust request builder's `submit()` returns a runtime-independent
 - The bindings public API keeps a single name for an operation's starting point. It does not grow that name with completion style or flag combinations, as in `requestAsync`, `request_callback`, `sendNoWait`, or `publishWithFlags`.
 - `send`, `request`, `reply`, `publish`, Actor location operations, and Actor session attach operations all return an operation builder.
 - Payload and timeout are expressed at the builder stage, not as arguments to the operation's starting point.
-- The bindings library does not own a coroutine scheduler, a Kotlin `CoroutineScope`, a C++ executor, or a framework dispatcher. **The bindings library owns no threads, queues, or retry policy of its own either** — for send, publish, routed send, or request.
+- The bindings library does not own a framework coroutine scheduler, a Kotlin `CoroutineScope`, or a C++ framework executor. **The bindings library owns no admission queue or retry policy of its own either** — for send, publish, routed send, or request. An existing completion dispatcher may deliver a terminal outside a Core callback when a language future or promise can run user continuations inline, but this adds no per-operation executor, queue, or timer.
 - It does not add separate public APIs to the bindings contract for a coroutine-only recv, a virtual-thread-only recv, or a framework-dispatcher-only submit.
 - Once a builder has been submitted, it cannot be submitted again. Where the language offers an ownership type or typestate, this is blocked by the type system; otherwise it is blocked by a runtime state check.
 - Submit failure and reply failure are delivered through the return type's failure representation or that language's idiomatic exception.
@@ -221,11 +223,13 @@ in every other language the terminal's returned awaitable already serves
 every consumption style (await / join / block_on / channel recv), leaving no
 reason to add another terminal.
 
-Core drives reply completion: a reply handler callback completes the
-suspension, callback, or completion channel, and resumption happens in the
-context where that completion occurred. Request timeout is already
-Core-owned (`ZLINK_REQUEST_TIMED_OUT`). A binding keeps no retry queue or
-dedicated thread for this completion surface.
+Core drives reply completion. A reply handler callback takes the terminal and
+payload exactly once. If a language future or promise can run user continuations
+inline on the completing thread, the binding hands terminal delivery to an
+existing completion dispatcher so completion occurs outside the native callback
+thread. Request timeout is already Core-owned (`ZLINK_REQUEST_TIMED_OUT`). A
+binding adds no admission/retry queue, per-operation executor, or timer for this
+completion surface.
 
 | Aspect | bindings completion surface |
 |---|---|
@@ -237,7 +241,7 @@ dedicated thread for this completion surface.
 | Timeout | The builder's `timeout(...)` stage; expiry is signaled by Core as `ZLINK_REQUEST_TIMED_OUT` |
 | Submit failure | A failed task/future/promise, error result, or exception (C++ `submit()` throws) |
 | Reply failure | Failure of the same completion surface |
-| Resumption context | The context where Core delivered the completion (the reply handler callback). Further execution-model wiring belongs to the framework |
+| Resumption context | The language binding's completion context. An inline-continuation language may complete on its existing dispatcher outside the native reply callback; further execution-model wiring belongs to the framework |
 
 ## Per-language normative table for send/publish/request/raw reply
 
@@ -316,7 +320,7 @@ A framework converts the completion boundary bindings provides into its
 own execution model. **Frameworks are coroutine-mandatory** — every framework
 language supports only a coroutine, or coroutine-equivalent async, execution
 model, and provides no separate surface for a blocking execution model.
-**Bindings provides no executor, but a framework does not need to build one
+**Bindings provides no framework executor, but a framework does not need to build one
 for HWM-managed send** — the send awaitable (C++'s `async()`, or the awaitable
 every other language's `submit()` returns) is already completed by the Core
 send-completion notification, so the framework simply `await`s / `co_await`s
@@ -401,4 +405,6 @@ needs no such wrapping either.
 
 This way, bindings keeps its responsibility as a C API wrapper, while each
 framework can independently provide coroutine support that fits its own
-execution model. Bindings owns no thread in either case.
+execution model. Bindings owns no admission-wait or retry thread in either
+case. An existing language completion dispatcher owns only the boundary that
+delivers a terminal outside a Core callback when that language requires it.

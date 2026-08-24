@@ -21,8 +21,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -138,6 +140,87 @@ public class ReceivedContractTest {
                 ZlinkRequestException failure =
                     (ZlinkRequestException) timedOut.getCause();
                 assertEquals(RequestResult.TIMED_OUT, failure.getResult());
+            }
+        }
+    }
+
+    @Test
+    public void routedRequestCompletionCanReplyToAnEarlierRouterRequest()
+        throws Exception {
+        TestSupport.assumeNative();
+
+        RoutingId callerRid = RoutingId.from("completion-caller");
+        RoutingId sourceRid = RoutingId.from("completion-source");
+        RoutingId targetRid = RoutingId.from("completion-target");
+        try (Context ctx = Zlink.createContext();
+             RouterSocket caller = ctx.createRouterSocket();
+             RouterSocket source = ctx.createRouterSocket();
+             RouterSocket target = ctx.createRouterSocket()) {
+            caller.setRoutingId(callerRid);
+            source.setRoutingId(sourceRid);
+            target.setRoutingId(targetRid);
+            String sourceEndpoint = TestSupport.inprocEndpoint(
+                "completion-source");
+            String targetEndpoint = TestSupport.inprocEndpoint(
+                "completion-target");
+            source.bind(sourceEndpoint);
+            caller.connect(sourceEndpoint);
+            target.bind(targetEndpoint);
+            source.connect(targetEndpoint);
+
+            var callerPending = caller.request(sourceRid)
+                .message(Message.from("caller-request"))
+                .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
+                .submit();
+            RoutingId replyTarget;
+            long replySequence;
+            try (Received inbound = new Received()) {
+                assertTrue(source.recv(inbound, RecvFlags.NONE));
+                replyTarget = inbound.getRoutingId().orElseThrow();
+                replySequence = inbound.requestSeq().orElseThrow();
+                assertEquals("caller-request",
+                    inbound.singlePartOrThrow().toUtf8String());
+            }
+
+            CompletableFuture<Void> forwardedTerminal = new CompletableFuture<>();
+            AtomicReference<String> completionThread = new AtomicReference<>();
+            var targetPending = source.request(targetRid)
+                .message(Message.from("forwarded-request"))
+                .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
+                .submit();
+            targetPending.whenComplete((reply, failure) -> {
+                completionThread.set(Thread.currentThread().getName());
+                if (failure != null) {
+                    forwardedTerminal.completeExceptionally(failure);
+                    return;
+                }
+                try {
+                    source.reply(replyTarget, replySequence)
+                        .message(reply.getFirst())
+                        .submit();
+                    forwardedTerminal.complete(null);
+                } catch (Throwable rejected) {
+                    forwardedTerminal.completeExceptionally(rejected);
+                } finally {
+                    Message.closeAll(reply);
+                }
+            });
+
+            try (Received inbound = new Received();
+                 Message reply = Message.from("target-reply")) {
+                assertTrue(target.recv(inbound, RecvFlags.NONE));
+                inbound.reply().message(reply).submit();
+            }
+
+            forwardedTerminal.get(TestSupport.DEFAULT_TIMEOUT_MS,
+                TimeUnit.MILLISECONDS);
+            assertEquals("zlink-send-completion", completionThread.get());
+            List<Message> reply = callerPending.toCompletableFuture().get(
+                TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            try {
+                assertEquals("target-reply", reply.getFirst().toUtf8String());
+            } finally {
+                Message.closeAll(reply);
             }
         }
     }
