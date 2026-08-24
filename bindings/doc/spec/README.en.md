@@ -5091,7 +5091,7 @@ target state.
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
 | `setDispatchHandler` callback registration | SPOT raw fn ptr | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented |
 | `recvActorLifecycle` | SPOT lifecycle queue | Required | Required | Required | Required | Required | Required | Required |
-| HWM-managed async send completion | `zlink_send_async` + completion callback | Required | Required | Required | Required | Required | Required | Required |
+| HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Public `detachStream` not exposed | N/A | Required | Required | Required | Required | Required | Required | Required |

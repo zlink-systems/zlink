@@ -4462,7 +4462,7 @@ guide, spec signature에 노출하지 않는다.
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
 | `setDispatchHandler` callback registration | SPOT raw fn ptr | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required | 구현 시 Required |
 | `recvActorLifecycle` | SPOT lifecycle queue | Required | Required | Required | Required | Required | Required | Required |
-| HWM-managed async send completion | `zlink_send_async` + completion callback | Required | Required | Required | Required | Required | Required | Required |
+| HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` 차단 | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Public `detachStream` 비노출 | N/A | Required | Required | Required | Required | Required | Required | Required |
