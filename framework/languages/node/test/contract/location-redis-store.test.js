@@ -521,6 +521,223 @@ test('redis-backed aggregate prepare commit and abort converge across repository
   }
 });
 
+test('aggregate committer retries a target owner-lease heartbeat conflict with unchanged authority', async () => {
+  const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  let targetRepository;
+  let targetOwner;
+  let heartbeatArmed = false;
+  let heartbeatWrites = 0;
+  let prepareCasAttempts = 0;
+  const provider = {
+    read: (key, signal) => inner.read(key, signal),
+    scan: (request, signal) => inner.scan(request, signal),
+    async write(request, signal) {
+      const preparesAggregate = request.mutations.some(mutation =>
+        mutation.kind === 'put'
+        && mutation.key.value.startsWith('zlink:v11:aggregate:')
+        && JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state === 'prepared'
+      );
+      if (preparesAggregate) prepareCasAttempts += 1;
+      if (preparesAggregate && heartbeatArmed) {
+        heartbeatArmed = false;
+        const renewed = await targetRepository.renewOwnerLease(
+          targetOwner.token,
+          60_000,
+          signal
+        );
+        assert.equal(renewed.kind, 'renewed');
+        heartbeatWrites += 1;
+      }
+      return inner.write(request, signal);
+    }
+  };
+  const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  targetRepository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const sourceOwner = await source.claimOwnerLease('heartbeat-source-owner', 60_000);
+  targetOwner = await targetRepository.claimOwnerLease('heartbeat-target-owner', 60_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') return;
+  const sourceTarget = {
+    meshName: 'heartbeat-play',
+    nodeRid: 'heartbeat-source-node',
+    nodeLifecycleGeneration: 1n,
+    owner: sourceOwner.token
+  };
+  const targetTarget = {
+    meshName: 'heartbeat-play',
+    nodeRid: 'heartbeat-target-node',
+    nodeLifecycleGeneration: 1n,
+    owner: targetOwner.token
+  };
+  for (const [repository, target] of [[source, sourceTarget], [targetRepository, targetTarget]]) {
+    const stored = await repository.updateMeshNode(
+      aggregateDescriptor(target, 4),
+      frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+    );
+    assert.equal(stored.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
+  }
+  const authority = await createReadyUserSpot(
+    source,
+    'heartbeat-room',
+    sourceTarget
+  );
+  const plan = aggregateCommitterPlan(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    authority,
+    'heartbeat-room',
+    targetTarget
+  );
+  heartbeatArmed = true;
+
+  const prepared = await new frameworkInternal.ServiceRelocationAggregateCommitter(
+    targetRepository
+  ).prepare(plan);
+
+  assert.equal(prepared.fence.aggregateId.value, plan.envelope.aggregateId);
+  assert.equal(heartbeatWrites, 1);
+  assert.equal(prepareCasAttempts, 2);
+  const unchanged = await targetRepository.readAuthority(plan.participants[0].key);
+  assert.equal(unchanged.kind, 'snapshot');
+  assert.equal(unchanged.storeVersion.value, authority.storeVersion.value);
+});
+
+test('aggregate committer does not retry a conflict after authority StoreVersion changes', async () => {
+  const key = encodeAuthorityKey('user_spot', 'changed-authority-room');
+  const expected = {
+    kind: 'snapshot',
+    storeVersion: { value: 'source-v1' },
+    payload: Buffer.from('source'),
+    objectGeneration: 3n,
+    authorityOwnerGeneration: 5n,
+    ownerId: 'source-owner',
+    ownerLeaseGeneration: 7n,
+    allocation: {
+      state: 'active',
+      objectKind: 'user_spot',
+      stableType: 'lobby',
+      descriptor: { meshName: 'changed-play', rid: 'source-node' },
+      descriptorLifecycleGeneration: 1n,
+      capacity: userSpotCapacity(1)
+    },
+    storeNow: new Date()
+  };
+  const plan = aggregateCommitterPlan(
+    'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    expected,
+    'changed-authority-room',
+    {
+      meshName: 'changed-play',
+      nodeRid: 'target-node',
+      nodeLifecycleGeneration: 2n,
+      owner: { ownerId: 'target-owner', leaseGeneration: 11n }
+    }
+  );
+  let attempts = 0;
+  const store = {
+    async prepareAggregate() {
+      attempts += 1;
+      return { kind: 'conflict' };
+    },
+    async readAuthority(readKey) {
+      assert.equal(readKey.value, key.value);
+      return { ...expected, storeVersion: { value: 'foreign-v2' } };
+    },
+    async commitAggregate() { return { kind: 'stale' }; },
+    async abortAggregate() { return { kind: 'stale' }; }
+  };
+
+  await assert.rejects(
+    new frameworkInternal.ServiceRelocationAggregateCommitter(store).prepare(plan),
+    /aggregate prepare: conflict/
+  );
+  assert.equal(attempts, 1);
+});
+
+test('aggregate commit retries a target owner-lease heartbeat conflict while its fence stays prepared', async () => {
+  const inner = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+  let targetRepository;
+  let targetOwner;
+  let heartbeatArmed = false;
+  let heartbeatWrites = 0;
+  let commitCasAttempts = 0;
+  const provider = {
+    read: (key, signal) => inner.read(key, signal),
+    scan: (request, signal) => inner.scan(request, signal),
+    async write(request, signal) {
+      const commitsAggregate = request.mutations.some(mutation =>
+        mutation.kind === 'put'
+        && mutation.key.value.startsWith('zlink:v11:aggregate:')
+        && JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state === 'committed'
+      );
+      if (commitsAggregate) commitCasAttempts += 1;
+      if (commitsAggregate && heartbeatArmed) {
+        heartbeatArmed = false;
+        const renewed = await targetRepository.renewOwnerLease(
+          targetOwner.token,
+          60_000,
+          signal
+        );
+        assert.equal(renewed.kind, 'renewed');
+        heartbeatWrites += 1;
+      }
+      return inner.write(request, signal);
+    }
+  };
+  const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  targetRepository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const sourceOwner = await source.claimOwnerLease('commit-heartbeat-source-owner', 60_000);
+  targetOwner = await targetRepository.claimOwnerLease('commit-heartbeat-target-owner', 60_000);
+  assert.equal(sourceOwner.kind, 'claimed');
+  assert.equal(targetOwner.kind, 'claimed');
+  if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') return;
+  const sourceTarget = {
+    meshName: 'commit-heartbeat-play',
+    nodeRid: 'commit-heartbeat-source-node',
+    nodeLifecycleGeneration: 1n,
+    owner: sourceOwner.token
+  };
+  const targetTarget = {
+    meshName: 'commit-heartbeat-play',
+    nodeRid: 'commit-heartbeat-target-node',
+    nodeLifecycleGeneration: 1n,
+    owner: targetOwner.token
+  };
+  for (const [repository, target] of [[source, sourceTarget], [targetRepository, targetTarget]]) {
+    const stored = await repository.updateMeshNode(
+      aggregateDescriptor(target, 4),
+      frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+    );
+    assert.equal(stored.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
+  }
+  const authority = await createReadyUserSpot(
+    source,
+    'commit-heartbeat-room',
+    sourceTarget
+  );
+  const request = aggregateRequest(
+    { value: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    1n,
+    [authority],
+    targetTarget,
+    ['commit-heartbeat-room']
+  );
+  const prepared = await targetRepository.prepareAggregate(request);
+  assert.equal(prepared.kind, 'prepared');
+  if (prepared.kind !== 'prepared') return;
+  heartbeatArmed = true;
+
+  const committed = await targetRepository.commitAggregate(prepared.fence);
+
+  assert.equal(committed.kind, 'committed');
+  assert.equal(heartbeatWrites, 1);
+  assert.equal(commitCasAttempts, 2);
+  const moved = await targetRepository.readAuthority(request.participants[0].authorityKey);
+  assert.equal(moved.kind, 'snapshot');
+  assert.equal(moved.ownerId, targetOwner.token.ownerId);
+  assert.equal(moved.ownerLeaseGeneration, targetOwner.token.leaseGeneration);
+});
+
 test('in-memory aggregate prepare, commit, and abort converge across repository instances', async () => {
   const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
   const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
@@ -997,6 +1214,39 @@ function aggregateRequest(
     },
     targetDescriptorLifecycleGeneration: target.nodeLifecycleGeneration,
     capacity: userSpotCapacity(snapshots.length),
+    targetOwner: target.owner
+  };
+}
+
+function aggregateCommitterPlan(aggregateId, snapshot, spotId, target) {
+  const key = encodeAuthorityKey('user_spot', spotId);
+  return {
+    envelope: {
+      aggregateId,
+      aggregateGeneration: 1n,
+      participants: [{
+        key: key.value,
+        objectKind: 'user_spot',
+        stableType: 'lobby',
+        objectGeneration: snapshot.objectGeneration,
+        authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+        applicationState: Buffer.alloc(0),
+        boundSessionState: Buffer.alloc(0),
+        queuedMessages: [],
+        timers: []
+      }],
+      memberships: []
+    },
+    participants: [{
+      key,
+      expected: snapshot,
+      ownerTransition: 'newOwner',
+      authorityPayload: Buffer.from(`relocated-${spotId}`),
+      membershipMutation: Buffer.alloc(0)
+    }],
+    targetDescriptor: { meshName: target.meshName, rid: target.nodeRid },
+    targetDescriptorLifecycleGeneration: target.nodeLifecycleGeneration,
+    capacity: userSpotCapacity(1),
     targetOwner: target.owner
   };
 }

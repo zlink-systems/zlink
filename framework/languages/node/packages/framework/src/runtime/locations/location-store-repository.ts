@@ -90,6 +90,8 @@ const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_CREATION_TERMINAL_BYTES = 1024 * 1024;
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
+const AGGREGATE_COMMIT_RETRY_WINDOW_MS = 5_000;
+const MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES = 64;
 
 type StoredAuthoritySnapshot = Omit<
   ZLinkAuthoritySnapshot,
@@ -777,6 +779,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkAggregateCommitResult> {
     validateAggregateFence(fence);
+    return await this.commitAggregateCore(
+      fence,
+      0,
+      Date.now() + AGGREGATE_COMMIT_RETRY_WINDOW_MS,
+      signal
+    );
+  }
+
+  private async commitAggregateCore(
+    fence: ZLinkAggregateFence,
+    retryAttempt: number,
+    retryDeadlineAtMs: number,
+    signal?: AbortSignal
+  ): Promise<ZLinkAggregateCommitResult> {
     const rowKey = aggregateKey(fence);
     let aggregateRead = await this.provider.read(rowKey, signal);
     if (aggregateRead.kind === 'missing') return { kind: 'stale' };
@@ -942,6 +958,21 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       aggregateRead = await this.provider.read(rowKey, signal);
       if (aggregateRead.kind === 'missing') return { kind: 'stale' };
       aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
+      if (aggregate.state === 'prepared'
+        && retryAttempt < MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES
+        && Date.now() < retryDeadlineAtMs) {
+        // The commit CAS also fences the target's live owner lease, descriptor,
+        // and capacity rows. Re-read the whole prepared fence after an
+        // auxiliary-row race; a changed aggregate or participant fence exits
+        // through the normal stale checks on the next attempt.
+        await waitForAggregateCommitRetry(retryAttempt, retryDeadlineAtMs, signal);
+        return await this.commitAggregateCore(
+          fence,
+          retryAttempt + 1,
+          retryDeadlineAtMs,
+          signal
+        );
+      }
       if (aggregate.state !== 'committed') return { kind: 'stale' };
     } else {
       aggregate = { ...aggregate, state: 'committed' };
@@ -3019,6 +3050,33 @@ async function parallelForEach<T>(
       }
     }
   ));
+}
+
+async function waitForAggregateCommitRetry(
+  retryAttempt: number,
+  deadlineAtMs: number,
+  signal?: AbortSignal
+): Promise<void> {
+  signal?.throwIfAborted();
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) return;
+  const exponentialMs = Math.min(100, 2 << Math.min(retryAttempt, 5));
+  const delayMs = Math.min(
+    remainingMs,
+    exponentialMs + Math.floor(Math.random() * (exponentialMs + 1))
+  );
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const aborted = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      reject(signal?.reason ?? new Error('Aggregate commit was aborted.'));
+    };
+    signal?.addEventListener('abort', aborted, { once: true });
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', aborted);
+      resolve();
+    }, delayMs);
+  });
 }
 
 function sha256Hex(bytes: Uint8Array): string {
