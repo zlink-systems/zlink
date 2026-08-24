@@ -119,34 +119,26 @@ compiled in.
 
 ---
 
-## `zlink_proxy` / `zlink_proxy_steerable`
+## `zlink_proxy`
 
 Runs a bidirectional forwarding loop between two raw sockets, blocking the calling thread until
 it ends.
 
 ```c
 zlink_proxy(frontend, backend, capture); // capture may be NULL
-
-// or, with external control:
-zlink_proxy_steerable(frontend, backend, capture, control);
 ```
 
 **Parameters.** `frontend_`/`backend_` are required raw socket handles the proxy forwards
 multipart messages between; `capture_` is optional — if non-`NULL`, it receives a copy of every
-forwarded message. `zlink_proxy_steerable` additionally takes an optional `control_` socket that
-accepts `PAUSE`/`RESUME`/`TERMINATE`/`STATISTICS` commands. Every handle is borrowed — neither
-function closes or takes ownership of any of them.
+forwarded message. Every handle is borrowed — the function neither closes nor takes ownership of
+any of them.
 
-**Return and errno.** Both return `zlink_config_result_t` — `ZLINK_CONFIG_OK` when the proxy
+**Return and errno.** Returns `zlink_config_result_t` — `ZLINK_CONFIG_OK` when the proxy
 loop ends normally. `ZLINK_CONFIG_INVALID_HANDLE` for a `NULL` required handle, or a non-`NULL`
 handle that isn't a raw socket.
 
-**When to use.** Use plain `zlink_proxy` for a fire-and-forget forwarding loop you'll run on a
-dedicated thread with no runtime control. Use `zlink_proxy_steerable` when the application needs
-to pause, resume, or cleanly terminate the loop, or pull statistics, from another thread via the
-control socket — the `STATISTICS` reply follows the control socket's ordinary raw send/receive
-contract. `zlink_proxy_steerable` blocks until `TERMINATE`, context termination, or an error ends
-it.
+**When to use.** Use `zlink_proxy` for a fire-and-forget forwarding loop you'll run on a
+dedicated thread with no runtime control.
 
 ---
 

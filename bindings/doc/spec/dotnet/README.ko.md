@@ -483,7 +483,7 @@ facade 연결을 위해 내부적으로 런타임 코드에 위임할 수 있지
 - `Zlink.CreatePoller()`, `Zlink.CreateTimer()`, `Zlink.CreateTimer(ISpot)`은
   eventing 리소스를 만든다.
 - `Zlink.Version()`, `Zlink.Has(...)`, `Zlink.Strerror(...)`, `Zlink.Proxy(...)`,
-  `Zlink.ProxySteerable(...)`, `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`,
+  `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`,
   `ZlinkPoll.Poll(...)`은 공개 static facade다. 네이티브 호출이 `Runtime/`에
   남아 있더라도 이들의 호출 가능 동작은 계약 표면의 일부다.
 

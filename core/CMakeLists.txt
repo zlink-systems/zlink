@@ -810,7 +810,6 @@ set(api-socket-sources
     src/api/socket/request_timeout_scheduler_internal.cpp
     src/api/socket/socket_message_api.cpp
     src/api/socket/socket_message_recv_api.cpp
-    src/api/socket/socket_retained_part_api.cpp
     src/api/socket/socket_message_handler_api.cpp
     src/api/socket/socket_send_async_api.cpp
     src/api/socket/socket_message_send_api.cpp

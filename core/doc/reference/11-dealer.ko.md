@@ -70,10 +70,9 @@ zlink_dealer_recv_part(dealer, &message_type, &request_seq, &part, &has_more, ZL
 **선택 기준.** `message_type_out_`으로 record를 분류한다 — `ZLINK_DEALER_MESSAGE_RAW`(`0`,
 `request_seq_out_ == 0`)는 request/reply envelope이 없는 일반 raw multipart
 메시지다. `ZLINK_DEALER_MESSAGE_REQUEST`(`1`, 0이 아닌 sequence)는 이 DEALER가 받은
-request다 — sequence가 `zlink_dealer_reply_part`에 넘길 reply token이다.
-`ZLINK_DEALER_MESSAGE_REPLY`(`2`)와 `ZLINK_DEALER_MESSAGE_ERROR_REPLY`(`3`)는 reply
-record다 — 실제로는 `zlink_dealer_request_part`로 시작한 작업의 reply와 종료 실패는
-이 수신 호출이 아니라 그 호출의 `zlink_reply_handler_fn` 완료로 전달된다. 한 multipart
+request다 — sequence가 `zlink_dealer_reply_part`에 넘길 reply token이다. 실제로
+`zlink_dealer_request_part`로 시작한 작업의 reply와 종료 실패는 이 수신 호출이 아니라
+그 호출의 `zlink_reply_handler_fn` 완료로만 전달된다. 한 multipart
 record의 모든 part는 같은 type과 sequence를 반환한다 — `has_more_out_ ==
 ZLINK_PART_MORE`면 다음 호출이 같은 record를 이어받는다.
 

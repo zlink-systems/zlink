@@ -69,10 +69,9 @@ for a non-blocking call with nothing available.
 **When to use.** Classify the record via `message_type_out_`: `ZLINK_DEALER_MESSAGE_RAW` (`0`,
 `request_seq_out_ == 0`) is an ordinary raw multipart message with no request/reply envelope.
 `ZLINK_DEALER_MESSAGE_REQUEST` (`1`, nonzero sequence) is a request this DEALER received — the
-sequence is the reply token to pass to `zlink_dealer_reply_part`. `ZLINK_DEALER_MESSAGE_REPLY`
-(`2`) and `ZLINK_DEALER_MESSAGE_ERROR_REPLY` (`3`) are reply records — in practice, replies and
-terminal failures for work started via `zlink_dealer_request_part` are delivered through that
-call's `zlink_reply_handler_fn` completion instead, not through this receive call. Every part of
+sequence is the reply token to pass to `zlink_dealer_reply_part`. Replies and terminal failures
+for work started via `zlink_dealer_request_part` are delivered only through that call's
+`zlink_reply_handler_fn` completion, not through this receive call. Every part of
 one multipart record returns the same type and sequence; when `has_more_out_ ==
 ZLINK_PART_MORE`, the next call continues the same record.
 

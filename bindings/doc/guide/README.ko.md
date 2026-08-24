@@ -18,6 +18,9 @@ zlink를 쓰는 방법**(설치, 관용 예제, 타입 매핑, 언어 고유 규
 않도록 [코어 가이드](https://zlink-systems.github.io/zlink/ko/guide/01-overview/)가 한 번만 다루며, 각 언어 가이드는
 개념이 필요한 자리마다 코어로 링크합니다.
 
+바인딩 구현을 작업하면서 release 대신 현재 Core를 사용해야 하면
+[로컬 Core 빌드](local-core-runtime.ko.md)를 따르세요.
+
 ## 읽는 순서
 
 - **이미 메시징을 안다 / 빨리 쓰고 싶다** → 자기 언어 가이드로 바로 가세요. 막히는

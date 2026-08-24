@@ -121,35 +121,26 @@ bool has_tls = zlink_has("tls");
 
 ---
 
-## `zlink_proxy` / `zlink_proxy_steerable`
+## `zlink_proxy`
 
 두 raw socket 사이의 양방향 forwarding loop를 실행하며, 끝날 때까지 호출한 스레드를
 block한다.
 
 ```c
 zlink_proxy(frontend, backend, capture); // capture는 NULL일 수 있음
-
-// 또는 외부 제어와 함께:
-zlink_proxy_steerable(frontend, backend, capture, control);
 ```
 
 **Parameters.** `frontend_`/`backend_`는 proxy가 multipart 메시지를 주고받을
 raw socket handle이며 필수다. `capture_`는 선택적이다 — non-`NULL`이면 전달되는
-모든 메시지의 복사본을 받는다. `zlink_proxy_steerable`은 추가로
-`PAUSE`/`RESUME`/`TERMINATE`/`STATISTICS` 명령을 받는 선택적 `control_` socket을
-받는다. 모든 handle은 빌린 것이다 — 어느 함수도 handle을 닫거나 소유권을 갖지
-않는다.
+모든 메시지의 복사본을 받는다. 모든 handle은 빌린 것이다 — 함수는 handle을 닫거나
+소유권을 갖지 않는다.
 
-**Return과 errno.** 둘 다 `zlink_config_result_t`를 반환한다 — proxy loop가
+**Return과 errno.** `zlink_config_result_t`를 반환한다 — proxy loop가
 정상적으로 끝나면 `ZLINK_CONFIG_OK`. 필수 handle이 `NULL`이거나 non-`NULL`
 handle이 raw socket이 아니면 `ZLINK_CONFIG_INVALID_HANDLE`.
 
 **선택 기준.** 런타임 제어 없이 전용 스레드에서 실행할 fire-and-forget forwarding
-loop에는 평범한 `zlink_proxy`를 쓴다. Application이 다른 스레드에서 control
-socket을 통해 loop를 멈추거나·재개하거나·깔끔히 종료하거나 통계를 뽑아야 하면
-`zlink_proxy_steerable`을 쓴다 — `STATISTICS` 응답은 control socket의 일반 raw
-send/receive 계약을 따른다. `zlink_proxy_steerable`은 `TERMINATE`, context 종료,
-또는 오류가 끝낼 때까지 block한다.
+loop에는 `zlink_proxy`를 쓴다.
 
 ---
 

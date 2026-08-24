@@ -19,6 +19,9 @@ mapping, language-specific conventions. The messaging **concepts themselves**
 covered once, in the [core guide](https://zlink-systems.github.io/zlink/guide/01-overview/);
 each language guide links back to the core guide wherever a concept is needed.
 
+When working on a binding and explicitly using the current Core rather than a
+release package, follow [building bindings against a local Core](local-core-runtime.en.md).
+
 ## Reading Order
 
 - **You already know messaging / want to get moving fast** → go straight to your

@@ -241,7 +241,7 @@ for the full list of C functions.
 | Subscribe | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | Monitor | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | Poller / timer | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
-| Proxy | `zlink_proxy` / `zlink_proxy_steerable` | `Zlink.Proxy(...)` / `Zlink.ProxySteerable(...)` |
+| Proxy | `zlink_proxy` | `Zlink.Proxy(...)` |
 
 > **Naming convention**: C's `snake_case` becomes `PascalCase` in .NET. The C
 > `*_part` family (the multipart substrate) is represented in .NET as accumulated

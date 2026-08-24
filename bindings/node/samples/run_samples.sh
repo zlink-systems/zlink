@@ -5,6 +5,9 @@ SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SAMPLES_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+source "$ROOT_DIR/../tools/local_core_runtime.sh"
+zlink_export_local_core_runtime
+
 source "$ROOT_DIR/scripts/run_node_job.sh"
 
 samples=(
