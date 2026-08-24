@@ -125,16 +125,37 @@ void test_ctx_thread_opts ()
     }
 
 
-    // test INTEGER thread name prefix:
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_set (get_test_context (), ZLINK_THREAD_NAME_PREFIX, 1234));
-    TEST_ASSERT_EQUAL_INT (1234,
-                           zlink_ctx_get (get_test_context (), ZLINK_THREAD_NAME_PREFIX, NULL));
-
     const char thread_name_prefix[] = "zlink-worker";
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_ctx_set_data (get_test_context (), ZLINK_THREAD_NAME_PREFIX,
                           thread_name_prefix, sizeof (thread_name_prefix)));
+
+    char read_thread_name_prefix[sizeof (thread_name_prefix)] = {};
+    size_t read_thread_name_prefix_size = sizeof (read_thread_name_prefix);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_ctx_get_data (get_test_context (), ZLINK_THREAD_NAME_PREFIX,
+                          read_thread_name_prefix, &read_thread_name_prefix_size));
+    TEST_ASSERT_EQUAL_UINT (sizeof (thread_name_prefix), read_thread_name_prefix_size);
+    TEST_ASSERT_EQUAL_STRING (thread_name_prefix, read_thread_name_prefix);
+
+    const char non_terminated_prefix[] = {'b', 'a', 'd'};
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_INVALID_ARGUMENT,
+      zlink_ctx_set_data (get_test_context (), ZLINK_THREAD_NAME_PREFIX,
+                          non_terminated_prefix,
+                          sizeof (non_terminated_prefix)));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_INVALID_ARGUMENT,
+      zlink_ctx_set (get_test_context (), ZLINK_THREAD_NAME_PREFIX, 1234));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+
+    zlink_config_result_t get_error = ZLINK_CONFIG_OK;
+    TEST_ASSERT_EQUAL_INT (-1, zlink_ctx_get (get_test_context (), ZLINK_THREAD_NAME_PREFIX,
+                                               &get_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT, get_error);
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
 }
 
 void test_ctx_zero_copy ()
@@ -367,6 +388,48 @@ void test_ctx_option_auto_hwm_budget_snapshot_abi_and_reset ()
       ZLINK_CONFIG_NOT_SUPPORTED,
       zlink_ctx_get_auto_hwm_budget_snapshot (ctx, &invalid));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+}
+
+void test_auto_hwm_metrics_reset_clears_pipe_oversize_counters ()
+{
+    void *ctx = get_test_context ();
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    const uint64_t endpoint_hwm = 128;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (receiver, ZLINK_OPT_RCVHWM, &endpoint_hwm,
+                        sizeof (endpoint_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_SNDHWM, &endpoint_hwm,
+                        sizeof (endpoint_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://auto-hwm-reset-oversize"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://auto-hwm-reset-oversize"));
+
+    std::vector<char> payload (4096, 'o');
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (payload.size ()),
+      zlink_send (sender, payload.data (), payload.size (), 0));
+
+    const zlink_auto_hwm_budget_snapshot_t before =
+      read_auto_hwm_budget_snapshot (ctx);
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, before.oversize_admission_count);
+    TEST_ASSERT_GREATER_THAN_UINT64 (
+      endpoint_hwm, before.largest_oversize_message_bytes);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_reset_auto_hwm_budget_metrics (ctx));
+    const zlink_auto_hwm_budget_snapshot_t after =
+      read_auto_hwm_budget_snapshot (ctx);
+    TEST_ASSERT_EQUAL_UINT64 (before.measurement_epoch + 1,
+                              after.measurement_epoch);
+    TEST_ASSERT_EQUAL_UINT64 (0, after.oversize_admission_count);
+    TEST_ASSERT_EQUAL_UINT64 (0, after.largest_oversize_message_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (before.current_accounted_bytes,
+                              after.current_accounted_bytes);
+
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
 }
 
 void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
@@ -668,10 +731,19 @@ void test_removed_auto_hwm_message_unit_options_are_unknown ()
 
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (router);
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_INVALID_ARGUMENT,
       zlink_set_option (router, static_cast<zlink_option_t> (0x3034),
                         &value, sizeof (value)));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    uint64_t read_value = 0;
+    size_t read_value_size = sizeof (read_value);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_INVALID_ARGUMENT,
+      zlink_get_option (router, static_cast<zlink_option_t> (0x3034),
+                        &read_value, &read_value_size));
     TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     test_context_socket_close (router);
 }
@@ -842,6 +914,7 @@ int main (void)
     RUN_TEST (test_ctx_option_auto_hwm_round_trip);
     RUN_TEST (test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot);
     RUN_TEST (test_ctx_option_auto_hwm_budget_snapshot_abi_and_reset);
+    RUN_TEST (test_auto_hwm_metrics_reset_clears_pipe_oversize_counters);
     RUN_TEST (test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt);
     RUN_TEST (test_auto_hwm_applied_limit_blocks_and_resumes_after_drain);
     RUN_TEST (test_auto_hwm_physical_queue_registry_counts_inproc_pair_once);

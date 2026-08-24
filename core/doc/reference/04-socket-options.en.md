@@ -33,7 +33,7 @@ zlink_get_option(s, ZLINK_OPT_LINGER, &linger, &linger_len);
 `_HOSTNAME`/`_TRUST_SYSTEM`/`_PASSWORD`; behavior: `IMMEDIATE`, `CONFLATE`, `BLOCKY` (read via
 `ZLINK_CTX_OPT_BLOCKY` instead — see the Socket specification's constants table for the full
 list and defaults), `INVERT_MATCHING`, `ZMP_METADATA`; read-only: `FD`, `EVENTS`, `TYPE`,
-`LAST_ENDPOINT`, `ROUTE_VALUE_MAX_SIZE`). `optval_`/`optvallen_` supply or receive the value and
+`LAST_ENDPOINT`). `optval_`/`optvallen_` supply or receive the value and
 its byte size — `SNDHWM`, `RCVHWM`, and `AUTO_HWM_MSG_UNIT_BYTES` require exactly
 `sizeof(uint64_t)` bytes.
 

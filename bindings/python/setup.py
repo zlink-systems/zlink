@@ -21,7 +21,7 @@ def _supported_platform() -> str:
     if sys.platform == "win32" and machine in {"x86_64", "amd64"}:
         return "windows-x86_64"
     raise RuntimeError(
-        "zlink Python Core 0.13.0 supports Linux x86_64 and Windows x86_64"
+        "zlink Python Core 0.13.1 supports Linux x86_64 and Windows x86_64"
     )
 
 
@@ -29,8 +29,29 @@ TARGET_PLATFORM = _supported_platform()
 SUPPORTED_PLATFORM = TARGET_PLATFORM
 
 
-def _core_prefix() -> Path:
-    value = os.environ.get("ZLINK_CORE_PREFIX")
+def _core_layout() -> tuple[Path, Path]:
+    if os.environ.get("ZLINK_CORE_SOURCE", "release") == "local":
+        include_value = os.environ.get("ZLINK_CORE_INCLUDE_DIR")
+        library_value = os.environ.get("ZLINK_CORE_LIB_DIR")
+        if not include_value or not library_value:
+            raise RuntimeError(
+                "ZLINK_CORE_SOURCE=local requires ZLINK_CORE_INCLUDE_DIR and "
+                "ZLINK_CORE_LIB_DIR; source bindings/tools/local_core_runtime.sh first"
+            )
+        include_dir = Path(include_value).expanduser().resolve()
+        library_dir = Path(library_value).expanduser().resolve()
+        if not (include_dir / "zlink.h").is_file():
+            raise RuntimeError(f"Core headers are missing from {include_dir}")
+        if not any(
+            candidate.name.startswith(("libzlink", "zlink"))
+            for candidate in library_dir.glob("*")
+        ):
+            raise RuntimeError(f"Core library is missing from {library_dir}")
+        return include_dir, library_dir
+
+    value = os.environ.get("ZLINK_CORE_PREFIX") or os.environ.get(
+        "ZLINK_CORE_PACKAGE_PREFIX"
+    )
     if not value:
         raise RuntimeError(
             "ZLINK_CORE_PREFIX is required; build against an explicit Core "
@@ -46,12 +67,10 @@ def _core_prefix() -> Path:
         for candidate in library_dir.glob("*")
     ):
         raise RuntimeError(f"Core library is missing from {library_dir}")
-    return prefix
+    return include_dir, library_dir
 
 
-CORE_PREFIX = _core_prefix()
-CORE_INCLUDE = CORE_PREFIX / "include"
-CORE_LIBRARY = CORE_PREFIX / "lib"
+CORE_INCLUDE, CORE_LIBRARY = _core_layout()
 
 
 def _runtime_library_dirs() -> list[str]:

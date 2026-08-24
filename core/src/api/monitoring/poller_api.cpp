@@ -175,6 +175,12 @@ zlink_poller_add_fd (void *poller_, zlink_fd_t fd_, void *user_data_, short even
         errno = EBUSY;
         return ZLINK_CONFIG_BUSY;
     }
+    if (validate_fd_poller_event_mask (events_) != 0)
+        return zlink::config_result_internal::from_errno (errno);
+    if (poller_find_fd_registration_index (poller, fd_, poller_subject_fd) >= 0) {
+        errno = EEXIST;
+        return ZLINK_CONFIG_CONFLICT;
+    }
     return zlink::config_result_internal::from_rc (
       poller_add_fd_registration (poller, fd_, user_data_, events_, NULL, poller_subject_fd));
 }
@@ -190,10 +196,12 @@ zlink_config_result_t zlink_poller_modify_fd (void *poller_, zlink_fd_t fd_, sho
         errno = EBUSY;
         return ZLINK_CONFIG_BUSY;
     }
+    if (validate_fd_poller_event_mask (events_) != 0)
+        return zlink::config_result_internal::from_errno (errno);
     const int index = poller_find_fd_registration_index (poller, fd_, poller_subject_fd);
     if (index < 0) {
-        errno = EINVAL;
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
+        errno = ENOENT;
+        return ZLINK_CONFIG_NOT_FOUND;
     }
     if (poller->poller.modify_fd (fd_, events_) != 0)
         return zlink::config_result_internal::from_errno (errno);
@@ -214,8 +222,8 @@ zlink_config_result_t zlink_poller_remove_fd (void *poller_, zlink_fd_t fd_)
     }
     const int index = poller_find_fd_registration_index (poller, fd_, poller_subject_fd);
     if (index < 0) {
-        errno = EINVAL;
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
+        errno = ENOENT;
+        return ZLINK_CONFIG_NOT_FOUND;
     }
     return zlink::config_result_internal::from_rc (poller_remove_registration_at (poller, index));
 }
@@ -231,6 +239,12 @@ zlink_config_result_t zlink_poller_add_timer (void *poller_, void *timer_, void 
     if (poller->wait_active) {
         errno = EBUSY;
         return ZLINK_CONFIG_BUSY;
+    }
+
+    if (poller_find_registration_index (poller, timer_, poller_subject_timer)
+        >= 0) {
+        errno = EEXIST;
+        return ZLINK_CONFIG_CONFLICT;
     }
 
     if (timer_handle_acquire_poller_ref (timer) != 0)
@@ -265,7 +279,7 @@ zlink_config_result_t zlink_poller_remove_timer (void *poller_, void *timer_)
     const int index = poller_find_registration_index (poller, timer_, poller_subject_timer);
     if (index < 0) {
         errno = ENOENT;
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
+        return ZLINK_CONFIG_NOT_FOUND;
     }
     return zlink::config_result_internal::from_rc (poller_remove_registration_at (poller, index));
 }
@@ -343,6 +357,7 @@ int zlink_poller_wait (void *poller_,
             return rc;
         }
         if (rc == 0) {
+            errno = 0;
             if (error_out_)
                 *error_out_ = ZLINK_CONFIG_OK;
             return 0;

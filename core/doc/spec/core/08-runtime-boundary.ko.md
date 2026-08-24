@@ -1,5 +1,5 @@
 ---
-title: "Core runtime 경계"
+title: "Runtime Boundary"
 ---
 
 [English](https://zlink-systems.github.io/zlink/spec/core/08-runtime-boundary/) | 한국어
@@ -8,20 +8,44 @@ title: "Core runtime 경계"
 [Core 스펙 목차](README.ko.md) | [이전: Utilities](07-utilities.ko.md) | [다음: 소켓 개요](socket/README.ko.md)
 <!-- zlink-nav:end -->
 
-# Core runtime 경계
+# Runtime Boundary
 
 > **이 장이 정의하는 것** — Core가 raw socket·transport로만 유지하는 범위와, 그 위 계층이
 > 넘지 않아야 할 경계.
 
-이 문서는 ZLink Core 공개 C ABI가 제공하는 runtime 경계를 정의한다. Core는 message transport와
-운영체제 I/O를 캡슐화한 raw socket runtime이다. Application service topology와 stateful object runtime은
-Framework가 소유한다.
+## 1. Runtime 경계 개요
 
-## 1. Core가 제공하는 기능
+이 문서는 zlink Core 공개 C ABI가 제공하는 runtime 경계를 정의한다. Core는 message
+transport와 운영체제 I/O를 캡슐화한 raw [socket](glossary.ko.md#socket) runtime이다 —
+socket은 message를 주고받는 endpoint다. Application service topology와 stateful object
+runtime은 Framework가 소유한다. 대상 독자는 Core와 Framework runtime을 구현하거나 이
+경계를 검토하는 개발자다.
+
+경계 양쪽의 책임은 다음과 같이 나뉜다.
+
+| 주체 | 책임 |
+|---|---|
+| Core | message transport와 운영체제 I/O를 캡슐화한 raw socket runtime을 공개 C ABI로 제공한다. |
+| Framework | application service topology와 stateful object runtime을 소유하고, 언어 binding의 공개 raw socket API만 사용해 service 계약을 구현한다. |
+| Application (raw) | Core 공개 C ABI 또는 언어 binding으로 raw socket을 직접 사용한다. transport liveness 정책이 필요하면 운영체제 설정이나 자신의 application protocol로 처리한다([§4](#4-transport-liveness-경계)). |
+
+관련 계약의 소유 문서는 다음과 같다.
+
+| 관련 계약 | 정의하는 문서 |
+|---|---|
+| socket 생성·옵션·송수신 | [Socket 공통](socket/README.ko.md)과 각 socket 정식 문서 |
+| Context 수명과 옵션 | [Context](01-context.ko.md) |
+| message lifecycle와 ownership | [Message](02-message.ko.md) |
+| socket monitor 계약 | [Monitoring](06-monitoring.ko.md) |
+| poller·timer 등 utilities | [Utilities](07-utilities.ko.md) |
+| completion progress lane의 HWM·budget 제외 | [Auto HWM](systems/06-auto-hwm.ko.md) |
+
+## 2. Core가 제공하는 기능
 
 Core는 다음 기능을 공개 C ABI로 제공한다.
 
-- Context와 I/O thread lifecycle
+- I/O thread와 socket을 담는 최상위 container인 [Context](glossary.ko.md#context)와,
+  네트워크 송수신을 실제로 처리하는 [I/O thread](glossary.ko.md#io-thread)의 lifecycle
 - message allocation, ownership, multipart frame과 routing ID
 - PAIR, PUB, SUB, XPUB, XSUB, DEALER, ROUTER와 STREAM raw socket
 - bind, connect, disconnect, endpoint와 connection lifecycle
@@ -32,12 +56,12 @@ Core는 다음 기능을 공개 C ABI로 제공한다.
 - request, handshake와 reconnect timeout
 - Paired DEALER/ROUTER의 receive-flow 상태
 
-## 2. Framework가 소유하는 기능
+## 3. Framework가 소유하는 기능
 
 Core는 다음 service 개념을 공개 C ABI, 설치 header, exported symbol 또는 compatibility facade로
 제공하지 않는다.
 
-- MeshName, ChannelName membership와 service discovery
+- MeshName, ChannelName membership과 service discovery
 - MeshNode lifecycle, peer admission과 node·channel messaging
 - ready batch, claim, receive batch와 reply token
 - Spot, Actor, Instance Spot activation과 Logical Multicast
@@ -52,14 +76,17 @@ Framework runtime은 언어 binding의 공개 raw socket API만 사용해 servic
 공통 native service runtime, 별도 Core C SPI, private binding 진입점과 language-neutral service C ABI를 두지
 않는다.
 
-Core는 paired DEALER/ROUTER socket의 receive-flow 상태를 completion lane의 frame으로
-운반하고 그 frame을 runtime 내부에서 소비한다. 이 상태의 공개 표면은 설정용
-`zlink_socket_set_receive_flow_state()`, 관측용 receive-flow monitor event 3개, monitor
-status snapshot의 receive-flow field다. Raw flow-state frame을 수신, 송신, encode 또는
-decode하는 공개 API는 없으며 flow-state frame은 application receive 호출로 전달되지 않는다.
-따라서 binding이 이 frame을 직접 만들거나 해석하지 않는다.
+Core는 paired DEALER/ROUTER socket의 receive-flow 상태를
+[completion progress lane](glossary.ko.md#completion-progress-lane)(terminal reply와 error
+reply의 진행만 담당하는 별도 경로, 이하 completion lane)의 frame으로 운반하고 그 frame을
+runtime 내부에서 소비한다. 이 lane이 [HWM](glossary.ko.md#hwm) admission과 Auto HWM
+budget에서 제외되는 계약은 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다. 이 상태의
+공개 표면은 설정용 `zlink_socket_set_receive_flow_state()`, 관측용 receive-flow monitor
+event 3개, monitor status snapshot의 receive-flow field다. Raw flow-state frame을 수신,
+송신, encode 또는 decode하는 공개 API는 없으며 flow-state frame은 application receive
+호출로 전달되지 않는다. 따라서 binding이 이 frame을 직접 만들거나 해석하지 않는다.
 
-## 3. Transport liveness 경계
+## 4. Transport liveness 경계
 
 Core는 orderly disconnect, transport failure와 protocol failure를 socket monitor로 보고하고 configured endpoint의
 reconnect를 처리한다. TCP connection의 half-open 감지 정책이 필요한 raw application은 운영체제 TCP keepalive와
@@ -73,7 +100,7 @@ Core 공개 option 집합에는 `ZLINK_OPT_HEARTBEAT_IVL`, `ZLINK_OPT_HEARTBEAT_
 `zmp_control_heartbeat_ack`가 없다. 같은 값을 alias, deprecated option 또는 compatibility command로
 제공하지 않는다.
 
-## 4. Ownership과 오류 경계
+## 5. Ownership과 오류 경계
 
 Raw message와 socket handle의 allocation, retain, copy와 close 규칙은 Core 공개 spec이 정한다. Framework는
 binding이 공개한 ownership 계약을 따르며 Core가 소유한 buffer view를 application callback 수명 밖으로
@@ -87,26 +114,14 @@ Core는 accepted service work, handler completion, Actor transfer, checkpoint와
 판정하지 않는다. 각 언어 Framework runtime이 raw I/O progress와 application dispatch progress를 분리해
 운영한다.
 
-## 5. 공개 표면 검증
+## 6. 내부 구조
 
-Core public surface 검증은 다음 조건을 만족해야 한다.
+> **이 절의 계약 소유** — Core가 유지하는 공개 경계는 이 문서의 계약
+> 절([§2](#2-core가-제공하는-기능)–[§5](#5-ownership과-오류-경계))과
+> [검증 요구](#7-구현-및-contract-test-검증-요구) 절이 소유한다. 이 절은 그 경계를
+> 내부 계층이 실제로 어떻게 나눠 지키는지 설명한다.
 
-- install tree와 exported symbol에 service header·type·function이 없다.
-- `zlink_socket_set_channel_name`, `zlink_socket_get_channel_name`, MeshNode poll·monitor와
-  `zlink_spot_timer_new`가 없다.
-- Public header와 exported symbol에 Framework 전용 C SPI와 service compatibility facade가 없다.
-- raw socket, generic poller·timer와 socket monitor contract test가 통과한다.
-- raw option과 ZMP command inventory가 정식 socket·protocol spec과 일치한다.
-- Framework runtime은 Core public raw surface만 사용한다.
-- Core public API와 implementation에 ChannelName, service dispatch, Spot, Actor, transfer와 maintenance 의미가
-  없다.
-
-## 내부 구조
-
-> **이 장의 계약 소유 문서** — Core가 유지하는 공개 경계는 이 문서의 계약 부분이 다룬다.
-> 이 절은 그 경계를 내부 계층이 실제로 어떻게 나눠 지키는지 설명한다.
-
-Core 0.9.0은 raw socket과 transport만 구현한다. Public API facade는 argument·handle·ownership을 검증하고,
+Core 0.13.0은 raw socket과 transport만 구현한다. Public API facade는 argument·handle·ownership을 검증하고,
 socket semantic 계층은 PAIR·PUB/SUB·DEALER/ROUTER·STREAM의 routing을 결정한다. Runtime core는
 connection, session, pipe와 I/O thread를 관리하며 engine이 TCP·WebSocket·TLS framing을 처리한다.
 
@@ -136,7 +151,7 @@ Raw capability가 부족하면 generic raw socket 사용자에게도 필요한 p
 spec과 네 binding 계약을 함께 갱신한다. Framework가 Core private header와 export되지 않은 symbol을 직접
 사용하지 않는다.
 
-### Socket와 pipe ownership
+### Socket과 pipe ownership
 
 Context는 I/O thread와 global runtime resource를 소유한다. Socket은 option, endpoint, session과 pipe를
 소유한다. Session은 한 transport connection의 protocol engine과 reconnect state를 관리하고, pipe는 socket
@@ -154,15 +169,16 @@ DEALER/ROUTER request-reply에서 하나의 logical peer는 Application과 Compl
 connection을 가진다. Core는 Application write를 허용하기 전에 두 connection의 pair ID,
 pair generation, lane과 peer identity를 검증한다. 한 lane이 실패하면 두 lane을 모두
 종료한다. 일반 message와 request는 Application lane을 사용하고 reply는 Completion
-lane을 사용한다. 따라서 Application ingress가 backpressure로 중단되어도 이미 보낸
-request를 완료할 수 있다.
+lane을 사용한다. 따라서 Application ingress가
+[backpressure](glossary.ko.md#backpressure)(수신이 처리 속도를 따라오지 못할 때 sender의
+추가 제출을 제한하는 동작)로 중단되어도 이미 보낸 request를 완료할 수 있다.
 
 각 lane의 payload는 directional network pipe에만 보관한다. 수신한 application payload를
 숨은 PAIR queue로 옮기지 않으며 reply payload를 completion deque로 복사하지 않는다.
 남은 terminal callback metadata queue에는 payload가 없는 timeout·disconnect·shutdown
 결과만 보관한다. 이 queue는 transport lane이나 wire record가 아니다.
 
-### Transport liveness 경계
+### Transport liveness 구현
 
 TCP와 WebSocket engine은 orderly disconnect, read·write failure와 protocol failure를 session에 전달한다. Session은
 이를 socket monitor에 보고하고 configured endpoint의 reconnect state를 갱신한다. 운영체제 TCP keepalive와 TCP
@@ -206,3 +222,39 @@ Core raw monitor queue와 Framework typed observer queue는 서로 다른 resour
 - Raw engine timer와 raw monitor는 connection resource다.
 - Framework는 public binding API만 사용하고 Core private symbol에 의존하지 않는다.
 - Raw socket option과 monitor event는 service public API에 그대로 전달하지 않는다.
+
+## 7. 구현 및 contract test 검증 요구
+
+공개 표면(설치 header tree, exported symbol, 공개 option·command inventory, 공개 API의
+send·receive·monitor 결과)만으로 다음을 확인한다. 각 항목은 검사 하나로 이어진다.
+
+**설치 표면과 symbol**
+- install tree와 exported symbol에 service header·type·function이 없다 — Core 설치 tree에
+  `zlink/service/*.h`가 없고 root `zlink.h`도 service header를 포함하지 않는다.
+- `zlink_socket_set_channel_name`, `zlink_socket_get_channel_name`, MeshNode poll·monitor와
+  `zlink_spot_timer_new`가 없다.
+- Public header와 exported symbol에 Framework 전용 C SPI와 service compatibility facade가 없다.
+
+**option·command inventory**
+- raw option과 ZMP command inventory가 정식 socket·protocol spec과 일치한다.
+- 공개 option 집합에 `ZLINK_OPT_HEARTBEAT_IVL`, `ZLINK_OPT_HEARTBEAT_TTL`과
+  `ZLINK_OPT_HEARTBEAT_TIMEOUT`이 없고, raw ZMP command 집합에 `zmp_control_heartbeat`와
+  `zmp_control_heartbeat_ack`가 없으며, 같은 값을 alias, deprecated option 또는
+  compatibility command로 제공하지 않는다.
+
+**raw 표면 동작**
+- raw socket, generic poller·timer와 socket monitor contract test가 통과한다.
+- Generic poller는 socket, file descriptor와 generic timer만 다루며 service owner나 claim을
+  반환하지 않는다.
+- Socket monitor는 transport와 protocol 상태만 보고한다.
+
+**receive-flow 상태**
+- receive-flow 상태의 공개 표면은 `zlink_socket_set_receive_flow_state()`, receive-flow
+  monitor event 3개와 monitor status snapshot의 receive-flow field뿐이다.
+- Raw flow-state frame을 수신, 송신, encode 또는 decode하는 공개 API가 없고, flow-state
+  frame이 application receive 호출로 전달되지 않는다.
+
+**Framework 경계**
+- Framework runtime은 Core public raw surface만 사용한다.
+- Core public API와 implementation에 ChannelName, service dispatch, Spot, Actor, transfer와
+  maintenance 의미가 없다.

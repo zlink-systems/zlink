@@ -375,6 +375,15 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
         return -1;
     }
 
+    // STREAM NOTIFY owns both option validation and its bind-time boundary in
+    // stream_t. Do not reinterpret its deliberate EINVAL as a request to use
+    // the generic option fallback, or a post-bind update would slip through.
+    if (option_ == ZLINK_INTERNAL_OPT_STREAM_NOTIFY
+        && socket_type () == ZLINK_CORE_SOCKET_STREAM) {
+        socket_public_api_lock_scope_t guard (lifecycle);
+        return xsetsockopt (option_, optval_, optvallen_);
+    }
+
     int rc = 0;
     {
         socket_public_api_lock_scope_t guard (lifecycle);

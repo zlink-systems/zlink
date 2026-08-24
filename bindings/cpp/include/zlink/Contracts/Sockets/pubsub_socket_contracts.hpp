@@ -97,11 +97,6 @@ class sub_socket_t : public subscriber_socket_t
         return socket_t::subscribe (out_, flags_);
     }
 
-    int subscribe_retained (
-      topic_message_t &out_, recv_flags_t flags_ = recv_flags_t::none)
-    {
-        return socket_t::subscribe_retained (out_, flags_);
-    }
 
     int subscribe_part (std::optional<routing_id_t> &source_rid_out_,
                         std::string &topic_out_,
@@ -169,11 +164,6 @@ class xsub_socket_t : public subscriber_socket_t
         return socket_t::subscribe (out_, flags_);
     }
 
-    int subscribe_retained (
-      topic_message_t &out_, recv_flags_t flags_ = recv_flags_t::none)
-    {
-        return socket_t::subscribe_retained (out_, flags_);
-    }
 
     int subscribe_part (std::optional<routing_id_t> &source_rid_out_,
                         std::string &topic_out_,

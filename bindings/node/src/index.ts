@@ -8,7 +8,6 @@ import {
   has as runtimeHas,
   multipartClose as runtimeMultipartClose,
   proxy as runtimeProxy,
-  proxySteerable as runtimeProxySteerable,
   sleep as runtimeSleep,
   strerror as runtimeStrerror,
   version as runtimeVersion,
@@ -142,20 +141,6 @@ export function proxy(frontend: BaseSocket, backend: BaseSocket, capture?: BaseS
     asRuntimeSocket(frontend),
     asRuntimeSocket(backend),
     capture ? asRuntimeSocket(capture) : undefined
-  );
-}
-
-export function proxySteerable(
-  frontend: BaseSocket,
-  backend: BaseSocket,
-  capture: BaseSocket | null,
-  control: BaseSocket
-): void {
-  runtimeProxySteerable(
-    asRuntimeSocket(frontend),
-    asRuntimeSocket(backend),
-    capture ? asRuntimeSocket(capture) : undefined,
-    asRuntimeSocket(control)
   );
 }
 

@@ -52,12 +52,7 @@ class dealer_t : public socket_base_t
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
-    int xrecv_retained (zlink::msg_t *msg_,
-                        retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     int xrecv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
-    int xrecv_pipe_retained (zlink::msg_t *msg_,
-                             zlink::pipe_t **pipe_out_,
-                             retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xrollback () ZLINK_OVERRIDE;
@@ -72,8 +67,6 @@ class dealer_t : public socket_base_t
     int sendpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_,
                   pipe_message_admission_t *admission_out_ = NULL);
     int recvpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_);
-    int recvpipe_retained (zlink::msg_t *msg_, zlink::pipe_t **pipe_,
-                           retained_credit_token_t *token_out_);
 
   private:
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;

@@ -9,7 +9,6 @@ import {
   freezeMessageParts,
   freezeOwnedMessageParts
 } from './message_parts_state';
-import { replaceMessagePartsEnvelopeRetainedCredit } from '../../contracts/messaging/message_parts_envelope';
 
 export interface ReplyContext {
   beginReply(): ReplyOperation;
@@ -61,11 +60,7 @@ export function replaceReceived(
   if (state.parts !== parts) {
     try {
       closeMessageParts(state.parts);
-    } finally {
-      replaceMessagePartsEnvelopeRetainedCredit(target, null);
-    }
-  } else {
-    replaceMessagePartsEnvelopeRetainedCredit(target, null);
+    } finally {}
   }
   state.parts = Object.isFrozen(parts) ? parts : freezeOwnedMessageParts(parts);
   state.routingId = routingId;

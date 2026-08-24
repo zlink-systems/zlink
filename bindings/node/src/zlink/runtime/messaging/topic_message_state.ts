@@ -12,7 +12,6 @@ import {
   freezeMessageParts,
   freezeOwnedMessageParts
 } from './message_parts_state';
-import { replaceMessagePartsEnvelopeRetainedCredit } from '../../contracts/messaging/message_parts_envelope';
 
 interface TopicMessageState {
   parts: Message[];
@@ -46,11 +45,7 @@ export function replaceTopicMessage(
   if (state.parts !== parts) {
     try {
       closeMessageParts(state.parts);
-    } finally {
-      replaceMessagePartsEnvelopeRetainedCredit(target, null);
-    }
-  } else {
-    replaceMessagePartsEnvelopeRetainedCredit(target, null);
+    } finally {}
   }
   const candidate = state._reusableSinglePart;
   if (candidate && !parts.includes(candidate)) {

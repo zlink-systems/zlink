@@ -50,26 +50,6 @@ public static partial class Zlink
             throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
     }
 
-    private static void ProxySteerableCore(IZlinkSocket frontend,
-        IZlinkSocket backend, IZlinkSocket? capture, IZlinkSocket control)
-    {
-        var frontendSocket = SocketInterop.RequireSocket(frontend,
-            nameof(frontend));
-        var backendSocket = SocketInterop.RequireSocket(backend,
-            nameof(backend));
-        var captureSocket = capture == null
-            ? null
-            : SocketInterop.RequireSocket(capture, nameof(capture));
-        var controlSocket = SocketInterop.RequireSocket(control,
-            nameof(control));
-
-        var rc = NativeMethods.zlink_proxy_steerable(frontendSocket.Handle,
-            backendSocket.Handle, captureSocket?.Handle ?? IntPtr.Zero,
-            controlSocket.Handle);
-        if (rc != 0)
-            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
-    }
-
     private static void SleepCore(TimeSpan duration)
     {
         var totalSeconds = duration.TotalSeconds;

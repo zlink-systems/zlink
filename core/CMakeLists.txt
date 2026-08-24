@@ -8,7 +8,7 @@ if(POLICY CMP0048)
   cmake_policy(SET CMP0048 NEW)
 endif()
 
-project(zlink VERSION 0.13.0 LANGUAGES C CXX)
+project(zlink VERSION 0.13.1 LANGUAGES C CXX)
 
 # Internal repo targets still include the public header from core/include.
 # Define a build-only macro so in-tree code can access private build-only
@@ -810,7 +810,6 @@ set(api-socket-sources
     src/api/socket/request_timeout_scheduler_internal.cpp
     src/api/socket/socket_message_api.cpp
     src/api/socket/socket_message_recv_api.cpp
-    src/api/socket/socket_retained_part_api.cpp
     src/api/socket/socket_message_handler_api.cpp
     src/api/socket/socket_send_async_api.cpp
     src/api/socket/socket_message_send_api.cpp

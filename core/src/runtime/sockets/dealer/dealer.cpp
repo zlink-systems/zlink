@@ -209,22 +209,9 @@ int zlink::dealer_t::xrecv (msg_t *msg_)
     return recvpipe (msg_, &pipe);
 }
 
-int zlink::dealer_t::xrecv_retained (msg_t *msg_,
-                                     retained_credit_token_t *token_out_)
-{
-    pipe_t *pipe = NULL;
-    return recvpipe_retained (msg_, &pipe, token_out_);
-}
-
 int zlink::dealer_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
 {
     return recvpipe (msg_, pipe_out_);
-}
-
-int zlink::dealer_t::xrecv_pipe_retained (
-  msg_t *msg_, pipe_t **pipe_out_, retained_credit_token_t *token_out_)
-{
-    return recvpipe_retained (msg_, pipe_out_, token_out_);
 }
 
 bool zlink::dealer_t::xhas_in ()
@@ -283,12 +270,6 @@ int zlink::dealer_t::sendpipe (
 int zlink::dealer_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
     return _fq.recvpipe (msg_, pipe_);
-}
-
-int zlink::dealer_t::recvpipe_retained (
-  msg_t *msg_, pipe_t **pipe_, retained_credit_token_t *token_out_)
-{
-    return _fq.recvpipe_retained (msg_, pipe_, token_out_);
 }
 
 int zlink::dealer_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)

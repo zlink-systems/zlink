@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
 use crate::error::{CloseError, RecvError, RecvResult};
-use crate::internal::HwmBudgetLeaseOwner;
+use crate::internal::ReceiveOwner;
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, ReplyOp, SendOp};
 
@@ -30,7 +30,7 @@ pub struct Received {
     route: Option<ReceivedRoute>,
     request_seq: Option<u64>,
     receive_scratch: Vec<Message>,
-    hwm_budget_leases: HwmBudgetLeaseOwner,
+    receive_owner: ReceiveOwner,
 }
 
 impl Default for Received {
@@ -51,12 +51,12 @@ impl Received {
             route: None,
             request_seq: None,
             receive_scratch: Vec::new(),
-            hwm_budget_leases: HwmBudgetLeaseOwner::default(),
+            receive_owner: ReceiveOwner::default(),
         }
     }
 
     pub(crate) fn begin_receive(&mut self) {
-        self.hwm_budget_leases.release();
+        self.receive_owner.release();
     }
 
     pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
@@ -78,7 +78,7 @@ impl Received {
         &mut self,
         routing_id: Option<RoutingId>,
         request_seq: Option<u64>,
-        leases: HwmBudgetLeaseOwner,
+        owner: ReceiveOwner,
     ) {
         self.route = routing_id.map(|routing_id| ReceivedRoute {
             handle: None,
@@ -87,7 +87,7 @@ impl Received {
             routing_id,
         });
         self.request_seq = request_seq;
-        self.hwm_budget_leases = leases;
+        self.receive_owner = owner;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
@@ -116,12 +116,12 @@ impl Received {
         completions: std::sync::Arc<crate::internal::SendCompletions>,
         routing_id: RoutingId,
         request_seq: u64,
-        leases: HwmBudgetLeaseOwner,
+        owner: ReceiveOwner,
     ) {
         self.replace_retained_parts(
             Some(routing_id),
             (request_seq != 0).then_some(request_seq),
-            leases,
+            owner,
         );
         if let Some(route) = self.route.as_mut() {
             route.handle = Some(handle);

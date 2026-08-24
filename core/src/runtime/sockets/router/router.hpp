@@ -51,18 +51,10 @@ class router_t : public routing_socket_base_t
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
-    int xrecv_retained (zlink::msg_t *msg_,
-                        retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     int xrecv_routed (zlink::msg_t *msg_,
                       zlink_routing_id_t *source_rid_out_,
                       uint64_t *connection_id_out_,
                       zlink::pipe_t **source_pipe_out_ = NULL) ZLINK_OVERRIDE;
-    int xrecv_routed_retained (
-      zlink::msg_t *msg_,
-      zlink_routing_id_t *source_rid_out_,
-      uint64_t *connection_id_out_,
-      zlink::pipe_t **source_pipe_out_,
-      retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
@@ -94,15 +86,6 @@ class router_t : public routing_socket_base_t
                                       uint64_t transport_pair_id_,
                                       uint64_t transport_pair_generation_) const;
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
-    int xrecv_with_credit (zlink::msg_t *msg_,
-                           retained_credit_token_t *token_out_);
-    int xrecv_routed_with_credit (
-      zlink::msg_t *msg_,
-      zlink_routing_id_t *source_rid_out_,
-      uint64_t *connection_id_out_,
-      zlink::pipe_t **source_pipe_out_,
-      retained_credit_token_t *token_out_);
-    int finish_prefetched_credit (retained_credit_token_t *token_out_);
 
     //  Fair queueing object for inbound pipes.
     fq_t _fq;
@@ -119,8 +102,6 @@ class router_t : public routing_socket_base_t
 
     //  Holds the prefetched message.
     msg_t _prefetched_msg;
-    retained_credit_token_t _prefetched_credit;
-    bool _prefetched_credit_deferred;
 
     //  The pipe we are currently reading from
     zlink::pipe_t *_current_in;

@@ -17,7 +17,6 @@ namespace zlink
 namespace detail
 {
 struct received_access_t;
-class hwm_budget_lease_set_t;
 struct socket_callback_state_t;
 }
 
@@ -81,10 +80,6 @@ class received_t
     std::optional<routing_id_t> _routing_id;
     std::optional<uint64_t> _request_seq;
     detail::lazy_message_parts_t _parts;
-    // Core queue credit follows the received envelope, not copies of an
-    // individual message part. Copies share this owner and the last owner (or
-    // an explicit close on the last owner) returns the retained credit.
-    std::shared_ptr<detail::hwm_budget_lease_set_t> _hwm_budget_leases;
     // Send/reply context, reconstructed lazily at submit time from the stored
     // routing ids and request sequence. Avoids per-receive std::function
     // closures and their heap allocations on the server hot path.

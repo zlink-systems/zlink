@@ -29,7 +29,6 @@ export interface StreamSocket extends Socket {
    * Core HWM credit. Successful reuse or `result.close()` returns the credit;
    * a native finalizer is the fallback if the result becomes unreachable.
    */
-  recvRetained(result: Received, flags?: RecvFlags): boolean;
   /**
    * Register the handler invoked for each inbound framed packet; the handler
    * owns the messages it receives (see {@link StreamPacketHandler}) and runs on

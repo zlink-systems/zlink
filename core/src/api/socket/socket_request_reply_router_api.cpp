@@ -93,7 +93,7 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
                                        zlink_routing_id_t *terminal_source_storage) -> zlink_recv_result_t {
         return reqrep::recv_router_message_direct (
                  handle, source_node_rid_out, request_seq_out, parts_out, part_count_out,
-                 static_cast<int> (flags_), NULL, terminal_part_out,
+                 static_cast<int> (flags_), terminal_part_out,
                  terminal_part_returned_out, terminal_source_storage)
                  == 0
                ? ZLINK_RECV_OK
@@ -115,8 +115,11 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
             return zlink::recv_result_internal::from_errno (errno);
 
         if (terminal_part_returned) {
-            *source_node_rid_out_ = source_node_rid;
-            *request_seq_out_ = request_seq;
+            // The direct terminal receive bypasses multipart staging, but the
+            // v2 receive surface still promises the exact transport-pair
+            // metadata captured by recv_router_message_direct().
+            export_router_recv_part_metadata_view (
+              source_node_rid, request_seq, source_node_rid_out_, request_seq_out_);
             *has_more_out_ = ZLINK_PART_FINAL;
             return ZLINK_RECV_OK;
         }

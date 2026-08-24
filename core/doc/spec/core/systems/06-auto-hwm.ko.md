@@ -52,7 +52,7 @@ Core는 다음 입력을 우선순위 순으로 검사해 처음 사용할 수 �
 이 budget의 성격은 다음과 같다.
 
 - 각 application directional pipe의 정상 상태 HWM을 나누는 기준이다. context 전체 사용량을 비교하는 hard cap이 아니다.
-- 각 pipe는 자신의 HWM과, 그 pipe에서 Framework로 이전된 [retained-credit lease](../glossary.ko.md#retained-credit-lease)만 함께 검사한다.
+- 각 pipe는 자신의 queue byte와 HWM만 검사한다.
 - 한 pipe가 HWM에 도달하거나 빈 pipe oversize 예외를 써도 다른 pipe의 HWM을 줄이거나 admission을 중단하지 않는다.
 
 | Profile | 비율 | 고정 cap | 일반 data 역할 하한 | 일반 data 역할 상한 | STREAM 하한 | STREAM 상한 |
@@ -97,7 +97,8 @@ direction을 전부 확정한 뒤에야 알 수 있으므로, budget은 그 시�
 
 Core가 finite hard limit을 감지한 경우, 그보다 큰 명시적 memory limit이나 수동 Core
 budget 설정은 `EINVAL`로 실패한다. Runtime memory hint는 설정할 수 있으며 실제
-계산에서는 finite hard limit과의 최솟값을 사용한다.
+계산에서는 finite hard limit과의 최솟값을 사용한다. Physical memory와 finite hard limit은
+context를 시작할 때 한 번만 감지하며, 실행 중에는 다시 감지하지 않는다.
 
 Auto HWM option setter가 성공하면 설정값을 저장하고 기본 debounce 경로로 새 계산을
 예약한다. `zlink_ctx_get_data`는 저장된 설정값을 즉시 반환하지만 budget snapshot은
@@ -115,8 +116,10 @@ application ypipe 방향을 한 번만 등록하고 다음을 소유한다.
 예약 규칙은 다음과 같다.
 
 - application 방향: 역할별 하한을 원자적으로 예약한다. 두 방향을 모두 예약할 수 없으면 attach를 공개하기 전에 전체 예약을 거절하고 일부 방향만 등록하지 않는다.
-- 수동 방향: 유한한 수동 HWM을 예약한다.
-- 수동 HWM이 `0`인 방향: admission은 계속 무제한이되, 계산용 예약에는 역할별 상한을 쓰고 aggregate HWM이 유한하지 않다는 flag를 설정한다.
+- 수동 방향도 attach 전에는 역할별 하한을 예약한다. 유한한 수동 HWM은 admission에 즉시
+  적용하고, 다음 plan의 수동 예약 합계와 aggregate HWM 통계에 반영한다.
+- 수동 HWM이 `0`인 방향: admission은 계속 무제한이되, 다음 plan의 계산용 예약에는 역할별
+  상한을 쓰고 aggregate HWM이 유한하지 않다는 flag를 설정한다.
 
 자동 방향들 사이에서는 남은 budget을 아직 상한에 못 미친 queue들에 물을 붓듯 고르게
 채워 올려 나눈다. 이 분배 방식을 [water-filling](../glossary.ko.md#water-filling)이라 한다. Inproc physical ypipe는 양
@@ -145,9 +148,10 @@ stable queue ID 순서로 1 byte씩 배정한다. 따라서 같은 registry snap
 
 | 상황 | Core 동작 |
 |---|---|
-| 새 explicit memory limit 또는 수동 Core budget이 현재 수동 reservation과 자동 하한을 함께 수용하지 못함 | setter가 `ENOBUFS`로 실패하고 이전 설정과 plan을 유지 |
+| 새 explicit memory limit 또는 수동 Core budget이 현재 수동 HWM과 자동 하한을 함께 수용하지 못함 | 값을 저장하고 재계산을 예약한다. planner는 자동 하한을 낮추지 않고 budget 부족 flag를 설정한다. |
 | 새 동기 inproc attach가 필요한 하한을 예약하지 못함 | `ENOBUFS`로 실패 |
-| Runtime memory hint 또는 감지한 hard limit이 실행 중 감소 | 기존 pipe와 message를 제거하지 않고 새 입력을 기록한 뒤 budget 부족 flag를 설정 |
+| Runtime memory hint가 실행 중 감소 | 기존 pipe와 message를 제거하지 않고 새 값을 기록한다. 재계산 결과가 부족하면 budget 부족 flag를 설정한다. |
+| Physical memory 또는 hard limit이 실행 중 감소 | context 시작 뒤에는 재감지하지 않으므로 현재 context의 입력과 plan을 바꾸지 않는다. |
 | 새 비동기 network attach가 필요한 reservation을 얻기 전 | publish하지 않고 실패한 연결 시도를 종료 |
 
 연결 수가 바뀌어 queue별 목표가 변할 때는 다음과 같이 적용한다.
@@ -181,10 +185,11 @@ water-filling 분모에는 포함되지 않는다.
 
 DEALER·ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)에는 byte HWM, LWM, inproc HWM boost와
 legacy 256 KiB floor를 적용하지 않으며 위 water-filling 분모에서도 제외한다. 이
-lane은 terminal reply와 error reply의 진행성만 소유한다. Completion lane은 HWM
-admission과 Core budget reservation에서 제외하지만 current·peak accounted byte와 pending
-message count를 별도로 관찰한다. 이 값은 `total_messaging_accounted_bytes`에는 포함되고
-application water-filling에는 포함되지 않는다.
+lane은 terminal reply와 error reply의 진행성을 소유하고, peer 사이의
+receive-flow-state frame도 동기화한다. Completion lane은 HWM admission과 Core budget
+reservation에서 제외하지만 current·peak accounted byte와 pending message count를 별도로
+관찰한다. 이 값은 `total_messaging_accounted_bytes`에는 포함되고 application
+water-filling에는 포함되지 않는다.
 
 ## 3. 함수
 
@@ -239,8 +244,8 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t total_applied_hwm_bytes;             // live 방향에 실제 적용된 HWM 합계
   uint64_t manual_reserved_hwm_bytes;           // 수동 방향 예약 합계
   uint64_t core_queue_accounted_bytes;          // Core가 보유한 accounted byte
-  uint64_t application_accounted_bytes;         // lease로 이전된 accounted byte
-  uint64_t current_accounted_bytes;             // 위 둘의 포화 합 (owner 이전만으로 불변)
+  uint64_t application_accounted_bytes;         // 예약 (항상 0)
+  uint64_t current_accounted_bytes;             // core_queue_accounted_bytes와 동일
   uint64_t provisional_accounted_bytes;         // 미완료 multipart 예약분
   uint64_t peak_accounted_bytes;                // 현재 epoch 관측 최대
   uint64_t completion_current_accounted_bytes;  // completion lane 현재 byte
@@ -257,9 +262,9 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t active_completion_directional_queue_count;// 활성 completion 방향 수
   uint64_t active_send_queue_count;             // 마지막 plan의 send 관점 count
   uint64_t active_receive_queue_count;          // 마지막 plan의 receive 관점 count
-  uint64_t outstanding_application_lease_count; // 아직 release 안 된 public lease 수
-  uint64_t retired_queue_count;                 // retained origin 때문에 유지되는 방향 수
-  uint64_t deferred_origin_credit_bytes;        // 아직 writer에 게시 안 된 exact-origin byte
+  uint64_t outstanding_application_lease_count; // 예약 (항상 0)
+  uint64_t retired_queue_count;                 // 예약 (항상 0)
+  uint64_t deferred_origin_credit_bytes;        // 예약 (항상 0)
   uint64_t unlimited_manual_queue_count;        // 무제한 수동 방향 수
   uint32_t blocked_ratio_ppm;                   // HWM으로 처음 block된 시도 비율 (ppm)
   uint32_t flags;                               // ZLINK_AUTO_HWM_BUDGET_FLAG_* bit
@@ -313,18 +318,9 @@ Completion queue에는 HWM이 없으므로 `total_instance_applied_hwm_bytes`에
 않는다. 위 합계가 `uint64_t` 범위를 넘으면 `UINT64_MAX`로 포화하고
 `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW`를 설정한다.
 
-Retained-credit receive가 physical frame을 반환하면 해당 charge는 원자적으로
-`core_queue_accounted_bytes`에서 `application_accounted_bytes`로 이동한다.
-`current_accounted_bytes`는 두 field의 포화 합이며 owner 이전만으로 변하지 않는다.
 `peak_accounted_bytes`는 현재 measurement epoch에서 budget snapshot 조회 또는 Auto HWM
 재계산이 queue를 확인한 시점의 합계 중 가장 큰 값이다. 두 확인 시점 사이에서 더
 짧게 유지된 값까지 기록한다고 보장하지 않는다.
-`outstanding_application_lease_count`는 아직 release되지 않은 public lease 수이고,
-`deferred_origin_credit_bytes`는 internal framing token 또는 public lease가 보유해 writer에
-아직 게시하지 않은 exact-origin byte이다. `retired_queue_count`는 detach 또는 generation
-교체 뒤에도 retained origin 때문에 유지되는 directional queue generation 수이다. Old
-generation release는 새 generation의 accounting, credit과 wake에 합쳐지지 않으며 마지막
-origin release 뒤 retired 항목이 제거된다.
 
 Snapshot은 한 `budget_generation`에 속한 일관된 registry view이다. Queue count, capacity와
 accounted counter를 서로 다른 generation에서 섞지 않는다. Current counter가 snapshot을
@@ -333,13 +329,7 @@ accounted counter를 서로 다른 generation에서 섞지 않는다. Current co
 
 Registry가 소유하는 field와 sampling한 field는 보이는 시점이 다르다.
 
-- 동기 갱신 field — `application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`. Registry가 값을 바꾼 호출과 동기적으로 갱신한다.
-- sampling field — `current_accounted_bytes`, `provisional_accounted_bytes`, `peak_accounted_bytes`. snapshot을 만들 때 pipe별 회계에서 sampling한 값이다. lease release는 credit을 소유 pipe에 비동기로 publish한다.
-
-따라서 다른 thread에서 `zlink_hwm_budget_lease_release`를 호출한 직후에 찍은 snapshot에는
-아직 그 byte가 남아 있을 수 있다. 계약이 보장하는 것은 exactly-once release와 snapshot 내부
-일관성이며, release가 바로 다음 snapshot에 보인다는 것은 아니다. 정리된 값을 관측해야 하면
-snapshot을 polling한다.
+- sampling field — `current_accounted_bytes`, `provisional_accounted_bytes`, `peak_accounted_bytes`. snapshot을 만들 때 pipe별 회계에서 sampling한 값이다.
 
 `blocked_ratio_ppm`은 다음 식으로 계산한다.
 
@@ -429,7 +419,7 @@ sequenceDiagram
     participant Q as 대상 Queue
     D->>D: candidate charge = payload + 고정 frame 비용
     Note over D: uint64_t overflow면 거부
-    D->>Q: buffer 할당 전 candidate charge 예약<br/>(writer가 만든 message 제출 시 생략)
+    D->>D: buffer 할당 전 candidate charge를 reservation token에 기록<br/>(writer가 만든 message 제출 시 생략)
     Note over Q: HWM이 0이 아니고 미반환+candidate가 HWM 초과면 거부<br/>(빈 queue oversize 예외는 별도)
     D->>Q: enqueue 후 provisional → committed
     Q-->>D: dequeue 시 committed 감소, writer에 credit 반환<br/>(Application이 계속 보유하면 retained lease로 이동)
@@ -437,8 +427,10 @@ sequenceDiagram
 
 1. Writer 또는 decoder가 payload 크기에 고정 frame 비용을 더해 candidate charge를 구한다.
 2. 덧셈이 `uint64_t` 범위를 넘으면 frame을 받아들이지 않는다.
-3. Decoder는 payload buffer를 할당하기 전에 대상 queue의 local 상태에 candidate charge를
-   예약한다. Application writer가 이미 만든 message를 제출할 때는 이 단계를 생략한다.
+3. Decoder는 payload buffer를 할당하기 전에 대상 queue 참조, generation과 candidate
+   charge를 reservation token에 기록한다. charge가 queue 회계에 반영되기 시작하는
+   시점은 frame write부터다. Application writer가 이미 만든 message를 제출할 때는 이
+   단계를 생략한다.
 4. 적용된 HWM이 0이 아니고 미반환 charge에 candidate charge를 더한 값이 HWM보다 크면
    frame을 받아들이지 않는다. 공개 스펙의 빈 queue oversize 예외는 별도로 적용한다.
 5. Enqueue가 끝나면 예약한 값을 다시 더하지 않고 provisional 상태에서 committed 상태로
@@ -453,16 +445,18 @@ sequenceDiagram
 ### Multipart와 큰 message
 
 Multipart는 각 frame의 charge를 누적한다. Decoder는 wire header에서 frame payload 크기를
-확인한 뒤 buffer allocation 전에 그 frame의 charge를 예약한다. 마지막 frame은 앞에서
+확인한 뒤 buffer allocation 전에 그 frame의 charge를 reservation token에 기록한다. 마지막 frame은 앞에서
 예약한 값을 다시 증가시키지 않고 multipart 전체를 읽을 수 있게 공개한다.
 
-최종 크기를 아직 모르는 multipart가 HWM에 도달하면 다음 frame의 buffer를 할당하기 전에
-멈춘다. Allocation 실패나 protocol 오류로 multipart를 폐기하면 그 multipart가 예약하거나
-queue에 기록한 charge를 모두 반환한다.
+최종 크기를 아직 모르는 multipart가 HWM에 도달하면 다음 `MORE` frame의 buffer를 할당하기
+전에 멈춘다. 다만 비어 있는 queue에서 시작한 multipart는 마지막 frame이 HWM을 넘더라도
+그 final frame을 받아 record 한 건을 완성할 수 있다. 이 자격은 첫 frame 직전에 queue가
+비어 있었는지로 고정하며, 중간 `MORE` frame에는 적용하지 않는다. Allocation 실패나 protocol
+오류로 multipart를 폐기하면 그 multipart가 예약하거나 queue에 기록한 charge를 모두 반환한다.
 
-비어 있는 queue에는 전체 charge를 admission 시점에 아는 complete message 한 건을 HWM보다
-크더라도 받아들일 수 있다. 이 예외는 두 message에 동시에 적용하지 않으며
-`ZLINK_OPT_MAXMSGSIZE` 검사를 건너뛰지 않는다. 자세한 공개 동작은
+비어 있는 queue에는 전체 charge를 admission 시점에 아는 complete message 한 건과, 비어
+있는 상태에서 시작한 multipart의 final frame을 HWM보다 크더라도 받아들일 수 있다. 이 예외는
+두 message에 동시에 적용하지 않으며 `ZLINK_OPT_MAXMSGSIZE` 검사를 건너뛰지 않는다. 자세한 공개 동작은
 [Socket 스펙의 HWM 설명](../socket/README.ko.md#transportbuffer)을 따른다.
 
 ### Retained receive와 queue generation
@@ -481,8 +475,9 @@ HWM을 늘리면 현재 queue generation에 새 값을 적용한다. HWM을 줄�
 새 목표보다 크면 이미 받아들인 frame을 제거하지 않는다. 새 frame을 받지 않고 charge가
 목표 이하가 될 때까지 기다린 뒤 새 HWM을 적용한다.
 
-DEALER·ROUTER가 terminal reply와 error reply를 진행시키는 completion queue에는 application
-HWM을 적용하지 않는다. Monitor queue도 application budget을 나누는 queue 목록에서 제외한다.
+DEALER·ROUTER가 terminal reply와 error reply를 진행시키고 receive-flow-state frame을
+동기화하는 completion queue에는 application HWM을 적용하지 않는다. Monitor queue도
+application budget을 나누는 queue 목록에서 제외한다.
 
 ### Message 처리 경로의 비용 제한
 
@@ -530,13 +525,16 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 
 **옵션과 budget**
 - Core가 finite hard limit을 감지한 상태에서 그보다 큰 memory limit이나 수동 Core budget을 설정하면 `EINVAL`이다.
+- 유효한 memory limit이나 수동 Core budget은 현재 수동 HWM과 자동 하한의 합보다 작아도 저장되고 재계산이 예약된다. 재계산된 snapshot은 자동 하한을 유지하고 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
+- Physical memory와 hard limit은 context 시작 시 한 번만 감지한다. 실행 중 값을 바꿔도 현재 context는 재감지하지 않으며, 감소한 runtime memory hint만 새 입력으로 저장하고 부족할 때 `ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT`를 설정한다.
 - Auto HWM byte 옵션을 정확히 `sizeof(uint64_t)`가 아닌 크기로 `zlink_ctx_set_data`/`zlink_ctx_get_data` 호출하면 `EINVAL`이고 값이 바뀌지 않는다.
 - 같은 연결 구성과 입력에서 snapshot의 `effective_core_budget_bytes`는 항상 같다(결정적).
+- 새 pipe pair는 수동 HWM 크기와 관계없이 방향별 역할 하한을 먼저 예약한다. 유한한 수동 HWM은 admission에 즉시 적용되고 다음 snapshot의 `manual_reserved_hwm_bytes`와 aggregate HWM 통계에 반영된다.
 
 **admission (byte 회계)**
 - payload가 없는 frame도 HWM을 소비한다 — 빈 frame만 반복해 보내도 HWM에서 admission이 막힌다.
 - 빈 queue는 전체 크기를 아는 complete message 1건을 HWM 초과여도 수락하고, 두 번째 oversize는 거부한다.
-- 미리 크기를 모르는 multipart는 HWM 초과 지점부터 막히고, 폐기한 뒤 snapshot의 `provisional_accounted_bytes`가 0으로 돌아온다.
+- 미리 크기를 모르는 multipart의 `MORE` frame은 HWM 초과 지점부터 막힌다. 다만 빈 queue에서 시작한 multipart의 final frame은 HWM을 넘더라도 수락하며, 이 예외는 중간 `MORE` frame에 적용하지 않는다. Multipart를 폐기한 뒤 snapshot의 `provisional_accounted_bytes`는 0으로 돌아온다.
 
 **credit·lease·generation**
 - 일반 recv 뒤 sender가 다시 보낼 수 있고, retained receive는 lease를 release하기 전에는 snapshot의 `application_accounted_bytes`가 유지된다.
@@ -546,7 +544,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - HWM을 낮추면 이미 받은 frame은 유지되고, 보관량이 새 목표 아래로 drain된 뒤에 새 HWM이 admission에 적용된다.
 
 **제외 대상**
-- DEALER·ROUTER completion reply와 monitor 트래픽은 application send admission 결과와 snapshot의 `total_planned_hwm_bytes` 분모를 바꾸지 않는다.
+- DEALER·ROUTER completion reply·receive-flow-state frame과 monitor 트래픽은 application send admission 결과와 snapshot의 `total_planned_hwm_bytes` 분모를 바꾸지 않는다.
 
 **snapshot 불변성**
 - `zlink_ctx_get_auto_hwm_budget_snapshot`이나 `zlink_ctx_reset_auto_hwm_budget_metrics`를 호출해도 같은 send sequence의 수락·거부 결과가 동일하다.

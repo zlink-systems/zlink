@@ -33,22 +33,6 @@ export function proxy(frontend: BaseSocket, backend: BaseSocket, capture?: BaseS
   });
 }
 
-export function proxySteerable(
-  frontend: BaseSocket,
-  backend: BaseSocket,
-  capture: BaseSocket | null,
-  control: BaseSocket
-): void {
-  configCall('proxySteerable failed', () => {
-    requireNative().proxySteerable(
-      getNativeHandle(frontend),
-      getNativeHandle(backend),
-      capture ? getNativeHandle(capture) : null,
-      getNativeHandle(control)
-    );
-  });
-}
-
 export function sleep(seconds: number): void {
   requireNative().sleep(seconds | 0);
 }

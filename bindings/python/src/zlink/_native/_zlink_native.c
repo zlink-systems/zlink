@@ -29,8 +29,6 @@ typedef struct received_parts_t
 {
     zlink_msg_t *parts;
     zlink_msg_t inline_part;
-    zlink_hwm_budget_lease_t **leases;
-    zlink_hwm_budget_lease_t *inline_lease;
     Py_ssize_t count;
     Py_ssize_t capacity;
 } received_parts_t;
@@ -82,15 +80,6 @@ typedef struct native_parts_owner_t
     Py_ssize_t part_count;
     int closed;
 } native_parts_owner_t;
-
-typedef struct hwm_budget_credit_owner_t
-{
-    PyObject_HEAD zlink_hwm_budget_lease_t **credits;
-    zlink_hwm_budget_lease_t *inline_credit;
-    Py_ssize_t count;
-    int closed;
-} hwm_budget_credit_owner_t;
-
 
 static int is_recv_no_data_result (int rc)
 {
@@ -489,69 +478,6 @@ static PyTypeObject native_parts_owner_type = {
   .tp_methods = native_parts_owner_methods,
   .tp_getset = native_parts_owner_getset,
 };
-
-static void hwm_budget_credit_owner_close_all (hwm_budget_credit_owner_t *owner)
-{
-    if (owner->closed)
-        return;
-    owner->closed = 1;
-    if (!owner->credits)
-        return;
-    for (Py_ssize_t i = 0; i < owner->count; ++i)
-        zlink_hwm_budget_lease_release (&owner->credits[i]);
-    if (owner->credits != &owner->inline_credit)
-        free (owner->credits);
-    owner->credits = NULL;
-}
-
-static void hwm_budget_credit_owner_dealloc (hwm_budget_credit_owner_t *owner)
-{
-    hwm_budget_credit_owner_close_all (owner);
-    Py_TYPE (owner)->tp_free ((PyObject *) owner);
-}
-
-static PyObject *hwm_budget_credit_owner_close (
-  hwm_budget_credit_owner_t *owner, PyObject *Py_UNUSED (ignored))
-{
-    hwm_budget_credit_owner_close_all (owner);
-    Py_RETURN_NONE;
-}
-
-static PyMethodDef hwm_budget_credit_owner_methods[] = {
-  {"close", (PyCFunction) hwm_budget_credit_owner_close, METH_NOARGS,
-   "Release all retained Core credit."},
-  {NULL, NULL, 0, NULL},
-};
-
-static PyTypeObject hwm_budget_credit_owner_type = {
-  PyVarObject_HEAD_INIT (NULL, 0).tp_name =
-    "zlink._native._zlink_native._HwmBudgetCreditOwner",
-  .tp_basicsize = sizeof (hwm_budget_credit_owner_t),
-  .tp_dealloc = (destructor) hwm_budget_credit_owner_dealloc,
-  .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_methods = hwm_budget_credit_owner_methods,
-};
-
-static PyObject *build_hwm_budget_credit_owner (received_parts_t *received)
-{
-    hwm_budget_credit_owner_t *owner =
-      PyObject_New (hwm_budget_credit_owner_t, &hwm_budget_credit_owner_type);
-    if (!owner)
-        return NULL;
-    owner->credits = NULL;
-    owner->inline_credit = NULL;
-    owner->count = received->count;
-    owner->closed = 0;
-    if (received->count == 1) {
-        owner->inline_credit = received->leases[0];
-        owner->credits = &owner->inline_credit;
-    } else {
-        owner->credits = received->leases;
-    }
-    received->leases = NULL;
-    received->inline_lease = NULL;
-    return (PyObject *) owner;
-}
 
 static PyObject *build_native_parts_owner (received_parts_t *received)
 {
@@ -1211,15 +1137,7 @@ static void close_received_parts (received_parts_t *received)
         if (received->parts != &received->inline_part)
             free (received->parts);
     }
-    if (received->leases) {
-        for (Py_ssize_t i = 0; i < received->count; ++i)
-            zlink_hwm_budget_lease_release (&received->leases[i]);
-        if (received->leases != &received->inline_lease)
-            free (received->leases);
-    }
     received->parts = NULL;
-    received->leases = NULL;
-    received->inline_lease = NULL;
     received->count = 0;
     received->capacity = 0;
 }
@@ -1248,179 +1166,6 @@ static int append_received_part (received_parts_t *received, zlink_msg_t *part)
     }
     received->parts[received->count++] = *part;
     return 0;
-}
-
-static int append_retained_received_part (received_parts_t *received,
-                                          zlink_msg_t *part,
-                                          zlink_hwm_budget_lease_t *lease)
-{
-    if (received->capacity == 0) {
-        received->parts = &received->inline_part;
-        received->leases = &received->inline_lease;
-        received->capacity = 1;
-    }
-    if (received->count == received->capacity) {
-        Py_ssize_t next_capacity = received->capacity < 4 ? 4 : received->capacity * 2;
-        zlink_msg_t *next_parts =
-          malloc ((size_t) next_capacity * sizeof (zlink_msg_t));
-        zlink_hwm_budget_lease_t **next_leases =
-          calloc ((size_t) next_capacity, sizeof (zlink_hwm_budget_lease_t *));
-        if (!next_parts || !next_leases) {
-            free (next_parts);
-            free (next_leases);
-            return -1;
-        }
-        memcpy (next_parts, received->parts,
-                (size_t) received->count * sizeof (zlink_msg_t));
-        memcpy (next_leases, received->leases,
-                (size_t) received->count * sizeof (zlink_hwm_budget_lease_t *));
-        if (received->parts != &received->inline_part)
-            free (received->parts);
-        if (received->leases != &received->inline_lease)
-            free (received->leases);
-        received->parts = next_parts;
-        received->leases = next_leases;
-        received->capacity = next_capacity;
-    }
-    received->parts[received->count] = *part;
-    received->leases[received->count] = lease;
-    ++received->count;
-    return 0;
-}
-
-typedef enum retained_recv_kind_t
-{
-    RETAINED_RECV_DIRECT,
-    RETAINED_RECV_DEALER,
-    RETAINED_RECV_ROUTER,
-    RETAINED_RECV_SUBSCRIBE
-} retained_recv_kind_t;
-
-typedef struct retained_recv_metadata_t
-{
-    zlink_routing_id_t routing_id;
-    int has_routing;
-    uint8_t message_type;
-    uint64_t request_seq;
-    uint64_t transport_pair_id;
-    uint64_t transport_pair_generation;
-    char topic[256];
-    size_t topic_len;
-} retained_recv_metadata_t;
-
-static int receive_retained_parts (void *handle,
-                                   int flags,
-                                   retained_recv_kind_t kind,
-                                   received_parts_t *received,
-                                   retained_recv_metadata_t *metadata,
-                                   int *err_out)
-{
-    int rc = ZLINK_RECV_OK;
-    while (1) {
-        const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_hwm_budget_lease_t *lease = NULL;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        zlink_recv_flags_t recv_flags =
-          received->count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
-        uint8_t message_type = 0;
-        uint64_t request_seq = 0;
-        uint64_t transport_pair_id = 0;
-        uint64_t transport_pair_generation = 0;
-        char topic[256] = {0};
-        size_t topic_len = 0;
-
-        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
-            *err_out = zlink_errno ();
-            if (*err_out == 0)
-                *err_out = ENOMEM;
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-
-        switch (kind) {
-            case RETAINED_RECV_DEALER:
-                rc = zlink_dealer_recv_part_with_hwm_budget_lease (
-                  handle, &message_type, &request_seq, &part, &lease, &has_more,
-                  recv_flags);
-                break;
-            case RETAINED_RECV_ROUTER:
-                rc = zlink_router_recv_part_v2_with_hwm_budget_lease (
-                  handle, &source_rid, &request_seq, &transport_pair_id,
-                  &transport_pair_generation, &part, &lease, &has_more, recv_flags);
-                break;
-            case RETAINED_RECV_SUBSCRIBE:
-                rc = zlink_subscribe_part_with_hwm_budget_lease (
-                  handle, &source_rid, topic, sizeof (topic), &topic_len, &part,
-                  &lease, &has_more, recv_flags);
-                break;
-            case RETAINED_RECV_DIRECT:
-            default:
-                rc = zlink_recv_part_with_hwm_budget_lease (
-                  handle, &source_rid, &part, &lease, &has_more, recv_flags);
-                break;
-        }
-
-        if (rc != ZLINK_RECV_OK) {
-            *err_out = zlink_errno ();
-            zlink_hwm_budget_lease_release (&lease);
-            zlink_msg_close (&part);
-            return rc;
-        }
-
-        if (received->count == 0) {
-            if (source_rid && source_rid->size > 0) {
-                metadata->routing_id = *source_rid;
-                metadata->has_routing = 1;
-            }
-            metadata->message_type = message_type;
-            metadata->request_seq = request_seq;
-            metadata->transport_pair_id = transport_pair_id;
-            metadata->transport_pair_generation = transport_pair_generation;
-            metadata->topic_len = topic_len < sizeof (metadata->topic)
-                                    ? topic_len
-                                    : sizeof (metadata->topic);
-            if (metadata->topic_len > 0)
-                memcpy (metadata->topic, topic, metadata->topic_len);
-        }
-
-        if (append_retained_received_part (received, &part, lease) != 0) {
-            zlink_hwm_budget_lease_release (&lease);
-            zlink_msg_close (&part);
-            *err_out = ENOMEM;
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        if (has_more == ZLINK_PART_FINAL)
-            return ZLINK_RECV_OK;
-    }
-}
-
-static int run_retained_receive (void *handle,
-                                 int flags,
-                                 retained_recv_kind_t kind,
-                                 received_parts_t *received,
-                                 retained_recv_metadata_t *metadata,
-                                 int *err_out)
-{
-    int rc = ZLINK_RECV_OK;
-    const int release_gil = (flags & ZLINK_DONTWAIT) == 0;
-    PyThreadState *_save = NULL;
-    memset (metadata, 0, sizeof (*metadata));
-    if (release_gil)
-        _save = PyEval_SaveThread ();
-    rc = receive_retained_parts (handle, flags, kind, received, metadata, err_out);
-    if (release_gil)
-        PyEval_RestoreThread (_save);
-    return rc;
-}
-
-static PyObject *retained_routing_object (const retained_recv_metadata_t *metadata)
-{
-    if (!metadata->has_routing) {
-        Py_INCREF (Py_None);
-        return Py_None;
-    }
-    return PyBytes_FromStringAndSize ((const char *) metadata->routing_id.data,
-                                      (Py_ssize_t) metadata->routing_id.size);
 }
 
 static PyObject *py_send_parts (PyObject *self, PyObject *args)
@@ -2050,185 +1795,6 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
     return Py_BuildValue ("iiNNN", rc, err, routing_obj, topic_obj, owner_obj);
 }
 
-static PyObject *py_recv_retained_owner (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    int flags = 0;
-    int err = 0;
-    received_parts_t received = {0};
-    retained_recv_metadata_t metadata;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
-        return NULL;
-
-    int rc = run_retained_receive ((void *) (uintptr_t) handle_value, flags,
-                                   RETAINED_RECV_DIRECT, &received, &metadata, &err);
-    if (rc != ZLINK_RECV_OK) {
-        close_received_parts (&received);
-        if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
-            Py_RETURN_FALSE;
-        return Py_BuildValue ("iiOOO", rc, err, Py_None, Py_None, Py_None);
-    }
-
-    PyObject *credit_owner_obj = build_hwm_budget_credit_owner (&received);
-    if (!credit_owner_obj) {
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *owner_obj = build_native_parts_owner (&received);
-    if (!owner_obj) {
-        Py_DECREF (credit_owner_obj);
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *routing_obj = retained_routing_object (&metadata);
-    if (!routing_obj) {
-        Py_DECREF (owner_obj);
-        Py_DECREF (credit_owner_obj);
-        return NULL;
-    }
-    return Py_BuildValue ("iiNNN", rc, err, routing_obj, owner_obj,
-                          credit_owner_obj);
-}
-
-static PyObject *py_dealer_recv_retained_owner (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    int flags = 0;
-    int err = 0;
-    received_parts_t received = {0};
-    retained_recv_metadata_t metadata;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
-        return NULL;
-
-    int rc = run_retained_receive ((void *) (uintptr_t) handle_value, flags,
-                                   RETAINED_RECV_DEALER, &received, &metadata, &err);
-    if (rc != ZLINK_RECV_OK) {
-        close_received_parts (&received);
-        if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
-            Py_RETURN_FALSE;
-        return Py_BuildValue ("iiOOOO", rc, err, Py_None, Py_None, Py_None,
-                              Py_None);
-    }
-
-    PyObject *credit_owner_obj = build_hwm_budget_credit_owner (&received);
-    if (!credit_owner_obj) {
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *owner_obj = build_native_parts_owner (&received);
-    if (!owner_obj) {
-        Py_DECREF (credit_owner_obj);
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *message_type_obj = PyLong_FromUnsignedLong (metadata.message_type);
-    PyObject *request_seq_obj = PyLong_FromUnsignedLongLong (metadata.request_seq);
-    if (!message_type_obj || !request_seq_obj) {
-        Py_XDECREF (message_type_obj);
-        Py_XDECREF (request_seq_obj);
-        Py_DECREF (owner_obj);
-        Py_DECREF (credit_owner_obj);
-        return NULL;
-    }
-    return Py_BuildValue ("iiNNNN", rc, err, message_type_obj, request_seq_obj,
-                          owner_obj, credit_owner_obj);
-}
-
-static PyObject *py_router_recv_retained_owner (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    int flags = 0;
-    int err = 0;
-    received_parts_t received = {0};
-    retained_recv_metadata_t metadata;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
-        return NULL;
-
-    int rc = run_retained_receive ((void *) (uintptr_t) handle_value, flags,
-                                   RETAINED_RECV_ROUTER, &received, &metadata, &err);
-    if (rc != ZLINK_RECV_OK) {
-        close_received_parts (&received);
-        if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
-            Py_RETURN_FALSE;
-        return Py_BuildValue ("iiOOOO", rc, err, Py_None, Py_None, Py_None,
-                              Py_None);
-    }
-
-    PyObject *credit_owner_obj = build_hwm_budget_credit_owner (&received);
-    if (!credit_owner_obj) {
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *owner_obj = build_native_parts_owner (&received);
-    if (!owner_obj) {
-        Py_DECREF (credit_owner_obj);
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *routing_obj = retained_routing_object (&metadata);
-    PyObject *request_seq_obj = PyLong_FromUnsignedLongLong (metadata.request_seq);
-    if (!routing_obj || !request_seq_obj) {
-        Py_XDECREF (routing_obj);
-        Py_XDECREF (request_seq_obj);
-        Py_DECREF (owner_obj);
-        Py_DECREF (credit_owner_obj);
-        return NULL;
-    }
-    return Py_BuildValue ("iiNNNN", rc, err, routing_obj, request_seq_obj,
-                          owner_obj, credit_owner_obj);
-}
-
-static PyObject *py_subscribe_retained_owner (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    int flags = 0;
-    int err = 0;
-    received_parts_t received = {0};
-    retained_recv_metadata_t metadata;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
-        return NULL;
-
-    int rc = run_retained_receive ((void *) (uintptr_t) handle_value, flags,
-                                   RETAINED_RECV_SUBSCRIBE, &received, &metadata, &err);
-    if (rc != ZLINK_RECV_OK) {
-        close_received_parts (&received);
-        if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
-            Py_RETURN_FALSE;
-        return Py_BuildValue ("iiOOOO", rc, err, Py_None, Py_None, Py_None,
-                              Py_None);
-    }
-
-    PyObject *credit_owner_obj = build_hwm_budget_credit_owner (&received);
-    if (!credit_owner_obj) {
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *owner_obj = build_native_parts_owner (&received);
-    if (!owner_obj) {
-        Py_DECREF (credit_owner_obj);
-        close_received_parts (&received);
-        return NULL;
-    }
-    PyObject *routing_obj = retained_routing_object (&metadata);
-    PyObject *topic_obj =
-      PyBytes_FromStringAndSize (metadata.topic, (Py_ssize_t) metadata.topic_len);
-    if (!routing_obj || !topic_obj) {
-        Py_XDECREF (routing_obj);
-        Py_XDECREF (topic_obj);
-        Py_DECREF (owner_obj);
-        Py_DECREF (credit_owner_obj);
-        return NULL;
-    }
-    return Py_BuildValue ("iiNNNN", rc, err, routing_obj, topic_obj, owner_obj,
-                          credit_owner_obj);
-}
-
-
-
 static PyMethodDef zlink_native_methods[] = {
   {"socket_send_op", py_socket_send_op, METH_O, "Create a native simple socket send builder."},
   {"routed_send_op", py_routed_send_op, METH_VARARGS,
@@ -2245,20 +1811,12 @@ static PyMethodDef zlink_native_methods[] = {
    "Receive multipart payload parts through zlink_recv_part."},
   {"recv_owner", py_recv_owner, METH_VARARGS,
    "Receive multipart payload parts as a native bytes owner."},
-  {"recv_retained_owner", py_recv_retained_owner, METH_VARARGS,
-   "Receive multipart payload parts with private retained Core credit."},
-  {"dealer_recv_retained_owner", py_dealer_recv_retained_owner, METH_VARARGS,
-   "Receive typed DEALER parts with private retained Core credit."},
   {"router_recv_owner", py_router_recv_owner, METH_VARARGS,
    "Receive routed multipart payload parts as a native owner."},
-  {"router_recv_retained_owner", py_router_recv_retained_owner, METH_VARARGS,
-   "Receive typed ROUTER parts with private retained Core credit."},
   {"subscribe_parts", py_subscribe_parts, METH_VARARGS,
    "Receive topic multipart payload parts through zlink_subscribe_part."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
    "Receive topic multipart payload parts as a native owner."},
-  {"subscribe_retained_owner", py_subscribe_retained_owner, METH_VARARGS,
-   "Receive topic multipart payload parts with private retained Core credit."},
   {NULL, NULL, 0, NULL},
 };
 
@@ -2279,8 +1837,6 @@ PyMODINIT_FUNC PyInit__zlink_native (void)
     if (PyType_Ready (&bytes_parts_owner_type) < 0)
         return NULL;
     if (PyType_Ready (&native_parts_owner_type) < 0)
-        return NULL;
-    if (PyType_Ready (&hwm_budget_credit_owner_type) < 0)
         return NULL;
     module = PyModule_Create (&zlink_native_module);
     if (!module)

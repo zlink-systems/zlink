@@ -470,7 +470,8 @@ class socket_lifecycle_coordinator_t
         async_mailbox_active (false),
         async_quiesce_pending (false),
         async_processing_done (true),
-        async_processing_started (false)
+        async_processing_started (false),
+        async_quiesce_completed (false)
     {
     }
 
@@ -529,6 +530,7 @@ class socket_lifecycle_coordinator_t
     std::atomic<bool> async_quiesce_pending;
     std::atomic<bool> async_processing_done;
     std::atomic<bool> async_processing_started;
+    std::atomic<bool> async_quiesce_completed;
     mutex_t async_done_mu;
     condition_variable_t async_done_cv;
 };

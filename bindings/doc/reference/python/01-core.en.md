@@ -222,14 +222,13 @@ when the zlink runtime needs to own its lifecycle.
 
 ---
 
-## `proxy(...)` / `proxy_steerable(...)` / `sleep(seconds)` / `multipart_close(parts)`
+## `proxy(...)` / `sleep(seconds)` / `multipart_close(parts)`
 
-Runs a bidirectional message-forwarding loop between two sockets (optionally steerable via a
-control socket), sleeps the calling thread, or closes every message in a multipart sequence.
+Runs a bidirectional message-forwarding loop between two sockets, sleeps the calling thread, or
+closes every message in a multipart sequence.
 
 ```python
 proxy(frontend, backend, capture)  # capture may be None; blocks until context termination
-proxy_steerable(frontend, backend, capture, control)
 sleep(1)  # seconds, not milliseconds
 multipart_close(parts)
 ```
@@ -239,17 +238,14 @@ multipart_close(parts)
 | Member | Meaning |
 | --- | --- |
 | `proxy(frontend, backend, capture=None)` | `capture` is optional |
-| `proxy_steerable(frontend, backend, capture, control)` | adds a required `control` socket |
 | `sleep(seconds)` | blocks the calling thread; takes whole seconds directly |
 | `multipart_close(parts)` | closes every message in one call |
 
-**Completion result.** All are synchronous with no return value. `proxy`/`proxy_steerable` block
-the calling thread until the context is terminated (or, for `proxy_steerable`, until a control
-command or error ends the loop) — run either on a dedicated thread.
+**Completion result.** All are synchronous with no return value. `proxy` blocks the calling thread
+until the context is terminated — run it on a dedicated thread.
 
-**When to use.** Use `proxy` for a simple fire-and-forget forwarding loop. Use `proxy_steerable`
-when the application needs to pause/resume/terminate the loop from another thread via the control
-socket. Use `multipart_close` to release every message in a received or constructed multipart
+**When to use.** Use `proxy` for a simple fire-and-forget forwarding loop. Use `multipart_close`
+to release every message in a received or constructed multipart
 sequence in one call instead of a hand-written loop.
 
 ---

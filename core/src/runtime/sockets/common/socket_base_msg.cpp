@@ -9,6 +9,8 @@
 #include "utils/err.hpp"
 #include "utils/likely.hpp"
 
+#include <limits>
+
 namespace
 {
 void prepare_direct_send_message (zlink::msg_t *msg_, int flags_)
@@ -224,6 +226,13 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
 
     if (unlikely (!msg_ || !msg_->check ())) {
         errno = EFAULT;
+        return -1;
+    }
+    if (unlikely (options.type != ZLINK_CORE_SOCKET_STREAM
+                  && msg_->size ()
+                       > static_cast<size_t> (
+                         std::numeric_limits<uint32_t>::max ()))) {
+        errno = EMSGSIZE;
         return -1;
     }
 
@@ -456,8 +465,8 @@ int zlink::socket_base_t::rollback_scoped (socket_public_send_scope_t &scope_)
 int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
 {
     // Plain public receive is the dominant data-plane role. Keep its state
-    // machine explicit instead of routing every frame through the retained and
-    // routed receive policy branches in recv_common(). The guarded receive
+    // machine explicit instead of routing every frame through the routed
+    // receive policy branch in recv_common(). The guarded receive
     // operation still owns the public/async reader handoff.
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -530,32 +539,8 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_)
     return 0;
 }
 
-int zlink::socket_base_t::recv_retained (
-  msg_t *msg_, retained_credit_token_t *token_out_, int flags_)
-{
-    return recv_common (msg_, token_out_, true, flags_, receive_runtime_t::mode_plain,
-                        NULL, NULL, NULL);
-}
-
-int zlink::socket_base_t::recv_pipe_retained (
-  msg_t *msg_, pipe_t **pipe_out_, retained_credit_token_t *token_out_,
-  int flags_)
-{
-    return recv_common (msg_, token_out_, true, flags_, receive_runtime_t::mode_pipe,
-                        pipe_out_, NULL, NULL);
-}
-
-int zlink::socket_base_t::recv_routed_retained (
-  msg_t *msg_, zlink_routing_id_t *source_rid_out_,
-  retained_credit_token_t *token_out_, int flags_,
-  uint64_t *connection_id_out_, pipe_t **source_pipe_out_)
-{
-    return recv_common (msg_, token_out_, true, flags_, receive_runtime_t::mode_routed,
-                        source_pipe_out_, source_rid_out_, connection_id_out_);
-}
-
 int zlink::socket_base_t::recv_common (
-  msg_t *msg_, retained_credit_token_t *token_out_, bool retained_, int flags_,
+  msg_t *msg_, int flags_,
   receive_runtime_t::mode_t mode_, pipe_t **pipe_out_,
   zlink_routing_id_t *source_rid_out_,
   uint64_t *connection_id_out_)
@@ -566,14 +551,11 @@ int zlink::socket_base_t::recv_common (
         source_rid_out_->size = 0;
     if (connection_id_out_)
         *connection_id_out_ = 0;
-    if (retained_ && token_out_)
-        token_out_->reset ();
-
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
         return -1;
     }
-    if (unlikely (!msg_ || !msg_->check () || (retained_ && !token_out_))) {
+    if (unlikely (!msg_ || !msg_->check ())) {
         errno = EFAULT;
         return -1;
     }
@@ -585,16 +567,6 @@ int zlink::socket_base_t::recv_common (
     }
 
     const auto recv_once = [&] () -> int {
-        if (retained_) {
-            token_out_->reset ();
-            if (mode_ == receive_runtime_t::mode_pipe)
-                return xrecv_pipe_retained (msg_, pipe_out_, token_out_);
-            if (mode_ == receive_runtime_t::mode_routed)
-                return xrecv_routed_retained (
-                  msg_, source_rid_out_, connection_id_out_, pipe_out_,
-                  token_out_);
-            return xrecv_retained (msg_, token_out_);
-        }
         if (mode_ == receive_runtime_t::mode_pipe)
             return xrecv_pipe (msg_, pipe_out_);
         if (mode_ == receive_runtime_t::mode_routed)
@@ -660,7 +632,7 @@ int zlink::socket_base_t::recv_common (
 
 int zlink::socket_base_t::recv_pipe (msg_t *msg_, pipe_t **pipe_out_, int flags_)
 {
-    return recv_common (msg_, NULL, false, flags_, receive_runtime_t::mode_pipe,
+    return recv_common (msg_, flags_, receive_runtime_t::mode_pipe,
                         pipe_out_, NULL, NULL);
 }
 

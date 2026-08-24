@@ -472,7 +472,6 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TLS_PASSWORD               = 0x302F,
   ZLINK_OPT_ZMP_METADATA               = 0x3030,
   ZLINK_OPT_TCP_NODELAY                = 0x3031,
-  ZLINK_OPT_ROUTE_VALUE_MAX_SIZE       = 0x3032,
   ZLINK_OPT_RID_DUPLICATE_POLICY       = 0x3033,
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,
@@ -619,7 +618,6 @@ errors, or reply timeout after a request submit has already succeeded.
 | `ZLINK_OPT_EVENTS` | Event state bitmask (read-only, `int`) |
 | `ZLINK_OPT_TYPE` | Socket type (read-only, `int`) |
 | `ZLINK_OPT_LAST_ENDPOINT` | Last endpoint bound (read-only, `string`) |
-| `ZLINK_OPT_ROUTE_VALUE_MAX_SIZE` | Maximum discovery route value size in bytes (read-only, `int`) |
 
 #### Dedicated Functions (not option enums)
 
@@ -1187,79 +1185,6 @@ A `ZLINK_SEND_TERMINAL` completion reports `ENOTCONN` for application-pipe
 detach or disconnect, `ECANCELED` for cancel or socket close, and `ETERM` for
 context termination. When terminal causes race, the completion carries the
 first cause that became final; the operation still completes exactly once.
-
-### Retained-credit receive
-
-```c
-typedef struct zlink_hwm_budget_lease_t zlink_hwm_budget_lease_t;
-
-ZLINK_EXPORT int zlink_recv_with_hwm_budget_lease (
-  void *socket_, zlink_msg_t *message_,
-  zlink_hwm_budget_lease_t **lease_out_, int flags_);
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part_with_hwm_budget_lease (
-  void *s_, const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t
-zlink_dealer_recv_part_with_hwm_budget_lease (
-  void *dealer_, uint8_t *message_type_out_, uint64_t *request_seq_out_,
-  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t
-zlink_router_recv_part_v2_with_hwm_budget_lease (
-  void *router_, const zlink_routing_id_t **source_node_rid_out_,
-  uint64_t *request_seq_out_, uint64_t *transport_pair_id_out_,
-  uint64_t *transport_pair_generation_out_, zlink_msg_t *part_out_,
-  zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t
-zlink_subscribe_part_with_hwm_budget_lease (
-  void *sub_, const zlink_routing_id_t **source_rid_out_,
-  char *topic_id_buf_, size_t topic_id_capacity_,
-  size_t *topic_id_len_out_, zlink_msg_t *part_out_,
-  zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
-ZLINK_EXPORT void zlink_hwm_budget_lease_release (
-  zlink_hwm_budget_lease_t **lease_p_);
-```
-
-Each variant preserves the framing, metadata, and return values of its existing
-receive counterpart. When one successful call returns one caller-visible
-physical payload frame, only that frame's accounting owner moves atomically
-from the queue to an opaque lease. These APIs do not introduce a new multipart
-transaction: a part variant is called once per existing part and returns one
-lease per call. Dealer message type and request sequence, Router source RID,
-request sequence and transport pair, SUB topic, and raw `STREAM` source RID
-remain the Core-parsed results of the corresponding existing API.
-
-A successful call that returns no physical application-queue charge sets
-`*lease_out_` to `NULL`. This includes Core-synthesized raw `ROUTER` and
-`STREAM` routing-ID frames and local `XPUB` subscription events. Dealer and
-Router envelopes, SUB topic metadata, credential frames, and handshake frames
-are not caller-visible payloads; Core consumes them immediately and does not
-expose their charge as a lease. A subsequent successful call that returns the
-physical payload returns a non-NULL lease.
-
-The lease retains the origin directional queue id, generation, and accounted
-bytes without immediately publishing writer credit. Ownership moves from
-`core_queue_accounted_bytes` to `application_accounted_bytes`, while their sum
-in `current_accounted_bytes` remains unchanged. Ordinary receive keeps its
-existing dequeue-credit behavior. The internal command worker enabled for a
-retained-receive socket processes deferred credit only; without a receive
-handler it does not consume caller-visible payload.
-
-The lease pointer must not be copied into multiple owners, but ownership may
-move between threads. `zlink_hwm_budget_lease_release()` is safe for `NULL` and
-for `*lease_p_ == NULL`; after returning ownership it sets `*lease_p_` to
-`NULL`, so repeating release through the same pointer variable has no effect.
-Release returns credit to the exact origin generation once. If that origin
-detaches or advances generation first, its retired record remains, and release
-of an old lease changes neither credit nor wake state for the new generation.
-The final old lease removes the retired record. Context shutdown prevents new
-lease transfers; forced termination invalidates remaining leases and cleans
-their counters once. A later caller release remains safe.
-
----
 
 ### zlink_multipart_close
 

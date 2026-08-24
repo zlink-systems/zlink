@@ -40,7 +40,7 @@ decoder reservations, and data-path cost boundaries.
 
 Core checks the following inputs in priority order and picks the first usable
 value. The `ZLINK_CTX_OPT_AUTO_HWM_*` below are
-[Context options](../01-context.en.md#context-option-constants) the application
+[Context options](../01-context.en.md#4-options) the application
 sets with `zlink_ctx_set_data`.
 
 1. A positive `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
@@ -393,13 +393,8 @@ registry updates `application_accounted_bytes`,
 `outstanding_application_lease_count`, and `deferred_origin_credit_bytes`
 synchronously with the call that changes them. `current_accounted_bytes`,
 `provisional_accounted_bytes`, and `peak_accounted_bytes` are sampled from
-per-pipe accounting when the snapshot is taken, and a lease release publishes
-its credit to the owning pipe asynchronously. A snapshot taken immediately
-after `zlink_hwm_budget_lease_release` on another thread may therefore still count
-the released bytes. The contract guarantees exactly-once release and internal
-snapshot consistency, not that a release is visible in the very next snapshot.
-Poll the snapshot when a test or an operator needs to observe the settled
-value.
+per-pipe accounting when the snapshot is taken. Poll the snapshot when a test
+or an operator needs to observe a later settled value.
 
 `blocked_ratio_ppm` is calculated as follows:
 

@@ -452,22 +452,6 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	return true, nil
 }
 
-// RecvRetained preserves STREAM source metadata while retaining Core receive
-// credit for the lifetime of the aggregate result.
-func (s *StreamSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error) {
-	ok, err := (&directSocket{connectionSocket: s.core.connectionSocket}).RecvRetained(out, flags)
-	if err != nil || !ok {
-		return ok, err
-	}
-	if out.routingID.Size() > 0 {
-		routingID := out.routingID
-		out.send = func(sendFlags SendFlags, builderParts []sendBuilderPart) (bool, error) {
-			return s.core.submitToBuilder(routingID, sendFlags, builderParts)
-		}
-	}
-	return true, nil
-}
-
 func (s *StreamSocket) OnPacket(handler func(RoutingID, *Message, *Message)) error {
 	if handler == nil {
 		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EINVAL)}

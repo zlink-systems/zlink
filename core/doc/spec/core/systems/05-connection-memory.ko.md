@@ -1,5 +1,5 @@
 ---
-title: "Connection별 memory"
+title: "Connection Memory"
 ---
 
 [English](https://zlink-systems.github.io/zlink/spec/core/systems/05-connection-memory/) | 한국어
@@ -8,52 +8,117 @@ title: "Connection별 memory"
 [시스템 목차](README.ko.md) | [이전: Thread safety](04-thread-safety.ko.md) | [다음: Auto HWM](06-auto-hwm.ko.md)
 <!-- zlink-nav:end -->
 
-# Connection별 memory
+# Connection Memory
 
-> **이 장이 답하는 것** — connection 하나가 실제로 어떤 메모리를 얼마나 할당하는가
-> (고정 비용과 HWM에 비례하는 비용).
+> **이 장이 정의하는 것** — connection 하나가 실제로 어떤 memory를 얼마나 할당하는가
+> (고정 비용과 HWM에 비례하는 가변 비용).
 
-각 transport connection은 session, engine state, pipe endpoint, handshake buffer와 kernel
-socket buffer를 할당한다. Queued message storage는 고정된 connection 비용이 아니라 각 frame의
-실제 accounted byte와 HWM에 따라 증가한다.
+## 1. Connection memory 개요
 
-## 고정 구성 요소
+각 transport connection은 두 종류의 memory를 사용한다. 하나는 connection을 만들 때
+할당하는 **고정 비용**이며, 구성은 inproc와 socket 기반 transport가 다르다. 다른 하나는
+queue가 보관하는 message storage인 **가변 비용**으로, 고정된 connection 비용이 아니라 각
+frame의 실제 accounted byte와, queue에 유지할 byte를 제한하는 상한인
+[HWM](../glossary.ko.md#hwm)에 따라 증가한다.
 
-- session과 engine object
-- pipe metadata와 queue chunk
-- routing id와 endpoint metadata
-- protocol handshake state
-- 운영체제 socket 구조
+이 문서는 그 두 비용의 구성과, 이를 관찰·측정할 때의 한계를 정의한다. 대상 독자는
+connection당 memory 사용량을 추정하고 capacity planning을 수행하는 개발자다.
 
-## 가변 구성 요소
+관련 계약의 소유 문서는 다음과 같다.
 
-Directional pipe는 frame마다 payload와 `sizeof(msg_t)`를 byte charge로 계산한다. Decoder는
-frame length를 확인한 직후 origin queue의 provisional credit을 먼저 얻고 그 뒤에만 payload
-buffer를 할당한다. Multipart 마지막 frame에서는 같은 provisional 합계를 committed message로
-전환하며 counter를 다시 증가시키지 않는다. Write 실패, rollback, close와 detach는 실제로
-제거한 provisional·committed frame charge를 정확히 한 번 반환한다.
+| 관련 계약 | 정의하는 문서 |
+|---|---|
+| memory budget 계산, byte 회계와 HWM admission | [Auto HWM](06-auto-hwm.ko.md) |
+| [socket](../glossary.ko.md#socket) 옵션과 HWM 관찰 동작 | [Socket 공통](../socket/README.ko.md) |
+| 각 용어의 짧은 정의 | [Core 용어](../glossary.ko.md) |
 
-Application directional HWM은 physical queue byte와 그 queue에서 Framework로 이전된
-retained-credit lease byte를 함께 제한한다. Retained receive는 queue charge를 줄이지 않고
-owner만 application lease로 바꾸며, release가 exact origin generation의 read credit을
-반환한다. Origin이 먼저 detach되면 마지막 lease가 반환될 때까지 retired registry entry를
-유지한다.
+## 2. 고정 구성 요소
 
-비어 있는 application pipe는 소켓의 최대 message 크기를 넘지 않는 범위에서 HWM보다 큰
-complete message 한 건을 허용하고, 그 뒤의 write를 중단한다. 끝나지 않은 multipart에는
-이 예외를 적용하지 않는다. DEALER·ROUTER completion progress lane은 terminal reply와 error
-reply 전용이며 byte HWM, LWM, manual HWM과 Core budget reservation을 적용하지 않는다.
-Application pipe가 가득 차도 유효한 completion record는 connection이 유지되고 allocation이
-성공하면 수용한다.
+connection 하나를 만들 때 traffic 양과 무관하게 할당하는 구성 요소는 transport에 따라
+다음과 같이 나뉜다.
 
-Monitor는 queue·application lease·completion의 current byte와 oversize 허용 이력을 구분해
-제공한다. Core budget은 정상 상태의 pipe별 HWM 분배 기준이지 context 실제 사용량 hard
-cap이 아니다. 이 값은 Core 회계를 설명하지만 process resident memory의 정확한 측정값은
-아니다.
+| Transport | 고정 구성 요소 |
+|---|---|
+| inproc | 두 socket endpoint를 직접 연결하는 pipepair. session과 engine은 만들지 않으며 protocol handshake state와 운영체제 socket도 없다. |
+| socket 기반 transport | session, engine, pipe endpoint와 queue chunk, routing ID와 endpoint metadata, protocol handshake state, 운영체제 socket 구조. TLS는 record와 handshake storage를 추가한다. |
 
-Kernel buffer는 platform autotuning에 따라 증가할 수 있다. TLS는 record와 handshake
-storage를 추가한다. Monitor snapshot은 적용된 HWM 계획을 보고하지만 allocator와 kernel
-overhead 전체를 측정하지는 않는다.
+## 3. 가변 구성 요소
 
-Capacity planning에서는 production transport와 message-size 분포를 사용해 idle, traffic 이후 잔류와
-burst peak memory를 각각 측정한다.
+> **이 절의 계약 소유** — byte 회계, HWM admission과 budget 계산의 공개 계약과 내부 구현은
+> [Auto HWM](06-auto-hwm.ko.md)이 소유한다. 이 절은 그 결과를 connection 하나의 memory 비용
+> 관점에서 요약한다.
+
+### 3.1 Frame byte charge
+
+한 application 방향의 message를 담는 물리 queue를
+[directional queue](../glossary.ko.md#directional-queue)라 한다. Directional pipe는 frame마다
+payload와 `sizeof(zlink_msg_t)`를 byte charge로 계산한다. 이 charge는 다음 순서로 예약되고
+반환된다.
+
+1. 수신한 wire byte를 frame으로 해석하는 decoder는 frame length를 확인한 직후 origin queue의
+   provisional credit을 먼저 얻고, 그 뒤에만 payload buffer를 할당한다.
+2. Multipart 마지막 frame에서는 같은 provisional 합계를 committed message로 전환하며 counter를
+   다시 증가시키지 않는다.
+3. Write 실패, rollback, close와 detach는 실제로 제거한 provisional·committed frame charge를
+   정확히 한 번 반환한다.
+
+### 3.2 빈 pipe oversize 예외
+
+비어 있는 application pipe는 socket의 최대 message 크기를 넘지 않는 범위에서 HWM보다 큰
+complete message 한 건을 허용하고, 그 뒤의 write를 중단한다. 끝나지 않은 multipart에는 이
+예외를 적용하지 않는다.
+
+### 3.4 Completion progress lane
+
+DEALER·ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)은
+terminal reply와 error reply를 진행시키고, peer 사이의 receive-flow-state frame을
+동기화하는 별도 경로다. 이 lane에는 byte HWM, LWM, manual HWM과 Core budget
+reservation을 적용하지 않는다. Application pipe가 가득 차도 유효한 completion record와
+receive-flow-state frame은 connection이 유지되고 allocation이 성공하면 수용한다.
+
+## 4. 측정과 한계
+
+실행 중 memory 상태를 조회하는 monitor는 queue·application lease·completion의 current byte와
+oversize 허용 이력을 구분해 제공한다. [Core budget](../glossary.ko.md#auto-hwm-budget) — Core가
+memory 입력에서 계산해 application queue들의 HWM을 나눌 때 기준으로 삼는 byte 총량 — 은 정상
+상태의 pipe별 HWM 분배 기준이지 context 실제 사용량 hard cap이 아니다. 이 값은 Core 회계를
+설명하지만 process resident memory의 정확한 측정값은 아니다.
+
+Kernel buffer는 platform autotuning에 따라 증가할 수 있다. TLS는 record와 handshake storage를
+추가한다. Monitor snapshot은 적용된 HWM 계획을 보고하지만 allocator와 kernel overhead 전체를
+측정하지는 않는다.
+
+## 5. Capacity planning
+
+Capacity planning에서는 production transport와 message-size 분포를 사용해 다음 세 값을 각각
+측정한다.
+
+- idle memory
+- traffic 이후 잔류 memory
+- burst peak memory
+
+## 6. 구현 및 contract test 검증 요구
+
+byte 회계, admission, credit·lease와 oversize 예외의 상세 검증 항목은
+[Auto HWM의 검증 요구](06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
+connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목은 test 하나로 이어진다.
+
+**byte charge**
+- frame 하나를 수락하면 그 pipe의 accounted byte가 payload에 `sizeof(zlink_msg_t)`를 더한 만큼 증가한다.
+- multipart 마지막 frame은 provisional 합계를 committed message로 전환할 뿐 counter를 다시 증가시키지 않는다.
+- write 실패, rollback, close와 detach 뒤 실제 제거된 frame의 provisional·committed charge는 정확히 한 번 반환된다.
+
+**HWM과 lease**
+- application directional HWM은 physical queue byte와 retained-credit lease byte의 합에 적용된다 — retained receive는 queue charge를 줄이지 않고 owner만 application lease로 바꾸므로, release 전에는 그 byte가 계속 HWM을 소비한다.
+- lease를 release하면 exact origin generation의 read credit이 반환된다. origin이 먼저 detach된 경우에도 마지막 lease가 반환될 때까지 retired registry entry가 유지된다.
+
+**oversize와 completion**
+- 빈 application pipe에 socket 최대 message 크기 이내이며 HWM보다 큰 complete message를 보내면 한 건 수락되고, 그 뒤의 write는 중단된다.
+- 끝나지 않은 multipart에는 빈 pipe oversize 예외가 적용되지 않는다.
+- application pipe가 가득 찬 상태에서도 유효한 completion record는 connection이 유지되고 allocation이 성공하면 수용된다.
+- RUNNING·PAUSED receive-flow-state frame은 DEALER·ROUTER completion progress lane으로 동기화된다.
+- completion progress lane에는 byte HWM, LWM, manual HWM과 Core budget reservation이 적용되지 않는다.
+
+**측정**
+- monitor는 queue·application lease·completion의 current byte와 oversize 허용 이력을 구분해 보고한다.
+- Core budget은 정상 상태의 pipe별 HWM 분배 기준이며 context 실제 사용량 hard cap으로 동작하지 않는다 (상세 admission 계약은 [Auto HWM](06-auto-hwm.ko.md) 소유).

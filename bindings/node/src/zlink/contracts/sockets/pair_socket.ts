@@ -25,5 +25,4 @@ export interface PairSocket extends ConnectableSocket {
    * Core HWM credit. Successful reuse or `result.close()` returns the credit;
    * a native finalizer is the fallback if the result becomes unreachable.
    */
-  recvRetained(result: Received, flags?: RecvFlags): boolean;
 }

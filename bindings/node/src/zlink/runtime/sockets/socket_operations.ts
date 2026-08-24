@@ -81,26 +81,6 @@ export class ReceiveSocket extends ConnectableSocket {
     return true;
   }
 
-  /** @internal Select the retained native receive family for this socket role. */
-  protected recvRetainedRaw(flags: RecvFlags): NativeReceivedRaw | null {
-    return ((flags | 0) & (RecvFlags.DontWait | 0))
-      ? native.socketRecvMessageRetainedNoWait(getNativeHandle(this))
-      : native.socketRecvMessageRetained(getNativeHandle(this), flags | 0);
-  }
-
-  recvRetained(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
-    let raw;
-    try {
-      raw = this.recvRetainedRaw(flags);
-    } catch (error) {
-      throw recvNativeError(error, flags, 'retained recv failed');
-    }
-    if (raw == null) return false;
-    materializeReceivedInto(result, raw);
-    return true;
-  }
-}
-
 export class SendSocket extends ReceiveSocket {
   private readonly sendCompletion: SendCompletionOwner;
 
@@ -211,22 +191,6 @@ export class SubscriberSocket extends ConnectableSocket {
     return materializeTopicMessage(raw);
   }
 
-  subscribeRetained(
-    result: TopicMessage,
-    flags: RecvFlags = RecvFlags.None
-  ): boolean {
-    let raw;
-    try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketTrySubscribeMessageRetained(getNativeHandle(this))
-        : native.socketSubscribeMessageRetained(getNativeHandle(this), flags | 0);
-    } catch (error) {
-      throw recvNativeError(error, flags, 'retained subscribe failed');
-    }
-    if (raw == null) return false;
-    adoptTopicMessage(result, raw);
-    return true;
-  }
 }
 
 export class RoutedMessageSocket extends ConnectableSocket {
@@ -320,17 +284,4 @@ export class RoutedMessageSocket extends ConnectableSocket {
   }
 
 
-  recvRetained(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
-    let raw;
-    try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.routerRecvMessageRetainedNoWait(getNativeHandle(this))
-        : native.routerRecvMessageRetained(getNativeHandle(this), flags | 0);
-    } catch (error) {
-      throw recvNativeError(error, flags, 'retained recv failed');
-    }
-    if (raw == null) return false;
-    materializeRoutedReceivedInto(result, raw, this.receivedOperations);
-    return true;
-  }
 }

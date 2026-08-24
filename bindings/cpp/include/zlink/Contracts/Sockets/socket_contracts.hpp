@@ -102,16 +102,8 @@ class socket_t
     [[nodiscard]] int
     receive (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_);
 
-    [[nodiscard]] int
-    receive_retained (received_t &received_, recv_flags_t flags_ = recv_flags_t::none);
-
-    [[nodiscard]] int receive_retained (
-      received_t &received_, recv_flags_t flags_,
-      bool attach_routed_send_context_);
-
     [[nodiscard]] int receive_impl (
-      received_t &received_, recv_flags_t flags_,
-      bool attach_routed_send_context_, bool retain_credit_);
+      received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_);
 
     [[nodiscard]] int publish (const std::string &topic_id_,
                                message_t &part_,
@@ -130,8 +122,6 @@ class socket_t
     [[nodiscard]] int subscribe (topic_message_t &message_,
                                  recv_flags_t flags_ = recv_flags_t::none);
 
-    [[nodiscard]] int subscribe_retained (
-      topic_message_t &message_, recv_flags_t flags_ = recv_flags_t::none);
 
     [[nodiscard]] int subscribe_part (std::optional<routing_id_t> &source_rid_out_,
                                       std::string &topic_out_,
@@ -180,9 +170,5 @@ namespace zlink
 
 void proxy (socket_t &frontend_, socket_t &backend_);
 void proxy (socket_t &frontend_, socket_t &backend_, socket_t &capture_);
-void proxy_steerable (socket_t &frontend_,
-                      socket_t &backend_,
-                      socket_t &capture_,
-                      socket_t &control_);
 
 } // namespace zlink

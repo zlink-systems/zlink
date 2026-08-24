@@ -215,11 +215,6 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_reset_auto_hwm_budget_metrics (void
 /** @brief Start a built-in proxy between frontend and backend sockets. */
 ZLINK_EXPORT zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *capture_);
 
-/** @brief Start a steerable proxy with an additional control socket. */
-ZLINK_EXPORT zlink_config_result_t zlink_proxy_steerable (void *frontend_,
-                                                          void *backend_,
-                                                          void *capture_,
-                                                          void *control_);
 
 /** @brief Check if the library supports a given capability (e.g. "ipc", "tls"). */
 ZLINK_EXPORT bool zlink_has (const char *capability_);

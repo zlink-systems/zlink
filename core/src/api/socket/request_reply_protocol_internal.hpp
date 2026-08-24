@@ -198,6 +198,12 @@ inline int decode_reply_completion (uint8_t message_type_,
 
     const unsigned char *errbuf = static_cast<const unsigned char *> (errno_part->data ());
     *callback_errno_out_ = static_cast<int> (decode_u32_be (errbuf));
+    if (*callback_errno_out_ == 0) {
+        *callback_errno_out_ = EPROTO;
+        *callback_parts_out_ = NULL;
+        *callback_part_count_out_ = 0;
+        return 0;
+    }
     *callback_parts_out_ = part_count_ > 1 ? parts_ + 1 : NULL;
     *callback_part_count_out_ = part_count_ > 0 ? part_count_ - 1 : 0;
     return 0;

@@ -180,6 +180,7 @@ zlink::stream_t::stream_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _more_out (false),
     _next_integral_routing_id (1),
     _dispatch_active (false),
+    _raw_part_receive_active (false),
     _dispatch_mode (dispatch_mode_none),
     _dispatch_inflight (0),
     _dispatch_raw_callback (NULL),
@@ -284,6 +285,8 @@ void zlink::stream_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     if (pipe_->check_write_admission () == pipe_message_admission_ready)
         notify_send_pending_writable (pipe_);
     maybe_emit_connect_event (pipe_);
+    if (options.stream_notify)
+        queue_stream_notify (pipe_->get_server_socket_routing_id ());
     notify_session_observer (pipe_->get_server_socket_routing_id (), true);
 }
 
@@ -295,6 +298,8 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
     pipe_->reset_stream_packet_state ();
 
     std::lock_guard<std::recursive_mutex> api_lock (_api_mutex);
+    if (options.stream_notify)
+        queue_stream_notify (server_routing_id);
     if (pipe_ == _current_out)
         _current_out = NULL;
 
@@ -585,32 +590,14 @@ int zlink::stream_t::xselect_routed_submit_target (
 
 int zlink::stream_t::xrecv (msg_t *msg_)
 {
-    return xrecv_with_credit (msg_, NULL);
-}
-
-int zlink::stream_t::xrecv_retained (msg_t *msg_,
-                                     retained_credit_token_t *token_out_)
-{
-    return xrecv_with_credit (msg_, token_out_);
-}
-
-int zlink::stream_t::xrecv_with_credit (
-  msg_t *msg_, retained_credit_token_t *token_out_)
-{
     if (_prefetched) {
         if (!_routing_id_sent) {
-            if (token_out_)
-                token_out_->reset ();
             const int rc = msg_->move (_prefetched_id);
             errno_assert (rc == 0);
             _routing_id_sent = true;
         } else {
             const int rc = msg_->move (_prefetched_msg);
             errno_assert (rc == 0);
-            if (token_out_)
-                *token_out_ = std::move (_prefetched_credit);
-            else
-                _prefetched_credit.reset ();
             _prefetched = false;
         }
 
@@ -620,10 +607,25 @@ int zlink::stream_t::xrecv_with_credit (
         return 0;
     }
 
+    if (!_more_in && !_stream_notify_routing_ids.empty ()) {
+        const uint32_t routing_id = _stream_notify_routing_ids.front ();
+        _stream_notify_routing_ids.pop_front ();
+
+        const int init_rc = msg_->init_size (sizeof (routing_id));
+        errno_assert (init_rc == 0);
+        put_uint32 (static_cast<unsigned char *> (msg_->data ()), routing_id);
+        msg_->set_flags (msg_t::more);
+        const int notify_init_rc = _prefetched_msg.init_size (0);
+        errno_assert (notify_init_rc == 0);
+        _prefetched = true;
+        _routing_id_sent = true;
+        _current_in = NULL;
+        _more_in = true;
+        return 0;
+    }
+
     pipe_t *pipe = NULL;
-    const int rc = token_out_
-                     ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
-                     : _fq.recvpipe (msg_, &pipe);
+    const int rc = _fq.recvpipe (msg_, &pipe);
     if (rc != 0)
         return -1;
 
@@ -638,8 +640,6 @@ int zlink::stream_t::xrecv_with_credit (
 
     const int stash_rc = _prefetched_msg.move (*msg_);
     errno_assert (stash_rc == 0);
-    if (token_out_)
-        _prefetched_credit = std::move (*token_out_);
     _prefetched = true;
     _routing_id_sent = true;
     _current_in = pipe;
@@ -655,7 +655,7 @@ int zlink::stream_t::xrecv_with_credit (
 
 bool zlink::stream_t::xhas_in ()
 {
-    return _prefetched || _fq.has_in ();
+    return _prefetched || !_stream_notify_routing_ids.empty () || _fq.has_in ();
 }
 
 bool zlink::stream_t::xhas_out ()
@@ -672,6 +672,17 @@ int zlink::stream_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
 
 int zlink::stream_t::xsetsockopt (int option_, const void *optval_, size_t optvallen_)
 {
+    if (option_ == ZLINK_INTERNAL_OPT_STREAM_NOTIFY) {
+        // STREAM does not support connect(), so a recorded endpoint means a
+        // successful bind has already occurred even if that endpoint was
+        // subsequently terminated.
+        if (socket_has_endpoint_history ()) {
+            errno = EINVAL;
+            return -1;
+        }
+        return options.setsockopt (option_, optval_, optvallen_);
+    }
+
     if (option_ == ZLINK_INTERNAL_OPT_CONNECT_ROUTING_ID) {
         LIBZLINK_UNUSED (optval_);
         LIBZLINK_UNUSED (optvallen_);
@@ -826,6 +837,28 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
     const unsigned char *payload = static_cast<const unsigned char *> (msg_->data ());
     const size_t payload_size = msg_->size ();
     size_t offset = 0;
+    const auto dispatch_completed_packet = [&] () {
+        msg_t header_out;
+        msg_t body_out;
+        const int header_init_rc = header_out.init ();
+        errno_assert (header_init_rc == 0);
+        const int body_init_rc = body_out.init ();
+        errno_assert (body_init_rc == 0);
+        const int header_move_rc = header_out.move (state.header);
+        errno_assert (header_move_rc == 0);
+        const int body_move_rc = body_out.move (state.body);
+        errno_assert (body_move_rc == 0);
+
+        state.reset ();
+
+        _dispatch_inflight.fetch_add (1, std::memory_order_acq_rel);
+        handler (this, rid_, reinterpret_cast<zlink_msg_t *> (&header_out),
+                 reinterpret_cast<zlink_msg_t *> (&body_out),
+                 _dispatch_packet_handler_userdata.load (std::memory_order_acquire));
+        reset_dispatched_msg (&header_out);
+        reset_dispatched_msg (&body_out);
+        _dispatch_inflight.fetch_sub (1, std::memory_order_acq_rel);
+    };
 
     while (offset < payload_size) {
         if (state.stage == pipe_t::stream_packet_state_t::prefix_stage) {
@@ -878,6 +911,14 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
 
             if (state.header_size == 0)
                 state.stage = pipe_t::stream_packet_state_t::body_stage;
+
+            // A 0/0 packet is complete at the exact byte that finishes its
+            // six-byte prefix. Dispatch it before the outer loop can observe
+            // offset == payload_size and stop.
+            if (state.header_size == 0 && state.body_size == 0) {
+                dispatch_completed_packet ();
+                continue;
+            }
         }
 
         if (state.stage == pipe_t::stream_packet_state_t::header_stage) {
@@ -911,26 +952,7 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
             if (state.body_used < state.body_size)
                 continue;
 
-            msg_t header_out;
-            msg_t body_out;
-            const int header_init_rc = header_out.init ();
-            errno_assert (header_init_rc == 0);
-            const int body_init_rc = body_out.init ();
-            errno_assert (body_init_rc == 0);
-            const int header_move_rc = header_out.move (state.header);
-            errno_assert (header_move_rc == 0);
-            const int body_move_rc = body_out.move (state.body);
-            errno_assert (body_move_rc == 0);
-
-            state.reset ();
-
-            _dispatch_inflight.fetch_add (1, std::memory_order_acq_rel);
-            handler (this, rid_, reinterpret_cast<zlink_msg_t *> (&header_out),
-                     reinterpret_cast<zlink_msg_t *> (&body_out),
-                     _dispatch_packet_handler_userdata.load (std::memory_order_acquire));
-            reset_dispatched_msg (&header_out);
-            reset_dispatched_msg (&body_out);
-            _dispatch_inflight.fetch_sub (1, std::memory_order_acq_rel);
+            dispatch_completed_packet ();
         }
     }
 
@@ -1021,4 +1043,10 @@ void zlink::stream_t::maybe_emit_connect_event (pipe_t *pipe_, uint32_t routing_
     put_uint32 (routing_id_data, resolved_routing_id);
     event_connection_ready_changed (pipe_->get_endpoint_pair (), routing_id_data,
                                     sizeof (routing_id_data));
+}
+
+void zlink::stream_t::queue_stream_notify (uint32_t routing_id_)
+{
+    if (routing_id_ != 0)
+        _stream_notify_routing_ids.push_back (routing_id_);
 }

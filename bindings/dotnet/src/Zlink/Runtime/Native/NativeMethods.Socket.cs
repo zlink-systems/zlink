@@ -46,16 +46,14 @@ internal static partial class NativeMethods
         out IntPtr sourceRoutingId, ref ZlinkMsg part, out int hasMore,
         int flags);
 
-    [LibraryImport(LibraryName)]
-    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial int zlink_recv_part_with_hwm_budget_lease(
+    internal static int receivePartWithoutLease(
         IntPtr socket, out IntPtr sourceRoutingId, ref ZlinkMsg part,
-        out IntPtr lease, out int hasMore, int flags);
-
-    [LibraryImport(LibraryName)]
-    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial void zlink_hwm_budget_lease_release(
-        ref IntPtr lease);
+        out IntPtr lease, out int hasMore, int flags)
+    {
+        lease = IntPtr.Zero;
+        return zlink_recv_part(socket, out sourceRoutingId, ref part,
+            out hasMore, flags);
+    }
 
     // DONT_WAIT-only variant: same C function, kept as a separate entry point
     // so managed code can choose the non-blocking path explicitly.
@@ -70,12 +68,17 @@ internal static partial class NativeMethods
         out IntPtr sourceNodeRoutingId, out ulong requestSeq,
         ref ZlinkMsg part, out int hasMore, int flags);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int
-        zlink_router_recv_part_v2_with_hwm_budget_lease(IntPtr router,
+    internal static int receiveRouterPartWithoutLease(IntPtr router,
             out IntPtr sourceNodeRoutingId, out ulong requestSeq,
             out ulong transportPairId, out ulong transportPairGeneration,
-            ref ZlinkMsg part, out IntPtr lease, out int hasMore, int flags);
+            ref ZlinkMsg part, out IntPtr lease, out int hasMore, int flags)
+    {
+        transportPairId = 0;
+        transportPairGeneration = 0;
+        lease = IntPtr.Zero;
+        return zlink_router_recv_part(router, out sourceNodeRoutingId,
+            out requestSeq, ref part, out hasMore, flags);
+    }
 
     // DONT_WAIT-only fast variant.
     [DllImport(LibraryName, EntryPoint = "zlink_router_recv_part",

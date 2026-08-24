@@ -50,7 +50,6 @@ internal enum SocketOption
     TlsPassword = 0x302F,
     ZmpMetadata = 0x3030,
     TcpNoDelay = 0x3031,
-    RouteValueMaxSize = 0x3032,
     RidDuplicatePolicy = 0x3033,
     SubmitRetryMode = 0x3037,
     SubmitRetryTimeout = 0x3038,

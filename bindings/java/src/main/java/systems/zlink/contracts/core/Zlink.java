@@ -60,11 +60,6 @@ public final class Zlink {
         ContractAccess.proxy(frontend, backend, capture);
     }
 
-    public static void proxySteerable(Socket frontend, Socket backend,
-                                      Socket capture, Socket control) {
-        ContractAccess.proxySteerable(frontend, backend, capture, control);
-    }
-
     static void sleep(int seconds) {
         ContractAccess.sleep(seconds);
     }

@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/zlink",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "zlink Node.js bindings \u2014 high-performance async messaging library",
   "license": "MPL-2.0",
   "author": "Zlink Systems",
@@ -30,6 +30,7 @@
     "native/src/**/*",
     "scripts/verify_prebuilds.js",
     "scripts/install.js",
+    "scripts/rebuild_native.sh",
     "binding.gyp",
     "README.md",
     "THIRD_PARTY_NOTICES.md"
@@ -40,7 +41,7 @@
     "clean": "node scripts/clean.js",
     "build": "npm run clean && tsc -p tsconfig.json && node scripts/generate_esm_wrapper.js && tsc -p tsconfig.tools.json && node scripts/link_dist_tools.js",
     "verify:prebuilds": "node scripts/verify_prebuilds.js",
-    "rebuild-native": "node-gyp configure build",
+    "rebuild-native": "./scripts/rebuild_native.sh",
     "perf:single": "./perf/single/run_benchmarks.sh",
     "perf:multi": "./perf/multi/run_benchmarks.sh",
     "perf": "./perf/run_benchmarks.sh",

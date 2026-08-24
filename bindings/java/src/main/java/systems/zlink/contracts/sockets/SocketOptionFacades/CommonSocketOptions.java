@@ -193,14 +193,6 @@ public class CommonSocketOptions {
         ContractAccess.socketSetOption(socket, SocketOptions.RID_DUPLICATE_POLICY, value.value());
     }
 
-    int routeValueMaxSize() {
-        return ContractAccess.socketGetOption(socket, SocketOptions.ROUTE_VALUE_MAX_SIZE);
-    }
-
-    void routeValueMaxSize(int value) {
-        ContractAccess.socketSetOption(socket, SocketOptions.ROUTE_VALUE_MAX_SIZE, value);
-    }
-
     public Duration connectTimeout() {
         return Duration.ofMillis(ContractAccess.socketGetOption(socket, SocketOptions.CONNECT_TIMEOUT));
     }

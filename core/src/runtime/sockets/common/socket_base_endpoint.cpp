@@ -428,6 +428,11 @@ void zlink::socket_base_t::socket_bound_endpoints (std::set<std::string> *out_) 
     }
 }
 
+bool zlink::socket_base_t::socket_has_endpoint_history () const
+{
+    return !endpoint_runtime ().last_endpoint_uri ().empty ();
+}
+
 bool zlink::socket_base_t::socket_has_manual_connect_endpoints () const
 {
     for (endpoints_t::const_iterator it = endpoint_runtime ().endpoints.begin (),

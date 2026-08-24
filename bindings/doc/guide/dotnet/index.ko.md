@@ -232,7 +232,7 @@ C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 �
 | 구독 | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | 모니터 | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | 폴러 / 타이머 | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
-| 프록시 | `zlink_proxy` / `zlink_proxy_steerable` | `Zlink.Proxy(...)` / `Zlink.ProxySteerable(...)` |
+| 프록시 | `zlink_proxy` | `Zlink.Proxy(...)` |
 
 > **이름 규칙**: C의 `snake_case`는 .NET에서 `PascalCase`가 됩니다. C의 `*_part`
 > 계열(멀티파트 substrate)은 .NET에서 플루언트 빌더의 `.Message(...)` 누적으로

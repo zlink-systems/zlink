@@ -72,7 +72,6 @@ const option_descriptor_t common_option_table[] = {
   {ZLINK_OPT_ZMP_METADATA, ZLINK_INTERNAL_OPT_ZMP_METADATA, false},
   {ZLINK_OPT_TCP_NODELAY, ZLINK_INTERNAL_OPT_TCP_NODELAY, false},
   {ZLINK_OPT_RID_DUPLICATE_POLICY, ZLINK_INTERNAL_OPT_RID_DUPLICATE_POLICY, false},
-  {ZLINK_OPT_ROUTE_VALUE_MAX_SIZE, ZLINK_OPT_ROUTE_VALUE_MAX_SIZE, true},
 };
 
 const option_descriptor_t router_option_table[] = {

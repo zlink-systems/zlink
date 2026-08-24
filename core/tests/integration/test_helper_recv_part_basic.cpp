@@ -242,6 +242,47 @@ void test_recv_part_reads_each_part_and_tracks_has_more ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_router_direct_single_part_uses_owned_source_rid_storage ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "D1", 2));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://helper-router-direct-source-rid-storage"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://helper-router-direct-source-rid-storage"));
+    set_recv_timeout_ms (router, 3000);
+    msleep (SETTLE_TIME);
+
+    zlink_msg_t outbound;
+    init_part (&outbound, "single");
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_send (dealer, &outbound, 1, static_cast<zlink_send_flags_t> (0)));
+
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::socket_reqrep_internal::recv_router_message_direct (
+        as_socket_handle (router), &source_rid, &request_seq, &parts,
+        &part_count, 0));
+
+    const zlink::socket_reqrep_internal::router_recv_metadata_tls_t &metadata =
+      zlink::socket_reqrep_internal::router_recv_metadata_tls ();
+    TEST_ASSERT_EQUAL_PTR (&metadata.source_rid, source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_UINT8 (2, source_rid->size);
+    TEST_ASSERT_EQUAL_MEMORY ("D1", source_rid->data, 2);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_MEMORY ("single", zlink_msg_data (&parts[0]), 6);
+    zlink_multipart_close (parts, part_count);
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -385,6 +426,7 @@ int main (void)
 
     UNITY_BEGIN ();
     RUN_TEST (test_recv_part_reads_each_part_and_tracks_has_more);
+    RUN_TEST (test_router_direct_single_part_uses_owned_source_rid_storage);
     RUN_TEST (test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call);
     RUN_TEST (
       test_subscribe_part_reports_needed_topic_size_without_consuming_payload);

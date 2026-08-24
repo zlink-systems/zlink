@@ -105,6 +105,13 @@ int zlink::pair_t::xsend (
     return 0;
 }
 
+int zlink::pair_t::xrollback ()
+{
+    if (_pipe)
+        _pipe->rollback ();
+    return 0;
+}
+
 int zlink::pair_t::xrecv (msg_t *msg_)
 {
     //  Deallocate old content of the message.
@@ -116,24 +123,6 @@ int zlink::pair_t::xrecv (msg_t *msg_)
         rc = msg_->init ();
         errno_assert (rc == 0);
 
-        errno = EAGAIN;
-        return -1;
-    }
-    return 0;
-}
-
-int zlink::pair_t::xrecv_retained (msg_t *msg_,
-                                   retained_credit_token_t *token_out_)
-{
-    int rc = msg_->close ();
-    errno_assert (rc == 0);
-
-    if (!_pipe || !_pipe->read_retained (msg_, token_out_)) {
-        rc = msg_->init ();
-        errno_assert (rc == 0);
-        // Match xrecv(): an empty PAIR receive is always a normal no-data
-        // result.  The retained token reset/read path must not leak a stale
-        // errno from an earlier registry lookup into the public receive API.
         errno = EAGAIN;
         return -1;
     }

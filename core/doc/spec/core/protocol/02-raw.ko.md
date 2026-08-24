@@ -1,5 +1,5 @@
 ---
-title: "RAW (STREAM) 프로토콜 상세"
+title: "Protocol — RAW"
 ---
 
 [English](https://zlink-systems.github.io/zlink/spec/core/protocol/02-raw/) | 한국어
@@ -8,63 +8,111 @@ title: "RAW (STREAM) 프로토콜 상세"
 [프로토콜 목차](README.ko.md) | [이전: ZMP 프로토콜 상세](01-zmp.ko.md) | [다음: 시스템 개요](../systems/README.ko.md)
 <!-- zlink-nav:end -->
 
-# RAW (STREAM) 프로토콜 상세
+# Protocol — RAW
 
-> **이 장의 계약 소유 문서** — STREAM 소켓의 공개 계약은
-> [소켓 — STREAM](../socket/08-stream.ko.md)이 다룬다. 이 장은 ZMP 프레이밍 없이
-> 연결하는 RAW 프로토콜의 바이트 단위 wire format을 설명한다.
+> **이 장이 정의하는 것** — ZMP framing 없이 연결하는 RAW 프로토콜의 byte 단위 wire
+> format. STREAM socket의 공개 계약은 [Socket — STREAM](../socket/08-stream.ko.md)이
+> 소유한다.
 
-RAW 프로토콜은 외부 클라이언트가 ZMP(zlink Message Protocol) 프레이밍 없이 연결할 때 사용된다. STREAM 소켓은 이 프로토콜로 지원되는 모든 transport(tcp, ipc, tls, ws, wss)에서 임의의 연결을 수락한다.
+## 1. RAW 개요
 
-## 1. 개요
-STREAM 소켓 전용 프로토콜. ZMP를 쓰지 않는 외부 클라이언트와 통신하는 용도다.
+RAW 프로토콜은 외부 client가 ZMP(zlink Message Protocol) — zlink socket 사이의 wire
+framing — 없이 연결할 때 사용된다. STREAM [socket](../glossary.ko.md#socket) 전용
+프로토콜로, ZMP를 쓰지 않는 외부 client와 통신하는 용도다. STREAM socket은 이
+프로토콜로 지원되는 모든 transport(tcp, ipc, tls, ws, wss)에서 임의의 연결을 수락한다.
 
-## 2. Wire Format
-순수 RAW 모드는 zlink 수준의 프레이밍을 추가하지 않는다. 연결은 투명한 바이트
-스트림이다. peer가 보낸 바이트는 그대로 메시지 데이터로 전달되고, 애플리케이션이
-보낸 바이트도 변형 없이 나간다. 메시지 경계는 애플리케이션이 정의하며, 하부
-transport(tcp/ipc/tls/ws/wss)가 바이트 스트림을 제공한다.
+관련 계약의 소유 문서는 다음과 같다.
 
-## 3. 설계 의도
-- 스트림 투명성: 와이어에 zlink 프레이밍 오버헤드 없음
-- zlink 계층 핸드셰이크 없음 — transport가 준비되면 바로 데이터가 흐른다
-- 애플리케이션이 필요한 application-level 프레이밍을 스스로 정한다
+| 관련 계약 | 정의하는 문서 |
+|---|---|
+| STREAM socket의 생성·bind, 수신 모드, 송수신 함수, monitor 이벤트 | [Socket — STREAM](../socket/08-stream.ko.md) |
+| ZMP framing으로 연결하는 zlink socket 사이의 wire format | [ZMP 프로토콜 상세](01-zmp.ko.md) |
 
-## 4. STREAM 소켓 내부 API (멀티파트)
-zlink 쪽에서는 STREAM 소켓이 연결된 각 클라이언트를 4바이트 routing id로 식별한다
-(`uint32`, `stream_t`가 할당·직렬화).
+## 2. Wire format
 
-### 4.1 송신 (zlink_send)
-```
-Frame 1: [Routing ID (4 bytes, uint32)] + MORE flag
-Frame 2: [Payload (N bytes)]
-```
+순수 RAW 모드는 zlink 수준의 framing을 추가하지 않는다. 연결은 투명한 byte stream이다.
+peer(연결 상대)가 보낸 byte는 그대로 message 데이터로 전달되고, application이 보낸
+byte도 변형 없이 나간다. message 경계는 application이 정의하며, 하부
+transport(tcp/ipc/tls/ws/wss)가 byte stream을 제공한다.
 
-### 4.2 수신 (zlink_recv)
-```
-Frame 1: [Routing ID (4 bytes, uint32)] + MORE flag
-Frame 2: [Payload (N bytes)]
-```
+이 형태는 다음 설계 의도를 따른다.
 
-### 4.3 연결 이벤트
-연결 준비와 연결 해제는 in-band 애플리케이션 프레임이 아니라 socket monitor
-이벤트(`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`)로 표면화된다.
-raw/packet 경로의 0바이트 payload는 제어 이벤트로 취급되어 애플리케이션
-데이터로 전달되지 않는다.
+- **stream 투명성** — wire에 zlink framing 오버헤드가 없다.
+- **zlink 계층 handshake 없음** — transport가 준비되면 바로 데이터가 흐른다.
+- **framing의 주체는 application** — 필요한 application-level framing을 application이
+  스스로 정한다.
 
-## 5. Packet-Dispatch 프레이밍 (packet handler 모드)
-`zlink_stream_packet_handler()`로 packet handler를 등록하면, zlink는 투명
-스트림 대신 length-prefixed packet 프레이밍을 파싱한다.
+## 3. Packet-dispatch framing (packet handler 모드)
+
+`zlink_stream_packet_handler()`로 packet handler를 등록하면, zlink는 투명 stream 대신
+length-prefixed(길이 접두사) packet framing을 파싱한다. wire의 byte 배치는 다음과 같다.
+
 ```
 +------------------+----------------+--------------+------------+
 | header_size (2B) | body_size (4B) | header (H B) | body (B B) |
 | Big Endian       | Big Endian     |              |            |
 +------------------+----------------+--------------+------------+
 ```
-콜백은 header와 body를 별도의 `zlink_msg_t` part로 받는다.
 
-## 6. 엔진 구현
+callback은 header와 body를 별도의 `zlink_msg_t` part로 받는다. handler 등록·callback
+규약과 malformed framing 처리의 계약은
+[Socket — STREAM의 Packet callback 절](../socket/08-stream.ko.md#7-packet-callback과-framing)이
+소유한다.
+
+## 4. 연결 이벤트
+
+연결 준비와 연결 해제는 in-band application frame이 아니라 socket monitor
+이벤트(`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`)로 표면화된다.
+raw/packet 경로의 0 byte payload는 제어 이벤트로 취급되어 application 데이터로
+전달되지 않는다.
+
+## 5. 내부 구조
+
+> **이 절의 계약 소유** — RAW wire format의 관찰 가능한 동작은 이 문서의
+> [검증 요구](#6-구현-및-contract-test-검증-요구) 절이, STREAM socket의 공개 API 계약은
+> [Socket — STREAM](../socket/08-stream.ko.md)이 소유한다. 이 절은 zlink 내부가 RAW
+> 연결의 message를 표현하고 encode·decode하는 방법을 설명한다.
+
+### STREAM socket 내부 API (multipart)
+
+zlink 쪽에서는 STREAM socket이 연결된 각 client를 4 byte routing id로 식별한다
+(`uint32`, `stream_t`가 할당·직렬화). 송신과 수신 경로 모두 내부에서 같은 2-frame
+배치를 사용한다.
+
+```
+Frame 1: [Routing ID (4 bytes, uint32)] + MORE flag
+Frame 2: [Payload (N bytes)]
+```
+
+### 엔진 구성
+
 - `asio_raw_engine_t` 사용
-- `raw_encoder_t`: 메시지 바이트를 그대로 내보낸다(추가 프레이밍 없음)
-- `raw_decoder_t`: 수신한 바이트 span을 `zlink_msg_t`로 만든다
-- routing id는 `stream_t`가 4바이트 `uint32` 값으로 할당·직렬화한다
+- `raw_encoder_t`: message byte를 그대로 내보낸다(추가 framing 없음)
+- `raw_decoder_t`: 수신한 byte span을 `zlink_msg_t`로 만든다
+- routing id는 `stream_t`가 4 byte `uint32` 값으로 할당·직렬화한다
+
+## 6. 구현 및 contract test 검증 요구
+
+공개 표면(STREAM socket 함수, 외부 client의 raw 연결, monitor 이벤트)만으로 다음을
+확인한다. 각 항목은 test 하나로 이어진다.
+
+**stream 투명성**
+- 외부 client가 보낸 byte는 추가 framing이나 변형 없이 그대로 message 데이터로
+  수신된다.
+- application이 보낸 byte는 변형 없이 wire로 나간다.
+- zlink 계층 handshake 없이 transport가 준비되면 바로 데이터가 흐른다.
+
+**연결 이벤트**
+- 연결 준비와 해제는 in-band application frame이 아니라 monitor
+  이벤트(`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`)로 관찰된다.
+- raw/packet 경로의 0 byte payload는 application 데이터로 전달되지 않는다(제어
+  이벤트로 취급).
+
+**packet handler 모드**
+- `zlink_stream_packet_handler()`로 handler를 등록하면 투명 stream 대신
+  length-prefixed packet framing(`header_size` 2 byte Big Endian, `body_size` 4 byte
+  Big Endian, header, body 순)이 파싱되고, callback이 header와 body를 별도의
+  `zlink_msg_t` part로 받는다.
+- callback 규약과 malformed framing의 상세 검증은
+  [Socket — STREAM의 검증 요구](../socket/08-stream.ko.md#12-구현-및-contract-test-검증-요구)가
+  소유한다.

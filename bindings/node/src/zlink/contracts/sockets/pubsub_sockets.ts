@@ -44,7 +44,6 @@ export interface SubSocket extends ConnectableSocket {
    * Core HWM credit. Successful reuse or `result.close()` returns the credit;
    * a native finalizer is the fallback if the result becomes unreachable.
    */
-  subscribeRetained(result: TopicMessage, flags?: RecvFlags): boolean;
 }
 
 /** XSUB socket: a subscriber whose subscriptions are carried as messages. */

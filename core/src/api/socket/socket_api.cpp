@@ -141,41 +141,6 @@ zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *captur
       zlink::proxy (frontend.socket, backend.socket, capture_socket));
 }
 
-zlink_config_result_t
-zlink_proxy_steerable (void *frontend_, void *backend_, void *capture_, void *control_)
-{
-    if (!frontend_ || !backend_) {
-        errno = EFAULT;
-        return ZLINK_CONFIG_INVALID_HANDLE;
-    }
-
-    socket_handle_t frontend = as_socket_handle (frontend_);
-    if (!frontend.socket)
-        return ZLINK_CONFIG_INVALID_HANDLE;
-    socket_handle_t backend = as_socket_handle (backend_);
-    if (!backend.socket)
-        return ZLINK_CONFIG_INVALID_HANDLE;
-
-    zlink::socket_base_t *capture_socket = NULL;
-    if (capture_) {
-        socket_handle_t capture = as_socket_handle (capture_);
-        if (!capture.socket)
-            return ZLINK_CONFIG_INVALID_HANDLE;
-        capture_socket = capture.socket;
-    }
-
-    zlink::socket_base_t *control_socket = NULL;
-    if (control_) {
-        socket_handle_t control = as_socket_handle (control_);
-        if (!control.socket)
-            return ZLINK_CONFIG_INVALID_HANDLE;
-        control_socket = control.socket;
-    }
-
-    return zlink::config_result_internal::from_rc (
-      zlink::proxy_steerable (frontend.socket, backend.socket, capture_socket, control_socket));
-}
-
 bool zlink_has (const char *capability_)
 {
     if (strcmp (capability_, "tcp") == 0)

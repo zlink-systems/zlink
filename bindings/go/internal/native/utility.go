@@ -53,29 +53,6 @@ func Proxy(frontend SocketTarget, backend SocketTarget, capture SocketTarget) er
 	return configErrorFromResult(ConfigResult(C.zlink_proxy(frontendHandle, backendHandle, captureHandle)))
 }
 
-func ProxySteerable(frontend SocketTarget, backend SocketTarget, capture SocketTarget, control SocketTarget) error {
-	frontendHandle, err := socketHandle(frontend)
-	if err != nil {
-		return err
-	}
-	backendHandle, err := socketHandle(backend)
-	if err != nil {
-		return err
-	}
-	var captureHandle unsafe.Pointer
-	if capture != nil {
-		captureHandle, err = socketHandle(capture)
-		if err != nil {
-			return err
-		}
-	}
-	controlHandle, err := socketHandle(control)
-	if err != nil {
-		return err
-	}
-	return configErrorFromResult(ConfigResult(C.zlink_proxy_steerable(frontendHandle, backendHandle, captureHandle, controlHandle)))
-}
-
 func socketHandle(socket SocketTarget) (unsafe.Pointer, error) {
 	if socket == nil {
 		return nil, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}

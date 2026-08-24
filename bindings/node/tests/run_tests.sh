@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+source "$ROOT_DIR/../tools/local_core_runtime.sh"
+zlink_export_local_core_runtime
+
 source "$ROOT_DIR/scripts/run_node_job.sh"
 
 for test_file in dist-tools/tests/*.test.js; do

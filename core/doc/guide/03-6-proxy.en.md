@@ -24,27 +24,6 @@ zlink_config_result_t zlink_proxy (void *frontend, void *backend, void *capture)
 - **No socket type restriction** — internally calls `socket_base_t` internal
   recv/send methods, independent of public API `ZLINK_SUBMIT_NOT_SUPPORTED` / `ZLINK_RECV_NOT_SUPPORTED` restrictions
 
-### Steerable Proxy
-
-```c
-zlink_config_result_t zlink_proxy_steerable (void *frontend, void *backend,
-                                             void *capture, void *control);
-```
-
-`zlink_proxy_steerable()` adds a `control` socket through which the proxy can
-be steered at runtime by sending one of these command frames:
-
-| Command | Intended effect |
-|---------|-----------------|
-| `PAUSE` | Suspend forwarding |
-| `RESUME` | Resume forwarding |
-| `TERMINATE` | Stop the proxy and return |
-| `STATISTICS` | Reply on the control socket with traffic counters |
-
-> Note: in the current runtime the `PAUSE`/`RESUME` handlers are swapped
-> (`PAUSE` resumes forwarding and `RESUME` suspends it). The table above
-> describes the intended semantics; this is a known implementation bug.
-
 ### Supported Socket Combinations
 
 | frontend | backend | Use case |

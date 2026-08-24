@@ -181,8 +181,10 @@ class msg_t
     };
     enum
     {
+        validity_signature_size = 4,
         max_vsm_size = msg_t_size
-                       - (3 + 16 + sizeof (uint32_t) + sizeof (uint64_t))
+                       - (3 + validity_signature_size + 16
+                          + sizeof (uint32_t) + sizeof (uint64_t))
     };
     enum
     {
@@ -220,6 +222,9 @@ class msg_t
         type_max = 107
     };
 
+    void mark_valid (type_t type_);
+    void invalidate ();
+
     enum group_type_t
     {
         group_type_short,
@@ -256,8 +261,10 @@ class msg_t
         struct
         {
             unsigned char unused[msg_t_size
-                                 - (2 + sizeof (uint32_t) + sizeof (uint64_t)
+                                 - (validity_signature_size + 2
+                                    + sizeof (uint32_t) + sizeof (uint64_t)
                                     + sizeof (group_t))];
+            unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
@@ -268,6 +275,7 @@ class msg_t
         {
             unsigned char data[max_vsm_size];
             unsigned char size;
+            unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
@@ -279,8 +287,10 @@ class msg_t
             content_t *content;
             unsigned char
               unused[msg_t_size
-                     - (sizeof (content_t *) + 2 + sizeof (uint32_t)
+                     - (sizeof (content_t *) + validity_signature_size + 2
+                        + sizeof (uint32_t)
                         + sizeof (uint64_t) + sizeof (group_t))];
+            unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
@@ -292,8 +302,10 @@ class msg_t
             content_t *content;
             unsigned char
               unused[msg_t_size
-                     - (sizeof (content_t *) + 2 + sizeof (uint32_t)
+                     - (sizeof (content_t *) + validity_signature_size + 2
+                        + sizeof (uint32_t)
                         + sizeof (uint64_t) + sizeof (group_t))];
+            unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
@@ -305,8 +317,11 @@ class msg_t
             void *data;
             size_t size;
             unsigned char unused[msg_t_size
-                                 - (sizeof (void *) + sizeof (size_t) + 2 + sizeof (uint32_t)
-                                    + sizeof (uint64_t) + sizeof (group_t))];
+                                 - (sizeof (void *) + sizeof (size_t)
+                                    + validity_signature_size + 2
+                                    + sizeof (uint32_t) + sizeof (uint64_t)
+                                    + sizeof (group_t))];
+            unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
@@ -316,8 +331,10 @@ class msg_t
         struct
         {
             unsigned char unused[msg_t_size
-                                 - (2 + sizeof (uint32_t) + sizeof (uint64_t)
+                                 - (validity_signature_size + 2
+                                    + sizeof (uint32_t) + sizeof (uint64_t)
                                     + sizeof (group_t))];
+            unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;

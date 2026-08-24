@@ -62,7 +62,7 @@ class ctx_t ZLINK_FINAL
 
     //  Set and get context properties.
     int set (int option_, const void *optval_, size_t optvallen_);
-    int get (int option_, void *optval_, const size_t *optvallen_);
+    int get (int option_, void *optval_, size_t *optvallen_);
     int get (int option_);
 
     //  Create and destroy a socket.

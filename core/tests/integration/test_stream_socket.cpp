@@ -33,7 +33,9 @@ static const size_t stream_routing_id_size = 4;
 static const char *const stream_socket_smoke_cases[] = {
   "test_stream_callback_lifecycle",
   "test_stream_recv_api_dispatch_conflict",
+  "test_stream_successful_recv_part_locks_raw_mode",
   "test_stream_notify_option_remains_available_with_dispatch",
+  "test_stream_notify_records_and_bind_constraint",
   "test_stream_callback_echo_raw",
   "test_stream_recv_ready_precedes_first_payload_contract",
   "test_stream_recv_handler_delivers_raw_chunks_not_len32be_frames",
@@ -125,6 +127,38 @@ static bool recv_stream_routing_id_and_payload (void *socket_,
     }
 
     return test_recv_single_msg (payload_out_, socket_, flags_) >= 0;
+}
+
+static bool wait_stream_notify_record (
+  void *socket_, unsigned char routing_id_[stream_routing_id_size], int timeout_ms_)
+{
+    const int attempts = timeout_ms_ / 10;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        zlink_msg_t part;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+        const zlink_routing_id_t *source_rid = NULL;
+        zlink_part_flag_t has_more = ZLINK_PART_MORE;
+        const zlink_recv_result_t rc = zlink_recv_part (
+          socket_, &source_rid, &part, &has_more,
+          static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
+        if (rc == ZLINK_RECV_OK) {
+            const bool valid = source_rid && source_rid->size == stream_routing_id_size
+                               && zlink_msg_size (&part) == 0
+                               && has_more == ZLINK_PART_FINAL;
+            if (valid)
+                memcpy (routing_id_, source_rid->data, stream_routing_id_size);
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+            return valid;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, rc);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+#if defined(ZLINK_HAVE_WINDOWS)
+        Sleep (10);
+#else
+        usleep (10000);
+#endif
+    }
+    return false;
 }
 
 static bool parse_tcp_endpoint (const char *endpoint_, char host_[64], int *port_)
@@ -1249,6 +1283,60 @@ void test_stream_recv_api_dispatch_conflict ()
     test_context_socket_close_zero_linger (stream);
 }
 
+#if defined(ZLINK_HAVE_WINDOWS)
+void test_stream_successful_recv_part_locks_raw_mode ()
+{
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+}
+#else
+void test_stream_successful_recv_part_locks_raw_mode ()
+{
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (stream);
+
+    const int recv_timeout_ms = 3000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (stream, ZLINK_OPT_RCVTIMEO, &recv_timeout_ms,
+                        sizeof (recv_timeout_ms)));
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (stream, endpoint, sizeof (endpoint));
+    const int client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client_fd >= 0);
+
+    const unsigned char payload[] = "raw-part-mode";
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet (client_fd, payload, sizeof (payload) - 1));
+
+    zlink_msg_t part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv_part (stream, &source_rid, &part, &has_more,
+                       ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (payload) - 1, zlink_msg_size (&part));
+    TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&part),
+                              sizeof (payload) - 1);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_BUSY,
+      zlink_recv_handler (stream, stream_echo_msg_handler, NULL));
+    TEST_ASSERT_EQUAL_INT (EBUSY, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_BUSY,
+      zlink_stream_packet_handler (stream, &stream_packet_callback, NULL));
+    TEST_ASSERT_EQUAL_INT (EBUSY, zlink_errno ());
+
+    close_raw_fd (client_fd);
+    test_context_socket_close_zero_linger (stream);
+}
+#endif
+
 void test_stream_notify_option_remains_available_with_dispatch ()
 {
     void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
@@ -1276,6 +1364,81 @@ void test_stream_notify_option_remains_available_with_dispatch ()
 
     test_context_socket_close_zero_linger (stream);
 }
+
+#if defined(ZLINK_HAVE_WINDOWS)
+void test_stream_notify_records_and_bind_constraint ()
+{
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+}
+#else
+void test_stream_notify_records_and_bind_constraint ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const int zero = 0;
+    const int enable = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_NOTIFY, &enable, sizeof (enable)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    errno = 0;
+    TEST_ASSERT_TRUE (
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_NOTIFY, &zero, sizeof (zero))
+      != ZLINK_CONFIG_OK);
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+
+    const int client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client_fd >= 0);
+
+    unsigned char connected_rid[stream_routing_id_size];
+    TEST_ASSERT_TRUE (wait_stream_notify_record (server, connected_rid, 5000));
+
+    close_raw_fd (client_fd);
+
+    unsigned char disconnected_rid[stream_routing_id_size];
+    TEST_ASSERT_TRUE (wait_stream_notify_record (server, disconnected_rid, 5000));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (connected_rid, disconnected_rid, stream_routing_id_size);
+
+    test_context_socket_close_zero_linger (server);
+
+    void *disabled = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (disabled);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (disabled, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_stream_option (disabled, ZLINK_STREAM_OPT_NOTIFY, &zero, sizeof (zero)));
+
+    bind_loopback_ipv4 (disabled, endpoint, sizeof (endpoint));
+    zlink_socket_monitor_open_options_t monitor_opts;
+    memset (&monitor_opts, 0, sizeof (monitor_opts));
+    monitor_opts.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+    void *monitor = zlink_socket_monitor_open (disabled, &monitor_opts);
+    TEST_ASSERT_NOT_NULL (monitor);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (monitor, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    const int disabled_client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (disabled_client_fd >= 0);
+
+    unsigned char ignored_rid[stream_routing_id_size];
+    TEST_ASSERT_TRUE (
+      wait_monitor_event (monitor, disabled, ZLINK_EVENT_CONNECTION_READY, ignored_rid, 5000));
+    TEST_ASSERT_FALSE (wait_stream_notify_record (disabled, ignored_rid, 100));
+
+    close_raw_fd (disabled_client_fd);
+
+    TEST_ASSERT_TRUE (
+      wait_monitor_event (monitor, disabled, ZLINK_EVENT_DISCONNECTED, ignored_rid, 5000));
+    TEST_ASSERT_FALSE (wait_stream_notify_record (disabled, ignored_rid, 100));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (disabled);
+}
+#endif
 
 #if defined(ZLINK_HAVE_WINDOWS)
 void test_stream_callback_echo_raw ()
@@ -2283,8 +2446,12 @@ int main (void)
         RUN_TEST (test_stream_callback_lifecycle);
     if (should_run_stream_socket_test ("test_stream_recv_api_dispatch_conflict"))
         RUN_TEST (test_stream_recv_api_dispatch_conflict);
+    if (should_run_stream_socket_test ("test_stream_successful_recv_part_locks_raw_mode"))
+        RUN_TEST (test_stream_successful_recv_part_locks_raw_mode);
     if (should_run_stream_socket_test ("test_stream_notify_option_remains_available_with_dispatch"))
         RUN_TEST (test_stream_notify_option_remains_available_with_dispatch);
+    if (should_run_stream_socket_test ("test_stream_notify_records_and_bind_constraint"))
+        RUN_TEST (test_stream_notify_records_and_bind_constraint);
     if (should_run_stream_socket_test ("test_stream_callback_echo_raw"))
         RUN_TEST (test_stream_callback_echo_raw);
     if (should_run_stream_socket_test ("test_stream_callback_echo_single_zero_byte"))

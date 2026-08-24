@@ -89,12 +89,6 @@ export class DealerSocket extends ReceiveSocket {
       return registration.promise;
     });
   }
-  /** @internal DEALER retained receive must preserve typed request metadata. */
-  protected recvRetainedRaw(flags: RecvFlags): NativeReceivedRaw | null {
-    return ((flags | 0) & (RecvFlags.DontWait | 0))
-      ? native.dealerRecvMessageRetainedNoWait(getNativeHandle(this))
-      : native.dealerRecvMessageRetained(getNativeHandle(this), flags | 0);
-  }
   close(): void {
     const handle = getNativeHandle(this);
     super.close();

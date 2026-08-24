@@ -39,7 +39,7 @@ internal sealed partial class SocketKernel
                     var lease = IntPtr.Zero;
                     int hasMore;
                     var rc = retainCredit
-                        ? NativeMethods.zlink_recv_part_with_hwm_budget_lease(
+                        ? NativeMethods.receivePartWithoutLease(
                             Handle, out _, ref part, out lease, out hasMore,
                             flags)
                         : (flags & DontWaitFlag) != 0
@@ -134,7 +134,7 @@ internal sealed partial class SocketKernel
                     IntPtr sourceNodeRid;
                     int basicHasMore;
                     var rc = retainCredit
-                        ? NativeMethods.zlink_recv_part_with_hwm_budget_lease(
+                        ? NativeMethods.receivePartWithoutLease(
                             Handle, out sourceNodeRid, ref part, out lease,
                             out basicHasMore, flags)
                         : (flags & DontWaitFlag) != 0
@@ -225,7 +225,7 @@ internal sealed partial class SocketKernel
                     int hasMore;
                     var rc = retainCredit
                         ? NativeMethods
-                            .zlink_router_recv_part_v2_with_hwm_budget_lease(
+                            .receiveRouterPartWithoutLease(
                                 Handle, out sourceNodeRid,
                                 out receivedRequestSeq, out _, out _, ref part,
                                 out lease, out hasMore, flags)
@@ -336,14 +336,14 @@ internal sealed partial class SocketKernel
                     {
                         rc = firstPart
                             ? NativeMethods
-                                .zlink_subscribe_part_with_hwm_budget_lease(
+                                .receiveSubscribedPartWithoutLease(
                                     Handle, out sourceRoutingId, topicBuffer,
                                     (nuint)topicBuffer.Length,
                                     out nativeTopicLength,
                                     ref reusableSinglePart.Handle, out lease,
                                     out hasMore, flags)
                             : NativeMethods
-                                .zlink_subscribe_part_with_hwm_budget_lease(
+                                .receiveSubscribedPartWithoutLease(
                                     Handle, out sourceRoutingId, topicBuffer,
                                     (nuint)topicBuffer.Length,
                                     out nativeTopicLength, ref part, out lease,

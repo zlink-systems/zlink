@@ -48,7 +48,7 @@ internal static class NativeLibraryLoader
             }
 
             throw new DllNotFoundException(
-                "The packaged Core 0.13.0 runtime was not found. Set ZLINK_LIBRARY_PATH only when testing an approved Core 0.13.0 runtime directly.");
+                "The packaged Core 0.13.1 runtime was not found. Set ZLINK_LIBRARY_PATH only when testing an approved Core 0.13.1 runtime directly.");
         }
     }
 

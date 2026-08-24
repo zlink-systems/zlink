@@ -188,6 +188,13 @@ void zlink::socket_base_t::reset_auto_hwm_admission_counters ()
 {
     _auto_hwm_send_attempts.store (0, std::memory_order_relaxed);
     _auto_hwm_send_blocked_attempts.store (0, std::memory_order_relaxed);
+    scoped_lock_t lock (monitor_runtime ().sync);
+    for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count ();
+        i != size; ++i) {
+        pipe_t *pipe = endpoint_runtime ().attached_pipe (i);
+        if (pipe)
+            pipe->reset_oversize_message_admission_metrics ();
+    }
 }
 
 uint32_t zlink::socket_base_t::monitor_ready_count () const

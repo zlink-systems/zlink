@@ -106,7 +106,6 @@ class _BaseReceived:
     """
 
     _owner = None
-    _retained_credit = None
     parts = ()
 
     @staticmethod
@@ -121,19 +120,13 @@ class _BaseReceived:
     def _close_current_owner(self):
         if self._owner is not None:
             self._owner.close()
-        retained_credit = self._retained_credit
-        self._retained_credit = None
-        if retained_credit is not None:
-            retained_credit.close()
 
-    def _attach_owner(self, owner, retained_credit=None):
+    def _attach_owner(self, owner):
         self._owner = owner
-        self._retained_credit = retained_credit
         self.parts = self._build_parts(owner)
 
     def _clear_owner(self):
         self._owner = None
-        self._retained_credit = None
         self.parts = ()
 
     def __iter__(self):
@@ -177,7 +170,7 @@ class _BaseReceived:
         return self.parts[-1].data
 
     def close(self):
-        if self._owner is None and self._retained_credit is None:
+        if self._owner is None:
             return
         self._close_current_owner()
         self._clear_owner()
@@ -203,21 +196,18 @@ class ReceivedMultipart(_BaseReceived):
         request_seq=None,
         *,
         router_socket=None,
-        retained_credit=None,
     ):
         # HOT PATH: ReceivedMultipart() and Received() create empty storage
         # objects that recv_into refills in place through the public
         # caller-provided receive contract.
         if owner is None:
             self._owner = None
-            self._retained_credit = None
             self.parts = ()
             self.routing_id = None
             self.request_seq = None
             self._router_socket = None
             return
         self._owner = owner
-        self._retained_credit = retained_credit
         if owner._part_count == 1:
             self.parts = (ReceivedMessage._from_owner(owner, 0),)
         else:
@@ -234,7 +224,6 @@ class ReceivedMultipart(_BaseReceived):
             return
         self._close_current_owner()
         self._owner = source._owner
-        self._retained_credit = source._retained_credit
         self.parts = source.parts
         self.routing_id = source.routing_id
         self.request_seq = source.request_seq
@@ -251,7 +240,6 @@ class ReceivedMultipart(_BaseReceived):
         request_seq=None,
         *,
         router_socket=None,
-        retained_credit=None,
     ):
         try:
             next_parts = (
@@ -261,12 +249,9 @@ class ReceivedMultipart(_BaseReceived):
             )
         except BaseException:
             owner.close()
-            if retained_credit is not None:
-                retained_credit.close()
             raise
         self._close_current_owner()
         self._owner = owner
-        self._retained_credit = retained_credit
         self.parts = next_parts
         self.routing_id = routing_id
         self.request_seq = request_seq
@@ -280,13 +265,11 @@ class TopicMessage(_BaseReceived):
         owner=None,
         routing_id=None,
         request_seq=None,
-        retained_credit=None,
     ):
         if owner is None:
             self._topic = ""
             self._topic_raw = None
             self._owner = None
-            self._retained_credit = None
             self.parts = ()
             self.routing_id = None
             self.request_seq = None
@@ -294,7 +277,6 @@ class TopicMessage(_BaseReceived):
         self._topic = topic
         self._topic_raw = None
         self._owner = owner
-        self._retained_credit = retained_credit
         self.parts = self._build_parts(owner)
         self.routing_id = routing_id
         self.request_seq = request_seq
@@ -319,7 +301,6 @@ class TopicMessage(_BaseReceived):
         self._topic = source._topic
         self._topic_raw = source._topic_raw
         self._owner = source._owner
-        self._retained_credit = source._retained_credit
         self.parts = source.parts
         self.routing_id = source.routing_id
         self.request_seq = source.request_seq
@@ -337,20 +318,16 @@ class TopicMessage(_BaseReceived):
         topic_raw=None,
         routing_id=None,
         request_seq=None,
-        retained_credit=None,
     ):
         try:
             next_parts = self._build_parts(owner)
         except BaseException:
             owner.close()
-            if retained_credit is not None:
-                retained_credit.close()
             raise
         self._close_current_owner()
         self._topic = topic
         self._topic_raw = topic_raw
         self._owner = owner
-        self._retained_credit = retained_credit
         self.parts = next_parts
         self.routing_id = routing_id
         self.request_seq = request_seq

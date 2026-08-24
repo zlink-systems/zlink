@@ -110,17 +110,6 @@ public static partial class Zlink
     }
 
     /// <summary>
-    ///     Forwards messages between two sockets under runtime control of
-    ///     <paramref name="control" />. This blocks the calling thread until the
-    ///     proxy is terminated, so run it on a dedicated thread.
-    /// </summary>
-    public static void ProxySteerable(IZlinkSocket frontend, IZlinkSocket backend,
-        IZlinkSocket? capture, IZlinkSocket control)
-    {
-        ProxySteerableCore(frontend, backend, capture, control);
-    }
-
-    /// <summary>
     ///     Sleeps for the specified duration.
     /// </summary>
     public static void Sleep(TimeSpan duration)

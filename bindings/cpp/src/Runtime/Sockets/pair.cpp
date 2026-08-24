@@ -28,11 +28,6 @@ int pair_socket_t::recv (received_t &out_, recv_flags_t flags_)
     return socket_t::receive (out_, flags_);
 }
 
-int pair_socket_t::recv_retained (received_t &out_, recv_flags_t flags_)
-{
-    return socket_t::receive_retained (out_, flags_);
-}
-
 int pair_socket_t::recv (message_t &part_out_, recv_flags_t flags_)
 {
     return detail::recv_single_part_message (detail::native_handle (*this), nullptr, part_out_,

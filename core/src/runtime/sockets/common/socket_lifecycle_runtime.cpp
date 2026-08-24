@@ -301,6 +301,9 @@ int zlink::socket_lifecycle_coordinator_t::start_async_mailbox_processing (
 
     async_mailbox_active.store (true, std::memory_order_release);
     async_processing_started.store (false, std::memory_order_release);
+    async_processing_done.store (false, std::memory_order_release);
+    async_quiesce_pending.store (false, std::memory_order_release);
+    async_quiesce_completed.store (false, std::memory_order_release);
     mailbox_->set_io_context (&io_thread_->get_io_context (), handler_, handler_arg_, pre_post_);
     mailbox_->schedule_if_needed ();
     return 0;
@@ -328,6 +331,15 @@ void zlink::socket_lifecycle_coordinator_t::wait_async_started (int timeout_ms_)
 
 void zlink::socket_lifecycle_coordinator_t::stop_async_mailbox_processing (mailbox_t *mailbox_)
 {
+    //  A monitor may detach after close() already quiesced its mailbox owner.
+    //  Do not turn that completed handoff back into a pending one: no async
+    //  callback remains to publish the acknowledgement a second time.  A
+    //  never-started coordinator is different: stop establishes the pending
+    //  handoff that complete_deferred_close_handoff() must wait for.
+    if (!async_mailbox_active.load (std::memory_order_acquire)
+        && async_quiesce_completed.load (std::memory_order_acquire))
+        return;
+
     async_mailbox_active.store (false, std::memory_order_release);
     async_processing_done.store (false, std::memory_order_release);
     async_quiesce_pending.store (true, std::memory_order_release);
@@ -343,6 +355,7 @@ void zlink::socket_lifecycle_coordinator_t::mark_async_processing_stopped (mailb
     if (async_quiesce_pending.load (std::memory_order_acquire)) {
         async_quiesce_pending.store (false, std::memory_order_release);
         async_processing_done.store (true, std::memory_order_release);
+        async_quiesce_completed.store (true, std::memory_order_release);
         scoped_lock_t lock (async_done_mu);
         async_done_cv.broadcast ();
     }

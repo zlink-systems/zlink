@@ -31,7 +31,6 @@ export interface RouterSocket extends ConnectableSocket {
    * Core HWM credit. Successful reuse or `result.close()` returns the credit;
    * a native finalizer is the fallback if the result becomes unreachable.
    */
-  recvRetained(result: Received, flags?: RecvFlags): boolean;
   /**
    * Set the routing id that identifies this ROUTER to its peers. Apply before
    * connecting so peers observe it from the first message.

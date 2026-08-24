@@ -91,10 +91,6 @@ internal static partial class NativeMethods
         IntPtr capture);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_proxy_steerable(IntPtr frontend,
-        IntPtr backend, IntPtr capture, IntPtr control);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_has(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string capability);
 

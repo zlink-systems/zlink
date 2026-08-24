@@ -52,7 +52,10 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
     && process.env.ZLINK_CORE_PACKAGE_PREFIX
     ? path.join(process.env.ZLINK_CORE_PACKAGE_PREFIX, 'lib')
     : undefined;
-  const runtimeDirs = [releaseDir, coreDir, coreAltDir].filter(
+  const localDir = process.env.ZLINK_CORE_SOURCE === 'local'
+    ? process.env.ZLINK_CORE_LIB_DIR
+    : undefined;
+  const runtimeDirs = [localDir, releaseDir, coreDir, coreAltDir].filter(
     (entry): entry is string => entry !== undefined
   );
   refreshAddonRuntimeLink(

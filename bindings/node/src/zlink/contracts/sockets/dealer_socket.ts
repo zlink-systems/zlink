@@ -22,7 +22,6 @@ export interface DealerSocket extends ConnectableSocket {
   /** Receive a message into `result`; false for non-blocking no-data. */
   recv(result: Received, flags?: RecvFlags): boolean;
   /** Receive while retaining the origin Core HWM credit for Framework use. */
-  recvRetained(result: Received, flags?: RecvFlags): boolean;
   /**
    * Set the routing id that identifies this DEALER to its peers. Apply before
    * connecting so peers observe it from the first message.

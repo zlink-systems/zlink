@@ -76,6 +76,11 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
 
     {
         scoped_lock_t lock (_slot_sync);
+        //  Context shutdown removes control-runtime tasks while this lock is
+        //  held. Do not recreate the auto-HWM task from a pipe/monitor cleanup
+        //  that runs after termination has begun.
+        if (_terminating)
+            return;
         _auto_hwm.schedule (now_ms, debounce_ms);
 
         if (debounce_ms > 0) {
@@ -219,19 +224,14 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
       queues.active_application_direction_count;
     out_->active_completion_directional_queue_count =
       queues.active_completion_direction_count;
-    out_->retired_queue_count = queues.retired_direction_count;
-    out_->application_accounted_bytes =
-      queues.application_lease_accounted_bytes;
     out_->core_queue_accounted_bytes =
       queues.application_current_accounted_bytes;
-    out_->outstanding_application_lease_count =
-      queues.outstanding_application_lease_count;
-    out_->deferred_origin_credit_bytes =
-      queues.deferred_origin_credit_bytes;
-    bool application_sum_overflow = false;
-    out_->current_accounted_bytes = add_counter_saturating (
-      out_->core_queue_accounted_bytes, out_->application_accounted_bytes,
-      &application_sum_overflow);
+    // ABI-reserved fields from the removed retained-credit lease feature.
+    out_->application_accounted_bytes = 0;
+    out_->outstanding_application_lease_count = 0;
+    out_->deferred_origin_credit_bytes = 0;
+    out_->retired_queue_count = 0;
+    out_->current_accounted_bytes = out_->core_queue_accounted_bytes;
     out_->provisional_accounted_bytes =
       queues.application_provisional_accounted_bytes;
     out_->peak_accounted_bytes = std::max (
@@ -273,8 +273,7 @@ int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *ou
     out_->oversize_admission_count = sampled_oversize_count;
     out_->largest_oversize_message_bytes = sampled_oversize_max;
     out_->blocked_ratio_ppm = admission_ratio_ppm (attempts, blocked);
-    if (queues.aggregate_overflow || application_sum_overflow
-        || messaging_sum_overflow || instance_applied_sum_overflow
+    if (queues.aggregate_overflow || messaging_sum_overflow || instance_applied_sum_overflow
         || instance_accounted_sum_overflow || sampled_overflow)
         out_->flags |= ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW;
     return 0;

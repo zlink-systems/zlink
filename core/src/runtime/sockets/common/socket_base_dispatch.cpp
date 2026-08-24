@@ -372,6 +372,12 @@ int zlink::socket_base_t::stream_set_packet_msg_handler_with_userdata (
     return -1;
 }
 
+int zlink::socket_base_t::stream_mark_raw_part_receive ()
+{
+    errno = ENOTSUP;
+    return -1;
+}
+
 int zlink::socket_base_t::stream_dispatch_stop ()
 {
     return 0;

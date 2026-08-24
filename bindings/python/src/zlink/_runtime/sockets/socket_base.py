@@ -61,8 +61,6 @@ from ..handles.native_support import (
     _clone_native_msg,
     _copy_routing_id,
     _recv_native_parts,
-    _recv_native_parts_retained,
-    _recv_retained_native_parts,
     _report_unhandled_callback_exception,
     _raise_result_error,
     _routing_id_bytes,
@@ -84,18 +82,8 @@ _native_recv_owner = (
     if _native_extension is not None
     else None
 )
-_native_recv_retained_owner = (
-    getattr(_native_extension, "recv_retained_owner", None)
-    if _native_extension is not None
-    else None
-)
 _native_subscribe_owner = (
     getattr(_native_extension, "subscribe_owner", None)
-    if _native_extension is not None
-    else None
-)
-_native_subscribe_retained_owner = (
-    getattr(_native_extension, "subscribe_retained_owner", None)
     if _native_extension is not None
     else None
 )
@@ -428,20 +416,6 @@ class _BaseSocket:
         if int(rc) != 0:
             _raise_result_error(RecvError, RecvResult, rc, err)
         return owner
-
-    def _recv_retained_parts_via_native_bridge(self, flags):
-        if _in_callback() or _native_recv_retained_owner is None:
-            return None
-        result = _native_recv_retained_owner(
-            int(self._socket_handle.handle), int(flags)
-        )
-        if result is False:
-            return False
-        rc, err, routing, owner, retained_credit = result
-        if int(rc) != 0:
-            _raise_result_error(RecvError, RecvResult, rc, err)
-        routing_id = RoutingId.from_(routing) if routing is not None else None
-        return routing_id, owner, retained_credit
 
     def _set_raw_option(self, setter, option, value):
         ptr, size, keepalive = _send_buffer(value)
@@ -795,42 +769,6 @@ class _MessageSocket(_Socket):
         received._replace(owner, routing)
         return True
 
-    def _replace_retained_received(
-        self, received, owner, routing, retained_credit
-    ):
-        received._replace(
-            owner, routing, retained_credit=retained_credit
-        )
-
-    def recv_retained_into(self, received, *, flags=0):
-        """Framework-backend receive that retains Core credit with ``received``.
-
-        Ordinary :meth:`recv_into` keeps its immediate-credit behavior.  This
-        explicit aggregate path privately owns one Core lease per physical
-        payload part until the result is closed, replaced, or collected.
-        """
-        if received is None:
-            raise TypeError("received must be a Received")
-        received.close()
-        try:
-            bridged = self._recv_retained_parts_via_native_bridge(flags)
-            if bridged is False:
-                return False
-            if bridged is None:
-                routing, owner, retained_credit = _recv_native_parts_retained(
-                    self._handle, flags
-                )
-            else:
-                routing, owner, retained_credit = bridged
-        except RecvError as ex:
-            if (int(flags) & 1) and ex.result == RecvResult.NO_DATA:
-                return False
-            raise
-        self._replace_retained_received(
-            received, owner, routing, retained_credit
-        )
-        return True
-
     def _attach_recv_handler(self, handler):
         if handler is None:
             raise ValueError("handler must not be None")
@@ -1018,48 +956,6 @@ class _SubscriberSocket(_Socket):
         routing = _routing_id_bytes(routing_id.contents) if routing_id else None
         return first_topic_raw, _ReceivedPartsOwner(final_array, part_count), routing
 
-    def _subscribe_retained_parts_owner(self, flags):
-        if not _in_callback() and _native_subscribe_retained_owner is not None:
-            result = _native_subscribe_retained_owner(
-                int(self._socket_handle.handle), int(flags)
-            )
-            if result is False:
-                return False
-            rc, err, routing, topic_raw, owner, retained_credit = result
-            if int(rc) != 0:
-                _raise_result_error(RecvError, RecvResult, rc, err)
-            routing_id = RoutingId.from_(routing) if routing is not None else None
-            return topic_raw, owner, routing_id, retained_credit
-
-        routing = None
-        topic_raw = b""
-        topic_buf = ctypes.create_string_buffer(256)
-        topic_len = ctypes.c_size_t()
-
-        def recv_part(part, lease, has_more, recv_flags, first):
-            nonlocal routing, topic_raw
-            source_rid = ctypes.POINTER(ZlinkRoutingId)()
-            rc = lib().zlink_subscribe_part_with_hwm_budget_lease(
-                self._handle,
-                ctypes.byref(source_rid),
-                topic_buf,
-                len(topic_buf),
-                ctypes.byref(topic_len),
-                part,
-                lease,
-                has_more,
-                recv_flags,
-            )
-            if rc == 0 and first:
-                routing = (
-                    _routing_id_bytes(source_rid.contents) if source_rid else None
-                )
-                topic_raw = bytes(topic_buf.raw[: topic_len.value])
-            return rc
-
-        owner, retained_credit = _recv_retained_native_parts(recv_part, flags)
-        return topic_raw, owner, routing, retained_credit
-
     def _subscribe_once(self, flags):
         result = self._subscribe_parts_owner(flags)
         if result is False:
@@ -1088,28 +984,6 @@ class _SubscriberSocket(_Socket):
                 return False
             raise
         topic_message._replace(owner, topic_raw=topic_raw, routing_id=routing)
-        return True
-
-    def subscribe_retained_into(self, topic_message, *, flags=0):
-        """Framework-backend topic receive with aggregate-retained credit."""
-        if topic_message is None or not hasattr(topic_message, "_replace"):
-            raise TypeError("topic_message must be a TopicMessage")
-        topic_message.close()
-        try:
-            result = self._subscribe_retained_parts_owner(flags)
-            if result is False:
-                return False
-            topic_raw, owner, routing, retained_credit = result
-        except RecvError as ex:
-            if (int(flags) & 1) and ex.result == RecvResult.NO_DATA:
-                return False
-            raise
-        topic_message._replace(
-            owner,
-            topic_raw=topic_raw,
-            routing_id=routing,
-            retained_credit=retained_credit,
-        )
         return True
 
     def set_subscription(self, topic):

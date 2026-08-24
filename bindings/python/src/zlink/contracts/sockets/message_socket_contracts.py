@@ -29,11 +29,6 @@ class PairSocket(_socket_contract._SocketContract, Protocol):
         available."""
         ...
 
-    def recv_retained_into(self, received, *, flags=0):
-        """Framework-backend aggregate receive that retains Core HWM credit
-        until ``received`` is closed or reused."""
-        ...
-
     def disconnect_rid(self, peer_rid):
         """Disconnect the peer identified by ``peer_rid`` rather than by
         address."""
@@ -70,11 +65,6 @@ class DealerSocket(_socket_contract._SocketContract, Protocol):
     def recv_into(self, received, *, flags=0):
         """Receive a message into ``received`` storage; ``False`` when
         ``DONT_WAIT`` is set and none is available."""
-        ...
-
-    def recv_retained_into(self, received, *, flags=0):
-        """Framework-backend typed aggregate receive that retains Core HWM
-        credit until ``received`` is closed or reused."""
         ...
 
 

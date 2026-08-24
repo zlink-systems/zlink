@@ -31,27 +31,6 @@ zlink_config_result_t zlink_proxy (void *frontend, void *backend, void *capture)
 - **소켓 타입 제한 없음** — 내부적으로 `socket_base_t`의 internal recv/send를
   직접 호출하므로 공개 API의 `ZLINK_SUBMIT_NOT_SUPPORTED` / `ZLINK_RECV_NOT_SUPPORTED` 제한과 무관하게 동작한다
 
-### Steerable 프록시
-
-```c
-zlink_config_result_t zlink_proxy_steerable (void *frontend, void *backend,
-                                             void *capture, void *control);
-```
-
-`zlink_proxy_steerable()`은 `control` 소켓을 추가해 런타임에 다음 명령 프레임으로
-프록시를 제어한다:
-
-| 명령 | 의도한 동작 |
-|------|-------------|
-| `PAUSE` | 전달 일시 중지 |
-| `RESUME` | 전달 재개 |
-| `TERMINATE` | 프록시 중지 후 반환 |
-| `STATISTICS` | control 소켓으로 트래픽 카운터 응답 |
-
-> 참고: 현재 런타임은 `PAUSE`/`RESUME` 핸들러가 서로 뒤바뀌어 있다
-> (`PAUSE`가 전달을 재개하고 `RESUME`이 중지함). 위 표는 의도한 의미이며,
-> 이는 알려진 구현 버그다.
-
 ### 지원 소켓 조합 예시
 
 | frontend | backend | 용도 |

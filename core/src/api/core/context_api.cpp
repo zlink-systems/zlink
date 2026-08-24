@@ -31,7 +31,7 @@ static const public_ctx_option_descriptor_t public_ctx_options[] = {
   {ZLINK_MSG_T_SIZE, false, true},
   {ZLINK_THREAD_AFFINITY_CPU_ADD, true, true},
   {ZLINK_THREAD_AFFINITY_CPU_REMOVE, true, true},
-  {ZLINK_THREAD_NAME_PREFIX, true, true},
+  {ZLINK_THREAD_NAME_PREFIX, false, false},
   {ZLINK_CTX_OPT_BLOCKY, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_ENABLE, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS, true, true},
@@ -105,11 +105,14 @@ void *zlink_ctx_new (void)
     }
 
     zlink::ctx_t *ctx = new (std::nothrow) zlink::ctx_t;
-    if (ctx) {
-        if (!ctx->valid ()) {
-            delete ctx;
-            return NULL;
-        }
+    if (!ctx) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (!ctx->valid ()) {
+        delete ctx;
+        errno = ENOMEM;
+        return NULL;
     }
     return ctx;
 }
@@ -155,10 +158,13 @@ zlink_config_result_t zlink_ctx_set (void *ctx_, zlink_ctx_option_t option_, int
 zlink_config_result_t
 zlink_ctx_set_data (void *ctx_, zlink_ctx_option_t option_, const void *optval_, size_t optvallen_)
 {
-    if (!is_public_ctx_set_option (option_) || !is_ctx_data_option (option_)
-        || !optval_
+    if (!is_ctx_data_option (option_) || !optval_
         || (is_auto_hwm_u64_option (option_)
-            && optvallen_ != sizeof (uint64_t))) {
+            && optvallen_ != sizeof (uint64_t))
+        || (option_ == ZLINK_THREAD_NAME_PREFIX
+            && (optvallen_ == 0
+                || static_cast<const unsigned char *> (optval_)[optvallen_ - 1]
+                     != '\0'))) {
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
@@ -169,8 +175,7 @@ zlink_ctx_set_data (void *ctx_, zlink_ctx_option_t option_, const void *optval_,
 zlink_config_result_t
 zlink_ctx_get_data (void *ctx_, zlink_ctx_option_t option_, void *optval_, size_t *optvallen_)
 {
-    if (!is_public_ctx_get_option (option_) || !is_auto_hwm_u64_option (option_)
-        || !optval_ || !optvallen_) {
+    if (!is_ctx_data_option (option_) || !optval_ || !optvallen_) {
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
@@ -178,13 +183,13 @@ zlink_ctx_get_data (void *ctx_, zlink_ctx_option_t option_, void *optval_, size_
         errno = EFAULT;
         return ZLINK_CONFIG_INVALID_HANDLE;
     }
-    if (*optvallen_ != sizeof (uint64_t)) {
+    if (is_auto_hwm_u64_option (option_) && *optvallen_ != sizeof (uint64_t)) {
         *optvallen_ = sizeof (uint64_t);
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
     const int rc = (static_cast<zlink::ctx_t *> (ctx_))->get (option_, optval_, optvallen_);
-    if (rc == 0)
+    if (rc == 0 && is_auto_hwm_u64_option (option_))
         *optvallen_ = sizeof (uint64_t);
     return zlink::config_result_internal::from_rc (rc);
 }

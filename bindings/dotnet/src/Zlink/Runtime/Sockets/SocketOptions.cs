@@ -91,9 +91,6 @@ internal static class SocketOptions
     public static SocketOptionKey<int> RidDuplicatePolicy { get; } =
         Int(SocketOption.RidDuplicatePolicy);
 
-    public static SocketOptionKey<int> RouteValueMaxSize { get; } =
-        Int(SocketOption.RouteValueMaxSize);
-
     public static SocketOptionKey<int> SubmitRetryMode { get; } =
         Int(SocketOption.SubmitRetryMode);
 

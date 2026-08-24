@@ -155,12 +155,6 @@ struct physical_queue_record_t
         applied_hwm (hwm_),
         provisional_accounted_bytes (0),
         committed_accounted_bytes (0),
-        held_dequeued_bytes (0),
-        held_dequeued_count (0),
-        retired_held_dequeued_bytes (0),
-        active_application_lease_bytes (0),
-        application_lease_accounted_bytes (0),
-        application_lease_count (0),
         completion_pending_message_count (0),
         application_writer (NULL),
         application_reader (NULL)
@@ -176,68 +170,13 @@ struct physical_queue_record_t
     std::atomic<uint64_t> applied_hwm;
     std::atomic<uint64_t> provisional_accounted_bytes;
     std::atomic<uint64_t> committed_accounted_bytes;
-    std::atomic<uint64_t> held_dequeued_bytes;
-    std::atomic<uint64_t> held_dequeued_count;
-    std::atomic<uint64_t> retired_held_dequeued_bytes;
-    std::atomic<uint64_t> active_application_lease_bytes;
-    std::atomic<uint64_t> application_lease_accounted_bytes;
-    std::atomic<uint64_t> application_lease_count;
     std::atomic<uint64_t> completion_pending_message_count;
     // Protected by ctx_physical_queue_registry_t::_sync. These are used only
     // to sample the pipe-local application ledger outside the frame path.
     pipe_t *application_writer;
     pipe_t *application_reader;
-    std::map<uint64_t, uint64_t> retained_origin_counts_by_generation;
     stored_endpoint_policy_t writer_policy;
     stored_endpoint_policy_t reader_policy;
-};
-
-struct retained_credit_control_t
-{
-    explicit retained_credit_control_t (ctx_physical_queue_registry_t *registry_) :
-        registry (registry_), accepting (true)
-    {
-    }
-
-    std::mutex sync;
-    ctx_physical_queue_registry_t *registry;
-    bool accepting;
-};
-
-struct retained_credit_origin_t
-{
-    enum owner_t
-    {
-        owner_queue_token,
-        owner_application_lease,
-        owner_released
-    };
-
-    retained_credit_origin_t (
-      uint64_t id_, const std::shared_ptr<retained_credit_control_t> &control_,
-      const physical_queue_handle_t &queue_, uint64_t generation_,
-      uint64_t bytes_, uint64_t counted_messages_, pipe_t *reader_pipe_) :
-        id (id_),
-        control (control_),
-        queue (queue_),
-        generation (generation_),
-        bytes (bytes_),
-        counted_messages (counted_messages_),
-        reader_pipe (reader_pipe_),
-        pipe_ref_held (true),
-        owner (owner_queue_token)
-    {
-    }
-
-    uint64_t id;
-    std::shared_ptr<retained_credit_control_t> control;
-    physical_queue_handle_t queue;
-    uint64_t generation;
-    uint64_t bytes;
-    uint64_t counted_messages;
-    pipe_t *reader_pipe;
-    bool pipe_ref_held;
-    owner_t owner;
 };
 
 namespace
@@ -258,17 +197,9 @@ uint64_t current_queue_bytes (const zlink::physical_queue_record_t &direction_)
       std::memory_order_relaxed);
     const uint64_t committed = direction_.committed_accounted_bytes.load (
       std::memory_order_relaxed);
-    const uint64_t retired_held =
-      direction_.retired_held_dequeued_bytes.load (std::memory_order_relaxed);
-    zlink_assert (committed >= retired_held);
-    const uint64_t leased = direction_.active_application_lease_bytes.load (
-      std::memory_order_relaxed);
-    const uint64_t active_committed = committed - retired_held;
-    if (UINT64_MAX - provisional < active_committed)
+    if (UINT64_MAX - provisional < committed)
         return UINT64_MAX;
-    const uint64_t queue_bytes = provisional + active_committed;
-    return UINT64_MAX - queue_bytes < leased ? UINT64_MAX
-                                              : queue_bytes + leased;
+    return provisional + committed;
 }
 
 void apply_deferred_hwm_if_drained (
@@ -326,95 +257,6 @@ void zlink::decoder_frame_reservation_t::reset ()
 }
 }
 
-zlink::retained_credit_token_t::retained_credit_token_t () : _origin ()
-{
-}
-
-zlink::retained_credit_token_t::retained_credit_token_t (
-  const std::shared_ptr<retained_credit_origin_t> &origin_) :
-    _origin (origin_)
-{
-}
-
-zlink::retained_credit_token_t::~retained_credit_token_t ()
-{
-    reset ();
-}
-
-zlink::retained_credit_token_t::retained_credit_token_t (
-  retained_credit_token_t &&other_) :
-    _origin ()
-{
-    _origin.swap (other_._origin);
-}
-
-zlink::retained_credit_token_t &zlink::retained_credit_token_t::operator= (
-  retained_credit_token_t &&other_)
-{
-    if (this != &other_) {
-        reset ();
-        _origin.swap (other_._origin);
-    }
-    return *this;
-}
-
-bool zlink::retained_credit_token_t::empty () const
-{
-    return !_origin;
-}
-
-void zlink::retained_credit_token_t::reset ()
-{
-    release_retained_credit_origin (&_origin);
-}
-
-int zlink::retained_credit_token_t::transfer_to_application (
-  std::shared_ptr<retained_credit_origin_t> *origin_out_)
-{
-    if (!origin_out_) {
-        errno = EFAULT;
-        return -1;
-    }
-    origin_out_->reset ();
-    if (!_origin)
-        return 0;
-
-    const std::shared_ptr<retained_credit_control_t> control =
-      _origin->control;
-    if (!control) {
-        errno = ETERM;
-        return -1;
-    }
-
-    std::lock_guard<std::mutex> lock (control->sync);
-    if (!control->accepting || !control->registry
-        || !control->registry->transfer_retained_origin_to_application (
-          _origin.get ())) {
-        errno = ETERM;
-        return -1;
-    }
-    origin_out_->swap (_origin);
-    return 0;
-}
-
-void zlink::release_retained_credit_origin (
-  std::shared_ptr<retained_credit_origin_t> *origin_)
-{
-    if (!origin_ || !*origin_)
-        return;
-
-    std::shared_ptr<retained_credit_origin_t> origin;
-    origin.swap (*origin_);
-    const std::shared_ptr<retained_credit_control_t> control =
-      origin->control;
-    if (!control)
-        return;
-
-    std::lock_guard<std::mutex> lock (control->sync);
-    if (control->registry)
-        control->registry->release_retained_origin (origin.get (), false);
-}
-
 zlink::physical_queue_registry_snapshot_t::physical_queue_registry_snapshot_t () :
     active_application_direction_count (0),
     active_completion_direction_count (0),
@@ -453,17 +295,11 @@ zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
     _application_reserved_minimum_bytes (0),
     _application_peak_accounted_bytes (0),
     _completion_peak_accounted_bytes (0),
-    _application_lease_accounted_bytes (0),
-    _outstanding_application_lease_count (0),
     _oversize_admission_count (0),
     _largest_oversize_message_bytes (0),
     _total_admission_attempts (0),
     _first_blocked_admission_attempts (0),
     _aggregate_overflow (false),
-    _retained_control (
-      std::make_shared<retained_credit_control_t> (this)),
-    _retained_origins (),
-    _next_retained_origin_id (1),
     _decoder_accepting (true)
 {
 }
@@ -471,14 +307,7 @@ zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
 zlink::ctx_physical_queue_registry_t::~ctx_physical_queue_registry_t ()
 {
     force_cancel_decoder_reservations ();
-    force_release_retained_credit ();
     zlink_assert (_directions.empty ());
-    zlink_assert (_application_lease_accounted_bytes.load (
-                    std::memory_order_relaxed)
-                  == 0);
-    zlink_assert (_outstanding_application_lease_count.load (
-                    std::memory_order_relaxed)
-                  == 0);
     zlink_assert (_application_reserved_minimum_bytes == 0);
 }
 
@@ -924,192 +753,6 @@ void zlink::ctx_physical_queue_registry_t::release_decoder_frame (
     reservation->reset ();
 }
 
-int zlink::ctx_physical_queue_registry_t::retain_dequeued_frame (
-  const physical_queue_handle_t &direction_, pipe_t *reader_pipe_,
-  uint64_t frame_bytes_, uint64_t counted_message_count_,
-  retained_credit_token_t *token_out_)
-{
-    if (!direction_ || !reader_pipe_ || !token_out_ || frame_bytes_ == 0) {
-        errno = EFAULT;
-        return -1;
-    }
-    token_out_->reset ();
-
-    const std::shared_ptr<retained_credit_control_t> control =
-      _retained_control;
-    std::lock_guard<std::mutex> control_lock (control->sync);
-    if (!control->accepting || control->registry != this) {
-        errno = ETERM;
-        return -1;
-    }
-    if (!reader_pipe_->retain_lifetime_ref ()) {
-        errno = ETERM;
-        return -1;
-    }
-
-    std::shared_ptr<retained_credit_origin_t> origin;
-    bool invalid_direction = false;
-    {
-        scoped_lock_t lock (_sync);
-        std::map<uint64_t, physical_queue_handle_t>::const_iterator direction_it =
-          _directions.find (direction_->queue_id);
-        if (direction_it == _directions.end ()
-            || direction_it->second.get () != direction_.get ()
-            || accounting_lane (*direction_) != physical_queue_lane_application) {
-            invalid_direction = true;
-        } else {
-            uint64_t origin_id = _next_retained_origin_id;
-            do {
-                origin_id = _next_retained_origin_id;
-                _next_retained_origin_id =
-                  origin_id == UINT64_MAX ? 1 : origin_id + 1;
-            } while (_retained_origins.find (origin_id)
-                     != _retained_origins.end ());
-
-            origin = std::make_shared<retained_credit_origin_t> (
-              origin_id, control, direction_, direction_->generation,
-              frame_bytes_, counted_message_count_, reader_pipe_);
-            _retained_origins.insert (
-              std::make_pair (origin_id, origin.get ()));
-            ++direction_->retained_origin_counts_by_generation[
-              direction_->generation];
-            saturating_add (&direction_->held_dequeued_bytes, frame_bytes_,
-                            &_aggregate_overflow);
-            saturating_add (&direction_->held_dequeued_count, 1,
-                            &_aggregate_overflow);
-        }
-    }
-
-    if (invalid_direction) {
-        reader_pipe_->release_lifetime_ref ();
-        errno = ETERM;
-        return -1;
-    }
-
-    *token_out_ = retained_credit_token_t (origin);
-    return 0;
-}
-
-bool zlink::ctx_physical_queue_registry_t::transfer_retained_origin_to_application (
-  retained_credit_origin_t *origin_)
-{
-    if (!origin_ || origin_->owner != retained_credit_origin_t::owner_queue_token)
-        return false;
-
-    scoped_lock_t lock (_sync);
-    std::map<uint64_t, retained_credit_origin_t *>::const_iterator origin_it =
-      _retained_origins.find (origin_->id);
-    if (origin_it == _retained_origins.end () || origin_it->second != origin_)
-        return false;
-    const physical_queue_handle_t &direction = origin_->queue;
-    std::map<uint64_t, physical_queue_handle_t>::const_iterator direction_it =
-      _directions.find (direction->queue_id);
-    if (direction_it == _directions.end ()
-        || direction_it->second.get () != direction.get ())
-        return false;
-
-    subtract_exact (&direction->held_dequeued_bytes, origin_->bytes);
-    subtract_exact (&direction->held_dequeued_count, 1);
-    try_subtract_exact (&direction->committed_accounted_bytes, origin_->bytes);
-    saturating_add (&direction->application_lease_accounted_bytes,
-                    origin_->bytes, &_aggregate_overflow);
-    saturating_add (&direction->application_lease_count, 1,
-                    &_aggregate_overflow);
-    saturating_add (&_application_lease_accounted_bytes, origin_->bytes,
-                    &_aggregate_overflow);
-    saturating_add (&_outstanding_application_lease_count, 1,
-                    &_aggregate_overflow);
-    if (origin_->generation == direction->generation) {
-        saturating_add (&direction->active_application_lease_bytes,
-                        origin_->bytes, &_aggregate_overflow);
-    } else {
-        subtract_exact (&direction->retired_held_dequeued_bytes,
-                        origin_->bytes);
-    }
-    origin_->owner = retained_credit_origin_t::owner_application_lease;
-    apply_deferred_hwm_if_drained (direction.get ());
-    return true;
-}
-
-void zlink::ctx_physical_queue_registry_t::release_retained_origin (
-  retained_credit_origin_t *origin_, bool force_)
-{
-    if (!origin_ || origin_->owner == retained_credit_origin_t::owner_released)
-        return;
-
-    pipe_t *reader_pipe = NULL;
-    bool release_pipe_ref = false;
-    bool publish_credit = false;
-    bool publish_credit_inline = false;
-    {
-        scoped_lock_t lock (_sync);
-        std::map<uint64_t, retained_credit_origin_t *>::iterator origin_it =
-          _retained_origins.find (origin_->id);
-        if (origin_it == _retained_origins.end () || origin_it->second != origin_) {
-            origin_->owner = retained_credit_origin_t::owner_released;
-        } else {
-            const physical_queue_handle_t direction = origin_->queue;
-            const bool queue_token_owner =
-              origin_->owner == retained_credit_origin_t::owner_queue_token;
-            if (queue_token_owner) {
-                subtract_exact (&direction->held_dequeued_bytes, origin_->bytes);
-                subtract_exact (&direction->held_dequeued_count, 1);
-                try_subtract_exact (&direction->committed_accounted_bytes,
-                                    origin_->bytes);
-                if (origin_->generation != direction->generation)
-                    subtract_exact (
-                      &direction->retired_held_dequeued_bytes,
-                      origin_->bytes);
-            } else {
-                subtract_exact (&direction->application_lease_accounted_bytes,
-                                origin_->bytes);
-                subtract_exact (&direction->application_lease_count, 1);
-                subtract_exact (&_application_lease_accounted_bytes,
-                                origin_->bytes);
-                subtract_exact (&_outstanding_application_lease_count, 1);
-                if (origin_->generation == direction->generation)
-                    subtract_exact (
-                      &direction->active_application_lease_bytes,
-                      origin_->bytes);
-            }
-            publish_credit = !force_ && direction->endpoint_refs > 0
-                             && direction->generation == origin_->generation;
-            publish_credit_inline = publish_credit && queue_token_owner;
-            _retained_origins.erase (origin_it);
-            std::map<uint64_t, uint64_t>::iterator generation_it =
-              direction->retained_origin_counts_by_generation.find (
-                origin_->generation);
-            zlink_assert (
-              generation_it
-                != direction->retained_origin_counts_by_generation.end ());
-            zlink_assert (generation_it->second > 0);
-            if (--generation_it->second == 0)
-                direction->retained_origin_counts_by_generation.erase (
-                  generation_it);
-            origin_->owner = retained_credit_origin_t::owner_released;
-            apply_deferred_hwm_if_drained (direction.get ());
-            erase_direction_if_retired_and_drained_unlocked (direction);
-        }
-
-        reader_pipe = origin_->reader_pipe;
-        release_pipe_ref = origin_->pipe_ref_held;
-        origin_->reader_pipe = NULL;
-        origin_->pipe_ref_held = false;
-        origin_->queue.reset ();
-    }
-
-    if (publish_credit && reader_pipe) {
-        if (publish_credit_inline)
-            reader_pipe->process_retained_credit (
-              origin_->generation, origin_->counted_messages, origin_->bytes);
-        else
-            reader_pipe->schedule_retained_credit (
-              origin_->generation, origin_->counted_messages, origin_->bytes);
-    }
-    if (release_pipe_ref && reader_pipe)
-        reader_pipe->release_lifetime_ref ();
-}
-
 void zlink::ctx_physical_queue_registry_t::plan_application_queues (
   auto_hwm_context_plan_t *context_,
   const std::vector<physical_queue_endpoint_policy_t> &policies_)
@@ -1409,27 +1052,6 @@ void zlink::ctx_physical_queue_registry_t::advance_generation (
     scoped_lock_t lock (_sync);
     zlink_assert (direction_->endpoint_refs > 0);
     zlink_assert (_directions.find (direction_->queue_id) != _directions.end ());
-    const uint64_t current_generation = direction_->generation;
-    uint64_t retiring_held_bytes = 0;
-    for (std::map<uint64_t, retained_credit_origin_t *>::const_iterator it =
-           _retained_origins.begin ();
-         it != _retained_origins.end (); ++it) {
-        const retained_credit_origin_t *origin = it->second;
-        if (origin && origin->queue.get () == direction_.get ()
-            && origin->generation == current_generation
-            && origin->owner
-                 == retained_credit_origin_t::owner_queue_token) {
-            retiring_held_bytes =
-              UINT64_MAX - retiring_held_bytes < origin->bytes
-                ? UINT64_MAX
-                : retiring_held_bytes + origin->bytes;
-        }
-    }
-    if (retiring_held_bytes > 0)
-        saturating_add (&direction_->retired_held_dequeued_bytes,
-                        retiring_held_bytes, &_aggregate_overflow);
-    direction_->active_application_lease_bytes.store (
-      0, std::memory_order_relaxed);
     direction_->generation =
       direction_->generation == UINT64_MAX ? 1 : direction_->generation + 1;
 }
@@ -1455,15 +1077,8 @@ void zlink::ctx_physical_queue_registry_t::release_endpoint (
             // backstop for record-owned charge that can no longer be observed.
             direction->provisional_accounted_bytes.store (
               0, std::memory_order_relaxed);
-            const uint64_t held = direction->held_dequeued_bytes.load (
-              std::memory_order_relaxed);
-            // Application queues account normal in-flight bytes in the pipe,
-            // so a retained frame can have no matching registry commitment
-            // while its endpoint is alive. Once the last endpoint retires,
-            // promote the held bytes into the registry-owned commitment so
-            // snapshots keep observing them until the retained token releases.
             direction->committed_accounted_bytes.store (
-              held, std::memory_order_relaxed);
+              0, std::memory_order_relaxed);
             const uint64_t completion_pending =
               direction->completion_pending_message_count.exchange (
                 0, std::memory_order_relaxed);
@@ -1471,10 +1086,8 @@ void zlink::ctx_physical_queue_registry_t::release_endpoint (
             if (lane == physical_queue_lane_application) {
                 zlink_assert (completion_pending == 0);
             } else if (lane == physical_queue_lane_completion) {
-                zlink_assert (held == 0);
             } else {
                 zlink_assert (lane == physical_queue_lane_monitor);
-                zlink_assert (held == 0);
                 zlink_assert (completion_pending == 0);
             }
             erase_direction_if_retired_and_drained_unlocked (direction);
@@ -1491,11 +1104,6 @@ void zlink::ctx_physical_queue_registry_t::erase_direction_if_retired_and_draine
              std::memory_order_relaxed)
              != 0
         || direction_->committed_accounted_bytes.load (
-             std::memory_order_relaxed)
-             != 0
-        || direction_->held_dequeued_count.load (std::memory_order_relaxed)
-             != 0
-        || direction_->application_lease_count.load (
              std::memory_order_relaxed)
              != 0)
         return;
@@ -1521,15 +1129,13 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
     struct application_direction_sample_t
     {
         application_direction_sample_t () :
-            direction (), fallback_provisional (0), fallback_committed (0),
-            active_lease_bytes (0)
+            direction (), fallback_provisional (0), fallback_committed (0)
         {
         }
 
         physical_queue_handle_t direction;
         uint64_t fallback_provisional;
         uint64_t fallback_committed;
-        uint64_t active_lease_bytes;
     };
 
     physical_queue_registry_snapshot_t current;
@@ -1555,32 +1161,7 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
                 sample.direction = handle;
                 sample.fallback_provisional = provisional;
                 sample.fallback_committed = committed;
-                sample.active_lease_bytes =
-                  direction.active_application_lease_bytes.load (
-                    std::memory_order_relaxed);
                 application_directions.push_back (sample);
-
-                const uint64_t lease =
-                  direction.application_lease_accounted_bytes.load (
-                    std::memory_order_relaxed);
-                current.application_lease_accounted_bytes =
-                  add_snapshot_value (
-                    current.application_lease_accounted_bytes, lease,
-                    &current.aggregate_overflow);
-                current.outstanding_application_lease_count =
-                  add_snapshot_value (
-                    current.outstanding_application_lease_count,
-                    direction.application_lease_count.load (
-                      std::memory_order_relaxed),
-                    &current.aggregate_overflow);
-                current.deferred_origin_credit_bytes = add_snapshot_value (
-                  current.deferred_origin_credit_bytes,
-                  direction.held_dequeued_bytes.load (
-                    std::memory_order_relaxed),
-                  &current.aggregate_overflow);
-                current.deferred_origin_credit_bytes = add_snapshot_value (
-                  current.deferred_origin_credit_bytes, lease,
-                  &current.aggregate_overflow);
             } else if (lane == physical_queue_lane_completion) {
                 current.completion_current_accounted_bytes =
                   add_snapshot_value (
@@ -1606,21 +1187,9 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
                     current.monitor_current_accounted_bytes, committed,
                     &current.aggregate_overflow);
             }
-            if (direction.endpoint_refs.load (std::memory_order_relaxed) == 0) {
-                current.retired_direction_count +=
-                  direction.retained_origin_counts_by_generation.size ();
-            } else if (lane == physical_queue_lane_application) {
+            if (direction.endpoint_refs.load (std::memory_order_relaxed) != 0
+                && lane == physical_queue_lane_application) {
                 ++current.active_application_direction_count;
-                const uint64_t generation = direction.generation.load (
-                  std::memory_order_relaxed);
-                for (std::map<uint64_t, uint64_t>::const_iterator generation_it =
-                       direction.retained_origin_counts_by_generation.begin ();
-                     generation_it
-                     != direction.retained_origin_counts_by_generation.end ();
-                     ++generation_it) {
-                    if (generation_it->first != generation)
-                        ++current.retired_direction_count;
-                }
             } else if (lane == physical_queue_lane_completion) {
                 ++current.active_completion_direction_count;
             } else if (lane == physical_queue_lane_monitor) {
@@ -1649,27 +1218,12 @@ void zlink::ctx_physical_queue_registry_t::snapshot (
           &current.aggregate_overflow);
         uint64_t queue_total = add_snapshot_value (
           provisional, committed, &current.aggregate_overflow);
-        // A pipe-local total retains bytes until a retained receive publishes
-        // credit. Once ownership transfers to an application lease, remove
-        // that active lease from the Core-owned portion before adding the
-        // lease back to the context total below.
-        if (queue_total < sample.active_lease_bytes) {
-            queue_total = 0;
-            current.aggregate_overflow = true;
-        } else {
-            queue_total -= sample.active_lease_bytes;
-        }
         current.application_current_accounted_bytes = add_snapshot_value (
           current.application_current_accounted_bytes, queue_total,
           &current.aggregate_overflow);
     }
-    uint64_t sampled_application_total =
-      current.application_current_accounted_bytes;
-    sampled_application_total = add_snapshot_value (
-      sampled_application_total, current.application_lease_accounted_bytes,
-      &current.aggregate_overflow);
     observe_peak (&_application_peak_accounted_bytes,
-                  sampled_application_total);
+                  current.application_current_accounted_bytes);
     current.application_peak_accounted_bytes =
       _application_peak_accounted_bytes.load (std::memory_order_relaxed);
     observe_peak (&_completion_peak_accounted_bytes,
@@ -1697,9 +1251,8 @@ void zlink::ctx_physical_queue_registry_t::reset_metrics ()
     physical_queue_registry_snapshot_t current;
     snapshot (&current);
     bool overflow = false;
-    const uint64_t application_current = add_snapshot_value (
-      current.application_current_accounted_bytes,
-      current.application_lease_accounted_bytes, &overflow);
+    const uint64_t application_current =
+      current.application_current_accounted_bytes;
     const uint64_t completion_current =
       current.completion_current_accounted_bytes;
 
@@ -1717,32 +1270,7 @@ void zlink::ctx_physical_queue_registry_t::reset_metrics ()
                                std::memory_order_relaxed);
 }
 
-void zlink::ctx_physical_queue_registry_t::stop_retained_transfers ()
-{
-    const std::shared_ptr<retained_credit_control_t> control =
-      _retained_control;
-    std::lock_guard<std::mutex> lock (control->sync);
-    control->accepting = false;
-}
-
 void zlink::ctx_physical_queue_registry_t::force_cancel_decoder_reservations ()
 {
     _decoder_accepting.store (false, std::memory_order_release);
-}
-
-void zlink::ctx_physical_queue_registry_t::force_release_retained_credit ()
-{
-    const std::shared_ptr<retained_credit_control_t> control =
-      _retained_control;
-    if (!control)
-        return;
-
-    std::lock_guard<std::mutex> lock (control->sync);
-    control->accepting = false;
-    while (!_retained_origins.empty ()) {
-        retained_credit_origin_t *origin =
-          _retained_origins.begin ()->second;
-        release_retained_origin (origin, true);
-    }
-    control->registry = NULL;
 }

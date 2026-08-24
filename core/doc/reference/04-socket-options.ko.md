@@ -33,7 +33,7 @@ network: `IPV6`, `TOS`, `MULTICAST_*`, `BINDTODEVICE`, `BACKLOG`; TLS: `TLS_CERT
 `_VERIFY`/`_REQUIRE_CLIENT_CERT`/`_HOSTNAME`/`_TRUST_SYSTEM`/`_PASSWORD`; behavior:
 `IMMEDIATE`, `CONFLATE`, `BLOCKY`(대신 `ZLINK_CTX_OPT_BLOCKY`로 읽는다 — 전체 목록과
 기본값은 Socket 스펙의 상수 표 참고), `INVERT_MATCHING`, `ZMP_METADATA`; 읽기 전용: `FD`,
-`EVENTS`, `TYPE`, `LAST_ENDPOINT`, `ROUTE_VALUE_MAX_SIZE`). `optval_`/`optvallen_`는 값과 그
+`EVENTS`, `TYPE`, `LAST_ENDPOINT`). `optval_`/`optvallen_`는 값과 그
 바이트 크기를 공급하거나 받는다 — `SNDHWM`, `RCVHWM`, `AUTO_HWM_MSG_UNIT_BYTES`는 정확히
 `sizeof(uint64_t)` 바이트가 필요하다.
 

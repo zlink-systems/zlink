@@ -57,8 +57,8 @@ extends AutoCloseable`이다.
 
 `socket.options()`로 도달하는, 모든 socket type이 공유하는 typed option
 facade. **아래 member만 `public`이다** — `CommonSocketOptions`는 `affinity`,
-`rate`, `recoveryInterval`, `handshakeInterval`, `routeValueMaxSize`,
-`tos`, `multicastHops`, `multicastMaxTpdu`, `bindToDevice`,
+`rate`, `recoveryInterval`, `handshakeInterval`, `tos`, `multicastHops`,
+`multicastMaxTpdu`, `bindToDevice`,
 `tcpKeepaliveCount`, `tcpKeepaliveIdle`, `tcpKeepaliveInterval`,
 `tcpMaxRt`, `conflate`, `blocky`, `invertMatching`, `fd`, `events`,
 `socketType`, `zmpMetadata`도 선언하지만 전부 package-private이라

@@ -49,10 +49,6 @@ Core가 memory 입력에서 계산해, application queue들의 HWM을 나눌 때
 
 Auto HWM budget에 씌우는 상한이다. profile 고정 cap과 활성 queue 하한 합계 중 큰 쪽이다.
 
-### retained-credit lease
-
-queue의 message를 Framework로 넘길 때 byte를 해제하지 않고 소유권만 옮기는 신용이다. release하면 원래 queue의 read credit이 돌아온다.
-
 ### water-filling
 
 남은 budget을 아직 상한에 못 미친 queue들에 물을 붓듯 고르게 채워 나누는 분배 방식이다.

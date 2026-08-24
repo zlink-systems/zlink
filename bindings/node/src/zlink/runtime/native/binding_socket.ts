@@ -70,8 +70,6 @@ export interface SocketNativeBinding {
     preferManagedSinglePart?: boolean,
     cachedRoutingId?: Buffer | null
   ) => NativeReceivedRaw | null;
-  routerRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  routerRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
   routerReply: (
     socket: NativeHandle,
     peerRid: Buffer,
@@ -106,11 +104,6 @@ export interface SocketNativeBinding {
   ) => number;
   socketRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
   socketRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
-  socketRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  socketRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
-  dealerRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  dealerRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
-  hwmBudgetLeaseRelease: (owner: unknown) => void;
   socketSend: (socket: NativeHandle, payload: unknown, flags: number) => void;
   socketSendNoWaitResult: (socket: NativeHandle, payload: unknown) => number;
   socketSendNoWaitResultParts: (
@@ -180,10 +173,6 @@ export interface SocketNativeBinding {
     socket: NativeHandle,
     flags: number
   ) => NativeTopicMessageRaw | null;
-  socketSubscribeMessageRetained: (
-    socket: NativeHandle,
-    flags: number
-  ) => NativeTopicMessageRaw | null;
   socketSubscriptionEvent: (
     socket: NativeHandle,
     flags: number
@@ -194,7 +183,6 @@ export interface SocketNativeBinding {
     payload: unknown
   ) => number;
   socketTrySubscribeMessage: (socket: NativeHandle) => NativeTopicMessageRaw | null;
-  socketTrySubscribeMessageRetained: (socket: NativeHandle) => NativeTopicMessageRaw | null;
   socketTrySubscriptionEvent: (
     socket: NativeHandle
   ) => { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;

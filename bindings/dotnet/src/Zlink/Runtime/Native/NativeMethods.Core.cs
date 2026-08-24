@@ -31,7 +31,6 @@ internal static partial class NativeMethods
         "zlink_ctx_shutdown",
         "zlink_ctx_term",
         "zlink_dealer_recv_part",
-        "zlink_dealer_recv_part_with_hwm_budget_lease",
         "zlink_dealer_reply_part",
         "zlink_dealer_request_part",
         "zlink_dealer_request_transport_pair_part",
@@ -47,7 +46,6 @@ internal static partial class NativeMethods
         "zlink_get_stream_option",
         "zlink_get_sub_option",
         "zlink_has",
-        "zlink_hwm_budget_lease_release",
         "zlink_monitor_close",
         "zlink_monitor_status",
         "zlink_msg_close",
@@ -73,13 +71,10 @@ internal static partial class NativeMethods
         "zlink_poller_size",
         "zlink_poller_wait",
         "zlink_proxy",
-        "zlink_proxy_steerable",
         "zlink_publish_part",
         "zlink_recv_handler",
         "zlink_recv_part",
-        "zlink_recv_part_with_hwm_budget_lease",
         "zlink_router_recv_part",
-        "zlink_router_recv_part_v2_with_hwm_budget_lease",
         "zlink_router_reply_part",
         "zlink_router_request_part",
         "zlink_router_request_transport_pair_part",
@@ -112,7 +107,6 @@ internal static partial class NativeMethods
         "zlink_stream_packet_handler",
         "zlink_strerror",
         "zlink_subscribe_part",
-        "zlink_subscribe_part_with_hwm_budget_lease",
         "zlink_subscription_at",
         "zlink_timer_destroy",
         "zlink_timer_handler",
@@ -249,11 +243,15 @@ internal static partial class NativeMethods
         out byte messageType, out ulong requestSeq, ref ZlinkMsg part,
         out ZlinkPartFlag hasMore, int flags);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_dealer_recv_part_with_hwm_budget_lease(
+    internal static int receiveDealerPartWithoutLease(
         IntPtr dealer, out byte messageType, out ulong requestSeq,
         ref ZlinkMsg part, out IntPtr lease, out ZlinkPartFlag hasMore,
-        int flags);
+        int flags)
+    {
+        lease = IntPtr.Zero;
+        return zlink_dealer_recv_part(dealer, out messageType, out requestSeq,
+            ref part, out hasMore, flags);
+    }
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_dealer_reply_part(IntPtr dealer,

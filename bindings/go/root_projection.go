@@ -278,7 +278,6 @@ var (
 	Poll                  = impl.Poll
 	Has                   = impl.Has
 	Proxy                 = impl.Proxy
-	ProxySteerable        = impl.ProxySteerable
 	Sleep                 = impl.Sleep
 	MultipartClose        = impl.MultipartClose
 	NewStopwatch          = impl.NewStopwatch

@@ -21,13 +21,6 @@ extern "C" {
 /* HWM option values are uint64_t byte counts. */
 #define ZLINK_HWM_BYTES_DFLT ((uint64_t) 4096000)
 
-typedef struct zlink_hwm_budget_lease_t zlink_hwm_budget_lease_t;
-
-ZLINK_EXPORT int zlink_recv_with_hwm_budget_lease (
-  void *socket_, zlink_msg_t *message_,
-  zlink_hwm_budget_lease_t **lease_out_, int flags_);
-ZLINK_EXPORT void zlink_hwm_budget_lease_release (
-  zlink_hwm_budget_lease_t **lease_p_);
 
 /******************************************************************************/
 /*  Raw socket events and monitoring                                          */
@@ -483,10 +476,6 @@ ZLINK_EXPORT zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
                                                          zlink_msg_t *part_out_,
                                                          zlink_part_flag_t *has_more_out_,
                                                          zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t zlink_dealer_recv_part_with_hwm_budget_lease (
-  void *dealer_, uint8_t *message_type_out_, uint64_t *request_seq_out_,
-  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_submit_result_t zlink_dealer_reply_part (void *dealer_,
                                                             uint64_t request_seq_,
@@ -539,23 +528,12 @@ zlink_router_recv_part_v2 (void *router_,
                            zlink_msg_t *part_out_,
                            zlink_part_flag_t *has_more_out_,
                            zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t
-zlink_router_recv_part_v2_with_hwm_budget_lease (
-  void *router_, const zlink_routing_id_t **source_node_rid_out_,
-  uint64_t *request_seq_out_, uint64_t *transport_pair_id_out_,
-  uint64_t *transport_pair_generation_out_, zlink_msg_t *part_out_,
-  zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
                                                   const zlink_routing_id_t **source_rid_out_,
                                                   zlink_msg_t *part_out_,
                                                   zlink_part_flag_t *has_more_out_,
                                                   zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t zlink_recv_part_with_hwm_budget_lease (
-  void *s_, const zlink_routing_id_t **source_rid_out_,
-  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
                                                        const char *topic_id_,
@@ -577,12 +555,6 @@ ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
                                                        zlink_msg_t *part_out_,
                                                        zlink_part_flag_t *has_more_out_,
                                                        zlink_recv_flags_t flags_);
-ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part_with_hwm_budget_lease (
-  void *sub_, const zlink_routing_id_t **source_rid_out_,
-  char *topic_id_buf_, size_t topic_id_capacity_,
-  size_t *topic_id_len_out_, zlink_msg_t *part_out_,
-  zlink_hwm_budget_lease_t **lease_out_,
-  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                                        const zlink_routing_id_t **source_rid_out_,

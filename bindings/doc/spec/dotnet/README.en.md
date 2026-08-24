@@ -413,7 +413,7 @@ An interface defines behavior; creation is provided by a public factory.
 - A `Spot` handle is obtained via `ISpotNode.CreateSpot()`, `ISpotNode.EntrySpot()`, `ISpotNode.GetOrCreateSpot(...)`, or `ISpotNode.SpotLookup(...)`. Directly constructing a `Spot` is not public. `GetOrCreateSpot(...)` maps directly to `zlink_spot_node_spot_get_or_new(...)`, and is never implemented by combining lookup and create in managed code.
 - An `Actor` handle is created with `ISpotNode.CreateActor(...)`. Directly constructing an Actor is not public.
 - `Zlink.CreatePoller()`, `Zlink.CreateTimer()`, `Zlink.CreateTimer(ISpot)` create eventing resources.
-- `Zlink.Version()`, `Zlink.Has(...)`, `Zlink.Strerror(...)`, `Zlink.Proxy(...)`, `Zlink.ProxySteerable(...)`, `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`, `ZlinkPoll.Poll(...)` are public static facades. Even though their native calls remain in `Runtime/`, their callable behavior is part of the contract surface.
+- `Zlink.Version()`, `Zlink.Has(...)`, `Zlink.Strerror(...)`, `Zlink.Proxy(...)`, `Zlink.Sleep(...)`, `Zlink.MultipartClose(...)`, `ZlinkPoll.Poll(...)` are public static facades. Even though their native calls remain in `Runtime/`, their callable behavior is part of the contract surface.
 
 A factory's return type favors the public contract wherever the caller
 does not need the concrete runtime type.

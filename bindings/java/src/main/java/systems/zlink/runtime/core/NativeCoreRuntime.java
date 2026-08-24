@@ -45,18 +45,6 @@ final class NativeCoreRuntime {
                 : InternalAccess.socketHandle(capture));
     }
 
-    static void proxySteerable(Socket frontend, Socket backend,
-                               Socket capture, Socket control) {
-        Objects.requireNonNull(frontend, "frontend");
-        Objects.requireNonNull(backend, "backend");
-        Objects.requireNonNull(control, "control");
-        Native.proxySteerable(InternalAccess.socketHandle(frontend),
-            InternalAccess.socketHandle(backend),
-            capture == null ? MemorySegment.NULL
-                : InternalAccess.socketHandle(capture),
-            InternalAccess.socketHandle(control));
-    }
-
     static void sleep(int seconds) {
         if (seconds < 0)
             throw new IllegalArgumentException("seconds must be >= 0");

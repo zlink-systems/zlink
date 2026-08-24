@@ -85,7 +85,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
                     NativeMethods.ZlinkPartFlag hasMore;
                     var rc = retainCredit
                         ? NativeMethods
-                            .zlink_dealer_recv_part_with_hwm_budget_lease(
+                            .receiveDealerPartWithoutLease(
                                 Handle, out nativeMessageType,
                                 out nativeRequestSeq, ref nativePart,
                                 out lease, out hasMore, recvFlags)

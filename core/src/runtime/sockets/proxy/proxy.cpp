@@ -17,13 +17,6 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 
-int zlink::proxy (class socket_base_t *frontend_,
-                  class socket_base_t *backend_,
-                  class socket_base_t *capture_)
-{
-    return zlink::proxy_steerable (frontend_, backend_, capture_, NULL);
-}
-
 #ifdef ZLINK_HAVE_POLLER
 
 #include "core/socket_poller.hpp"
@@ -71,25 +64,10 @@ static int capture (class zlink::socket_base_t *capture_, zlink::msg_t *msg_, in
     return 0;
 }
 
-struct stats_socket
-{
-    uint64_t count, bytes;
-};
-struct stats_endpoint
-{
-    stats_socket send, recv;
-};
-struct stats_proxy
-{
-    stats_endpoint frontend, backend;
-};
-
 static int forward (class zlink::socket_base_t *from_,
                     class zlink::socket_base_t *to_,
                     class zlink::socket_base_t *capture_,
-                    zlink::msg_t *msg_,
-                    stats_socket &recving,
-                    stats_socket &sending)
+                    zlink::msg_t *msg_)
 {
     // Forward a burst of messages
     for (unsigned int i = 0; i < zlink::proxy_burst_size; i++) {
@@ -103,10 +81,6 @@ static int forward (class zlink::socket_base_t *from_,
                 return -1;
             }
 
-            size_t nbytes = msg_->size ();
-            recving.count += 1;
-            recving.bytes += nbytes;
-
             const bool more = (msg_->flags () & zlink::msg_t::more) != 0;
 
             //  Copy message to capture socket if any
@@ -117,9 +91,6 @@ static int forward (class zlink::socket_base_t *from_,
             rc = to_->send (msg_, more ? ZLINK_SNDMORE : 0);
             if (unlikely (rc < 0))
                 return -1;
-            sending.count += 1;
-            sending.bytes += nbytes;
-
             if (more == 0)
                 break;
         }
@@ -128,80 +99,10 @@ static int forward (class zlink::socket_base_t *from_,
     return 0;
 }
 
-enum proxy_state_t
-{
-    active,
-    paused,
-    terminated
-};
-
-// Handle control request [5]PAUSE, [6]RESUME, [9]TERMINATE,
-// [10]STATISTICS.  Only STATISTICS results in a send.
-static int handle_control (class zlink::socket_base_t *control_,
-                           proxy_state_t &state,
-                           const stats_proxy &stats)
-{
-    zlink::msg_t cmsg;
-    int rc = cmsg.init ();
-    if (rc != 0) {
-        return -1;
-    }
-    rc = control_->recv (&cmsg, ZLINK_DONTWAIT);
-    if (rc < 0) {
-        return -1;
-    }
-    uint8_t *const command = static_cast<uint8_t *> (cmsg.data ());
-    const size_t msiz = cmsg.size ();
-
-    if (msiz == 10 && 0 == memcmp (command, "STATISTICS", 10)) {
-        // The stats are a cross product:
-        //
-        // (Front,Back) X (Recv,Sent) X (Number,Bytes).
-        //
-        // that is flattened into sequence of 8 message parts according to the
-        // zlink_proxy_steerable(3) documentation as:
-        //
-        // (frn, frb, fsn, fsb, brn, brb, bsn, bsb)
-        //
-        // f=front/b=back, r=recv/s=send, n=number/b=bytes.
-        const uint64_t stat_vals[8] = {stats.frontend.recv.count, stats.frontend.recv.bytes,
-                                       stats.frontend.send.count, stats.frontend.send.bytes,
-                                       stats.backend.recv.count,  stats.backend.recv.bytes,
-                                       stats.backend.send.count,  stats.backend.send.bytes};
-
-        for (size_t ind = 0; ind < 8; ++ind) {
-            cmsg.init_size (sizeof (uint64_t));
-            memcpy (cmsg.data (), stat_vals + ind, sizeof (uint64_t));
-            rc = control_->send (&cmsg, ind < 7 ? ZLINK_SNDMORE : 0);
-            if (unlikely (rc < 0)) {
-                return -1;
-            }
-        }
-        return 0;
-    }
-
-    if (msiz == 5 && memcmp (command, "\x05PAUSE", 6)) {
-        state = active;
-    } else if (msiz == 6 && 0 == memcmp (command, "RESUME", 6)) {
-        state = paused;
-    } else if (msiz == 9 && 0 == memcmp (command, "TERMINATE", 9)) {
-        state = terminated;
-    }
-
-    // satisfy REP duty and reply no matter what.
-    cmsg.init_size (0);
-    rc = control_->send (&cmsg, 0);
-    if (unlikely (rc < 0)) {
-        return -1;
-    }
-    return 0;
-}
-
 #ifdef ZLINK_HAVE_POLLER
-int zlink::proxy_steerable (class socket_base_t *frontend_,
-                            class socket_base_t *backend_,
-                            class socket_base_t *capture_,
-                            class socket_base_t *control_)
+int zlink::proxy (class socket_base_t *frontend_,
+                  class socket_base_t *backend_,
+                  class socket_base_t *capture_)
 {
     msg_t msg;
     int rc = msg.init ();
@@ -211,18 +112,13 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
     //  The algorithm below assumes ratio of requests and replies processed
     //  under full load to be 1:1.
 
-    //  Proxy can be in these three states
-    proxy_state_t state = active;
-
     bool frontend_equal_to_backend;
     bool frontend_in = false;
     bool frontend_out = false;
     bool backend_in = false;
     bool backend_out = false;
-    zlink::socket_poller_t::event_t events[4];
-    int nevents = 3; // increase to 4 if we have control_
-
-    stats_proxy stats = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}};
+    zlink::socket_poller_t::event_t events[3];
+    const int nevents = 2;
 
     //  Don't allocate these pollers from stack because they will take more than 900 kB of stack!
     //  On Windows this blows up default stack of 1 MB and aborts the program.
@@ -315,36 +211,9 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
         CHECK_RC_EXIT_ON_FAILURE ();
     }
 
-    if (control_) {
-        ++nevents;
-
-        // wherever you go, there you are.
-
-        rc = poller_all->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-
-        rc = poller_in->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-
-        rc = poller_receive_blocked->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-
-        rc = poller_send_blocked->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-
-        rc = poller_both_blocked->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-
-        rc = poller_frontend_only->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-
-        rc = poller_backend_only->add (control_, NULL, ZLINK_POLLIN);
-        CHECK_RC_EXIT_ON_FAILURE ();
-    }
-
     bool request_processed = false, reply_processed = false;
 
-    while (state != terminated) {
+    while (true) {
         //  Blocking wait initially only for 'ZLINK_POLLIN' - 'poller_wait' points to 'poller_in'.
         //  If one of receiving end's queue is full ('ZLINK_POLLOUT' not available),
         //  'poller_wait' is pointed to 'poller_receive_blocked', 'poller_send_blocked' or 'poller_both_blocked'.
@@ -361,12 +230,6 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
 
         //  Process events.
         for (int i = 0; i < rc; i++) {
-            if (control_ && events[i].socket == control_) {
-                rc = handle_control (control_, state, stats);
-                CHECK_RC_EXIT_ON_FAILURE ();
-                continue;
-            }
-
             if (events[i].socket == frontend_) {
                 frontend_in = (events[i].events & ZLINK_POLLIN) != 0;
                 frontend_out = (events[i].events & ZLINK_POLLOUT) != 0;
@@ -379,32 +242,29 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
                 }
         }
 
-        if (state == active) {
-            //  Process a request, 'ZLINK_POLLIN' on 'frontend_' and 'ZLINK_POLLOUT' on 'backend_'.
-            //  In case of frontend_==backend_ there's no 'ZLINK_POLLOUT' event.
-            if (frontend_in && (backend_out || frontend_equal_to_backend)) {
-                rc = forward (frontend_, backend_, capture_, &msg, stats.frontend.recv,
-                              stats.backend.send);
-                CHECK_RC_EXIT_ON_FAILURE ();
-                request_processed = true;
-                frontend_in = backend_out = false;
-            } else
-                request_processed = false;
+        //  Process a request, 'ZLINK_POLLIN' on 'frontend_' and 'ZLINK_POLLOUT' on 'backend_'.
+        //  In case of frontend_==backend_ there's no 'ZLINK_POLLOUT' event.
+        if (frontend_in && (backend_out || frontend_equal_to_backend)) {
+            rc = forward (frontend_, backend_, capture_, &msg);
+            CHECK_RC_EXIT_ON_FAILURE ();
+            request_processed = true;
+            frontend_in = backend_out = false;
+        } else
+            request_processed = false;
 
-            //  Process a reply, 'ZLINK_POLLIN' on 'backend_' and 'ZLINK_POLLOUT' on 'frontend_'.
-            //  If 'frontend_' and 'backend_' are the same this is not needed because previous processing
-            //  covers all of the cases. 'backend_in' is always false if frontend_==backend_ due to
-            //  design in 'for' event processing loop.
-            if (backend_in && frontend_out) {
-                rc = forward (backend_, frontend_, capture_, &msg, stats.backend.recv,
-                              stats.frontend.send);
-                CHECK_RC_EXIT_ON_FAILURE ();
-                reply_processed = true;
-                backend_in = frontend_out = false;
-            } else
-                reply_processed = false;
+        //  Process a reply, 'ZLINK_POLLIN' on 'backend_' and 'ZLINK_POLLOUT' on 'frontend_'.
+        //  If 'frontend_' and 'backend_' are the same this is not needed because previous processing
+        //  covers all of the cases. 'backend_in' is always false if frontend_==backend_ due to
+        //  design in 'for' event processing loop.
+        if (backend_in && frontend_out) {
+            rc = forward (backend_, frontend_, capture_, &msg);
+            CHECK_RC_EXIT_ON_FAILURE ();
+            reply_processed = true;
+            backend_in = frontend_out = false;
+        } else
+            reply_processed = false;
 
-            if (request_processed || reply_processed) {
+        if (request_processed || reply_processed) {
                 //  If request/reply is processed that means we had at least one 'ZLINK_POLLOUT' event.
                 //  Enable corresponding 'ZLINK_POLLIN' for blocking wait if any was disabled.
                 if (poller_wait != poller_in) {
@@ -423,7 +283,7 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
                             poller_wait = poller_in;
                     }
                 }
-            } else {
+        } else {
                 //  No requests have been processed, there were no 'ZLINK_POLLIN' with corresponding 'ZLINK_POLLOUT' events.
                 //  That means that out queue(s) is/are full or one out queue is full and second one has no messages to process.
                 //  Disable receiving 'ZLINK_POLLIN' for sockets for which there's no 'ZLINK_POLLOUT',
@@ -455,19 +315,15 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
                             poller_wait = poller_send_blocked;
                     }
                 }
-            }
         }
     }
-    PROXY_CLEANUP ();
-    return close_and_return (&msg, 0);
 }
 
 #else //  ZLINK_HAVE_POLLER
 
-int zlink::proxy_steerable (class socket_base_t *frontend_,
-                            class socket_base_t *backend_,
-                            class socket_base_t *capture_,
-                            class socket_base_t *control_)
+int zlink::proxy (class socket_base_t *frontend_,
+                  class socket_base_t *backend_,
+                  class socket_base_t *capture_)
 {
     msg_t msg;
     int rc = msg.init ();
@@ -478,29 +334,16 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
     //  under full load to be 1:1.
 
     zlink_pollitem_t items[] = {{frontend_, 0, ZLINK_POLLIN, 0},
-                                {backend_, 0, ZLINK_POLLIN, 0},
-                                {control_, 0, ZLINK_POLLIN, 0}};
-    const int qt_poll_items = control_ ? 3 : 2;
+                                {backend_, 0, ZLINK_POLLIN, 0}};
 
     zlink_pollitem_t itemsout[] = {{frontend_, 0, ZLINK_POLLOUT, 0},
                                    {backend_, 0, ZLINK_POLLOUT, 0}};
 
-    stats_proxy stats = {0};
-
-    //  Proxy can be in these three states
-    proxy_state_t state = active;
-
-    while (state != terminated) {
+    while (true) {
         //  Wait while there are either requests or replies to process.
-        rc = zlink_poll (&items[0], qt_poll_items, -1, NULL);
+        rc = zlink_poll (&items[0], 2, -1, NULL);
         if (unlikely (rc < 0))
             return close_and_return (&msg, -1);
-
-        if (control_ && items[2].revents & ZLINK_POLLIN) {
-            rc = handle_control (control_, state, stats);
-            if (unlikely (rc < 0))
-                return close_and_return (&msg, -1);
-        }
 
         //  Get the pollout separately because when combining this with pollin it maxes the CPU
         //  because pollout shall most of the time return directly.
@@ -512,24 +355,20 @@ int zlink::proxy_steerable (class socket_base_t *frontend_,
             }
         }
 
-        if (state == active && items[0].revents & ZLINK_POLLIN
+        if (items[0].revents & ZLINK_POLLIN
             && (frontend_ == backend_ || itemsout[1].revents & ZLINK_POLLOUT)) {
-            rc = forward (frontend_, backend_, capture_, &msg, stats.frontend.recv,
-                          stats.backend.send);
+            rc = forward (frontend_, backend_, capture_, &msg);
             if (unlikely (rc < 0))
                 return close_and_return (&msg, -1);
         }
         //  Process a reply
-        if (state == active && frontend_ != backend_ && items[1].revents & ZLINK_POLLIN
+        if (frontend_ != backend_ && items[1].revents & ZLINK_POLLIN
             && itemsout[0].revents & ZLINK_POLLOUT) {
-            rc = forward (backend_, frontend_, capture_, &msg, stats.backend.recv,
-                          stats.frontend.send);
+            rc = forward (backend_, frontend_, capture_, &msg);
             if (unlikely (rc < 0))
                 return close_and_return (&msg, -1);
         }
     }
-
-    return close_and_return (&msg, 0);
 }
 
 #endif //  ZLINK_HAVE_POLLER
