@@ -135,6 +135,7 @@ def update_framework_node_lock(source: str, version: str) -> str:
 
 def synchronize(write: bool) -> tuple[str, list[Path]]:
     major, minor, patch, version = repository_version()
+    version_path = f"{major}_{minor}_{patch}"
     sync = Synchronizer(write)
 
     sync.regex(
@@ -142,6 +143,60 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         rf"project\(zlink VERSION {SEMVER} LANGUAGES C CXX\)",
         f"project(zlink VERSION {version} LANGUAGES C CXX)",
         1,
+    )
+    sync.regex(
+        "core/packaging/debian/changelog",
+        rf"(?m)^zlink \({SEMVER}-0\.1\)",
+        f"zlink ({version}-0.1)",
+        1,
+    )
+    sync.regex(
+        "core/packaging/debian/changelog",
+        rf"Package the zlink {SEMVER} public ABI\.",
+        f"Package the zlink {version} public ABI.",
+        1,
+    )
+    sync.regex(
+        "core/packaging/debian/zlink.dsc",
+        rf"(?m)^Version: {SEMVER}-0\.1$",
+        f"Version: {version}-0.1",
+        1,
+    )
+    sync.regex(
+        "core/packaging/redhat/zlink.spec",
+        rf"(?m)^Version:\s+{SEMVER}$",
+        f"Version:       {version}",
+        1,
+    )
+    sync.regex(
+        "core/packaging/nuget/package.config",
+        rf'(version\s*=\s*"){SEMVER}(")',
+        rf"\g<1>{version}\2",
+        1,
+    )
+    sync.regex(
+        "core/packaging/nuget/package.config",
+        r'(pathversion=")[0-9]+_[0-9]+_[0-9]+(")',
+        rf"\g<1>{version_path}\2",
+        1,
+    )
+    sync.regex(
+        "core/packaging/nuget/package.nuspec",
+        rf"(<version>){SEMVER}(</version>)",
+        rf"\g<1>{version}\2",
+        1,
+    )
+    sync.regex(
+        "core/packaging/nuget/package.nuspec",
+        r"[0-9]+_[0-9]+_[0-9]+",
+        version_path,
+        24,
+    )
+    sync.regex(
+        "core/packaging/nuget/package.targets",
+        r"[0-9]+_[0-9]+_[0-9]+",
+        version_path,
+        20,
     )
     for relative in (
         "core/include/zlink.h",

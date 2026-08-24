@@ -5,12 +5,12 @@
 # zlink_cpp version.
 zlink_cpp_sample_prepare_build() {
   local cpp_root="$1"
-  # All C++ tests and samples share the framework build tree. The package
-  # versions and dependency prefixes are fixed by that tree's cache so a
-  # sample cannot silently create or select a second build provenance.
+  # All C++ tests and samples share the framework build tree. Reapply the
+  # canonical package versions before each sample build so a stale cache
+  # cannot silently select a second build provenance.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
-  local cpp_version="0.13.0"
-  local core_version="0.13.0"
+  local cpp_version="0.13.1"
+  local core_version="0.13.1"
   local dependency_prefix=""
   local toolchain_file=""
   local build_type="Release"
@@ -25,18 +25,6 @@ zlink_cpp_sample_prepare_build() {
       "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
     if [[ -n "$cached_build_type" ]]; then
       build_type="$cached_build_type"
-    fi
-    local cached_cpp_version
-    cached_cpp_version="$(sed -n 's/^ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION:[^=]*=//p' \
-      "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
-    if [[ -n "$cached_cpp_version" ]]; then
-      cpp_version="$cached_cpp_version"
-    fi
-    local cached_core_version
-    cached_core_version="$(sed -n 's/^ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION:[^=]*=//p' \
-      "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
-    if [[ -n "$cached_core_version" ]]; then
-      core_version="$cached_core_version"
     fi
   fi
 
@@ -63,7 +51,15 @@ zlink_cpp_sample_prepare_build() {
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=$toolchain_file")
   fi
 
-  cmake "${cmake_args[@]}" >/dev/null
+  # The package prefixes and find-package directories are derived cache
+  # entries. Drop them when applying the canonical package versions so an
+  # existing build tree cannot keep resolving an older zlink_cpp/Core pair.
+  cmake \
+    -U ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX \
+    -U ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX \
+    -U zlink_cpp_DIR \
+    -U zlink_DIR \
+    "${cmake_args[@]}" >/dev/null
   BIN_DIR="$BUILD_DIR"
   if [[ ! -x "$BIN_DIR/sample_cpp_framework_tictactoe_play" \
     && -d "$BIN_DIR/linux-ninja-debug" ]]; then

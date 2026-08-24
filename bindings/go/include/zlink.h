@@ -7,7 +7,7 @@
     zlink.h directly do not need to parse nested public headers. */
 #define ZLINK_VERSION_MAJOR 0
 #define ZLINK_VERSION_MINOR 13
-#define ZLINK_VERSION_PATCH 0
+#define ZLINK_VERSION_PATCH 1
 
 #define ZLINK_MAKE_VERSION(major, minor, patch) ((major) * 10000 + (minor) * 100 + (patch))
 #define ZLINK_VERSION                                                                              \

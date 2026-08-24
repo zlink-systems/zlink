@@ -312,10 +312,10 @@ int recv_router_message_direct (socket_handle_t handle_,
       receive_terminal_direct
         ? *reinterpret_cast<zlink::msg_t *> (terminal_part_out_)
         : current_storage;
-    zlink_routing_id_t source_rid_storage;
+    router_recv_metadata_tls_t &metadata = router_recv_metadata_tls ();
     zlink_routing_id_t *const source_rid =
       terminal_source_storage_ ? terminal_source_storage_
-                               : &source_rid_storage;
+                               : &metadata.source_rid;
     memset (source_rid, 0, sizeof (*source_rid));
     zlink::pipe_t *source_pipe = NULL;
     const int first_recv_rc = handle_.socket->recv_routed (
@@ -324,7 +324,6 @@ int recv_router_message_direct (socket_handle_t handle_,
         return -1;
     }
 
-    router_recv_metadata_tls_t &metadata = router_recv_metadata_tls ();
     metadata.transport_pair_id = source_pipe ? source_pipe->get_transport_pair_id () : 0;
     metadata.transport_pair_generation =
       source_pipe ? source_pipe->get_transport_pair_generation () : 0;
