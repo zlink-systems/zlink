@@ -46,7 +46,9 @@ foreach(test ${unittests})
 
   # per-test directories not generated on OS X / Darwin
   if(NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang.*")
-    link_directories(${test} PRIVATE "${Zlink_SOURCE_DIR}/../lib")
+    set_property(
+      TARGET ${test} APPEND PROPERTY LINK_DIRECTORIES
+      "${Zlink_SOURCE_DIR}/../lib")
   endif()
 
   target_link_libraries(${test} testutil-static)

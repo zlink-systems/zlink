@@ -328,7 +328,9 @@ foreach(test_source ${tests})
   else()
     # per-test directories not generated on OS X / Darwin
     if(NOT APPLE)
-      link_directories(${test} PRIVATE "${Zlink_SOURCE_DIR}/../lib")
+      set_property(
+        TARGET ${test} APPEND PROPERTY LINK_DIRECTORIES
+        "${Zlink_SOURCE_DIR}/../lib")
     endif()
   endif()
 
