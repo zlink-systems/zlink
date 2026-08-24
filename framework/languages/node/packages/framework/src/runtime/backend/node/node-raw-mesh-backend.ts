@@ -90,9 +90,10 @@ import type {
   ServiceChannelDescriptor,
   ServiceNodeDescriptor
 } from '../../foundation/service-topology-registry';
-import type {
-  RoutingId
-} from '../../../contracts';
+import type { RoutingId } from '../../../contracts';
+import { buildAdvertisedEndpoint } from '../../../contracts/Configuration/EndpointNotation';
+import { ZLinkConfigurationException } from
+  '../../../contracts/Configuration/ConfigurationException';
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendActorSessionSendFence,
@@ -161,6 +162,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private readonly routingId: string;
   private readonly lifecycleGeneration: bigint;
   private bindEndpoint?: string;
+  private advertiseHost?: string;
   private runtime?: RawServiceMeshRuntime;
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
@@ -340,6 +342,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.bindEndpoint = endpoint;
   }
 
+  setAdvertiseHost(host: string): void {
+    this.requireNotStarted();
+    if (host.length === 0) throw new TypeError('MeshNode advertise host must be non-empty.');
+    this.advertiseHost = host;
+  }
+
   start(): void {
     if (this.runtime !== undefined) return;
     if (this.closed) throw new Error('MeshNode is closed.');
@@ -347,6 +355,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const descriptor = this.createDescriptor();
     const runtime = new RawServiceMeshRuntime({
       descriptor,
+      resolveAdvertisedEndpoint: boundEndpoint =>
+        this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
       applicationJobQueue: this.requireApplicationJobQueue(),
       onMailboxReady: (domain) => this.readyHandler?.(
@@ -1464,6 +1474,16 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       activeCapacityUsed: 0,
       pendingCapacityUsed: 0
     };
+  }
+
+  private resolveAdvertisedEndpoint(boundEndpoint: string): string {
+    const result = buildAdvertisedEndpoint(boundEndpoint, this.advertiseHost, 'tcp');
+    if (result === undefined) {
+      throw new ZLinkConfigurationException(
+        `RouteMesh advertise host requires a TCP endpoint, received '${boundEndpoint}'.`
+      );
+    }
+    return result;
   }
 
   private schedulePoll(delayMs = MESH_BACKEND_IDLE_POLL_INTERVAL_MS): void {

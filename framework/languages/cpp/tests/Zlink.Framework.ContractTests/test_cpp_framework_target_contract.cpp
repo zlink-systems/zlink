@@ -931,15 +931,15 @@ int main ()
                       "legacy diagnostics level remains public: " + forbidden);
     }
 
-    /* CPP-G0-METRIC-001 — raw runtime event and metric DTOs stay private. */
+    /* CPP-G0-METRIC-001 — generic raw events and metric DTOs stay private. */
     gate.require (
       !std::filesystem::exists (
         include_root / "zlink/framework/contracts/eventing/events.hpp"),
       "CPP-G0-METRIC-001",
       "raw event contract header is still public");
     for (const std::string forbidden : {
-           "monitoring_builder_t", "metrics_builder_t",
-           "metric_event_payload_t", "socket_event_payload_t"}) {
+           "metrics_builder_t", "metric_event_payload_t",
+           "socket_event_payload_t"}) {
         gate.require (
           !tree_contains (include_root, forbidden),
           "CPP-G0-METRIC-001",
@@ -1215,18 +1215,18 @@ int main ()
         : mesh_node_runtime.substr (
             source_finalizer_begin, source_finalizer_end - source_finalizer_begin);
     const auto source_fence = source_finalizer.find (
-      "const auto source=runtime::protocol::actor_route_fence_t{");
+      "const auto source =\n      runtime::protocol::actor_route_fence_t{");
     const auto target_fence = source_finalizer.find (
-      "const auto target=runtime::protocol::actor_route_fence_t{");
+      "const auto target = runtime::protocol::actor_route_fence_t{");
     const auto source_follow_publish = source_finalizer.find (
-      "co_await spot.complete_remote_actor_transfer(");
+      "co_await spot.complete_remote_actor_transfer (");
     const auto source_join_completion = source_finalizer.find (
       "co_return result_t<actor_join_reply_t>::success (", source_follow_publish);
     const auto duplicate_source_follow_publish =
       source_follow_publish == std::string::npos
         ? std::string::npos
         : source_finalizer.find (
-            "co_await spot.complete_remote_actor_transfer(",
+            "co_await spot.complete_remote_actor_transfer (",
             source_follow_publish + 1);
     const auto duplicate_target_finalize =
       target_finalize == std::string::npos
@@ -2203,12 +2203,16 @@ int main ()
              "pending.completion->complete (result)")
              != std::string::npos
         && actor_gateway_runtime.find (
-             "[state, actor_id, pending = std::move (pending), dispatched,\n"
-             "               continue_gate]")
+             "[state, actor_id, pending = std::move (pending), dispatched,")
              != std::string::npos
         && actor_gateway_runtime.find (
-             "payload, relay_source = std::move (relay_source)] () mutable -> task_t<void> {\n"
-             "          const auto dispatched = co_await dispatcher (")
+             "continue_gate] (const result_t<void> &result) mutable {")
+             != std::string::npos
+        && actor_gateway_runtime.find (
+             "relay_source = std::move (relay_source)] () mutable -> task_t<void> {")
+             != std::string::npos
+        && actor_gateway_runtime.find (
+             "const auto dispatched = co_await dispatcher (")
              != std::string::npos
         && actor_gateway_unit.find (
              "if (!first.result () || !second.result () || !independent.result ())")

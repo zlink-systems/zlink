@@ -1327,6 +1327,24 @@ int main ()
         return 15;
     }
 
+    auto push_codec_stream = runtime.open_session ("client-stream");
+    sample_session_t push_codec_session;
+    if (!runtime.dispatch_packet (
+          push_codec_session, push_codec_stream, request_header,
+          zlink::message_t::from (std::string ("codec-selection")))) {
+        return 292;
+    }
+    push_codec_stream
+      .write_packet (zlink::message_t::from (std::string ("json-push")))
+      .packet_name ("JsonPush")
+      .submit ().result ().value ();
+    const auto push_codec_headers = runtime.written_headers (push_codec_stream);
+    if (push_codec_headers.size () != 2
+        || push_codec_headers.back ().kind () != stream_message_kind_t::send
+        || push_codec_headers.back ().codec () != stream_codec_t::json) {
+        return 293;
+    }
+
     auto duplicate_reply_stream = runtime.open_session ("client-stream");
     duplicate_reply_session_t duplicate_reply_session;
     if (!runtime.dispatch_packet (

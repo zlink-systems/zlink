@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Timers;
 
@@ -437,8 +438,11 @@ internal sealed partial class ZLinkEntrySpotActivation :
         ZLinkSpotActorLifecycleDescriptor descriptor,
         IZLinkActor actor,
         ZLinkMessage? request,
+        bool acquireActorTurn,
         CancellationToken cancellationToken)
     {
+        var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
+        var actorTurnAlreadyOwned = !acquireActorTurn || actorState.OwnsCurrentDispatch;
         await ExecuteAsync(
             static async (activation, state, ct) =>
             {
@@ -447,15 +451,58 @@ internal sealed partial class ZLinkEntrySpotActivation :
                     null,
                     activation._runtime.Flow.CaptureEnabled,
                     ZLinkFlowOrigin.Lifecycle);
-                await activation._invoker.InvokeActorLifecycleAsync(
-                        state.Descriptor,
-                        state.Actor,
-                        state.Request,
+                if (state.ActorTurnAlreadyOwned)
+                {
+                    await InvokeActorLifecycleOnOwnedTurnAsync(
+                            activation,
+                            state.ActorState,
+                            state.Descriptor,
+                            state.Actor,
+                            state.Request,
+                            ct)
+                        .ConfigureAwait(false);
+                    return;
+                }
+
+                // Entry Spot lifecycle callbacks execute on the Spot's serial
+                // lane, outside the Actor mailbox. Make that callback an Actor
+                // lifecycle turn so destroy closes admission behind it and
+                // native terminal cleanup starts only after it returns.
+                await state.ActorState.ExecuteLifecycleAsync(
+                        token => InvokeActorLifecycleOnOwnedTurnAsync(
+                            activation,
+                            state.ActorState,
+                            state.Descriptor,
+                            state.Actor,
+                            state.Request,
+                            token),
                         ct)
                     .ConfigureAwait(false);
             },
-            (Descriptor: descriptor, Actor: actor, Request: request),
+            (
+                Descriptor: descriptor,
+                Actor: actor,
+                Request: request,
+                ActorState: actorState,
+                ActorTurnAlreadyOwned: actorTurnAlreadyOwned),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask InvokeActorLifecycleOnOwnedTurnAsync(
+        ZLinkEntrySpotActivation activation,
+        ZLinkActorRuntimeState actorState,
+        ZLinkSpotActorLifecycleDescriptor descriptor,
+        IZLinkActor actor,
+        ZLinkMessage? request,
+        CancellationToken cancellationToken)
+    {
+        using var dispatch = actorState.EnterDeferredJoinExecution();
+        await activation._invoker.InvokeActorLifecycleAsync(
+                descriptor,
+                actor,
+                request,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async ValueTask<ZLinkActorCreateResponse> InvokeActorCreateAsync(

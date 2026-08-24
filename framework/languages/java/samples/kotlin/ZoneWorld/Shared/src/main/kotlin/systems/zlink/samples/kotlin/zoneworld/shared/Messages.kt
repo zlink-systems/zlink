@@ -11,8 +11,8 @@ object Messages {
         val playerCount: Int,
     )
 
-    data class JoinWorldReq(val playerId: String)
-    data class JoinWorldRes(val playerId: String, val zoneId: String, val x: Int, val y: Int, val error: String? = null)
+    data class JoinWorldMsg(val playerId: String)
+    data class JoinWorldNotify(val playerId: String, val zoneId: String, val x: Int, val y: Int, val error: String? = null)
     data class MoveMsg(val x: Int, val y: Int)
     data class ZoneStateNotify(val zoneId: String, val tick: Long, val players: List<PlayerView>)
     data class ZoneChangedNotify(val playerId: String, val zoneId: String)
@@ -21,6 +21,15 @@ object Messages {
 
     class WatchNodesReq
     data class WatchNodesRes(val nodes: List<NodeView>)
+    data class NodeStatusNotify(
+        val nodeId: String,
+        val registered: Boolean,
+        val connected: Boolean,
+        val maintenance: Boolean,
+        val zones: List<String>,
+        val playerCount: Int,
+    )
+    data class NodeAlertNotify(val nodeId: String, val kind: String, val detail: String, val occurredAt: String)
     data class AnnounceWorldReq(val text: String)
     data class AnnounceWorldRes(val announcementId: String)
     data class SetMaintenanceReq(val nodeId: String, val enabled: Boolean)
@@ -31,6 +40,28 @@ object Messages {
         val zones: List<String>,
         val playerCount: Int,
         val maintenance: Boolean,
+        val error: String? = null,
+    )
+    class RelocationPairReq
+    data class RelocationPairRes(
+        val sourceZoneId: String,
+        val targetZoneId: String,
+        val sourceOwnerNodeRid: String,
+        val targetOwnerNodeRid: String,
+        val error: String? = null,
+    )
+    data class ActorLocationProbeReq(val actorId: String)
+    data class ActorLocationProbeRes(
+        val actorId: String,
+        val objectGeneration: Long,
+        val ownerNodeRid: String,
+        val error: String? = null,
+    )
+    data class FreshActorProbeReq(val actorId: String)
+    data class FreshActorProbeRes(
+        val actorId: String,
+        val objectGeneration: Long,
+        val ownerNodeRid: String,
         val error: String? = null,
     )
 
@@ -49,9 +80,17 @@ object Messages {
         val y: Int,
         val isBot: Boolean,
         val initialEntry: Boolean,
-        val fromNodeId: String,
+        val fromZoneId: String,
+        val crashBoundaryProbe: Boolean,
     )
     data class EnterZoneRes(val zoneId: String, val error: String? = null)
     data class UpdatePositionMsg(val playerId: String, val x: Int, val y: Int, val isBot: Boolean)
     data class DeliverZoneStateMsg(val zoneId: String, val tick: Long, val players: List<PlayerView>)
+    data class DeliverZoneChangedMsg(val playerId: String, val zoneId: String)
+    data class DeliverWorldAnnounceMsg(val announcementId: String, val text: String)
+    data class MessageFollowProbeReq(val actorId: String, val probeId: String, val payload: ByteArray)
+    data class MessageFollowProbeRes(val probeId: String, val payload: ByteArray)
+    data class MessageFollowProbeMsg(val actorId: String, val probeId: String, val payload: ByteArray)
+    data class CrashRelocationProbeMsg(val x: Int, val y: Int)
+    data class CrashRelocationProbeRes(val error: String? = null)
 }

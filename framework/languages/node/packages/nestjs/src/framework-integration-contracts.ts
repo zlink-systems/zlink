@@ -12,7 +12,7 @@ import type {
   ZLinkLocationOptionValues,
   ZLinkLocationStore,
   ZLinkRelocationStore,
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode,
   ZLinkInstanceSpot,
   ZLinkMessageSerializer,
@@ -302,7 +302,7 @@ export interface ZLinkActorFactoryConfiguration {}
 export interface ZLinkUserSpotFactoryConfiguration {
   readonly stableTypeLimit?: number;
   readonly executionMode: ZLinkUserSpotExecutionMode;
-  readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
+  readonly relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode;
 }
 
 export interface ZLinkInstanceSpotFactoryConfiguration {

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/configuration/logging.hpp>
+#include <zlink/framework/contracts/monitoring/spot_events.hpp>
 #include <zlink/framework/contracts/locations/diagnostics.hpp>
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/timers/timer.hpp>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,12 +26,6 @@ enum class socket_event_kind_t
     disconnected,
     handshake_failed,
     closed
-};
-
-enum class spot_event_kind_t
-{
-    timer_handler_failed,
-    timer_stopped_after_unhandled_exception
 };
 
 enum class stream_event_kind_t
@@ -114,13 +110,19 @@ struct drain_event_t
 class monitoring_runtime_state_t
 {
   public:
+    mutable std::mutex mutex;
     logger_t<> diagnostics_logger;
+    std::vector<std::string> spot_sources;
+    std::vector<spot_event_handler_t> spot_handlers;
 };
 
 class monitoring_runtime_t
 {
   public:
     explicit monitoring_runtime_t (std::shared_ptr<monitoring_runtime_state_t> state);
+
+    static monitoring_runtime_t from (
+      const monitoring_builder_t &builder);
 
     const std::shared_ptr<monitoring_runtime_state_t> &state () const noexcept { return _state; }
 

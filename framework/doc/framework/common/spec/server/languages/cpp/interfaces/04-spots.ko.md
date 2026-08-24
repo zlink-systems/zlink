@@ -36,8 +36,8 @@ class user_spot_factory_builder_t {
 public:
     user_spot_factory_builder_t &set_stable_type_limit(std::int32_t limit);
     user_spot_factory_builder_t &set_execution_mode(user_spot_execution_mode_t mode);
-    user_spot_factory_builder_t &set_relocation_readiness(
-      spot_relocation_readiness_mode_t mode);
+    user_spot_factory_builder_t &set_relocation_coordination_mode(
+      spot_relocation_coordination_mode_t mode);
     void disable_relocation();
     void recreate_on_relocation();
     template <typename TAdapter>
@@ -722,7 +722,7 @@ relocation을 취소하거나 rollback하지 않는다.
 virtual 구현은 no-op이다. Callback 완료 전에는 보류한 application message와 timer를
 실행하지 않는다.
 
-기본 `any_turn_boundary`, `per_actor`, Entry·Instance Spot, Spot turn 밖과 같은 turn의
+기본 `framework_managed`, `per_actor`, Entry·Instance Spot, Spot turn 밖과 같은 turn의
 중복 `defer()`는 queue mutation 전에 `invalid_operation`으로 실패한다.
 `defer()` 뒤 같은 turn의 다른 Framework operation도 같은 오류다. Recovery에서
 callback이 다시 실행될 수 있으므로 override는 retry-safe해야 한다.

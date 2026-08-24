@@ -19,13 +19,16 @@ function createGatewayModule() {
         if (gateway === undefined) throw new Error('Gateway configuration is required.');
         const builder = zlinkFramework();
         builder.addLocationStore(createZoneWorldLocationStore(config.shared));
-        zoneWorldLocationOptions(builder.configureLocations());
+        zoneWorldLocationOptions(builder.configureLocations(), config.shared);
         builder.configureDispatch()
           .messageFlow('normal');
         const zoneMesh = builder
           .addRouteMesh(ZoneWorldNames.zoneMesh)
-            .setRoutingIdPrefix('gw0')
-            .listen(gateway.spotRouterEndpoint);
+            .setRoutingIdPrefix('gw0');
+        if (gateway.spotRouterAdvertiseHost !== undefined) {
+          zoneMesh.setAdvertiseHost(gateway.spotRouterAdvertiseHost);
+        }
+        zoneMesh.listen(gateway.spotRouterEndpoint);
         zoneMesh.channel(ZoneWorldNames.zoneMesh).client();
         zoneMesh.channel(ZoneWorldNames.bridgeMesh).client();
         zoneMesh.objects().client();

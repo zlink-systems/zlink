@@ -40,7 +40,7 @@ import type {
   ZLinkUserSpotFactoryConfiguration
 } from './framework-integration-contracts';
 import {
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode,
   ZLinkUnhandledDispatchAction
 } from '@zlink-systems/framework';
@@ -914,7 +914,7 @@ class DefaultZLinkNestUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
   implements ZLinkUserSpotFactoryBuilder<TSpot> {
   private stableTypeLimitValue: number | undefined;
   private executionModeValue = ZLinkUserSpotExecutionMode.SpotWide;
-  private relocationReadinessValue = ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
+  private relocationCoordinationModeValue = ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
 
   stableTypeLimit(limit: number): this {
     this.assertMutable();
@@ -929,9 +929,9 @@ class DefaultZLinkNestUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
     return this;
   }
 
-  relocationReadiness(mode: ZLinkSpotRelocationReadinessMode): this {
+  relocationCoordinationMode(mode: ZLinkSpotRelocationCoordinationMode): this {
     this.assertMutable();
-    this.relocationReadinessValue = mode;
+    this.relocationCoordinationModeValue = mode;
     return this;
   }
 
@@ -957,7 +957,7 @@ class DefaultZLinkNestUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
     const options = {
       stableTypeLimit: this.stableTypeLimitValue,
       executionMode: this.executionModeValue,
-      relocationReadiness: this.relocationReadinessValue
+      relocationCoordinationMode: this.relocationCoordinationModeValue
     };
     validateUserSpotFactoryConfiguration(options);
     if (
@@ -1159,7 +1159,7 @@ function validateUserSpotFactoryConfiguration(
 ): void {
   validateStableTypeLimit(options.stableTypeLimit);
   const executionMode: unknown = options.executionMode;
-  const relocationReadiness: unknown = options.relocationReadiness;
+  const relocationCoordinationMode: unknown = options.relocationCoordinationMode;
   if (
     executionMode !== ZLinkUserSpotExecutionMode.SpotWide
     && executionMode !== ZLinkUserSpotExecutionMode.PerActor
@@ -1169,19 +1169,19 @@ function validateUserSpotFactoryConfiguration(
     );
   }
   if (
-    relocationReadiness !== ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
-    && relocationReadiness !== ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+    && relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
   ) {
     throw new framework.ZLinkConfigurationException(
-      'User Spot relocationReadiness is invalid.'
+      'User Spot relocationCoordinationMode is invalid.'
     );
   }
   if (
     options.executionMode === ZLinkUserSpotExecutionMode.PerActor
-    && options.relocationReadiness === ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    && options.relocationCoordinationMode === ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
   ) {
     throw new framework.ZLinkConfigurationException(
-      'ApplicationSignaled relocation readiness is valid only for SpotWide User Spots.'
+      'ApplicationSignaled relocation coordination mode is valid only for SpotWide User Spots.'
     );
   }
 }

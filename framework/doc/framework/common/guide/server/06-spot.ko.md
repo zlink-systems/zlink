@@ -2243,7 +2243,7 @@ Framework는 source에서 새 turn 수락을 닫고, adapter의 `Capture`로 app
 
 | 모드 | safe point 결정 주체 | 적용 대상 |
 | --- | --- | --- |
-| `AnyTurnBoundary`(기본) | Framework — 완료된 turn과 다음 turn 사이 | 대부분의 Spot |
+| `FrameworkManaged`(기본) | Framework — 완료된 turn과 다음 turn 사이 | 대부분의 Spot |
 | `ApplicationSignaled` | Application — `Defer()`를 호출한 turn의 끝 | 상태 일관성 단위가 여러 turn에 걸치는 Spot |
 
 **기본 모드가 성립하는 조건.** Framework는 실행 중인 turn을 중단하지 않는다. handler 하나와
@@ -2265,8 +2265,8 @@ Framework는 turn 경계는 알지만 application이 정의한 일관성 단위�
             "game-room",
             factory => factory
                 .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide) // 이 모드에서만 쓸 수 있다.
-                .RelocationReadiness(
-                    ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+                .RelocationCoordinationMode(
+                    ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
                 .PreserveStateWith<GameRoomRelocationAdapter>());
     ```
 
@@ -2280,7 +2280,7 @@ Framework는 turn 경계는 알지만 application이 정의한 일관성 단위�
         [] (auto &factory) {
             // 이 모드에서만 쓸 수 있다.
             factory.execution_mode (user_spot_execution_mode_t::spot_wide);
-            factory.relocation_readiness (spot_relocation_readiness_mode_t::application_signaled);
+            factory.set_relocation_coordination_mode (spot_relocation_coordination_mode_t::application_signaled);
             factory.template preserve_state_with<game_room_relocation_adapter_t> ();
         });
     ```
@@ -2295,7 +2295,7 @@ Framework는 turn 경계는 알지만 application이 정의한 일관성 단위�
             factory -> factory
                 // 이 모드에서만 쓸 수 있다.
                 .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                .relocationReadiness(ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED)
+                .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED)
                 .preserveStateWith(GameRoomRelocationAdapter.class));
     ```
 
@@ -2307,7 +2307,7 @@ Framework는 turn 경계는 알지만 application이 정의한 일관성 단위�
             factory
                 // 이 모드에서만 쓸 수 있다.
                 .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                .relocationReadiness(ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED)
+                .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED)
                 .preserveStateWith(GameRoomRelocationAdapter::class.java)
         }
     ```
@@ -2319,7 +2319,7 @@ Framework는 turn 경계는 알지만 application이 정의한 일관성 단위�
       .addSpotFactory('game-room', GameRoom, (factory) => factory
         // 이 모드에서만 쓸 수 있다.
         .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
-        .relocationReadiness(ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+        .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
         .preserveStateWith(GameRoomRelocationAdapter));
     ```
 
@@ -2479,7 +2479,7 @@ callback은 **두 경우 모두** 호출되므로, 다음 라운드를 여는 �
   operation(send, request, close 등)을 시작하면 오류다.
 - **한 turn에 한 번만 호출한다.** 같은 turn에서 두 번째 `Defer()`는 오류다.
 - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
-  `AnyTurnBoundary` 모드에서는 호출할 수 없다.
+  `FrameworkManaged` 모드에서는 호출할 수 없다.
 
 ## 8. 관련 문서
 

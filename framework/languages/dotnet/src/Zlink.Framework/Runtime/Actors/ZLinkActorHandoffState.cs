@@ -182,8 +182,7 @@ internal sealed class ZLinkActorHandoffState(
             or ZLinkActorTargetHandoffPhase.NotifyingJoined
             or ZLinkActorTargetHandoffPhase.Prepared
             or ZLinkActorTargetHandoffPhase.Replaying
-            or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-        || _targetPhase == ZLinkActorTargetHandoffPhase.Completed;
+            or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
 
     public IReadOnlyList<ZLinkActorHandoffFrame> EndDeferredJoinCapture()
     {

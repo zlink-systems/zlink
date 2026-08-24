@@ -110,8 +110,8 @@ public interface IZLinkUserSpotFactoryBuilder<TSpot>
     IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
         ZLinkUserSpotExecutionMode mode);
 
-    IZLinkUserSpotFactoryBuilder<TSpot> RelocationReadiness(
-        ZLinkSpotRelocationReadinessMode mode);
+    IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
+        ZLinkSpotRelocationCoordinationMode mode);
 
     IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation();
 
@@ -151,9 +151,9 @@ public enum ZLinkUserSpotExecutionMode
     PerActor = 1
 }
 
-public enum ZLinkSpotRelocationReadinessMode
+public enum ZLinkSpotRelocationCoordinationMode
 {
-    AnyTurnBoundary = 0,
+    FrameworkManaged = 0,
     ApplicationSignaled = 1
 }
 

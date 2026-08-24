@@ -22,9 +22,9 @@ public sealed class RelocationReadinessContracts
 
         Assert.NotNull(
             typeof(IZLinkUserSpotFactoryBuilder<>)
-                .GetMethod("RelocationReadiness"));
+                .GetMethod("RelocationCoordinationMode"));
         Assert.Equal(
             0,
-            (int)ZLinkSpotRelocationReadinessMode.AnyTurnBoundary);
+            (int)ZLinkSpotRelocationCoordinationMode.FrameworkManaged);
     }
 }

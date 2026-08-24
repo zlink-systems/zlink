@@ -2192,6 +2192,17 @@ int main ()
     if (route_connections.connect (route_peer, "tcp://route-a:7500")) {
         return 313;
     }
+    const auto replacement_route_peer =
+      zlink::routing_id_t::from (std::string ("route-a-replacement"));
+    if (!route_connections.connect (
+          replacement_route_peer, "tcp://route-a:7500")
+        || route_connections.disconnect (
+          route_peer, "tcp://route-a:7500")
+        || !route_connections.contains ("tcp://route-a:7500")
+        || !route_connections.disconnect (
+          replacement_route_peer, "tcp://route-a:7500")) {
+        return 314;
+    }
     if (!route_connections.disconnect ("tcp://route-b:7500")
         || route_connections.contains ("tcp://route-b:7500")) {
         return 32;

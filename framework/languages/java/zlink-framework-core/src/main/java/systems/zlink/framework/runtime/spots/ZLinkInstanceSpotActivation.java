@@ -260,8 +260,9 @@ final class ZLinkInstanceSpotActivation
     }
 
     void close(ZLinkSpotCloseReason reason, Instant deadline) {
+        closeStarted = true;
         try {
-            host.awaitClosing(context.runLifecycle(() -> spot.onClosing(
+            host.awaitClosing(context.runClosing(() -> spot.onClosing(
                 new ZLinkSpotClosingContext(reason, deadline))));
         } finally {
             closeResources();

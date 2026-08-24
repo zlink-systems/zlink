@@ -7,7 +7,9 @@ import java.util.Properties
 data class ClientOptions(
     val gatewayEndpoint: String,
     val opsEndpoint: String,
-    val scenario: String,
+    val scenarios: String,
+    val streamTrace: Boolean,
+    val faultArmFile: String,
 ) {
     companion object {
         fun load(args: Array<String>): ClientOptions {
@@ -19,7 +21,9 @@ data class ClientOptions(
             return ClientOptions(
                 gatewayEndpoint = required(properties, "sample.gateway-endpoint"),
                 opsEndpoint = required(properties, "sample.ops-endpoint"),
-                scenario = properties.getProperty("sample.scenario", "full"),
+                scenarios = properties.getProperty("sample.scenarios", "all"),
+                streamTrace = properties.getProperty("sample.stream-trace", "false").toBoolean(),
+                faultArmFile = properties.getProperty("sample.fault-arm-file", ""),
             )
         }
 

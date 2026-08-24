@@ -5,6 +5,8 @@ import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
 import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import {
   createServiceRelocationId,
+  decodeQueuedHandoffPacket,
+  encodeHandoffQueuedMessages,
   relocationFailedFailureCode,
   ServiceRelocationDataLostError,
   ZLinkHostServiceRelocationRuntime
@@ -115,6 +117,26 @@ test('relocation identity retries zero and local collisions with all 128 entropy
   assert.equal(id, acceptedId);
   assert.deepEqual(observed, [collisionId, acceptedId]);
   assert.equal(entropy.length, 0);
+});
+
+test('Actor relocation queue preserves Message Follow bigint origin fields', () => {
+  const packet = {
+    ...actorJoinHandoffPacket(0, 'message-follow-origin'),
+    messageFollowOrigin: {
+      sourceNodeRid: 'source-node',
+      originalOperation: {
+        high: 0xffff_ffff_ffff_ffffn,
+        low: 7n
+      },
+      originalReplyRouteId: 0xffff_ffff_ffff_fffen
+    }
+  };
+  const queued = encodeHandoffQueuedMessages([packet]);
+  assert.equal(queued.length, 1);
+  assert.deepEqual(
+    decodeQueuedHandoffPacket(queued[0]!).messageFollowOrigin,
+    packet.messageFollowOrigin
+  );
 });
 
 test('Session owner applies an exact relocation without an Actor authority or lease mirror', async () => {

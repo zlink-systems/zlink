@@ -297,7 +297,7 @@ and `RELOCATED` from the target if it moved, to
 no-op. Held application messages and timers aren't run before the
 callback completes.
 
-A duplicate `defer()` on the default `ANY_TURN_BOUNDARY`, on
+A duplicate `defer()` on the default `FRAMEWORK_MANAGED`, on
 `PER_ACTOR`, on Entry/Instance Spot, outside the Spot turn, or in the
 same turn fails with `INVALID_OPERATION` before any queue mutation. A
 different Framework operation in the same turn after `defer()` is the

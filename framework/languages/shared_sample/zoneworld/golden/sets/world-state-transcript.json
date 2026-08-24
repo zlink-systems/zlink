@@ -1,0 +1,182 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "world-state-transcript",
+  "records": [
+    {
+      "scenario_id": "ZW-A1",
+      "producer_role": "gateway",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "step": "spawn",
+        "position": [
+          25,
+          25
+        ],
+        "zone": "zone-nw"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-A1 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "wire_record": "JoinWorldRes"
+      }
+    },
+    {
+      "scenario_id": "ZW-A2",
+      "producer_role": "player-actor",
+      "consumer_role": "zone-spot",
+      "normalized_payload": {
+        "step": "legal-move",
+        "position": [
+          28,
+          27
+        ]
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-A2 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "wire_record": "ZoneStateNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-A3",
+      "producer_role": "move-policy",
+      "consumer_role": "player-actor",
+      "normalized_payload": {
+        "step": "rejection-precedence",
+        "ordered": [
+          "OutOfRange",
+          "TooFar",
+          "DiagonalCrossing"
+        ]
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=MoveRejectedNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "wire_record": "MoveRejectedNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-A4",
+      "producer_role": "zone-spot",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "step": "visibility-order",
+        "sort": "UTF-8 ordinal by playerId",
+        "duplicates": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-A4 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "players array is sorted and unique"
+      }
+    },
+    {
+      "scenario_id": "ZW-A5",
+      "producer_role": "player-actor",
+      "consumer_role": "zone-spot",
+      "normalized_payload": {
+        "step": "legal-step-boundary",
+        "max_delta_per_axis": 5,
+        "accepted": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-A5 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "authoritative position advances"
+      }
+    },
+    {
+      "scenario_id": "ZW-B1",
+      "producer_role": "zone-nw",
+      "consumer_role": "zone-ne",
+      "normalized_payload": {
+        "step": "adjacent-border",
+        "west_x": 48,
+        "observed": true,
+        "diagonal_observed": false
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "checkpoint=east-observed-west"
+        },
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "checkpoint=diagonal-exclusion-observed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "wire_record": "ZoneBorderEvent",
+        "assert": "adjacent only"
+      }
+    },
+    {
+      "scenario_id": "ZW-B3",
+      "producer_role": "player-actor",
+      "consumer_role": "same-owner-zone-spot",
+      "normalized_payload": {
+        "step": "local-zone-change",
+        "zone_before": "zone-nw",
+        "zone_after": "zone-sw",
+        "owner_changed": false,
+        "object_generation_changed": false
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-B3 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "ZoneChangedNotify and ZoneStateNotify advance zone without relocation"
+      }
+    },
+    {
+      "scenario_id": "ZW-B4",
+      "producer_role": "zone-border-cache",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "step": "expiry",
+        "stale_tick": "ignored",
+        "missing_after_ticks": 3
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-B4 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "remote player absent from ZoneStateNotify after three ticks"
+      }
+    }
+  ]
+}

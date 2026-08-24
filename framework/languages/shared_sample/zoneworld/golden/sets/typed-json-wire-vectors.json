@@ -1,0 +1,468 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "typed-json-wire-vectors",
+  "records": [
+    {
+      "scenario_id": "ZW-A1",
+      "producer_role": "client",
+      "consumer_role": "gateway",
+      "normalized_payload": {
+        "packet": "JoinWorldReq",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"playerId\":\"<PLAYER:ZW-A1>\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=JoinWorldReq"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-A1",
+      "producer_role": "gateway",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "JoinWorldRes",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"playerId\":\"<PLAYER:ZW-A1>\",\"zoneId\":\"zone-nw\",\"x\":25,\"y\":25,\"error\":null}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=JoinWorldRes"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-A3",
+      "producer_role": "client",
+      "consumer_role": "player-actor",
+      "normalized_payload": {
+        "packet": "MoveMsg",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"x\":101,\"y\":25}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "packet=MoveMsg"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-A3",
+      "producer_role": "player-actor",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "MoveRejectedNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"reason\":\"OutOfRange\",\"x\":25,\"y\":25}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=MoveRejectedNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-A3",
+      "producer_role": "player-actor",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "MoveRejectedNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"reason\":\"TooFar\",\"x\":25,\"y\":25}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=MoveRejectedNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-A3",
+      "producer_role": "player-actor",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "MoveRejectedNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"reason\":\"DiagonalCrossing\",\"x\":49,\"y\":49}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=MoveRejectedNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-A2",
+      "producer_role": "zone-spot",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "ZoneStateNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"zoneId\":\"zone-nw\",\"tick\":\"<TICK:1>\",\"players\":[{\"playerId\":\"<PLAYER:ZW-A2>\",\"x\":28,\"y\":27,\"zoneId\":\"zone-nw\",\"isBot\":false}]}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "player=a2- packet=ZoneStateNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "zone-spot",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "ZoneChangedNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"playerId\":\"<PLAYER:ZW-B2>\",\"zoneId\":\"zone-ne\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=ZoneChangedNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-B1",
+      "producer_role": "zone-spot",
+      "consumer_role": "adjacent-zone-spot",
+      "normalized_payload": {
+        "packet": "ZoneBorderEvent",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"fromZoneId\":\"zone-nw\",\"toZoneId\":\"zone-ne\",\"tick\":\"<TICK:2>\",\"players\":[{\"playerId\":\"<PLAYER:ZW-B1-WEST>\",\"x\":48,\"y\":25,\"zoneId\":\"zone-nw\",\"isBot\":false}]}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "packet=ZoneBorderEvent"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-C1",
+      "producer_role": "ops-client",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "packet": "WatchNodesReq",
+        "kind": "request",
+        "codec": "Json",
+        "json": "{}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "packet=WatchNodesReq"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-C1",
+      "producer_role": "ops",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "packet": "WatchNodesRes",
+        "kind": "reply",
+        "codec": "Json",
+        "json": "{\"nodes\":[{\"nodeId\":\"zone-node-1\",\"registered\":true,\"connected\":true,\"maintenance\":false,\"zones\":[\"zone-nw\",\"zone-sw\"],\"playerCount\":<COUNT:1>}]}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "packet=WatchNodesRes"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-C4",
+      "producer_role": "ops",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "packet": "NodeAlertNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"nodeId\":\"zone-node-1\",\"kind\":\"TimerHandlerFailed\",\"detail\":\"spot=zone-nw; timer=zone-tick-zone-nw; detail=injected tick failure for ZW-C4. zone=zone-nw\",\"occurredAt\":\"<TIMESTAMP:1>\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "kind=TimerHandlerFailed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-D1",
+      "producer_role": "ops-client",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "packet": "AnnounceWorldReq",
+        "kind": "request",
+        "codec": "Json",
+        "json": "{\"text\":\"server maintenance starts in 10 minutes\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "packet=AnnounceWorldReq"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-D1",
+      "producer_role": "ops",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "packet": "AnnounceWorldRes",
+        "kind": "reply",
+        "codec": "Json",
+        "json": "{\"announcementId\":\"<ANNOUNCEMENT_ID:1>\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-D1 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-D1",
+      "producer_role": "zone-spot",
+      "consumer_role": "client",
+      "normalized_payload": {
+        "packet": "WorldAnnounceNotify",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"announcementId\":\"<ANNOUNCEMENT_ID:1>\",\"text\":\"server maintenance starts in 10 minutes\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "packet=WorldAnnounceNotify"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-E1",
+      "producer_role": "ops-client",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "packet": "SetMaintenanceReq",
+        "kind": "request",
+        "codec": "Json",
+        "json": "{\"nodeId\":\"zone-node-2\",\"enabled\":true}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "packet=SetMaintenanceReq"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-E1",
+      "producer_role": "ops",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "packet": "SetMaintenanceRes",
+        "kind": "reply",
+        "codec": "Json",
+        "json": "{\"nodeId\":\"zone-node-2\",\"enabled\":true,\"zones\":[\"zone-ne\",\"zone-se\"],\"error\":null}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E1 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-E6",
+      "producer_role": "ops-client",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "packet": "NodeDiagnosticsReq",
+        "kind": "request",
+        "codec": "Json",
+        "json": "{\"nodeId\":\"zone-node-2\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "packet=NodeDiagnosticsReq"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-E6",
+      "producer_role": "zone-node",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "packet": "NodeDiagnosticsRes",
+        "kind": "reply",
+        "codec": "Json",
+        "json": "{\"nodeId\":\"zone-node-2\",\"zones\":[\"zone-ne\",\"zone-se\"],\"playerCount\":<COUNT:2>,\"maintenance\":true,\"error\":null}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E6 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6",
+      "producer_role": "gateway-probe",
+      "consumer_role": "source-old-route",
+      "normalized_payload": {
+        "packet": "MessageFollowProbeReq",
+        "kind": "request",
+        "codec": "Json",
+        "json": "{\"actorId\":\"<ACTOR:ZW-B6>\",\"probeId\":\"<PROBE:ZW-B6>\",\"payload\":\"cmVxdWVzdC1wYXlsb2Fk\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=MessageFollowProbeReq actor=b6-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6",
+      "producer_role": "target-actor",
+      "consumer_role": "gateway-probe",
+      "normalized_payload": {
+        "packet": "MessageFollowProbeRes",
+        "kind": "reply",
+        "codec": "Json",
+        "json": "{\"probeId\":\"<PROBE:ZW-B6>\",\"payload\":\"cmVxdWVzdC1wYXlsb2Fk\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "message-follow-request completed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    },
+    {
+      "scenario_id": "ZW-B5",
+      "producer_role": "gateway-probe",
+      "consumer_role": "source-old-route",
+      "normalized_payload": {
+        "packet": "MessageFollowProbeMsg",
+        "kind": "send",
+        "codec": "Json",
+        "json": "{\"actorId\":\"<ACTOR:ZW-B5>\",\"probeId\":\"<PROBE:ZW-B5>\",\"payload\":\"b25lLXdheS1wYXlsb2Fk\"}"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=MessageFollowProbeMsg actor=b5-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "exact UTF-8 JSON field names, values, nulls, and optional-field presence"
+      }
+    }
+  ]
+}

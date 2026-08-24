@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
 #include "../../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -25,8 +25,7 @@ class supportchat_session_t final : public packet_stream_session_t
   public:
     using dependency_types = dependency_list_t<channel_client_t, session_actor_manager_t>;
 
-    supportchat_session_t (channel_client_t &channels,
-                           session_actor_manager_t &actors) :
+    supportchat_session_t (channel_client_t &channels, session_actor_manager_t &actors) :
         _channels (channels), _actors (actors)
     {
     }
@@ -51,24 +50,22 @@ class supportchat_session_t final : public packet_stream_session_t
         if (dispatch.packet_name == authenticate_req_t::packet_name) {
             /* 인증은 API 서버가 소유한다(공통 sample spec §11). Session은 access token을
              * 그대로 넘기고 사용자 프로필을 만들어 내지 않는다. */
-            auto verified =
-              co_await _channels
-                .request ("supportchat.api",
-                            authenticate_user_req_t{
-                            payload.parse_json<authenticate_req_t> ().access_token})
-                .submit<authenticate_user_res_t> ();
+            auto verified = co_await _channels
+                              .request ("supportchat.api",
+                                        authenticate_user_req_t{
+                                          payload.parse_json<authenticate_req_t> ().access_token})
+                              .submit<authenticate_user_res_t> ();
             if (!verified.accepted) {
                 throw framework_exception_t (framework_error_kind_t::rejected,
                                              verified.reason.value_or ("AuthenticationRejected"));
             }
             const authenticate_res_t authenticated{*verified.actor_id, *verified.display_name,
                                                    *verified.role};
-            auto ensure = ensure_support_user_actor_req_t{authenticated.actor_id,
-                                                          authenticated.display_name,
-                                                          authenticated.role,
-                                                          authenticated.actor_id};
+            auto ensure =
+              ensure_support_user_actor_req_t{authenticated.actor_id, authenticated.display_name,
+                                              authenticated.role, authenticated.actor_id};
             auto ensured = co_await _channels.request ("supportchat.support", ensure)
-                              .submit<ensure_support_user_actor_res_t> ();
+                             .submit<ensure_support_user_actor_res_t> ();
             auto actor_ref = ensured.actor.to_actor_ref (sample_names_t::mesh);
             auto bound = co_await _actors.bind_or_get (actor_ref).submit ();
             _identity_actor_id = std::string (bound.actor_id ());
@@ -80,9 +77,9 @@ class supportchat_session_t final : public packet_stream_session_t
         if (dispatch.packet_name == join_conversation_req_t::packet_name
             && _identity_role == role_t::agent) {
             auto joined = co_await ensure_agent_conversation_actor (stream, dispatch);
-            stream.reply_packet (
-                    zlink::message_t::from_json (
-                      join_conversation_res_t{joined.scheduled, joined.state}))
+            stream
+              .reply_packet (zlink::message_t::from_json (
+                join_conversation_res_t{joined.scheduled, joined.state}))
               .submit ();
             co_return;
         }
@@ -109,29 +106,27 @@ class supportchat_session_t final : public packet_stream_session_t
     }
 
     task_t<ensure_agent_conversation_res_t>
-    ensure_agent_conversation_actor (stream_t &stream,
-                                     const session_message_context_t &dispatch)
+    ensure_agent_conversation_actor (stream_t &stream, const session_message_context_t &dispatch)
     {
         const auto conversation_id = require_conversation_id (dispatch);
         const auto existing = _conversation_actor_ids.find (conversation_id);
         if (existing != _conversation_actor_ids.end ()) {
             auto actor = require_actor (existing->second, std::string (dispatch.packet_name));
             auto refreshed =
-              co_await actor.relay_request (std::string (dispatch.packet_name),
-                                            zlink::message_t::from_json (join_conversation_req_t {}))
+              co_await actor
+                .relay_request (std::string (dispatch.packet_name),
+                                zlink::message_t::from_json (join_conversation_req_t{}))
                 .submit ();
             co_return ensure_agent_conversation_res_t{
-              actor_location_t::from (actor.ref ()),
-              false,
+              actor_location_t::from (actor.ref ()), false,
               refreshed.parse_json<join_conversation_res_t> ().state};
         }
 
-        auto ensured =
-          co_await _channels
-            .request ("supportchat.support",
-                      ensure_agent_conversation_req_t{_identity_actor_id, _identity_display_name,
-                                                      conversation_id})
-            .submit<ensure_agent_conversation_res_t> ();
+        auto ensured = co_await _channels
+                         .request ("supportchat.support",
+                                   ensure_agent_conversation_req_t{
+                                     _identity_actor_id, _identity_display_name, conversation_id})
+                         .submit<ensure_agent_conversation_res_t> ();
         auto actor_ref = ensured.actor.to_actor_ref (sample_names_t::mesh);
         /* The Ensure reply returns as soon as the conversation join is
          * scheduled (Defer); the agent actor may still be materializing on
@@ -213,20 +208,22 @@ int main (int argc, char **argv)
     std::filesystem::create_directories (configuration.role.log_dir);
 
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        add_supportchat_location_store (options, topology);
-        options.add_client_server_channel ("supportchat.support").client ();
-        options.add_client_server_channel ("supportchat.api").client ();
-        auto support_spot = options.add_route_mesh (sample_names_t::mesh);
-        support_spot.set_routing_id (
-          zlink::routing_id_t::from ("supportchat-session"));
-        support_spot.set_object_role (object_role_t::client)
-          .listen (topology.session_spot_router_endpoint);
-        options.add_stream_node ("supportchat-session-stream")
-          .bind (topology.session_stream_endpoint)
-          .register_session<supportchat_session_t> ();
-    });
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "location:");
+    options.add_relocation_store<redis::redis_relocation_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    options.add_client_server_channel ("supportchat.support").client ();
+    options.add_client_server_channel ("supportchat.api").client ();
+    auto support_spot = options.add_route_mesh (sample_names_t::mesh);
+    support_spot.set_routing_id (zlink::routing_id_t::from ("supportchat-session"));
+    support_spot.listen (topology.session_spot_router_endpoint);
+    support_spot.objects ().client ();
+    options.add_stream_node ("supportchat-session-stream")
+      .bind (topology.session_stream_endpoint)
+      .register_session<supportchat_session_t> ();
     return app.run (argc, argv);
 }

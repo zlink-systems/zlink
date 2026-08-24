@@ -193,6 +193,12 @@ class public_authority_store_adapter_t final :
                     reference.application_payload = stored->snapshot.payload;
                     if (!same_owner (stored->snapshot.owner, target_owner))
                         return {authority_publish_status_t::failed, std::nullopt};
+                    // Location Store authority generations are globally
+                    // allocated, so another object's commit can make the
+                    // durable target generation larger than source + 1.
+                    // Return the Store-assigned fence, not the proposal.
+                    reference.target.authority_owner_generation =
+                      stored->snapshot.authority_owner_generation;
                     return {authority_publish_status_t::published,
                             std::move (reference)};
                 }

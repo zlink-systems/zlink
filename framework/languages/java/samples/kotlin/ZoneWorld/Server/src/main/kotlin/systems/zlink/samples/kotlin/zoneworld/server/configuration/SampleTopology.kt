@@ -9,6 +9,11 @@ data class SampleTopology(
     val streamEndpoint: String? = null,
     val redisEndpoint: String? = null,
     val redisKeyPrefix: String? = null,
+    val subscriberOnly: Boolean? = null,
+    val disableBots: Boolean? = null,
+    val allowEmptyZoneSet: Boolean? = null,
+    val faultTickZone: String? = null,
+    val meshAdvertiseHost: String? = null,
 ) {
     fun isRole(expected: String) = role.equals(expected, ignoreCase = true)
     fun required(value: String?, name: String): String = value?.takeIf { it.isNotBlank() }
@@ -19,6 +24,9 @@ data class SampleTopology(
     fun streamValue() = required(streamEndpoint, "stream-endpoint")
     fun redisValue() = required(redisEndpoint, "redis-endpoint")
     fun prefixValue() = required(redisKeyPrefix, "redis-key-prefix")
+    fun isSubscriberOnly() = subscriberOnly == true
+    fun botsDisabled() = disableBots == true
+    fun allowsEmptyZoneSet() = allowEmptyZoneSet == true
 
     fun validate() {
         val value = roleValue()

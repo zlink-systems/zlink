@@ -36,6 +36,10 @@ async function main(): Promise<void> {
   const path = readConfigPath(process.argv.slice(2));
   const config = validateConfiguration(JSON.parse(fs.readFileSync(path, 'utf8')) as unknown, 'client');
   if (config.client === undefined) throw new Error('Client configuration is required.');
+  if (config.client.scenarios === 'ZW-B8') {
+    await runB8(config.client.gatewayEndpoint, config.client.opsEndpoint, config.client.faultArmFile);
+    return;
+  }
   const gateway = createConnector(config.client.gatewayEndpoint);
   const second = createConnector(config.client.gatewayEndpoint);
   const westObserver = createConnector(config.client.gatewayEndpoint);
@@ -337,6 +341,99 @@ async function main(): Promise<void> {
     console.log('scenario ZW-D1 passed');
   } finally {
     await Promise.allSettled([gateway.close(), second.close(), westObserver.close(), ops.close()]);
+  }
+}
+
+async function runB8(
+  gatewayEndpoint: string,
+  opsEndpoint: string,
+  faultArmFile: string | undefined
+): Promise<void> {
+  zlinkStreamAssert.ensure(faultArmFile !== undefined, 'ZW-B8 runner arm file is configured.');
+  const player = createConnector(gatewayEndpoint);
+  const ops = createConnector(opsEndpoint);
+  const playerId = `player-b8-${process.pid}`;
+  try {
+    await Promise.all([player.connect(), ops.connect()]);
+    const pair = await ops.request(new RelocationPairReq())
+      .packetName(PacketNames.relocationPairReq)
+      .submit<RelocationPairRes>();
+    zlinkStreamAssert.ensure(pair.error === null, 'ZW-B8 requires a cross-owner adjacent pair.');
+    const boundary = boundaryRoute(pair.targetZoneId);
+    const joined = await joinAndWaitForOwnedState(player, playerId);
+    await walkTo(player, playerId, { x: joined.x, y: joined.y }, boundary.sourceEdge.x, boundary.sourceEdge.y);
+    const beforeRelocation = await probeActor(player, playerId);
+    zlinkStreamAssert.ensure(beforeRelocation.error === null, 'ZW-B8 pre-relocation actor probe failed.');
+    zlinkStreamAssert.ensure(
+      beforeRelocation.nodeRid === pair.sourceOwnerNodeRid,
+      'ZW-B8 initial Actor was not owned by the selected source node.'
+    );
+
+    let resolveDisconnected: (() => void) | undefined;
+    const disconnected = new Promise<void>((resolve) => { resolveDisconnected = resolve; });
+    const subscription = player.onDisconnected(() => { resolveDisconnected?.(); });
+    console.log(`scenario ZW-B8 armed actor=${playerId} target=${pair.targetZoneId}`);
+    await waitForPathState(faultArmFile, true, 10_000,
+      'ZW-B8 runner did not arm the command-44 fault.');
+    await player.send(new MoveMsg(boundary.targetInside.x, boundary.targetInside.y))
+      .packetName(PacketNames.moveMsg)
+      .submit();
+    await withTimeout(disconnected, 45_000,
+      'ZW-B8 did not observe the physical connection close after the session seal timeout.');
+    subscription.dispose();
+    zlinkStreamAssert.ensure(!player.isConnected, 'ZW-B8 disconnect callback ran while the connection was still open.');
+    console.log(`scenario ZW-B8 disconnected reason=${player.closeReason ?? 'TransportClose'}`);
+
+    await waitForPathState(faultArmFile, false, 60_000,
+      'ZW-B8 precondition unmet: runner did not prove command-44 interception and target relocation commit.');
+    await player.connect();
+    const rebound = await joinAndWaitForOwnedState(player, playerId, pair.targetZoneId);
+    zlinkStreamAssert.ensure(rebound.playerId === playerId, 'ZW-B8 reconnect did not preserve PlayerId.');
+    zlinkStreamAssert.ensure(
+      rebound.zoneId === pair.targetZoneId,
+      'ZW-B8 reconnect did not rebind the already relocated Actor at the target zone.'
+    );
+    const afterReconnect = await probeActor(player, playerId);
+    zlinkStreamAssert.ensure(afterReconnect.error === null, 'ZW-B8 post-reconnect actor probe failed.');
+    zlinkStreamAssert.ensure(afterReconnect.actorId === beforeRelocation.actorId,
+      'ZW-B8 reconnect changed the ActorId.');
+    zlinkStreamAssert.ensure(afterReconnect.objectGeneration === beforeRelocation.objectGeneration,
+      'ZW-B8 reconnect created a replacement Actor generation.');
+    zlinkStreamAssert.ensure(afterReconnect.nodeRid === pair.targetOwnerNodeRid,
+      'ZW-B8 reconnect did not resolve the committed target owner.');
+    console.log(
+      `scenario ZW-B8 rebound actor=${afterReconnect.actorId} generation=${afterReconnect.objectGeneration}`
+    );
+    console.log('scenario ZW-B8 passed');
+  } finally {
+    await Promise.allSettled([player.close(), ops.close()]);
+  }
+}
+
+async function waitForPathState(
+  target: string,
+  expected: boolean,
+  timeoutMs: number,
+  failure: string
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (fs.existsSync(target) !== expected) {
+    if (Date.now() >= deadline) throw new Error(failure);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, failure: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(failure)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

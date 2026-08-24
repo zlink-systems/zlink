@@ -124,9 +124,9 @@ public enum ZLinkUserSpotExecutionMode
     PerActor = 1
 }
 
-public enum ZLinkSpotRelocationReadinessMode
+public enum ZLinkSpotRelocationCoordinationMode
 {
-    AnyTurnBoundary = 0,
+    FrameworkManaged = 0,
     ApplicationSignaled = 1
 }
 
@@ -145,8 +145,8 @@ public interface IZLinkUserSpotFactoryBuilder<TSpot>
     IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
     IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
         ZLinkUserSpotExecutionMode mode);
-    IZLinkUserSpotFactoryBuilder<TSpot> RelocationReadiness(
-        ZLinkSpotRelocationReadinessMode mode);
+    IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
+        ZLinkSpotRelocationCoordinationMode mode);
     IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation();
     IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation();
     IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
@@ -498,7 +498,8 @@ stateless execution shell이며 member Actor의 relocation policy와 adapter가 
 state를 각각 처리한다. 유지해야 하는 shared state와 Spot-level schedule은
 application의 Redis·database·service 같은 외부 저장소에 둔다.
 
-Execution mode의 기본값은 `SpotWide`, relocation readiness의 기본값은 `AnyTurnBoundary`다.
+Execution mode의 기본값은 `SpotWide`, relocation coordination mode의 기본값은
+`FrameworkManaged`다.
 `ApplicationSignaled`는 `SpotWide`에서만 허용한다. `PerActor`와 함께 등록하면
 socket bind 전에 startup configuration error다. Callback은 `IZLinkSpot`의 기본
 no-op 구현을 사용하므로 application override는 필수가 아니다.

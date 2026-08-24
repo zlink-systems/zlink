@@ -111,8 +111,7 @@ struct membership_token_t
     object_ref_t actor;
     object_ref_t target_spot;
 
-    friend bool operator== (const membership_token_t &,
-                            const membership_token_t &) = default;
+    friend bool operator== (const membership_token_t &, const membership_token_t &) = default;
 };
 
 struct spot_close_token_t
@@ -120,8 +119,7 @@ struct spot_close_token_t
     std::uint64_t value = 0;
     object_ref_t spot;
 
-    friend bool operator== (const spot_close_token_t &,
-                            const spot_close_token_t &) = default;
+    friend bool operator== (const spot_close_token_t &, const spot_close_token_t &) = default;
 };
 
 enum class turn_domain_t
@@ -175,13 +173,11 @@ struct logical_timer_t
         std::uint64_t scheduled_at_unix_milliseconds = 0;
         std::uint64_t skipped_ticks = 0;
 
-        friend bool operator== (const pending_tick_t &,
-                                const pending_tick_t &) = default;
+        friend bool operator== (const pending_tick_t &, const pending_tick_t &) = default;
     };
     std::vector<pending_tick_t> pending_ticks;
 
-    friend bool operator== (const logical_timer_t &,
-                            const logical_timer_t &) = default;
+    friend bool operator== (const logical_timer_t &, const logical_timer_t &) = default;
 };
 
 struct frozen_object_state_t
@@ -192,8 +188,7 @@ struct frozen_object_state_t
     std::vector<turn_record_t> pending_application;
     std::vector<logical_timer_t> timers;
 
-    friend bool operator== (const frozen_object_state_t &,
-                            const frozen_object_state_t &) = default;
+    friend bool operator== (const frozen_object_state_t &, const frozen_object_state_t &) = default;
 };
 
 struct relocation_restore_identity_t
@@ -219,8 +214,7 @@ struct object_inventory_t
     object_state_t state = object_state_t::creating;
     std::string membership;
 
-    friend bool operator== (const object_inventory_t &,
-                            const object_inventory_t &) = default;
+    friend bool operator== (const object_inventory_t &, const object_inventory_t &) = default;
 };
 
 struct aggregate_relocation_seal_t
@@ -266,75 +260,63 @@ struct relocation_ingress_batch_t
 class stateful_object_runtime_t
 {
   public:
-    using relocation_state_capture_t = std::function<
-      std::vector<std::uint8_t> (
-        const object_ref_t &, const std::string &, std::stop_token)>;
-    using relocation_state_restore_t = std::function<
-      bool (
-        const frozen_object_state_t &, const object_ref_t &,
-        std::stop_token)>;
+    using relocation_state_capture_t = std::function<std::vector<std::uint8_t> (
+      const object_ref_t &, const std::string &, std::stop_token)>;
+    using relocation_state_restore_t =
+      std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
     // Application materialization is a second, internal boundary from the
     // persisted state machine.  Aggregate restore supplies the target Spot to
     // member Actors and invokes this callback in Spot-before-Actor order.
-    using relocation_state_materialize_t = std::function<
-      bool (
-        const frozen_object_state_t &, const object_ref_t &,
-        const std::optional<object_ref_t> &, std::stop_token)>;
-    using relocation_state_commit_t =
-      std::function<bool (const std::vector<object_ref_t> &)>;
-    using relocation_state_abort_t =
-      std::function<void (const std::vector<object_ref_t> &)>;
+    using relocation_state_materialize_t = std::function<bool (const frozen_object_state_t &,
+                                                               const object_ref_t &,
+                                                               const std::optional<object_ref_t> &,
+                                                               std::stop_token)>;
+    using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
+    using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
 
     explicit stateful_object_runtime_t (
-      std::size_t application_capacity =
-        dispatch_limits::application_mailbox_messages,
-      std::size_t infrastructure_capacity =
-        dispatch_limits::control_mailbox_messages,
-      std::size_t application_byte_capacity =
-        dispatch_limits::application_mailbox_bytes,
-      std::size_t infrastructure_byte_capacity =
-        dispatch_limits::control_mailbox_bytes);
+      std::size_t application_capacity = dispatch_limits::application_mailbox_messages,
+      std::size_t infrastructure_capacity = dispatch_limits::control_mailbox_messages,
+      std::size_t application_byte_capacity = dispatch_limits::application_mailbox_bytes,
+      std::size_t infrastructure_byte_capacity = dispatch_limits::control_mailbox_bytes);
 
-    void configure_relocation_state (
-      relocation_state_capture_t capture,
-      relocation_state_restore_t restore);
-    void configure_relocation_materialization (
-      relocation_state_materialize_t materialize,
-      relocation_state_commit_t commit,
-      relocation_state_abort_t abort);
+    void configure_relocation_state (relocation_state_capture_t capture,
+                                     relocation_state_restore_t restore);
+    void configure_relocation_materialization (relocation_state_materialize_t materialize,
+                                               relocation_state_commit_t commit,
+                                               relocation_state_abort_t abort);
 
-    void replace_placement_candidates (
-      std::vector<placement_candidate_t> candidates);
+    void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
-    create_result_t begin_reserved_object (
-      const object_ref_t &reserved,
-      const std::string &stable_type,
-      std::vector<std::uint8_t> creation_request);
+    create_result_t begin_reserved_object (const object_ref_t &reserved,
+                                           const std::string &stable_type,
+                                           std::vector<std::uint8_t> creation_request);
     // Accepts the next authority fence for an actor that is retained as a
     // remote copy while ownership returns to this node.
-    stateful_error_t adopt_reserved_actor_owner (
-      const object_ref_t &reserved,
-      const std::string &stable_type);
+    stateful_error_t adopt_reserved_actor_owner (const object_ref_t &reserved,
+                                                 const std::string &stable_type);
+    // Applies the next Store-committed authority generation when a local
+    // Actor keeps the same owner node while its membership authority advances.
+    stateful_error_t advance_local_actor_authority (const object_ref_t &committed,
+                                                    const std::string &stable_type);
+    stateful_error_t
+    reconcile_relocation_restore_authority (const object_ref_t &staged,
+                                            const object_ref_t &committed,
+                                            const relocation_restore_identity_t &identity);
     stateful_error_t commit_create (std::uint64_t attempt);
     stateful_error_t abort_create (std::uint64_t attempt);
-    create_result_t activate_instance (
-      create_request_t request,
-      const std::function<bool (const object_ref_t &)> &factory);
-    std::optional<object_ref_t> find (object_kind_t kind,
-                                      const std::string &key) const;
+    create_result_t activate_instance (create_request_t request,
+                                       const std::function<bool (const object_ref_t &)> &factory);
+    std::optional<object_ref_t> find (object_kind_t kind, const std::string &key) const;
 
-    std::pair<stateful_error_t, membership_token_t> begin_membership_move (
-      const object_ref_t &actor,
-      const object_ref_t &target_spot);
     std::pair<stateful_error_t, membership_token_t>
-    begin_remote_membership_move (
-      const object_ref_t &actor,
-      object_ref_t target_spot);
-    std::pair<stateful_error_t, object_ref_t> commit_membership_move (
-      const membership_token_t &token);
+    begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
+    std::pair<stateful_error_t, membership_token_t>
+    begin_remote_membership_move (const object_ref_t &actor, object_ref_t target_spot);
+    std::pair<stateful_error_t, object_ref_t>
+    commit_membership_move (const membership_token_t &token);
     stateful_error_t abort_membership_move (const membership_token_t &token);
-    std::optional<std::string> actor_membership (
-      const object_ref_t &actor) const;
+    std::optional<std::string> actor_membership (const object_ref_t &actor) const;
     stateful_error_t destroy_actor (const object_ref_t &actor);
     std::pair<stateful_error_t, bool> close_spot (const object_ref_t &spot);
     std::pair<stateful_error_t, std::optional<spot_close_token_t>>
@@ -342,42 +324,28 @@ class stateful_object_runtime_t
     stateful_error_t commit_close_spot (const spot_close_token_t &token);
     stateful_error_t abort_close_spot (const spot_close_token_t &token);
 
-    stateful_error_t enqueue (const object_ref_t &owner,
-                              turn_domain_t domain,
-                              turn_record_t record);
-    std::pair<stateful_error_t, std::optional<turn_record_t>> try_claim (
-      const object_ref_t &owner,
-      turn_domain_t domain);
-    stateful_error_t complete_claim (const object_ref_t &owner,
-                                     turn_domain_t domain);
-    stateful_error_t yield_claim (const object_ref_t &owner,
-                                  turn_record_t continuation);
-    std::size_t pending (const object_ref_t &owner,
-                         turn_domain_t domain) const;
-    std::size_t pending_bytes (const object_ref_t &owner,
-                               turn_domain_t domain) const;
-    stateful_error_t discard_application (
-      const object_ref_t &owner,
-      std::uint64_t sequence);
-    stateful_error_t register_timer (const object_ref_t &owner,
-                                     logical_timer_t timer);
-    stateful_error_t cancel_timer (const object_ref_t &owner,
-                                   std::uint64_t timer_id);
-    stateful_error_t enqueue_timer_tick (
-      const object_ref_t &owner,
-      std::uint64_t timer_id,
-      std::vector<std::uint8_t> payload);
-    std::vector<logical_timer_t> timers (
-      const object_ref_t &owner) const;
+    stateful_error_t
+    enqueue (const object_ref_t &owner, turn_domain_t domain, turn_record_t record);
+    std::pair<stateful_error_t, std::optional<turn_record_t>> try_claim (const object_ref_t &owner,
+                                                                         turn_domain_t domain);
+    stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
+    stateful_error_t yield_claim (const object_ref_t &owner, turn_record_t continuation);
+    std::size_t pending (const object_ref_t &owner, turn_domain_t domain) const;
+    std::size_t pending_bytes (const object_ref_t &owner, turn_domain_t domain) const;
+    stateful_error_t discard_application (const object_ref_t &owner, std::uint64_t sequence);
+    stateful_error_t register_timer (const object_ref_t &owner, logical_timer_t timer);
+    stateful_error_t cancel_timer (const object_ref_t &owner, std::uint64_t timer_id);
+    stateful_error_t enqueue_timer_tick (const object_ref_t &owner,
+                                         std::uint64_t timer_id,
+                                         std::vector<std::uint8_t> payload);
+    std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
-    std::optional<std::vector<object_inventory_t>>
-    try_begin_maintenance_inventory ();
+    std::optional<std::vector<object_inventory_t>> try_begin_maintenance_inventory ();
     void end_maintenance_inventory () noexcept;
     task_t<aggregate_relocation_seal_attempt_t>
-    try_seal_relocation_aggregate (
-      const std::vector<object_ref_t> &participants,
-      std::stop_token cancellation = {},
-      const std::function<task_t<bool> ()> &before_capture = {});
+    try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
+                                   std::stop_token cancellation = {},
+                                   const std::function<task_t<bool> ()> &before_capture = {});
     // Atomically separates the ingress accepted since capture from ingress
     // that arrives afterwards.  The caller must perform transport work after
     // this method returns; no callback runs while the aggregate mutex is held.
@@ -389,34 +357,27 @@ class stateful_object_runtime_t
     // (or its enqueue outcome is uncertain).
     stateful_error_t finalize_relocation_cutover (std::uint64_t token);
     stateful_error_t abort_relocation (std::uint64_t token);
-    std::pair<stateful_error_t, object_ref_t>
-    commit_relocation (std::uint64_t token, std::string target_node_id);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
-    commit_relocation_aggregate (
-      std::uint64_t token, std::string target_node_id);
-    stateful_error_t restore_relocation (
-      frozen_object_state_t frozen,
-      object_ref_t target,
-      relocation_restore_identity_t identity,
-      std::stop_token cancellation = {},
-      std::optional<object_ref_t> target_spot = std::nullopt);
-    stateful_error_t restore_relocation_aggregate (
-      std::vector<frozen_object_state_t> frozen,
-      std::vector<object_ref_t> targets,
-      relocation_restore_identity_t identity,
-      std::stop_token cancellation = {});
-    stateful_error_t commit_relocation_restore (
-      const object_ref_t &target,
-      const relocation_restore_identity_t &identity);
-    stateful_error_t commit_relocation_restore_aggregate (
-      const std::vector<object_ref_t> &targets,
-      const relocation_restore_identity_t &identity);
-    stateful_error_t abort_relocation_restore (
-      const object_ref_t &target,
-      const relocation_restore_identity_t &identity);
-    stateful_error_t abort_relocation_restore_aggregate (
-      const std::vector<object_ref_t> &targets,
-      const relocation_restore_identity_t &identity);
+    commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
+    stateful_error_t restore_relocation (frozen_object_state_t frozen,
+                                         object_ref_t target,
+                                         relocation_restore_identity_t identity,
+                                         std::stop_token cancellation = {},
+                                         std::optional<object_ref_t> target_spot = std::nullopt);
+    stateful_error_t restore_relocation_aggregate (std::vector<frozen_object_state_t> frozen,
+                                                   std::vector<object_ref_t> targets,
+                                                   relocation_restore_identity_t identity,
+                                                   std::stop_token cancellation = {});
+    stateful_error_t commit_relocation_restore (const object_ref_t &target,
+                                                const relocation_restore_identity_t &identity);
+    stateful_error_t
+    commit_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
+                                         const relocation_restore_identity_t &identity);
+    stateful_error_t abort_relocation_restore (const object_ref_t &target,
+                                               const relocation_restore_identity_t &identity);
+    stateful_error_t
+    abort_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
+                                        const relocation_restore_identity_t &identity);
 
   private:
     struct object_key_t
@@ -425,8 +386,7 @@ class stateful_object_runtime_t
         std::string key;
 
         bool operator< (const object_key_t &other) const noexcept;
-        friend bool operator== (const object_key_t &,
-                                const object_key_t &) = default;
+        friend bool operator== (const object_key_t &, const object_key_t &) = default;
     };
 
     struct queue_t
@@ -468,8 +428,7 @@ class stateful_object_runtime_t
         std::vector<object_key_t> keys;
         std::vector<object_ref_t> sources;
         std::vector<frozen_object_state_t> frozen;
-        relocation_ingress_phase_t ingress_phase =
-          relocation_ingress_phase_t::holding;
+        relocation_ingress_phase_t ingress_phase = relocation_ingress_phase_t::holding;
         std::vector<std::vector<turn_record_t>> boundary_application;
     };
 
@@ -480,19 +439,23 @@ class stateful_object_runtime_t
     };
 
     static bool valid_text (const std::string &value);
-    static bool same_exact_ref (const object_ref_t &left,
-                                const object_ref_t &right);
+    static bool same_exact_ref (const object_ref_t &left, const object_ref_t &right);
+    /* Return-relocation remnant (spec 28 §2/§8): after this node handed an
+     * object's authority to another node the local record stays behind in
+     * `moving` — nothing on the source side removes it. When the object later
+     * relocates back here the incoming restore carries a strictly newer,
+     * Store-validated authority generation, so that leftover is a replaceable
+     * local remnant and must never veto the restore. */
+    static bool replaceable_relocation_remnant (const object_record_t &record,
+                                                const object_ref_t &target);
     static object_key_t key_for (const object_ref_t &reference);
-    object_record_t *find_record_locked (const object_ref_t &reference,
-                                         stateful_error_t &error);
-    const object_record_t *find_record_locked (
-      const object_ref_t &reference,
-      stateful_error_t &error) const;
-    std::optional<placement_candidate_t> select_candidate_locked (
-      const create_request_t &request) const;
-    stateful_error_t enqueue_locked (object_record_t &object,
-                                     turn_domain_t domain,
-                                     turn_record_t record);
+    object_record_t *find_record_locked (const object_ref_t &reference, stateful_error_t &error);
+    const object_record_t *find_record_locked (const object_ref_t &reference,
+                                               stateful_error_t &error) const;
+    std::optional<placement_candidate_t>
+    select_candidate_locked (const create_request_t &request) const;
+    stateful_error_t
+    enqueue_locked (object_record_t &object, turn_domain_t domain, turn_record_t record);
     static std::size_t retained_bytes (const turn_record_t &record) noexcept;
     void move_held_application_locked (object_record_t &object);
     void release_pending_capacity_locked (const object_record_t &record);
@@ -511,8 +474,7 @@ class stateful_object_runtime_t
     std::map<std::uint64_t, spot_close_token_t> _spot_closes;
     std::map<std::uint64_t, relocation_seal_state_t> _relocation_seals;
     std::map<std::uint64_t, relocation_hold_state_t> _relocation_holds;
-    std::map<object_key_t, std::uint64_t>
-      _relocation_restore_reservations;
+    std::map<object_key_t, std::uint64_t> _relocation_restore_reservations;
     relocation_state_capture_t _relocation_state_capture;
     relocation_state_restore_t _relocation_state_restore;
     relocation_state_materialize_t _relocation_state_materialize;

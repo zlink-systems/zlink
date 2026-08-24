@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
@@ -7,6 +8,61 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StandaloneActorRelocationPrecommitTests
 {
+    [Fact]
+    public async Task Precommit_retries_owner_lease_heartbeat_conflict_and_completes()
+    {
+        var provider = new OwnerLeaseHeartbeatLocationStore(
+            new ZLinkInMemoryProviderLocationStore(),
+            "heartbeat-source");
+        var store = new ZLinkProviderLocationRepository(provider);
+        var sourceOwner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+            await store.ClaimOwnerLeaseAsync(
+                "heartbeat-source",
+                TimeSpan.FromMinutes(1))).Token;
+        var source = Descriptor(
+            RoutingId.From("heartbeat-source"),
+            sourceOwner);
+        await store.UpdateMeshNodeAsync(
+            source,
+            ZLinkLocationWriteIntent.NewClaim);
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var reservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await store.ReserveAsync(
+                new ZLinkObjectReservationRequest(
+                    ZLinkPlacementObjectKind.Actor,
+                    key,
+                    "Game.Actor",
+                    $"intent:{actorId}",
+                    SHA256.HashData("intent"u8),
+                    6,
+                    new ZLinkMeshNodeDescriptorKey("mesh", source.Rid),
+                    source.LifecycleGeneration,
+                    sourceOwner,
+                    new byte[] { 1 },
+                    new ZLinkCapacityVector(1, 0, null))));
+        var sourceAuthority = Authority(actorId, source, sourceOwner);
+        var ready = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await store.CommitAsync(
+                reservation.Reservation,
+                ZLinkActorAuthorityPayloadCodec.Encode(sourceAuthority)));
+        provider.ArmHeartbeatBeforeAuthorityWrite();
+        var coordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            store);
+
+        var preparing = await coordinator.BeginPreparingAsync(
+            ready.Snapshot,
+            sourceAuthority,
+            Guid.NewGuid(),
+            applicationVersion: 1,
+            CancellationToken.None);
+
+        Assert.Equal(1, Projection(preparing).Phase);
+        Assert.Equal(sourceOwner.OwnerId, preparing.OwnerId);
+        Assert.Equal(1, provider.HeartbeatWriteCount);
+        Assert.Equal(2, provider.AuthorityWriteCount);
+    }
+
     [Fact]
     public async Task Preparing_Captured_and_target_cutover_are_durable()
     {
@@ -492,5 +548,73 @@ public sealed class StandaloneActorRelocationPrecommitTests
             return result;
         }
 
+    }
+
+    private sealed class OwnerLeaseHeartbeatLocationStore(
+        IZLinkLocationStore inner,
+        string ownerId) : IZLinkLocationStore
+    {
+        private readonly ZLinkStoreKey _ownerKey =
+            ZLinkProviderLocationRepository.OwnerKey(ownerId);
+        private int _trackAuthorityWrites;
+        private int _heartbeatNext;
+
+        internal int HeartbeatWriteCount { get; private set; }
+
+        internal int AuthorityWriteCount { get; private set; }
+
+        internal void ArmHeartbeatBeforeAuthorityWrite()
+        {
+            Interlocked.Exchange(ref _trackAuthorityWrites, 1);
+            Interlocked.Exchange(ref _heartbeatNext, 1);
+        }
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(key, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+                ZLinkStoreWriteRequest request,
+                CancellationToken cancellationToken = default)
+        {
+            var writesAuthority = request.Mutations
+                .OfType<ZLinkStoreMutation.Put>()
+                .Any(static mutation => mutation.Key.Value.StartsWith(
+                    "authority\0",
+                    StringComparison.Ordinal));
+            if (writesAuthority
+                && Volatile.Read(ref _trackAuthorityWrites) != 0)
+                AuthorityWriteCount++;
+            if (writesAuthority
+                && Interlocked.Exchange(ref _heartbeatNext, 0) == 1)
+            {
+                var owner = Assert.IsType<ZLinkStoreReadResult.Found>(
+                    await inner.ReadAsync(_ownerKey, cancellationToken)
+                        .ConfigureAwait(false));
+                Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                    await inner.WriteAsync(
+                            new ZLinkStoreWriteRequest(
+                                [new ZLinkStoreCondition.Version(
+                                    _ownerKey,
+                                    owner.Value.Version)],
+                                [new ZLinkStoreMutation.Put(
+                                    _ownerKey,
+                                    owner.Value.Bytes,
+                                    TimeSpan.FromMinutes(1))]),
+                            cancellationToken)
+                        .ConfigureAwait(false));
+                HeartbeatWriteCount++;
+            }
+            return await inner.WriteAsync(
+                    request,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
     }
 }

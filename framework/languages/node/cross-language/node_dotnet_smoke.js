@@ -149,9 +149,7 @@ function opaqueStoreKey(value) {
 
 async function nodeClientToDotnetChannelServer(tempDir) {
   const port = await reservePort();
-  const localPort = await reservePort();
   const endpoint = `tcp://127.0.0.1:${port}`;
-  const localEndpoint = `tcp://127.0.0.1:${localPort}`;
   const eventFile = path.join(tempDir, 'node-client-dotnet-channel.events');
   const host = startDotnetHost(tempDir, 'node-client-dotnet-channel', [
     'channel-server',
@@ -170,9 +168,7 @@ async function nodeClientToDotnetChannelServer(tempDir) {
     imports: [nestjs.ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
-        const mesh = builder.addRouteMesh('profiles').listen(localEndpoint);
-        mesh.channel('profiles').client();
-        mesh.peerConnections().connect(rid('dotnet-channel-server'), endpoint);
+        builder.addClientServerChannel('profiles').client().connect(endpoint);
         return builder.build();
       }
     })]
@@ -182,23 +178,21 @@ async function nodeClientToDotnetChannelServer(tempDir) {
   try {
     await host.ready;
     app = await NestFactory.createApplicationContext(ClientModule, { logger: false, abortOnError: false });
-    const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+    const clientServerRuntime = app.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME, { strict: false });
     try {
       await waitForCondition(
-        () => routeMeshRuntime.snapshot('profiles').channels.some(
-          channel => channel.channelName === 'profiles' && channel.isReady
-        ),
+        () => clientServerRuntime.snapshot('profiles').isReady,
         7000,
-        'Node RouteMesh profiles channel readiness'
+        'Node ClientServer profiles channel readiness'
       );
     } catch (error) {
-      error.message += `\nNode RouteMesh snapshot:\n${JSON.stringify(
-        routeMeshRuntime.snapshot('profiles'),
+      error.message += `\nNode ClientServer snapshot:\n${JSON.stringify(
+        clientServerRuntime.snapshot('profiles'),
         (_key, value) => typeof value === 'bigint' ? value.toString() : value
       )}\nDotnet host output:\n${host.output()}`;
       throw error;
     }
-    const client = app.get(nestjs.ZLINK_ROUTE_CLIENT, { strict: false });
+    const client = app.get(nestjs.ZLINK_CHANNEL_CLIENT, { strict: false });
     let reply;
     try {
       reply = await withTimeout(
@@ -337,9 +331,9 @@ async function dotnetClientToNodeChannelServer(tempDir) {
     imports: [nestjs.ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
-        builder.addRouteMesh('profiles')
-          .listen(endpoint)
-          .channel('profiles').server()
+        builder.addClientServerChannel('profiles').server()
+          .setBindHost('127.0.0.1')
+          .listen(port)
           .addRequestHandler('TestHostProfileRequest', TestHostProfileRequestHandler);
         return builder.build();
       }
@@ -534,13 +528,13 @@ async function nodeSpotRouteClientToDotnetHost(tempDir) {
       applicationError.kind, framework.ZLinkFrameworkErrorKind.Rejected,
       `application kind must cross as rejected; got kind=${applicationError.kind} message=${applicationError.message}`);
     assert.equal(
-      'origin' in applicationError, false,
-      'an application handler failure must not carry the framework origin marker');
+      applicationError.origin, 'application',
+      'an application handler failure must decode with application origin');
     assert.match(applicationError.message, /application spot route failure/);
     return [
       'Node spot-route client -> dotnet host request/reply',
       'Node spot-route client -> dotnet host framework not_found with origin marker',
-      'Node spot-route client -> dotnet host application rejected without marker'
+      'Node spot-route client -> dotnet host application rejected with application origin'
     ];
   } finally {
     await app?.close();
@@ -663,7 +657,7 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
         const fields = record.attributes;
         fsSync.appendFileSync(
           flowFile,
-          `packet=${fields.packet_name ?? '<null>'} flow=${fields.flow_id ?? '<null>'} origin=${fields.flow_origin ?? '<null>'}\n`
+          `packet=${fields.packet ?? '<null>'} flow=${fields.flow ?? '<null>'} origin=${fields.origin ?? '<null>'}\n`
         );
       },
       forceFlush: async () => undefined,

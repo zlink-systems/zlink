@@ -19,13 +19,16 @@ function createZoneWorldRelocationStore(shared: SharedSettings): ZLinkRedisReloc
   });
 }
 
-function zoneWorldLocationOptions(options: ZLinkLocationOptions): void {
+function zoneWorldLocationOptions(options: ZLinkLocationOptions, shared: SharedSettings): void {
   options
     .pollingIntervalMs(100)
     .ownerLeaseRenewIntervalMs(1_000)
     .ownerLeaseTtlMs(3_000)
     .ownerLeaseFencingMarginMs(500)
     .ownerLeaseRenewTimeoutMs(500);
+  if (shared.sessionRelocationSealTimeoutMs !== undefined) {
+    options.sessionRelocationSealTimeoutMs(shared.sessionRelocationSealTimeoutMs);
+  }
 }
 
 export {

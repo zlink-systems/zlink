@@ -389,8 +389,8 @@ public sealed class ObjectAndChannelRoleBuilderContracts
             return this;
         }
 
-        public IZLinkUserSpotFactoryBuilder<TSpot> RelocationReadiness(
-            ZLinkSpotRelocationReadinessMode mode) => this;
+        public IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
+            ZLinkSpotRelocationCoordinationMode mode) => this;
 
         public IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation() =>
             Select("Disabled");

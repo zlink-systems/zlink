@@ -41,8 +41,7 @@ class app_t;
 class core_hwm_options_t
 {
   public:
-    explicit core_hwm_options_t (
-      std::shared_ptr<detail::framework_options_state_t> options) :
+    explicit core_hwm_options_t (std::shared_ptr<detail::framework_options_state_t> options) :
         _options (std::move (options))
     {
     }
@@ -78,36 +77,32 @@ class inbound_dispatch_options_t
     {
     }
 
-    inbound_dispatch_options_t &set_core_hwm_memory_limit_bytes (
-      std::optional<std::uint64_t> value)
+    inbound_dispatch_options_t &set_core_hwm_memory_limit_bytes (std::optional<std::uint64_t> value)
     {
         _options->core_hwm_memory_limit_bytes = value.value_or (0);
         return *this;
     }
 
-    inbound_dispatch_options_t &set_core_hwm_budget_bytes (
-      std::optional<std::uint64_t> value)
+    inbound_dispatch_options_t &set_core_hwm_budget_bytes (std::optional<std::uint64_t> value)
     {
         _options->core_hwm_budget_bytes = value.value_or (0);
         return *this;
     }
 
-    inbound_dispatch_options_t &set_core_hwm_profile (
-      core_hwm_profile_t value)
+    inbound_dispatch_options_t &set_core_hwm_profile (core_hwm_profile_t value)
     {
         _options->core_hwm_profile = value;
         return *this;
     }
 
-    inbound_dispatch_options_t &set_application_job_queue_profile (
-      application_job_queue_profile_t value)
+    inbound_dispatch_options_t &
+    set_application_job_queue_profile (application_job_queue_profile_t value)
     {
         _options->application_job_queue_profile = value;
         return *this;
     }
 
-    inbound_dispatch_options_t &set_max_queued_application_jobs (
-      std::optional<std::uint32_t> value)
+    inbound_dispatch_options_t &set_max_queued_application_jobs (std::optional<std::uint32_t> value)
     {
         _options->max_queued_application_jobs = value;
         return *this;
@@ -172,16 +167,14 @@ class handler_options_builder_t
     friend class client_server_channel_server_builder_t;
 
     template <typename THandler>
-    void add_to_group (
-      std::string group_name,
-      std::optional<std::string> packet_name = std::nullopt)
+    void add_to_group (std::string group_name,
+                       std::optional<std::string> packet_name = std::nullopt)
     {
         using request_type = typename THandler::request_type;
         using reply_type = typename THandler::reply_type;
-        auto topic_name =
-          packet_name && !packet_name->empty ()
-            ? std::move (*packet_name)
-            : detail::handler_topic_name<THandler, request_type> ();
+        auto topic_name = packet_name && !packet_name->empty ()
+                            ? std::move (*packet_name)
+                            : detail::handler_topic_name<THandler, request_type> ();
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::request, topic_name,
                                     detail::message_name<request_type> ());
 
@@ -277,15 +270,13 @@ class handler_options_builder_t
     }
 
     template <typename THandler>
-    void add_send_to_group (
-      std::string group_name,
-      std::optional<std::string> packet_name = std::nullopt)
+    void add_send_to_group (std::string group_name,
+                            std::optional<std::string> packet_name = std::nullopt)
     {
         using message_type = typename THandler::message_type;
-        auto topic_name =
-          packet_name && !packet_name->empty ()
-            ? std::move (*packet_name)
-            : detail::handler_topic_name<THandler, message_type> ();
+        auto topic_name = packet_name && !packet_name->empty ()
+                            ? std::move (*packet_name)
+                            : detail::handler_topic_name<THandler, message_type> ();
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::send, topic_name,
                                     detail::message_name<message_type> ());
 
@@ -313,12 +304,12 @@ class handler_options_builder_t
                     detail::message_name<message_type> (),
                     static_cast<void (THandler::*) (const message_type &)> (&THandler::handle));
               });
-            _state->add_mesh_installer (
-              std::move (mesh_group_name), detail::handler_group_kind_t::send,
-              [] (mesh_channel_server_builder_t &channel) {
-                  channel.add_send_handler<THandler, message_type> (
-                    detail::message_name<message_type> ());
-              });
+            _state->add_mesh_installer (std::move (mesh_group_name),
+                                        detail::handler_group_kind_t::send,
+                                        [] (mesh_channel_server_builder_t &channel) {
+                                            channel.add_send_handler<THandler, message_type> (
+                                              detail::message_name<message_type> ());
+                                        });
         } else if constexpr (requires {
                                  static_cast<task_t<void> (THandler::*) (const message_type &)> (
                                    &THandler::handle);
@@ -331,12 +322,12 @@ class handler_options_builder_t
                     static_cast<task_t<void> (THandler::*) (const message_type &)> (
                       &THandler::handle));
               });
-            _state->add_mesh_installer (
-              std::move (mesh_group_name), detail::handler_group_kind_t::send,
-              [] (mesh_channel_server_builder_t &channel) {
-                  channel.add_send_handler<THandler, message_type> (
-                    detail::message_name<message_type> ());
-              });
+            _state->add_mesh_installer (std::move (mesh_group_name),
+                                        detail::handler_group_kind_t::send,
+                                        [] (mesh_channel_server_builder_t &channel) {
+                                            channel.add_send_handler<THandler, message_type> (
+                                              detail::message_name<message_type> ());
+                                        });
         } else if constexpr (requires {
                                  static_cast<void (THandler::*) (const message_type &,
                                                                  const route_message_context_t &)> (
@@ -350,12 +341,12 @@ class handler_options_builder_t
                     static_cast<void (THandler::*) (
                       const message_type &, const route_message_context_t &)> (&THandler::handle));
               });
-            _state->add_mesh_installer (
-              std::move (mesh_group_name), detail::handler_group_kind_t::send,
-              [] (mesh_channel_server_builder_t &channel) {
-                  channel.add_send_handler<THandler, message_type> (
-                    detail::message_name<message_type> ());
-              });
+            _state->add_mesh_installer (std::move (mesh_group_name),
+                                        detail::handler_group_kind_t::send,
+                                        [] (mesh_channel_server_builder_t &channel) {
+                                            channel.add_send_handler<THandler, message_type> (
+                                              detail::message_name<message_type> ());
+                                        });
         } else if constexpr (requires {
                                  static_cast<task_t<void> (THandler::*) (
                                    const message_type &, const route_message_context_t &)> (
@@ -369,12 +360,12 @@ class handler_options_builder_t
                     static_cast<task_t<void> (THandler::*) (
                       const message_type &, const route_message_context_t &)> (&THandler::handle));
               });
-            _state->add_mesh_installer (
-              std::move (mesh_group_name), detail::handler_group_kind_t::send,
-              [] (mesh_channel_server_builder_t &channel) {
-                  channel.add_send_handler<THandler, message_type> (
-                    detail::message_name<message_type> ());
-              });
+            _state->add_mesh_installer (std::move (mesh_group_name),
+                                        detail::handler_group_kind_t::send,
+                                        [] (mesh_channel_server_builder_t &channel) {
+                                            channel.add_send_handler<THandler, message_type> (
+                                              detail::message_name<message_type> ());
+                                        });
         }
     }
 
@@ -446,10 +437,7 @@ class network_options_t
         return *this;
     }
 
-    std::optional<std::string> advertise_host () const
-    {
-        return _options->advertise_host;
-    }
+    std::optional<std::string> advertise_host () const { return _options->advertise_host; }
 
     network_options_t &set_advertise_host (std::optional<std::string> host)
     {
@@ -468,8 +456,7 @@ class codec_registration_context_t
 {
   public:
     explicit codec_registration_context_t (serializer_registry_t &serializers) :
-        _serializers (&serializers),
-        _registration (serializers.begin_registration ())
+        _serializers (&serializers), _registration (serializers.begin_registration ())
     {
     }
 
@@ -480,8 +467,7 @@ class codec_registration_context_t
                     std::string content_type = "application/octet-stream")
     {
         _serializers->template add_for_registration<TPayload> (
-          std::move (serialize), std::move (deserialize),
-          std::move (content_type), _registration);
+          std::move (serialize), std::move (deserialize), std::move (content_type), _registration);
         return *this;
     }
 
@@ -505,6 +491,12 @@ class codec_options_builder_t
         codec_registration_context_t context (*_serializers);
         extension.register_framework_codecs (context);
         return *this;
+    }
+
+    template <typename TExtension>
+    requires std::default_initializable<TExtension> codec_options_builder_t &use ()
+    {
+        return use (TExtension{});
     }
 
   private:
@@ -551,16 +543,14 @@ class client_server_channel_builder_t
     void listen (std::uint16_t port)
     {
         _server_port = port;
-        _server_endpoint =
-          "tcp://" + _server_bind_host_override.value_or (_options->bind_host) + ":"
-          + (port == 0 ? "*" : std::to_string (port));
+        _server_endpoint = "tcp://" + _server_bind_host_override.value_or (_options->bind_host)
+                           + ":" + (port == 0 ? "*" : std::to_string (port));
         apply_channel ();
     }
 
     void set_server_bind_host (std::string host)
     {
-        detail::require_non_blank (
-          host, "client/server server bind host is required");
+        detail::require_non_blank (host, "client/server server bind host is required");
         _server_bind_host_override = std::move (host);
         if (_server_port)
             listen (*_server_port);
@@ -568,21 +558,19 @@ class client_server_channel_builder_t
 
     void set_server_advertise_host (std::string host)
     {
-        detail::require_non_blank (
-          host, "client/server server advertise host is required");
+        detail::require_non_blank (host, "client/server server advertise host is required");
         _server_advertise_host_override = std::move (host);
-        _options->client_server_server_advertise_hosts[
-          _channel_name] = *_server_advertise_host_override;
-        _options->client_server_server_advertise_host_overrides[
-          _channel_name] = *_server_advertise_host_override;
+        _options->client_server_server_advertise_hosts[_channel_name] =
+          *_server_advertise_host_override;
+        _options->client_server_server_advertise_host_overrides[_channel_name] =
+          *_server_advertise_host_override;
     }
 
     void set_server_weight (int weight)
     {
         if (weight < 0 || weight > 10000)
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "client/server server weight must be between 0 and 10000");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "client/server server weight must be between 0 and 10000");
         _server_weight = weight;
         apply_channel ();
     }
@@ -597,8 +585,7 @@ class client_server_channel_builder_t
 
     void connect_client (std::string endpoint)
     {
-        detail::require_non_blank (
-          endpoint, "client/server client endpoint is required");
+        detail::require_non_blank (endpoint, "client/server client endpoint is required");
         client_connections ().connect (std::move (endpoint));
         apply_channel ();
     }
@@ -641,28 +628,23 @@ class client_server_channel_builder_t
         }
         if (client_enabled) {
             _options->client_server_client_actions[channel_name] =
-              [client_endpoints] (
-                channel_builder_t &channel) {
+              [client_endpoints] (channel_builder_t &channel) {
                   auto client = channel.enable_client ();
                   for (const auto &endpoint : client_endpoints) {
                       client.connect (endpoint);
                   }
               };
         }
-        const auto merged_timeout =
-          _options->client_server_default_request_timeouts[channel_name];
-        const auto merged_server =
-          _options->client_server_server_actions.contains (channel_name)
-            ? _options->client_server_server_actions.at (channel_name)
-            : std::function<void (channel_builder_t &)>{};
-        const auto merged_client =
-          _options->client_server_client_actions.contains (channel_name)
-            ? _options->client_server_client_actions.at (channel_name)
-            : std::function<void (channel_builder_t &)>{};
+        const auto merged_timeout = _options->client_server_default_request_timeouts[channel_name];
+        const auto merged_server = _options->client_server_server_actions.contains (channel_name)
+                                     ? _options->client_server_server_actions.at (channel_name)
+                                     : std::function<void (channel_builder_t &)>{};
+        const auto merged_client = _options->client_server_client_actions.contains (channel_name)
+                                     ? _options->client_server_client_actions.at (channel_name)
+                                     : std::function<void (channel_builder_t &)>{};
         _options->set_zlink_action (
           "client_server_channel:" + channel_name,
-          [channel_name, merged_timeout, merged_server,
-           merged_client] (zlink_builder_t &zlink) {
+          [channel_name, merged_timeout, merged_server, merged_client] (zlink_builder_t &zlink) {
               auto channel = zlink.channel (channel_name);
               if (merged_timeout) {
                   channel.default_request_timeout (*merged_timeout);
@@ -694,8 +676,7 @@ class client_server_channel_builder_t
 class client_server_channel_client_builder_t
 {
   public:
-    client_server_channel_client_builder_t &
-    connect (std::string endpoint)
+    client_server_channel_client_builder_t &connect (std::string endpoint)
     {
         _channel->connect_client (std::move (endpoint));
         return *this;
@@ -715,77 +696,59 @@ class client_server_channel_client_builder_t
 class client_server_channel_server_builder_t
 {
   public:
-    client_server_channel_server_builder_t &
-    listen (std::uint16_t port = 0)
+    client_server_channel_server_builder_t &listen (std::uint16_t port = 0)
     {
         _channel->listen (port);
         return *this;
     }
 
-    client_server_channel_server_builder_t &
-    set_bind_host (std::string host)
+    client_server_channel_server_builder_t &set_bind_host (std::string host)
     {
         _channel->set_server_bind_host (std::move (host));
         return *this;
     }
 
-    client_server_channel_server_builder_t &
-    set_advertise_host (std::string host)
+    client_server_channel_server_builder_t &set_advertise_host (std::string host)
     {
-        _channel->set_server_advertise_host (
-          std::move (host));
+        _channel->set_server_advertise_host (std::move (host));
         return *this;
     }
 
-    client_server_channel_server_builder_t &
-    set_weight (int weight)
+    client_server_channel_server_builder_t &set_weight (int weight)
     {
         _channel->set_server_weight (weight);
         return *this;
     }
 
-    client_server_channel_server_builder_t &
-    add_handler_group (std::string group_name)
+    client_server_channel_server_builder_t &add_handler_group (std::string group_name)
     {
-        _channel->add_server_handler_group (
-          std::move (group_name));
+        _channel->add_server_handler_group (std::move (group_name));
         return *this;
     }
 
     template <typename THandler, typename TMessage>
-    client_server_channel_server_builder_t &
-    add_send_handler (std::string packet_name = {})
+    client_server_channel_server_builder_t &add_send_handler (std::string packet_name = {})
     {
-        static_assert (
-          std::is_same_v<
-            typename THandler::message_type, TMessage>,
-          "ClientServer send handler message type must match THandler::message_type");
+        static_assert (std::is_same_v<typename THandler::message_type, TMessage>,
+                       "ClientServer send handler message type must match THandler::message_type");
         const auto group_name = next_inline_group ("send");
-        handler_options_builder_t handlers (
-          *_channel->_services, *_channel->_handlers,
-          *_channel->_serializers, _channel->_handler_groups);
-        handlers.template add_send_to_group<THandler> (
-          group_name, std::move (packet_name));
+        handler_options_builder_t handlers (*_channel->_services, *_channel->_handlers,
+                                            *_channel->_serializers, _channel->_handler_groups);
+        handlers.template add_send_to_group<THandler> (group_name, std::move (packet_name));
         _channel->add_server_handler_group (group_name);
         return *this;
     }
 
     template <typename THandler, typename TRequest, typename TReply>
-    client_server_channel_server_builder_t &
-    add_request_handler (std::string packet_name = {})
+    client_server_channel_server_builder_t &add_request_handler (std::string packet_name = {})
     {
-        static_assert (
-          std::is_same_v<
-              typename THandler::request_type, TRequest>
-            && std::is_same_v<
-              typename THandler::reply_type, TReply>,
-          "ClientServer request/reply types must match THandler");
+        static_assert (std::is_same_v<typename THandler::request_type, TRequest>
+                         && std::is_same_v<typename THandler::reply_type, TReply>,
+                       "ClientServer request/reply types must match THandler");
         const auto group_name = next_inline_group ("request");
-        handler_options_builder_t handlers (
-          *_channel->_services, *_channel->_handlers,
-          *_channel->_serializers, _channel->_handler_groups);
-        handlers.template add_to_group<THandler> (
-          group_name, std::move (packet_name));
+        handler_options_builder_t handlers (*_channel->_services, *_channel->_handlers,
+                                            *_channel->_serializers, _channel->_handler_groups);
+        handlers.template add_to_group<THandler> (group_name, std::move (packet_name));
         _channel->add_server_handler_group (group_name);
         return *this;
     }
@@ -800,33 +763,25 @@ class client_server_channel_server_builder_t
 
     std::string next_inline_group (std::string_view kind)
     {
-        return "__client_server:" + _channel->_channel_name
-               + ":" + std::string (kind) + ":"
-               + std::to_string (
-                 _channel->_inline_handler_sequence++);
+        return "__client_server:" + _channel->_channel_name + ":" + std::string (kind) + ":"
+               + std::to_string (_channel->_inline_handler_sequence++);
     }
 
     std::shared_ptr<client_server_channel_builder_t> _channel;
 };
 
-inline client_server_channel_client_builder_t
-client_server_channel_builder_t::client ()
+inline client_server_channel_client_builder_t client_server_channel_builder_t::client ()
 {
-    auto channel =
-      std::make_shared<client_server_channel_builder_t> (*this);
+    auto channel = std::make_shared<client_server_channel_builder_t> (*this);
     channel->select_client ();
-    return client_server_channel_client_builder_t (
-      std::move (channel));
+    return client_server_channel_client_builder_t (std::move (channel));
 }
 
-inline client_server_channel_server_builder_t
-client_server_channel_builder_t::server ()
+inline client_server_channel_server_builder_t client_server_channel_builder_t::server ()
 {
-    auto channel =
-      std::make_shared<client_server_channel_builder_t> (*this);
+    auto channel = std::make_shared<client_server_channel_builder_t> (*this);
     channel->select_server ();
-    return client_server_channel_server_builder_t (
-      std::move (channel));
+    return client_server_channel_server_builder_t (std::move (channel));
 }
 
 class fanout_channel_builder_t
@@ -856,9 +811,9 @@ class fanout_channel_builder_t
     fanout_channel_builder_t &enable_publisher (std::uint16_t port = 0)
     {
         _publisher_port = port;
-        _publisher_endpoint =
-          "tcp://" + _publisher_bind_host_override.value_or (_options->bind_host) + ":"
-          + std::to_string (port);
+        _publisher_endpoint = "tcp://"
+                              + _publisher_bind_host_override.value_or (_options->bind_host) + ":"
+                              + std::to_string (port);
         apply ();
         return *this;
     }
@@ -868,9 +823,9 @@ class fanout_channel_builder_t
         detail::require_non_blank (host, "fanout publisher bind host is required");
         _publisher_bind_host_override = std::move (host);
         if (_publisher_port) {
-            _publisher_endpoint =
-              "tcp://" + _publisher_bind_host_override.value_or (_options->bind_host) + ":"
-              + std::to_string (*_publisher_port);
+            _publisher_endpoint = "tcp://"
+                                  + _publisher_bind_host_override.value_or (_options->bind_host)
+                                  + ":" + std::to_string (*_publisher_port);
         }
         apply ();
         return *this;
@@ -891,27 +846,26 @@ class fanout_channel_builder_t
     fanout_channel_builder_t &set_routing_id (zlink::routing_id_t routing_id)
     {
         if (_automatic_routing_id_prefix) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "Fanout publisher cannot configure both a fixed routing id and an automatic routing id prefix");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "Fanout publisher cannot configure both a fixed routing "
+                                         "id and an automatic routing id prefix");
         }
         _routing_id = std::move (routing_id);
         apply ();
         return *this;
     }
 
-    fanout_channel_builder_t &
-    set_automatic_routing_id_prefix (std::string prefix)
+    fanout_channel_builder_t &set_automatic_routing_id_prefix (std::string prefix)
     {
         if (!detail::is_valid_automatic_routing_id_prefix (prefix)) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "Fanout automatic routing id prefix must contain 1..64 ASCII letters, digits, '.', '_' or '-'");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "Fanout automatic routing id prefix must contain 1..64 "
+                                         "ASCII letters, digits, '.', '_' or '-'");
         }
         if (_routing_id) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "Fanout publisher cannot configure both a fixed routing id and an automatic routing id prefix");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "Fanout publisher cannot configure both a fixed routing "
+                                         "id and an automatic routing id prefix");
         }
         _automatic_routing_id_prefix = std::move (prefix);
         apply ();
@@ -980,50 +934,44 @@ class fanout_channel_builder_t
         } else {
             _options->fanout_channels_with_publisher.erase (channel_name);
         }
-        _options->set_zlink_action ("fanout_channel:" + channel_name,
-                                    [channel_name, options, publisher_endpoint,
-                                     publisher_port, publisher_bind_host_override,
-                                     subscriber_enabled,
-                                     subscriber_endpoints, routing_id,
-                                     automatic_routing_id_prefix,
-                                     subscriber_uses_discovery] (zlink_builder_t &zlink) {
-                                        auto channel = zlink.channel (channel_name);
-                                        if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
-                                            /* Publisher discovery (Location
+        _options->set_zlink_action (
+          "fanout_channel:" + channel_name,
+          [channel_name, options, publisher_endpoint, publisher_port, publisher_bind_host_override,
+           subscriber_enabled, subscriber_endpoints, routing_id, automatic_routing_id_prefix,
+           subscriber_uses_discovery] (zlink_builder_t &zlink) {
+              auto channel = zlink.channel (channel_name);
+              if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
+                  /* Publisher discovery (Location
                                              * Store announcement) is opted
                                              * into by configuring a routing
                                              * identity; a plain
                                              * endpoint-bound publisher runs
                                              * on the native path with no
                                              * store requirement. */
-                                            auto publisher = channel.enable_publisher (
-                                              routing_id.has_value ()
-                                              || automatic_routing_id_prefix.has_value ());
-                                            if (routing_id) {
-                                                publisher.set_routing_id (*routing_id);
-                                            } else if (automatic_routing_id_prefix) {
-                                                publisher.set_routing_id (
-                                                  zlink::routing_id_t::from (
-                                                    *automatic_routing_id_prefix + "-"
-                                                    + detail::new_uuid_v4 ()));
-                                            }
-                                            const auto endpoint = publisher_port
-                                              ? "tcp://"
-                                                  + publisher_bind_host_override.value_or (
-                                                      options->bind_host)
-                                                  + ":" + std::to_string (*publisher_port)
-                                                  : publisher_endpoint;
-                                            publisher.bind (endpoint);
-                                        }
-                                        if (subscriber_enabled) {
-                                            auto subscriber = channel.enable_subscriber ();
-                                            if (!subscriber_uses_discovery) {
-                                                for (const auto &endpoint : subscriber_endpoints) {
-                                                    subscriber.connect (endpoint);
-                                                }
-                                            }
-                                        }
-                                    });
+                  auto publisher = channel.enable_publisher (
+                    routing_id.has_value () || automatic_routing_id_prefix.has_value ());
+                  if (routing_id) {
+                      publisher.set_routing_id (*routing_id);
+                  } else if (automatic_routing_id_prefix) {
+                      publisher.set_routing_id (zlink::routing_id_t::from (
+                        *automatic_routing_id_prefix + "-" + detail::new_uuid_v4 ()));
+                  }
+                  const auto endpoint =
+                    publisher_port
+                      ? "tcp://" + publisher_bind_host_override.value_or (options->bind_host) + ":"
+                          + std::to_string (*publisher_port)
+                      : publisher_endpoint;
+                  publisher.bind (endpoint);
+              }
+              if (subscriber_enabled) {
+                  auto subscriber = channel.enable_subscriber ();
+                  if (!subscriber_uses_discovery) {
+                      for (const auto &endpoint : subscriber_endpoints) {
+                          subscriber.connect (endpoint);
+                      }
+                  }
+              }
+          });
     }
 
     std::string _channel_name;
@@ -1239,9 +1187,8 @@ class stream_node_options_builder_t
     stream_node_options_builder_t &bind (std::uint16_t port = 0)
     {
         _port = port;
-        _endpoint =
-          "tcp://" + _bind_host_override.value_or (_options->bind_host) + ":"
-          + std::to_string (port);
+        _endpoint = "tcp://" + _bind_host_override.value_or (_options->bind_host) + ":"
+                    + std::to_string (port);
         _options->stream_nodes_with_bind.insert (_stream_name);
         apply ();
         return *this;
@@ -1252,9 +1199,8 @@ class stream_node_options_builder_t
         detail::require_non_blank (host, "STREAM bind host is required");
         _bind_host_override = std::move (host);
         if (_port) {
-            _endpoint =
-              "tcp://" + _bind_host_override.value_or (_options->bind_host) + ":"
-              + std::to_string (*_port);
+            _endpoint = "tcp://" + _bind_host_override.value_or (_options->bind_host) + ":"
+                        + std::to_string (*_port);
         }
         apply ();
         return *this;
@@ -1268,10 +1214,9 @@ class stream_node_options_builder_t
         return *this;
     }
 
-    stream_node_options_builder_t &set_tls_server (
-      std::string certificate_file,
-      std::string private_key_file,
-      bool require_client_certificate = false)
+    stream_node_options_builder_t &set_tls_server (std::string certificate_file,
+                                                   std::string private_key_file,
+                                                   bool require_client_certificate = false)
     {
         detail::require_non_blank (certificate_file, "STREAM TLS certificate file is required");
         detail::require_non_blank (private_key_file, "STREAM TLS private key file is required");
@@ -1344,9 +1289,8 @@ class stream_node_options_builder_t
             return;
         }
         if (_socket_config.max_message_size < 0) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "STREAM MaxMessageSize must be zero or positive");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM MaxMessageSize must be zero or positive");
         }
         const auto stream_name = _stream_name;
         const auto endpoint = _endpoint;
@@ -1361,16 +1305,14 @@ class stream_node_options_builder_t
         const auto options = _options;
         _options->set_zlink_action (
           "stream_node:" + stream_name,
-          [stream_name, endpoint, port, bind_host_override, options, session_name,
-           max_message_size, tls_certificate_file,
-           tls_private_key_file, tls_require_client_certificate,
+          [stream_name, endpoint, port, bind_host_override, options, session_name, max_message_size,
+           tls_certificate_file, tls_private_key_file, tls_require_client_certificate,
            advertise_host_override] (zlink_builder_t &zlink) {
               auto stream = zlink.stream (stream_name);
               stream.set_max_message_size (max_message_size);
               if (port) {
-                  stream.bind (
-                    "tcp://" + bind_host_override.value_or (options->bind_host) + ":"
-                    + std::to_string (*port));
+                  stream.bind ("tcp://" + bind_host_override.value_or (options->bind_host) + ":"
+                               + std::to_string (*port));
               } else if (!endpoint.empty ()) {
                   stream.bind (endpoint);
               }
@@ -1494,15 +1436,9 @@ class zlink_framework_options_t
 
     worker_options_t &worker () { return _options->worker; }
 
-    core_hwm_options_t &configure_core_hwm ()
-    {
-        return *_core_hwm;
-    }
+    core_hwm_options_t &configure_core_hwm () { return *_core_hwm; }
 
-    inbound_dispatch_options_t &configure_inbound_dispatch ()
-    {
-        return *_inbound_dispatch;
-    }
+    inbound_dispatch_options_t &configure_inbound_dispatch () { return *_inbound_dispatch; }
 
     std::uint64_t core_hwm_memory_limit_bytes () const noexcept
     {
@@ -1514,10 +1450,7 @@ class zlink_framework_options_t
         return _options->core_hwm_budget_bytes;
     }
 
-    core_hwm_profile_t core_hwm_profile () const noexcept
-    {
-        return _options->core_hwm_profile;
-    }
+    core_hwm_profile_t core_hwm_profile () const noexcept { return _options->core_hwm_profile; }
 
     application_job_queue_profile_t application_job_queue_profile () const noexcept
     {
@@ -1538,8 +1471,7 @@ class zlink_framework_options_t
         return _options->route_mesh_channels_with_client;
     }
 
-    zlink_framework_options_t &
-    set_message_follow_duration (std::chrono::milliseconds duration)
+    zlink_framework_options_t &set_message_follow_duration (std::chrono::milliseconds duration)
     {
         if (duration < std::chrono::milliseconds::zero ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -1570,40 +1502,78 @@ class zlink_framework_options_t
                                          "location store instance must not be null");
         }
         if (_options->has_location_store_instance) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "location store must be registered exactly once");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "location store must be registered exactly once");
         }
         _options->has_location_store_instance = true;
         register_location_store_instance (std::move (store));
         return *this;
     }
 
-    zlink_framework_options_t &
-    add_relocation_store (std::shared_ptr<relocation_store_t> store)
+    template <typename TStore> requires std::derived_from<TStore, location_store_t> &&requires
+    {
+        typename TStore::options_type;
+        typename TStore::options_builder_type;
+    }
+    typename TStore::options_builder_type add_location_store ()
+    {
+        if (_options->has_location_store_instance) {
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "location store must be registered exactly once");
+        }
+        _options->has_location_store_instance = true;
+        auto options = std::make_shared<typename TStore::options_type> ();
+        _services->add_factory<location_store_t> (
+          [options] (service_provider_t &) {
+              return std::static_pointer_cast<location_store_t> (
+                std::make_shared<TStore> (*options));
+          },
+          service_lifetime_t::singleton);
+        return typename TStore::options_builder_type (std::move (options));
+    }
+
+    zlink_framework_options_t &add_relocation_store (std::shared_ptr<relocation_store_t> store)
     {
         if (!store) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "relocation store instance must not be null");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "relocation store instance must not be null");
         }
         if (_options->has_relocation_store_instance) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "relocation store must be registered exactly once");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "relocation store must be registered exactly once");
         }
         _options->has_relocation_store_instance = true;
         _services->add_factory<relocation_store_t> (
-          [store] (service_provider_t &) { return store; },
-          service_lifetime_t::singleton);
+          [store] (service_provider_t &) { return store; }, service_lifetime_t::singleton);
         return *this;
+    }
+
+    template <typename TStore> requires std::derived_from<TStore, relocation_store_t> &&requires
+    {
+        typename TStore::options_type;
+        typename TStore::options_builder_type;
+    }
+    typename TStore::options_builder_type add_relocation_store ()
+    {
+        if (_options->has_relocation_store_instance) {
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "relocation store must be registered exactly once");
+        }
+        _options->has_relocation_store_instance = true;
+        auto options = std::make_shared<typename TStore::options_type> ();
+        _services->add_factory<relocation_store_t> (
+          [options] (service_provider_t &) {
+              return std::static_pointer_cast<relocation_store_t> (
+                std::make_shared<TStore> (*options));
+          },
+          service_lifetime_t::singleton);
+        return typename TStore::options_builder_type (std::move (options));
     }
 
     client_server_channel_builder_t add_client_server_channel (std::string channel_name)
     {
-        return client_server_channel_builder_t (std::move (channel_name), _options,
-                                                _handler_groups, *_services,
-                                                *_handlers, *_serializers);
+        return client_server_channel_builder_t (std::move (channel_name), _options, _handler_groups,
+                                                *_services, *_handlers, *_serializers);
     }
 
     fanout_channel_builder_t add_fanout_channel (std::string channel_name)
@@ -1638,8 +1608,7 @@ class zlink_framework_options_t
         return _options->client_endpoint_connections;
     }
 
-    std::map<std::string, endpoint_connections_t> &
-    subscriber_endpoint_connections () const noexcept
+    std::map<std::string, endpoint_connections_t> &subscriber_endpoint_connections () const noexcept
     {
         return _options->subscriber_endpoint_connections;
     }
@@ -1668,8 +1637,7 @@ class zlink_framework_options_t
         for (const auto &channel_name : _options->client_server_channels) {
             const auto override_host =
               _options->client_server_server_advertise_host_overrides.find (channel_name);
-            if (override_host !=
-                _options->client_server_server_advertise_host_overrides.end ()) {
+            if (override_host != _options->client_server_server_advertise_host_overrides.end ()) {
                 _options->client_server_server_advertise_hosts[channel_name] =
                   override_host->second;
             } else if (_options->advertise_host) {
@@ -1682,10 +1650,8 @@ class zlink_framework_options_t
         for (const auto &channel_name : _options->fanout_channels_with_publisher) {
             const auto override_host =
               _options->fanout_publisher_advertise_host_overrides.find (channel_name);
-            if (override_host !=
-                _options->fanout_publisher_advertise_host_overrides.end ()) {
-                _options->fanout_publisher_advertise_hosts[channel_name] =
-                  override_host->second;
+            if (override_host != _options->fanout_publisher_advertise_host_overrides.end ()) {
+                _options->fanout_publisher_advertise_hosts[channel_name] = override_host->second;
             } else if (_options->advertise_host) {
                 _options->fanout_publisher_advertise_hosts[channel_name] =
                   *_options->advertise_host;

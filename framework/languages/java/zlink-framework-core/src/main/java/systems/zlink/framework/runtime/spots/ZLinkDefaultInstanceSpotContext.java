@@ -83,6 +83,13 @@ final class DefaultInstanceSpotContext
         return enqueueDispatch(() -> host.runWithOutbound(outbound, operation));
     }
 
+    CompletionStage<Void> runClosing(
+        Supplier<CompletionStage<Void>> operation) {
+        timers.freeze();
+        return awaitQuiescence().thenCompose(ignored ->
+            runLifecycle(operation));
+    }
+
     void closeResources() {
         timers.close();
         handlerInstances.close();

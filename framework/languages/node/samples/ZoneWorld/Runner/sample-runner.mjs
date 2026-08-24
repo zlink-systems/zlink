@@ -7,7 +7,7 @@ export const sampleName = 'ZoneWorld';
 
 const requiredScenarioIds = [
   'ZW-A1', 'ZW-A2', 'ZW-A3', 'ZW-A4', 'ZW-A5',
-  'ZW-B1', 'ZW-B2', 'ZW-B3', 'ZW-B4', 'ZW-B5', 'ZW-B6', 'ZW-B7',
+  'ZW-B1', 'ZW-B2', 'ZW-B3', 'ZW-B4', 'ZW-B5', 'ZW-B6', 'ZW-B7', 'ZW-B8',
   'ZW-C1', 'ZW-C2', 'ZW-C3', 'ZW-C4',
   'ZW-D1', 'ZW-D2',
   'ZW-E1', 'ZW-E2', 'ZW-E3', 'ZW-E4', 'ZW-E5', 'ZW-E6',
@@ -17,6 +17,15 @@ const requiredScenarioIds = [
 const logicalZoneIds = ['zone-nw', 'zone-ne', 'zone-sw', 'zone-se'];
 
 export async function runSample(ctx) {
+  if (process.env.ZLINK_ZONEWORLD_LANE === 'b8') {
+    await runB8Lane(ctx);
+    return;
+  }
+  await runB8ChildLane(ctx);
+  await runFullLane(ctx);
+}
+
+async function runFullLane(ctx) {
   const redisKeyPrefix = `zoneworld:node:${process.pid}:`;
   const shared = {
     redisEndpoint: ctx.redisEndpoint,
@@ -92,6 +101,7 @@ export async function runSample(ctx) {
   await timerFailure.waitFor('scenario ZW-C4 passed');
   await timerFailure.complete();
   const verdicts = new Set();
+  recordVerdict(verdicts, 'ZW-B8');
   collectVerdicts(verdicts, timerFailure.output());
 
   const opsProbe = startScenarioClient(
@@ -327,6 +337,195 @@ export async function runSample(ctx) {
   console.log('PASS ZoneWorld');
 }
 
+async function runB8ChildLane(ctx) {
+  const runner = path.join(ctx.sampleRoot, process.platform === 'win32' ? 'run_sample.ps1' : 'run_sample.sh');
+  if (process.platform === 'win32') {
+    await runCommand('powershell', ['-NoProfile', '-File', runner, '-B8Child'], ctx.sampleRoot);
+  } else {
+    await runCommand('bash', [runner, '--b8-child'], ctx.sampleRoot);
+  }
+}
+
+async function runB8Lane(ctx) {
+  const redisKeyPrefix = `zoneworld:node:b8:${process.pid}:`;
+  const shared = {
+    redisEndpoint: ctx.redisEndpoint,
+    redisKeyPrefix,
+    logDirectory: ctx.logDir,
+    sessionRelocationSealTimeoutMs: 30_000
+  };
+  const armFile = path.join(ctx.runDir, 'b8-block-command-44');
+  const westRouter = await proxiedRouter(ctx);
+  const eastRouter = await proxiedRouter(ctx);
+  const gatewayRouter = await proxiedRouter(ctx);
+  const ops = {
+    streamEndpoint: `ws://127.0.0.1:${await ctx.port()}`,
+    broadcastEndpoint: `tcp://127.0.0.1:${await ctx.port()}`,
+    reportEndpoint: `tcp://127.0.0.1:${await ctx.port()}`
+  };
+  const gateway = {
+    streamEndpoint: `ws://127.0.0.1:${await ctx.port()}`,
+    spotRouterEndpoint: gatewayRouter.bindEndpoint,
+    spotRouterAdvertiseHost: '127.0.0.1'
+  };
+  const proxies = [
+    startSessionRouteProxy(ctx, 'zone-node-1', westRouter.port, armFile),
+    startSessionRouteProxy(ctx, 'zone-node-2', eastRouter.port, armFile),
+    startSessionRouteProxy(ctx, 'gateway', gatewayRouter.port, armFile)
+  ];
+  let b8Client;
+  try {
+    await Promise.all(proxies.map((proxy) => waitForLogFile(proxy.logPath, 'proxy-ready', 30_000)));
+    const opsPath = ctx.writeConfig('ops', { shared, ops });
+    await ctx.start('ops', 'dist/Server/Ops/main.js', ['--config', opsPath]);
+    await ctx.waitTcp(ops.streamEndpoint);
+
+    const west = await zoneNodeConfig(ctx, shared, 'zone-node-1', 'west', {
+      disableBots: true,
+      waitForPlacementPeer: true,
+      spotRouterEndpoint: westRouter.bindEndpoint,
+      spotRouterAdvertiseHost: '127.0.0.1'
+    });
+    await ctx.start('zone-node-1', 'dist/Server/ZoneNode/main.js', ['--config', west.path]);
+    await ctx.waitTcp(west.value.zoneNode.spotRouterEndpoint);
+    await ctx.waitLog('zone-node-1', 'topology=ready');
+    await ctx.waitLog('ops', 'node status received node=zone-node-1');
+
+    const layoutProbe = startScenarioClient(
+      ctx,
+      specialClientConfig(ctx, shared, gateway, ops, 'LAYOUT'),
+      'b8-layout-probe'
+    );
+    await layoutProbe.waitFor('ops-layout=');
+    await layoutProbe.complete();
+    const initiallyHosted = parseOpsLayout(layoutProbe.output()).flatMap((node) => node.zones);
+    const remainingZones = logicalZoneIds.filter((zoneId) => !initiallyHosted.includes(zoneId));
+    if (initiallyHosted.length !== 2 || remainingZones.length !== 2) {
+      throw new Error(`ZW-B8 first ZoneNode did not fill its capacity: ${initiallyHosted.join(',')}.`);
+    }
+
+    const east = await zoneNodeConfig(ctx, shared, 'zone-node-2', 'east', {
+      disableBots: true,
+      bootstrapZones: remainingZones,
+      waitForPlacementPeer: true,
+      spotRouterEndpoint: eastRouter.bindEndpoint,
+      spotRouterAdvertiseHost: '127.0.0.1'
+    });
+    await ctx.start('zone-node-2', 'dist/Server/ZoneNode/main.js', ['--config', east.path]);
+    await ctx.waitTcp(east.value.zoneNode.spotRouterEndpoint);
+    await ctx.waitLog('zone-node-1', 'topology=ready');
+    await ctx.waitLog('zone-node-2', 'topology=ready');
+    await ctx.waitLog('ops', 'node status received node=zone-node-2');
+
+    const pairProbe = startScenarioClient(
+      ctx,
+      specialClientConfig(ctx, shared, gateway, ops, 'PAIR'),
+      'b8-pair-probe'
+    );
+    await pairProbe.waitFor('ops-probe=');
+    await pairProbe.complete();
+    const layout = parseOpsProbe(pairProbe.output());
+    assertZoneLayout(layout);
+
+    const gatewayPath = ctx.writeConfig('gateway', { shared, gateway });
+    await ctx.start('gateway', 'dist/Server/Gateway/main.js', ['--config', gatewayPath]);
+    await ctx.waitTcp(gateway.streamEndpoint);
+    await ctx.waitLog('gateway', 'gateway mesh status mesh=zoneworld.zones state=1');
+    await ctx.waitLog('zone-node-1', 'mesh status node=zone-node-1 state=1 readyPeers=3');
+    await ctx.waitLog('zone-node-2', 'mesh status node=zone-node-2 state=1 readyPeers=3');
+
+    const clientPath = ctx.writeConfig('client-b8', {
+      shared,
+      client: {
+        gatewayEndpoint: gateway.streamEndpoint,
+        opsEndpoint: ops.streamEndpoint,
+        scenarios: 'ZW-B8',
+        faultArmFile: armFile
+      }
+    });
+    b8Client = startScenarioClient(ctx, clientPath, 'b8', 'dist/Client/main.js');
+    await b8Client.waitFor('scenario ZW-B8 armed actor=');
+    const armed = b8Client.output().match(/scenario ZW-B8 armed actor=([^ ]+) target=([^\s]+)/);
+    if (armed === null) throw new Error('ZW-B8 client arm evidence was malformed.');
+    const [, actorId, targetZoneId] = armed;
+    fs.writeFileSync(armFile, 'block\n', { mode: 0o600 });
+
+    await requireB8Evidence(
+      b8Client,
+      proxies.map((proxy) => proxy.logPath),
+      'blocked-command-44',
+      'ZW-B8 precondition unmet: fault proxy did not intercept command 44.'
+    );
+    await requireB8Evidence(
+      b8Client,
+      ['zone-node-1', 'zone-node-2'].map((name) => path.join(ctx.logDir, `${name}.log`)),
+      `zone player entered zone=${targetZoneId} player=${actorId} initial=false`,
+      `ZW-B8 precondition unmet: target relocation commit was not observed for actor ${actorId} in ${targetZoneId}.`
+    );
+    fs.rmSync(armFile, { force: true });
+    try {
+      await b8Client.complete();
+    } catch (error) {
+      throw new Error(
+        `ZW-B8 post-boundary reconnect did not rebind the existing relocated Actor.\n${String(error)}`
+      );
+    }
+    process.stdout.write(b8Client.output());
+    console.log('verdict ZW-B8=passed');
+    console.log('PASS ZoneWorld ZW-B8');
+  } finally {
+    fs.rmSync(armFile, { force: true });
+    await b8Client?.dispose();
+    for (const proxy of proxies) {
+      if (proxy.child.exitCode === null && proxy.child.signalCode === null) proxy.child.kill('SIGKILL');
+    }
+    await Promise.allSettled(proxies.map((proxy) => proxy.exited));
+  }
+}
+
+async function proxiedRouter(ctx) {
+  const port = await ctx.port();
+  return { port, bindEndpoint: `tcp://127.0.0.2:${port}` };
+}
+
+function startSessionRouteProxy(ctx, name, port, armFile) {
+  const logPath = path.join(ctx.logDir, `session-route-proxy-${name}.log`);
+  const processState = startCommand(
+    'python3',
+    [
+      path.join(ctx.sampleRoot, 'Support/session_route_block_proxy.py'),
+      '--listen-host', '127.0.0.1', '--listen-port', String(port),
+      '--target-host', '127.0.0.2', '--target-port', String(port),
+      '--arm-file', armFile
+    ],
+    ctx.sampleRoot,
+    logPath
+  );
+  return { ...processState, logPath };
+}
+
+async function requireB8Evidence(client, logPaths, marker, failure) {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    if (logPaths.some((target) => fs.existsSync(target) && fs.readFileSync(target, 'utf8').includes(marker))) return;
+    if (!client.isRunning()) {
+      await client.complete().catch(() => undefined);
+      throw new Error(failure);
+    }
+    await delay(50);
+  }
+  throw new Error(failure);
+}
+
+async function waitForLogFile(target, marker, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(target) && fs.readFileSync(target, 'utf8').includes(marker)) return;
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for '${marker}' in ${target}.`);
+}
+
 async function zoneNodeConfig(ctx, shared, nodeId, name, overrides = {}) {
   const value = {
     shared,
@@ -394,7 +593,12 @@ function startScenarioClient(ctx, configPath, name, relativeExecutable = 'dist/C
       }
     },
     complete,
-    output: () => output
+    output: () => output,
+    isRunning: () => child.exitCode === null && child.signalCode === null,
+    async dispose() {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
+    }
   };
 }
 
@@ -406,7 +610,7 @@ async function stopAndWaitForLocationLease(ctx, name, signal) {
 }
 
 function collectVerdicts(verdicts, output) {
-  for (const match of output.matchAll(/scenario (ZW-[A-G][1-7]) passed/g)) {
+  for (const match of output.matchAll(/scenario (ZW-(?:[A-G][1-7]|B8)) passed/g)) {
     recordVerdict(verdicts, match[1]);
   }
 }

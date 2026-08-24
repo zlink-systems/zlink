@@ -342,6 +342,32 @@ public sealed class FanoutAutomaticDiscoveryTests
         Assert.Equal(count, runtime.SocketCreationCount);
     }
 
+    [Fact]
+    public async Task DiscoveryStop_AfterSubscriberRuntimeDisposal_CompletesCleanly()
+    {
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
+            options.AddFanoutChannel("events")
+                .EnableSubscriber()
+                .AddHandler<TestPublishHandler, TestPublishedEvent>();
+        });
+        await using var provider = services.BuildServiceProvider();
+        var location = provider.GetRequiredService<ZLinkLocationRuntime>();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var discovery = provider.GetRequiredService<ZLinkLocationAutoConnectHost>();
+
+        await location.StartAsync(RoutingId.From("fanout-teardown-owner"));
+        await runtime.StartAsync(CancellationToken.None);
+        await discovery.StartAsync(
+            await runtime.EnsureStartedStateAsync(CancellationToken.None));
+
+        await runtime.ForceStopAsync(CancellationToken.None);
+        await discovery.StopAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await location.StopAsync();
+    }
+
     private static ZLinkFanoutPublisherDescriptor Descriptor(
         string rid,
         ulong generation,

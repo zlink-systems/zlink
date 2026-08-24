@@ -7,8 +7,16 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class NodeCensus {
     private final Map<String, Integer> counts = new ConcurrentHashMap<>();
 
+    public void hostZone(String zoneId) {
+        counts.putIfAbsent(zoneId, 0);
+    }
+
+    public void releaseZone(String zoneId) {
+        counts.remove(zoneId);
+    }
+
     public void record(String zoneId, int count) {
-        counts.put(zoneId, count);
+        counts.computeIfPresent(zoneId, (ignored, previous) -> count);
     }
 
     public int total() {

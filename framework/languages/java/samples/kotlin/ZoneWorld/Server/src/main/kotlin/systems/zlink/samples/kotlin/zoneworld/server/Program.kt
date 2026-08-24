@@ -7,6 +7,7 @@ import org.springframework.boot.ApplicationRunner
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ConfigurableApplicationContext
@@ -35,6 +36,8 @@ import systems.zlink.samples.kotlin.zoneworld.server.configuration.SampleTopolog
 import systems.zlink.samples.kotlin.zoneworld.server.gateway.GameSession
 import systems.zlink.samples.kotlin.zoneworld.server.ops.NodeLivenessObserver
 import systems.zlink.samples.kotlin.zoneworld.server.ops.OpsSession
+import systems.zlink.samples.kotlin.zoneworld.server.ops.OpsConsoleRegistry
+import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.server.zone.ZoneBootstrap
 import systems.zlink.samples.kotlin.zoneworld.server.zone.ZoneStatusReporter
 import systems.zlink.samples.kotlin.zoneworld.server.zone.PlayerActor
@@ -65,6 +68,12 @@ class Program {
     @Bean fun maintenanceState() = NodeMaintenanceState()
     @Bean fun nodeCensus() = NodeCensus()
     @Bean fun nodeRegistry() = NodeRegistry()
+    @Bean fun opsConsoleRegistry(registry: NodeRegistry) = OpsConsoleRegistry().also { consoles ->
+        registry.onChanged { node -> consoles.broadcast(Messages.NodeStatusNotify(
+            node.nodeId, node.registered, node.connected, node.maintenance, node.zones, node.playerCount,
+        )) }
+        registry.onAlert { alert -> consoles.record(alert); consoles.broadcast(alert) }
+    }
 
     @Bean fun framework(
         topology: SampleTopology,
@@ -77,16 +86,18 @@ class Program {
         options.addRelocationStore(relocation)
         options.addHandlersFromPackageOf(Program::class.java)
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+        if (topology.isRole("zone") && topology.isSubscriberOnly()) {
+            options.addFanoutChannel(ZoneWorldNames.BROADCAST_CHANNEL).enableSubscriber()
+                .addHandlerGroup(ZoneWorldNames.BROADCAST_HANDLER_GROUP)
+            return@ZLinkFrameworkConfigurer
+        }
         val mesh: ZLinkMeshNodeBuilder = options.addRouteMesh(ZoneWorldNames.MESH)
             .listen(topology.meshValue())
             // A zone node names its application identity in the routing id prefix; the
             // framework appends a per-process UUID, so a replacement started for the same
             // node id still publishes a routing id no earlier process ever held.
-            .setRoutingIdPrefix(
-                ZoneWorldNames.routingIdPrefix(
-                    if (topology.isRole("zone")) topology.nodeValue() else topology.roleValue(),
-                ),
-            )
+            .setRoutingIdPrefix(if (topology.isRole("zone")) "zn" else "zoneworld-${topology.roleValue()}")
+        topology.meshAdvertiseHost?.takeIf { it.isNotBlank() }?.let(mesh::setAdvertiseHost)
         when (topology.roleValue()) {
             "gateway" -> {
                 mesh.objects().client()
@@ -128,6 +139,10 @@ class Program {
         ApplicationRunner {
             val runtime = provider.ifAvailable
             println("framework lifecycle role=${topology.roleValue()} state=${runtime?.status()?.state()}")
+            if (topology.isSubscriberOnly()) {
+                println("topology=ready node=${topology.nodeValue()} zones=")
+                return@ApplicationRunner
+            }
             println("runtime event mesh=${ZoneWorldNames.MESH} state=SERVING")
         }
 
@@ -137,17 +152,19 @@ class Program {
         NodeLivenessObserver(runtime, registry)
 
     @Bean
-    @ConditionalOnProperty(prefix = "sample", name = ["role"], havingValue = "zone")
+    @ConditionalOnExpression("'\${sample.role:}' == 'zone' && !\${sample.subscriber-only:false}")
     fun zoneBootstrap(
         topology: SampleTopology,
         spots: ZLinkSpotManager,
         actors: ZLinkActorManager,
+        actorClient: ZLinkActorClient,
         maintenance: NodeMaintenanceState,
         store: MaintenanceStore,
-    ) = ZoneBootstrap(topology, spots, actors, maintenance, store)
+        census: NodeCensus,
+    ) = ZoneBootstrap(topology, spots, actors, actorClient, maintenance, store, census)
 
     @Bean
-    @ConditionalOnProperty(prefix = "sample", name = ["role"], havingValue = "zone")
+    @ConditionalOnExpression("'\${sample.role:}' == 'zone' && !\${sample.subscriber-only:false}")
     fun zoneReporter(
         topology: SampleTopology,
         routes: ZLinkRouteClient,

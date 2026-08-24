@@ -47,14 +47,15 @@ final class Scenarios {
         all.put("ZW-C2", Scenarios::c2); all.put("ZW-C3", Scenarios::c3);
         all.put("ZW-E5-arm", Scenarios::e5Arm); all.put("ZW-E5", Scenarios::e5);
         all.put("ZW-G2", Scenarios::g2); all.put("ZW-G4", Scenarios::g4);
+        all.put("ZW-G3-fresh", Scenarios::g3Fresh);
         all.put("ZW-G4-fresh", Scenarios::g4Fresh);
         return all;
     }
 
     private static void a1(ClientOptions options) {
         try (Game player = new Game(options, unique("a1"))) {
-            Messages.JoinWorldRes join = player.join();
-            ensure(join.error() == null, "target admission completes before JoinWorldRes");
+            Messages.JoinWorldNotify join = player.join();
+            ensure(join.error() == null, "target admission completes before JoinWorldNotify");
             ensure("zone-nw".equals(join.zoneId()) && join.x() == 25 && join.y() == 25,
                 "canonical spawn is zone-nw (25,25)");
         }
@@ -321,10 +322,9 @@ final class Scenarios {
             resetMaintenance(ops);
             List<List<String>> pairs = List.of(List.of("zone-nw", "zone-ne"), List.of("zone-nw", "zone-sw"),
                 List.of("zone-ne", "zone-se"), List.of("zone-sw", "zone-se"));
-            // Registration settles asynchronously, so re-read the roster for a moment before giving
-            // up. The zone Spots are placed by a race between the zone nodes, so a diagonal split
-            // (nw+se / ne+sw) leaves no node owning two adjacent zones and this scenario cannot be
-            // set up at all - name that precondition instead of dying on an empty Optional.
+            // Registration settles asynchronously, so re-read the roster for a moment. ZoneBootstrap
+            // prefers an adjacent second claim, making this precondition satisfiable; keep the named
+            // failure as a guard against a future bootstrap regression.
             long deadline = System.nanoTime() + TOPOLOGY_SETTLE_TIMEOUT.toNanos();
             Messages.WatchNodesRes nodes; List<String> selected;
             while (true) {
@@ -463,12 +463,17 @@ final class Scenarios {
     private static void e5(ClientOptions options) {
         try (Ops ops = new Ops(options)) {
             Messages.NodeView node = ops.watch().nodes().stream().filter(value -> value.registered()
-                && value.connected() && value.maintenance()).findFirst().orElseThrow();
+                && value.connected() && value.maintenance()).findFirst().orElse(null);
+            String nodeId = node == null
+                ? waitFor(ops.connector, Messages.NodeStatusNotify.class,
+                    value -> value.registered() && value.connected() && value.maintenance(),
+                    Duration.ofSeconds(20)).toCompletableFuture().join().payload().nodeId()
+                : node.nodeId();
             Messages.NodeDiagnosticsRes diagnostics = request(ops.connector,
-                new Messages.NodeDiagnosticsReq(node.nodeId()), Messages.NodeDiagnosticsRes.class);
+                new Messages.NodeDiagnosticsReq(nodeId), Messages.NodeDiagnosticsRes.class);
             try { ensure(diagnostics.error() == null && diagnostics.maintenance(),
                 "restart restores stored maintenance"); }
-            finally { ops.maintenance(node.nodeId(), false); }
+            finally { ops.maintenance(nodeId, false); }
         }
     }
 
@@ -509,13 +514,22 @@ final class Scenarios {
         }
     }
 
+    private static void g3Fresh(ClientOptions options) {
+        replacementFresh(options, "g3");
+    }
+
     private static void g4Fresh(ClientOptions options) {
+        replacementFresh(options, "g4");
+    }
+
+    private static void replacementFresh(ClientOptions options, String scenario) {
         try (Probes probes = new Probes(options)) {
             for (int i = 0; i < 16; i++) {
-                Messages.FreshActorProbeRes created = probes.fresh(unique("g4-fresh"));
+                Messages.FreshActorProbeRes created = probes.fresh(unique(scenario + "-fresh"));
                 ensure(created.error() == null && created.objectGeneration() > 0,
                     "replacement accepts a fresh actor");
-                System.out.println("scenario ZW-G4-fresh owner=" + created.ownerNodeRid()
+                System.out.println("scenario ZW-" + scenario.toUpperCase() + "-fresh owner="
+                    + created.ownerNodeRid()
                     + " actor=" + created.actorId());
             }
         }
@@ -532,7 +546,8 @@ final class Scenarios {
                     disconnected.complete(event.closeReason().toString());
                     return CompletableFuture.completedFuture(null);
                 });
-                System.out.println("scenario ZW-B8 armed");
+                System.out.println("scenario ZW-B8 armed actor=" + id
+                    + " target=" + pair.targetZoneId());
                 Path arm = Path.of(options.faultArmFile());
                 for (int i = 0; !Files.exists(arm); i++) {
                     if (i >= 200) throw new IllegalStateException("runner did not arm command 44 block");
@@ -541,10 +556,17 @@ final class Scenarios {
                 player.move(edge.target().x(), edge.target().y());
                 String reason = disconnected.orTimeout(60, java.util.concurrent.TimeUnit.SECONDS).join();
                 System.out.println("scenario ZW-B8 disconnected reason=" + reason);
+                for (int i = 0; Files.exists(arm); i++) {
+                    if (i >= 600) throw new IllegalStateException(
+                        "ZW-B8 precondition unmet: runner did not prove command-44 interception "
+                            + "and target relocation commit");
+                    delay(Duration.ofMillis(100));
+                }
                 player.connector.connect().submit().toCompletableFuture().join();
-                Messages.JoinWorldRes rebound = player.join();
-                ensure(id.equals(rebound.playerId()) && pair.targetZoneId().equals(rebound.zoneId()),
-                    "reconnect rebinds the relocated actor");
+                Messages.JoinWorldNotify rebound = player.join();
+                ensure(id.equals(rebound.playerId()), "reconnect preserves the PlayerId");
+                ensure(pair.targetZoneId().equals(rebound.zoneId()),
+                    "reconnect rebinds the existing relocated actor at the target zone");
             }
         }
     }

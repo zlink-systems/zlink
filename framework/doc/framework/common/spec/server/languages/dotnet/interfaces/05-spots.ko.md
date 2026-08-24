@@ -409,14 +409,14 @@ cutover submit의 성공 또는 실패 terminal까지 source-local 1초는 운�
 취소하거나 rollback하지 않는다.
 
 `RelocationReady().Defer()`는 `SpotWide` factory가
-`ApplicationSignaled` readiness mode를 선택한 Spot turn에서만 유효하다. `Defer()`는
+`ApplicationSignaled` coordination mode를 선택한 Spot turn에서만 유효하다. `Defer()`는
 현재 handler가 끝난 뒤 다음 application turn 앞에 relocation 경계를 등록한다.
 Framework는 이동하지 않았거나 relay-ready reply가 accepted 상태가 되기 전에 abort했으면 source에서 `Continued`,
 이동했으면 target에서 `Relocated` completion을
 `OnRelocationReadyCompletedAsync(...)`에 전달한다. 기본 구현은 no-op이다.
 Callback 완료 전에는 보류한 message와 timer를 실행하지 않는다.
 
-기본 `AnyTurnBoundary`, `PerActor`, Entry·Instance Spot, Spot turn 밖과 같은 turn의
+기본 `FrameworkManaged`, `PerActor`, Entry·Instance Spot, Spot turn 밖과 같은 turn의
 중복 `Defer()`는 queue mutation 전에 `ZLinkFrameworkErrorKind.InvalidOperation`
 오류로 끝난다. `Defer()` 뒤 같은 turn에서 다른 Framework operation을 시작해도
 같은 오류다. Callback은 process recovery에서 다시 실행될 수 있으므로 override는

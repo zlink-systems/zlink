@@ -348,10 +348,18 @@ Application은 [Configuration과 host](02-configuration-host.ko.md)의
 `logging_builder_t`로 표준 logging provider를 구성한다. Runtime 상태 변화와 진단 정보는
 `log_record_t`의 identifier와 field로 전달한다.
 
-다음 타입과 등록 API는 public contract가 아니다.
+C++는 Spot timer failure에 한해 public raw monitoring surface를 제공한다.
+`app_t::monitoring()`이 반환하는 `monitoring_builder_t`에서 `add_spot_events(source_name)`으로
+SpotNode source를 등록하고 `on_spot_event(handler)`로 `spot_event_t`를 수신한다.
+`spot_event_t`는 `source_name`, `timestamp`, `event`, `spot_timer_diagnostic_t`를 가지며
+`event`는 `timer_handler_failed` 또는 `timer_stopped_after_unhandled_exception`이다.
+등록되지 않은 source의 event는 전달하지 않고 handler 예외는 timer/runtime 동작에 영향을
+주지 않는다.
 
-- socket·Spot·Actor·STREAM별 raw event DTO
-- raw event handler와 source 등록 builder
+다음 타입과 등록 API는 계속 public contract가 아니다.
+
+- socket·Actor·STREAM별 raw event DTO
+- 위 Spot timer failure surface 외의 raw event handler와 source 등록 builder
 - metric sample DTO와 application callback
 - exporter lifecycle, registry와 provider 내부 상태
 

@@ -338,8 +338,7 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
                 _loop = null;
             }
 
-            await runtime.ReplaceAsync(
-                    [],
+            await runtime.ClearAsync(
                     new ZLinkLocationRuntimeSnapshot(
                         "healthy",
                         DateTimeOffset.UtcNow,

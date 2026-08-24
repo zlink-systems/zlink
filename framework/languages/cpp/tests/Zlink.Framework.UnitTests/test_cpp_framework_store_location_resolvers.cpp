@@ -3064,6 +3064,103 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,
+      AutoConnectSameEndpointReplacementPrefersNewRid)
+{
+    auto store = std::make_shared<in_memory_location_repository_t> ();
+    location_options_t options;
+    options.polling_interval = std::chrono::milliseconds (20);
+    options.owner_lease_renew_interval = std::chrono::milliseconds (50);
+    auto runtime = std::make_shared<location_runtime_t> (
+      *store, options, "owner-route-replacement-local");
+    runtime->start (zlink::routing_id_t::from ("route-0-replacement-local"));
+
+    constexpr auto endpoint = "inproc://route-replacement-peer";
+    seed_mesh_node (*store, "owner-route-replacement-old", "route.replacement",
+                    "route-z-replacement-old", endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (5));
+    seed_mesh_node (*store, "owner-route-replacement-new", "route.replacement",
+                    "route-a-replacement-new", endpoint);
+    seed_mesh_node (*store, "owner-route-replacement-self-stale",
+                    "route.replacement", "route-z-replacement-self-stale",
+                    "inproc://route-replacement-local");
+
+    zlink::framework::zlink_builder_t zlink;
+    zlink.route_channel ("route.replacement")
+      .bind ("inproc://route-replacement-local")
+      .set_routing_id (
+        zlink::routing_id_t::from ("route-0-replacement-local"));
+    auto manager =
+      zlink::framework::detail::channel_runtime_manager_t::from (zlink);
+    manager.initialize_route_channels (zlink);
+    auto &route = manager.get_route_channel ("route.replacement");
+
+    zlink::framework::service_collection_t services;
+    services.add_factory<zlink::framework::location_repository_t> (
+      [store] (zlink::framework::service_provider_t &) {
+          return std::static_pointer_cast<zlink::framework::location_repository_t> (
+            store);
+      },
+      zlink::framework::service_lifetime_t::singleton);
+    services.add_factory<zlink::framework::runtime::live_location_reader_t> (
+      [store, options] (zlink::framework::service_provider_t &) {
+          return std::make_shared<
+            zlink::framework::runtime::live_location_reader_t> (*store, options);
+      },
+      zlink::framework::service_lifetime_t::singleton);
+    services.add_factory<location_runtime_t> (
+      [runtime] (zlink::framework::service_provider_t &) { return runtime; },
+      zlink::framework::service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+
+    zlink::framework::handler_registry_t handlers;
+    zlink::framework::serializer_registry_t serializers;
+    location_auto_connect_host_service_t service (
+      zlink.message_bus (),
+      zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ())
+        .channel_snapshots (),
+      handlers, serializers);
+    service.start (provider);
+
+    const auto replacement_selected = wait_until ([&] {
+        const auto targets = route.list_connection_targets ();
+        const auto has_new = std::any_of (
+          targets.begin (), targets.end (), [] (const auto &target) {
+              return target.peer_rid
+                     && target.peer_rid->to_string ()
+                          == "route-a-replacement-new";
+          });
+        const auto has_old = std::any_of (
+          targets.begin (), targets.end (), [] (const auto &target) {
+              return target.peer_rid
+                     && target.peer_rid->to_string ()
+                          == "route-z-replacement-old";
+          });
+        const auto has_stale_self = std::any_of (
+          targets.begin (), targets.end (), [] (const auto &target) {
+              return target.peer_rid
+                     && target.peer_rid->to_string ()
+                          == "route-z-replacement-self-stale";
+          });
+        return has_new && !has_old && !has_stale_self;
+    });
+    const auto final_targets = route.list_connection_targets ();
+    std::string selected_targets;
+    for (const auto &target : final_targets) {
+        selected_targets += " [" + target.endpoint + "="
+                            + (target.peer_rid
+                                 ? target.peer_rid->to_string ()
+                                 : std::string ("none"))
+                            + "]";
+    }
+    ASSERT_TRUE (replacement_selected)
+      << "target_count=" << final_targets.size ()
+      << " targets=" << selected_targets;
+
+    service.stop ();
+    runtime->stop ();
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
       AutoConnectRetainsExistingDrainingMeshPipeUntilDescriptorRetires)
 {
     auto store = std::make_shared<in_memory_location_repository_t> ();

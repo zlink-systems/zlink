@@ -79,7 +79,7 @@ play.add_actor_factory<player_actor_t, player_actor_factory_t>(
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
 | `.add_entry_spot<TEntrySpot>()` / `.add_entry_spot<TEntrySpot>(factory)` | 없음 | 외부 진입 전용 Entry Spot 타입 등록. Factory를 생략하면 `TEntrySpot(entry_spot_context_t)` 생성자를 사용한다 |
-| `.add_spot_factory<TSpot>(stable_type, factory, configure)` | 없음 | stable User Spot 타입 등록. `configure`는 `set_stable_type_limit`·`set_execution_mode`·`set_relocation_readiness`에 더해 `preserve_state_with<TAdapter>`/`recreate_on_relocation`/`disable_relocation` 중 정확히 하나를 받는다 |
+| `.add_spot_factory<TSpot>(stable_type, factory, configure)` | 없음 | stable User Spot 타입 등록. `configure`는 `set_stable_type_limit`·`set_execution_mode`·`set_relocation_coordination_mode`에 더해 `preserve_state_with<TAdapter>`/`recreate_on_relocation`/`disable_relocation` 중 정확히 하나를 받는다 |
 | `.add_instance_spot_factory<TSpot>(stable_type, factory, configure)` | 없음 | cold-activation Instance Spot 타입 등록. `configure`는 `set_stable_type_limit`에 더해 relocation policy 중 정확히 하나를 받는다 |
 | `.add_actor_factory<TActor, TFactory>(stable_type, factory, configure)` | 없음 | stable Actor 타입 등록. `configure`는 relocation policy 중 정확히 하나를 받는다(Actor factory에는 `stable_type_limit`이 없다) |
 

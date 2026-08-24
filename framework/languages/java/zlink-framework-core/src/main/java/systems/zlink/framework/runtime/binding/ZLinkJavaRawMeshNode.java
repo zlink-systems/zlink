@@ -2486,9 +2486,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     "remote Instance Spot target is not connected"));
         }
         if (peer.isEmpty() || localDescriptor == null) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "remote Instance Spot target is not connected"));
+            return awaitInstanceSpotTargetConnection(route, deadlineNanos)
+                .thenCompose(ignored -> submitInstanceSpotSendWhenConnected(
+                    route,
+                    stableType,
+                    sourceSpotId,
+                    metadata,
+                    parts,
+                    deadlineNanos));
         }
         if (closed.get() || deadlineNanos - System.nanoTime() <= 0) {
             return CompletableFuture.failedFuture(
@@ -2547,9 +2552,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     "remote Instance Spot target is not connected"));
         }
         if (peer.isEmpty() || localDescriptor == null) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "remote Instance Spot target is not connected"));
+            return awaitInstanceSpotTargetConnection(route, deadlineNanos)
+                .thenCompose(ignored -> requestInstanceSpotWhenConnected(
+                    route,
+                    stableType,
+                    sourceSpotId,
+                    metadata,
+                    parts,
+                    deadlineNanos));
         }
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0 || closed.get()) {
@@ -2682,6 +2692,54 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 }
             });
         return operation.completion();
+    }
+
+    private CompletionStage<Void> awaitInstanceSpotTargetConnection(
+        ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+        long deadlineNanos) {
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
+            topology == null
+                ? Optional.empty()
+                : topology.peer(route.targetNodeRid());
+        if (peer.isPresent()
+            && peer.orElseThrow().descriptor().lifecycleGeneration()
+                != route.targetNodeGeneration()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "remote Instance Spot target is not connected"));
+        }
+        if (peer.isPresent() && localDescriptor != null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0 || closed.get()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "remote Instance Spot target is not connected"));
+        }
+
+        CompletableFuture<Void> waiting = new CompletableFuture<>();
+        long delayNanos = Math.min(
+            remainingNanos,
+            Duration.ofMillis(10).toNanos());
+        try {
+            deadlines.schedule(() -> {
+                if (waiting.isDone()) {
+                    return;
+                }
+                awaitInstanceSpotTargetConnection(route, deadlineNanos)
+                    .whenComplete((ignored, failure) -> {
+                        if (failure == null) {
+                            waiting.complete(null);
+                        } else {
+                            waiting.completeExceptionally(unwrap(failure));
+                        }
+                    });
+            }, delayNanos, TimeUnit.NANOSECONDS);
+        } catch (RuntimeException failure) {
+            waiting.completeExceptionally(failure);
+        }
+        return waiting;
     }
 
     private long addDeadlineNanos(Duration timeout) {

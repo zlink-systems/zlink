@@ -152,7 +152,7 @@ relocation을 중단한다. Relocation waiter는 `blocked/shutdown_requested`를
 ## 2. App / Host
 
 `app_t`는 framework의 가장 바깥 public type이다. 사용자는 `app_t::create()`로 앱을
-만들고, `add_zlink_framework(...)`에서 services, handlers, zlink runtime을 한 번에
+만들고, `add_zlink_framework()`가 반환한 options builder에서 services, handlers, zlink runtime을 한 번에
 구성한 뒤 `run`을 호출한다. 낮은 수준의 runtime builder는 일반 애플리케이션 표면에
 직접 노출하지 않는다.
 
@@ -175,6 +175,7 @@ public:
     health_builder_t &health() noexcept;
 
     app_t &add_module(module_t &module);
+    zlink_framework_options_t &add_zlink_framework();
     app_t &add_zlink_framework(
       std::function<void(zlink_framework_options_t &)> configure);
     template <typename TModule, typename... TArgs>
@@ -325,8 +326,9 @@ concept framework_module_contract_t =
 module은 서비스 등록, runtime 구성과 handler 등록을 `zlink_framework_options_t` 하나로
 묶는다. 별도 low-level builder와 handler registry를 넘겨 runtime wiring 순서를 application에 노출하지 않는다.
 
-`app_t::add_zlink_framework(options_callback)`는 `.NET`의
-`AddZLinkFramework(options => ...)`에 대응하는 C++ 고수준 구성 진입점이다. C++에는 assembly
+`app_t::add_zlink_framework()`는 `.NET`의 `AddZLinkFramework(...)`에 대응하는 C++ 고수준
+구성 진입점이다. 반환된 builder를 직접 이어서 구성하므로 구성 전체를 감싸는 lambda가 필요하지 않다.
+기존 callback overload는 호환성을 위해 유지한다. C++에는 assembly
 reflection이 없으므로 `.NET`의 `AddHandlersFromAssemblyOf(...)`만 그대로 옮기지 않는다.
 그 대신 handler group을 먼저 고르고, 그 group 안에 handler 타입을 명시해서
 `options.handlers().group(group_name).add<THandler>()`,
@@ -365,34 +367,30 @@ host logging 설정에서 정한다. custom category가 필요하면 `logger_fac
 받아 handler 내부에서 category logger를 만들 수 있다.
 
 ```cpp
-app.add_zlink_framework ([&](zlink::framework::zlink_framework_options_t &options) {
-    options.use_filter<audit_filter_t>();
-    options.metadata()
-      .allow_session_to_actor("trace-id")
-      .allow_actor_to_session("trace-id");
+auto &options = app.add_zlink_framework();
+options.use_filter<audit_filter_t>();
+options.metadata()
+  .allow_session_to_actor("trace-id")
+  .allow_actor_to_session("trace-id");
 
-    auto mesh = options.add_route_mesh(sample_names_t::application_mesh)
-      .listen(7300)
-      .set_routing_id(topology.application_rid);
-    mesh.channel(sample_names_t::api_channel)
-      .server()
-      .add_handler_group("api");
-    mesh.channel(sample_names_t::play_channel).client();
+auto mesh = options.add_route_mesh(sample_names_t::application_mesh);
+mesh.listen(7300).set_routing_id(topology.application_rid);
+mesh.channel(sample_names_t::api_channel).server().add_handler_group("api");
+mesh.channel(sample_names_t::play_channel).client();
 
     // 시작 시 사용할 message-flow 관측 수준을 설정한다.
-    options.configure_dispatch().message_flow(
-      zlink::framework::message_flow_log_mode_t::errors);
+options.configure_dispatch().message_flow(
+  zlink::framework::message_flow_log_mode_t::errors);
 
-    options.handlers()
-      .group("api")
-      .add<authenticate_player_handler_t>()
-      .add<match_bingo_api_handler_t>()
-      .add_send<player_command_handler_t>();
+options.handlers()
+  .group("api")
+  .add<authenticate_player_handler_t>()
+  .add<match_bingo_api_handler_t>()
+  .add_send<player_command_handler_t>();
 
-    options.handlers()
-      .group("events")
-      .add_publish<notification_event_handler_t>();
-});
+options.handlers()
+  .group("events")
+  .add_publish<notification_event_handler_t>();
 ```
 
 자동 peer discovery를 사용하면 등록된 `location_store_t` provider에서 같은 [MeshName](../../../01-glossary.ko.md#meshname)의
@@ -578,6 +576,8 @@ public:
 class codec_options_builder_t {
 public:
     template <typename TExtension>
+    codec_options_builder_t &use();
+    template <typename TExtension>
     codec_options_builder_t &use(const TExtension &extension);
 };
 
@@ -616,6 +616,8 @@ public:
     service_collection_t &services() noexcept;
     zlink_framework_options_t &add_location_store(
       std::shared_ptr<location_store_t> store);
+    template <typename TStore>
+    typename TStore::options_builder_type add_location_store();
     client_server_channel_builder_t add_client_server_channel(
       std::string channel_name);
     fanout_channel_builder_t add_fanout_channel(std::string channel_name);
@@ -631,6 +633,8 @@ public:
     std::size_t handler_coroutine_workers() const noexcept;
     zlink_framework_options_t &add_relocation_store(
       std::shared_ptr<relocation_store_t> store);
+    template <typename TStore>
+    typename TStore::options_builder_type add_relocation_store();
 };
 
 } // namespace zlink::framework
@@ -659,7 +663,9 @@ Host startup이 끝나면 registry는 바뀌지 않는다. 이후 등록 시도�
 `http_options_builder_t`의 snapshot 생성과 validation 실행은 host startup 내부 책임이며 public
 interface가 아니다. application은 위 builder method로만 HTTP 설정을 구성한다.
 
-Location runtime을 사용하는 application은 `add_location_store(...)`로 Location Store를 정확히 하나 등록한다.
+Location runtime을 사용하는 application은 `add_location_store<TStore>()`가 반환한 store options builder로
+연결 정보와 key prefix를 이어서 설정한다. 미리 만든 store instance를 받는 overload도 호환성을 위해 유지한다.
+Application은 Location Store를 정확히 하나 등록한다.
 `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot factory가 하나라도 있으면
 `add_relocation_store(...)`로 Relocation Store도 정확히 하나 등록한다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
 `DisableRelocation` factory만 있는 same-node 구성에는 Relocation Store가 필요하지 않다. 필요한 Store가 없거나
@@ -686,20 +692,19 @@ maintenance wave exclusion을 사용하지 않는다는 뜻이다.
 사용 예시는 아래와 같다.
 
 ```cpp
-app.add_zlink_framework([&](auto &options) {
-    auto mesh = options.add_route_mesh(sample_names_t::application_mesh)
-      .listen(7300) // 이 RouteMesh가 peer message를 받을 endpoint를 연다.
-      .set_routing_id(topology.application_rid); // 같은 mesh 안에서 이 node를 식별한다.
-    mesh.channel(sample_names_t::api_channel)
-      .server() // 이 node를 api_channel의 요청 처리 후보로 게시한다.
-      .add_handler_group("api"); // 등록할 DI handler group을 Channel handler와 연결한다.
-    mesh.channel(sample_names_t::play_channel)
-      .client(); // Server membership 없이 play_channel 호출 경로만 등록한다.
+auto &options = app.add_zlink_framework();
+auto mesh = options.add_route_mesh(sample_names_t::application_mesh);
+mesh.listen(7300) // 이 RouteMesh가 peer message를 받을 endpoint를 연다.
+  .set_routing_id(topology.application_rid); // 같은 mesh 안에서 이 node를 식별한다.
+mesh.channel(sample_names_t::api_channel)
+  .server() // 이 node를 api_channel의 요청 처리 후보로 게시한다.
+  .add_handler_group("api"); // 등록할 DI handler group을 Channel handler와 연결한다.
+mesh.channel(sample_names_t::play_channel)
+  .client(); // Server membership 없이 play_channel 호출 경로만 등록한다.
 
-    options.http()
-      .listen(topology.api_http_endpoint) // HTTP client가 연결할 listener를 연다.
-      .map_post<create_game_http_handler_t>("/games"); // POST /games를 DI handler에 연결한다.
-});
+options.http()
+  .listen(topology.api_http_endpoint) // HTTP client가 연결할 listener를 연다.
+  .map_post<create_game_http_handler_t>("/games"); // POST /games를 DI handler에 연결한다.
 ```
 
 HTTP handler의 type alias, DI constructor와 `handle(...)` shape declaration은

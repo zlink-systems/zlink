@@ -43,7 +43,7 @@ import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runti
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkSpotRelocationReadyOutcome,
   ZLinkTimerOverrunPolicy,
   ZLinkUserSpotExecutionMode
@@ -119,7 +119,7 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
     domain: {
       kind: 'user',
       executionMode: ZLinkUserSpotExecutionMode.SpotWide,
-      relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
     },
     spotType: class {} as never,
     spot: {
@@ -181,7 +181,7 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
     domain: {
       kind: 'user',
       executionMode: ZLinkUserSpotExecutionMode.SpotWide,
-      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.FrameworkManaged
     },
     spotType: class {} as never,
     spot: {} as never,
@@ -205,7 +205,7 @@ test('ApplicationSignaled defer without active relocation completes before the n
     domain: {
       kind: 'user',
       executionMode: ZLinkUserSpotExecutionMode.SpotWide,
-      relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
     },
     spotType: class {} as never,
     spot: {

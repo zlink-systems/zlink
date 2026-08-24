@@ -74,8 +74,8 @@ internal sealed class ZLinkSpotActivationFactory(
                     out var userSpotOptions)
                     ? userSpotOptions.ExecutionMode
                     : ZLinkUserSpotExecutionMode.SpotWide,
-                userSpotOptions?.RelocationReadiness
-                ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
+                userSpotOptions?.RelocationCoordinationMode
+                ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
                 restoreLogicalTimers: !invokeCreate,
                 timerScheduler: timerScheduler);
 

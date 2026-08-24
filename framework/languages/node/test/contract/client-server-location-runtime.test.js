@@ -781,6 +781,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     normalizedEffectiveMaxMessageBytes: 1024
   }));
   let reply;
+  let pushed;
   let received = {
     parts: [hello],
     requestSeq: 1n,
@@ -796,7 +797,11 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     },
     reply(_routingId, _requestSeq, message) {
       reply = Buffer.from(message.data());
-    }
+    },
+    async send(_routingId, message) {
+      pushed = Buffer.from(message.data());
+    },
+    async dispose() {}
   };
   let applicationDispatches = 0;
   const loop = new ZLinkChannelReceiveLoop(
@@ -822,7 +827,16 @@ test('ClientServer reserved hello is consumed before application dispatch and re
   assert.equal(decoded.admission.serverRid, String(server.serverRid));
   assert.equal(decoded.admission.lifecycleGeneration, server.lifecycleGeneration);
   assert.equal(decoded.admission.securityIdentity, server.securityIdentity);
-  assert.equal(decoded.admission.normalizedEffectiveMaxMessageBytes, 4096);
+  assert.equal(decoded.admission.normalizedEffectiveMaxMessageBytes, 1024);
+  sockets.channelRouters.set('orders', router);
+  sockets.setClientServerServerDescriptor({
+    ...server,
+    descriptorRevision: 2n
+  }, 'orders');
+  await new Promise(resolve => setImmediate(resolve));
+  const update = clientServerWire.decodeClientServerControl(pushed);
+  assert.equal(update.kind, 'update');
+  assert.equal(update.admission.normalizedEffectiveMaxMessageBytes, 1024);
   await sockets.dispose();
 });
 

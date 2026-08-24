@@ -547,6 +547,32 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
+    public void DeferredJoinAfterCompletedTarget_StartsNewCaptureWithoutWaiting()
+    {
+        var handoff = new ZLinkActorHandoffState(
+            "actor-1",
+            TimeProvider.System);
+        Assert.True(handoff.Import(CommitRequest("handoff-completed", []), out _));
+        _ = handoff.PrepareImportedReplay([]);
+        handoff.Complete("handoff-completed");
+
+        var targetCompletion = handoff.BeginDeferredJoinCapture();
+
+        Assert.Null(targetCompletion);
+        using var body = Message.From("new-join-after-completed-target");
+        using var frame = Frame(body, ActorRef("node-a", 1), "session-1");
+        Assert.Equal(
+            ZLinkActorHandoffCaptureResult.Captured,
+            handoff.TryCapture(frame));
+
+        handoff.BeginCapture();
+        Assert.Equal(
+            ["new-join-after-completed-target"],
+            handoff.SnapshotFrames().Select(DecodeBody));
+        _ = handoff.AbortCapture();
+    }
+
+    [Fact]
     public void TargetArrivalBacklog_RemainsSealedThroughJoinedNotification()
     {
         var handoff = new ZLinkActorHandoffState(

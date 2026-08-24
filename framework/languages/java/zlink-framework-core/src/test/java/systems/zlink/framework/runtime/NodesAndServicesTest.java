@@ -32,7 +32,7 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -93,8 +93,8 @@ final class NodesAndServicesTest {
                 RoomSpot.class,
                 factory -> {
                     factory.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
-                    factory.relocationReadiness(
-                        ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED);
+                    factory.relocationCoordinationMode(
+                        ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
                     factory.disableRelocation();
                 }));
 
@@ -226,8 +226,8 @@ final class NodesAndServicesTest {
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
             configuration.executionMode());
         assertEquals(
-            ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY,
-            configuration.relocationReadiness());
+            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED,
+            configuration.relocationCoordinationMode());
     }
 
     @Test

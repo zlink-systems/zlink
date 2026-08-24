@@ -355,8 +355,8 @@ common gate. `PerActor` has no shared Spot turn, so `Yield` isn't provided.
 ### 5.1 SpotWide Relocation Boundary
 
 The default for
-[`Spot relocation readiness mode`](01-glossary.en.md#spot-relocation-readiness-mode)
-is `AnyTurnBoundary`. In this mode, the framework picks a safe boundary after
+[`Spot relocation coordination mode`](01-glossary.en.md#spot-relocation-coordination-mode)
+is `FrameworkManaged`. In this mode, the framework picks a safe boundary after
 the current turn ends, so the application doesn't send a separate readiness
 signal.
 
@@ -388,7 +388,7 @@ readiness registration creates one logical completion. If the process
 terminates while the callback is running, completion can't be confirmed, so
 recovery may call the same completion again. An override must be retry-safe.
 
-Calling `RelocationReady().Defer()` on `AnyTurnBoundary`, `PerActor`, Entry
+Calling `RelocationReady().Defer()` on `FrameworkManaged`, `PerActor`, Entry
 Spot, or Instance Spot fails with `InvalidOperation` before a queue mutation
 and doesn't call the completion callback.
 

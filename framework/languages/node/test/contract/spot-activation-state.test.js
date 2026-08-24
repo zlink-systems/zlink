@@ -12,7 +12,7 @@ function createActivation(externalActorCount = () => 0) {
     domain: {
       kind: 'user',
       executionMode: 'spot_wide',
-      relocationReadiness: 'any_turn_boundary'
+      relocationCoordinationMode: 'framework_managed'
     },
     spotType: class Room {},
     spot: {},

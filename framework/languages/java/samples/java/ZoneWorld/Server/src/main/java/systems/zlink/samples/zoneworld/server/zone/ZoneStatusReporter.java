@@ -1,6 +1,8 @@
 package systems.zlink.samples.zoneworld.server.zone;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -51,14 +53,18 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
         }
     }
 
-    private void report() {
+    public CompletionStage<Void> reportNow() {
+        return report();
+    }
+
+    private CompletionStage<Void> report() {
         synchronized (lifecycleLock) {
             if (!running) {
-                return;
+                return CompletableFuture.completedFuture(null);
             }
             List<String> zones = census.zoneIds();
             try {
-                routes.sendToChannel(
+                return routes.sendToChannel(
                         ZoneWorldNames.REPORT_CHANNEL,
                         new Messages.ReportNodeStatusMsg(
                             topology.nodeId(),
@@ -81,6 +87,7 @@ public final class ZoneStatusReporter implements SmartLifecycle, AutoCloseable {
                 // public-channel retry alive across that expected readiness window.
                 System.out.println("report failed node=" + topology.nodeId()
                     + " detail=" + error.getMessage());
+                return CompletableFuture.completedFuture(null);
             }
         }
     }

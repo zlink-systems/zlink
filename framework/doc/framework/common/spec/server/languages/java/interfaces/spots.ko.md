@@ -256,7 +256,7 @@ source에서 `CONTINUED`, 이동했으면 target에서 `RELOCATED` completion을
 `onRelocationReadyCompleted(...)`에 전달한다. 기본 method는 no-op이다. Callback
 완료 전에는 보류한 application message와 timer를 실행하지 않는다.
 
-기본 `ANY_TURN_BOUNDARY`, `PER_ACTOR`, Entry·Instance Spot, Spot turn 밖과 같은
+기본 `FRAMEWORK_MANAGED`, `PER_ACTOR`, Entry·Instance Spot, Spot turn 밖과 같은
 turn의 중복 `defer()`는 queue mutation 전에 `INVALID_OPERATION`으로 실패한다.
 `defer()` 뒤 같은 turn의 다른 Framework operation도 같은 오류다. Recovery에서
 callback이 다시 실행될 수 있으므로 override는 retry-safe해야 한다.

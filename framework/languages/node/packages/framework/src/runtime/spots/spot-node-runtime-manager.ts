@@ -45,7 +45,6 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import {
-  buildAdvertisedEndpoint,
   ZLinkConfigurationException,
   type ZLinkFrameworkRegistration,
   type ZLinkSpotNodeOptions
@@ -318,6 +317,9 @@ export class ZLinkSpotNodeRuntimeManager {
       const completions = new ZLinkMeshCompletionTable();
       try {
         node.setBind(bind);
+        if (spotNode.router?.advertiseHost !== undefined) {
+          node.setAdvertiseHost(spotNode.router.advertiseHost);
+        }
         const stableTypes = [
           ...Object.keys(spotNode.spotFactoryRegistrations ?? {}),
           ...Object.keys(spotNode.instanceSpotFactoryRegistrations ?? {}),
@@ -467,12 +469,9 @@ export class ZLinkSpotNodeRuntimeManager {
         rid: status.routingId,
         lifecycleGeneration: status.lifecycleGeneration,
         descriptorRevision: maxBigInt(previousRevision, current?.descriptorRevision ?? 0n) + 1n,
-        // Core resolves port zero. The configured advertise host replaces only
-        // the host component; peers still use Core's resolved port.
-        endpoint: advertisedMeshEndpoint(
-          status.localEndpoint,
-          registration.router?.advertiseHost
-        ),
+        // The raw MeshNode resolves port zero and applies AdvertiseHost once.
+        // Discovery and RouteMesh hello must publish that same public identity.
+        endpoint: status.localEndpoint,
         objectRole: effectiveObjectRole(registration),
         entrySpotId: this.entrySpotId(meshName, registration),
         placementWeight: this.placementWeight(meshName),
@@ -1394,19 +1393,6 @@ export class ZLinkSpotNodeRuntimeManager {
       queue.head = 0;
     }
   }
-}
-
-function advertisedMeshEndpoint(
-  boundEndpoint: string,
-  advertiseHost: string | undefined
-): string {
-  const result = buildAdvertisedEndpoint(boundEndpoint, advertiseHost, 'tcp');
-  if (result === undefined) {
-    throw new ZLinkConfigurationException(
-      `RouteMesh advertise host requires a TCP endpoint, received '${boundEndpoint}'.`
-    );
-  }
-  return result;
 }
 
 function runtimeShutdownError(): ZLinkFrameworkException {

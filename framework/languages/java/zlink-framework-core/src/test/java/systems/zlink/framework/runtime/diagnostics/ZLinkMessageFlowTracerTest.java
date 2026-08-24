@@ -248,6 +248,7 @@ class ZLinkMessageFlowTracerTest {
         assertTrue(errorLine.contains("event_id=zlink.dispatch_error"));
         assertTrue(errorLine.contains("surface=classic_fanout"));
         assertTrue(errorLine.contains("reason=no_handler"));
+        assertTrue(errorLine.contains("action=drop"));
         assertTrue(errorLine.contains("outcome=failed"));
         assertFalse(errorLine.contains(" phase="));
         assertEquals(ZLinkDispatchErrorAction.DROP, dispatchError.errorAction());

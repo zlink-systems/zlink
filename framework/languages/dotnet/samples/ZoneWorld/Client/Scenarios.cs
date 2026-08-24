@@ -1242,7 +1242,8 @@ public static class Scenarios
             disconnected.TrySetResult(message.CloseReason);
             return ValueTask.CompletedTask;
         };
-        Console.WriteLine("scenario ZW-B8 armed");
+        Console.WriteLine(
+            $"scenario ZW-B8 armed actor={playerId} target={pair.TargetZoneId}");
         var armFile = options.FaultArmFile;
         ZlinkStreamAssert.Ensure(!string.IsNullOrWhiteSpace(armFile), "B8 runner arm file is configured");
         for (var attempt = 0; !File.Exists(armFile); attempt++)
@@ -1254,6 +1255,17 @@ public static class Scenarios
         await player.MoveAsync(edge.Target.X, edge.Target.Y);
         var closeReason = await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(45), ct);
         Console.WriteLine($"scenario ZW-B8 disconnected reason={closeReason}");
+
+        for (var attempt = 0; File.Exists(armFile); attempt++)
+        {
+            if (attempt >= 900)
+            {
+                throw new ScenarioFailure(
+                    "ZW-B8 precondition unmet: runner did not prove command-44 interception " +
+                    "and target relocation commit.");
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
+        }
 
         await player.Connector.Connect.Async(ct);
         var rebound = await player.JoinWorldAsync(ct);

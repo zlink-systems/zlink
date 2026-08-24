@@ -32,7 +32,7 @@ import systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig;
 import systems.zlink.framework.configuration.ZLinkActorFactoryBuilder;
 import systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshPeerConnection;
@@ -753,8 +753,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         private int stableTypeLimit;
         private ZLinkUserSpotExecutionMode executionMode =
             ZLinkUserSpotExecutionMode.SPOT_WIDE;
-        private ZLinkSpotRelocationReadinessMode relocationReadiness =
-            ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY;
+        private ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
+            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED;
 
         @Override
         public ZLinkUserSpotFactoryBuilder<TSpot> stableTypeLimit(int limit) {
@@ -772,10 +772,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         }
 
         @Override
-        public ZLinkUserSpotFactoryBuilder<TSpot> relocationReadiness(
-            ZLinkSpotRelocationReadinessMode mode) {
+        public ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(
+            ZLinkSpotRelocationCoordinationMode mode) {
             requireAccepting();
-            relocationReadiness = Objects.requireNonNull(mode, "mode");
+            relocationCoordinationMode = Objects.requireNonNull(mode, "mode");
             return this;
         }
 
@@ -798,10 +798,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
         UserSpotFactoryConfiguration build(RelocationPolicy policy) {
             if (executionMode != ZLinkUserSpotExecutionMode.SPOT_WIDE
-                && relocationReadiness
-                    != ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY) {
+                && relocationCoordinationMode
+                    != ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED) {
                 throw new ZLinkConfigurationException(
-                    "relocationReadiness applies only to SpotWide User Spots");
+                    "relocationCoordinationMode applies only to SpotWide User Spots");
             }
             if (executionMode == ZLinkUserSpotExecutionMode.PER_ACTOR
                 && !(policy instanceof RelocationPolicy.Recreate)) {
@@ -811,7 +811,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
             return new UserSpotFactoryConfiguration(
                 stableTypeLimit,
                 executionMode,
-                relocationReadiness);
+                relocationCoordinationMode);
         }
     }
 

@@ -1,11 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
-#include "../common_codecs.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <set>
 #include <mutex>
@@ -25,9 +24,7 @@ using namespace framework;
 class customer_session_directory_t
 {
   public:
-    void subscribe (const std::string &customer_id,
-                    const std::string &delivery_id,
-                    stream_t stream)
+    void subscribe (const std::string &customer_id, const std::string &delivery_id, stream_t stream)
     {
         const std::lock_guard lock (_mutex);
         _subscriptions[delivery_id] = subscription_t{customer_id, std::move (stream)};
@@ -72,8 +69,7 @@ class customer_actor_t : public actor_t
 {
   public:
     explicit customer_actor_t (actor_context_t context) :
-        actor_id (context.actor_ref ().actor_id ().value ()),
-        _context (std::move (context))
+        actor_id (context.actor_ref ().actor_id ().value ()), _context (std::move (context))
     {
     }
 
@@ -84,31 +80,25 @@ class customer_actor_t : public actor_t
     actor_context_t _context;
 };
 
-struct customer_actor_factory_t final
-    : public actor_factory_t<customer_actor_t>
+struct customer_actor_factory_t final : public actor_factory_t<customer_actor_t>
 {
-    task_t<std::shared_ptr<customer_actor_t>>
-    create (actor_context_t context, std::stop_token) override
+    task_t<std::shared_ptr<customer_actor_t>> create (actor_context_t context,
+                                                      std::stop_token) override
     {
-        co_return std::make_shared<customer_actor_t> (
-          std::move (context));
+        co_return std::make_shared<customer_actor_t> (std::move (context));
     }
 };
 
 class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
 {
   public:
-    customer_entry_spot_t (entry_spot_context_t context,
-                           customer_session_directory_t &sessions) :
+    customer_entry_spot_t (entry_spot_context_t context, customer_session_directory_t &sessions) :
         _context (std::move (context)), _sessions (sessions)
     {
     }
 
     entry_spot_context_t &context () noexcept override { return _context; }
-    const entry_spot_context_t &context () const noexcept override
-    {
-        return _context;
-    }
+    const entry_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {
@@ -121,9 +111,8 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
             delivery_status_updated_msg_t::packet_name);
     }
 
-    task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view,
-                   const zlink::framework::message_t &) override
+    task_t<spot_actor_join_result_t> on_actor_join (std::string_view,
+                                                    const zlink::framework::message_t &) override
     {
         co_return spot_actor_join_result_t::accept ();
     }
@@ -131,10 +120,9 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
     task_t<void> on_actor_joined (customer_actor_t &) override { co_return; }
     task_t<void> on_leave_actor (customer_actor_t &) override { co_return; }
 
-    subscribe_delivery_res_t
-    subscribe_delivery (customer_actor_t &actor,
-                        message_context_t &,
-                        const subscribe_delivery_req_t &request)
+    subscribe_delivery_res_t subscribe_delivery (customer_actor_t &actor,
+                                                 message_context_t &,
+                                                 const subscribe_delivery_req_t &request)
     {
         return {request.delivery_id};
     }
@@ -149,9 +137,10 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
                       << status.delivery_id << " actor=" << actor.actor_id << "\n";
             return;
         }
-        std::cerr << "deliverydispatch customer-entry: push status delivery="
-                  << status.delivery_id << " status=" << status.status << "\n";
-        actor.context ().bound_session ()
+        std::cerr << "deliverydispatch customer-entry: push status delivery=" << status.delivery_id
+                  << " status=" << status.status << "\n";
+        actor.context ()
+          .bound_session ()
           .send (delivery_status_notify_t{status.delivery_id, status.status, status.courier_id,
                                           status.occurred_at_unix_ms})
           .submit ();
@@ -189,11 +178,10 @@ class customer_gateway_session_t final : public packet_stream_session_t
                             const session_message_context_t &dispatch,
                             const zlink::message_t &payload) override
     {
-        std::cerr << "deliverydispatch customer-gateway: dispatch packet="
-                  << dispatch.packet_name << "\n";
+        std::cerr << "deliverydispatch customer-gateway: dispatch packet=" << dispatch.packet_name
+                  << "\n";
         if (dispatch.packet_name != subscribe_delivery_req_t::packet_name) {
-            auto actor = require_single_bound_actor (
-              stream, std::string (dispatch.packet_name));
+            auto actor = require_single_bound_actor (stream, std::string (dispatch.packet_name));
             if (dispatch.can_reply) {
                 auto reply = co_await actor.relay_request (payload).submit ();
                 stream.reply_packet (reply).submit ();
@@ -204,14 +192,13 @@ class customer_gateway_session_t final : public packet_stream_session_t
         }
         const auto request = payload.parse_json<subscribe_delivery_req_t> ();
         auto &actors = stream.actors ();
-        auto actor = actors.get_or_create (sample_names_t::customer_actor_type,
-                                           sample_names_t::customer_id,
-                                           ensure_customer_actor_req_t{
-                                             sample_names_t::customer_id});
+        auto actor =
+          actors.get_or_create (sample_names_t::customer_actor_type, sample_names_t::customer_id,
+                                ensure_customer_actor_req_t{sample_names_t::customer_id});
         if (!actor) {
-            throw framework_exception_t (
-              actor.error_kind (),
-              actor.error () ? actor.error ()->what () : "customer actor create failed");
+            throw framework_exception_t (actor.error_kind (), actor.error ()
+                                                                ? actor.error ()->what ()
+                                                                : "customer actor create failed");
         }
         auto bound = co_await actors.bind_or_get (actor.value ().ref ()).submit ();
         const auto actor_id = std::string (bound.actor_id ());
@@ -225,16 +212,13 @@ class customer_gateway_session_t final : public packet_stream_session_t
         _bound_actors.insert (actor_id);
         _sessions.subscribe (actor_id, request.delivery_id, stream);
         stream.reply_packet (reply).submit ();
-        std::cerr << "deliverydispatch customer-session: bound customer actor="
-                  << actor_id
-                  << "\n";
+        std::cerr << "deliverydispatch customer-session: bound customer actor=" << actor_id << "\n";
         std::cerr << "deliverydispatch customer-session: subscribed customer="
                   << sample_names_t::customer_id << " delivery=" << request.delivery_id << "\n";
     }
 
   private:
-    session_actor_t require_single_bound_actor (stream_t &stream,
-                                                const std::string &packet_name)
+    session_actor_t require_single_bound_actor (stream_t &stream, const std::string &packet_name)
     {
         if (_bound_actors.size () != 1) {
             throw framework_exception_t (framework_error_kind_t::not_found,
@@ -265,32 +249,25 @@ int main (int argc, char **argv)
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        auto sessions = std::make_unique<customer_session_directory_t> ();
-        auto *sessions_ptr = sessions.get ();
-        options.services ().add_singleton<customer_session_directory_t> (std::move (sessions));
-        add_deliverydispatch_json_codecs (options.codecs ());
-        add_deliverydispatch_location_store (options, topology);
-        auto actor_mesh = options.add_route_mesh (sample_names_t::customer_actor_discovery);
-        actor_mesh.set_routing_id (zlink::routing_id_t::from (
-          sample_names_t::customer_gateway_route_node));
-        actor_mesh.set_object_role (object_role_t::server);
-        actor_mesh.listen (topology.customer_spot_router_endpoint);
-        actor_mesh.channel_name (sample_names_t::customer_actor_discovery).server ();
-        actor_mesh.add_entry_spot<customer_entry_spot_t> ([sessions_ptr] (
-                                                            entry_spot_context_t context) {
-              return std::make_shared<customer_entry_spot_t> (
-                std::move (context), *sessions_ptr);
-          })
-          .add_actor_factory<customer_actor_t, customer_actor_factory_t> (
-            sample_names_t::customer_actor_type,
-            std::make_shared<customer_actor_factory_t> (),
-            [] (auto &factory) { factory.disable_relocation (); });
-        options.add_stream_node (sample_names_t::customer_stream_node)
-          .bind (topology.customer_stream_endpoint)
-          .register_session<customer_gateway_session_t> ();
-    });
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.services ().add_singleton<customer_session_directory_t> ();
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix);
+    auto actor_mesh = options.add_route_mesh (sample_names_t::customer_actor_discovery);
+    actor_mesh.set_routing_id (
+      zlink::routing_id_t::from (sample_names_t::customer_gateway_route_node));
+    actor_mesh.listen (topology.customer_spot_router_endpoint);
+    actor_mesh.channel (sample_names_t::customer_actor_discovery).server ();
+    actor_mesh.objects ()
+      .server ()
+      .add_entry_spot<customer_entry_spot_t, customer_session_directory_t> ()
+      .add_actor_factory<customer_actor_t, customer_actor_factory_t> (
+        sample_names_t::customer_actor_type)
+      .disable_relocation ();
+    options.add_stream_node (sample_names_t::customer_stream_node)
+      .bind (topology.customer_stream_endpoint)
+      .register_session<customer_gateway_session_t> ();
     return app.run (argc, argv);
 }

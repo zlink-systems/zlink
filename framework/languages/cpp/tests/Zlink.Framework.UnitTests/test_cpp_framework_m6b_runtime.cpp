@@ -2436,6 +2436,28 @@ void verify_global_identity_remote_create_and_generation_fence ()
     assert (runtime.adopt_reserved_actor_owner (stale_owner, "player")
             == stateful::stateful_error_t::generation_stale);
 
+    // A User-Spot membership authority commit can advance the generation
+    // without changing the local owner node. It is distinct from the
+    // return-to-node adoption above and accepts exactly the next generation.
+    auto local_membership_owner = returned_owner;
+    ++local_membership_owner.authority_owner_generation;
+    assert (runtime.advance_local_actor_authority (
+              local_membership_owner, "player")
+            == stateful::stateful_error_t::none);
+    assert (runtime.find (stateful::object_kind_t::actor,
+                          local_membership_owner.key)
+              == local_membership_owner);
+    auto skipped_local_membership_owner = local_membership_owner;
+    skipped_local_membership_owner.authority_owner_generation += 2;
+    assert (runtime.advance_local_actor_authority (
+              skipped_local_membership_owner, "player")
+            == stateful::stateful_error_t::none);
+    auto stale_local_membership_owner = skipped_local_membership_owner;
+    --stale_local_membership_owner.authority_owner_generation;
+    assert (runtime.advance_local_actor_authority (
+              stale_local_membership_owner, "player")
+            == stateful::stateful_error_t::generation_stale);
+
     // Application actors created from a globally reserved reference use the
     // same local placement capacity as actors created through begin_create.
     // Destroying that actor must release the capacity before the next
@@ -2853,6 +2875,49 @@ void verify_session_route_supports_repeated_relocation ()
     assert (!sessions.remote_route_sealed (source.key));
 }
 
+void verify_session_route_defers_target_lease_to_first_bound_push ()
+{
+    stateful::stream_session_registry_t sessions (
+      [] (const std::string &) {
+          return std::optional<stateful::object_ref_t>{};
+      });
+    const auto connection = sessions.open ("deferred-lease-session");
+    const stateful::object_ref_t source{
+      stateful::object_kind_t::actor,
+      "deferred-lease-actor", 7, 11, "mesh-a", "node-a"};
+    const auto [bind_error, binding] = sessions.bind_remote (
+      connection, source, 13, 17);
+    assert (bind_error == stateful::stateful_error_t::none);
+    const auto sealed = sessions.seal_remote_route (
+      connection.connection_id, binding.binding_generation,
+      source, 13, 17);
+    assert (sealed.error == stateful::stateful_error_t::none);
+
+    auto target = source;
+    target.node_id = "node-b";
+    ++target.authority_owner_generation;
+    const auto committed = sessions.commit_remote_route (
+      connection.connection_id, binding.binding_generation,
+      source.key, source.object_generation,
+      source.authority_owner_generation, target, 19, 0);
+    assert (committed.error == stateful::stateful_error_t::none);
+    assert (committed.binding);
+    assert (committed.binding->owner_lease_generation == 0);
+    assert (!sessions.remote_route_sealed (source.key));
+
+    const stateful::stream_remote_tenure_t first_push{
+      source.key, source.object_generation,
+      target.authority_owner_generation, target.node_id,
+      19, 23, binding.binding_generation};
+    assert (sessions.confirm_remote_tenure (first_push));
+    assert (sessions.current_binding (source.key)
+              ->owner_lease_generation == 23);
+    assert (sessions.confirm_remote_tenure (first_push));
+    auto stale_push = first_push;
+    ++stale_push.owner_lease_generation;
+    assert (!sessions.confirm_remote_tenure (stale_push));
+}
+
 void verify_displaced_stream_binding_can_be_restored ()
 {
     stateful::stateful_object_runtime_t runtime;
@@ -3114,11 +3179,11 @@ void verify_actor_commit_is_replayable_until_deadline ()
     assert (coordinator.stage_session_relocation_route (
       "transfer-replay", {0x41}, "player", 17));
     assert (coordinator.commit_session_relocation_route_authority (
-      "transfer-replay", 41));
+      "transfer-replay", 40, 41));
     assert (coordinator.commit_session_relocation_route_authority (
-      "transfer-replay", 41));
+      "transfer-replay", 40, 41));
     assert (!coordinator.commit_session_relocation_route_authority (
-      "transfer-replay", 42));
+      "transfer-replay", 40, 42));
     assert (coordinator.begin_commit (
       "transfer-replay", source, "spot-b"));
     coordinator.complete_commit ("transfer-replay");
@@ -3128,7 +3193,10 @@ void verify_actor_commit_is_replayable_until_deadline ()
       "transfer-replay", source, "spot-b");
     assert (completed);
     assert (completed
-              ->session_relocation_committed_authority_owner_generation
+              ->session_relocation_committed_previous_authority_owner_generation
+            == 40);
+    assert (completed
+              ->session_relocation_committed_target_authority_owner_generation
             == 41);
     assert (!coordinator.completed_commit (
       "transfer-replay", source, "different-spot"));
@@ -3424,22 +3492,6 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
             zlink::framework::location_owner_token_t{
               "same-node-session-owner", 19});
       });
-    local->configure_session_route_target_owner (
-      [] (const std::string &actor_id,
-          std::uint64_t object_generation,
-          std::uint64_t authority_owner_generation,
-          const zlink::routing_id_t &,
-          std::uint64_t target_node_generation)
-      -> std::optional<zlink::framework::location_owner_token_t> {
-          if (actor_id != "same-node-session-actor"
-              || object_generation == 0
-              || authority_owner_generation == 0
-              || target_node_generation == 0) {
-              return std::nullopt;
-          }
-          return zlink::framework::location_owner_token_t{
-            "same-node-target-owner", 23};
-      });
     local->start ();
     const auto status = local->status ();
     const auto actor =
@@ -3555,7 +3607,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
                  == target_authority_owner_generation);
     assert (current->target_node_generation
             == status.lifecycle_generation ());
-    assert (current->owner_lease_generation == 23);
+    assert (current->owner_lease_generation == 0);
     assert (!local->sessions ().remote_route_sealed (
       actor_object->key));
 
@@ -3589,8 +3641,13 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
     assert (actor_object);
     const auto session_rid = bytes (
       "configured-session-timeout-rid");
+    std::atomic_int physical_close_count{0};
     const auto connection = local->sessions ().open (
-      zlink::routing_id_t::from (session_rid).to_hex ());
+      zlink::routing_id_t::from (session_rid).to_hex (),
+      [&physical_close_count] {
+          physical_close_count.fetch_add (
+            1, std::memory_order_acq_rel);
+      });
     const auto [bind_error, binding] = local->sessions ().bind (
       connection, *actor_object,
       status.lifecycle_generation (), 23);
@@ -3703,6 +3760,9 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
               foundation::operation_terminal_t::timed_out));
     assert (!completion_has_result.load (
       std::memory_order_acquire));
+    assert (physical_close_count.load (
+              std::memory_order_acquire)
+            == 1);
     assert (local->sessions ().complete_inbound (*ingress)
             != stateful::stateful_error_t::none);
 
@@ -3738,6 +3798,9 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
 
     local->close ();
     assert (held_settlement_count.load (
+              std::memory_order_acquire)
+            == 1);
+    assert (physical_close_count.load (
               std::memory_order_acquire)
             == 1);
 }
@@ -6579,6 +6642,7 @@ int main ()
     verify_session_binding_and_terminal_once ();
     verify_session_ingress_sequence_is_scoped_by_actor_binding ();
     verify_session_route_supports_repeated_relocation ();
+    verify_session_route_defers_target_lease_to_first_bound_push ();
     verify_displaced_stream_binding_can_be_restored ();
     verify_verified_remote_stream_binding ();
     verify_message_follow_route_admission_and_suppression ();

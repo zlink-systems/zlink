@@ -3402,7 +3402,7 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
-            ZLinkSpotRelocationReadinessMode.ApplicationSignaled);
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled);
         var spot = new RelocationReadyProbeSpot(activation);
         activation.AttachSpot(spot);
         await using var cleanup = activation.ConfigureAwait(false);
@@ -3460,7 +3460,7 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
-            ZLinkSpotRelocationReadinessMode.ApplicationSignaled);
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled);
         var spot = new RelocationReadyProbeSpot(activation);
         activation.AttachSpot(spot);
         await using var cleanup = activation.ConfigureAwait(false);
@@ -3512,7 +3512,7 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
-            ZLinkSpotRelocationReadinessMode.ApplicationSignaled);
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled);
         var spot = new RelocationReadyProbeSpot(
             activation,
             failFirstRelocatedCallback: true);
@@ -5652,6 +5652,58 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task LocalEntrySpotJoin_DestroyFromJoinedCallback_DefersNativeDestroyUntilCallbackReturns()
+    {
+        var callbackReturned = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var destroyStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDestroy = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var destroyObservedReturnedCallback = false;
+        var node = new CapturingSpotNode
+        {
+            DestroyHandler = async (_, cancellationToken) =>
+            {
+                destroyObservedReturnedCallback = callbackReturned.Task.IsCompleted;
+                destroyStarted.TrySetResult();
+                await releaseDestroy.Task.WaitAsync(cancellationToken);
+            }
+        };
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            entrySpotType: typeof(LocalJoinProbeEntrySpot));
+        runtime.Services.GetRequiredService<LocalEntryJoinProbe>().JoinedHandler =
+            async (context, actor, cancellationToken) =>
+            {
+                await context.DestroyActorAsync(actor, cancellationToken);
+                callbackReturned.TrySetResult();
+            };
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var join = runtime.JoinActorEntrySpotAsync(
+                    RoutingId.From("entry-node"),
+                    actor,
+                    ZLinkMessage.Empty,
+                    CancellationToken.None)
+                .AsTask();
+
+            await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(
+                destroyObservedReturnedCallback,
+                "Native destroy started while the local Entry Spot joined callback still owned the Actor lifecycle.");
+            releaseDestroy.TrySetResult();
+            await join.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            releaseDestroy.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task LocalEntrySpotJoin_MissingActivation_DoesNotCreateANativeActor()
     {
         var node = new CapturingSpotNode();
@@ -5962,6 +6014,74 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ActorJoinPrewarmSupersession_DoesNotWaitForUnrelatedTargetAttemptGate()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        object? targetAttemptLease = null;
+        SemaphoreSlim? targetAttemptGate = null;
+        try
+        {
+            var owner = runtime.StandaloneActorRelocationRuntime;
+            var ownerType = owner.GetType();
+            var keyType = ownerType.GetNestedType(
+                              "AttemptKey",
+                              BindingFlags.NonPublic)
+                          ?? throw new InvalidOperationException(
+                              "Target attempt key was not found.");
+            var key = Activator.CreateInstance(
+                          keyType,
+                          BindingFlags.Instance
+                          | BindingFlags.Public
+                          | BindingFlags.NonPublic,
+                          binder: null,
+                          args: [11UL, 12UL, 1UL],
+                          culture: null)
+                      ?? throw new InvalidOperationException(
+                          "Target attempt key could not be created.");
+            var acquire = ownerType.GetMethod(
+                              "AcquireTargetAttempt",
+                              BindingFlags.Instance | BindingFlags.NonPublic,
+                              binder: null,
+                              types: [keyType],
+                              modifiers: null)
+                          ?? throw new InvalidOperationException(
+                              "Target attempt acquisition owner was not found.");
+            targetAttemptLease = acquire.Invoke(owner, [key])
+                                 ?? throw new InvalidOperationException(
+                                     "Target attempt lease was not acquired.");
+            var slot = targetAttemptLease.GetType()
+                           .GetProperty(
+                               "Slot",
+                               BindingFlags.Instance | BindingFlags.NonPublic)!
+                           .GetValue(targetAttemptLease)
+                       ?? throw new InvalidOperationException(
+                           "Target attempt slot was not found.");
+            targetAttemptGate = Assert.IsType<SemaphoreSlim>(
+                slot.GetType()
+                    .GetProperty(
+                        "Gate",
+                        BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(slot));
+            Assert.True(await targetAttemptGate.WaitAsync(0));
+
+            using var deadline = new CancellationTokenSource(
+                TimeSpan.FromMilliseconds(100));
+            await owner.AbortSupersededRoutedActorJoinPreparationAsync(
+                "different-actor",
+                actorGeneration: 42,
+                newerHandoffId: "newer-handoff",
+                deadline.Token);
+        }
+        finally
+        {
+            targetAttemptGate?.Release();
+            (targetAttemptLease as IDisposable)?.Dispose();
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -8617,6 +8737,10 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public Func<CancellationToken, ValueTask<ZLinkSpotActorJoinResult>> Handler { get; set; } =
             _ => ValueTask.FromResult(ZLinkSpotActorJoinResult.Reject());
+
+        public Func<IZLinkEntrySpotContext, ProbeActor, CancellationToken, ValueTask>
+            JoinedHandler { get; set; } =
+            static (_, _, _) => ValueTask.CompletedTask;
     }
 
     private sealed class LocalJoinProbeEntrySpot(
@@ -8639,8 +8763,10 @@ public sealed partial class EntrySpotActorDispatchTests
             return probe.Handler(cancellationToken);
         }
 
-        public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken) =>
+            probe.JoinedHandler(Context, actor, cancellationToken);
 
         public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
             ValueTask.CompletedTask;

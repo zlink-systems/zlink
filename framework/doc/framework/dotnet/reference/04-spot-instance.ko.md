@@ -323,7 +323,7 @@ Spot 자신을 스스로 종료하려면 `CloseAsync`를, Entry Spot에서 더 �
 
 ## `RelocationReady().Defer()` (Spot 코드 안)
 
-`ApplicationSignaled` readiness mode를 선택한 `SpotWide` Spot에서, relocation 경계를 다음 application
+`ApplicationSignaled` coordination mode를 선택한 `SpotWide` Spot에서, relocation 경계를 다음 application
 turn 앞으로 미룬다.
 
 ```csharp
@@ -334,11 +334,11 @@ Context.RelocationReady().Defer();
 
 **완료 결과.** 반환값 없음. 현재 handler가 끝난 뒤 relocation 경계를 등록한다. 이동하지 않았거나
 commit 전에 abort했으면 source에서 `Continued`, 이동했으면 target에서 `Relocated` completion을
-`OnRelocationReadyCompletedAsync(...)`로 받는다. `AnyTurnBoundary` mode, `PerActor` Spot, Entry·
+`OnRelocationReadyCompletedAsync(...)`로 받는다. `FrameworkManaged` mode, `PerActor` Spot, Entry·
 Instance Spot, Spot turn 밖, 같은 turn의 중복 호출은 `InvalidOperation`으로 완료한다.
 
 **선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 쓴다. 기본
-`AnyTurnBoundary` mode에서는 이 호출이 필요하지 않다.
+`FrameworkManaged` mode에서는 이 호출이 필요하지 않다.
 
 ---
 

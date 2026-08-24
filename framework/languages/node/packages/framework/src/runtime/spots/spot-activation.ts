@@ -24,7 +24,7 @@ import type {
 import {
   ZLinkSpotCloseReason,
   ZLinkSpotCreateState,
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
@@ -93,10 +93,10 @@ export interface ZLinkSpotActivationLifecycleOptions {
     meshName: string,
     spotType: Type<ZLinkSpot>
   ) => ZLinkUserSpotExecutionMode;
-  readonly userSpotRelocationReadiness?: (
+  readonly userSpotRelocationCoordinationMode?: (
     meshName: string,
     spotType: Type<ZLinkSpot>
-  ) => ZLinkSpotRelocationReadinessMode;
+  ) => ZLinkSpotRelocationCoordinationMode;
   readonly channelClient?: ZLinkChannelClient;
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
@@ -291,10 +291,10 @@ export class ZLinkSpotActivationLifecycle {
                 meshName,
                 implementation as unknown as Type<ZLinkSpot>
               ) ?? ZLinkUserSpotExecutionMode.SpotWide,
-              relocationReadiness: this.options.userSpotRelocationReadiness?.(
+              relocationCoordinationMode: this.options.userSpotRelocationCoordinationMode?.(
                 meshName,
                 implementation as unknown as Type<ZLinkSpot>
-              ) ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+              ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
             }
           : { kind: 'instance', objectGeneration },
         spotType: implementation as unknown as Type<ZLinkSpot>,
@@ -588,10 +588,10 @@ export class ZLinkSpotActivationLifecycle {
         domain: {
           kind: 'user',
           executionMode,
-          relocationReadiness: this.options.userSpotRelocationReadiness?.(
+          relocationCoordinationMode: this.options.userSpotRelocationCoordinationMode?.(
             meshName,
             spotType
-          ) ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+          ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
         },
         spotType,
         spot,
@@ -690,10 +690,10 @@ export class ZLinkSpotActivationLifecycle {
       domain: {
         kind: 'user',
         executionMode,
-        relocationReadiness: this.options.userSpotRelocationReadiness?.(
+        relocationCoordinationMode: this.options.userSpotRelocationCoordinationMode?.(
           meshName,
           spotType
-        ) ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+        ) ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged
       },
       spotType,
       spot,

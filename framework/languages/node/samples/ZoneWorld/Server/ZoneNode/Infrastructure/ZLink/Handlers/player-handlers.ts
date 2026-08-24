@@ -109,6 +109,24 @@ class EntryJoinWorldHandler {
 }
 
 @Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => ZoneSpot,
+  actor: () => PlayerActor,
+  packetName: PacketNames.joinWorldReq
+})
+class PlayerRejoinWorldHandler {
+  async handle(
+    spot: ZoneSpot,
+    actor: PlayerActor,
+    _context: ZLinkMessageContext,
+    request: JoinWorldReq
+  ): Promise<void> {
+    assertPlayerId(request.playerId, actor.actorId);
+    await actor.context.boundSession.send(spot.rejoin(actor)).submit();
+  }
+}
+
+@Injectable()
 class PlayerMovement {
   constructor(
     @Inject(ZLINK_SPOT_OUTBOUND) private readonly spotOutbound: ZLinkSpotOutbound
@@ -264,4 +282,5 @@ export {
   PlayerMessageFollowProbeSendHandler,
   PlayerMoveHandler,
   PlayerMovement,
+  PlayerRejoinWorldHandler,
 };

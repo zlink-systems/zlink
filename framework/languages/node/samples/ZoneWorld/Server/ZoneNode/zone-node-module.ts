@@ -46,7 +46,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           const builder = zlinkFramework();
           builder.addLocationStore(createZoneWorldLocationStore(config.shared));
           builder.addRelocationStore(createZoneWorldRelocationStore(config.shared));
-          zoneWorldLocationOptions(builder.configureLocations());
+          zoneWorldLocationOptions(builder.configureLocations(), config.shared);
           builder.configureDispatch()
             .messageFlow('normal');
 
@@ -58,8 +58,11 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           }
 
           const zoneMesh = builder.addRouteMesh(ZoneWorldNames.zoneMesh)
-            .setRoutingIdPrefix('zn')
-            .listen(node.spotRouterEndpoint);
+            .setRoutingIdPrefix('zn');
+          if (node.spotRouterAdvertiseHost !== undefined) {
+            zoneMesh.setAdvertiseHost(node.spotRouterAdvertiseHost);
+          }
+          zoneMesh.listen(node.spotRouterEndpoint);
           const objectServer = zoneMesh.objects().server();
           objectServer.addEntrySpot(ZoneEntrySpot);
           objectServer.addSpotFactory(

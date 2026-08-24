@@ -228,10 +228,10 @@ export interface ZLinkSpotManagerOptions {
     meshName: string,
     spotType: Type<ZLinkSpot>
   ) => import('../../contracts').ZLinkUserSpotExecutionMode;
-  readonly userSpotRelocationReadiness?: (
+  readonly userSpotRelocationCoordinationMode?: (
     meshName: string,
     spotType: Type<ZLinkSpot>
-  ) => import('../../contracts').ZLinkSpotRelocationReadinessMode;
+  ) => import('../../contracts').ZLinkSpotRelocationCoordinationMode;
   readonly actorDispatchOwnerResolver?: (actorId: string) => {
     readonly actorRef?: ActorRef;
     readonly spotId?: RoutingId;
@@ -391,7 +391,7 @@ export class DefaultZLinkSpotManager {
       nodeRidProvider: options.nodeRidProvider,
       actorCountProvider: options.actorCountProvider,
       userSpotExecutionMode: options.userSpotExecutionMode,
-      userSpotRelocationReadiness: options.userSpotRelocationReadiness,
+      userSpotRelocationCoordinationMode: options.userSpotRelocationCoordinationMode,
       channelClient: options.channelClient,
       fanoutClient: options.fanoutClient,
       spotPublisherClient: options.spotPublisherClient,

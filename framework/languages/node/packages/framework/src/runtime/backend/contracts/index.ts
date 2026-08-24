@@ -67,6 +67,7 @@ export type ZLinkBackendObjectPlacement =
 export interface ZLinkBackendMeshNode {
   setRoutingId(routingId: unknown): void;
   setBind(endpoint: string): void;
+  setAdvertiseHost(host: string): void;
   start(): void;
   setMailboxRecordDroppedHandler?(handler: (record: {
     readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';

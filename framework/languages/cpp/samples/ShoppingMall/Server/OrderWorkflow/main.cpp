@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Common/workflow_logic.hpp"
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_configuration.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -24,17 +24,13 @@ struct order_workflow_continue_timer_handler_t
 class order_workflow_spot_t : public instance_spot_t
 {
   public:
-    order_workflow_spot_t (instance_spot_context_t context,
-                           sample_topology_t topology) :
+    order_workflow_spot_t (instance_spot_context_t context, sample_topology_t topology) :
         _store (std::move (topology)), _context (std::move (context))
     {
     }
 
     instance_spot_context_t &context () noexcept override { return _context; }
-    const instance_spot_context_t &context () const noexcept override
-    {
-        return _context;
-    }
+    const instance_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {
@@ -54,8 +50,7 @@ class order_workflow_spot_t : public instance_spot_t
         co_return;
     }
 
-    task_t<void> on_closing (const spot_closing_context_t &,
-                             std::stop_token) override
+    task_t<void> on_closing (const spot_closing_context_t &, std::stop_token) override
     {
         _continue_timer.cancel ();
         co_return;
@@ -91,9 +86,8 @@ class order_workflow_spot_t : public instance_spot_t
 
     rebuild_order_projection_res_t rebuild (const rebuild_order_projection_req_t &request)
     {
-        auto state = _store.update ([&] (nlohmann::json &json) {
-            return rebuild_projection (json, request.order_id);
-        });
+        auto state = _store.update (
+          [&] (nlohmann::json &json) { return rebuild_projection (json, request.order_id); });
         std::cerr << "shoppingmall order: projection rebuilt order=" << state.order_id
                   << " status=" << state.status << "\n";
         return {state};
@@ -114,7 +108,7 @@ class order_workflow_spot_t : public instance_spot_t
     {
         /* 같은 IdempotencyKey의 시작 요청은 같은 SourceCommandId를 사용한다(§9.4). */
         return request.source_command_id.empty () ? "start:" + request.idempotency_key
-                                                   : request.source_command_id;
+                                                  : request.source_command_id;
     }
 
     order_state_t run_to_completion (const std::string &order_id,
@@ -142,7 +136,7 @@ class order_workflow_spot_t : public instance_spot_t
 };
 
 void order_workflow_continue_timer_handler_t::handle (order_workflow_spot_t &spot,
-                                                       const timer_tick_t &) const
+                                                      const timer_tick_t &) const
 {
     spot.run_scheduled_continue ();
 }
@@ -161,34 +155,30 @@ int main (int argc, char **argv)
     redis_state_store_t store{topology};
     store.seed_defaults ();
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.services ()
-          .add_singleton<sample_topology_t> (std::make_unique<sample_topology_t> (topology))
-          .add_singleton<workflow_instance_topology_t> (
-            std::make_unique<workflow_instance_topology_t> (instance))
-          .add_singleton<redis_state_store_t, sample_topology_t> ();
-        add_shoppingmall_location_store (options, topology);
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        const auto workflow_channel = sample_names_t::order_workflow_channel;
-        auto workflow_route = options.add_route_mesh (workflow_channel);
-        workflow_route
-          .set_routing_id (zlink::routing_id_t::from (
-            "shoppingmall-" + instance.instance_id + "-workflow"))
-          .set_object_role (object_role_t::server)
-          .listen (instance.route_endpoint)
-          .add_instance_spot_factory<order_workflow_spot_t> (
-            sample_names_t::order_workflow_spot,
-            [topology] (instance_spot_context_t context) {
-                return std::make_shared<order_workflow_spot_t> (
-                  std::move (context), topology);
-            },
-            [] (auto &factory) {
-                factory.disable_relocation ();
-            });
-        options.http ()
-          .listen (instance.http_url)
-          .map_health ("/health");
-    });
+    auto &options = app.add_zlink_framework ();
+    options.services ()
+      .add_singleton<sample_topology_t> (std::make_unique<sample_topology_t> (topology))
+      .add_singleton<workflow_instance_topology_t> (
+        std::make_unique<workflow_instance_topology_t> (instance))
+      .add_singleton<redis_state_store_t, sample_topology_t> ();
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "location:");
+    options.add_relocation_store<redis::redis_relocation_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    const auto workflow_channel = sample_names_t::order_workflow_channel;
+    auto workflow_route = options.add_route_mesh (workflow_channel);
+    workflow_route
+      .set_routing_id (
+        zlink::routing_id_t::from ("shoppingmall-" + instance.instance_id + "-workflow"))
+      .listen (instance.route_endpoint);
+    workflow_route.objects ()
+      .server ()
+      .add_instance_spot_factory<order_workflow_spot_t, sample_topology_t> (
+        sample_names_t::order_workflow_spot)
+      .disable_relocation ();
+    options.http ().listen (instance.http_url).map_health ("/health");
     return app.run (argc, argv);
 }

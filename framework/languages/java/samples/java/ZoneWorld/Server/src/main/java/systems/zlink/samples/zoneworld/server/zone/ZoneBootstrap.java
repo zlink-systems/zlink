@@ -8,6 +8,7 @@ import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.spots.ZLinkSpotCreateState;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.samples.zoneworld.server.configuration.MaintenanceStore;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
@@ -58,12 +59,51 @@ public final class ZoneBootstrap implements ApplicationRunner {
             maintenance.apply(nodeId, store.get(nodeId));
         }
         for (int attempt = 0; census.zoneIds().size() != 2; attempt++) {
-            for (String zone : ZoneWorldSpec.zones()) {
+            java.util.List<String> claimed = census.zoneIds();
+            java.util.List<String> adjacentOrder = new java.util.ArrayList<>();
+            for (String zone : claimed) {
+                for (String adjacent : ZoneWorldSpec.adjacentZones(zone)) {
+                    if (!claimed.contains(adjacent) && !adjacentOrder.contains(adjacent)) {
+                        adjacentOrder.add(adjacent);
+                    }
+                }
+            }
+            java.util.List<String> fallbackOrder = ZoneWorldSpec.zones().stream()
+                .filter(zone -> !claimed.contains(zone) && !adjacentOrder.contains(zone))
+                .toList();
+            boolean claimedChanged = false;
+            boolean adjacentSettling = false;
+            for (String zone : adjacentOrder) {
+                if (!census.zoneIds().equals(claimed)) {
+                    claimedChanged = true;
+                    break;
+                }
                 try {
-                    spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
+                    var result = spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
                         .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join();
+                    if (census.zoneIds().equals(claimed)
+                            && result.state() == ZLinkSpotCreateState.CREATED) {
+                        adjacentSettling = true;
+                    }
                 } catch (RuntimeException ignored) {
                     // The other eligible process may still be entering the mesh.
+                    adjacentSettling = true;
+                }
+                if (!census.zoneIds().equals(claimed)) {
+                    claimedChanged = true;
+                    break;
+                }
+            }
+            if (!claimedChanged && !adjacentSettling) {
+                for (String zone : fallbackOrder) {
+                    if (!census.zoneIds().equals(claimed)) break;
+                    try {
+                        spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
+                            .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join();
+                    } catch (RuntimeException ignored) {
+                        // The other eligible process may still be entering the mesh.
+                    }
+                    if (!census.zoneIds().equals(claimed)) break;
                 }
             }
             if (topology.allowsEmptyZoneSet() && census.zoneIds().isEmpty() && attempt >= 8) break;
@@ -102,4 +142,5 @@ public final class ZoneBootstrap implements ApplicationRunner {
         System.out.println("topology=ready node=" + topology.nodeId()
             + " zones=" + census.zoneIds());
     }
+
 }

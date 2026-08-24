@@ -540,7 +540,7 @@ export class ZLinkActorPacketRelay {
       payload: encodeRemoteActorSessionBinding({ sessionNodeRid, sessionRid })
     });
     if (options?.waitForAcknowledgement === false) {
-      this.retryRemoteSessionBindingSend(
+      await this.retryRemoteSessionBindingSend(
         withDefaultSpotKind(target),
         request,
         Date.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
@@ -581,45 +581,42 @@ export class ZLinkActorPacketRelay {
     }
   }
 
-  private retryRemoteSessionBindingSend(
+  private async retryRemoteSessionBindingSend(
     target: ZLinkSpotRouteTarget,
     request: unknown,
     deadline: number,
     delayMs: number
-  ): void {
-    void this.options.routeTransport.sendToSpot(
-      target,
-      request,
-      { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
-    ).then(
-      () => undefined,
-      error => {
-        if (Date.now() >= deadline) {
-          //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
-          //  exhaustion on the fire-and-forget bind send keeps its
-          //  fire-and-forget semantics (reported, not thrown) but is
-          //  classified as the typed framework deadline error with the last
-          //  underlying send failure preserved as the cause.
-          this.options.errorSink().reportRuntimeTaskException(
-            'remote session binding send',
-            createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-              'Remote actor session binding send retries exceeded their deadline.',
-              error
-            )
-          );
-          return;
-        }
-        setTimeout(() => {
-          this.retryRemoteSessionBindingSend(
-            target,
-            request,
-            deadline,
-            Math.min(delayMs * 2, REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS)
-          );
-        }, delayMs);
+  ): Promise<void> {
+    try {
+      await this.options.routeTransport.sendToSpot(
+        target,
+        request,
+        { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
+      );
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
+        //  exhaustion on the one-way bind send remains diagnostics-only but
+        //  the caller waits for its bounded submission terminal so later
+        //  application relay cannot overtake it.
+        this.options.errorSink().reportRuntimeTaskException(
+          'remote session binding send',
+          createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            'Remote actor session binding send retries exceeded their deadline.',
+            error
+          )
+        );
+        return;
       }
-    );
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      await this.retryRemoteSessionBindingSend(
+        target,
+        request,
+        deadline,
+        Math.min(delayMs * 2, REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS)
+      );
+    }
   }
 
   async relayRemoteActorPacket(

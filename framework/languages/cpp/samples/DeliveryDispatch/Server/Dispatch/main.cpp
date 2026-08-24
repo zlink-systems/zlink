@@ -1,14 +1,13 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Configuration/evidence_store.hpp"
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_timings.hpp"
 #include "../Configuration/sample_configuration.hpp"
-#include "../common_codecs.hpp"
 #include "Handlers/route_ready_handler.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -60,12 +59,12 @@ class dispatch_state_t
         _pending_decisions.push_back (std::move (result));
     }
 
-    std::pair<std::vector<assign_delivery_msg_t>,
-              std::vector<offer_delivery_result_msg_t>> take_pending ()
+    std::pair<std::vector<assign_delivery_msg_t>, std::vector<offer_delivery_result_msg_t>>
+    take_pending ()
     {
         const std::lock_guard lock (_mutex);
-        std::pair<std::vector<assign_delivery_msg_t>,
-                  std::vector<offer_delivery_result_msg_t>> pending;
+        std::pair<std::vector<assign_delivery_msg_t>, std::vector<offer_delivery_result_msg_t>>
+          pending;
         pending.first.swap (_pending_assignments);
         pending.second.swap (_pending_decisions);
         return pending;
@@ -92,8 +91,7 @@ class dispatch_state_t
     {
         const std::lock_guard lock (_mutex);
         const auto found = _offers.find (delivery_id);
-        if (found == _offers.end () || found->second.settled
-            || found->second.attempt != attempt) {
+        if (found == _offers.end () || found->second.settled || found->second.attempt != attempt) {
             return std::nullopt;
         }
         found->second.settled = true;
@@ -147,9 +145,8 @@ class courier_offer_port_t
     {
     }
 
-    task_t<void> offer (const assign_delivery_msg_t &delivery,
-                        const std::string &courier_id,
-                        int attempt)
+    task_t<void>
+    offer (const assign_delivery_msg_t &delivery, const std::string &courier_id, int attempt)
     {
         auto actor = co_await _directory.find (courier_id);
         if (!actor) {
@@ -158,8 +155,8 @@ class courier_offer_port_t
         }
         co_await _actors
           .send (actor->actor_id (),
-                          offer_delivery_msg_t{courier_id, delivery.delivery_id, attempt,
-                                               delivery.pickup_address, delivery.dropoff_address})
+                 offer_delivery_msg_t{courier_id, delivery.delivery_id, attempt,
+                                      delivery.pickup_address, delivery.dropoff_address})
           .submit ();
     }
 
@@ -205,8 +202,7 @@ class dispatch_worker_t
         std::cerr << "deliverydispatch dispatch: assign delivery=" << request.delivery_id
                   << " customer=" << request.customer_id << "\n";
         const auto &courier_id = _couriers.candidates ().front ();
-        const auto attempt =
-          _state.offer (request, 0, sample_timings_t::courier_decision_timeout);
+        const auto attempt = _state.offer (request, 0, sample_timings_t::courier_decision_timeout);
         co_await _statuses.publish (request, delivery_status_t::assigned, courier_id);
         co_await _offers.offer (request, courier_id, attempt);
     }
@@ -284,7 +280,10 @@ class assign_delivery_handler_t
                                actor_directory_t &directory,
                                actor_client_t &actors,
                                channel_client_t &channels) :
-        _state (state), _couriers (couriers), _directory (directory), _actors (actors),
+        _state (state),
+        _couriers (couriers),
+        _directory (directory),
+        _actors (actors),
         _channels (channels)
     {
     }
@@ -322,7 +321,10 @@ class offer_delivery_result_handler_t
                                      actor_directory_t &directory,
                                      actor_client_t &actors,
                                      channel_client_t &channels) :
-        _state (state), _couriers (couriers), _directory (directory), _actors (actors),
+        _state (state),
+        _couriers (couriers),
+        _directory (directory),
+        _actors (actors),
         _channels (channels)
     {
     }
@@ -349,12 +351,10 @@ class offer_deadline_sweeper_t final : public hosted_service_t
     void start (service_provider_t &services) override
     {
         _state = &services.get_required<dispatch_state_t> ();
-        _worker = std::make_unique<dispatch_worker_t> (
-          make_worker (*_state,
-                       services.get_required<courier_selection_policy_t> (),
-                       services.get_required<actor_directory_t> (),
-                       services.get_required<actor_client_t> (),
-                       services.get_required<channel_client_t> ()));
+        _worker = std::make_unique<dispatch_worker_t> (make_worker (
+          *_state, services.get_required<courier_selection_policy_t> (),
+          services.get_required<actor_directory_t> (), services.get_required<actor_client_t> (),
+          services.get_required<channel_client_t> ()));
         _running.store (true);
         _thread = std::thread ([this] { run (); });
     }
@@ -414,9 +414,8 @@ class offer_deadline_sweeper_t final : public hosted_service_t
         }
     }
 
-    task_t<void> settle (dispatch_worker_t &worker,
-                         delivery_offer_t offer,
-                         offer_delivery_result_msg_t decision)
+    task_t<void>
+    settle (dispatch_worker_t &worker, delivery_offer_t offer, offer_delivery_result_msg_t decision)
     {
         try {
             co_await worker.settle (offer, decision.accepted, decision.reason.value_or (""));
@@ -442,9 +441,7 @@ class offer_deadline_sweeper_t final : public hosted_service_t
     /* 끝난 재제안만 걷어낸다. 기다리지 않는다. */
     void reap ()
     {
-        std::erase_if (_work, [] (const task_t<void> &work) {
-            return work.await_ready ();
-        });
+        std::erase_if (_work, [] (const task_t<void> &work) { return work.await_ready (); });
     }
 
     dispatch_state_t *_state = nullptr;
@@ -495,14 +492,14 @@ class server_assertion_http_handler_t
     {
         std::cerr << "deliverydispatch api: assert successful=" << request.successful_delivery_id
                   << " reassigned=" << request.reassigned_delivery_id << "\n";
-        const auto success = _evidence.has_sequence (
-          request.successful_delivery_id,
-          {delivery_status_t::assigned, delivery_status_t::accepted, delivery_status_t::picked_up,
-           delivery_status_t::delivered});
-        const auto reassigned = _evidence.has_sequence (
-          request.reassigned_delivery_id,
-          {delivery_status_t::assigned, delivery_status_t::reassigned, delivery_status_t::accepted,
-           delivery_status_t::delivered});
+        const auto success =
+          _evidence.has_sequence (request.successful_delivery_id,
+                                  {delivery_status_t::assigned, delivery_status_t::accepted,
+                                   delivery_status_t::picked_up, delivery_status_t::delivered});
+        const auto reassigned =
+          _evidence.has_sequence (request.reassigned_delivery_id,
+                                  {delivery_status_t::assigned, delivery_status_t::reassigned,
+                                   delivery_status_t::accepted, delivery_status_t::delivered});
         return {success && reassigned, _evidence.read_lines ()};
     }
 
@@ -521,41 +518,40 @@ int main (int argc, char **argv)
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        add_deliverydispatch_json_codecs (options.codecs ());
-        add_deliverydispatch_location_store (options, topology);
-        options.services ()
-          .add_singleton<evidence_store_t> (std::make_unique<evidence_store_t> (configuration.evidence_path ()))
-          .add_singleton<dispatch_state_t> ()
-          .add_singleton<courier_selection_policy_t> ();
-        auto dispatch_channel =
-          options.add_client_server_channel (sample_names_t::dispatch_route_channel);
-        dispatch_channel.server ()
-          .set_bind_host (host_from_tcp_endpoint (topology.dispatch_route_endpoint))
-          .listen (port_from_http_url (topology.dispatch_route_endpoint))
-          .add_handler_group ("dispatch");
-        dispatch_channel.client ();
-        options.add_client_server_channel (sample_names_t::tracking_route_channel).client ();
-        auto courier_mesh = options.add_route_mesh (sample_names_t::courier_actor_discovery);
-        courier_mesh.set_routing_id (zlink::routing_id_t::from (
-          sample_names_t::dispatch_route_node));
-        courier_mesh.set_object_role (object_role_t::client);
-        courier_mesh.listen (topology.dispatch_spot_router_endpoint)
-          .channel_name (sample_names_t::courier_actor_discovery)
-          .client ();
-        options.handlers ()
-          .group ("dispatch")
-          .add_send<assign_delivery_handler_t> ()
-          .add_send<offer_delivery_result_handler_t> ();
-        options.http ()
-          .listen (topology.dispatch_api_http_url)
-          .map_health ("/health")
-          .map_get<route_ready_handler_t> ("/ready")
-          .map_post<create_delivery_http_handler_t> ("/deliveries")
-          .map_post<server_assertion_http_handler_t> ("/self-check/assert");
-    });
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix);
+    options.services ()
+      .add_singleton<evidence_store_t> (
+        std::make_unique<evidence_store_t> (configuration.evidence_path ()))
+      .add_singleton<dispatch_state_t> ()
+      .add_singleton<courier_selection_policy_t> ();
+    auto dispatch_channel =
+      options.add_client_server_channel (sample_names_t::dispatch_route_channel);
+    dispatch_channel.server ()
+      .set_bind_host (host_from_tcp_endpoint (topology.dispatch_route_endpoint))
+      .listen (port_from_http_url (topology.dispatch_route_endpoint))
+      .add_handler_group ("dispatch");
+    dispatch_channel.client ();
+    options.add_client_server_channel (sample_names_t::tracking_route_channel).client ();
+    auto courier_mesh = options.add_route_mesh (sample_names_t::courier_actor_discovery);
+    courier_mesh.set_routing_id (zlink::routing_id_t::from (sample_names_t::dispatch_route_node));
+    courier_mesh.listen (topology.dispatch_spot_router_endpoint)
+      .channel (sample_names_t::courier_actor_discovery)
+      .client ();
+    courier_mesh.objects ().client ();
+    options.handlers ()
+      .group ("dispatch")
+      .add_send<assign_delivery_handler_t> ()
+      .add_send<offer_delivery_result_handler_t> ();
+    options.http ()
+      .listen (topology.dispatch_api_http_url)
+      .map_health ("/health")
+      .map_get<route_ready_handler_t> ("/ready")
+      .map_post<create_delivery_http_handler_t> ("/deliveries")
+      .map_post<server_assertion_http_handler_t> ("/self-check/assert");
     app.add_hosted_service (std::make_unique<offer_deadline_sweeper_t> ());
     return app.run (argc, argv);
 }

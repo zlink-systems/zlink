@@ -22,13 +22,15 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 final class ZLinkDefaultSpotContextTest {
@@ -49,19 +51,19 @@ final class ZLinkDefaultSpotContextTest {
     void lifecycleRelocationReadyFollowsSpotFactoryPolicy() {
         assertTrue(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
             false));
         assertFalse(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY,
+            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED,
             false));
         assertFalse(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.PER_ACTOR,
-            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
             false));
         assertFalse(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
             true));
     }
 
@@ -364,7 +366,7 @@ final class ZLinkDefaultSpotContextTest {
             TestHost host = new TestHost(executor);
             DefaultSpotContext context = host.userContext(
                 ZLinkUserSpotExecutionMode.SPOT_WIDE,
-                ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED);
+                ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
             CompletableFuture<Void> applicationRelease =
                 new CompletableFuture<>();
             CompletableFuture<Void> applicationStarted =
@@ -391,6 +393,53 @@ final class ZLinkDefaultSpotContextTest {
 
             applicationRelease.complete(null);
             application.toCompletableFuture().join();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void instanceClosingWaitsForAcceptedApplicationAndInfrastructureTurns()
+        throws Exception {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try (ZLinkWorkerPool workerPool = new ZLinkWorkerPool(
+                0, 1, java.time.Duration.ofSeconds(1), 1)) {
+            TestHost host = new TestHost(executor);
+            DefaultInstanceSpotContext context =
+                host.instanceContext(workerPool);
+            CompletableFuture<Void> applicationRelease =
+                new CompletableFuture<>();
+            CompletableFuture<Void> infrastructureRelease =
+                new CompletableFuture<>();
+            CompletableFuture<Void> applicationStarted =
+                new CompletableFuture<>();
+            CompletableFuture<Void> infrastructureStarted =
+                new CompletableFuture<>();
+            CompletableFuture<Void> closingStarted =
+                new CompletableFuture<>();
+
+            context.enqueueDispatch(() -> {
+                applicationStarted.complete(null);
+                return applicationRelease;
+            });
+            context.enqueueInfrastructureDispatch(() -> {
+                infrastructureStarted.complete(null);
+                return infrastructureRelease;
+            });
+            applicationStarted.get(2, TimeUnit.SECONDS);
+            infrastructureStarted.get(2, TimeUnit.SECONDS);
+
+            CompletionStage<Void> closing = context.runClosing(() -> {
+                closingStarted.complete(null);
+                return CompletableFuture.completedFuture(null);
+            });
+
+            assertFalse(closingStarted.isDone());
+            applicationRelease.complete(null);
+            assertFalse(closingStarted.isDone());
+            infrastructureRelease.complete(null);
+            closing.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(closingStarted.isDone());
         } finally {
             executor.shutdownNow();
         }
@@ -580,12 +629,12 @@ final class ZLinkDefaultSpotContextTest {
             ZLinkUserSpotExecutionMode executionMode) {
             return userContext(
                 executionMode,
-                ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY);
+                ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED);
         }
 
         DefaultSpotContext userContext(
             ZLinkUserSpotExecutionMode executionMode,
-            ZLinkSpotRelocationReadinessMode relocationReadiness) {
+            ZLinkSpotRelocationCoordinationMode relocationCoordinationMode) {
             return new DefaultSpotContext(
                 this,
                 null,
@@ -596,7 +645,7 @@ final class ZLinkDefaultSpotContextTest {
                 executionMode,
                 false,
                 null,
-                relocationReadiness);
+                relocationCoordinationMode);
         }
 
         DefaultEntrySpotContext entryContext() {
@@ -604,6 +653,22 @@ final class ZLinkDefaultSpotContextTest {
                 this,
                 null,
                 null,
+                RoutingId.from("node-a"),
+                backendSpot);
+        }
+
+        DefaultInstanceSpotContext instanceContext(
+            ZLinkWorkerPool workerPool) {
+            ZLinkScannedHandlerCatalog scannedHandlers =
+                new ZLinkScannedHandlerCatalog(List.of());
+            return new DefaultInstanceSpotContext(
+                this,
+                workerPool,
+                new ZLinkSpotHandlerLoader(
+                    scannedHandlers,
+                    new ZLinkSpotActorHandlerCatalog(
+                        scannedHandlers, null)),
+                "instance-mesh",
                 RoutingId.from("node-a"),
                 backendSpot);
         }

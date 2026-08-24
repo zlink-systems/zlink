@@ -10,6 +10,11 @@ builder에 membership으로 추가하며 별도 socket을 만들지 않는다.
 Application이 조회하는 RouteMesh 상태 interface는
 [C++ monitoring exact interface](08-monitoring.ko.md)가 정의한다.
 
+Object 역할과 factory는 `objects().client()` 또는 `objects().server()`에서 시작한다. Object
+Server의 Spot 생성자 dependency는 template argument로 선언하며 Framework service provider가
+주입한다. Factory lambda와 policy callback overload는 호환성을 위해 남지만 sample과 guide는
+아래 callback 없는 fluent surface를 사용한다.
+
 ```cpp
 namespace zlink::framework {
 
@@ -29,6 +34,15 @@ public:
 
 class mesh_channel_server_builder_t;
 class mesh_channel_client_builder_t {};
+class mesh_object_role_builder_t;
+class mesh_object_client_builder_t;
+class mesh_object_server_builder_t;
+template <typename TSpot, typename... TDependencies>
+class user_spot_registration_builder_t;
+template <typename TSpot, typename... TDependencies>
+class instance_spot_registration_builder_t;
+template <typename TActor, typename TActorFactory>
+class actor_registration_builder_t;
 
 class mesh_channel_builder_t {
 public:
@@ -100,14 +114,15 @@ enum class user_spot_execution_mode_t {
     per_actor = 1
 };
 
-enum class spot_relocation_readiness_mode_t {
-    any_turn_boundary = 0,
+enum class spot_relocation_coordination_mode_t {
+    framework_managed = 0,
     application_signaled = 1
 };
 
 class mesh_node_builder_t {
 public:
     mesh_channel_builder_t channel(std::string channel_name);
+    mesh_object_role_builder_t objects();
     mesh_node_builder_t &listen(std::string endpoint);
     mesh_node_builder_t &listen(std::uint16_t port = 0);
     mesh_node_builder_t &set_bind_host(std::string host);
@@ -168,6 +183,65 @@ public:
       std::shared_ptr<TActorFactory> factory,
       std::function<void(actor_factory_builder_t<TActor> &)> configure);
 
+};
+
+class mesh_object_role_builder_t {
+public:
+    mesh_object_client_builder_t client();
+    mesh_object_server_builder_t server();
+};
+
+class mesh_object_client_builder_t {};
+
+class mesh_object_server_builder_t {
+public:
+    template <typename TEntrySpot, typename... TDependencies>
+    mesh_object_server_builder_t &add_entry_spot();
+
+    template <typename TSpot, typename... TDependencies>
+    user_spot_registration_builder_t<TSpot, TDependencies...>
+    add_spot_factory(std::string stable_type);
+
+    template <typename TSpot, typename... TDependencies>
+    instance_spot_registration_builder_t<TSpot, TDependencies...>
+    add_instance_spot_factory(std::string stable_type);
+
+    template <typename TActor, typename TActorFactory>
+    actor_registration_builder_t<TActor, TActorFactory>
+    add_actor_factory(std::string stable_type);
+};
+
+template <typename TSpot, typename... TDependencies>
+class user_spot_registration_builder_t {
+public:
+    user_spot_registration_builder_t &set_stable_type_limit(std::int32_t value);
+    user_spot_registration_builder_t &set_execution_mode(
+      user_spot_execution_mode_t value);
+    user_spot_registration_builder_t &set_relocation_coordination_mode(
+      spot_relocation_coordination_mode_t value);
+    mesh_object_server_builder_t disable_relocation();
+    mesh_object_server_builder_t recreate_on_relocation();
+    template <typename TAdapter>
+    mesh_object_server_builder_t preserve_state_with();
+};
+
+template <typename TSpot, typename... TDependencies>
+class instance_spot_registration_builder_t {
+public:
+    instance_spot_registration_builder_t &set_stable_type_limit(std::int32_t value);
+    mesh_object_server_builder_t disable_relocation();
+    mesh_object_server_builder_t recreate_on_relocation();
+    template <typename TAdapter>
+    mesh_object_server_builder_t preserve_state_with();
+};
+
+template <typename TActor, typename TActorFactory>
+class actor_registration_builder_t {
+public:
+    mesh_object_server_builder_t disable_relocation();
+    mesh_object_server_builder_t recreate_on_relocation();
+    template <typename TAdapter>
+    mesh_object_server_builder_t preserve_state_with();
 };
 
 enum class client_server_role_t { client, server, client_and_server };
@@ -401,7 +475,7 @@ state 보존 Spot policy를 함께 등록하면 socket bind 전에 configuration
 PerActor Spot은 stateless execution shell이며 Actor policy와
 `actor_relocation_adapter_t<TActor>`가 Actor state를 각각 처리한다.
 
-`relocation_readiness`의 기본값은 `any_turn_boundary`다.
+`relocation_coordination_mode`의 기본값은 `framework_managed`다.
 `application_signaled`는 `spot_wide`에서만 허용하며 `per_actor`와 함께 등록하면
 socket bind 전에 configuration error다. Spot callback은 기본 no-op virtual
 member이므로 application override는 필수가 아니다.

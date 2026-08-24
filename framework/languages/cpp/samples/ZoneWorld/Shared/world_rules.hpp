@@ -4,6 +4,7 @@
 #include "Contracts/messages.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <string>
@@ -24,7 +25,52 @@ struct names_t
     static constexpr const char *ops_stream = "zoneworld.ops";
     static constexpr const char *announce_topic = "world.announce";
     static constexpr const char *maintenance_topic = "world.maintenance";
+
+    static std::string ops_channel (const std::string &node_id)
+    {
+        return "zoneworld.ops." + node_id;
+    }
 };
+
+struct errors_t
+{
+    static constexpr const char *not_found = "NotFound";
+    static constexpr const char *already_exists = "AlreadyExists";
+    static constexpr const char *type_mismatch = "TypeMismatch";
+    static constexpr const char *not_configured = "NotConfigured";
+    static constexpr const char *rejected = "Rejected";
+    static constexpr const char *unavailable = "Unavailable";
+    static constexpr const char *capacity_exceeded = "CapacityExceeded";
+    static constexpr const char *deadline_exceeded = "DeadlineExceeded";
+    static constexpr const char *shutting_down = "ShuttingDown";
+    static constexpr const char *protocol_error = "ProtocolError";
+    static constexpr const char *invalid_operation = "InvalidOperation";
+    static constexpr const char *data_lost = "DataLost";
+    static constexpr const char *internal_failure = "InternalFailure";
+};
+
+struct spec_t
+{
+    static constexpr int world_size = 100;
+    static constexpr int zone_split = 50;
+    static constexpr int border_band = 10;
+    static constexpr int max_step = 5;
+    static constexpr int spawn_x = 25;
+    static constexpr int spawn_y = 25;
+    static constexpr int tick_period_ms = 100;
+    static constexpr int bot_tick_period_ms = 500;
+    static constexpr int bot_step = 3;
+    static constexpr int border_expiry_ticks = 3;
+    static constexpr int report_period_ms = 5000;
+    static constexpr int report_ttl_ms = 15000;
+};
+
+inline const std::array<std::string, 4> &all_zones ()
+{
+    static const std::array<std::string, 4> zones{
+      "zone-nw", "zone-ne", "zone-sw", "zone-se"};
+    return zones;
+}
 
 struct reject_reason_t
 {

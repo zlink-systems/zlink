@@ -29,16 +29,7 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
 
         RoutingId initiatorRid = RoutingId.from("route-a-initiator");
         RoutingId listenerRid = RoutingId.from("route-z-listener");
-        assertConnectLearnsInboundIdentity(initiatorRid, listenerRid, "first");
-        assertConnectLearnsInboundIdentity(initiatorRid, listenerRid, "second");
-    }
-
-    private static void assertConnectLearnsInboundIdentity(
-        RoutingId initiatorRid,
-        RoutingId listenerRid,
-        String marker)
-        throws Exception {
-        String endpoint = "inproc://java-route-inbound-identity-" + marker + "-" + System.nanoTime();
+        String endpoint = "inproc://java-route-inbound-identity-" + System.nanoTime();
         try (Context context = Zlink.createContext();
              RouterSocket listener = context.createRouterSocket();
              RouterSocket initiator = context.createRouterSocket();
@@ -47,13 +38,22 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
                  thread.setDaemon(true);
                  return thread;
              })) {
+            // A failed assertion must not leave an inproc probe/request queued forever
+            // while NativeContext.close() waits for the socket linger interval.
+            listener.options().linger(Duration.ZERO);
+            initiator.options().linger(Duration.ZERO);
             listener.setRoutingId(listenerRid);
             listener.bind(endpoint);
             initiator.setRoutingId(initiatorRid);
 
             connectWithProbe(initiator, listenerRid, endpoint);
             assertInboundProbe(listener, initiatorRid);
-            assertReverseRequest(listener, initiator, responder, initiatorRid, marker);
+            assertReverseRequest(listener, initiator, responder, initiatorRid, "first");
+
+            initiator.disconnect(endpoint);
+            connectWithProbe(initiator, listenerRid, endpoint);
+            assertInboundProbe(listener, initiatorRid);
+            assertReverseRequest(listener, initiator, responder, initiatorRid, "second");
         }
     }
 

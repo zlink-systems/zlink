@@ -126,9 +126,9 @@ public enum ZLinkUserSpotExecutionMode
     PerActor = 1
 }
 
-public enum ZLinkSpotRelocationReadinessMode
+public enum ZLinkSpotRelocationCoordinationMode
 {
-    AnyTurnBoundary = 0,
+    FrameworkManaged = 0,
     ApplicationSignaled = 1
 }
 
@@ -147,8 +147,8 @@ public interface IZLinkUserSpotFactoryBuilder<TSpot>
     IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(int limit);
     IZLinkUserSpotFactoryBuilder<TSpot> ExecutionMode(
         ZLinkUserSpotExecutionMode mode);
-    IZLinkUserSpotFactoryBuilder<TSpot> RelocationReadiness(
-        ZLinkSpotRelocationReadinessMode mode);
+    IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
+        ZLinkSpotRelocationCoordinationMode mode);
     IZLinkUserSpotFactoryBuilder<TSpot> DisableRelocation();
     IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation();
     IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
@@ -595,8 +595,8 @@ Actor state. Shared state and Spot-level schedules that must be kept are
 placed in an external store the application owns, such as Redis or a
 database.
 
-Execution mode defaults to `SpotWide`, and relocation readiness defaults
-to `AnyTurnBoundary`. `ApplicationSignaled` is only allowed with
+Execution mode defaults to `SpotWide`, and relocation coordination mode
+defaults to `FrameworkManaged`. `ApplicationSignaled` is only allowed with
 `SpotWide`. Registering it together with `PerActor` is a startup
 configuration error before socket bind. The callback uses `IZLinkSpot`'s
 default no-op implementation, so an application override isn't required.

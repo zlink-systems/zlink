@@ -1752,6 +1752,29 @@ int run_cross_process_delivery ()
     const auto local_node_rid = node.status ().routing_id ();
     const auto local_target_generation =
       local_target.status ().lifecycle_generation ();
+    const std::vector<zlink::message_t> local_send_parts{
+      zlink::message_t::from (std::string ("local-send"))};
+    assert (std::move (local_source.send_to_spot (
+              local_node_rid, "local-target", local_target_generation,
+              local_send_parts))
+              .result ().value ()
+            == zlink::submit_result_t::ok);
+    bool local_send_delivered = false;
+    (void) std::move (node.dispatch_ready (
+      [&] (const zlink::framework::runtime::host::ready_record_t &owner,
+           const zlink::framework::runtime::host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          local_send_delivered =
+            owner.owner_kind
+                == zlink::framework::runtime::host::owner_kind_t::spot
+            && owner.spot_id == "local-target"
+            && record.kind
+                == zlink::framework::runtime::host::record_kind_t::spot_send
+            && !parts.empty ()
+            && parts.front ().to_string () == "local-send";
+      })).result ().value ();
+    assert (local_send_delivered);
+
     zlink::framework::runtime::host::call_id_t local_timeout_operation;
     int local_timeout_callbacks = 0;
     assert (std::move (local_source.request_to_spot (

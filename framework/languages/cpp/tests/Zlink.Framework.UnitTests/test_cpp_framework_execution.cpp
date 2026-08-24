@@ -4839,6 +4839,17 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         : result_t<actor_join_reply_t>::failure (
             framework_error_kind_t::deadline_exceeded,
             "cutover source awaited target completion");
+    bool target_actor_authority_matches_committed_store = false;
+    if (joined_result) {
+        const auto target_actor = target.native_node ().resolve_actor (
+          joined_result.value ().actor);
+        const auto committed_authority = authority->read (
+          stateful::object_kind_t::actor,
+          std::string (joined_result.value ().actor.actor_id ().value ()));
+        target_actor_authority_matches_committed_store =
+          target_actor && committed_authority
+          && committed_authority->target == *target_actor;
+    }
     const auto source_completions_before_release =
       actor_cutover_probe_t::source_completions.load (
         std::memory_order_acquire);
@@ -4847,6 +4858,57 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     const auto target_completed =
       actor_cutover_probe_t::target_completions.load (
         std::memory_order_acquire) == 1;
+    const auto target_operation_high =
+      actor_cutover_probe_t::target_operation_high.load (
+        std::memory_order_acquire);
+    const auto target_operation_low =
+      actor_cutover_probe_t::target_operation_low.load (
+        std::memory_order_acquire);
+
+    /* The relocated-in Actor exists in the target public host but was never
+     * inserted into mesh_node_runtime_t's create-time _actors map.  A later
+     * same-node User-Spot Join must bind a current host handle and complete
+     * the ordinary local membership lane instead of returning NotFound. */
+    bool relocated_actor_local_rejoin_passed = false;
+    if (joined_result) {
+        const auto move_closed_deadline =
+          std::chrono::steady_clock::now () + 2s;
+        while (target_state->spot_state->actor_transfer_coordinator.phase (
+                 "actor.cutover.probe:actor-cutover-probe")
+                 && std::chrono::steady_clock::now () < move_closed_deadline) {
+            std::this_thread::sleep_for (1ms);
+        }
+        const auto local_spot =
+          target_spots.create_spot ("actor.cutover.spot");
+        auto local_native_spot = target.get_or_create_spot (
+          std::string (local_spot.spot_id));
+        const auto local_spot_generation =
+          local_native_spot.status ().lifecycle_generation ();
+        const runtime::spot_address_t local_address{
+          .mesh_name = "actor-cutover-mesh",
+          .node_rid = target.status ().routing_id (),
+          .spot_id = local_native_spot.spot_id (),
+          .spot_generation = local_spot_generation,
+          .object_generation = local_spot_generation,
+          .authority_owner_generation = 1,
+          .owner = target_owner,
+          .node_generation = target.status ().lifecycle_generation ()};
+        auto local_join = std::async (std::launch::async, [&] {
+            return std::move (target.join_application_actor_to_spot (
+              joined_result.value ().actor, local_address,
+              zlink::message_t{}, 2s)).result ();
+        });
+        if (local_join.wait_for (2s) == std::future_status::ready) {
+            const auto local_result = local_join.get ();
+            const auto current_spot = local_result
+              ? target_spots.actor_spot (local_result.value ().actor)
+              : std::optional<spot_id_t>{};
+            relocated_actor_local_rejoin_passed =
+              local_result && local_result.value ().result_code == 0
+              && current_spot
+              && *current_spot == local_native_spot.spot_id ();
+        }
+    }
     stop_dispatch.store (true, std::memory_order_release);
     source_dispatch.join ();
     target_dispatch.join ();
@@ -4855,14 +4917,10 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     if (!returned_before_target_completion)
         (void) joined.get ();
 
-    const auto target_operation_high =
-      actor_cutover_probe_t::target_operation_high.load (
-        std::memory_order_acquire);
-    const auto target_operation_low =
-      actor_cutover_probe_t::target_operation_low.load (
-        std::memory_order_acquire);
     const auto passed = target_context_authority_differs_from_committed_store
       && joined_result && joined_result.value ().result_code == 0
+      && target_actor_authority_matches_committed_store
+      && relocated_actor_local_rejoin_passed
       && source_leave_started && returned_while_source_leave_blocked
       && target_completion_started_while_source_leave_blocked
       && !actor_cutover_probe_t::source_leave_before_target_joined.load (
@@ -4874,7 +4932,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       && actor_cutover_probe_t::source_completions.load (
            std::memory_order_acquire) == 0
       && actor_cutover_probe_t::target_completions.load (
-           std::memory_order_acquire) == 1
+           std::memory_order_acquire) == 2
       && actor_cutover_probe_t::failed_completions.load (
            std::memory_order_acquire) == 0
       && target_operation_high != 0 && target_operation_low != 0
@@ -4901,6 +4959,9 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
                         ? joined_result.error ()->what () : "<none>")
                   << " target-started=" << target_completion_started
                   << " target-completed=" << target_completed
+                  << " local-rejoin=" << relocated_actor_local_rejoin_passed
+                  << " target-host-authority="
+                  << target_actor_authority_matches_committed_store
                   << " source="
                   << actor_cutover_probe_t::source_completions.load ()
                   << " target="

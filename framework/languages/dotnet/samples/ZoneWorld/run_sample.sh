@@ -460,6 +460,17 @@ wait_for_file_while_running() {
   return 1
 }
 
+wait_for_b8_evidence_while_running() {
+  local pattern="$1" pid="$2" attempts="${3:-600}"
+  shift 3
+  for ((i = 0; i < attempts; i++)); do
+    if grep -Fq "$pattern" "$@" 2>/dev/null; then return 0; fi
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.1
+  done
+  return 1
+}
+
 wait_for_port() {
   local port="$1"
   for _ in $(seq 1 200); do
@@ -585,16 +596,33 @@ if [[ "$B8_CHILD" == "1" ]]; then
   first_b8_client_line="$(next_log_line "$LOG_DIR/client.log")"
   run_client ZW-B8 &
   b8_client_pid=$!
-  if ! wait_for_log_after client "scenario ZW-B8 armed" "$first_b8_client_line" 600; then
+  if ! wait_for_log_after client "scenario ZW-B8 armed actor=" "$first_b8_client_line" 600; then
     wait "$b8_client_pid" || true
     g_fail ZW-B8 "client did not establish its initial bound session"
   fi
+  b8_armed_line="$(tail -n +"$first_b8_client_line" "$LOG_DIR/client.log" \
+    | grep -F "scenario ZW-B8 armed actor=" | tail -n 1)"
+  b8_actor="${b8_armed_line#*actor=}"
+  b8_actor="${b8_actor%% target=*}"
+  b8_target="${b8_armed_line##* target=}"
   : >"$RUN_DIR/b8-block-command-44"
-  if ! wait "$b8_client_pid"; then
-    g_fail ZW-B8 "client did not observe the 30 second route-seal timeout and reconnect"
+  if ! wait_for_b8_evidence_while_running \
+      "blocked-command-44" "$b8_client_pid" 600 \
+      "$LOG_DIR"/session-route-proxy-*.log; then
+    wait "$b8_client_pid" || true
+    g_fail ZW-B8 "precondition unmet: fault proxy did not intercept command 44"
   fi
-  if ! grep -q "blocked-command-44" "$LOG_DIR"/session-route-proxy-*.log; then
-    g_fail ZW-B8 "the fault proxy never intercepted internal command 44"
+  b8_commit_pattern="zone spot: player entered. zone=$b8_target, player=$b8_actor, bot=False, initial=False"
+  if ! wait_for_b8_evidence_while_running \
+      "$b8_commit_pattern" "$b8_client_pid" 600 \
+      "$LOG_DIR"/zone-node-[12].log; then
+    wait "$b8_client_pid" || true
+    g_fail ZW-B8 \
+      "precondition unmet: target relocation commit was not observed for actor $b8_actor in $b8_target"
+  fi
+  rm -f "$RUN_DIR/b8-block-command-44"
+  if ! wait "$b8_client_pid"; then
+    g_fail ZW-B8 "post-boundary reconnect did not rebind the existing relocated Actor"
   fi
   g_pass ZW-B8
   exit 0

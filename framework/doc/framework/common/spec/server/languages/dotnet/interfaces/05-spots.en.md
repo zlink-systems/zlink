@@ -445,7 +445,7 @@ operational goal — exceeding it doesn't cancel or roll back the
 relocation.
 
 `RelocationReady().Defer()` is only valid on a Spot turn where the
-`SpotWide` factory selected the `ApplicationSignaled` readiness mode.
+`SpotWide` factory selected the `ApplicationSignaled` coordination mode.
 `Defer()` registers a relocation boundary right before the next
 application turn, after the current handler finishes. The framework
 delivers `Continued` from the source if it didn't move or aborted before
@@ -454,7 +454,7 @@ relay-ready was accepted, and `Relocated` from the target if it moved, to
 implementation is a no-op. Held messages and timers aren't run before the
 callback completes.
 
-A duplicate `Defer()` on the default `AnyTurnBoundary`, on `PerActor`, on
+A duplicate `Defer()` on the default `FrameworkManaged`, on `PerActor`, on
 Entry/Instance Spot, outside the Spot turn, or in the same turn ends with
 a `ZLinkFrameworkErrorKind.InvalidOperation` error before any queue
 mutation. Starting a different framework operation in the same turn

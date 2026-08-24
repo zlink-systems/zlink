@@ -92,6 +92,18 @@ bool route_channel_runtime_t::disconnect (const std::string &endpoint)
     return removed;
 }
 
+bool route_channel_runtime_t::disconnect (
+  const zlink::routing_id_t &peer_rid,
+  const std::string &endpoint)
+{
+    const auto normalized_endpoint = runtime::transport::normalize_endpoint (endpoint);
+    std::lock_guard lock (_mutex);
+    const bool removed = _connections.disconnect (peer_rid, normalized_endpoint);
+    if (removed)
+        _ready_peer_rids.erase (peer_rid.to_string ());
+    return removed;
+}
+
 std::vector<std::string> route_channel_runtime_t::list_connections () const
 {
     std::lock_guard lock (_mutex);

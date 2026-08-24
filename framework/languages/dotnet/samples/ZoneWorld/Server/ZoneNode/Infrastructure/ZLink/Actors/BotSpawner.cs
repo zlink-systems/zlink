@@ -5,6 +5,7 @@ using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Server.Configuration;
 using ZoneWorld.Server.ZoneNode.Application.Node;
 using ZoneWorld.Server.ZoneNode.Application.Zone;
+using ZoneWorld.Server.ZoneNode.Domain.ZoneWorld;
 using ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Spots;
 using ZoneWorld.Server.ZoneNode.Ports;
 using ZoneWorld.Shared.Contracts;
@@ -40,14 +41,29 @@ internal sealed class ZoneNodeBootstrap(
         // not NodeId, distributes two Spot owners to each process. A process that fills its
         // local capacity keeps retrying until the other eligible process is ready and owns the
         // remaining objects.
+        var locallyClaimed = new HashSet<string>(StringComparer.Ordinal);
         for (var attempt = 0; census.ZoneIds.Count != 2; attempt++)
         {
+            var claimed = ClaimedZones(locallyClaimed);
+            var claimOrder = new List<string>();
+            foreach (var zoneId in claimed)
+                foreach (var adjacent in World.AdjacentZones(zoneId))
+                    if (!claimed.Contains(adjacent) && !claimOrder.Contains(adjacent))
+                        claimOrder.Add(adjacent);
+            foreach (var zoneId in ZoneTopology.Zones)
+                if (!claimed.Contains(zoneId) && !claimOrder.Contains(zoneId))
+                    claimOrder.Add(zoneId);
+
             // GetOrCreate can initially observe an object that is still registered to the
             // process the runner just crashed. Re-issuing the canonical create operation is
             // what lets this replacement claim the Zone after that owner expires; merely
             // waiting on the local census would never trigger a new placement decision.
-            foreach (var zoneId in ZoneTopology.Zones)
-                await EnsureZoneAsync(zoneId, cancellationToken);
+            foreach (var zoneId in claimOrder)
+            {
+                if (await EnsureZoneAsync(zoneId, cancellationToken))
+                    locallyClaimed.Add(zoneId);
+                if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed)) break;
+            }
 
             if (settings.AllowEmptyZoneSet
                 && census.ZoneIds.Count == 0
@@ -84,7 +100,14 @@ internal sealed class ZoneNodeBootstrap(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private async Task EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
+    private IReadOnlyList<string> ClaimedZones(IReadOnlySet<string> locallyClaimed) =>
+        census.ZoneIds
+            .Concat(locallyClaimed)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
+    private async Task<bool> EnsureZoneAsync(string zoneId, CancellationToken cancellationToken)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -97,7 +120,7 @@ internal sealed class ZoneNodeBootstrap(
                 if (result.State is not ZLinkSpotCreateState.Rejected)
                 {
                     logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
-                    return;
+                    return result.State is ZLinkSpotCreateState.Created;
                 }
             }
             catch (ZLinkFrameworkException exception)

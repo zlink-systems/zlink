@@ -7,11 +7,11 @@
  * User Spot을 만들고, Session 서버는 stream 경계만 다룬다. */
 
 #include "../../Shared/Contracts/messages.hpp"
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -101,22 +101,18 @@ class open_conversation_api_handler_t
           co_await _spots.create (sample_names_t::conversation_spot)
             .in_mesh (sample_names_t::mesh)
             .creation_request (conversation_create_req_t{
-              request.customer_actor_id,
-              request.customer_display_name,
-              request.subject,
+              request.customer_actor_id, request.customer_display_name, request.subject,
               std::chrono::duration_cast<std::chrono::milliseconds> (
                 std::chrono::system_clock::now ().time_since_epoch ())
-                .count()})
+                .count ()})
             .submit ();
         if (created.state == spot_create_state_t::rejected || !created.reply) {
-            throw framework_exception_t (
-              framework_error_kind_t::rejected,
-              "SupportChat conversation creation returned no state");
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "SupportChat conversation creation returned no state");
         }
         const auto response = created.reply->decode<conversation_create_res_t> ();
-        std::cerr << "supportchat api: conversation created id="
-                  << response.state.conversation_id << " status=" << response.state.status
-                  << "\n";
+        std::cerr << "supportchat api: conversation created id=" << response.state.conversation_id
+                  << " status=" << response.state.status << "\n";
         co_return open_conversation_api_res_t{response.state};
     }
 
@@ -136,31 +132,31 @@ int main (int argc, char **argv)
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        add_supportchat_location_store (options, topology);
-        options.services ().add_singleton<user_directory_t> ();
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "location:");
+    options.add_relocation_store<redis::redis_relocation_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    options.services ().add_singleton<user_directory_t> ();
 
-        options.add_client_server_channel ("supportchat.api")
-          .server ()
-          .set_bind_host (host_from_tcp_endpoint (
-            topology.api_route_endpoint))
-          .set_advertise_host (host_from_tcp_endpoint (
-            topology.api_route_endpoint))
-          .listen (port_from_tcp_endpoint (
-            topology.api_route_endpoint))
-          .add_handler_group ("supportchat-api");
-        options.add_route_mesh (sample_names_t::mesh)
-          .set_routing_id (zlink::routing_id_t::from ("supportchat-api"))
-          .set_object_role (object_role_t::client)
-          .listen (topology.api_spot_route_endpoint);
+    options.add_client_server_channel ("supportchat.api")
+      .server ()
+      .set_bind_host (host_from_tcp_endpoint (topology.api_route_endpoint))
+      .set_advertise_host (host_from_tcp_endpoint (topology.api_route_endpoint))
+      .listen (port_from_tcp_endpoint (topology.api_route_endpoint))
+      .add_handler_group ("supportchat-api");
+    auto support_spot = options.add_route_mesh (sample_names_t::mesh);
+    support_spot.set_routing_id (zlink::routing_id_t::from ("supportchat-api"))
+      .listen (topology.api_spot_route_endpoint);
+    support_spot.objects ().client ();
 
-        options.handlers ()
-          .group ("supportchat-api")
-          .add<authenticate_user_handler_t> ()
-          .add<open_conversation_api_handler_t> ();
-    });
+    options.handlers ()
+      .group ("supportchat-api")
+      .add<authenticate_user_handler_t> ()
+      .add<open_conversation_api_handler_t> ();
     std::cout << "supportchat api role=ready" << std::endl;
     return app.run (argc, argv);
 }

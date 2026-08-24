@@ -738,7 +738,7 @@ Framework는 source에서 새 turn 수락을 닫고, adapter의 `capture`로 app
 
 | 모드 | safe point 결정 주체 | 적용 대상 |
 | --- | --- | --- |
-| `AnyTurnBoundary`(기본) | Framework — 완료된 turn과 다음 turn 사이 | 대부분의 Spot |
+| `FrameworkManaged`(기본) | Framework — 완료된 turn과 다음 turn 사이 | 대부분의 Spot |
 | `ApplicationSignaled` | Application — `defer()`를 호출한 turn의 끝 | 상태 일관성 단위가 여러 turn에 걸치는 Spot |
 
 **기본 모드가 성립하는 조건.** Framework는 실행 중인 turn을 중단하지 않는다. handler 하나와
@@ -758,7 +758,7 @@ mesh.objects().server()
         factory
             // 이 모드에서만 쓸 수 있다.
             .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-            .relocationReadiness(ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED)
+            .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED)
             .preserveStateWith(GameRoomRelocationAdapter::class.java)
     }
 ```
@@ -796,7 +796,7 @@ override suspend fun onRelocationReadyCompleted(
   operation(send, request, close 등)을 시작하면 오류다.
 - **한 turn에 한 번만 호출한다.** 같은 turn에서 두 번째 `defer()`는 오류다.
 - **`SpotWide` User Spot 전용이다.** Entry Spot, `PerActor` User Spot, Instance Spot과 기본
-  `AnyTurnBoundary` 모드에서는 호출할 수 없다.
+  `FrameworkManaged` 모드에서는 호출할 수 없다.
 
 ## 8. 관련 문서
 

@@ -129,8 +129,8 @@ internal static class ActorNodeHostFactory
                     SpotActorTransferNames.RelocationReadyUserSpotType,
                     factory => factory
                         .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                        .RelocationReadiness(
-                            ZLinkSpotRelocationReadinessMode
+                        .RelocationCoordinationMode(
+                            ZLinkSpotRelocationCoordinationMode
                                 .ApplicationSignaled)
                         .PreserveStateWith<
                             RelocationReadyUserSpotAdapter>())
@@ -139,8 +139,8 @@ internal static class ActorNodeHostFactory
                         .RelocationReadyDefaultUserSpotType,
                     factory => factory
                         .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                        .RelocationReadiness(
-                            ZLinkSpotRelocationReadinessMode
+                        .RelocationCoordinationMode(
+                            ZLinkSpotRelocationCoordinationMode
                                 .ApplicationSignaled)
                         .RecreateOnRelocation())
                 .AddInstanceSpotFactory<RelocationPayloadInstanceSpot>(

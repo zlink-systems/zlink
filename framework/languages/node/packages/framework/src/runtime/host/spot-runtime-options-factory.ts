@@ -1,6 +1,6 @@
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import {
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
 import {
@@ -248,14 +248,14 @@ export class ZLinkSpotRuntimeOptionsFactory {
         return registration?.options?.executionMode
           ?? ZLinkUserSpotExecutionMode.SpotWide;
       },
-      userSpotRelocationReadiness: (meshName, spotType) => {
+      userSpotRelocationCoordinationMode: (meshName, spotType) => {
         const registrations =
           this.options.registration.spotNodes.get(meshName)
             ?.spotFactoryRegistrations ?? {};
         const registration = Object.values(registrations)
           .find(candidate => candidate.implementation === spotType);
-        return registration?.options?.relocationReadiness
-          ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
+        return registration?.options?.relocationCoordinationMode
+          ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
       },
       actorBindingGenerationObserver: (actorId, generation) =>
         this.options.actorManager()?.getState(actorId)?.setBoundSessionBindingGeneration(generation),

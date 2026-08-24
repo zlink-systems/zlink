@@ -1,12 +1,11 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_timings.hpp"
 #include "../Configuration/sample_configuration.hpp"
-#include "../common_codecs.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -26,8 +25,7 @@ class courier_actor_t : public actor_t
 {
   public:
     explicit courier_actor_t (actor_context_t context) :
-        actor_id (context.actor_ref ().actor_id ().value ()),
-        _context (std::move (context))
+        actor_id (context.actor_ref ().actor_id ().value ()), _context (std::move (context))
     {
     }
 
@@ -41,14 +39,12 @@ class courier_actor_t : public actor_t
     std::map<std::string, int> offered_attempts;
 };
 
-struct courier_actor_factory_t final
-    : public actor_factory_t<courier_actor_t>
+struct courier_actor_factory_t final : public actor_factory_t<courier_actor_t>
 {
-    task_t<std::shared_ptr<courier_actor_t>>
-    create (actor_context_t context, std::stop_token) override
+    task_t<std::shared_ptr<courier_actor_t>> create (actor_context_t context,
+                                                     std::stop_token) override
     {
-        co_return std::make_shared<courier_actor_t> (
-          std::move (context));
+        co_return std::make_shared<courier_actor_t> (std::move (context));
     }
 };
 
@@ -61,10 +57,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
     }
 
     entry_spot_context_t &context () noexcept override { return _context; }
-    const entry_spot_context_t &context () const noexcept override
-    {
-        return _context;
-    }
+    const entry_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {
@@ -73,15 +66,13 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
         _context.handlers ()
           .add_actor_request<&courier_entry_spot_t::bind_courier_session> (
             bind_courier_session_req_t::packet_name)
-          .add_actor_send<&courier_entry_spot_t::offer_delivery> (
-            offer_delivery_msg_t::packet_name)
+          .add_actor_send<&courier_entry_spot_t::offer_delivery> (offer_delivery_msg_t::packet_name)
           .add_actor_send<&courier_entry_spot_t::courier_decision> (
             courier_decision_msg_t::packet_name);
     }
 
-    task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view,
-                   const zlink::framework::message_t &) override
+    task_t<spot_actor_join_result_t> on_actor_join (std::string_view,
+                                                    const zlink::framework::message_t &) override
     {
         co_return spot_actor_join_result_t::accept ();
     }
@@ -90,8 +81,8 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
     task_t<void> on_leave_actor (courier_actor_t &) override { co_return; }
 
     bind_courier_session_res_t bind_courier_session (courier_actor_t &,
-                                                    message_context_t &,
-                                                    const bind_courier_session_req_t &request)
+                                                     message_context_t &,
+                                                     const bind_courier_session_req_t &request)
     {
         return {request.courier_id};
     }
@@ -155,29 +146,22 @@ int main (int argc, char **argv)
                                         : topology.courier_actor_node_2_router_endpoint;
 
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        add_deliverydispatch_json_codecs (options.codecs ());
-        add_deliverydispatch_location_store (options, topology);
-        auto services = options.services ().build_provider ();
-        /* 배송원의 결정을 배차 쪽으로 돌려보내는 통로. */
-        options.add_client_server_channel (sample_names_t::dispatch_route_channel)
-          .client ();
-        auto actor_mesh = options.add_route_mesh (sample_names_t::courier_actor_discovery);
-        actor_mesh.set_routing_id (zlink::routing_id_t::from (instance_name));
-        actor_mesh.set_object_role (object_role_t::server);
-        actor_mesh.listen (spot_router_endpoint);
-        actor_mesh.channel_name (sample_names_t::courier_actor_discovery).server ();
-        actor_mesh.add_entry_spot<courier_entry_spot_t> (
-            [services] (entry_spot_context_t context) mutable {
-                return std::make_shared<courier_entry_spot_t> (
-                  std::move (context), services.get_required<channel_client_t> ());
-            })
-          .add_actor_factory<courier_actor_t, courier_actor_factory_t> (
-            sample_names_t::courier_actor_type,
-            std::make_shared<courier_actor_factory_t> (),
-            [] (auto &factory) { factory.disable_relocation (); });
-    });
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix);
+    /* 배송원의 결정을 배차 쪽으로 돌려보내는 통로. */
+    options.add_client_server_channel (sample_names_t::dispatch_route_channel).client ();
+    auto actor_mesh = options.add_route_mesh (sample_names_t::courier_actor_discovery);
+    actor_mesh.set_routing_id (zlink::routing_id_t::from (instance_name));
+    actor_mesh.listen (spot_router_endpoint);
+    actor_mesh.channel (sample_names_t::courier_actor_discovery).server ();
+    actor_mesh.objects ()
+      .server ()
+      .add_entry_spot<courier_entry_spot_t, channel_client_t> ()
+      .add_actor_factory<courier_actor_t, courier_actor_factory_t> (
+        sample_names_t::courier_actor_type)
+      .disable_relocation ();
     return app.run (argc, argv);
 }

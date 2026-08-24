@@ -40,8 +40,8 @@ export declare enum ZLinkUserSpotExecutionMode {
     PerActor = "per_actor"
 }
 
-export declare enum ZLinkSpotRelocationReadinessMode {
-    AnyTurnBoundary = "any_turn_boundary",
+export declare enum ZLinkSpotRelocationCoordinationMode {
+    FrameworkManaged = "framework_managed",
     ApplicationSignaled = "application_signaled"
 }
 
@@ -120,7 +120,7 @@ export interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
 export interface ZLinkUserSpotFactoryBuilder<TSpot extends ZLinkSpot> {
     stableTypeLimit(limit: number): this;
     executionMode(mode: ZLinkUserSpotExecutionMode): this;
-    relocationReadiness(mode: ZLinkSpotRelocationReadinessMode): this;
+    relocationCoordinationMode(mode: ZLinkSpotRelocationCoordinationMode): this;
     disableRelocation(): void;
     recreateOnRelocation(): void;
     preserveStateWith(adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>): void;
@@ -384,7 +384,7 @@ identity, generation, deadline, correlation, and reply route. The
 operational goal — exceeding it doesn't cancel or roll back the
 relocation.
 
-If `relocationReadiness` is omitted, it's `AnyTurnBoundary`.
+If `relocationCoordinationMode` is omitted, it's `FrameworkManaged`.
 `ApplicationSignaled` is only allowed with `SpotWide`, and registering
 it together with `PerActor` is a startup configuration error before
 socket bind. The Spot callback is optional, and treated as a no-op if

@@ -16,8 +16,8 @@ struct bingo_protobuf_codecs_t
 {
     template <typename TRegistrar> void register_framework_codecs (TRegistrar &registrar) const
     {
-#define ZLINK_BINGO_REGISTER_PROTOBUF(payload_type, message_type)                                 \
-    zlink::framework_codecs::protobuf_codec_extension_t::register_payload_serializer<             \
+#define ZLINK_BINGO_REGISTER_PROTOBUF(payload_type, message_type)                                  \
+    zlink::framework_codecs::protobuf_codec_extension_t::register_payload_serializer<              \
       payload_type, ::bingo::samples::message_type> (registrar)
         ZLINK_BINGO_REGISTER_PROTOBUF (authenticate_req_t, AuthenticateReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (authenticate_res_t, AuthenticateRes);
@@ -34,8 +34,7 @@ struct bingo_protobuf_codecs_t
         ZLINK_BINGO_REGISTER_PROTOBUF (match_bingo_api_res_t, MatchBingoApiRes);
         ZLINK_BINGO_REGISTER_PROTOBUF (reserve_bingo_room_req_t, ReserveBingoRoomReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (reserve_bingo_room_res_t, ReserveBingoRoomRes);
-        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_settings_payload_t,
-                                       BingoRoomSettingsPayload);
+        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_settings_payload_t, BingoRoomSettingsPayload);
         ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_create_req_t, BingoRoomCreateReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_join_req_t, BingoRoomJoinReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_join_res_t, BingoRoomJoinRes);
@@ -51,16 +50,10 @@ struct bingo_protobuf_codecs_t
         ZLINK_BINGO_REGISTER_PROTOBUF (game_started_notify_t, BingoGameStartedNotify);
         ZLINK_BINGO_REGISTER_PROTOBUF (number_drawn_notify_t, BingoNumberDrawnNotify);
         ZLINK_BINGO_REGISTER_PROTOBUF (game_ended_notify_t, BingoGameEndedNotify);
-        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_reward_announced_notify_t,
-                                       BingoRewardAnnouncedNotify);
+        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_reward_announced_notify_t, BingoRewardAnnouncedNotify);
         ZLINK_BINGO_REGISTER_PROTOBUF (bingo_reward_acquired_event_t, BingoRewardAcquiredEvent);
 #undef ZLINK_BINGO_REGISTER_PROTOBUF
     }
 };
-
-inline void use_default_bingo_codecs (framework::codec_options_builder_t codecs)
-{
-    codecs.use (bingo_protobuf_codecs_t{});
-}
 
 } // namespace zlink::samples::bingo

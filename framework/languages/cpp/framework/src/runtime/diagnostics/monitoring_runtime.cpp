@@ -2,7 +2,73 @@
 
 #include "monitoring_runtime.hpp"
 
+#include <algorithm>
+#include <stdexcept>
 #include <utility>
+
+namespace
+{
+
+bool blank_monitoring_source (const std::string &value)
+{
+    return value.empty ()
+           || std::all_of (
+             value.begin (), value.end (), [] (char ch) {
+                 return ch == ' ' || ch == '\t'
+                        || ch == '\r' || ch == '\n';
+             });
+}
+
+} // namespace
+
+namespace zlink::framework
+{
+
+monitoring_builder_t::monitoring_builder_t () :
+    _state (std::make_shared<detail::monitoring_runtime_state_t> ())
+{
+}
+
+monitoring_builder_t::monitoring_builder_t (
+  std::shared_ptr<detail::monitoring_runtime_state_t> state) :
+    _state (std::move (state))
+{
+}
+
+monitoring_builder_t::~monitoring_builder_t () = default;
+monitoring_builder_t::monitoring_builder_t (
+  monitoring_builder_t &&) noexcept = default;
+monitoring_builder_t &monitoring_builder_t::operator= (
+  monitoring_builder_t &&) noexcept = default;
+
+monitoring_builder_t &monitoring_builder_t::add_spot_events (
+  std::string source_name)
+{
+    if (blank_monitoring_source (source_name))
+        throw std::invalid_argument (
+          "Spot monitoring source name must not be empty");
+    std::lock_guard lock (_state->mutex);
+    if (std::find (_state->spot_sources.begin (),
+                   _state->spot_sources.end (), source_name)
+        != _state->spot_sources.end ())
+        throw std::invalid_argument (
+          "Spot monitoring source is already registered");
+    _state->spot_sources.push_back (std::move (source_name));
+    return *this;
+}
+
+monitoring_builder_t &monitoring_builder_t::on_spot_event (
+  spot_event_handler_t handler)
+{
+    if (!handler)
+        throw std::invalid_argument (
+          "Spot monitoring handler is required");
+    std::lock_guard lock (_state->mutex);
+    _state->spot_handlers.push_back (std::move (handler));
+    return *this;
+}
+
+} // namespace zlink::framework
 
 namespace zlink::framework::detail
 {
@@ -107,6 +173,12 @@ monitoring_runtime_t::monitoring_runtime_t (
 {
 }
 
+monitoring_runtime_t monitoring_runtime_t::from (
+  const monitoring_builder_t &builder)
+{
+    return monitoring_runtime_t (builder._state);
+}
+
 void monitoring_runtime_t::log (log_level_t level,
                                 std::string identifier,
                                 std::vector<log_field_t> fields) const noexcept
@@ -201,6 +273,34 @@ void monitoring_runtime_t::publish_timer_failure (
   spot_id_t spot_id,
   timer_failure_event_t failure) const
 {
+    std::vector<spot_event_handler_t> handlers;
+    if (_state) {
+        std::lock_guard lock (_state->mutex);
+        if (std::find (_state->spot_sources.begin (),
+                       _state->spot_sources.end (), source_name)
+            != _state->spot_sources.end ())
+            handlers = _state->spot_handlers;
+    }
+    if (!handlers.empty ()) {
+        const spot_event_t event{
+          source_name,
+          std::chrono::system_clock::now (),
+          failure.stopped
+            ? spot_event_kind_t::
+                timer_stopped_after_unhandled_exception
+            : spot_event_kind_t::timer_handler_failed,
+          {spot_id, failure.timer_name,
+           failure.handler_type.name (),
+           failure.delivery_index, failure.message}};
+        for (const auto &handler : handlers) {
+            try {
+                handler (event);
+            }
+            catch (...) {
+                // Monitoring callbacks cannot affect timer delivery.
+            }
+        }
+    }
     log (log_level_t::error,
          "zlink.runtime.spot.timer_failed",
          {{"source_name", std::move (source_name)},

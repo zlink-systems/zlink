@@ -441,8 +441,8 @@ internal sealed record ZLinkInstanceSpotFactoryRegistration(
 internal sealed record ZLinkUserSpotFactoryConfiguration(
     int StableTypeLimit = 0,
     ZLinkUserSpotExecutionMode ExecutionMode = ZLinkUserSpotExecutionMode.SpotWide,
-    ZLinkSpotRelocationReadinessMode RelocationReadiness =
-        ZLinkSpotRelocationReadinessMode.AnyTurnBoundary);
+    ZLinkSpotRelocationCoordinationMode RelocationCoordinationMode =
+        ZLinkSpotRelocationCoordinationMode.FrameworkManaged);
 
 internal sealed record ZLinkInstanceSpotFactoryConfiguration(
     int StableTypeLimit = 0);

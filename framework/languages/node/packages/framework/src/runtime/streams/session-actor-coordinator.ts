@@ -164,7 +164,7 @@ export class ZLinkSessionActorCoordinator {
       const waitForAcknowledgement = previous === undefined
         && confirmRemoteSessionBinding !== 'send';
       const confirmation = this.options.confirmRemoteActorSessionBinding(
-        actorRef,
+        boundActorRef,
         this.actorBindingRoutingId(context),
         undefined,
         { waitForAcknowledgement }
@@ -204,7 +204,15 @@ export class ZLinkSessionActorCoordinator {
           throw error;
         }
       } else {
-        void confirmation.catch(reportFailure);
+        // Replacement does not wait for a remote acknowledgement, but its
+        // one-way bind must reach transport submission before application
+        // relay can use the new Session route. Otherwise the first packet on
+        // a reconnected Session can overtake the binding command.
+        try {
+          await confirmation;
+        } catch (error) {
+          reportFailure(error);
+        }
       }
     }
     return sessionActor;

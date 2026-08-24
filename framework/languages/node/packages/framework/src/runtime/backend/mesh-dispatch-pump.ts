@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
 import {
   ReadyDomain,
@@ -15,7 +16,11 @@ import { runWithApplicationJobPermit } from '../application-jobs/application-job
 const MESH_DISPATCH_TIMER_YIELD_BATCHES = 16;
 const MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
-
+// Captured while the runtime module is loaded, before any application owner
+// exists. A ready callback may run inside a Spot turn; the shared Mesh pump
+// must enter like an independent receive-loop task, without inheriting that
+// owner's AsyncLocalStorage identity.
+const detachedMeshDispatchScope = AsyncLocalStorage.snapshot();
 
 export interface ZLinkMeshDispatchPumpOptions {
   readonly readyCapacity?: number;
@@ -96,7 +101,7 @@ export class ZLinkMeshDispatchPump {
     }
     this.scheduled = true;
     const drain = yieldToEventLoop()
-      .then(() => this.drain())
+      .then(() => detachedMeshDispatchScope(() => this.drain()))
       .catch((error) => {
         if (error instanceof ZLinkMeshDispatchFailure) {
           this.options.reportError?.(error.dispatchCause, error.context);
@@ -131,7 +136,7 @@ export class ZLinkMeshDispatchPump {
     }
     this.infrastructureScheduled = true;
     const drain = yieldToEventLoop()
-      .then(() => this.drainInfrastructure())
+      .then(() => detachedMeshDispatchScope(() => this.drainInfrastructure()))
       .catch((error) => {
         if (error instanceof ZLinkMeshDispatchFailure) {
           this.options.reportError?.(error.dispatchCause, error.context);

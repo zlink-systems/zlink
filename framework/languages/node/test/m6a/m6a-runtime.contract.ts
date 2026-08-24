@@ -18,6 +18,11 @@ import {
 import {
   ZLinkNodeRawBindingPort
 } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
+import type {
+  ZLinkRawBindingPort,
+  ZLinkRawHostPort,
+  ZLinkRawRouterPort
+} from '../../packages/framework/src/runtime/backend/raw-binding-port';
 import {
   ZLinkNodeRawMeshBackend
 } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
@@ -237,6 +242,61 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
   const created = (backend as unknown as { createDescriptor(): ServiceNodeDescriptor })
     .createDescriptor();
   assert.equal(created.maintenanceWave, 'rolling-a');
+});
+
+test('RouteMesh hello advertises the configured host instead of the bind host', async () => {
+  const sent: Array<{ readonly target: string; readonly parts: readonly Uint8Array[] }> = [];
+  const router = {
+    setRoutingId() {},
+    bind(endpoint: string) {
+      assert.equal(endpoint, 'tcp://127.0.0.2:0');
+    },
+    localEndpoint: () => 'tcp://127.0.0.2:28730',
+    monitor: () => ({ statusReady: () => false, close() {} }),
+    connectToRoutingId(routingId: string, endpoint: string) {
+      assert.equal(routingId, 'peer-node');
+      assert.equal(endpoint, 'tcp://127.0.0.1:28731');
+    },
+    async send(target: string, parts: readonly Uint8Array[]) {
+      sent.push({ target, parts });
+    },
+    receive: () => undefined,
+    close() {}
+  } as unknown as ZLinkRawRouterPort;
+  const binding = {
+    createHost: () => ({
+      createRouter: () => router,
+      close() {},
+      shutdown() {}
+    } as unknown as ZLinkRawHostPort)
+  } satisfies ZLinkRawBindingPort;
+  const backend = new ZLinkNodeRawMeshBackend(
+    'advertise-mesh',
+    'advertise-node',
+    binding,
+    applicationJobQueue()
+  );
+  backend.setBind('tcp://127.0.0.2:0');
+  backend.setAdvertiseHost('127.0.0.1');
+  backend.start();
+  try {
+    await backend.connectPeer({
+      endpoint: 'tcp://127.0.0.1:28731',
+      expectedRid: 'peer-node'
+    });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]!.target, 'peer-node');
+    assert.equal(
+      decodeRouteMeshAdmission(
+        sent[0]!.parts[0]!,
+        M6aServiceWireCommand.hello,
+        'advertise-node'
+      ).advertisedEndpoint,
+      'tcp://127.0.0.1:28730'
+    );
+  } finally {
+    backend.close();
+  }
 });
 
 test('raw binding receive retains Core credit until the Framework record closes', async () => {

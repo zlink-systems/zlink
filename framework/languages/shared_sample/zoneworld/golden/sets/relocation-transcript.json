@@ -1,0 +1,176 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "relocation-transcript",
+  "records": [
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "source-player-actor",
+      "consumer_role": "target-zone-spot",
+      "normalized_payload": {
+        "actor_id": "<ACTOR:ZW-B2>",
+        "before_owner": "<RID:SOURCE>",
+        "after_owner": "<RID:TARGET>",
+        "object_generation_before": "<OBJECT_GENERATION:1>",
+        "object_generation_after": "<OBJECT_GENERATION:1>",
+        "owner_changed": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-B2 passed"
+        },
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "relocation_session_route commit=present actor=b2-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "wire_record": "ActorLocationProbeRes"
+      }
+    },
+    {
+      "scenario_id": "ZW-B3",
+      "producer_role": "target-player-actor",
+      "consumer_role": "target-zone-spot",
+      "normalized_payload": {
+        "same_zone_move": true,
+        "relocation_count": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-B3 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "owner RID and generation unchanged"
+      }
+    },
+    {
+      "scenario_id": "ZW-B5",
+      "producer_role": "gateway-probe",
+      "consumer_role": "target-player-actor",
+      "normalized_payload": {
+        "route": "primed source route",
+        "kind": "one-way",
+        "payload_utf8": "one-way-payload",
+        "target_handler_count": 1,
+        "source_follow_relay_count": 1
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "message-follow-one-way completed"
+        },
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=MessageFollowProbeMsg actor=b5-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "MessageFollowProbeMsg"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6",
+      "producer_role": "gateway-probe",
+      "consumer_role": "target-player-actor",
+      "normalized_payload": {
+        "route": "primed source route",
+        "kind": "request",
+        "payload_utf8": "request-payload",
+        "reply_payload_equal": true,
+        "target_handler_count": 1,
+        "source_follow_relay_count": 1
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "message-follow-request completed"
+        },
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=MessageFollowProbeReq actor=b6-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "MessageFollowProbeReq/Res"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6",
+      "producer_role": "source-old-route",
+      "consumer_role": "caller",
+      "normalized_payload": {
+        "missing_route_terminal": "Unavailable",
+        "source_reresolve_count": 0,
+        "source_retry_count": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "message_follow_relay"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "single terminal outcome; no second application dispatch"
+      }
+    },
+    {
+      "scenario_id": "ZW-B7",
+      "producer_role": "player-actor",
+      "consumer_role": "bound-session",
+      "normalized_payload": {
+        "path": [
+          "zone-nw",
+          "zone-ne",
+          "zone-nw"
+        ],
+        "actor_id": "<ACTOR:ZW-B7>",
+        "object_generation": "<OBJECT_GENERATION:2>",
+        "binding_session_id": "<SESSION_ID:1>",
+        "binding_preserved": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-B7 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "same player receives ZoneChanged and ZoneState after both crossings"
+      }
+    },
+    {
+      "scenario_id": "ZW-B8",
+      "producer_role": "target-player-actor",
+      "consumer_role": "gateway",
+      "normalized_payload": {
+        "target_commit": true,
+        "command_44_dropped": true,
+        "disconnect": "ProtocolError",
+        "rebind_same_actor": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/b8-reference/logs/client.log",
+          "selector": "scenario ZW-B8 passed"
+        },
+        {
+          "path": "raw/b8-reference/logs/session-route-proxy-gateway.log",
+          "selector": "blocked-command-44"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "reconnect JoinWorldRes reports target zone for same actor"
+      }
+    }
+  ]
+}

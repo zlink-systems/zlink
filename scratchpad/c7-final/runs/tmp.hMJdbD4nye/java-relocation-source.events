@@ -1,0 +1,4 @@
+entry-spot-create|status=created
+entry-spot-owner-before|node=java-relocation-source
+relocate-attempt|attempt=0|outcome=BLOCKED|reason=DEADLINE_EXCEEDED
+relocate-attempt|attempt=1|outcome=BLOCKED|reason=DEADLINE_EXCEEDED

@@ -340,7 +340,7 @@ permanently remove an Actor the Entry Spot no longer needs.
 
 ## `RelocationReady().Defer()` (inside Spot code)
 
-In a `SpotWide` Spot that has selected `ApplicationSignaled` readiness mode, defers the
+In a `SpotWide` Spot that has selected `ApplicationSignaled` coordination mode, defers the
 relocation boundary to just before the next application turn.
 
 ```csharp
@@ -352,12 +352,12 @@ Context.RelocationReady().Defer();
 **Completion.** No return value. It registers the relocation boundary after the current handler
 finishes. If it did not move, or aborted before commit, the source receives `Continued`; if it
 moved, the target receives `Relocated` — both delivered as completions to
-`OnRelocationReadyCompletedAsync(...)`. Calling it under `AnyTurnBoundary` mode, on a `PerActor`
+`OnRelocationReadyCompletedAsync(...)`. Calling it under `FrameworkManaged` mode, on a `PerActor`
 Spot, on an Entry·Instance Spot, outside a Spot turn, or twice within the same turn all complete
 with `InvalidOperation`.
 
 **When to use it.** Use it when the application needs to control the relocation moment precisely
-at a specific turn boundary. Under the default `AnyTurnBoundary` mode, this call is not needed.
+at a specific turn boundary. Under the default `FrameworkManaged` mode, this call is not needed.
 
 ---
 

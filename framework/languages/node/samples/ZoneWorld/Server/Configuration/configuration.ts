@@ -6,11 +6,13 @@ type SharedSettings = {
   redisEndpoint: string;
   redisKeyPrefix: string;
   logDirectory: string;
+  sessionRelocationSealTimeoutMs?: number;
 };
 
 type ZoneNodeSettings = {
   nodeId: string;
   spotRouterEndpoint: string;
+  spotRouterAdvertiseHost?: string;
   zoneCapacity: number;
   bootstrapZones?: readonly string[] | false;
   faultTickZone?: string | null;
@@ -24,6 +26,7 @@ type ZoneNodeSettings = {
 type GatewaySettings = {
   streamEndpoint: string;
   spotRouterEndpoint: string;
+  spotRouterAdvertiseHost?: string;
 };
 
 type OpsSettings = {
@@ -37,6 +40,7 @@ type ClientSettings = {
   opsEndpoint: string;
   scenarios?: string;
   targetNodeId?: string;
+  faultArmFile?: string;
 };
 
 type ZoneWorldConfiguration = {
@@ -91,6 +95,12 @@ function validateConfiguration(
   const document = requireRecord(root.sample, 'sample');
   const shared = requireRecord(document.shared, 'shared');
   for (const key of ['redisEndpoint', 'redisKeyPrefix', 'logDirectory']) requireString(shared, key, 'shared');
+  if (shared.sessionRelocationSealTimeoutMs !== undefined) {
+    const timeout = shared.sessionRelocationSealTimeoutMs;
+    if (typeof timeout !== 'number' || !Number.isSafeInteger(timeout) || timeout <= 0) {
+      throw new Error("Configuration value 'shared.sessionRelocationSealTimeoutMs' must be a positive integer.");
+    }
+  }
 
   const roles = ['zoneNode', 'gateway', 'ops', 'client'] as const;
   const configured = roles.filter((role) => document[role] !== undefined);
@@ -114,6 +124,13 @@ function validateConfiguration(
   }
   if (expectedRole === 'client' && role.targetNodeId !== undefined) {
     requireString(role, 'targetNodeId', expectedRole);
+  }
+  if (expectedRole === 'client' && role.faultArmFile !== undefined) {
+    requireString(role, 'faultArmFile', expectedRole);
+  }
+  if ((expectedRole === 'zoneNode' || expectedRole === 'gateway')
+    && role.spotRouterAdvertiseHost !== undefined) {
+    requireString(role, 'spotRouterAdvertiseHost', expectedRole);
   }
   if (expectedRole === 'zoneNode' && role.placementWeightAfterZoneCreation !== undefined) {
     const weight = role.placementWeightAfterZoneCreation;

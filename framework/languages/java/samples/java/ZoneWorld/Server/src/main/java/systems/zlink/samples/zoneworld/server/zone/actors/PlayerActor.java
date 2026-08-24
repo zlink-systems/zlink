@@ -188,7 +188,7 @@ public final class PlayerActor implements ZLinkActor {
             pendingZone = null;
             if (pendingPurpose == JoinPurpose.INITIAL_HUMAN) {
                 pendingPurpose = JoinPurpose.NONE;
-                return send(new Messages.JoinWorldRes(actorId, joinedZone, x, y, null));
+                return send(new Messages.JoinWorldNotify(actorId, joinedZone, x, y, null));
             }
             if (pendingPurpose == JoinPurpose.CRASH_PROBE) {
                 pendingPurpose = JoinPurpose.NONE;
@@ -204,7 +204,7 @@ public final class PlayerActor implements ZLinkActor {
         pendingZone = null;
         if (pendingPurpose == JoinPurpose.INITIAL_HUMAN) {
             pendingPurpose = JoinPurpose.NONE;
-            return send(new Messages.JoinWorldRes(
+            return send(new Messages.JoinWorldNotify(
                 actorId, ZoneWorldSpec.zoneOf(pendingX, pendingY), pendingX, pendingY, reason));
         }
         if (pendingPurpose == JoinPurpose.CRASH_PROBE) {

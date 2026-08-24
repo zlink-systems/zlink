@@ -1,0 +1,171 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "store-snapshots",
+  "records": [
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "location-store",
+      "consumer_role": "reference-observer",
+      "normalized_payload": {
+        "point": "before",
+        "key": "authority\\0actor\\0<ACTOR:ZW-B2>",
+        "exists": false
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-b2-reference/redis-monitor.log",
+          "selector": "first authority\\x00actor\\x00b2- put"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "assert": "key missing before creation reservation"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "source-owner",
+      "consumer_role": "location-store",
+      "normalized_payload": {
+        "point": "source-authority",
+        "namespace": "{zlink-location-v3}:opaque",
+        "record_version": 1,
+        "allocation_state": "active",
+        "object_generation": "<OBJECT_GENERATION:1>",
+        "authority_owner_generation": "<OWNER_GENERATION:1>",
+        "owner_rid": "<RID:SOURCE>"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-b2-reference/redis-monitor.log",
+          "selector": "authority\\x00actor\\x00b2- allocation state active source"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "assert": "opaque record and decoded JSON agree"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "target-owner",
+      "consumer_role": "location-store",
+      "normalized_payload": {
+        "point": "target-authority",
+        "namespace": "{zlink-location-v3}:opaque",
+        "record_version": 1,
+        "allocation_state": "active",
+        "object_generation": "<OBJECT_GENERATION:1>",
+        "authority_owner_generation": "<OWNER_GENERATION:2>",
+        "owner_rid": "<RID:TARGET>",
+        "owner_changed": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-b2-reference/redis-monitor.log",
+          "selector": "authority\\x00actor\\x00b2- target owner put"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "assert": "object generation stable; authority owner generation and RID change"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "relocation-runtime",
+      "consumer_role": "relocation-store",
+      "normalized_payload": {
+        "point": "clean-cross-owner-relocation",
+        "namespace_pattern": "<PREFIX>:relocation:*",
+        "redis_access_count": 0,
+        "key_count": 0,
+        "assertion": "absent"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-b2-reference/redis-monitor.log",
+          "selector": "whole-artifact absence scan: literal relocation: occurs zero times"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "negative-store-state",
+        "assert": "typed ActorLocationProbeRes proves source-to-target authority change while the Relocation Store remains untouched"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6-pending-cutover",
+      "producer_role": "source-memory-relay",
+      "consumer_role": "eight-request-callers",
+      "normalized_payload": {
+        "point": "pending-requests-through-cutover",
+        "request_count": 8,
+        "reply_count": 8,
+        "payload_and_correlation_preserved": true,
+        "owner_changed": true,
+        "object_generation_stable": true,
+        "relocation_store_access_count": 0,
+        "relocation_store_key_count": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-pending-follow-reference/pending-follow.stdout.log",
+          "selector": "scenario ZW-B6-pending-cutover passed ... requests=8"
+        },
+        {
+          "path": "raw/redis-pending-follow-reference/redis-monitor.log",
+          "selector": "whole-artifact absence scan: literal relocation: occurs zero times"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "negative-store-state",
+        "assert": "typed request replies complete after cutover through the spec-28 in-memory relay window with no Relocation Store access"
+      }
+    },
+    {
+      "scenario_id": "ZW-E5",
+      "producer_role": "ops",
+      "consumer_role": "maintenance-store",
+      "normalized_payload": {
+        "point": "before-restart",
+        "key": "<PREFIX>:maintenance",
+        "row": {
+          "zone-node-2": true
+        }
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-e5-reference/redis-monitor.log",
+          "selector": "\"HSET\" \"<PREFIX>:maintenance\" \"zone-node-2\" \"1\""
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "assert": "typed SetMaintenanceRes enabled=true and hash row=1"
+      }
+    },
+    {
+      "scenario_id": "ZW-E5",
+      "producer_role": "replacement-zone-node-2",
+      "consumer_role": "maintenance-store",
+      "normalized_payload": {
+        "point": "after-restart",
+        "key": "<PREFIX>:maintenance",
+        "row": {
+          "zone-node-2": true
+        },
+        "restored": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/redis-e5-reference/logs/zone-node-2.log",
+          "selector": "maintenance restored. node=zone-node-2, own=True"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "assert": "typed diagnostics maintenance=true after restart; same hash row remains"
+      }
+    }
+  ]
+}

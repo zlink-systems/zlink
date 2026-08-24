@@ -74,6 +74,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotKind;
@@ -309,8 +310,8 @@ final class ChannelMessagingTest {
                 "HANDLER_MISSING for packet 'MissingReq'"));
 
             assertTrue(logMessages.stream().anyMatch(message ->
-                message.contains("reason=HANDLER_MISSING")
-                    && message.contains("action=REPLY_ERROR")
+                message.contains("reason=no_handler")
+                    && message.contains("action=reply_error")
                     && message.contains("packet=MissingReq")
                     && message.contains("channel=profile")),
                 "dispatch error log marker was not written");
@@ -339,8 +340,8 @@ final class ChannelMessagingTest {
             public void publish(LogRecord record) {
                 String message = record.getMessage();
                 logMessages.add(message);
-                if (message.contains("reason=HANDLER_MISSING")
-                    && message.contains("action=DROP")
+                if (message.contains("reason=no_handler")
+                    && message.contains("action=drop")
                     && message.contains("packet=MissingCommand")
                     && message.contains("channel=profile")) {
                     missingSendLogged.complete(null);
@@ -377,8 +378,8 @@ final class ChannelMessagingTest {
 
             missingSendLogged.get(2, TimeUnit.SECONDS);
             assertTrue(logMessages.stream().anyMatch(message ->
-                message.contains("reason=HANDLER_MISSING")
-                    && message.contains("action=DROP")
+                message.contains("reason=no_handler")
+                    && message.contains("action=drop")
                     && message.contains("packet=MissingCommand")
                     && message.contains("channel=profile")),
                 "dispatch error log marker was not written");
@@ -447,8 +448,9 @@ final class ChannelMessagingTest {
                         malformedParts,
                         Duration.ofSeconds(2)).toCompletableFuture().get(
                             2, TimeUnit.SECONDS)) {
-                        assertEquals("ZLinkFrameworkError", reply.parts().get(0).toUtf8String());
-                        assertTrue(reply.parts().get(1).toUtf8String().contains("PayloadDecodeFailed"));
+                        assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
+                        assertTrue(ZLinkFrameworkErrorReply.message(reply.parts())
+                            .contains("PayloadDecodeFailed"));
                     }
                 } finally {
                     malformedParts.forEach(Message::close);
@@ -457,8 +459,8 @@ final class ChannelMessagingTest {
 
             assertEquals(0, DecodeProbeHandler.invocations.get());
             assertTrue(logMessages.stream().anyMatch(message ->
-                message.contains("reason=PAYLOAD_DECODE_FAILED")
-                    && message.contains("action=REPLY_ERROR")
+                message.contains("reason=decode_error")
+                    && message.contains("action=reply_error")
                     && message.contains("packet=DecodeReq")
                     && message.contains("channel=profile")),
                 "dispatch error log marker was not written");
@@ -523,8 +525,8 @@ final class ChannelMessagingTest {
             assertTrue(failure.getCause().getMessage().contains("DERR-007 handler exception"));
 
             assertTrue(logMessages.stream().anyMatch(message ->
-                message.contains("reason=HANDLER_EXCEPTION")
-                    && message.contains("action=REPLY_ERROR")
+                message.contains("reason=handler_exception")
+                    && message.contains("action=reply_error")
                     && message.contains("packet=ThrowReq")
                     && message.contains("channel=profile")),
                 "dispatch error log marker was not written");
@@ -588,8 +590,9 @@ final class ChannelMessagingTest {
                         malformedParts,
                         Duration.ofSeconds(2)).toCompletableFuture().get(
                             2, TimeUnit.SECONDS)) {
-                        assertEquals("ZLinkFrameworkError", reply.parts().get(0).toUtf8String());
-                        assertTrue(reply.parts().get(1).toUtf8String().contains("PayloadDecodeFailed"));
+                        assertTrue(ZLinkFrameworkErrorReply.isReply(reply.parts()));
+                        assertTrue(ZLinkFrameworkErrorReply.message(reply.parts())
+                            .contains("PayloadDecodeFailed"));
                     }
                 } finally {
                     malformedParts.forEach(Message::close);
@@ -604,13 +607,13 @@ final class ChannelMessagingTest {
             assertTrue(thrown.getCause() instanceof ZLinkFrameworkException);
 
             fileHandler.flush();
-            String logText = waitForFileLog(logPath, "outcome=ERROR", 3);
-            assertTrue(logText.contains("surface=CHANNEL"));
-            assertTrue(logText.contains("kind=REQUEST"));
-            assertTrue(logText.contains("reason=HANDLER_MISSING"));
-            assertTrue(logText.contains("reason=PAYLOAD_DECODE_FAILED"));
-            assertTrue(logText.contains("reason=HANDLER_EXCEPTION"));
-            assertTrue(logText.contains("action=REPLY_ERROR"));
+            String logText = waitForFileLog(logPath, "outcome=failed", 3);
+            assertTrue(logText.contains("surface=channel"));
+            assertTrue(logText.contains("kind=request"));
+            assertTrue(logText.contains("reason=no_handler"));
+            assertTrue(logText.contains("reason=decode_error"));
+            assertTrue(logText.contains("reason=handler_exception"));
+            assertTrue(logText.contains("action=reply_error"));
             assertTrue(logText.contains("packet=MissingReq"));
             assertTrue(logText.contains("packet=DecodeReq"));
             assertTrue(logText.contains("packet=ThrowReq"));
@@ -678,13 +681,15 @@ final class ChannelMessagingTest {
             public void publish(LogRecord record) {
                 String message = record.getMessage();
                 observedErrors.add(message);
-                if (message.contains("kind=PUBLISH")
-                    && message.contains("reason=HANDLER_MISSING")
+                if (message.contains("surface=classic_fanout")
+                    && message.contains("kind=send")
+                    && message.contains("reason=no_handler")
                     && message.contains("packet=ManualMissingEvent")) {
                     missingPublishLogged.complete(null);
                 }
-                if (message.contains("kind=SEND")
-                    && message.contains("reason=HANDLER_MISSING")
+                if (message.contains("surface=channel")
+                    && message.contains("kind=send")
+                    && message.contains("reason=no_handler")
                     && message.contains("packet=ManualMissingCommand")) {
                     missingSendLogged.complete(null);
                 }
@@ -1571,11 +1576,14 @@ final class ChannelMessagingTest {
         ZLinkDispatchErrorAction action,
         String packetName,
         String channelName) {
+        String surface = kind == ZLinkDispatchMessageKind.PUBLISH
+            ? "classic_fanout"
+            : "channel";
         return errors.stream().anyMatch(error ->
-            error.contains("surface=CHANNEL")
-                && error.contains("kind=" + kind)
-                && error.contains("reason=" + reason)
-                && error.contains("action=" + action)
+            error.contains("surface=" + surface)
+                && error.contains("kind=" + kind.traceName())
+                && error.contains("reason=" + reason.traceName())
+                && error.contains("action=" + action.traceName())
                 && error.contains("packet=" + packetName)
                 && error.contains("channel=" + channelName));
     }

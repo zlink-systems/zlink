@@ -73,8 +73,8 @@ public static class PlayServerHostFactory
                     SampleNames.RoomSpotType,
                     factory => factory
                         .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
-                        .RelocationReadiness(
-                            ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+                        .RelocationCoordinationMode(
+                            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
                         .PreserveStateWith<BingoRoomRelocationAdapter>());
             mesh.Channel(SampleNames.RoomChannel).Server();
             options.AddClientServerChannel(SampleNames.ApiChannel).Client();

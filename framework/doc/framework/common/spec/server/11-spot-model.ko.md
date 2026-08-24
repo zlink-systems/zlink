@@ -317,8 +317,8 @@ shared Spot turn이 없으므로 `Yield`를 제공하지 않는다.
 
 ### 5.1 SpotWide relocation 경계
 
-[`Spot relocation readiness mode`](01-glossary.ko.md#spot-relocation-readiness-mode)의
-기본값은 `AnyTurnBoundary`다. 이 mode에서는 Framework가 현재 turn이 끝난 안전한
+[`Spot relocation coordination mode`](01-glossary.ko.md#spot-relocation-coordination-mode)의
+기본값은 `FrameworkManaged`다. 이 mode에서는 Framework가 현재 turn이 끝난 안전한
 경계를 선택하므로 application이 별도 준비 신호를 보내지 않는다.
 
 Round·match가 끝난 뒤에만 이동할 수 있는 Spot은 factory 등록에서
@@ -345,7 +345,7 @@ override를 강제하지 않는다. 정상 실행에서는 readiness 등록마�
 하나를 만든다. Callback 실행 중 process가 종료되면 완료를 확인할 수 없으므로
 recovery에서 같은 completion을 다시 호출할 수 있다. Override는 retry-safe해야 한다.
 
-`AnyTurnBoundary`, `PerActor`, Entry Spot 또는 Instance Spot에서
+`FrameworkManaged`, `PerActor`, Entry Spot 또는 Instance Spot에서
 `RelocationReady().Defer()`를 호출하면 queue mutation 전에
 `InvalidOperation`으로 실패하고 completion callback을 호출하지 않는다.
 

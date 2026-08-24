@@ -70,7 +70,7 @@ play.objects().server()
 | --- | --- | --- |
 | `.client()` / `.server()` | — | Object Client(참조만) 또는 Object Server(호스팅) 역할 선택. `server()`는 `client()` 기능을 포함하며 둘 다 Location Store가 필수다. 생략하면 `None` |
 | `.addEntrySpot(entrySpotClass)` | 없음 | 외부 진입 전용 Entry Spot 타입 등록 |
-| `.addSpotFactory(spotType, spotClass, configure)` | 없음 | stable User Spot 타입 등록. `configure`는 `stableTypeLimit`·`executionMode`·`relocationReadiness`에 더해 `disableRelocation()`/`recreateOnRelocation()`/`preserveStateWith(...)` 중 정확히 하나를 호출해야 한다 |
+| `.addSpotFactory(spotType, spotClass, configure)` | 없음 | stable User Spot 타입 등록. `configure`는 `stableTypeLimit`·`executionMode`·`relocationCoordinationMode`에 더해 `disableRelocation()`/`recreateOnRelocation()`/`preserveStateWith(...)` 중 정확히 하나를 호출해야 한다 |
 | `.addInstanceSpotFactory(instanceSpotType, spotClass, configure)` | 없음 | cold-activation Instance Spot 타입 등록. `configure`는 `stableTypeLimit`에 더해 relocation 동작 중 정확히 하나를 호출해야 한다 |
 | `.addActorFactory(actorType, actorClass, factoryClass, configure)` | 없음 | stable Actor 타입 등록. `configure`는 relocation 동작 중 정확히 하나를 호출해야 한다(Actor factory에는 `stableTypeLimit`이 없다) |
 

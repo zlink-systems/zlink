@@ -101,12 +101,12 @@ final class ScenarioSupport {
             this.playerId = playerId;
         }
 
-        Messages.JoinWorldRes join() {
-            CompletionStage<ZLinkStreamMessage<Messages.JoinWorldRes>> response = waitFor(
-                connector, Messages.JoinWorldRes.class, value -> playerId.equals(value.playerId()),
+        Messages.JoinWorldNotify join() {
+            CompletionStage<ZLinkStreamMessage<Messages.JoinWorldNotify>> response = waitFor(
+                connector, Messages.JoinWorldNotify.class, value -> playerId.equals(value.playerId()),
                 Duration.ofSeconds(20));
-            connector.send(new Messages.JoinWorldReq(playerId)).submit().toCompletableFuture().join();
-            Messages.JoinWorldRes value = response.toCompletableFuture().join().payload();
+            connector.send(new Messages.JoinWorldMsg(playerId)).submit().toCompletableFuture().join();
+            Messages.JoinWorldNotify value = response.toCompletableFuture().join().payload();
             x = value.x(); y = value.y();
             return value;
         }

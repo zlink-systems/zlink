@@ -11,6 +11,11 @@ doesn't create a separate socket.
 The RouteMesh status interface the application queries is defined by
 the [C++ monitoring exact interface](08-monitoring.en.md).
 
+Object roles and factories start at `objects().client()` or `objects().server()`. An Object
+Server declares Spot constructor dependencies as template arguments, and the Framework service
+provider injects them. Factory-lambda and policy-callback overloads remain for compatibility, but
+samples and guides use the callback-free fluent surface below.
+
 ```cpp
 namespace zlink::framework {
 
@@ -30,6 +35,15 @@ public:
 
 class mesh_channel_server_builder_t;
 class mesh_channel_client_builder_t {};
+class mesh_object_role_builder_t;
+class mesh_object_client_builder_t;
+class mesh_object_server_builder_t;
+template <typename TSpot, typename... TDependencies>
+class user_spot_registration_builder_t;
+template <typename TSpot, typename... TDependencies>
+class instance_spot_registration_builder_t;
+template <typename TActor, typename TActorFactory>
+class actor_registration_builder_t;
 
 class mesh_channel_builder_t {
 public:
@@ -101,14 +115,15 @@ enum class user_spot_execution_mode_t {
     per_actor = 1
 };
 
-enum class spot_relocation_readiness_mode_t {
-    any_turn_boundary = 0,
+enum class spot_relocation_coordination_mode_t {
+    framework_managed = 0,
     application_signaled = 1
 };
 
 class mesh_node_builder_t {
 public:
     mesh_channel_builder_t channel(std::string channel_name);
+    mesh_object_role_builder_t objects();
     mesh_node_builder_t &listen(std::string endpoint);
     mesh_node_builder_t &listen(std::uint16_t port = 0);
     mesh_node_builder_t &set_bind_host(std::string host);
@@ -169,6 +184,65 @@ public:
       std::shared_ptr<TActorFactory> factory,
       std::function<void(actor_factory_builder_t<TActor> &)> configure);
 
+};
+
+class mesh_object_role_builder_t {
+public:
+    mesh_object_client_builder_t client();
+    mesh_object_server_builder_t server();
+};
+
+class mesh_object_client_builder_t {};
+
+class mesh_object_server_builder_t {
+public:
+    template <typename TEntrySpot, typename... TDependencies>
+    mesh_object_server_builder_t &add_entry_spot();
+
+    template <typename TSpot, typename... TDependencies>
+    user_spot_registration_builder_t<TSpot, TDependencies...>
+    add_spot_factory(std::string stable_type);
+
+    template <typename TSpot, typename... TDependencies>
+    instance_spot_registration_builder_t<TSpot, TDependencies...>
+    add_instance_spot_factory(std::string stable_type);
+
+    template <typename TActor, typename TActorFactory>
+    actor_registration_builder_t<TActor, TActorFactory>
+    add_actor_factory(std::string stable_type);
+};
+
+template <typename TSpot, typename... TDependencies>
+class user_spot_registration_builder_t {
+public:
+    user_spot_registration_builder_t &set_stable_type_limit(std::int32_t value);
+    user_spot_registration_builder_t &set_execution_mode(
+      user_spot_execution_mode_t value);
+    user_spot_registration_builder_t &set_relocation_coordination_mode(
+      spot_relocation_coordination_mode_t value);
+    mesh_object_server_builder_t disable_relocation();
+    mesh_object_server_builder_t recreate_on_relocation();
+    template <typename TAdapter>
+    mesh_object_server_builder_t preserve_state_with();
+};
+
+template <typename TSpot, typename... TDependencies>
+class instance_spot_registration_builder_t {
+public:
+    instance_spot_registration_builder_t &set_stable_type_limit(std::int32_t value);
+    mesh_object_server_builder_t disable_relocation();
+    mesh_object_server_builder_t recreate_on_relocation();
+    template <typename TAdapter>
+    mesh_object_server_builder_t preserve_state_with();
+};
+
+template <typename TActor, typename TActorFactory>
+class actor_registration_builder_t {
+public:
+    mesh_object_server_builder_t disable_relocation();
+    mesh_object_server_builder_t recreate_on_relocation();
+    template <typename TAdapter>
+    mesh_object_server_builder_t preserve_state_with();
 };
 
 enum class client_server_role_t { client, server, client_and_server };
@@ -450,7 +524,7 @@ is a configuration error before socket bind. A PerActor Spot is a
 stateless execution shell, and the Actor policy and
 `actor_relocation_adapter_t<TActor>` each handle Actor state.
 
-`relocation_readiness` defaults to `any_turn_boundary`.
+`relocation_coordination_mode` defaults to `framework_managed`.
 `application_signaled` is only allowed with `spot_wide`, and
 registering it together with `per_actor` is a configuration error
 before socket bind. Since the Spot callback is a default no-op virtual

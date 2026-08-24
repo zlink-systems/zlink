@@ -6,13 +6,13 @@
   "baseline": {
     "revision": "86258cb9a3ecbc7db2dfd86a8c18de45a562734a",
     "reviewedV11FirstMembers": {
-      "count": 2792,
-      "sha256": "143a107a6544f9892a602ad8634b74e4ac4c42c598a1e864be6c1aa001df2f4d",
+      "count": 2944,
+      "sha256": "94afca5b31313da203d7ced5d0da779884e7e1d74162ea35f6b491dcaddf2f51",
       "specReason": "The v11 formal contract and exact interfaces introduce this reviewed member after the frozen 10.x baseline."
     },
     "reviewedV11FirstOwners": {
-      "count": 758,
-      "sha256": "779b5e398bc070b8f45db86b1dfdb700abc5d96d5920ef27df9b18d043a876c7",
+      "count": 777,
+      "sha256": "66deebd36e140662516c379cc36408c87dd22867e8b5366f82390f9e971322aa",
       "specReason": "The v11 exact interface introduces this reviewed declaration owner after the frozen 10.x baseline."
     },
     "reviewedIntentionalRemovals": {
@@ -2189,67 +2189,89 @@
   "blockRoleOverrides": [
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "a7cf29ed0b62e2f08d357395fc8390b602176a01a3f842c215df6f5aac75e30d",
+      "heading": "3. Service 등록",
+      "tag": "cpp",
+      "headingOrdinal": 1,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "ee2500bcef180c991b244b1dacc37e43f9011b141e7a25435e942cf13edb1014",
+      "heading": "4. Hosted Service 와 Module",
+      "tag": "cpp",
+      "headingOrdinal": 1,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "763cc584a670037b6ae5a11508ca379cc41e15e2b738991e793e35407070dba6",
+      "heading": "4. Hosted Service 와 Module",
+      "tag": "cpp",
+      "headingOrdinal": 2,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "7f0f82e3a690ba3b28e821cc535460ac5ea8d7d02ec861f49f90968a31d71fc8",
+      "heading": "4.1 HTTP Hosting",
+      "tag": "cpp",
+      "headingOrdinal": 1,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "4f83fb0b37c48e9a6dda8c16035a59ba2bfe06639eb0ebec6862cd2a77956e1a",
+      "heading": "4.1 HTTP Hosting",
+      "tag": "cpp",
+      "headingOrdinal": 2,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "cd37fa1430109f9003352c88cefdc340b463944deeff970aee78b2acea842391",
+      "heading": "4.1 HTTP Hosting",
+      "tag": "cpp",
+      "headingOrdinal": 3,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/03-channel-messaging.ko.md",
-      "sha256": "4c9c4c230444594a7dc100a14ba8f02a560a07ddf0280abd8696c43f30ec823f",
+      "heading": "3. Handler Registry",
+      "tag": "cpp",
+      "headingOrdinal": 1,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/04-spots.ko.md",
-      "sha256": "24bd97c5708f1ff66567bb29d5f856551eb2ce74c4cdd5bf608a9aca149c1df5",
+      "heading": "2. Spot Framework API",
+      "tag": "cpp",
+      "headingOrdinal": 1,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/04-spots.ko.md",
-      "sha256": "87ff33163584b69530404f7e4f5f759f8dbd34b66147cfc3ece3dc79f6e8c2e8",
+      "heading": "2. Spot Framework API",
+      "tag": "cpp",
+      "headingOrdinal": 2,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md",
-      "sha256": "9343f53eff43e471196e0dd0b729a11f03c6d543a3e31a481219f851c6bba239",
+      "heading": "5. Location Store 등록",
+      "tag": "csharp",
+      "headingOrdinal": 0,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use and is not a package-owned declaration."
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/kotlin/interfaces/channel-messaging.ko.md",
-      "sha256": "0b8cc01955b0e6f631e1283a1580e70343da63555dbe615a86a449d2f6a8f770",
+      "heading": "Kotlin source signature",
+      "tag": "kotlin",
+      "headingOrdinal": 2,
       "role": "application-example",
       "reason": "The fenced block demonstrates application use and is not a package-owned declaration."
     }

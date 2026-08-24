@@ -485,8 +485,8 @@ identity, generation, deadline, correlation, and reply route. The source-local
 operational goal — exceeding it doesn't cancel or roll back the
 relocation.
 
-If `relocationReadiness(...)` is omitted in the factory configure
-callback, it's `ANY_TURN_BOUNDARY`. `APPLICATION_SIGNALED` is only
+If `relocationCoordinationMode(...)` is omitted in the factory configure
+callback, it's `FRAMEWORK_MANAGED`. `APPLICATION_SIGNALED` is only
 allowed with `SPOT_WIDE`. On a Spot turn in this mode,
 `context.relocationReady().defer()` registers a boundary right after
 the current turn. The framework delivers the source's `CONTINUED` or

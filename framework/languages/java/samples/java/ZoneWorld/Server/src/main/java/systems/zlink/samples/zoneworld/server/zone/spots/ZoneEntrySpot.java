@@ -53,7 +53,7 @@ public final class ZoneEntrySpot implements ZLinkEntrySpot<PlayerActor> {
         }
         return CompletableFuture.completedFuture(
             ZLinkActorCreateResponse.accept(
-                new Messages.JoinWorldRes(
+                new Messages.JoinWorldNotify(
                     actor.actorId(), zone, request.x(), request.y(), null)));
     }
 

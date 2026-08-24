@@ -439,6 +439,7 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                 return;
             }
         }
+        std::uint64_t committed_previous_authority_owner_generation = 0;
         std::uint64_t committed_authority_owner_generation = 0;
         // A finalize retry after the target completed returns the same Join
         // result and repeats only the idempotent Session route notification.
@@ -606,6 +607,7 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                   request.target_owner_id,
                   static_cast<std::int64_t> (
                     request.target_owner_lease_generation)},
+                &committed_previous_authority_owner_generation,
                 &committed_authority_owner_generation);
             if (!authority_committed) {
                 complete (detail::propagate_failure<zlink::message_t> (
@@ -616,6 +618,7 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
             if (session_relocation_route
                 && !runtime.commit_session_relocation_route_authority (
                   request.transfer_id,
+                  committed_previous_authority_owner_generation,
                   committed_authority_owner_generation)) {
                 complete (result_t<zlink::message_t>::failure (
                   framework_error_kind_t::unavailable,

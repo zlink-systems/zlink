@@ -18,10 +18,10 @@ public final class Messages {
         int playerCount) {
     }
 
-    public record JoinWorldReq(String playerId) {
+    public record JoinWorldMsg(String playerId) {
     }
 
-    public record JoinWorldRes(String playerId, String zoneId, int x, int y, String error) {
+    public record JoinWorldNotify(String playerId, String zoneId, int x, int y, String error) {
     }
 
     public record MoveMsg(int x, int y) {

@@ -488,6 +488,21 @@ bool raw_mesh_connection_candidates_t::disconnect (
     return removed;
 }
 
+std::vector<std::vector<std::uint8_t>>
+raw_mesh_connection_candidates_t::disconnect_all (
+  const std::vector<std::uint8_t> &node_routing_id)
+{
+    std::vector<std::vector<std::uint8_t>> removed;
+    const auto found = _candidates.find (node_routing_id);
+    if (found == _candidates.end ())
+        return removed;
+    removed.reserve (found->second.size ());
+    for (const auto &[connection_id, _] : found->second)
+        removed.push_back (connection_id);
+    _candidates.erase (found);
+    return removed;
+}
+
 std::optional<std::vector<std::uint8_t>>
 raw_mesh_connection_candidates_t::disconnect_by_connection_id (
   const std::vector<std::uint8_t> &connection_id,
@@ -552,6 +567,23 @@ bool raw_mesh_connection_candidates_t::contains (
 {
     const auto found = _candidates.find (node_routing_id);
     return found != _candidates.end () && found->second.contains (connection_id);
+}
+
+bool raw_mesh_connection_candidates_t::endpoint_in_use_by_other (
+  std::string_view remote_endpoint,
+  const std::vector<std::uint8_t> &excluded_node_routing_id) const
+{
+    if (remote_endpoint.empty ())
+        return false;
+    for (const auto &[node_routing_id, candidates] : _candidates) {
+        if (node_routing_id == excluded_node_routing_id)
+            continue;
+        for (const auto &[_, candidate] : candidates) {
+            if (candidate.remote_endpoint == remote_endpoint)
+                return true;
+        }
+    }
+    return false;
 }
 
 raw_mesh_node_owner_t::raw_mesh_node_owner_t (
@@ -736,32 +768,24 @@ bool raw_mesh_node_owner_t::connect_peer (
 
 void raw_mesh_node_owner_t::disconnect_peer (const std::string &endpoint) noexcept
 {
-    disconnect_peer ({}, endpoint);
+    (void) disconnect_peer ({}, endpoint);
 }
 
-void raw_mesh_node_owner_t::disconnect_peer (
+bool raw_mesh_node_owner_t::disconnect_peer (
   const std::vector<std::uint8_t> &expected_routing_id,
   const std::string &endpoint) noexcept
 {
     if (endpoint.empty ())
-        return;
+        return false;
     std::lock_guard lifecycle_lock (_lifecycle_mutex);
     if (!_router)
-        return;
+        return false;
     try {
         trace_mesh ("disconnect endpoint=" + endpoint
                     + " expected=" + owner_key (expected_routing_id));
         std::optional<admitted_peer_t> admitted;
         if (!expected_routing_id.empty ()) {
             admitted = _topology.peer (expected_routing_id);
-            if (!admitted) {
-                for (const auto &candidate : _topology.peers ()) {
-                    if (candidate.descriptor.advertised_endpoint == endpoint) {
-                        admitted = candidate;
-                        break;
-                    }
-                }
-            }
         }
         else {
             for (const auto &candidate : _topology.peers ()) {
@@ -776,8 +800,10 @@ void raw_mesh_node_owner_t::disconnect_peer (
                         + owner_key (admitted->descriptor.node_routing_id)
                         + " connection="
                         + owner_key (admitted->connection_id));
-            (void) _connections.disconnect (admitted->descriptor.node_routing_id,
-                                             admitted->connection_id);
+            if (expected_routing_id.empty ())
+                (void) _connections.disconnect (
+                  admitted->descriptor.node_routing_id,
+                  admitted->connection_id);
             (void) _topology.disconnect (admitted->descriptor.node_routing_id,
                                          admitted->connection_id);
             (void) _liveness.disconnect (admitted->descriptor.node_routing_id,
@@ -785,7 +811,7 @@ void raw_mesh_node_owner_t::disconnect_peer (
             discard_pending_admissions_locked (
               admitted->descriptor.node_routing_id);
         }
-        else {
+        else if (expected_routing_id.empty ()) {
             const auto candidates = _connections.disconnect_by_endpoint (endpoint);
             trace_mesh ("disconnect admitted=none candidates="
                         + std::to_string (candidates.size ()));
@@ -793,6 +819,34 @@ void raw_mesh_node_owner_t::disconnect_peer (
                 (void) _topology.disconnect (node_routing_id, connection_id);
                 (void) _liveness.disconnect (node_routing_id, connection_id);
                 discard_pending_admissions_locked (node_routing_id);
+            }
+        }
+        if (!expected_routing_id.empty ()) {
+            const auto candidates =
+              _connections.disconnect_all (expected_routing_id);
+            for (const auto &connection_id : candidates) {
+                (void) _topology.disconnect (
+                  expected_routing_id, connection_id);
+                (void) _liveness.disconnect (
+                  expected_routing_id, connection_id);
+            }
+            discard_pending_admissions_locked (expected_routing_id);
+        }
+        bool endpoint_in_use_by_other = false;
+        if (!expected_routing_id.empty ()) {
+            endpoint_in_use_by_other =
+              _connections.endpoint_in_use_by_other (
+                endpoint, expected_routing_id);
+            if (!endpoint_in_use_by_other) {
+                for (const auto &candidate : _topology.peers ()) {
+                    if (candidate.descriptor.node_routing_id
+                          != expected_routing_id
+                        && candidate.descriptor.advertised_endpoint
+                             == endpoint) {
+                        endpoint_in_use_by_other = true;
+                        break;
+                    }
+                }
             }
         }
         if (!expected_routing_id.empty ()) {
@@ -807,19 +861,23 @@ void raw_mesh_node_owner_t::disconnect_peer (
                  * disable reconnect for every pipe configured by this owner. */
             }
         }
-        try {
-            std::lock_guard socket_lock (_socket_mutex);
-            // Remove the configured endpoint after terminating the current
-            // RID. Otherwise the binding may reconnect the same stale
-            // endpoint. This step must still run when the RID index is stale.
-            _router->disconnect (endpoint);
+        if (!endpoint_in_use_by_other) {
+            try {
+                std::lock_guard socket_lock (_socket_mutex);
+                // Remove the configured endpoint after terminating the current
+                // RID. Otherwise the binding may reconnect the same stale
+                // endpoint. This step must still run when the RID index is stale.
+                _router->disconnect (endpoint);
+            }
+            catch (...) {
+            }
+            _outbound_endpoints.erase (endpoint);
         }
-        catch (...) {
-        }
-        _outbound_endpoints.erase (endpoint);
         trace_mesh ("disconnect endpoint-complete=" + endpoint);
+        return endpoint_in_use_by_other;
     }
     catch (...) {
+        return false;
     }
 }
 
@@ -2925,10 +2983,9 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             }
             (void) protocol::decode_application_payload (
               received->parts.back (), false);
-            const auto local = _topology.local_descriptor ();
             co_return enqueue_received_or_retain (
               service_mailbox_record_t{
-                owner_key (local.node_routing_id),
+                "bound-session:" + send.actor.actor_id,
                 service_mailbox_domain_t::application,
                 std::move (received->parts),
                 std::move (received->source_routing_id),

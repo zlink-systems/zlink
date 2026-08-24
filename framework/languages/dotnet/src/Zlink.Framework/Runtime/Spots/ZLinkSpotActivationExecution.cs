@@ -160,8 +160,8 @@ internal abstract partial class ZLinkSpotActivation
     internal Task<ZLinkSpotRelocationSeal> WaitForRelocationReadyTurnAsync(
         CancellationToken cancellationToken)
     {
-        if (RelocationReadiness
-            != ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+        if (RelocationCoordinationMode
+            != ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
             throw new InvalidOperationException(
                 "Only ApplicationSignaled readiness waits for an application turn.");
 
@@ -255,8 +255,8 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(admissionSeal);
-        if (RelocationReadiness
-            != ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+        if (RelocationCoordinationMode
+            != ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
             return;
         await _serial.ExecuteSealedRelocationAsync(
                 admissionSeal.QueueSeal,

@@ -122,7 +122,9 @@ class stream_session_registry_t
 
     explicit stream_session_registry_t (authority_resolver_t resolver);
 
-    stream_connection_t open (std::string connection_id);
+    stream_connection_t open (
+      std::string connection_id,
+      std::function<void ()> close_connection = {});
     bool close (const stream_connection_t &connection);
     std::vector<stream_binding_t> bindings (
       const stream_connection_t &connection) const;
@@ -179,6 +181,8 @@ class stream_session_registry_t
       std::uint64_t authority_owner_generation,
       const std::string &target_node_id,
       std::uint64_t target_node_generation) const;
+    bool confirm_remote_tenure (
+      const stream_remote_tenure_t &tenure);
     bool memoize_remote_tenure (
       stream_remote_tenure_proof_t proof,
       std::uint64_t previous_authority_owner_generation);
@@ -248,6 +252,7 @@ class stream_session_registry_t
     {
         stream_connection_t connection;
         std::map<std::string, session_binding_aggregate_t> bindings;
+        std::function<void ()> close_connection;
     };
 
     struct actor_binding_locator_t

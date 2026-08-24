@@ -286,7 +286,15 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
         } else {
           result.reply?.close();
         }
-        await result.finalizeDeferredJoin?.();
+        const finalization = result.finalizeDeferredJoin?.();
+        if (finalization !== undefined) {
+          // Releasing a rejected provisional handoff can enqueue source
+          // backlog behind this same Spot turn. Yield the lifecycle boundary
+          // so replay can run without overtaking the completion callback.
+          await (this.turn === undefined
+            ? finalization
+            : this.turn.yieldFrameworkPromise(finalization));
+        }
         }
       });
     } catch (error) {
@@ -411,7 +419,12 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
         } else {
           result.reply?.close();
         }
-        await result.finalizeDeferredJoin?.();
+        const finalization = result.finalizeDeferredJoin?.();
+        if (finalization !== undefined) {
+          await (this.turn === undefined
+            ? finalization
+            : this.turn.yieldFrameworkPromise(finalization));
+        }
         }
       });
     } catch (error) {

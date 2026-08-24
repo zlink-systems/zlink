@@ -190,8 +190,12 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     bindingGeneration,
                     targetActor,
                     timeout))
-            .thenRun(() -> relocationTrace("bind-complete", targetActor))
-            .thenCompose(ignored -> notifyRemoteBoundSession());
+            // Specs 44/52 make command 44 one-way: target restoration already
+            // installed the bound-Session context before publishing the route
+            // update. Waiting for another Actor-mailbox request here can
+            // deadlock behind the application turn whose relocation is being
+            // completed and lets the Session seal deadline win.
+            .thenRun(() -> relocationTrace("bind-complete", targetActor));
     }
 
     void commitPreparedNativeActorRoute(ZLinkBackendActorRef targetActor) {
@@ -206,8 +210,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 sourceActor.actorId(),
                 bindingGeneration,
                 sourceActor,
-                timeout)
-            .thenCompose(ignored -> notifyRemoteBoundSession());
+                timeout);
     }
 
     private static void relocationTrace(

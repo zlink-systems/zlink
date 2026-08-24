@@ -136,6 +136,7 @@ export class ZLinkChannelSocketRegistry {
     readonly channelName: string;
     readonly routingId: RoutingId;
     readonly physicalConnectionId: symbol;
+    readonly normalizedEffectiveMaxMessageBytes: number;
     nextProbeAt: number;
     deadlineAt: number;
     outstandingProbeId?: bigint;
@@ -820,13 +821,18 @@ export class ZLinkChannelSocketRegistry {
           || record.hello.securityIdentity !== descriptor.securityIdentity) {
           reply = encodeClientServerReject(3);
         } else {
+          const normalizedEffectiveMaxMessageBytes = Math.min(
+            normalizedMessageLimit(router.maxMessageSize),
+            record.hello.normalizedEffectiveMaxMessageBytes
+          );
           reply = encodeClientServerAdmit(
             descriptor,
-            normalizedMessageLimit(router.maxMessageSize)
+            normalizedEffectiveMaxMessageBytes
           );
           this.admitClientServerServerPeer(
             channelName,
-            String(received.routingId)
+            String(received.routingId),
+            normalizedEffectiveMaxMessageBytes
           );
         }
       }
@@ -1398,13 +1404,18 @@ export class ZLinkChannelSocketRegistry {
       .finally(() => message.close());
   }
 
-  private admitClientServerServerPeer(channelName: string, routingId: RoutingId): void {
+  private admitClientServerServerPeer(
+    channelName: string,
+    routingId: RoutingId,
+    normalizedEffectiveMaxMessageBytes: number
+  ): void {
     const key = clientServerServerPeerKey(channelName, routingId);
     const now = performance.now();
     const peer = {
       channelName,
       routingId,
       physicalConnectionId: Symbol(key),
+      normalizedEffectiveMaxMessageBytes,
       nextProbeAt: now + CLIENT_SERVER_PROBE_INTERVAL_MS,
       deadlineAt: now + CLIENT_SERVER_PEER_DEADLINE_MS
     };
@@ -1470,9 +1481,16 @@ export class ZLinkChannelSocketRegistry {
     const clients = this.clientServerAdmittedClients.get(channelName);
     if (router === undefined || clients === undefined) return;
     for (const routingId of [...clients]) {
+      const peer = this.clientServerServerPeers.get(
+        clientServerServerPeerKey(channelName, routingId)
+      );
+      if (peer === undefined) {
+        clients.delete(routingId);
+        continue;
+      }
       const message = RuntimeMessage.from(encodeClientServerUpdate(
         descriptor,
-        normalizedMessageLimit(router.maxMessageSize)
+        peer.normalizedEffectiveMaxMessageBytes
       ));
       void router.send(routingId, message)
         .catch((error) => {

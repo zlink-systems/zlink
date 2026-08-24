@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
-#include "../common_codecs.hpp"
+#include "../../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -59,8 +59,8 @@ class game_api_store_t
     void record_event (const gameplay_msg_t &event)
     {
         const std::lock_guard lock (_mutex);
-        const auto existing = std::find_if (
-          _events.begin (), _events.end (), [&] (const gameplay_msg_t &stored) {
+        const auto existing =
+          std::find_if (_events.begin (), _events.end (), [&] (const gameplay_msg_t &stored) {
               return stored.player_id == event.player_id && stored.event_id == event.event_id;
           });
         if (existing != _events.end ()) {
@@ -155,15 +155,12 @@ class player_actor_t : public zlink::framework::actor_t
     actor_context_t actor_context;
 };
 
-struct player_actor_factory_t final
-    : public zlink::framework::actor_factory_t<player_actor_t>
+struct player_actor_factory_t final : public zlink::framework::actor_factory_t<player_actor_t>
 {
-    zlink::framework::task_t<std::shared_ptr<player_actor_t>>
-    create (actor_context_t context,
-            std::stop_token) override
+    zlink::framework::task_t<std::shared_ptr<player_actor_t>> create (actor_context_t context,
+                                                                      std::stop_token) override
     {
-        co_return std::make_shared<player_actor_t> (
-          std::move (context));
+        co_return std::make_shared<player_actor_t> (std::move (context));
     }
 };
 
@@ -172,17 +169,13 @@ struct player_actor_factory_t final
 class player_entry_spot_t : public entry_spot_t<player_actor_t>
 {
   public:
-    player_entry_spot_t (entry_spot_context_t context,
-                         game_api_store_t &store) :
+    player_entry_spot_t (entry_spot_context_t context, game_api_store_t &store) :
         _store (store), _context (std::move (context))
     {
     }
 
     entry_spot_context_t &context () noexcept override { return _context; }
-    const entry_spot_context_t &context () const noexcept override
-    {
-        return _context;
-    }
+    const entry_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {
@@ -192,9 +185,8 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
           .add_actor_request<&player_entry_spot_t::join_session> (join_session_req_t::packet_name);
     }
 
-    task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view,
-                   const zlink::framework::message_t &) override
+    task_t<spot_actor_join_result_t> on_actor_join (std::string_view,
+                                                    const zlink::framework::message_t &) override
     {
         co_return spot_actor_join_result_t::accept ();
     }
@@ -204,9 +196,8 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
 
     /* session이 join을 actor로 relay한다. actor가 이 노드의 entry spot에 붙어 있어야 owner spot이
      * session binding으로 이 노드를 찾을 수 있다. */
-    join_session_res_t join_session (player_actor_t &,
-                                     message_context_t &,
-                                     const join_session_req_t &request)
+    join_session_res_t
+    join_session (player_actor_t &, message_context_t &, const join_session_req_t &request)
     {
         return {request.player_id, _store.projection (request.player_id)};
     }
@@ -227,15 +218,14 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
               .submit ();
         }
         if (!notify.completed_quest_id.empty ()) {
-            const auto completed = std::find_if (
-              notify.projection.begin (), notify.projection.end (),
-              [&] (const quest_progress_t &progress) {
-                  return progress.quest_id == notify.completed_quest_id;
-              });
+            const auto completed =
+              std::find_if (notify.projection.begin (), notify.projection.end (),
+                            [&] (const quest_progress_t &progress) {
+                                return progress.quest_id == notify.completed_quest_id;
+                            });
             if (completed != notify.projection.end ()) {
                 actor.actor_context.bound_session ()
-                  .send (quest_completed_notify_t{
-                    notify.player_id, *completed, true})
+                  .send (quest_completed_notify_t{notify.player_id, *completed, true})
                   .submit ();
             }
         }
@@ -258,10 +248,7 @@ class gamequest_session_t final : public packet_stream_session_t
                          game_api_store_t &store,
                          sample_topology_t &topology,
                          session_actor_manager_t &actors) :
-        _routes (routes),
-        _store (store),
-        _topology (topology),
-        _actors (actors)
+        _routes (routes), _store (store), _topology (topology), _actors (actors)
     {
     }
 
@@ -293,7 +280,7 @@ class gamequest_session_t final : public packet_stream_session_t
             }
             auto bound = co_await _actors.bind_or_get (actor.value ().ref ()).submit ();
             _player_id = request.player_id;
-        _store.bind (request.player_id, _topology.api_name);
+            _store.bind (request.player_id, _topology.api_name);
             auto synced = co_await sync_projection (request.player_id);
             _store.merge_projection (request.player_id, synced.updated_quests);
             auto current = _actors.find (std::string (bound.actor_id ()));
@@ -322,26 +309,22 @@ class gamequest_session_t final : public packet_stream_session_t
             const auto request = payload.parse_json<sync_quest_progress_req_t> ();
             auto synced = co_await sync_projection (request.player_id);
             _store.merge_projection (request.player_id, synced.updated_quests);
-            stream.reply_packet (zlink::message_t::from_json (synced))
-              .submit ();
+            stream.reply_packet (zlink::message_t::from_json (synced)).submit ();
             co_return;
         }
         if (packet == projection_admin_req_t::packet_name) {
             const auto request = payload.parse_json<projection_admin_req_t> ();
-            auto result = co_await _routes
-                            .request_to_spot (
-                              player_spot_id (request.player_id), request)
-                            .instance_spot (
-                              sample_names_t::player_quest_spot)
-                            .template submit<projection_admin_res_t> ();
+            auto result =
+              co_await _routes.request_to_spot (player_spot_id (request.player_id), request)
+                .instance_spot (sample_names_t::player_quest_spot)
+                .template submit<projection_admin_res_t> ();
             stream.reply_packet (zlink::message_t::from_json (result)).submit ();
             co_return;
         }
         if (packet == unpublished_kill_req_t::packet_name) {
             const auto request = payload.parse_json<unpublished_kill_req_t> ();
             _store.add_unpublished_kills (request.player_id, request.count);
-            stream
-              .reply_packet (zlink::message_t::from_json (unpublished_kill_res_t{true}))
+            stream.reply_packet (zlink::message_t::from_json (unpublished_kill_res_t{true}))
               .submit ();
             co_return;
         }
@@ -379,9 +362,7 @@ class gamequest_session_t final : public packet_stream_session_t
                               std::string value,
                               int count) const
     {
-        return {player_id + "-" + idempotency_key,
-                std::move (player_id),
-                std::move (event_type),
+        return {player_id + "-" + idempotency_key, std::move (player_id), std::move (event_type),
                 gameplay_payload (value, count),
                 static_cast<long long> (std::time (nullptr)) * 1000LL};
     }
@@ -389,12 +370,10 @@ class gamequest_session_t final : public packet_stream_session_t
     task_t<sync_quest_progress_res_t> sync_projection (const std::string &player_id)
     {
         auto synced = co_await _routes
-                        .request_to_spot (
-                          player_spot_id (player_id),
-                          sync_quest_progress_owner_req_t{
-                            player_id, _store.snapshot_kill_count (player_id)})
-                        .instance_spot (
-                          sample_names_t::player_quest_spot)
+                        .request_to_spot (player_spot_id (player_id),
+                                          sync_quest_progress_owner_req_t{
+                                            player_id, _store.snapshot_kill_count (player_id)})
+                        .instance_spot (sample_names_t::player_quest_spot)
                         .template submit<sync_quest_progress_res_t> ();
         co_return synced;
     }
@@ -403,8 +382,7 @@ class gamequest_session_t final : public packet_stream_session_t
      * client에는 event id만 즉시 돌려주고, 진행은 notify로 돌아온다. */
     task_t<void> apply_event (const gameplay_msg_t &event)
     {
-        co_await _routes
-          .send_to_spot (player_spot_id (event.player_id), event)
+        co_await _routes.send_to_spot (player_spot_id (event.player_id), event)
           .instance_spot (sample_names_t::player_quest_spot)
           .submit ();
         _store.record_event (event);
@@ -444,10 +422,7 @@ class route_ready_http_handler_t
   public:
     using dependency_types = dependency_list_t<route_mesh_runtime_t>;
 
-    explicit route_ready_http_handler_t (route_mesh_runtime_t &runtime) :
-        _runtime (runtime)
-    {
-    }
+    explicit route_ready_http_handler_t (route_mesh_runtime_t &runtime) : _runtime (runtime) {}
 
     http_response_t handle (const http_request_t &request)
     {
@@ -458,19 +433,17 @@ class route_ready_http_handler_t
 
         const auto snapshot = _runtime.snapshot ("gamequest");
         for (const auto &peer : snapshot.peers) {
-            if (peer.node_rid.to_string () == found->second
-                && snapshot.placement.is_available
+            if (peer.node_rid.to_string () == found->second && snapshot.placement.is_available
                 && peer.state == peer_state_t::ready) {
-                return {.body = nlohmann::json{{"ready", true},
-                                               {"targetRid", found->second}}
-                                  .dump ()};
+                return {.body =
+                          nlohmann::json{{"ready", true}, {"targetRid", found->second}}.dump ()};
             }
         }
 
         nlohmann::json peers = nlohmann::json::array ();
         for (const auto &peer : snapshot.peers) {
-            peers.push_back ({{"rid", peer.node_rid.to_string ()},
-                              {"state", static_cast<int> (peer.state)}});
+            peers.push_back (
+              {{"rid", peer.node_rid.to_string ()}, {"state", static_cast<int> (peer.state)}});
         }
         return {.status = 503,
                 .body = nlohmann::json{{"ready", false},
@@ -494,43 +467,36 @@ int main (int argc, char **argv)
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        options.services ().add_singleton<sample_topology_t> (
-          std::make_unique<sample_topology_t> (topology));
-        auto api_store = std::make_unique<game_api_store_t> ();
-        auto *store_ptr = api_store.get ();
-        options.services ().add_singleton<game_api_store_t> (std::move (api_store));
-        add_gamequest_json_codecs (options.codecs ());
-        add_gamequest_location_store (options, topology);
-        /* GameApi는 player entry Spot을 제공하는 Object Server다. API와 QuestMission은
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.services ().add_singleton<sample_topology_t> (
+      std::make_unique<sample_topology_t> (topology));
+    options.services ().add_singleton<game_api_store_t> ();
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix);
+    options.add_relocation_store<redis::redis_relocation_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    /* GameApi는 player entry Spot을 제공하는 Object Server다. API와 QuestMission은
          * 같은 RouteMesh에서 global Spot routing을 사용한다. */
-        auto gamequest = options.add_route_mesh ("gamequest");
-        gamequest
-          .set_routing_id (zlink::routing_id_t::from (
-            "gamequest-" + topology.api_name + "-spot"))
-          .set_object_role (object_role_t::server)
-          .listen (topology.selected_api_spot_route_endpoint ());
-        /* Location Store discovery owns every peer in this shared RouteMesh. */
-        gamequest
-          .add_entry_spot<player_entry_spot_t> ([store_ptr] (
-                                                  entry_spot_context_t context) {
-              return std::make_shared<player_entry_spot_t> (
-                std::move (context), *store_ptr);
-          })
-          .add_actor_factory<player_actor_t, player_actor_factory_t> (
-            gamequest_player_actor_type,
-            std::make_shared<player_actor_factory_t> (),
-            [] (auto &factory) { factory.disable_relocation (); });
-        options.add_stream_node (sample_names_t::stream_node)
-          .bind (topology.selected_api_stream_endpoint ())
-          .register_session<gamequest_session_t> ();
-        options.http ()
-          .listen (topology.selected_api_http_url ())
-            .map_health ("/health")
-          .map_get<route_ready_http_handler_t> ("/ready")
-          .map_post<server_assertion_http_handler_t> ("/self-check/assert");
-    });
+    auto gamequest = options.add_route_mesh ("gamequest");
+    gamequest
+      .set_routing_id (zlink::routing_id_t::from ("gamequest-" + topology.api_name + "-spot"))
+      .listen (topology.selected_api_spot_route_endpoint ());
+    /* Location Store discovery owns every peer in this shared RouteMesh. */
+    gamequest.objects ()
+      .server ()
+      .add_entry_spot<player_entry_spot_t, game_api_store_t> ()
+      .add_actor_factory<player_actor_t, player_actor_factory_t> (gamequest_player_actor_type)
+      .disable_relocation ();
+    options.add_stream_node (sample_names_t::stream_node)
+      .bind (topology.selected_api_stream_endpoint ())
+      .register_session<gamequest_session_t> ();
+    options.http ()
+      .listen (topology.selected_api_http_url ())
+      .map_health ("/health")
+      .map_get<route_ready_http_handler_t> ("/ready")
+      .map_post<server_assertion_http_handler_t> ("/self-check/assert");
     return app.run (argc, argv);
 }

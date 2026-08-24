@@ -1033,6 +1033,10 @@ task_t<bool> maintenance_runtime_t::relocate_cutover (
       == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
     state->cutover_record = cutover;
     state->cutover_enqueued = enqueued;
+    // The relocation execution permit ends at the cutover submit terminal.
+    // Retransmission copies and the SafeToShutdown pending-unit token remain
+    // retained independently for their full post-cutover windows.
+    state->permit.reset ();
     retain_retransmission_copies (state);
     if (!enqueued || !finalized) {
         state->result.emplace (finish ({relocation_terminal_t::recovery_required,
