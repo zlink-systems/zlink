@@ -16,11 +16,6 @@ public interface StreamSocket extends Socket {
     RoutingId getRoutingId();
     SendOperation send(RoutingId rid);
     boolean recv(Received result, RecvFlags flags);
-    /**
-     * Receives for a Framework backend and retains the origin Core HWM credit
-     * until {@code result} is closed or reused.
-     */
-    boolean recvRetained(Received result, RecvFlags flags);
     void onPacket(StreamPacketHandler handler);
     @Override StreamSocketOptions options();
 }

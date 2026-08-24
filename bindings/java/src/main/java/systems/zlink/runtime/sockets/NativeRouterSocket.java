@@ -112,15 +112,6 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         return true;
     }
 
-    public boolean recvRetained(Received result, RecvFlags flags) {
-        Objects.requireNonNull(result, "result");
-        Objects.requireNonNull(flags, "flags");
-        boolean ok = InternalAccess.routerRecvRetainedInto(routedRequests,
-            result, flags);
-        if (ok) attachSendSender(result);
-        return ok;
-    }
-
     void attachSendSender(Received result) {
         if (ContractAccess.receivedHasRoutingIdBytes(result)) {
             ContractAccess.receivedSetRoutedSenders(result,

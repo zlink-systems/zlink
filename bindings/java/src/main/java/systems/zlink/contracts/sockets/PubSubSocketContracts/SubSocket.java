@@ -18,10 +18,5 @@ public interface SubSocket extends Socket {
     void unsetSubscription(String filter);
     Optional<SubscriptionEntry> subscriptionAt(int index);
     boolean subscribe(TopicMessage result, RecvFlags flags);
-    /**
-     * Subscribes for a Framework backend and retains each payload part's
-     * origin Core HWM credit until {@code result} is closed or reused.
-     */
-    boolean subscribeRetained(TopicMessage result, RecvFlags flags);
     @Override SubSocketOptions options();
 }

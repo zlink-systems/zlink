@@ -98,18 +98,6 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
                 SendFlag.fromValue(sendFlags.value()))));
         return true;
     }
-    public boolean recvRetained(Received result, RecvFlags flags) {
-        Objects.requireNonNull(result, "result");
-        Objects.requireNonNull(flags, "flags");
-        boolean ok = runtime().recvRetainedInto(result,
-            ReceiveFlag.fromValue(flags.value()));
-        if (!ok) return false;
-        result.getRoutingId().ifPresent(rid ->
-            InternalAccess.receivedSetSendSender(result, (parts, sendFlags) ->
-                runtime().send(rid, parts,
-                    SendFlag.fromValue(sendFlags.value()))));
-        return true;
-    }
     public void onPacket(StreamPacketHandler handler) {
         Objects.requireNonNull(handler, "handler");
         runtime().attachStreamPacket((StreamFramedPacketHandler)

@@ -18,11 +18,6 @@ public interface DealerSocket extends Socket {
     RoutingId getRoutingId();
     RoutedSendOperation send();
     boolean recv(Received result, RecvFlags flags);
-    /**
-     * Receives for a Framework backend and retains the origin Core HWM credit
-     * until {@code result} is closed or reused.
-     */
-    boolean recvRetained(Received result, RecvFlags flags);
     RequestOperation request();
     @Override DealerSocketOptions options();
 }

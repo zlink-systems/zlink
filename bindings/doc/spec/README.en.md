@@ -1494,18 +1494,16 @@ is the baseline.
   budgetInsufficient, budgetGeneration, measurementEpoch
   ```
 
-  `currentAccountedBytes = coreQueueAccountedBytes +
-  applicationAccountedBytes`, and `totalMessagingAccountedBytes =
+  `applicationAccountedBytes` is ABI-reserved and always `0`. Therefore
+  `currentAccountedBytes = coreQueueAccountedBytes`, and
+  `totalMessagingAccountedBytes =
   currentAccountedBytes + completionCurrentAccountedBytes`. Completion values
   are diagnostic only and change neither HWM admission nor the Core budget.
   Send and receive counts are perspective-specific and must not be added to
-  derive the physical directional queue count. `outstandingApplicationLeaseCount`
-  is the number of public retained-credit leases not yet returned,
-  `retiredQueueCount` is the number of queue generations retained after detach
-  or generation replacement because they still have a retained origin, and
-  `deferredOriginCreditBytes` is exact-origin credit held by an internal framing
-  token or public lease and not yet published to the writer. Metrics reset
-  preserves these three gauges as well.
+  derive the physical directional queue count. `outstandingApplicationLeaseCount`,
+  `retiredQueueCount`, and `deferredOriginCreditBytes` are also ABI-reserved and
+  always `0`. A binding does not use these reserved fields for application
+  lifetime or Framework queue accounting.
 - `MonitorStatus` projects Core monitoring ABI v3 byte HWM and pending
   diagnostics. Legacy message-unit, slot, size-cap, and connection-bucket
   planner properties are removed without aliases.
@@ -1531,41 +1529,35 @@ Pending message counts are display diagnostics, not admission inputs. Planned,
 applied, and deferred HWM and pending/accounted values use bytes. A binding
 preserves Core ABI values and flags unchanged.
 
-##### Retained credit and routed completion (revised 2026-08-23)
-
-> This section was revised by owner decision on 2026-08-23. For the rationale
-> and the superseded prior design, see
-> `doc/plan/cpp-routed-async-contract-issue.ko.md` §3.2.
+##### Receive ownership and routed completion
 
 Terminal replies and error replies use the HWM-free completion lane. A binding
 applies no SNDHWM, RCVHWM, HWM-readiness wait, or backpressure retry to this
 completion submit.
 
-For Framework data-plane receive, the binding's `Received`-family owner holds a
-Core HWM budget lease together with the message returned through the existing
-receive framing. This contract adds no multipart transaction ABI. A multipart
-job retains the leases returned with its receive results and releases each
-lease exactly once when `Received` is closed, disposed, dropped, or terminally
-cleaned up. A lease is not a separate application capacity, and a payload copy
-retained by user code does not retain it.
+Core byte HWM accounts only payload bytes physically retained by a Core queue.
+The charge ends when receive dequeues the payload and hands it to the binding.
+Ordinary binding `recv` and `subscribe` transfer normal ownership of message
+parts, routing IDs, request sequences, and topic metadata into a
+`Received`/`TopicMessage`-family result. The result owns the payload until the
+language-specific close, dispose, drop, or next receive, but that application
+lifetime is never joined back into Core HWM accounting. No separate retained
+receive, raw lease handle, or application byte capacity exists in either the
+public or internal binding path.
 
-This behavior applies only to the retained aggregate receive entrypoint that a
-Framework backend selects explicitly. Ordinary binding `recv` and `subscribe`
-keep their existing behavior of returning Core credit at dequeue. A binding
-does not silently change ordinary receive semantics; it exposes a
-language-idiomatic `recvRetained`/`subscribeRetained` family without exposing a
-raw lease handle.
+A Framework that limits handler work counts its own application jobs
+separately. The binding never adds that queue count to a Core byte snapshot.
+The single dynamic control boundary a Framework uses to slow Core receive is
+the socket's `RUNNING`/`PAUSED` receive-flow-state setter.
 
-Routed DEALER/ROUTER **send** is a synchronous `submit()` terminal that wraps
-the Core send directly. HWM wait, resume, and timeout semantics are entirely
-Core-owned: blocking mode waits inside Core and resumes on Core's signal,
-`SNDTIMEO` bounds the wait, and `DONTWAIT` returns `EAGAIN` immediately.
-Backpressure policy belongs to the application. A binding keeps no park queue,
-WRITABLE-callback retry, deadline timer, or dispatcher thread. The
-"HWM-managed routed is async-only" rule, and the machinery that implemented
-it — long-lived readiness-handler registration, `pendingByTarget`/
-`readyTargets`/`readySet` state, and a binding pump retrying `DONTWAIT` outside
-the callback thread — are all abolished.
+The asynchronous terminal for HWM-managed PAIR **send** and DEALER/ROUTER
+**routed send** wraps Core `zlink_send_async` and send completion. Core owns HWM
+wait/retry, the operation deadline, route termination, and cancellation, and
+delivers exactly one completion for every accepted operation. A binding only
+correlates the Core operation id with a language awaitable; it owns no park
+queue, readiness-callback retry, deadline timer, or dispatcher thread. The
+application owns policy only when Core rejects the initial submit because its
+pending-operation bound is full.
 
 A binding that uses part-level Core APIs has a short complete-record attempt
 gate shared by every outbound path on the same native handle. Inside the gate
@@ -1582,17 +1574,16 @@ cancellation — timeout is already Core-owned (`ZLINK_REQUEST_TIMED_OUT`).
 Waiting never extends the original deadline. A binding owns no thread or retry
 queue for the request completion surface either.
 
-Routed **send**'s language canonical terminal takes the same synchronous form
-as raw reply's submit: C++ `submit()` (throws `submit_error_t`), .NET
-`Submit()` (throws), Java `submit()` (throws), Node `submit()` (throws), Go
-`Submit(ctx) error`, Python `submit()` (raises), and Rust
-`submit() -> Result<(), SubmitError>`. **Request**'s canonical terminal keeps
+Routed **send**'s canonical asynchronous terminal is C++ `async()`, .NET
+`Async(...)`, Java/Node/Python/Rust `submit()`, and Go `Submit(ctx)`. C++ also
+provides blocking `submit()` for a plain thread. **Request**'s canonical terminal keeps
 the language-native suspension surface: C++ `async()`, .NET `Async(...)`,
 Java/Node/Python/Rust `submit()` (an async return type), Kotlin
 `submit().await()`, and the completion channel returned by Go `Submit(ctx)`. A
-request builder does not pair that terminal with callback or blocking
-compatibility terminals, and no language adds a new operation start point such
-as `request_async`.
+request builder keeps callback and blocking compatibility terminals only in
+C++, whose existing terminals are `submit()`, `submit(callback)`, and
+`async()`. Other languages do not pair such terminals, and no language adds a
+new operation start point such as `request_async`.
 
 Each binding maps HWM values as follows.
 

@@ -29,17 +29,6 @@ internal abstract class RoutedReceivingSocketBase : SocketBase,
         return Kernel.ReceiveRoutedInto(result, (int)flags);
     }
 
-    /// <summary>
-    ///     Receive a routed message and retain its Core HWM credit with the
-    ///     supplied envelope until deterministic cleanup.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool RecvRetained(Received result,
-        RecvFlags flags = RecvFlags.None)
-    {
-        return Kernel.ReceiveRoutedRetainedInto(result, (int)flags);
-    }
-
 }
 
 [EditorBrowsable(EditorBrowsableState.Never)]

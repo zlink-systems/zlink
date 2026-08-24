@@ -71,12 +71,6 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
         java.util.Objects.requireNonNull(flags, "flags");
         return runtime().recvInto(result, ReceiveFlag.fromValue(flags.value()));
     }
-    public boolean recvRetained(Received result, RecvFlags flags) {
-        java.util.Objects.requireNonNull(result, "result");
-        java.util.Objects.requireNonNull(flags, "flags");
-        return runtime().recvRetainedInto(result,
-            ReceiveFlag.fromValue(flags.value()));
-    }
     public RequestOperation request() {
         return MessageOperations.request((parts, timeout) ->
             runtime().requestAsync(requestSupport, null, 0L, 0L, parts,

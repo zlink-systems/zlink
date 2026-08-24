@@ -48,9 +48,6 @@ public sealed class test_socket_surface
             typeName => typeName.StartsWith(
                 "Systems.Zlink.Runtime.",
                 StringComparison.Ordinal));
-        Assert.DoesNotContain(exportedTypeNames,
-            typeName => typeName.Contains("HwmBudgetLease",
-                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -65,20 +62,14 @@ public sealed class test_socket_surface
             "Recv",
             typeof(Received),
             typeof(RecvFlags)));
-        Assert.True(HasPublicInstanceMethod(
-            typeof(IPairSocket),
-            "RecvRetained",
-            typeof(Received),
+        Assert.False(HasPublicInstanceMethod(
+            typeof(IPairSocket), "RecvRetained", typeof(Received),
             typeof(RecvFlags)));
-        Assert.True(HasPublicInstanceMethod(
-            typeof(IRouterSocket),
-            "RecvRetained",
-            typeof(Received),
+        Assert.False(HasPublicInstanceMethod(
+            typeof(IRouterSocket), "RecvRetained", typeof(Received),
             typeof(RecvFlags)));
-        Assert.True(HasPublicInstanceMethod(
-            typeof(ISubSocket),
-            "SubscribeRetained",
-            typeof(TopicMessage),
+        Assert.False(HasPublicInstanceMethod(
+            typeof(ISubSocket), "SubscribeRetained", typeof(TopicMessage),
             typeof(RecvFlags)));
         Assert.True(HasPublicInstanceMethod(
             typeof(IStreamSocket),

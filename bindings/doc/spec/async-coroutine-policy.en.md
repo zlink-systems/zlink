@@ -8,43 +8,6 @@ title: "Bindings Routed Submit Contract And Async Completion Surface Policy"
 
 # Bindings Routed Submit Contract And Async Completion Surface Policy
 
-> **Revision history (1st)** — Revised by owner decision on 2026-08-23. The
-> canonical terminal for HWM-managed routed **send** reverts to a synchronous
-> `submit()`, and the binding-owned admission machinery introduced to support
-> the async-only rule (park queues, WRITABLE-callback retry, deadline timers,
-> dispatcher threads) and the "HWM-managed routed is async-only" rule itself
-> are abolished. The asynchronous completion surface for **request**
-> (a suspension whose completion Core drives through the reply) is unchanged.
-> For rationale and measurements, see
-> `doc/plan/cpp-routed-async-contract-issue.ko.md` (§0 governing principle,
-> §3.1 preflight findings, §3.2 final design).
-
-> **Revision history (2nd)** — Revised by owner decision again on the same
-> day, 2026-08-23. This revision normalizes the terminal surface: (1) under
-> the rule then in force, it codifies that operations that can wait on HWM
-> (PAIR send, DEALER/ROUTER routed send, request) are classified ASYNC purely
-> because an HWM wait can occur; (2) it re-expands the C++ routed send surface
-> the 1st revision had narrowed to "synchronous only" back into a two-terminal
-> `submit()` (blocking) + `async()` (coroutine) surface; and (3) it restores
-> C++ **request**'s three-terminal surface (`submit()` / `submit(callback)` /
-> `async()`) to its pre-2026-08-15 shape. See [Classification
-> principle](#classification-principle) and the sections below for details.
-> C++ send's async completion depends on the Core send-completion
-> notification design, which is in progress at
-> `doc/plan/core-send-completion-design.ko.md` (a forward reference — once
-> that notification surface is finalized, the relevant sections here will be
-> updated to match its contract).
-
-> **Revision history (3rd)** — Revised by owner decision on 2026-08-24. PUB/XPUB
-> `publish` is reclassified as synchronous-only. Default PUB semantics are
-> lossy: when a subscriber's queue reaches HWM, that subscriber's copy is
-> dropped and the publisher proceeds immediately; the publisher never waits on
-> HWM. With `ZLINK_PUB_OPT_NODROP` (an opt-in equivalent to ZMQ
-> `XPUB_NODROP`), a full subscriber surfaces an immediate
-> `BACKPRESSURED`/`EAGAIN` error from synchronous `submit()`, and retry policy
-> belongs to the application. Core's `zlink_send_async` returns `ENOTSUP` for
-> PUB/XPUB.
-
 > **What this chapter defines** — the naming and return-type policy every
 > language binding except C must follow for (1) the asynchronous completion
 > surface of HWM-managed **send** (PAIR send, DEALER/ROUTER routed send),
@@ -62,16 +25,17 @@ per-language completion boundary on top of the core C API. Coroutine execution,
 virtual thread execution, event loop wiring, and handler dispatcher wiring are
 the framework's responsibility.
 
-**The bindings library owns no threads at all.** HWM-managed send and routed
-send are classified ASYNC because an HWM wait can occur, but Core still drives
-completion. C++'s blocking `submit()` waits inside Core and resumes on Core's
-signal, `SNDTIMEO` bounds the wait, and `DONTWAIT` returns `EAGAIN` immediately.
-Every other language's single `submit()` (Go's `Submit(ctx)`) wraps the Core
-send but returns a language-idiomatic awaitable, and that awaitable's completion
-is driven by the upcoming Core send-completion notification
-(`doc/plan/core-send-completion-design.ko.md`, in progress). PUB/XPUB
-`publish` never waits on HWM and completes through synchronous `submit()`.
-Backpressure policy belongs to the application. Request
+**The bindings library owns no threads at all.** Core owns admission waiting
+and retry for HWM-managed send and routed send. C++'s blocking `submit()` and
+Go's `Submit(ctx)` wait inside Core. Every other language's asynchronous
+terminal submits through `zlink_send_async`, then completes its awaitable from
+the final event delivered by `zlink_send_complete_handler`. Every accepted
+operation completes exactly once as `ZLINK_SEND_ADMITTED`,
+`ZLINK_SEND_TIMED_OUT`, or `ZLINK_SEND_TERMINAL`. A binding correlates only the
+operation id and the language completion object; it does not retry. The
+application chooses policy only when Core rejects the initial submit because
+the pending-operation bound is full. PUB/XPUB `publish` never waits on HWM and
+completes through synchronous `submit()`. Request
 already has a point where Core itself drives completion (the reply handler
 callback, `ZLINK_REQUEST_TIMED_OUT`), so a binding only wires that point to
 complete the suspension, callback, or completion channel; it adds no retry
@@ -143,9 +107,7 @@ object, and a Rust request builder's `submit()` returns a runtime-independent
   naming-distinction rule above, C++ alone needs these three terminals. Other
   languages keep a single terminal, because the awaitable that terminal
   returns already serves every consumption style, leaving no reason to add
-  another terminal. (The former rule forbidding a callback or
-  blocking-compatible terminal alongside the canonical suspension terminal
-  was repealed in the 2nd revision on 2026-08-23.)
+  another terminal.
 
 ## HWM-managed send completion contract
 
@@ -160,42 +122,48 @@ same operation entrypoint. It adds no separate name such as `send_async` or
   `async()` (coroutine-only — returns a move-only `async_result_t<T>`). This
   follows the naming-distinction rule, separating the plain-thread call from
   the coroutine call.
-- **Every other language**: exposes a single `submit()` (Go: `Submit(ctx)`)
-  terminal, returning that language's idiomatic awaitable (`CompletionStage`,
-  `Promise`, a coroutine object, a `Future`, and so on). Users consume that
-  awaitable idiomatically — await / join / block_on / channel recv.
-- **Completion driver.** Both the `async_result_t<T>` returned by C++'s
-  `async()` and the awaitable returned by every other language's `submit()`
-  are completed by the Core send-completion notification. That notification
-  mechanism is in progress; see `doc/plan/core-send-completion-design.ko.md`
-  (a forward reference — once that document is finalized, this section's
-  contract will be updated to match its surface). C++'s blocking `submit()`
-  does not depend on this notification and keeps using Core's internal
-  wait/resume exactly as before.
-- The `send_ready` readiness-hint semantics are abolished. The completion
-  notification is deliverable via a callback or receivable as an event —
-  two channels, and the consumer chooses between them; this is two options,
-  not a duplicated surface.
+- **.NET, Java, Node, Python, and Rust**: expose one asynchronous terminal that
+  returns the language's idiomatic awaitable (`Task`, `CompletionStage`,
+  `Promise`, a coroutine object, or a `Future`). Users consume it
+  idiomatically — await / join / block_on.
+- **Go**: `Submit(ctx) error` is synchronous and waits inside Core. The context
+  is checked at the submit boundary; after Core accepts the record, Core owns
+  the wait.
+- **Completion driver.** C++ `async()` and the .NET, Java, Node, Python, and
+  Rust asynchronous send terminals use Core `zlink_send_async`. They first
+  install `zlink_send_complete_handler`, then correlate the accepted
+  operation's socket-local id with an awaitable. A
+  `zlink_send_complete_event_t` reports admission, deadline expiry, or terminal
+  failure exactly once. Completions preserve submit order for the same target,
+  and completion callbacks for one socket do not run concurrently.
+  `ZLINK_POLLCOMPLETION` only transfers dispatch of that same callback and
+  event to the thread calling `zlink_poller_wait`; it does not create a second
+  completion path. C++ blocking `submit()` and Go `Submit(ctx)` use Core's
+  blocking wait/resume instead.
+- No public send-ready handler exists. `ZLINK_POLLOUT` is a readiness value for
+  retrying a synchronous nonblocking send, not completion of an accepted async
+  operation.
 - A binding keeps no park queue, WRITABLE-callback retry, deadline timer, or
   dispatcher thread for this completion surface — completion is driven by
   the Core send-completion notification.
 - Submit flags may be accepted as a language-idiomatic option argument or
   builder stage.
-- Backpressure policy is owned by the application. The binding does not
-  retry.
+- Core retries an accepted async operation. The binding never retries; the
+  application owns policy only for an initial submit rejection at the Core
+  pending-operation bound.
 
 | Aspect | bindings completion surface |
 |---|---|
 | Classification | ASYNC (an HWM wait can occur) |
 | C++ execution meaning | `submit()` blocks inside Core and resumes on Core's signal. `async()` returns an awaitable `co_await`ed from a coroutine |
-| Other-language execution meaning | The single `submit()` (Go: `Submit(ctx)`) returns a language-idiomatic awaitable |
+| Other-language execution meaning | .NET/Java/Node/Python/Rust return a language-idiomatic awaitable. Go `Submit(ctx) error` waits inside Core |
 | Blocking mode (C++ `submit()`) | Waits inside Core and resumes on Core's signal (no binding-side wait) |
 | `SNDTIMEO` | Used by Core as the wait bound |
 | `DONTWAIT` | Core returns `EAGAIN` immediately (surfaced as the language's `BACKPRESSURED`) |
-| Completion notification | The Core send-completion notification (in progress, `doc/plan/core-send-completion-design.ko.md`) drives the awaitable/callback completion. The consumer chooses between a callback or a receivable event |
+| Completion notification | `zlink_send_complete_handler` delivers one `zlink_send_complete_event_t` for each accepted operation. `ZLINK_POLLCOMPLETION` changes only the dispatch owner of that callback |
 | Submit flags | May be accepted as a language-idiomatic option argument or builder stage |
 | Failure | The language's idiomatic exception or `Result`/`error` return |
-| Backpressure policy | Owned by the application. The binding does not retry |
+| Backpressure policy | Core retries accepted operations. The application owns only initial-submit rejection policy |
 
 ### Synchronous publish submission contract
 
@@ -230,11 +198,9 @@ principle](#classification-principle). It invokes a terminal on the builder
 returned by the same operation entrypoint. It adds no separate name such as
 `requestCoroutine`, `request_async`, or `submit_async`.
 
-### C++ request's three terminals (pre-2026-08-15 surface restored)
+### C++ request's three terminals
 
-The C++ request builder exposes three terminals. The 2nd revision repeals
-the 2026-08-15 rule that narrowed it to a single canonical suspension
-terminal, restoring the earlier surface:
+The C++ request builder exposes three terminals:
 
 1. **`submit()`** — blocking. Returns the reply
    (`std::vector<message_t>`) directly after a Core-owned wait. Timeout

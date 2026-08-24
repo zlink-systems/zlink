@@ -15,24 +15,16 @@ public sealed partial class Received : IDisposable
 
     internal void ResetForReuse()
     {
-        try
+        if (_singlePart != null)
         {
-            if (_singlePart != null)
-            {
-                _singlePart.DisposeNativeOwned();
-                _singlePart = null;
-            }
-
-            if (_parts != null)
-            {
-                _parts.Dispose();
-                _parts = null;
-            }
+            _singlePart.DisposeNativeOwned();
+            _singlePart = null;
         }
-        finally
+
+        if (_parts != null)
         {
-            _hwmBudgetLeases?.Dispose();
-            _hwmBudgetLeases = null;
+            _parts.Dispose();
+            _parts = null;
         }
 
         _routingId = null;
@@ -46,40 +38,32 @@ public sealed partial class Received : IDisposable
         _closed = false;
     }
 
-    internal void PopulateSinglePart(Message singlePart,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+    internal void PopulateSinglePart(Message singlePart)
     {
         _singlePart = singlePart;
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
-    internal void PopulateMultipart(MultipartMessageCollection parts,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+    internal void PopulateMultipart(MultipartMessageCollection parts)
     {
         _parts = parts;
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void PopulateMessageEnvelope(Message[] parts,
         ReceivedMessageType messageType, ulong? requestSeq,
-        ReceivedReplyHandler? replyHandler = null,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+        ReceivedReplyHandler? replyHandler = null)
     {
         _parts = MultipartMessageCollection.FromMessages(parts);
         MessageType = messageType;
         _metadata = ReceivedMetadata.Create(requestSeq, replyHandler);
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void PopulateMessageEnvelopeSingle(Message singlePart,
         ReceivedMessageType messageType, ulong? requestSeq,
-        ReceivedReplyHandler? replyHandler = null,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+        ReceivedReplyHandler? replyHandler = null)
     {
         _singlePart = singlePart;
         MessageType = messageType;
         _metadata = ReceivedMetadata.Create(requestSeq, replyHandler);
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void PopulateRoutedSinglePart(Message singlePart,
@@ -87,8 +71,7 @@ public sealed partial class Received : IDisposable
         ReceivedReplyHandler? replyHandler,
         ReceivedSendHandler? sendHandler = null,
         ReceivedSendSingleHandler? sendSingleHandler = null,
-        SocketKernel? sendKernel = null,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+        SocketKernel? sendKernel = null)
     {
         _singlePart = singlePart;
         _routingIdSnapshot = routingId;
@@ -99,7 +82,6 @@ public sealed partial class Received : IDisposable
         _sendSingleHandler = sendSingleHandler;
         _sendHandler = sendHandler;
         SetSendContext(sendKernel, routingId);
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void PopulateRoutedMultipart(MultipartMessageCollection parts,
@@ -107,8 +89,7 @@ public sealed partial class Received : IDisposable
         ReceivedReplyHandler? replyHandler,
         ReceivedSendHandler? sendHandler = null,
         ReceivedSendSingleHandler? sendSingleHandler = null,
-        SocketKernel? sendKernel = null,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+        SocketKernel? sendKernel = null)
     {
         _parts = parts;
         _routingIdSnapshot = routingId;
@@ -119,7 +100,6 @@ public sealed partial class Received : IDisposable
         _sendSingleHandler = sendSingleHandler;
         _sendHandler = sendHandler;
         SetSendContext(sendKernel, routingId);
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void SetSendHandler(ReceivedSendHandler? sendHandler,

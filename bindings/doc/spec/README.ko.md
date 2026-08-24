@@ -187,7 +187,6 @@ callback/handler 등록 함수 이름은 실제 동작을 드러내야 한다. �
 
 | 의미 | canonical 이름 |
 |------|----------------|
-| send ready handler 등록 | `setSendReadyHandler` |
 | raw STREAM packet handler 등록 | `setPacketHandler` |
 | SPOT dispatch event handler 등록 | `setDispatchHandler` |
 | SPOT routed receive | `recvRouted` |
@@ -1268,15 +1267,14 @@ streamSocket.bindActor(sessionRid, actorRef)
   budgetInsufficient, budgetGeneration, measurementEpoch
   ```
 
-  `currentAccountedBytes = coreQueueAccountedBytes + applicationAccountedBytes`이고
+  `applicationAccountedBytes`는 ABI 호환을 위해 남은 예약 필드이며 항상 `0`이다.
+  따라서 `currentAccountedBytes = coreQueueAccountedBytes`이고
   `totalMessagingAccountedBytes = currentAccountedBytes +
   completionCurrentAccountedBytes`다. Completion 값은 진단에만 사용하며 HWM admission과
   Core budget을 바꾸지 않는다. Send/receive count는 관점별 값이라 둘을 더해 physical
-  directional queue count로 사용하지 않는다. `outstandingApplicationLeaseCount`는 아직 반환되지
-  않은 public retained-credit lease 수, `retiredQueueCount`는 retained origin 때문에 detach 또는
-  generation 교체 뒤에도 유지되는 queue generation 수, `deferredOriginCreditBytes`는 internal framing
-  token 또는 public lease가 보유해 writer에 아직 게시되지 않은 exact-origin byte다. Metrics reset은
-  이 세 gauge도 유지한다.
+  directional queue count로 사용하지 않는다. `outstandingApplicationLeaseCount`,
+  `retiredQueueCount`, `deferredOriginCreditBytes`도 ABI 호환용 예약 필드이며 항상 `0`이다.
+  Binding은 이 예약 필드를 application lifetime이나 Framework queue accounting에 사용하지 않는다.
 - `MonitorStatus`는 Core monitoring ABI v3의 byte HWM·pending 진단을 투영한다. Legacy
   message-unit, slot, size-cap과 connection-bucket planner property는 alias 없이 제거한다.
 
@@ -1299,34 +1297,30 @@ message에는 이 예외를 적용하지 않는다.
 Pending message count는 표시용 진단이며 admission 기준이 아니다. Planned, applied,
 deferred HWM과 pending/accounted 값은 byte 단위이고, binding은 Core ABI 값과 flag를 그대로 보존한다.
 
-##### Retained credit과 routed 완료 (2026-08-23 개정)
-
-> 이 절은 2026-08-23 소유자 결정으로 개정됐다. 근거와 폐지된 이전 설계는
-> `doc/plan/cpp-routed-async-contract-issue.ko.md` §3.2를 참고한다.
+##### Receive ownership과 routed 완료
 
 Terminal reply와 error reply는 HWM이 없는 completion lane으로 전송한다. Binding은 이
 completion submit에 SNDHWM·RCVHWM, HWM readiness 대기나 backpressure retry를 적용하지 않는다.
 
-Framework data-plane receive에서 binding의 `Received` 계열 owner는 기존 receive framing으로
-반환된 message와 Core HWM budget lease를 함께 소유한다. 이를 위해 새 multipart transaction
-ABI를 추가하지 않는다. Multipart job은 각 receive 결과와 함께 받은 lease를 보관하고,
-`Received`의 close, dispose, drop 또는 job terminal cleanup에서 각 lease를 정확히 한 번
-반환한다. Lease를 별도 application capacity로 바꾸지 않으며 payload copy만 user code에 남긴
-뒤에는 lease를 보유하지 않는다.
+Core byte HWM은 Core queue가 실제로 보관하는 payload byte만 계산한다. Receive가 payload를
+dequeue해 binding에 넘기면 그 byte charge는 끝난다. Binding의 일반 `recv`와 `subscribe`는
+message part, routing ID, request sequence와 topic metadata의 정상 ownership을
+`Received`·`TopicMessage` 계열 결과로 옮긴다. 결과는 언어별 close/dispose/drop 또는 다음
+receive까지 payload를 소유하지만, 그 application lifetime을 Core HWM accounting에 다시
+연결하지 않는다. 별도 retained receive, raw lease handle, application byte capacity를
+public 또는 internal 경로에 두지 않는다.
 
-이 동작은 Framework backend가 명시적으로 선택하는 retained aggregate receive 진입점에만
-적용한다. 일반 binding `recv`와 `subscribe`는 기존처럼 dequeue 시 Core credit을 즉시
-반환한다. Binding은 일반 receive의 의미를 조용히 바꾸지 않고 언어 naming convention에 맞는
-`recvRetained`·`subscribeRetained` 계열 진입점을 제공하되 raw lease handle은 공개하지 않는다.
+Framework가 handler 실행량을 제한할 때는 자기 application job queue의 개수를 별도로
+계산한다. Binding은 그 queue count를 Core byte snapshot에 합치지 않는다. Framework가 Core
+receive를 늦춰야 할 때 사용하는 동적 제어 경계는 socket의 `RUNNING`/`PAUSED` receive-flow
+state setter 하나다.
 
-Routed DEALER/ROUTER **send**는 Core send를 직접 감싸는 동기 `submit()` terminal이다.
-HWM 대기·재개·timeout 의미론은 전부 Core가 소유한다: blocking 모드는 Core 내부에서
-대기하다 Core 신호로 재개하고, `SNDTIMEO`가 대기 상한을 정하며, `DONTWAIT`은 즉시
-`EAGAIN`을 반환한다. 백프레셔 정책의 소유자는 어플리케이션이다. 바인딩은 park queue,
-WRITABLE-callback 재시도, deadline timer, dispatcher thread 같은 admission 기계장치를
-두지 않는다. "HWM-managed routed는 async 전용" 규칙과 그 구현이던 장기 readiness handler
-등록, `pendingByTarget`/`readyTargets`/`readySet` 상태, binding pump의 callback-외부
-`DONTWAIT` 재시도는 전부 폐지됐다.
+HWM-managed PAIR **send**와 DEALER/ROUTER **routed send**의 비동기 terminal은 Core
+`zlink_send_async`와 send-completion을 감싼다. Core가 HWM 대기와 재시도, operation deadline,
+route 종료와 cancel을 소유하고 accepted operation마다 정확히 한 번 completion을 전달한다.
+Binding은 Core operation id를 언어별 awaitable에 연결할 뿐 park queue, readiness callback
+재시도, deadline timer 또는 dispatcher thread를 두지 않는다. Core가 pending-operation
+상한 때문에 submit 자체를 거부한 경우에만 application이 그 즉시 실패의 정책을 정한다.
 
 Part 단위 Core API를 사용하는 binding은 같은 native handle의 모든 outbound 경로가 공유하는 짧은
 complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part API를 첫 part부터 `FINAL`까지
@@ -1340,14 +1334,14 @@ correlation을 유지하며 reply, timeout, disconnect, termination, cancellatio
 연장하지 않는다. 바인딩은 request 완료 표면 제공을 위해서도 자체 스레드나 재시도 큐를
 두지 않는다.
 
-Routed **send**의 언어별 canonical terminal은 raw reply의 동기 submit과 같은 형태다:
-C++ `submit()`(`submit_error_t`를 던짐), .NET `Submit()`(던짐), Java `submit()`(던짐), Node
-`submit()`(던짐), Go `Submit(ctx) error`, Python `submit()`(예외 발생), Rust
-`submit() -> Result<(), SubmitError>`. **Request**의 canonical terminal은 언어 native
+Routed **send**의 언어별 canonical async terminal은 C++ `async()`, .NET `Async(...)`,
+Java·Node·Python·Rust `submit()`과 Go `Submit(ctx)`다. C++는 plain-thread용 blocking
+`submit()`도 제공한다. **Request**의 canonical terminal은 언어 native
 suspension 표면을 유지한다: C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
 `submit()`(async 반환 타입), Kotlin `submit().await()`, Go `Submit(ctx)`가 반환하는 completion
-channel. Request builder에는 callback·blocking 호환 terminal을 함께 두지 않으며
-`request_async` 같은 새 operation 시작점도 만들지 않는다.
+channel. C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을 유지한다.
+다른 언어는 callback·blocking 호환 terminal을 함께 두지 않으며 `request_async` 같은
+새 operation 시작점도 만들지 않는다.
 
 언어별 HWM 값 표현과 범위는 다음과 같다.
 
@@ -1412,12 +1406,14 @@ channel. Request builder에는 callback·blocking 호환 terminal을 함께 두�
   사용한다.
 - 첫 SPOT routed recv 는 hidden activation, hidden queue open, hidden target registration 을
   수행하면 안 된다. 바인딩도 같은 전제를 두고 lazy bootstrap 로직을 올리지 않는다.
-#### Send-ready, Peer 가중치, STREAM 수신 모드
+#### Send completion, Peer 가중치, STREAM 수신 모드
 
-- `zlink_send_ready_handler()` 와 poller `ZLINK_POLLOUT` 은 같은
-  send-recovery readiness 축을 가리킨다. 바인딩 문서도 같은 의미로 설명해야
-  한다. `ZLINK_POLLOUT` 은 "transport writable" 이 아니라
-  "send recovery readiness / backpressure recovery notification" 으로 설명한다.
+- `zlink_send_complete_handler()`는 `zlink_send_async()`가 수용한 operation의
+  최종 결과를 전달한다. `ZLINK_POLLCOMPLETION`은 같은 callback과
+  `zlink_send_complete_event_t`의 dispatch를 `zlink_poller_wait()` 호출 thread로
+  옮긴다. `ZLINK_POLLOUT`은 동기 nonblocking send를 다시 시도할 수 있다는
+  readiness 값이며 async send completion과 같은 축이 아니다. 공개 send-ready
+  handler는 없다.
 - 바인딩은 peer 가중치 surface 를 언어별 typed option/property 로 노출해야
   한다. 설정 대상은 `ROUTER`, `DEALER`이며 값 범위는
   `0..10000`, 기본값은 `100`이다. `0`은 새 outbound 선택에서 제외를 뜻한다.
@@ -1624,7 +1620,6 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
   - `receiveSubscriptionEvent()`
   - raw direct receive handler registration
   - `onSubscribe(...)`
-  - `setSendReadyHandler(...)`
   - `setRoutingId(...)`, `getRoutingId()`
   - `attachStreamRaw(...)`, `detachStream()`
   - `streamAttach(...)`, `streamAttachRaw(...)`, `streamDetach()`
@@ -1637,7 +1632,7 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
   허용할 수 있다.
   - 예: subscriber-only base의 `setSubscription`, `unsetSubscription`,
     `subscribe`
-  - 예: publisher-only base의 `publish`, `setSendReadyHandler`
+  - 예: publisher-only base의 `publish`
 - 위 역할은 역할 matrix에서 `Y`인 concrete socket type에만
   public으로 존재해야 한다.
 - 역할 matrix에서 `—`인 socket type에 대해 base 경유 우회 호출이 가능하면
@@ -2359,7 +2354,6 @@ raw `zlink_*_t` 구조체를 바인딩 API 표면으로 노출하지 않고 `cla
 | `setPacketHandler` | — | — | — | — | — | — | — | Y |
 | `onReceive` | — | — | — | — | — | — | — | — |
 | `onSubscribe` | — | — | — | — | — | — | — | — |
-| `setSendReadyHandler` | Y | Y | Y | Y | — | Y | — | Y |
 
 `STREAM` public surface 는 `recv` 와 `setPacketHandler` 를 제공해야 한다.
 raw direct callback `onReceive` 는 canonical public binding API 가 아니다.
@@ -2529,7 +2523,7 @@ Spot
   |-- actor join: recvActorJoin, replyActorJoin, actors
   |-- actor lifecycle: recvActorLifecycle
   |-- setSubscription, unsetSubscription
-  |-- setDispatchHandler, setSendReadyHandler
+  |-- setDispatchHandler
   `-- close facade only
 
 Actor
@@ -2758,7 +2752,6 @@ surface로 노출해야 한다.
 | `replyToSpot` | Routed reply surface (spot → spot) |
 | `replyToRouter` | Routed reply surface (spot → router) |
 | `setDispatchHandler` | Y |
-| `setSendReadyHandler` | Y |
 | `recvActorLifecycle` | Y |
 | `close` | Y |
 
@@ -2846,7 +2839,6 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
 | Spot | `setSubscription` / `unsetSubscription` | 구독 필터 관리 |
 | Spot | `sendToChannel` / `requestToChannel` | channel 단위 routed 송신 / 요청 |
 | Spot | `setDispatchHandler` | topic/routed/channel reply/timer readable 알림 handler 등록 |
-| Spot | `setSendReadyHandler` | send ready callback handler 등록 |
 | Spot | `recvActorLifecycle` | Actor join/leave lifecycle event 수신 |
 | Spot | `close` | facade 종료 |
 
@@ -2873,7 +2865,6 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
 - Spot subscribe → 데이터 없음 시 empty 반환 (non-blocking)
 - Spot publish 실패 시 예외 확인
 - Spot dispatch event callback 호출 확인
-- Spot setSendReadyHandler callback 호출 확인
 - Spot receiveSubscriptionEvent 경로 확인
 - SpotRouteBridge attach/send/request/handleReceived 경로 동작 확인
 - SpotNode publisher handle publish 경로 동작 확인
@@ -2917,7 +2908,6 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
 - 위 Callback Capabilities 표가 기준이다.
 - canonical handler 등록 이름:
   - `setDispatchHandler`: SPOT unified readable notification callback 등록
-  - `setSendReadyHandler`: send ready 상태 callback 등록
 - SPOT routed receive와 Actor lifecycle은 direct callback 등록 API를 노출하지 않는다.
   `setDispatchHandler`가 readable event를 알리고, 사용자는 `recvRouted` 또는
   `recvActorLifecycle`로 queue를 명시적으로 drain한다.

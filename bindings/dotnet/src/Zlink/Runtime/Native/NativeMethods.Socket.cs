@@ -46,15 +46,6 @@ internal static partial class NativeMethods
         out IntPtr sourceRoutingId, ref ZlinkMsg part, out int hasMore,
         int flags);
 
-    internal static int receivePartWithoutLease(
-        IntPtr socket, out IntPtr sourceRoutingId, ref ZlinkMsg part,
-        out IntPtr lease, out int hasMore, int flags)
-    {
-        lease = IntPtr.Zero;
-        return zlink_recv_part(socket, out sourceRoutingId, ref part,
-            out hasMore, flags);
-    }
-
     // DONT_WAIT-only variant: same C function, kept as a separate entry point
     // so managed code can choose the non-blocking path explicitly.
     [LibraryImport(LibraryName, EntryPoint = "zlink_recv_part")]
@@ -67,18 +58,6 @@ internal static partial class NativeMethods
     internal static extern int zlink_router_recv_part(IntPtr router,
         out IntPtr sourceNodeRoutingId, out ulong requestSeq,
         ref ZlinkMsg part, out int hasMore, int flags);
-
-    internal static int receiveRouterPartWithoutLease(IntPtr router,
-            out IntPtr sourceNodeRoutingId, out ulong requestSeq,
-            out ulong transportPairId, out ulong transportPairGeneration,
-            ref ZlinkMsg part, out IntPtr lease, out int hasMore, int flags)
-    {
-        transportPairId = 0;
-        transportPairGeneration = 0;
-        lease = IntPtr.Zero;
-        return zlink_router_recv_part(router, out sourceNodeRoutingId,
-            out requestSeq, ref part, out hasMore, flags);
-    }
 
     // DONT_WAIT-only fast variant.
     [DllImport(LibraryName, EntryPoint = "zlink_router_recv_part",

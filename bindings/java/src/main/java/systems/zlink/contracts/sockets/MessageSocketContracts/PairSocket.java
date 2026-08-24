@@ -15,9 +15,4 @@ public interface PairSocket extends Socket {
     void disconnectRid(RoutingId routingId);
     AsyncSendOperation send();
     boolean recv(Received result, RecvFlags flags);
-    /**
-     * Receives for a Framework backend and retains the origin Core HWM credit
-     * until {@code result} is closed or reused.
-     */
-    boolean recvRetained(Received result, RecvFlags flags);
 }

@@ -33,11 +33,6 @@ public interface RouterSocket extends Socket {
                              long transportPairId,
                              long transportPairGeneration);
     boolean recv(Received result, RecvFlags flags);
-    /**
-     * Receives for a Framework backend and retains each physical part's
-     * origin Core HWM credit until {@code result} is closed or reused.
-     */
-    boolean recvRetained(Received result, RecvFlags flags);
     RequestOperation request(RoutingId rid);
     /**
      * Creates a request operation pinned to the specified physical transport

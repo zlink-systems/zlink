@@ -522,10 +522,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         return receivePlane.recvInto(result, flags);
     }
 
-    public boolean recvRetainedInto(Received result, ReceiveFlag flags) {
-        return receivePlane.recvRetainedInto(result, flags);
-    }
-
     public Optional<Received> recvNoWait() {
         return Optional.ofNullable(recvNoWaitOrNull());
     }
@@ -554,10 +550,6 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     public boolean subscribe(TopicMessage result, ReceiveFlag flags) {
         return topicPlane.subscribe(result, flags);
-    }
-
-    public boolean subscribeRetained(TopicMessage result, ReceiveFlag flags) {
-        return topicPlane.subscribeRetained(result, flags);
     }
 
     public Optional<TopicMessage> subscribeNoWait() {

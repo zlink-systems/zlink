@@ -107,7 +107,7 @@ final class ReceiveFlowStateContractTest {
             Received received = new Received();
             TestSupport.awaitCondition(() -> {
                 try {
-                    return right.recvRetained(received, RecvFlags.DONT_WAIT);
+                    return right.recv(received, RecvFlags.DONT_WAIT);
                 } catch (RuntimeException ex) {
                     return false;
                 }

@@ -453,7 +453,7 @@ public sealed class test_stream_socket
     }
 
     [Fact]
-    public void stream_recv_retained_holds_core_credit_until_envelope_disposal()
+    public void stream_recv_preserves_payload()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -462,33 +462,22 @@ public sealed class test_stream_socket
         using var stream = ctx.CreateStreamSocket();
         string endpoint = CoreTestSupport.NewEndpoint(
             "tcp",
-            "stream-recv-retained");
+            "stream-recv-payload");
         int port = CoreTestSupport.ExtractPort(endpoint);
         stream.Bind(endpoint);
 
         using var client = ConnectRawClient(port);
-        byte[] incoming = "retained-stream-part"u8.ToArray();
+        byte[] incoming = "stream-payload"u8.ToArray();
         SendAll(client.GetStream(), incoming);
 
         using var received = Received.Create();
         Assert.True(CoreTestSupport.WaitUntil(
-            () => stream.RecvRetained(received, RecvFlags.DontWait),
+            () => stream.Recv(received, RecvFlags.DontWait),
             3_000));
         Assert.False(received.RoutingId is null || received.RoutingId.Value.IsEmpty);
         Assert.Single(received.Parts);
         Assert.Equal(incoming, received.FirstPart().ToArray());
 
-        CoreHwmBudgetSnapshot held = ctx.GetCoreHwmBudgetSnapshot();
-        Assert.Equal(1UL, held.OutstandingApplicationLeaseCount);
-        Assert.True(held.ApplicationAccountedBytes > 0);
-
-        received.Dispose();
-        Assert.True(CoreTestSupport.WaitUntil(() =>
-        {
-            CoreHwmBudgetSnapshot released = ctx.GetCoreHwmBudgetSnapshot();
-            return released.OutstandingApplicationLeaseCount == 0
-                   && released.ApplicationAccountedBytes == 0;
-        }, 3_000));
     }
 
     [Fact]

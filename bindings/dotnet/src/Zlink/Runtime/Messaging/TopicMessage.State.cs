@@ -7,7 +7,6 @@ namespace Systems.Zlink;
 public sealed partial class TopicMessage
 {
     private int _closed;
-    private HwmBudgetLeaseOwner? _hwmBudgetLeases;
     private MultipartMessageCollection? _parts;
     private RoutingId? _routingId;
     private RoutingIdSnapshot _routingIdSnapshot;
@@ -157,25 +156,21 @@ public sealed partial class TopicMessage
 
     internal void PopulateFromWritableTopicBuffer(
         RoutingIdSnapshot routingId, int topicLength,
-        MultipartMessageCollection parts,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+        MultipartMessageCollection parts)
     {
         ResetForReuse(false);
         SetTopicFromWritableBuffer(topicLength);
         PopulatePartsCore(null, routingId, parts);
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void PopulateSinglePartFromWritableTopicBuffer(
-        RoutingIdSnapshot routingId, int topicLength, Message singlePart,
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
+        RoutingIdSnapshot routingId, int topicLength, Message singlePart)
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
         ResetForIncomingSinglePart(singlePart, resetTopic: false);
         SetTopicFromWritableBuffer(topicLength);
         PopulateSinglePartCore(null, routingId, singlePart);
-        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal Message PrepareReusableSinglePart()
@@ -217,18 +212,10 @@ public sealed partial class TopicMessage
 
         var retainedSinglePart = reopen && _parts == null
             && _reusableSinglePart == null ? _singlePart : null;
-        try
-        {
-            if (_parts != null)
-                _parts.Dispose();
-            else if (!ReferenceEquals(_singlePart, retainedSinglePart))
-                _singlePart?.Dispose();
-        }
-        finally
-        {
-            _hwmBudgetLeases?.Dispose();
-            _hwmBudgetLeases = null;
-        }
+        if (_parts != null)
+            _parts.Dispose();
+        else if (!ReferenceEquals(_singlePart, retainedSinglePart))
+            _singlePart?.Dispose();
         _parts = null;
         _singlePart = null;
         if (retainedSinglePart != null)
@@ -256,19 +243,11 @@ public sealed partial class TopicMessage
         EnsureOpen();
         var previousSinglePart = _singlePart;
         var candidate = _reusableSinglePart;
-        try
-        {
-            if (_parts != null)
-                _parts.Dispose();
-            else if (!ReferenceEquals(singlePart, candidate)
-                     && !ReferenceEquals(previousSinglePart, singlePart))
-                previousSinglePart?.Dispose();
-        }
-        finally
-        {
-            _hwmBudgetLeases?.Dispose();
-            _hwmBudgetLeases = null;
-        }
+        if (_parts != null)
+            _parts.Dispose();
+        else if (!ReferenceEquals(singlePart, candidate)
+                 && !ReferenceEquals(previousSinglePart, singlePart))
+            previousSinglePart?.Dispose();
         _parts = null;
         _singlePart = null;
 

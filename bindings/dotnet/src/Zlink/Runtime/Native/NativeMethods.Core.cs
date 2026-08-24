@@ -243,16 +243,6 @@ internal static partial class NativeMethods
         out byte messageType, out ulong requestSeq, ref ZlinkMsg part,
         out ZlinkPartFlag hasMore, int flags);
 
-    internal static int receiveDealerPartWithoutLease(
-        IntPtr dealer, out byte messageType, out ulong requestSeq,
-        ref ZlinkMsg part, out IntPtr lease, out ZlinkPartFlag hasMore,
-        int flags)
-    {
-        lease = IntPtr.Zero;
-        return zlink_dealer_recv_part(dealer, out messageType, out requestSeq,
-            ref part, out hasMore, flags);
-    }
-
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_dealer_reply_part(IntPtr dealer,
         ulong requestSeq, ref ZlinkMsg part, ZlinkPartFlag partFlag);

@@ -39,6 +39,10 @@ final class ReceivePlane {
     boolean recvInto(Received result, ReceiveFlag flags) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(flags, "flags");
+        if (socket.resolveSocketType()
+            == systems.zlink.contracts.sockets.SocketType.DEALER) {
+            return recvDealerInto(result, flags);
+        }
         MultipartReceiveState state = multipartReceiveState.get();
         if (flags == ReceiveFlag.DONTWAIT && !state.hasPending()) {
             return recvIntoNoWait(result, state);
@@ -59,38 +63,26 @@ final class ReceivePlane {
         return true;
     }
 
-    boolean recvRetainedInto(Received result, ReceiveFlag flags) {
-        Objects.requireNonNull(result, "result");
-        Objects.requireNonNull(flags, "flags");
-        result.close();
+    private boolean recvDealerInto(Received result, ReceiveFlag flags) {
         prepareRecvLikeOperation();
 
-        HwmBudgetLeaseOwner leases = new HwmBudgetLeaseOwner();
         ArrayList<Message> parts = null;
         Message firstPart = null;
-        boolean ownerAdopted = false;
         try {
             RecvScratch scratch = socket.recvScratch();
-            boolean dealer = socket.resolveSocketType() ==
-                systems.zlink.contracts.sockets.SocketType.DEALER;
-            firstPart = recvRetainedPartOrNull(scratch, flags,
-                flags == ReceiveFlag.DONTWAIT, dealer, leases);
+            firstPart = recvDealerPartOrNull(scratch, flags,
+                flags == ReceiveFlag.DONTWAIT);
             if (firstPart == null)
                 return false;
 
-            byte[] routingIdBytes = dealer ? null
-                : NativeRoutingIds.readBytesOut(scratch.sourceRidOut);
-            long requestSequence = dealer
-                ? scratch.requestSequenceOut.get(ValueLayout.JAVA_LONG, 0)
-                : 0L;
+            long requestSequence = scratch.requestSequenceOut.get(
+                ValueLayout.JAVA_LONG, 0);
             boolean hasRequestSequence = requestSequence != 0L;
             if (!firstPart.more()) {
                 ContractAccess.receivedPopulateRoutedSinglePart(result,
-                    routingIdBytes, firstPart, requestSequence,
+                    null, firstPart, requestSequence,
                     hasRequestSequence, null, null);
                 firstPart = null;
-                ContractAccess.receivedAdoptRetainedCredit(result, leases);
-                ownerAdopted = true;
                 return true;
             }
 
@@ -98,26 +90,23 @@ final class ReceivePlane {
             parts.add(firstPart);
             firstPart = null;
             while (parts.get(parts.size() - 1).more()) {
-                Message next = recvRetainedPartOrNull(scratch, flags, false,
-                    dealer, leases);
+                Message next = recvDealerPartOrNull(scratch, flags, false);
                 if (next == null)
                     throw new ZlinkRecvException(RecvResult.NO_DATA,
                         NativeErrno.EAGAIN);
                 parts.add(next);
             }
 
-            Received fresh = InternalAccess.received(routingIdBytes,
+            Received fresh = InternalAccess.received((byte[]) null,
                 parts.toArray(Message[]::new), true, requestSequence,
                 hasRequestSequence, null, null);
             parts = null;
-            ContractAccess.receivedAdoptRetainedCredit(fresh, leases);
             try {
                 ContractAccess.receivedAdoptFrom(result, fresh);
             } catch (RuntimeException | Error ex) {
                 fresh.close();
                 throw ex;
             }
-            ownerAdopted = true;
             return true;
         } finally {
             if (firstPart != null) {
@@ -128,8 +117,6 @@ final class ReceivePlane {
             }
             if (parts != null)
                 Message.closeAll(parts);
-            if (!ownerAdopted)
-                leases.close();
         }
     }
 
@@ -380,37 +367,22 @@ final class ReceivePlane {
         }
     }
 
-    private Message recvRetainedPartOrNull(RecvScratch scratch,
-                                            ReceiveFlag flags,
-                                            boolean allowNoData,
-                                            boolean dealer,
-                                            HwmBudgetLeaseOwner leases) {
+    private Message recvDealerPartOrNull(RecvScratch scratch,
+                                         ReceiveFlag flags,
+                                         boolean allowNoData) {
         while (true) {
             Message part = InternalAccess.messageAcquireReceive();
             boolean success = false;
-            scratch.leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            scratch.dealerMessageTypeOut.set(ValueLayout.JAVA_BYTE, 0,
+                (byte) 0);
+            scratch.requestSequenceOut.set(ValueLayout.JAVA_LONG, 0, 0L);
             try {
-                int rc;
-                if (dealer) {
-                    scratch.dealerMessageTypeOut.set(ValueLayout.JAVA_BYTE, 0,
-                        (byte) 0);
-                    scratch.requestSequenceOut.set(ValueLayout.JAVA_LONG, 0,
-                        0L);
-                    rc = Native.dealerRecvPartWithHwmBudgetLease(
-                        socket.handle(), scratch.dealerMessageTypeOut,
-                        scratch.requestSequenceOut,
-                        InternalAccess.messageNativeHandle(part),
-                        scratch.leaseOut, scratch.hasMoreOut,
-                        flags.getValue());
-                } else {
-                    rc = Native.recvPartWithHwmBudgetLease(socket.handle(),
-                        scratch.sourceRidOut,
-                        InternalAccess.messageNativeHandle(part),
-                        scratch.leaseOut, scratch.hasMoreOut,
-                        flags.getValue());
-                }
+                int rc = Native.dealerRecvPart(socket.handle(),
+                    scratch.dealerMessageTypeOut,
+                    scratch.requestSequenceOut,
+                    InternalAccess.messageNativeHandle(part),
+                    scratch.hasMoreOut, flags.getValue());
                 if (rc == RecvResult.OK.value()) {
-                    leases.adopt(scratch.leaseOut);
                     boolean hasMore =
                         scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
                     InternalAccess.messageFinishReceive(part, hasMore);
@@ -418,7 +390,6 @@ final class ReceivePlane {
                     return part;
                 }
 
-                HwmBudgetLeaseOwner.releaseNative(scratch.leaseOut);
                 int errno = Native.errno();
                 if (errno == NativeErrno.EINTR)
                     continue;
