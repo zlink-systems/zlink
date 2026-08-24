@@ -112,6 +112,27 @@ scripts/local-package/build-wsl.sh --core-source local cpp dotnet java node
 
 Framework source에서 binding source directory를 직접 참조하지 않는다.
 
+### 1.5 언어별 Core receive-flow binding API
+
+Framework는 §4에서 지원 paired socket에 receive-flow state를 설정할 때 **각 언어 binding이
+이미 노출한 API**를 호출한다. Core raw handle을 새로 노출하거나 control frame을 직접 encode하지
+않는다. 정확한 signature와 값은 Core binding 산출물이 소유하며, 시작 게이트에서 provenance와
+함께 확인한다(§1.1, §1.4).
+
+| 언어 | receive-flow 설정 API | 상태 enum |
+|---|---|---|
+| C (기준) | `zlink_socket_set_receive_flow_state(handle, state)` | `zlink_receive_flow_state_t` {`ZLINK_RECEIVE_FLOW_RUNNING`=0, `ZLINK_RECEIVE_FLOW_PAUSED`=1} |
+| C++ | `socket_t::set_receive_flow_state(receive_flow_state_t)` | `receive_flow_state_t` |
+| .NET | `SocketBase.SetReceiveFlowState(ReceiveFlowState)` | `ReceiveFlowState` |
+| Java | `CommonSocketOptions.receiveFlowState(ReceiveFlowState)` | `ReceiveFlowState` |
+| Kotlin | Java binding의 `receiveFlowState(...)`를 그대로 사용 (별도 API를 만들지 않는다) | Java `ReceiveFlowState` |
+| Node.js | socket의 `setReceiveFlowState(state)` | `ReceiveFlowState` 상수 |
+
+이 호출은 **local receive-flow를 설정**해 remote send를 PAUSE시킨다. Flow 전이 관측(§7)은 socket
+monitor event로 받는다 — `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED`·`_RESUMED`·
+`_FLOW_STATE_STALE`(각 언어 monitor·eventing surface의 대응 이름). 위 표의 이름이 Core 완료 보고와
+다르면 우회 helper를 만들지 않고 `Core prerequisite gap`으로 보고한다(§1.1).
+
 ## 2. 책임 경계
 
 | 주체 | 소유하는 결정 | 소유하지 않는 결정 |
@@ -206,6 +227,20 @@ Deadline, cancellation, route timeout이 경쟁하면 기존 operation state mac
 유효하다. PAUSE가 terminal 우선순위를 바꾸지 않는다.
 
 ## 6. Framework control과 liveness
+
+이 절은 서로 다른 세 전달 경로를 구분한다. 이 구분을 놓치면 liveness 계약을 잘못 읽는다 —
+특히 remote PAUSE가 멀쩡한 연결을 죽은 것으로 만든다고 오해하게 된다.
+
+| 경로 | 실어 나르는 것 | remote PAUSE의 영향 |
+|---|---|---|
+| Data line | application payload와 Framework control(heartbeat·topology·relocation)을 하나의 FIFO로 | application send-ready를 막는 대상이다 |
+| Transport liveness | 연결 progress 증거인 `livenessAck` (§6.2 · `29`·`49`가 소유) | **영향받지 않는다.** PAUSE와 독립된 경로라 PAUSE 중에도 계속 오간다 |
+| Core completion lane | Core가 내부 처리하는 flow state | Framework control 채널이 아니다 |
+
+따라서 remote PAUSE는 **data line의 application 흐름만** 조절하고 transport liveness 경로는
+건드리지 않는다. 연결을 not-ready로 바꿀지는 이 별도 경로의 `livenessAck`가 정하며(§6.2),
+PAUSE 자체는 그 판정을 바꾸지 않는다. 아래 §6.1은 data line, §6.2는 transport liveness 경로를
+설명한다.
 
 ### 6.1 Data-line FIFO
 
