@@ -528,13 +528,13 @@ async function nodeSpotRouteClientToDotnetHost(tempDir) {
       applicationError.kind, framework.ZLinkFrameworkErrorKind.Rejected,
       `application kind must cross as rejected; got kind=${applicationError.kind} message=${applicationError.message}`);
     assert.equal(
-      'origin' in applicationError, false,
-      'an application handler failure must not carry the framework origin marker');
+      applicationError.origin, 'application',
+      'an application handler failure must decode with application origin');
     assert.match(applicationError.message, /application spot route failure/);
     return [
       'Node spot-route client -> dotnet host request/reply',
       'Node spot-route client -> dotnet host framework not_found with origin marker',
-      'Node spot-route client -> dotnet host application rejected without marker'
+      'Node spot-route client -> dotnet host application rejected with application origin'
     ];
   } finally {
     await app?.close();
@@ -657,7 +657,7 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
         const fields = record.attributes;
         fsSync.appendFileSync(
           flowFile,
-          `packet=${fields.packet_name ?? '<null>'} flow=${fields.flow_id ?? '<null>'} origin=${fields.flow_origin ?? '<null>'}\n`
+          `packet=${fields.packet ?? '<null>'} flow=${fields.flow ?? '<null>'} origin=${fields.origin ?? '<null>'}\n`
         );
       },
       forceFlush: async () => undefined,
