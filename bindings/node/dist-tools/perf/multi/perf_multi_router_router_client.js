@@ -6,12 +6,23 @@ const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentE
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, recvNoWaitInto, sendStopTokenOnce, tryRoutedSocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
+const { resolveRoutedPattern, runRoutedSendSendClient } = require('./perf_multi_routed_sendsend');
 const SERVER_ID = Buffer.from('SERVER', 'ascii');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(SERVER_ID);
+const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
+    const pattern = resolveRoutedPattern(process.env.PERF_MULTI_PATTERN, 'ROUTER_ROUTER');
+    if (pattern.endsWith('_SENDSEND')) {
+        await runRoutedSendSendClient({
+            options,
+            pattern,
+            routerClient: true
+        });
+        return;
+    }
     const ctx = zlink.createContext();
-    applyContextPolicy(ctx, 'client', 'MULTI_ROUTER_ROUTER');
+    applyContextPolicy(ctx, 'client', PATTERN);
     const routers = [];
     const payloads = [];
     const replyMessages = [];
@@ -113,7 +124,7 @@ async function main() {
         // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end via wire stop token.
         await sendStopTokenOnce(routers[0], (bytes) => tryRoutedSocketSend(routers[0], SERVER_ROUTING_ID, bytes));
         const result = await collector.finish();
-        for (const metricLine of summarizeMetrics('MULTI_ROUTER_ROUTER', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
+        for (const metricLine of summarizeMetrics(PATTERN, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
             console.log(metricLine);
         }
     }

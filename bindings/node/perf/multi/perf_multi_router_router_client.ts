@@ -26,14 +26,31 @@ const {
   tryRoutedSocketSend,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
+const {
+  resolveRoutedPattern,
+  runRoutedSendSendClient
+} = require('./perf_multi_routed_sendsend');
 
 const SERVER_ID = Buffer.from('SERVER', 'ascii');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(SERVER_ID);
+const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
 
 async function main() {
   const options = parseMultiArgs(process.argv.slice(2));
+  const pattern = resolveRoutedPattern(
+    process.env.PERF_MULTI_PATTERN,
+    'ROUTER_ROUTER'
+  );
+  if (pattern.endsWith('_SENDSEND')) {
+    await runRoutedSendSendClient({
+      options,
+      pattern,
+      routerClient: true
+    });
+    return;
+  }
   const ctx = zlink.createContext();
-  applyContextPolicy(ctx, 'client', 'MULTI_ROUTER_ROUTER');
+  applyContextPolicy(ctx, 'client', PATTERN);
   const routers = [];
   const payloads = [];
   const replyMessages = [];
@@ -155,7 +172,7 @@ async function main() {
 
     const result = await collector.finish();
     for (const metricLine of summarizeMetrics(
-      'MULTI_ROUTER_ROUTER',
+      PATTERN,
       options.transport,
       options.msgSize,
       result.latenciesNs,

@@ -226,18 +226,26 @@ function resolveSinglePatternNames(pattern) {
 }
 function normalizeMultiPatternName(pattern) {
     const upper = pattern.trim().toUpperCase();
-    if (upper.startsWith('MULTI_')) {
-        return upper;
+    const normalized = upper.startsWith('MULTI_')
+        ? upper
+        : (upper === 'STREAM' ? 'MULTI_STREAM' : `MULTI_${upper}`);
+    if (normalized === 'MULTI_DEALER_ROUTER') {
+        return 'MULTI_DEALER_ROUTER_SENDSEND';
     }
-    return upper === 'STREAM' ? 'MULTI_STREAM' : `MULTI_${upper}`;
+    if (normalized === 'MULTI_ROUTER_ROUTER') {
+        return 'MULTI_ROUTER_ROUTER_SENDSEND';
+    }
+    return normalized;
 }
 function resolveMultiPatternNames(pattern) {
     const normalized = String(pattern || 'ALL').trim().toUpperCase();
     return normalized === 'ALL'
         ? [
             'MULTI_DEALER_DEALER',
-            'MULTI_DEALER_ROUTER',
-            'MULTI_ROUTER_ROUTER',
+            'MULTI_DEALER_ROUTER_SENDSEND',
+            'MULTI_DEALER_ROUTER_REQREP',
+            'MULTI_ROUTER_ROUTER_SENDSEND',
+            'MULTI_ROUTER_ROUTER_REQREP',
             'MULTI_PUBSUB',
             'MULTI_STREAM'
         ]

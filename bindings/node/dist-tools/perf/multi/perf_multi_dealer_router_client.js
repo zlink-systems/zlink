@@ -6,10 +6,21 @@ const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentE
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, tryRoutedSocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
+const { resolveRoutedPattern, runRoutedSendSendClient } = require('./perf_multi_routed_sendsend');
+const PATTERN = 'MULTI_DEALER_ROUTER_REQREP';
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
+    const pattern = resolveRoutedPattern(process.env.PERF_MULTI_PATTERN, 'DEALER_ROUTER');
+    if (pattern.endsWith('_SENDSEND')) {
+        await runRoutedSendSendClient({
+            options,
+            pattern,
+            routerClient: false
+        });
+        return;
+    }
     const ctx = zlink.createContext();
-    applyContextPolicy(ctx, 'client', 'MULTI_DEALER_ROUTER');
+    applyContextPolicy(ctx, 'client', PATTERN);
     const dealers = [];
     const payloads = [];
     const replyMessages = [];
@@ -109,7 +120,7 @@ async function main() {
         // first stop token observed.
         await sendStopTokenOnce(dealers[0], (bytes) => tryRoutedSocketSend(dealers[0], bytes));
         const result = await collector.finish();
-        for (const metricLine of summarizeMetrics('MULTI_DEALER_ROUTER', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
+        for (const metricLine of summarizeMetrics(PATTERN, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
             console.log(metricLine);
         }
     }

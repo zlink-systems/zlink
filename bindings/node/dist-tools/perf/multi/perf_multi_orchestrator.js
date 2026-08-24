@@ -387,6 +387,10 @@ function startLine(msgSize) {
 }
 function needsClientReady(pattern) {
     return pattern === 'MULTI_DEALER_DEALER'
+        || pattern === 'MULTI_DEALER_ROUTER'
+        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
+        || pattern === 'MULTI_ROUTER_ROUTER'
+        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_PUBSUB'
         || pattern === 'MULTI_SPOT'
         || pattern === 'MULTI_SPOT_REQREP'
@@ -394,6 +398,10 @@ function needsClientReady(pattern) {
 }
 function needsRunnerStart(pattern) {
     return pattern === 'MULTI_DEALER_DEALER'
+        || pattern === 'MULTI_DEALER_ROUTER'
+        || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
+        || pattern === 'MULTI_ROUTER_ROUTER'
+        || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_PUBSUB'
         || pattern === 'MULTI_SPOT'
         || pattern === 'MULTI_SPOT_REQREP'

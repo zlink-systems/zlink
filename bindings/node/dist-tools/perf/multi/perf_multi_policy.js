@@ -1,19 +1,33 @@
 // SPDX-License-Identifier: MPL-2.0
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
+const DEALER_ROUTER_SENDSEND_RUNNER = {
+    server: 'perf_multi_dealer_router_server.js',
+    client: 'perf_multi_dealer_router_client.js'
+};
+const DEALER_ROUTER_REQREP_RUNNER = {
+    server: 'perf_multi_dealer_router_server.js',
+    client: 'perf_multi_dealer_router_client.js'
+};
+const ROUTER_ROUTER_SENDSEND_RUNNER = {
+    server: 'perf_multi_router_router_server.js',
+    client: 'perf_multi_router_router_client.js'
+};
+const ROUTER_ROUTER_REQREP_RUNNER = {
+    server: 'perf_multi_router_router_server.js',
+    client: 'perf_multi_router_router_client.js'
+};
 const MULTI_PATTERN_RUNNERS = {
     MULTI_DEALER_DEALER: {
         server: 'perf_multi_dealer_dealer_server.js',
         client: 'perf_multi_dealer_dealer_client.js'
     },
-    MULTI_DEALER_ROUTER: {
-        server: 'perf_multi_dealer_router_server.js',
-        client: 'perf_multi_dealer_router_client.js'
-    },
-    MULTI_ROUTER_ROUTER: {
-        server: 'perf_multi_router_router_server.js',
-        client: 'perf_multi_router_router_client.js'
-    },
+    MULTI_DEALER_ROUTER: DEALER_ROUTER_SENDSEND_RUNNER,
+    MULTI_DEALER_ROUTER_SENDSEND: DEALER_ROUTER_SENDSEND_RUNNER,
+    MULTI_DEALER_ROUTER_REQREP: DEALER_ROUTER_REQREP_RUNNER,
+    MULTI_ROUTER_ROUTER: ROUTER_ROUTER_SENDSEND_RUNNER,
+    MULTI_ROUTER_ROUTER_SENDSEND: ROUTER_ROUTER_SENDSEND_RUNNER,
+    MULTI_ROUTER_ROUTER_REQREP: ROUTER_ROUTER_REQREP_RUNNER,
     MULTI_PUBSUB: {
         server: 'perf_multi_pubsub_server.js',
         client: 'perf_multi_pubsub_client.js'
@@ -26,7 +40,11 @@ const MULTI_PATTERN_RUNNERS = {
 const POLICY_TRANSPORTS = {
     MULTI_DEALER_DEALER: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_DEALER_ROUTER: ['tcp', 'tls', 'ws', 'wss'],
+    MULTI_DEALER_ROUTER_SENDSEND: ['tcp', 'tls', 'ws', 'wss'],
+    MULTI_DEALER_ROUTER_REQREP: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_ROUTER_ROUTER: ['tcp', 'tls', 'ws', 'wss'],
+    MULTI_ROUTER_ROUTER_SENDSEND: ['tcp', 'tls', 'ws', 'wss'],
+    MULTI_ROUTER_ROUTER_REQREP: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_PUBSUB: ['tcp', 'tls', 'ws', 'wss'],
     MULTI_STREAM: ['tcp', 'tls', 'ws', 'wss']
 };

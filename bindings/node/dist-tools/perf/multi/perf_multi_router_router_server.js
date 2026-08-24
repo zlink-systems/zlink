@@ -7,6 +7,8 @@ const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
 const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, tryRoutedSocketSend, waitPollerOne } = require('./perf_multi_runtime');
+const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
+const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
 async function drainPending(router, pending) {
     while (pending.length > 0) {
         const reply = pending[0];
@@ -43,8 +45,17 @@ async function receiveAndQueueReplies(router, pending, received) {
 }
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
+    const pattern = resolveRoutedPattern(process.env.PERF_MULTI_PATTERN, 'ROUTER_ROUTER');
+    if (pattern.endsWith('_SENDSEND')) {
+        await runRoutedSendSendServer({
+            options,
+            pattern,
+            family: 'ROUTER_ROUTER'
+        });
+        return;
+    }
     const ctx = zlink.createContext();
-    applyContextPolicy(ctx, 'server', 'MULTI_ROUTER_ROUTER');
+    applyContextPolicy(ctx, 'server', PATTERN);
     const router = zlink.createRouterSocket(ctx);
     const poller = zlink.createPoller();
     const pending = [];
