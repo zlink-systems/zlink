@@ -567,13 +567,18 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
   - **[x] [해소] cpp SpotActorTransfer e2e HEAD red(5/5 결정적)**: stale e2e 바이너리가 가리던
     실패 — 재빌드 후 ST-C4/D2 `get_actor_ref` 404(원격 Join 후 target actor_directory find 실패),
     ST-C2 session bind 실패. 용의: `ea7805d54b`(cpp ZLAU 정렬) 또는 `dd234c3110`. 회귀 판정 진행 중.
-- [~] **단계 6 — [D2] 7샘플 × 4언어 결정적 green** `4언어` — **node 7/7 ✅**(TTT inner
+- [x] **단계 6 — [D2] 7샘플 × 4언어 결정적 green** `4언어` — **완료(2026-08-24)**: 최종 HEAD별
+  전언어 게이트 그린 — dotnet 14/14 런(29b7e47ba9 재게이트 GREEN, report-dotnet-7gate-3) ·
+  java 7샘플+kotlin ZW 16/16(5a4ed6f520, report-java-7gate-3) · cpp 7/7(TTT 8/8 정책 포함,
+  d6307e3130, report-cpp-7gate) · node 6샘플 2/2(f401c0181a) + ZW B8 rejoin·CAS 수정 후
+  격리 10/10·full 2/2(18155beab9·212d31c99b) + 최종 full 그린(0ddbbabbd3). 이 과정에서
+  발굴·근본수정한 프레임워크 결함 15건은 stage8-final-report-matrix.ko.md §5 참조. (이전 진행 기록: node TTT inner
   content-type 소실 수정 `3b26bed38b` 후 게이트 exit 0) · **dotnet 7/7 ✅**(self-teardown
   순환대기+disconnect 순서 수정 `93cf627a9e` 후 exit 0, browser 포함; 잔존 카드: "actor destroy
   completion" 1/8 별개 서명, run 보존) · java·cpp는 ZW 프레임워크 수정 후 게이트 실행 예정.
   단계 5 잔여도 사실상 흡수: ST-C4 ✅`5bf825cafb`(cpp 53 라이브 terminal 수정 동반), Bingo
-  target_closed ✅`720e19a43b`.
-- [~] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어` — **진행(2026-08-23)**: 시나리오 v2
+  target_closed ✅`720e19a43b`.)
+- [x] **단계 7 — [Z1] ZoneWorld 구현(7번째 샘플)** `4언어` — **완료(2026-08-24)**: 4언어 결정적 그린으로 샘플 게이트 편입 완료(단계 6 근거와 동일), golden 패키지 v1(9세트·정규화 78레코드·추출 도구·README) 커밋 `f5ed56e4e8`, Relocation Store 판정 2건은 zoneworld-stage7-recon.md §5 최종 문안(`3e22d7e104`) 참조. (이전 진행 기록 2026-08-23: 시나리오 v2
   확정(`56603668a1` — 판정 8건+ZW 34개 개별 정의 표) → **.NET 정본 CONFORMANT ✅
   `9d9c43c0ad`**(34 ID 2연속, browser 기본) → **Node ✅**(33판정 2연속 완주, shared browser
   정렬 `6acc4c7d38`+재시작 §7.5 정합 `ec2fd0c174`+프레임워크 B7/E2 수정) → **Java 포팅 구조
@@ -597,7 +602,7 @@ provisional 모델·발신 게이트·사설 잔존물 5개 표면 × 확정 rul
   (`zoneworld.zone`/`zoneworld.player`)·ZW-* 개별 스텝 표·typed failure 매핑 공통 README 신설.
   실행 순서: 공통 README ko/en 개정(Claude 단독, 파일 잠금 해제 대기) → shared browser/언어
   fixture 정렬 → .NET 정본 완성 → golden 추출 → 포팅. stale 참조 6건(§c)은 README 개정에 포함.
-- [ ] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합`(집계=주로 JVM, 보고=전체)
+- [x] **단계 8 — [D3·D4] 집계·doc·harness 게이트 + 보고 준비** `혼합` — **완료(2026-08-24)**: D3 = JVM 집계 `check` 그린+doc-examples 그린(`895d7a6963`), harness cpp 드라이버 `all` 32스테이지 PASS + node 드라이버 `all` PASS(`0ddbbabbd3`; origin 단정 판정은 report-dotnet-origin 참조). D4 = 최종 보고 매트릭스 `doc/plan/stage8-final-report-matrix.ko.md`(clean-break 마이그레이션 명기 포함).
 - [ ] **단계 9 — 모든 e2e 추가·구현·실행 (맨 마지막 작업)** `4언어`(항목별 lockstep)
   - [ ] B1 config-6 (14 시나리오)
   - [ ] B2 config-10 Track E/G/H/I (~28 시나리오)
