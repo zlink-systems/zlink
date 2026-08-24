@@ -150,7 +150,7 @@ fn xpub_socket_has_subscription_event() {
     sock.bind("inproc://surface-xpub").unwrap();
 
     // XPubSocket: publish (synchronous terminal), receive_subscription_event.
-    // `on_send_ready` is gone: Core 0.13.0 dropped the readiness-hint surface.
+    // There is no `on_send_ready`; Core 0.13.1 reports accepted async sends by completion.
     let mut event = SubscriptionEvent::empty();
     let _ = sock.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT);
     let _publish = XPubSocket::publish;

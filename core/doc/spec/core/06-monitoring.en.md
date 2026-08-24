@@ -1,3 +1,7 @@
+---
+title: "Monitoring"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/06-monitoring/) | English
 
 <!-- zlink-nav:start -->
@@ -6,19 +10,236 @@
 
 # Monitoring
 
-This document defines the ZLink Core raw-socket monitor contract. Its
-audience is C API and binding developers who observe connection, transport,
-protocol, and socket lifecycle. A monitor observes state and never changes
-routing or queue state.
+> **What this chapter defines** — The public contract for subscribing to socket
+> [events](04-events.en.md) through a separate channel with the `zlink_socket_monitor_*` APIs.
 
-## 1. Raw socket monitor
+## 1. Monitoring Overview
+
+The zlink raw socket monitor is an observability tool that subscribes to connection,
+transport, protocol, and socket-lifecycle changes on a [socket](glossary.en.md#socket)
+through a separate event channel. A socket monitor provides bind, accept, connect,
+disconnect, handshake, protocol-error, and close events. A monitor only observes state;
+it does not change routing or queue state.
+
+This document defines the public contract for opening a monitor, consuming events,
+querying a status snapshot, and closing the monitor. Its audience is developers who map
+this contract to the C API and each language binding.
+
+The following documents own the related contracts.
+
+| Related contract | Defining document |
+|---|---|
+| Socket event-family catalog, emission conditions for the three receive-flow events, and the meanings of their `value` and `flags` | [Events](04-events.en.md) |
+| Exclusion of monitor queues from Auto HWM planning and their aggregation in context budget snapshots | [Auto HWM](systems/06-auto-hwm.en.md) |
+| Mapping between each result value and errno | [Errors](03-errors.en.md#result-and-errno-mapping) |
+
+## 2. Monitor Lifecycle and Consumption Modes
+
+A monitor proceeds through **open → event consumption → close**.
+
+- **open** — [`zlink_socket_monitor_open`](#zlink_socket_monitor_open) opens a
+  monitor on the target socket. The `events` mask in the open options selects the
+  events to receive. `events == 0` selects no events, while `EVENT_ALL` selects
+  every bit.
+- **consumption** — Events are consumed either in handler mode, which registers a
+  callback with [`zlink_socket_monitor_handler`](#zlink_socket_monitor_handler), or
+  in recv mode, in which the caller retrieves events directly with
+  [`zlink_socket_monitor_recv`](#zlink_socket_monitor_recv). Calling recv after a
+  handler has been installed fails with `EBUSY`. Installing a handler on a monitor
+  that has used recv is allowed; events produced after installation are delivered
+  to the handler.
+- **status** — [`zlink_monitor_status`](#zlink_monitor_status) fills a current-state
+  snapshot ([§6](#6-status-snapshot)).
+- **close** — [`zlink_monitor_close`](#zlink_monitor_close) closes the monitor.
+
+Handler, recv, and close must follow the single-consumer rule for the same event queue.
+The caller is responsible for serializing these operations. Core neither detects nor
+serializes concurrent consumption by handler, recv, and close.
+
+Event-data ownership depends on the consumption mode. In recv mode, the event addresses
+and the routing ID—the byte sequence that identifies a peer—are values inside the
+caller-owned output structure. A callback's event pointer and the values it contains are
+borrowed views valid only until the callback returns; they must not be referenced after
+the callback returns.
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Mon as Monitor
+    participant S as Raw socket
+    App->>Mon: zlink_socket_monitor_open(socket, options)
+    S-->>Mon: Record events in state-transition commit order
+    opt recv mode before handler installation
+        App->>Mon: zlink_socket_monitor_recv(&event_out, flags)
+        Mon-->>App: Write event to caller-owned structure
+    end
+    App->>Mon: zlink_socket_monitor_handler(handler, userdata)
+    Note over App,Mon: Handler installation is allowed regardless of prior recv use
+    Mon-->>App: Deliver subsequent events to handler(event) (borrowed view)
+    App->>Mon: zlink_socket_monitor_recv(&event_out, flags)
+    Mon-->>App: EBUSY
+    App->>Mon: zlink_monitor_status(&status_out)
+    App->>Mon: zlink_monitor_close(&monitor)
+```
+
+## 3. Event Interpretation
+
+### 3.1 Connection and Transport-Pair Identification
+
+`connection_id` identifies one physical transport attempt in the current process. When
+Application and Completion transports form one Framework peer, physical lifecycle events
+for each lane use the same `transport_pair_id` and `transport_pair_generation`, and
+`transport_lane` distinguishes the lanes. For a transport that does not use a pair, the
+pair fields are zero and `transport_lane` has the Application value. A pair ID is not a
+global identifier that persists across process restarts.
+
+However, `CONNECTION_READY` aggregates a pair whose two lanes are both ready as one public
+ready transport. It therefore emits exactly one ready edge for each pair ID and generation
+and counts the pair only once in `value`. Learning the routing ID at different times on the
+two lanes does not split the pair into two ready transports.
+
+### 3.2 `value` and `flags`
+
+Each event defines `value` as follows.
+
+| Event | `value` |
+|---|---|
+| `DISCONNECTED` | A `zlink_disconnect_reason_t` value |
+| `HANDSHAKE_FAILED_PROTOCOL` | A `zlink_protocol_error_t` value |
+| `PEER_WEIGHT_CHANGED` | The new `0..10000` weight |
+| `CONNECTION_READY` | The current count of public transports that are ready for this monitor source |
+| Other failure events | The errno for that failure |
+| Three receive-flow events | Owned by [Events](04-events.en.md) |
+
+Because the `value` of `CONNECTION_READY` is the current count of public ready transports, use
+`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` in `flags` to identify the instant when
+the count increases. A ready-count event without this flag is a count snapshot, not the
+ready edge of a new connection.
+
+`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`,
+`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`, and
+`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` apply only to the three receive-flow
+events (`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, and
+`ZLINK_EVENT_FLOW_STATE_STALE`). [Events](04-events.en.md) owns their emission conditions
+and the meaning of `value` for each event.
+
+## 4. Ordering, Overflow, and Thread Safety
+
+Within one monitor, Core queues events in the order in which it commits state transitions.
+No wall-clock order is guaranteed across different connection
+[I/O threads](glossary.en.md#io-thread).
+
+The monitor queue is bounded and lossy. When the queue is full, it discards the newly
+arriving record regardless of event type and retains records already in the queue. It does
+not aggregate events or preferentially retain specific event types, and it exposes no
+public counter or status field for the number of discarded records. A delayed monitor
+consumer does not block raw socket submission.
+
+The thread rule follows the single-consumer rule in
+[§2](#2-monitor-lifecycle-and-consumption-modes): the caller serializes handler, recv, and
+close so that one consumer uses the event queue. Core does not contractually detect or
+serialize concurrent calls on the caller's behalf.
+
+## 5. Monitor Queue Byte Budget
+
+`monitor_hwm_bytes` is the single byte budget applied to both the monitor source worker and
+the internal monitor PAIR. An [HWM](glossary.en.md#hwm) limits the bytes retained in a
+queue. A positive value is used unchanged as the exact SNDHWM, RCVHWM, and worker admission
+limit. `0` is not unlimited; it selects the Core default byte value computed by
+`checkedMultiply(4096, sizeof(socket_monitor_internal_event_t) + sizeof(zlink_msg_t))`.
+
+The worker also makes admission decisions from the actual accounted bytes of a record, not
+from an event count, and applies the same one-oversize-record-on-empty rule.
+
+Monitor queues are excluded from application Auto HWM
+[water-filling](glossary.en.md#water-filling). A context budget snapshot counts each unique
+physical ypipe direction of the internal monitor PAIR once and does not add the reader and
+writer endpoint options twice. [Auto HWM](systems/06-auto-hwm.en.md) owns this relationship.
+
+## 6. Status Snapshot
+
+### 6.1 ABI Version and Layout
+
+In the status structure filled by [`zlink_monitor_status`](#zlink_monitor_status),
+`abi_version` is `ZLINK_MONITOR_STATUS_ABI_VERSION`, and `struct_size` is the full byte size
+of the returned ABI version. These values diagnose the current layout returned by Core;
+they are neither caller inputs nor compatibility-negotiation values. A raw socket monitor
+status has `source_kind` set to `ZLINK_MONITOR_SOURCE_SOCKET`.
+
+Version 3 adds `snd_pending_bytes` and `rcv_pending_bytes` and removes message-unit, slot,
+size-cap, and connection-bucket diagnostic fields. Version 4 appends five receive-flow
+fields to the end of the structure and makes no other change. Older layouts are not
+accepted as compatibility layouts.
+
+`zlink_socket_monitor_open`, its open-options structure, and the status structure replace
+the existing names in place with the current 0.13.0 layout. Core does not add caller
+size/version negotiation or a parallel versioned entry point.
+
+### 6.2 Detail Bits and Valid Fields
+
+`detail_flags` identifies which optional status fields are valid. Each detail bit makes
+the following fields valid. A field belongs to only one bit, and all fields in a row are
+zero when that bit is absent.
+
+| detail bit | valid fields |
+|---|---|
+| `ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS` | `snd_pending_msgs`, `snd_pending_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs`, `rcv_pending_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
+| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS` | `auto_hwm_applied_sndhwm_bytes`, `auto_hwm_applied_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`, `auto_hwm_effective_rcvbuf`, `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
+
+### 6.3 Byte and Pending Diagnostic Fields
+
+The planned fields report the result of the current automatic policy. The applied fields
+report the byte HWM that the socket actually uses, including manual overrides. A deferred
+value is valid only when the corresponding `_valid` field is nonzero.
+
+`snd_bytes_in_flight` and `rcv_bytes_in_flight` are directional pipe totals at snapshot
+time. In the current version 3 layout, `snd_pending_bytes` and `rcv_pending_bytes` report
+the same send and receive in-flight totals, respectively. Some sources estimate the
+receive total and count. Pending message fields remain counts, and pending byte fields use
+the same byte unit as admission accounting, but the diagnostic values themselves are not
+used as admission inputs. The minimum-charge and oversize fields make it possible to
+diagnose byte-accounting results without querying the allocator for every message.
+
+The pipe-total field group consists of `snd_pending_msgs`, `rcv_pending_msgs`,
+`snd_pending_bytes`, `rcv_pending_bytes`, `snd_bytes_in_flight`, and
+`rcv_bytes_in_flight`. Core reads this group under one lock, so the group is internally
+consistent. Auto HWM fields and the flow counters in
+[§6.4](#64-receive-flow-statistics) may be read at different times. Therefore,
+cross-consistency among the pipe-total field group, Auto HWM fields, and flow counters is
+not guaranteed.
+
+`auto_hwm_send_blocked_ratio_ppm` is the fraction, in parts per million, of the socket's
+first send-admission attempts in the measurement epoch that were blocked by an application
+pipe HWM. Retries after the same submission wakes are not counted again. Transport I/O
+waits, the completion lane, and context-aggregate usage are excluded.
+
+### 6.4 Receive-Flow Statistics
+
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set only for socket types that have a paired
+DEALER/ROUTER [completion lane](glossary.en.md#completion-progress-lane)—a separate path
+responsible only for progressing terminal replies and error replies. For other socket
+types, the bit is absent and all five fields are zero. These fields report the receive-flow
+state that the socket observes on its peers. The declaration comments in
+[§7.5](#75-status-structure) define the exact increment and decrement rules for each field.
+
+The three counters (`flow_pause_applied_total`, `flow_resume_applied_total`, and
+`flow_state_stale_total`) increase monotonically over the lifetime of the socket. No public
+call resets or rebases these values, and `zlink_ctx_reset_auto_hwm_budget_metrics` does not
+change them. Snapshot consistency between these flow counters and other field groups
+follows the boundary in [§6.3](#63-byte-and-pending-diagnostic-fields).
+
+## 7. Types and Constants
+
+### 7.1 Event Mask
+
+`ZLINK_SOCKET_MONITOR_EVENT_*` names are the canonical event-mask names;
+`ZLINK_EVENT_*` are shorter names with the same numeric values.
 
 ```c
-typedef enum zlink_monitor_source_kind_t {
-  ZLINK_MONITOR_SOURCE_SOCKET = 1
-} zlink_monitor_source_kind_t;
-
-typedef uint32_t zlink_socket_monitor_event_mask_t;
+typedef uint32_t zlink_socket_monitor_event_mask_t;  // Event-selection mask in open options
 
 typedef enum zlink_socket_monitor_event_e {
   ZLINK_SOCKET_MONITOR_EVENT_CONNECTED                  = 1u << 0,
@@ -37,11 +258,12 @@ typedef enum zlink_socket_monitor_event_e {
   ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL  = 1u << 13,
   ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH      = 1u << 14,
   ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED        = 1u << 15,
-  ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED           = 1u << 16,
-  ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED          = 1u << 17,
-  ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE           = 1u << 18,
-  ZLINK_SOCKET_MONITOR_EVENT_ALL                        = 0x7FFFFu,
+  ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED           = 1u << 16,  // Events owns the emission condition
+  ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED          = 1u << 17,  // Events owns the emission condition
+  ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE           = 1u << 18,  // Events owns the emission condition
+  ZLINK_SOCKET_MONITOR_EVENT_ALL                        = 0x7FFFFu,  // Select every bit (0..18)
 
+  /* ZLINK_EVENT_* are shorter names with the same numeric values. */
   ZLINK_EVENT_CONNECTED                  = ZLINK_SOCKET_MONITOR_EVENT_CONNECTED,
   ZLINK_EVENT_CONNECT_DELAYED            = ZLINK_SOCKET_MONITOR_EVENT_CONNECT_DELAYED,
   ZLINK_EVENT_CONNECT_RETRIED            = ZLINK_SOCKET_MONITOR_EVENT_CONNECT_RETRIED,
@@ -70,35 +292,49 @@ typedef enum zlink_socket_monitor_event_e {
     ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE,
   ZLINK_EVENT_ALL                        = ZLINK_SOCKET_MONITOR_EVENT_ALL
 } zlink_socket_monitor_event_e;
+```
 
-typedef uint32_t zlink_monitor_state_mask_t;
+### 7.2 Event Record
 
-typedef enum zlink_monitor_state_flag_e {
-  ZLINK_MONITOR_STATE_READY       = 1u << 0,
-  ZLINK_MONITOR_STATE_BOUND_READY = 1u << 1,
-  ZLINK_MONITOR_STATE_CLOSED      = 1u << 3
-} zlink_monitor_state_flag_e;
+```c
+typedef struct zlink_monitor_event_t {
+  uint64_t event;                      // ZLINK_SOCKET_MONITOR_EVENT_* value
+  uint64_t value;                      // Event-specific additional value (§3.2)
+  zlink_routing_id_t routing_id;       // Routing ID for the event
+  char local_addr[256];                // Local address for the event
+  char remote_addr[256];               // Remote address for the event
+  uint64_t connection_id;              // Physical transport-attempt ID in the current process (§3.1)
+  uint64_t transport_pair_id;          // Transport-pair ID; 0 when unpaired (§3.1)
+  uint64_t transport_pair_generation;  // Transport-pair generation; 0 when unpaired
+  uint32_t transport_lane;             // zlink_monitor_transport_lane_t value
+  uint32_t flags;                      // ZLINK_MONITOR_EVENT_FLAG_* bits
+} zlink_monitor_event_t;
 
-typedef uint32_t zlink_monitor_status_detail_mask_t;
+typedef enum zlink_monitor_transport_lane_e {
+  ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION = 0,  // Application lane; default for unpaired transports
+  ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION  = 1   // Completion lane
+} zlink_monitor_transport_lane_t;
 
-typedef enum zlink_monitor_status_detail_flag_e {
-  ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS = 1u << 1,
-  ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS = 1u << 2,
-  ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET  = 1u << 3,
-  ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4,
-  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5
-} zlink_monitor_status_detail_flag_e;
+#define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)       // Ready edge that increased the count (§3.2)
+#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // Receive-flow event only; Events owns the meaning
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2) // Receive-flow event only; Events owns the meaning
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // Receive-flow event only; Events owns the meaning
 
-typedef enum zlink_auto_hwm_recalc_reason_t {
-  ZLINK_AUTO_HWM_RECALC_REASON_NONE            = 0,
-  ZLINK_AUTO_HWM_RECALC_REASON_INITIAL         = 1,
-  ZLINK_AUTO_HWM_RECALC_REASON_ROLE_CHANGE     = 2,
-  ZLINK_AUTO_HWM_RECALC_REASON_POLICY_TOGGLE   = 3,
-  ZLINK_AUTO_HWM_RECALC_REASON_REFRESH         = 4,
-  ZLINK_AUTO_HWM_RECALC_REASON_DEFERRED_SHRINK = 5
-} zlink_auto_hwm_recalc_reason_t;
+typedef void (*zlink_monitor_handler_fn)(
+  const zlink_monitor_event_t *event,  // Borrowed view valid only until the callback returns (§2)
+  void *userdata);
 
-typedef enum zlink_disconnect_reason_t {
+typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
+typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
+```
+
+### 7.3 Enums Used by `value`
+
+The `ZLINK_DISCONNECT_*` macros are ABI-preserving aliases for the corresponding
+`ZLINK_DISCONNECT_REASON_*` enum values.
+
+```c
+typedef enum zlink_disconnect_reason_t {   // Value of a DISCONNECTED event (§3.2)
   ZLINK_DISCONNECT_REASON_UNKNOWN          = 0,
   ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED = 3,
   ZLINK_DISCONNECT_REASON_TRANSPORT_ERROR  = 4,
@@ -110,241 +346,319 @@ typedef enum zlink_disconnect_reason_t {
 #define ZLINK_DISCONNECT_TRANSPORT_ERROR ZLINK_DISCONNECT_REASON_TRANSPORT_ERROR
 #define ZLINK_DISCONNECT_CTX_TERM ZLINK_DISCONNECT_REASON_CTX_TERM
 
-typedef enum zlink_protocol_error_t {
+typedef enum zlink_protocol_error_t {      // Value of a HANDSHAKE_FAILED_PROTOCOL event (§3.2)
   ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013
 } zlink_protocol_error_t;
+```
 
-typedef struct zlink_monitor_event_t {
-  uint64_t event;
-  uint64_t value;
-  zlink_routing_id_t routing_id;
-  char local_addr[256];
-  char remote_addr[256];
-  uint64_t connection_id;
-  uint64_t transport_pair_id;
-  uint64_t transport_pair_generation;
-  uint32_t transport_lane;
-  uint32_t flags;
-} zlink_monitor_event_t;
+### 7.4 Open Options
 
-typedef enum zlink_monitor_transport_lane_e {
-  ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION = 0,
-  ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION  = 1
-} zlink_monitor_transport_lane_t;
-
-#define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)
-#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2)
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)
-
-typedef void (*zlink_monitor_handler_fn)(
-  const zlink_monitor_event_t *event,
-  void *userdata);
-
-typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
-typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
-
-#define ZLINK_MONITOR_STATUS_ABI_VERSION 4u
-
-ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
-                                                void *userdata_);
-
+```c
 typedef struct zlink_socket_monitor_open_options_t {
-  zlink_socket_monitor_event_mask_t events;
-  uint64_t monitor_hwm_bytes;
+  zlink_socket_monitor_event_mask_t events;  // Event bits to receive; 0=none, EVENT_ALL=every bit (§2)
+  uint64_t monitor_hwm_bytes;                // Single monitor-queue byte budget; 0=Core default (§5)
 } zlink_socket_monitor_open_options_t;
+```
+
+### 7.5 Status Structure
+
+```c
+#define ZLINK_MONITOR_STATUS_ABI_VERSION 4u  // ABI version of the current status layout (§6.1)
+
+typedef enum zlink_monitor_source_kind_t {
+  ZLINK_MONITOR_SOURCE_SOCKET = 1   // source_kind for a raw socket monitor
+} zlink_monitor_source_kind_t;
+
+typedef uint32_t zlink_monitor_state_mask_t;
+
+typedef enum zlink_monitor_state_flag_e {
+  ZLINK_MONITOR_STATE_READY       = 1u << 0,
+  ZLINK_MONITOR_STATE_BOUND_READY = 1u << 1,
+  ZLINK_MONITOR_STATE_CLOSED      = 1u << 3
+} zlink_monitor_state_flag_e;
+
+typedef uint32_t zlink_monitor_status_detail_mask_t;
+
+typedef enum zlink_monitor_status_detail_flag_e {  // See the §6.2 table for fields valid under each bit
+  ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS = 1u << 1,
+  ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS = 1u << 2,
+  ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET  = 1u << 3,
+  ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4,
+  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5   // Only for types with a paired DEALER/ROUTER completion lane (§6.4)
+} zlink_monitor_status_detail_flag_e;
+
+typedef enum zlink_auto_hwm_recalc_reason_t {  // Values for auto_hwm_last_recalc_reason
+  ZLINK_AUTO_HWM_RECALC_REASON_NONE            = 0,
+  ZLINK_AUTO_HWM_RECALC_REASON_INITIAL         = 1,
+  ZLINK_AUTO_HWM_RECALC_REASON_ROLE_CHANGE     = 2,
+  ZLINK_AUTO_HWM_RECALC_REASON_POLICY_TOGGLE   = 3,
+  ZLINK_AUTO_HWM_RECALC_REASON_REFRESH         = 4,
+  ZLINK_AUTO_HWM_RECALC_REASON_DEFERRED_SHRINK = 5
+} zlink_auto_hwm_recalc_reason_t;
 
 typedef struct zlink_monitor_status_t {
-  uint32_t abi_version;
-  uint32_t struct_size;
-  zlink_monitor_source_kind_t source_kind;
-  zlink_monitor_state_mask_t state_flags;
-  zlink_monitor_status_detail_mask_t detail_flags;
-  uint64_t snd_pending_msgs;
-  uint64_t rcv_pending_msgs;
-  uint64_t snd_pending_bytes;
-  uint64_t rcv_pending_bytes;
+  uint32_t abi_version;                     // ABI version of the current layout returned by Core (diagnostic, §6.1)
+  uint32_t struct_size;                     // Full byte size of the returned ABI version
+  zlink_monitor_source_kind_t source_kind;  // ZLINK_MONITOR_SOURCE_SOCKET for raw socket monitors
+  zlink_monitor_state_mask_t state_flags;   // ZLINK_MONITOR_STATE_* bits
+  zlink_monitor_status_detail_mask_t detail_flags;  // Groups of valid optional fields (§6.2)
+  uint64_t snd_pending_msgs;                // Pending messages in the send direction (count)
+  uint64_t rcv_pending_msgs;                // Pending messages in the receive direction (count; estimated for some sources)
+  uint64_t snd_pending_bytes;               // Send in-flight byte total (§6.3)
+  uint64_t rcv_pending_bytes;               // Receive in-flight byte total (§6.3)
   uint32_t auto_hwm_enabled;
   uint32_t auto_hwm_profile;
   uint32_t auto_hwm_role;
   uint32_t auto_hwm_policy_class;
-  uint64_t auto_hwm_planned_sndhwm_bytes;
+  uint64_t auto_hwm_planned_sndhwm_bytes;   // planned: result of the current automatic policy (§6.3)
   uint64_t auto_hwm_planned_rcvhwm_bytes;
-  uint64_t auto_hwm_applied_sndhwm_bytes;
+  uint64_t auto_hwm_applied_sndhwm_bytes;   // applied: byte HWM actually used, including manual overrides (§6.3)
   uint64_t auto_hwm_applied_rcvhwm_bytes;
   int32_t auto_hwm_effective_sndbuf;
   int32_t auto_hwm_effective_rcvbuf;
   uint64_t auto_hwm_last_recalc_ms;
-  uint32_t auto_hwm_last_recalc_reason;
-  uint32_t auto_hwm_send_blocked_ratio_ppm;
-  uint64_t auto_hwm_deferred_sndhwm_bytes;
+  uint32_t auto_hwm_last_recalc_reason;     // zlink_auto_hwm_recalc_reason_t value
+  uint32_t auto_hwm_send_blocked_ratio_ppm; // First send attempts blocked by HWM (ppm, §6.3)
+  uint64_t auto_hwm_deferred_sndhwm_bytes;  // deferred: valid only when the matching _valid field is nonzero (§6.3)
   uint64_t auto_hwm_deferred_rcvhwm_bytes;
   uint32_t auto_hwm_deferred_sndhwm_valid;
   uint32_t auto_hwm_deferred_rcvhwm_valid;
-  uint64_t snd_bytes_in_flight;
-  uint64_t rcv_bytes_in_flight;
-  uint64_t minimum_core_message_charge_bytes;
-  uint64_t oversize_message_admission_count;
+  uint64_t snd_bytes_in_flight;             // Directional send-pipe total at snapshot time
+  uint64_t rcv_bytes_in_flight;             // Directional receive-pipe total at snapshot time
+  uint64_t minimum_core_message_charge_bytes;  // Byte-accounting diagnostic (§6.3)
+  uint64_t oversize_message_admission_count;   // Byte-accounting diagnostic (§6.3)
   uint64_t oversize_message_admission_max_bytes;
-  uint64_t flow_paused_connections;
-  uint64_t flow_pause_applied_total;
-  uint64_t flow_resume_applied_total;
-  uint64_t flow_state_stale_total;
-  uint64_t flow_pause_duration_ms;
+  /* Five receive-flow fields appended in version 4 (ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE, §6.4) */
+  uint64_t flow_paused_connections;   // gauge: application pipes currently seen as remote-PAUSED.
+                                      // Increment by 1 for each applied PAUSED transition; decrement by 1
+                                      // for the matching RUNNING transition or when a PAUSED pipe terminates
+  uint64_t flow_pause_applied_total;  // counter: PAUSED transitions actually applied since socket creation.
+                                      // Do not count stale, duplicate, or same-state frames
+  uint64_t flow_resume_applied_total; // counter: RUNNING transitions actually applied under the same rule.
+                                      // Do not count a pipe that terminates while PAUSED as a resume
+  uint64_t flow_state_stale_total;    // counter: flow-state frames ignored as stale or duplicate
+  uint64_t flow_pause_duration_ms;    // Length of the most recently completed PAUSED interval (ms); 0 if none.
+                                      // A pause ended by pipe termination also records its duration
 } zlink_monitor_status_t;
+```
 
+## 8. Functions
+
+The [errno map](03-errors.en.md#result-and-errno-mapping) owns the mapping between each
+result value and errno.
+
+### zlink_socket_monitor_open
+
+Opens a raw socket monitor on the target socket.
+
+```c
 ZLINK_EXPORT void *zlink_socket_monitor_open(
   void *socket,
   const zlink_socket_monitor_open_options_t *options);
+```
+
+The `events` mask in `options` selects the events to receive
+([§2](#2-monitor-lifecycle-and-consumption-modes)), and `monitor_hwm_bytes` sets the
+monitor queue's byte budget ([§5](#5-monitor-queue-byte-budget)). This function, the open
+options, and the status-structure layout follow [§6.1](#61-abi-version-and-layout): Core
+does not add caller size/version negotiation or a parallel versioned entry point.
+
+**Returns:** A monitor handle on success; `NULL` on failure, with errno set.
+
+**Errors:** If an HWM range or calculation or an allocation prevents monitor creation,
+the function fails with `NULL` and `errno`. Core does not add a separate `RESOURCE_LIMIT`
+configuration result or binding error type.
+
+**See also:** `zlink_monitor_close`, `zlink_monitor_status`
+
+---
+
+### zlink_socket_monitor_handler
+
+Registers a callback consumer on the monitor (handler mode).
+
+```c
 ZLINK_EXPORT zlink_handler_result_t zlink_socket_monitor_handler(
   void *monitor,
   zlink_socket_monitor_handler_fn handler,
   void *userdata);
+```
+
+This function activates handler mode. Installing a handler is allowed even if recv mode
+has been used on this monitor, and events produced after installation are delivered to the
+handler ([§2](#2-monitor-lifecycle-and-consumption-modes)). The event pointer passed to
+the callback and the values it contains are borrowed views valid only until the callback
+returns.
+
+**Returns:** A `zlink_handler_result_t` value.
+
+**Thread safety:** Handler, recv, and close follow the single-consumer rule for the same
+event queue ([§2](#2-monitor-lifecycle-and-consumption-modes)).
+
+**See also:** `zlink_socket_monitor_recv`, `zlink_monitor_ignore_handler`
+
+---
+
+### zlink_socket_monitor_recv
+
+Receives one event into a caller-owned structure (recv mode).
+
+```c
 ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   void *monitor,
   zlink_socket_monitor_event_t *event_out,
   zlink_recv_flags_t flags);
+```
+
+This function writes the complete current 0.13.0 `zlink_socket_monitor_event_t` layout.
+The caller must provide an output buffer sized for the current layout. Core does not
+provide a separate receive entry point for the previous event prefix or a version-
+negotiation path. The received event's addresses and routing ID are values inside the
+caller-owned output structure. If a handler is already installed, the function fails with
+`EBUSY`. Recv may be used before a handler is installed; if a handler is then installed,
+subsequent events are delivered to the handler
+([§2](#2-monitor-lifecycle-and-consumption-modes)).
+
+**Returns:** A `zlink_recv_result_t` value.
+
+**Thread safety:** Handler, recv, and close follow the single-consumer rule for the same
+event queue ([§2](#2-monitor-lifecycle-and-consumption-modes)).
+
+**See also:** `zlink_socket_monitor_handler`
+
+---
+
+### zlink_monitor_status
+
+Queries the monitor's current status snapshot.
+
+```c
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
   void *monitor,
   zlink_monitor_status_t *status_out);
+```
+
+This function fills `status_out` according to [§6](#6-status-snapshot). `abi_version` and
+`struct_size` diagnose the current layout returned by Core and are not caller inputs.
+Optional fields absent from `detail_flags` are zero. Core reads the pipe-total field group
+under one lock, which makes that group internally consistent. Auto HWM fields and flow
+counters may be read at different times, so cross-consistency among field groups is not
+guaranteed ([§6.3](#63-byte-and-pending-diagnostic-fields)).
+
+**Returns:** A `zlink_config_result_t` value.
+
+**See also:** `zlink_socket_monitor_open`, `zlink_ctx_get_auto_hwm_budget_snapshot`
+
+---
+
+### zlink_monitor_close
+
+Closes the monitor.
+
+```c
 ZLINK_EXPORT zlink_close_result_t zlink_monitor_close(void **monitor_p);
 ```
 
-`monitor_hwm_bytes` is the single byte budget applied to the monitor source
-worker and both directions of its internal monitor PAIR. A positive value is
-used unchanged as the exact SNDHWM, RCVHWM, and worker admission limit. Zero is
-not unlimited; it selects the Core default computed by
-`checkedMultiply(4096, sizeof(socket_monitor_internal_event_t) + sizeof(zlink_msg_t))`.
-The worker admits the actual accounted bytes of each event record, not an event
-count, and applies only the same one-oversize-record-on-empty rule. Monitor
-queues are excluded from application Auto HWM water-filling.
-The context budget snapshot counts each unique physical ypipe direction of the
-internal monitor PAIR once; it does not add the reader and writer endpoint
-option copies separately.
+**Returns:** A `zlink_close_result_t` value.
 
-`ZLINK_SOCKET_MONITOR_EVENT_*` names are canonical event-mask names;
-`ZLINK_EVENT_*` are shorter names with the same numeric values.
-The `ZLINK_DISCONNECT_*` macros are ABI-preserving aliases for the matching
-`ZLINK_DISCONNECT_REASON_*` enum values.
-`events == 0`
-selects no event, while `EVENT_ALL` selects every bit. A raw socket monitor
-status has `source_kind == ZLINK_MONITOR_SOURCE_SOCKET`. Optional fields whose
-bits are absent from `detail_flags` are zero.
-`abi_version` is `ZLINK_MONITOR_STATUS_ABI_VERSION`, and `struct_size` is the
-number of bytes in the returned ABI version. Version 3 adds `snd_pending_bytes`
-and `rcv_pending_bytes` and removes message-unit, slot, size-cap, and
-connection-bucket diagnostic fields. Version 4 appends the five receive-flow
-fields at the end of the structure and adds no other change. Older layouts are
-not accepted as compatibility layouts.
+**Thread safety:** Handler, recv, and close follow the single-consumer rule for the same
+event queue ([§2](#2-monitor-lifecycle-and-consumption-modes)).
 
-`zlink_socket_monitor_open`, its open-options structure, and its status
-structure replace the existing names in place with the current 0.13.0 layout.
-There is no caller size/version negotiation or parallel versioned entrypoint.
-`abi_version` and `struct_size` diagnose the current layout returned by Core;
-they are neither caller inputs nor compatibility-negotiation values. If an HWM
-range or calculation or an allocation prevents monitor creation, open fails
-with `NULL` and `errno`. Core adds no separate `RESOURCE_LIMIT` config result or
-binding error type.
+**See also:** `zlink_socket_monitor_open`
 
-Each detail bit makes exactly the following fields valid. A field belongs to
-one bit only, and every field in a row is zero when that bit is absent.
+---
 
-| detail bit | valid fields |
-|---|---|
-| `ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS` | `snd_pending_msgs`, `snd_pending_bytes` |
-| `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs`, `rcv_pending_bytes` |
-| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
-| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS` | `auto_hwm_applied_sndhwm_bytes`, `auto_hwm_applied_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`, `auto_hwm_effective_rcvbuf`, `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
-| `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
+### zlink_monitor_ignore_handler
 
-The planned fields report the current automatic policy result. The applied
-fields report the byte HWM currently used by the socket, including manual
-overrides. A deferred value is meaningful only when its matching `_valid`
-field is non-zero. `snd_bytes_in_flight` and `rcv_bytes_in_flight` are
-directional pipe totals at snapshot time. In version 3, `snd_pending_bytes` and
-`rcv_pending_bytes` expose those same send and receive in-flight totals. Some
-sources estimate the receive total and count. Pending message fields remain
-counts. Pending byte fields use the same byte unit as admission accounting, but
-the diagnostic values themselves are not admission inputs. The minimum charge
-and oversize fields explain byte accounting without requiring an allocator
-lookup for every message.
+A no-op handler that ignores events.
 
-`auto_hwm_send_blocked_ratio_ppm` is the fraction, in parts per million, of
-first send-admission attempts in the measurement epoch that were blocked by an
-application-pipe HWM. Retries after the same submission wakes are not counted
-again; transport-I/O waits, the completion lane, and context-aggregate usage
-are excluded.
+```c
+ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
+                                                void *userdata_);
+```
 
-`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set only for a socket type that has
-a paired DEALER/ROUTER completion lane. Every other socket type leaves the bit
-absent and all five fields zero. The fields describe the receive-flow state
-this socket observes on its peers:
+This no-op function neither retains nor releases the supplied event or `userdata`.
+`event` is a borrowed view valid only for the duration of the call. Registering this
+function through the handler API consumes the event queue like a normal callback consumer
+but performs no action for each event.
 
-| Field | Kind | Meaning |
-|---|---|---|
-| `flow_paused_connections` | gauge | Application pipes this socket currently sees as remote-PAUSED. It rises by one for each applied PAUSED transition and falls by one for the matching applied RUNNING transition, or when a pipe that was paused terminates. |
-| `flow_pause_applied_total` | counter | PAUSED transitions actually applied since the socket was created. A stale, duplicate, or same-state frame is never counted. |
-| `flow_resume_applied_total` | counter | RUNNING transitions actually applied, counted under the same rule. A pipe that terminates while paused is not counted as a resume. |
-| `flow_state_stale_total` | counter | Flow-state frames ignored as stale or duplicate. |
-| `flow_pause_duration_ms` | duration | Length in milliseconds of the most recently completed PAUSED interval on this socket. Zero until one interval has completed. A pause closed by pipe termination also records its duration. |
+**Returns:** Nothing (void).
 
-The three counters are monotonic for the lifetime of the socket. Core exposes
-no public call that resets or rebases them; `zlink_ctx_reset_auto_hwm_budget_metrics`
-does not change them. The snapshot consistency rule is unchanged: these fields
-are read at the same snapshot boundary as every other field of the same call.
+**See also:** `zlink_socket_monitor_handler`
 
-The socket monitor provides bind, accept, connect, disconnect, handshake,
-protocol-error, and close events. Handler mode and receive mode are mutually
-exclusive; the second mode returns `EBUSY`. With receive, event addresses and
-routing IDs are values inside the caller-owned output structure. A callback's
-event pointer and contained values are borrowed views valid only until the
-callback returns. `DISCONNECTED.value` is a `zlink_disconnect_reason_t`,
-`HANDSHAKE_FAILED_PROTOCOL.value` is a `zlink_protocol_error_t`, and
-`PEER_WEIGHT_CHANGED.value` is the new weight in `0..10000`. Other failure-event
-values contain the errno for that failure.
+## 9. Implementation and Contract-Test Verification Requirements
 
-`zlink_monitor_ignore_handler()` is a no-op that neither retains nor releases
-the event or `userdata`. `event` is a borrowed view valid only for the call.
-Registering it through the handler API makes it an ordinary callback consumer
-that drains each event without taking further action.
+Verify the following through the public surface only: the `zlink_socket_monitor_*` and
+`zlink_monitor_*` functions, open options, event structure, status snapshot, return values,
+and errno. Each item maps to one test.
 
-`connection_id` identifies one physical transport attempt within the current
-process. When Application and Completion transports form one Framework peer,
-physical lifecycle events for each lane use the same `transport_pair_id` and
-`transport_pair_generation`, and `transport_lane` distinguishes the lanes.
-`CONNECTION_READY`, however, aggregates a pair whose two lanes are ready as one
-public ready transport. It emits exactly one ready edge per pair id and
-generation and counts that pair once in `value`. Learning the routing ID at
-different times on the two lanes does not split the pair into two ready
-transports. For an unpaired transport, the pair fields are zero and
-`transport_lane` is the Application value. A pair id is not a global identifier
-that survives process restarts.
+**Open and consumption modes**
 
-For `CONNECTION_READY`, `value` is the current count of public ready transports
-reported by the monitor source. Use
-`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` in `flags` to identify the
-transition that increased the count. A ready-count event without this flag is
-a count snapshot, not a new connection-ready edge.
+- A monitor opened with `events == 0` receives no events, while one opened with
+  `EVENT_ALL` receives events for every bit.
+- If an HWM range or calculation or an allocation prevents monitor creation,
+  `zlink_socket_monitor_open` returns `NULL` and sets errno. No separate `RESOURCE_LIMIT`
+  configuration result or binding error type is observable.
+- Calling `zlink_socket_monitor_recv` after installing a handler fails with `EBUSY`.
+- `zlink_socket_monitor_handler` can be installed on a monitor that has used recv, and
+  events produced after installation are delivered to the handler.
+- The caller is responsible for single-consumer serialization of handler, recv, and close.
+  Core neither detects nor serializes concurrent consumption by these three operations.
+- Registering `zlink_monitor_ignore_handler` consumes the event queue like a normal callback
+  consumer and neither retains nor releases the supplied event or `userdata`.
 
-`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`,
-`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`, and
-`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` apply only to the three
-receive-flow events. [Events](04-events.en.md) owns their emission conditions
-and the meaning of `value` for each one.
+**Event delivery and ordering**
 
-`zlink_socket_monitor_recv` writes the complete current 0.13.0
-`zlink_socket_monitor_event_t` layout. The caller must provide an output buffer
-for that current layout. Core exposes neither a separate receive entry point
-for the previous event prefix nor a version-negotiation path.
+- Events from one monitor are ordered by the order in which Core commits state
+  transitions. No wall-clock order is guaranteed across different connection I/O threads.
+- When the monitor queue is full, it discards the newly arriving record regardless of event
+  type and retains existing queue records. It does not aggregate events or preferentially
+  retain event types, and it does not expose the discard count through a public counter or
+  status field.
+- A delayed monitor consumer does not block raw socket submission.
 
-## 2. Ordering, overflow, and thread safety
+**Event contents**
 
-The monitor queue is bounded. When full, it aggregates identical high-frequency
-events and prioritizes connection-state, protocol-error, and lifecycle events.
-The next status snapshot reflects aggregated counts. A delayed monitor consumer
-does not block raw-socket submission.
+- The `value` of `DISCONNECTED` is a `zlink_disconnect_reason_t` value, the `value` of
+  `HANDSHAKE_FAILED_PROTOCOL` is a `zlink_protocol_error_t` value, the `value` of
+  `PEER_WEIGHT_CHANGED` is the new `0..10000` weight, and the `value` of another
+  failure event is the errno for that failure.
+- For the same `transport_pair_id` and `transport_pair_generation`, the
+  `CONNECTION_READY` ready edge (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`) occurs
+  exactly once and contributes exactly once to the count in `value`. A ready-count event
+  without the edge flag is a count snapshot.
+- Events for a transport that does not use a pair have zero pair fields and the Application
+  value in `transport_lane`.
 
-Within one monitor, Core queues events in the order in which it commits state
-transitions. No wall-clock order is guaranteed across connection I/O threads.
-Handler and receive follow the single-consumer rule for one event queue. Results
-and errno follow the [errno map](03-errors.en.md#result-and-errno-mapping).
+**Event-data ownership**
+
+- `zlink_socket_monitor_recv` writes the complete current 0.13.0 layout to a caller-owned
+  output structure, and the event addresses and routing ID are values inside that structure.
+- The event pointer passed to a callback and the values it contains remain valid only until
+  the callback returns.
+
+**Status snapshot**
+
+- A raw socket monitor status has `source_kind` set to `ZLINK_MONITOR_SOURCE_SOCKET`,
+  `abi_version` set to `ZLINK_MONITOR_STATUS_ABI_VERSION`, and `struct_size` set to the full
+  byte size of the returned ABI version.
+- Every optional field whose bit is absent from `detail_flags` is zero.
+- `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set only for socket types with a paired
+  DEALER/ROUTER completion lane. For other socket types, the bit is absent and all five flow
+  fields are zero.
+- The three flow counters increase monotonically over the socket lifetime and do not change
+  when `zlink_ctx_reset_auto_hwm_budget_metrics` is called.
+- Core reads the pipe-total field group under one lock, so that group is internally
+  consistent. Auto HWM fields and flow counters may be read at different times, so
+  cross-consistency among field groups is not guaranteed.
+
+**Monitor queue budget**
+
+- A positive `monitor_hwm_bytes` is used unchanged as the exact SNDHWM, RCVHWM, and worker
+  admission limit. `0` is not unlimited; it selects the default byte value computed by
+  Core ([§5](#5-monitor-queue-byte-budget)).
+- The worker makes admission decisions from the actual accounted bytes of each record, not
+  from an event count, and applies the same one-oversize-record-on-empty rule.
+- [Auto HWM](systems/06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements)
+  owns verification of monitor-queue exclusion from Auto HWM planning and context budget
+  snapshot aggregation.

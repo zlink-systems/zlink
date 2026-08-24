@@ -8,20 +8,14 @@ namespace Systems.Zlink.Runtime.Sockets.Internal;
 
 internal sealed partial class SocketKernel : IDisposable
 {
-    private bool SubscribeInto(TopicMessage result, int flags,
-        bool retainCredit)
+    private bool SubscribeInto(TopicMessage result, int flags)
     {
         var topicBuffer = result.GetWritableTopicBuffer(TopicBufferSize);
-        if (retainCredit)
-            result.PrepareForSubscribe();
         var allowNoData = (flags & DontWaitFlag) != 0;
         var candidate = result.PrepareReusableSinglePart();
-        var received = ReceiveSubscribedParts(flags, retainCredit, topicBuffer,
-            candidate,
+        var received = ReceiveSubscribedParts(flags, topicBuffer, candidate,
             out var routingId, out var topicLength,
-            out var singlePart, out var parts,
-            out var hwmBudgetLeases,
-            allowNoData);
+            out var singlePart, out var parts, allowNoData);
         if (!received)
             return false;
         try
@@ -29,7 +23,7 @@ internal sealed partial class SocketKernel : IDisposable
             if (singlePart != null)
             {
                 result.PopulateSinglePartFromWritableTopicBuffer(routingId,
-                    topicLength, singlePart, hwmBudgetLeases);
+                    topicLength, singlePart);
                 return true;
             }
 
@@ -37,12 +31,12 @@ internal sealed partial class SocketKernel : IDisposable
                 throw ZlinkException.CreateRecvException(
                     (int)ErrorCode.EAgain);
             result.PopulateFromWritableTopicBuffer(routingId, topicLength,
-                parts, hwmBudgetLeases);
+                parts);
             return true;
         }
         catch
         {
-            DisposeReceivedAssembly(singlePart, parts, hwmBudgetLeases);
+            DisposeReceivedAssembly(singlePart, parts);
             throw;
         }
     }
@@ -50,24 +44,16 @@ internal sealed partial class SocketKernel : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool SubscribeIntoSubscriber(TopicMessage result, int flags)
     {
-        return SubscribeIntoSubscriberCore(result, flags, false);
+        return SubscribeIntoSubscriberCore(result, flags);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool SubscribeRetainedIntoSubscriber(TopicMessage result,
-        int flags)
-    {
-        return SubscribeIntoSubscriberCore(result, flags, true);
-    }
-
-    private bool SubscribeIntoSubscriberCore(TopicMessage result, int flags,
-        bool retainCredit)
+    private bool SubscribeIntoSubscriberCore(TopicMessage result, int flags)
     {
         if (result == null)
             throw new ArgumentNullException(nameof(result));
         try
         {
-            return SubscribeInto(result, flags, retainCredit);
+            return SubscribeInto(result, flags);
         }
         catch (ZlinkException ex) when ((flags & DontWaitFlag) != 0
                                         && ZlinkException.MapErrorCode(ex.NativeErrno) is ErrorCode.EAgain

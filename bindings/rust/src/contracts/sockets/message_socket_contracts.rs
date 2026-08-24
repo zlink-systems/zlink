@@ -2,8 +2,8 @@
 
 use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions,
-    Received, RecvError, RecvFlags,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions, Received,
+    RecvError, RecvFlags,
 };
 use crate::{Empty, RequestOp, RoutedSendOp, RoutingId, SendOp};
 
@@ -39,13 +39,6 @@ impl PairSocket {
     pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
         crate::socket::pair_inner(self).recv(out, flags)
     }
-
-    /// Receives while retaining each physical part's Core HWM credit in
-    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
-    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        crate::socket::pair_inner(self).recv_retained(out, flags)
-    }
-
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {
@@ -170,13 +163,7 @@ impl DealerSocket {
     /// Returns `Ok(true)` on success and `Ok(false)` when
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        crate::socket::dealer_inner(self).recv(out, flags)
-    }
-
-    /// Receives while retaining each physical part's Core HWM credit in
-    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
-    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        crate::socket::dealer_inner(self).recv_dealer_retained(out, flags)
+        crate::socket::dealer_inner(self).recv_dealer(out, flags)
     }
 
     /// Begins a request: add parts on the returned builder, then submit and
@@ -191,7 +178,6 @@ impl DealerSocket {
                 .clone(),
         )
     }
-
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {

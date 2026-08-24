@@ -46,6 +46,8 @@ import java.util.concurrent.CompletionStage;
 final class NativeSocketRuntime implements AutoCloseable {
     static final int DEFAULT_IO_BUFFER_SIZE = 8192;
     static final int TOPIC_CAPACITY = 256;
+    private static final long CLOSE_BUSY_RETRY_TIMEOUT_NANOS =
+        Duration.ofSeconds(1).toNanos();
     private final SocketCore socketCore;
     private final TopicPlane topicPlane;
     private final ReceivePlane receivePlane;
@@ -522,10 +524,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         return receivePlane.recvInto(result, flags);
     }
 
-    public boolean recvRetainedInto(Received result, ReceiveFlag flags) {
-        return receivePlane.recvRetainedInto(result, flags);
-    }
-
     public Optional<Received> recvNoWait() {
         return Optional.ofNullable(recvNoWaitOrNull());
     }
@@ -554,10 +552,6 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     public boolean subscribe(TopicMessage result, ReceiveFlag flags) {
         return topicPlane.subscribe(result, flags);
-    }
-
-    public boolean subscribeRetained(TopicMessage result, ReceiveFlag flags) {
-        return topicPlane.subscribeRetained(result, flags);
     }
 
     public Optional<TopicMessage> subscribeNoWait() {
@@ -698,7 +692,7 @@ final class NativeSocketRuntime implements AutoCloseable {
     void closeInternal() {
         if (handle != null && handle.address() != 0) {
             if (own) {
-                int rc = Native.close(handle);
+                int rc = closeOwnedHandle();
                 if (rc != CloseResult.OK.value()) {
                     throw new ZlinkCloseException(CloseResult.fromValue(rc),
                         Native.errno());
@@ -709,6 +703,19 @@ final class NativeSocketRuntime implements AutoCloseable {
             return;
         }
         socketCore.closeCommonState();
+    }
+
+    private int closeOwnedHandle() {
+        long deadline = System.nanoTime() + CLOSE_BUSY_RETRY_TIMEOUT_NANOS;
+        while (true) {
+            int result = Native.close(handle);
+            if (result != CloseResult.BUSY.value()
+                || Native.errno() != NativeErrno.EBUSY
+                || System.nanoTime() - deadline >= 0) {
+                return result;
+            }
+            Thread.yield();
+        }
     }
 
     @SuppressWarnings("unchecked")

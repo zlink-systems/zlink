@@ -104,7 +104,6 @@ impl crate::internal::SocketStorage {
     /// finds no data, and `Err(_)` on hard error. See
     /// `doc/spec/bindings/README.md` for the caller-provided receive shape.
     pub(crate) fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        out.begin_receive();
         let routing_id = recv_basic_parts(self.handle, flags.bits(), out.receive_scratch())?;
         match routing_id {
             Some(routing_id) => {
@@ -115,33 +114,15 @@ impl crate::internal::SocketStorage {
         }
     }
 
-    pub(crate) fn recv_retained(
+    pub(crate) fn recv_dealer(
         &self,
         out: &mut Received,
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
-        out.begin_receive();
-        let received =
-            recv_retained_parts(self.handle, flags.bits(), out.receive_scratch(), false)?;
-        match received {
-            Some((routing_id, request_seq, leases)) => {
-                out.replace_retained_parts(routing_id, request_seq, leases);
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-
-    pub(crate) fn recv_dealer_retained(
-        &self,
-        out: &mut Received,
-        flags: RecvFlags,
-    ) -> Result<bool, RecvError> {
-        out.begin_receive();
-        let received = recv_retained_parts(self.handle, flags.bits(), out.receive_scratch(), true)?;
-        match received {
-            Some((routing_id, request_seq, leases)) => {
-                out.replace_retained_parts(routing_id, request_seq, leases);
+        let request_seq = recv_dealer_parts(self.handle, flags.bits(), out.receive_scratch())?;
+        match request_seq {
+            Some(request_seq) => {
+                out.replace_dealer_parts(request_seq);
                 Ok(true)
             }
             None => Ok(false),
@@ -155,7 +136,6 @@ impl crate::internal::SocketStorage {
         out: &mut TopicMessage,
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
-        out.begin_receive();
         let mut topic_buf = [0i8; 256];
         let received = recv_subscribed_parts(
             self.handle,
@@ -166,28 +146,6 @@ impl crate::internal::SocketStorage {
         match received {
             Some((routing_id, topic)) => {
                 out.replace_received_parts(routing_id, topic);
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-
-    pub(crate) fn subscribe_recv_retained(
-        &self,
-        out: &mut TopicMessage,
-        flags: RecvFlags,
-    ) -> Result<bool, RecvError> {
-        out.begin_receive();
-        let mut topic_buf = [0i8; 256];
-        let received = recv_retained_subscribed_parts(
-            self.handle,
-            &mut topic_buf,
-            flags.bits(),
-            out.receive_scratch(),
-        )?;
-        match received {
-            Some((routing_id, topic, leases)) => {
-                out.replace_retained_parts(routing_id, topic, leases);
                 Ok(true)
             }
             None => Ok(false),

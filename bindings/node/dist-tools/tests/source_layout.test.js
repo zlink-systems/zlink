@@ -98,7 +98,7 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.equal(nativeBridge.includes('routed_send_ready'), false);
     strict_1.default.equal(socketBinding.includes('sendReady'), false);
 });
-(0, node_test_1.default)('bindings samples stay on the Core 0.13.0 raw socket boundary', () => {
+(0, node_test_1.default)('bindings samples stay on the Core 0.13.1 raw socket boundary', () => {
     const sampleRoots = [
         node_path_1.default.resolve(__dirname, '../../samples'),
         node_path_1.default.resolve(__dirname, '../../../javascript/samples')

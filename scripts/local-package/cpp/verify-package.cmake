@@ -67,7 +67,8 @@ execute_process(
   COMMAND "${CMAKE_COMMAND}"
     -S "${positive_source_dir}"
     -B "${positive_build_dir}"
-    "-DCMAKE_PREFIX_PATH=${ZLINK_CPP_PREFIX};${ZLINK_CORE_PREFIX}"
+    "-Dzlink_cpp_DIR=${ZLINK_CPP_PREFIX}/lib/cmake/zlink_cpp"
+    "-Dzlink_DIR=${ZLINK_CORE_PREFIX}/lib/cmake/zlink"
   RESULT_VARIABLE positive_configure_result
   OUTPUT_VARIABLE positive_configure_output
   ERROR_VARIABLE positive_configure_error)
@@ -117,7 +118,8 @@ execute_process(
   COMMAND "${CMAKE_COMMAND}"
     -S "${negative_source_dir}"
     -B "${negative_build_dir}"
-    "-DCMAKE_PREFIX_PATH=${ZLINK_CPP_PREFIX};${mismatched_core_dir}"
+    "-Dzlink_cpp_DIR=${ZLINK_CPP_PREFIX}/lib/cmake/zlink_cpp"
+    "-Dzlink_DIR=${mismatched_core_dir}/lib/cmake/zlink"
   RESULT_VARIABLE negative_configure_result
   OUTPUT_VARIABLE negative_configure_output
   ERROR_VARIABLE negative_configure_error)

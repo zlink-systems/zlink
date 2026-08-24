@@ -5,7 +5,7 @@ namespace Systems.Zlink.Tests;
 
 /// <summary>
 ///     The routed asynchronous send terminal is a thin wrapper over the Core
-///     0.13.0 send-completion contract: one complete record goes to
+///     0.13.1 send-completion contract: one complete record goes to
 ///     <c>zlink_send_async</c>, and exactly one Core completion resolves the
 ///     Task. The binding parks nothing, retries nothing and times nothing.
 /// </summary>

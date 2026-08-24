@@ -6,11 +6,11 @@ title: "Go Bindings Public Contract"
 [Spec index](../README.en.md) | [Previous: Python](../python/README.en.md) | [Next: Rust](../rust/README.en.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.13.0 public contract
+# Go binding Core 0.13.1 public contract
 
 > **What this chapter defines** — the public type, ownership, and error
 > contract the currently implemented Go binding provides on top of the
-> Core 0.13.0 raw C API.
+> Core 0.13.1 raw C API.
 
 This document defines only the public contract of the currently
 implemented Go binding. It does not add pre-implementation designs or
@@ -20,7 +20,7 @@ matching projection at the module root.
 
 | Section | Covers |
 |---|---|
-| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.13.0 raw scope |
+| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.13.1 raw scope |
 | [Public contract categories](#public-contract-categories) | A table of public concepts by category |
 | [Context and resource lifetime](#context-and-resource-lifetime) | Ownership/release rules for Context/socket/monitor/poller/timer |
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Go `uint64` and Core `uint64_t` byte HWM |
@@ -44,7 +44,7 @@ buffer marshalling are implementation
 details of `internal/native`. These types and this package are not part of
 the consumer contract.
 
-- The current package contract projects only the Core 0.13.0 raw C API.
+- The current package contract projects only the Core 0.13.1 raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.
 - The Go module has no per-message codec registration API either.
 - The default path for messages and byte payloads uses the typed API the binding provides.
@@ -130,10 +130,9 @@ completion channel are explicitly closed after use. When a `Recv` family
 method takes caller-provided output, it clears that output object's
 existing parts before filling in the new native parts and metadata.
 
-Ordinary `Recv` and `Subscribe` return Core queue credit immediately when a
-part is dequeued. The lifetime of an ordinary application receive result
-therefore does not remain in HWM accounting. Only a Framework backend
-explicitly selects the retained aggregate path below.
+Core byte-HWM charge ends when ordinary `Recv` or `Subscribe` dequeues a part.
+The lifetime of an application receive result therefore does not remain in HWM
+accounting.
 
 ## Socket operation
 
@@ -260,8 +259,8 @@ type ReplySubmitOp interface {
 
 | Socket | Receive API |
 |---|---|
-| PAIR, DEALER, ROUTER, STREAM | Ordinary `Recv`, which fills `Received` storage; Framework-backend-only `RecvRetained` |
-| SUB, XSUB | Ordinary `Subscribe`, which fills `TopicMessage` storage; Framework-backend-only `SubscribeRetained` |
+| PAIR, DEALER, ROUTER, STREAM | `Recv`, which fills `Received` storage |
+| SUB, XSUB | `Subscribe`, which fills `TopicMessage` storage |
 
 Core's part functions are the internal substrate used to implement these
 multipart receive APIs, and are not exposed as Go public methods.
@@ -273,28 +272,15 @@ A caller-provided receive method returns `(bool, error)`. If `bool` is
 error is nil. If `bool` is `true`, the output has been filled with one or
 more results. A real failure is `*RecvError`.
 
-`RecvRetained(out, flags)` and `SubscribeRetained(out, flags)` preserve the
-same `Received`/`TopicMessage` shape, routing ID, request sequence, topic, and
-multipart framing as ordinary receive. Their only lifetime difference is
-that the result privately owns one opaque Core retained credit for every
-caller-visible physical payload part. These APIs let a Framework backend move
-Core credit with the message through its queue, executor, and handler; they are
-not the default application receive path.
-
-`Received.Close` and `TopicMessage.Close` return the current parts and every
-retained credit exactly once. Starting another ordinary or retained receive
-with the same output first clears the old result, and no-data or a partial
-multipart error leaves no credit already acquired behind. Framework drop,
-cancellation, and error paths also call `Close` on the aggregate they own. The
-Go binding does not use GC timing as a lifetime contract, so both normal
-cleanup and leak prevention rely on explicit `Close` or reuse.
-
-An individual `Message` part does not secretly own retained credit. The public
-API exposes no native lease handle, separate retry/application capacity,
-allowance, or duplicate accounting state.
+Core byte-HWM charge ends when `Recv` or `Subscribe` dequeues the payload.
+`Received` and `TopicMessage` own only the Go lifetime of parts, routing ID,
+request sequence, topic, and multipart framing. `Close` and storage reuse clean
+up that payload and metadata but do not participate in Core HWM accounting. No
+separate retained receive, native lease handle, application byte capacity, or
+duplicate accounting state exists in a public or internal API.
 
 A socket monitor is opened with a typed event mask and provides
-`MonitorEvent` and `MonitorStatus`. Each Core 0.13.0 monitor event mask and
+`MonitorEvent` and `MonitorStatus`. Each Core 0.13.1 monitor event mask and
 delivered event value is provided as its matching typed constant.
 `MonitorEventMask` is used to open a monitor, and `MonitorEventType` is
 used to check a received `MonitorEvent.Event`.
@@ -312,7 +298,8 @@ messaging values, monitor/instance aggregates, application/completion queue
 counts, `OutstandingApplicationLeaseCount`, `RetiredQueueCount`,
 `DeferredOriginCreditBytes`, oversize/blocked/aggregate flags,
 `BudgetGeneration`, and `MeasurementEpoch` as exact `uint64`/boolean values.
-Reset preserves current, pending, queue-count, and those three owner-lifecycle
+`ApplicationAccountedBytes` and those three owner-lifecycle fields are
+ABI-reserved and always zero. Reset preserves current, pending, and queue-count
 gauges, rebases both peaks to current, clears epoch counters, and increments
 `MeasurementEpoch`. An ABI version/size mismatch is an unsupported error.
 A poller reports the
@@ -385,9 +372,9 @@ allowlist.
 The module package uses the following file proxy layout.
 
 ```text
-zlink.systems/zlink/@v/v0.13.0.info
-zlink.systems/zlink/@v/v0.13.0.mod
-zlink.systems/zlink/@v/v0.13.0.zip
+zlink.systems/zlink/@v/v0.13.1.info
+zlink.systems/zlink/@v/v0.13.1.mod
+zlink.systems/zlink/@v/v0.13.1.zip
 ```
 
 The supported platform runtimes are included under the module's

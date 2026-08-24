@@ -42,17 +42,10 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
 
     public override bool Recv(Received result, RecvFlags flags = RecvFlags.None)
     {
-        return RecvCore(result, flags, false);
+        return RecvCore(result, flags);
     }
 
-    public override bool RecvRetained(Received result,
-        RecvFlags flags = RecvFlags.None)
-    {
-        return RecvCore(result, flags, true);
-    }
-
-    private bool RecvCore(Received result, RecvFlags flags,
-        bool retainCredit)
+    private bool RecvCore(Received result, RecvFlags flags)
     {
         if (result == null)
             throw new ArgumentNullException(nameof(result));
@@ -63,7 +56,6 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         ulong requestSeq = 0;
         var firstPart = true;
         var transferred = false;
-        HwmBudgetLeaseOwner? hwmBudgetLeases = null;
 
         try
         {
@@ -79,23 +71,15 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
                 var recvFlags = firstPart ? (int)flags : 0;
                 try
                 {
-                    var lease = IntPtr.Zero;
                     byte nativeMessageType;
                     ulong nativeRequestSeq;
                     NativeMethods.ZlinkPartFlag hasMore;
-                    var rc = retainCredit
-                        ? NativeMethods
-                            .receiveDealerPartWithoutLease(
-                                Handle, out nativeMessageType,
-                                out nativeRequestSeq, ref nativePart,
-                                out lease, out hasMore, recvFlags)
-                        : NativeMethods.zlink_dealer_recv_part(Handle,
-                            out nativeMessageType, out nativeRequestSeq,
-                            ref nativePart, out hasMore, recvFlags);
+                    var rc = NativeMethods.zlink_dealer_recv_part(Handle,
+                        out nativeMessageType, out nativeRequestSeq,
+                        ref nativePart, out hasMore, recvFlags);
 
                     if (rc != 0)
                     {
-                        HwmBudgetLeaseOwner.ReleaseUnowned(ref lease);
                         var errno = NativeMethods.zlink_errno();
                         if (firstPart && (flags & RecvFlags.DontWait) != 0
                                       && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
@@ -104,10 +88,6 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
 
                         throw ZlinkException.CreateRecvException(errno);
                     }
-
-                    if (retainCredit)
-                        HwmBudgetLeaseOwner.Adopt(ref hwmBudgetLeases,
-                            ref lease);
 
                     messageType = (ReceivedMessageType)nativeMessageType;
                     requestSeq = nativeRequestSeq;
@@ -127,8 +107,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
                         if (messageType == ReceivedMessageType.Raw
                             && requestSeq == 0)
                         {
-                            result.PopulateSinglePart(singlePart,
-                                hwmBudgetLeases);
+                            result.PopulateSinglePart(singlePart);
                             transferred = true;
                             return true;
                         }
@@ -140,7 +119,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
                                 : null;
                         result.PopulateMessageEnvelopeSingle(singlePart,
                             messageType, requestSeq == 0 ? null : requestSeq,
-                            singleReplyHandler, hwmBudgetLeases);
+                            singleReplyHandler);
                         transferred = true;
                         return true;
                     }
@@ -168,8 +147,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
                     ? CreateReplyHandler(requestSeq)
                     : null;
             result.PopulateMessageEnvelope(parts!.ToArray(), messageType,
-                requestSeq == 0 ? null : requestSeq, replyHandler,
-                hwmBudgetLeases);
+                requestSeq == 0 ? null : requestSeq, replyHandler);
             transferred = true;
             return true;
         }
@@ -177,7 +155,6 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         {
             if (!transferred)
             {
-                hwmBudgetLeases?.Dispose();
                 if (parts != null)
                     RequestReplySupport.DisposeParts(parts);
             }

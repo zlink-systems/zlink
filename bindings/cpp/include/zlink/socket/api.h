@@ -21,7 +21,6 @@ extern "C" {
 /* HWM option values are uint64_t byte counts. */
 #define ZLINK_HWM_BYTES_DFLT ((uint64_t) 4096000)
 
-
 /******************************************************************************/
 /*  Raw socket events and monitoring                                          */
 /******************************************************************************/
@@ -476,7 +475,6 @@ ZLINK_EXPORT zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
                                                          zlink_msg_t *part_out_,
                                                          zlink_part_flag_t *has_more_out_,
                                                          zlink_recv_flags_t flags_);
-
 ZLINK_EXPORT zlink_submit_result_t zlink_dealer_reply_part (void *dealer_,
                                                             uint64_t request_seq_,
                                                             zlink_msg_t *part_,
@@ -528,13 +526,11 @@ zlink_router_recv_part_v2 (void *router_,
                            zlink_msg_t *part_out_,
                            zlink_part_flag_t *has_more_out_,
                            zlink_recv_flags_t flags_);
-
 ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
                                                   const zlink_routing_id_t **source_rid_out_,
                                                   zlink_msg_t *part_out_,
                                                   zlink_part_flag_t *has_more_out_,
                                                   zlink_recv_flags_t flags_);
-
 ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
                                                        const char *topic_id_,
                                                        zlink_msg_t *part_,
@@ -555,7 +551,6 @@ ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
                                                        zlink_msg_t *part_out_,
                                                        zlink_part_flag_t *has_more_out_,
                                                        zlink_recv_flags_t flags_);
-
 ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                                        const zlink_routing_id_t **source_rid_out_,
                                                        int *subscribed_out_,

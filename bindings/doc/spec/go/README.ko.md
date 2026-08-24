@@ -6,9 +6,9 @@ title: "Go 바인딩 공개 계약"
 [스펙 목록](../README.ko.md) | [이전: Python](../python/README.ko.md) | [다음: Rust](../rust/README.ko.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.13.0 공개 계약
+# Go binding Core 0.13.1 공개 계약
 
-> **이 장이 정의하는 것** — 현재 구현된 Go binding이 Core 0.13.0 raw C API 위에
+> **이 장이 정의하는 것** — 현재 구현된 Go binding이 Core 0.13.1 raw C API 위에
 > 제공하는 공개 type·ownership·오류 계약.
 
 이 문서는 현재 구현된 Go binding의 공개 계약만 정의한다. 구현 전 설계나 다른
@@ -18,7 +18,7 @@ signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 
 
 | 절 | 다루는 내용 |
 |---|---|
-| [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core 0.13.0 raw 범위 |
+| [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core 0.13.1 raw 범위 |
 | [공개 계약 범주](#공개-계약-범주) | 범주별 공개 개념 표 |
 | [Context와 resource 수명](#context와-resource-수명) | Context/socket/monitor/poller/timer 소유·해제 규칙 |
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Go `uint64`와 Core `uint64_t` byte HWM의 매핑 |
@@ -40,7 +40,7 @@ Runtime handle, cgo declaration, native struct, callback trampoline과 buffer
 marshalling은 `internal/native`의 구현 세부사항이다. 이 타입과 package는 consumer
 계약이 아니다.
 
-- 현재 package 계약은 Core 0.13.0 raw C API만 투영한다.
+- 현재 package 계약은 Core 0.13.1 raw C API만 투영한다.
 - Context, Message, raw socket, monitor, poller, timer와 utility는 포함하지만 Spot, Actor, MeshNode와 service operation은 포함하지 않는다.
 - Go module에는 message별 codec 등록 API도 없다.
 - Message와 byte payload의 기본 경로는 binding이 제공하는 typed API를 사용한다.
@@ -119,10 +119,8 @@ message 밖으로 연장해야 할 때는 `Message.Bytes`가 snapshot을 만든�
 명시적으로 close한다. `Recv` 계열이 caller-provided output을 받는 경우 output
 객체의 기존 parts를 정리한 뒤 새 native parts와 metadata를 채운다.
 
-일반 `Recv`와 `Subscribe`는 part를 dequeue할 때 Core queue credit을 즉시
-반환한다. 따라서 일반 application 수신 결과의 수명은 HWM accounting에 남지
-않는다. Framework backend만 아래의 retained aggregate 경로를 명시적으로
-선택한다.
+Core byte HWM charge는 일반 `Recv`와 `Subscribe`가 part를 dequeue할 때 끝난다.
+따라서 application 수신 결과의 수명은 HWM accounting에 남지 않는다.
 
 ## Socket operation
 
@@ -247,8 +245,8 @@ type ReplySubmitOp interface {
 
 | Socket | 수신 API |
 |---|---|
-| PAIR, DEALER, ROUTER, STREAM | `Received` 저장소를 채우는 일반 `Recv`, Framework backend 전용 `RecvRetained` |
-| SUB, XSUB | `TopicMessage` 저장소를 채우는 일반 `Subscribe`, Framework backend 전용 `SubscribeRetained` |
+| PAIR, DEALER, ROUTER, STREAM | `Received` 저장소를 채우는 `Recv` |
+| SUB, XSUB | `TopicMessage` 저장소를 채우는 `Subscribe` |
 
 Core의 part 함수는 이 multipart 수신 API를 구현하기 위한 internal substrate이며 Go
 public method로 노출하지 않는다.
@@ -259,26 +257,15 @@ Caller-provided receive method는 `(bool, error)`를 반환한다. `bool`이 `fa
 `RecvFlagsDontWait`에서 읽을 데이터가 없었다는 뜻이며 error는 nil이다. `bool`이
 `true`이면 output에 하나 이상의 결과가 채워졌다. 실제 실패는 `*RecvError`다.
 
-`RecvRetained(out, flags)`와 `SubscribeRetained(out, flags)`는 일반 수신과 같은
-`Received`/`TopicMessage` shape, Routing ID, request sequence, topic과 multipart
-framing을 유지한다. 차이는 caller에게 보이는 physical payload part마다 Core의
-opaque retained credit 하나를 결과가 private하게 소유한다는 점뿐이다. 이 API는
-Framework backend의 queue·executor·handler 수명에 Core credit을 함께 전달하기
-위한 경계이며 일반 application 수신의 기본 경로가 아니다.
-
-`Received.Close`와 `TopicMessage.Close`는 현재 part와 retained credit을 모두
-정확히 한 번 반환한다. 같은 output으로 다음 일반 또는 retained 수신을 시작해도
-기존 결과를 먼저 정리하며, no-data와 부분 multipart error도 이미 얻은 credit을
-남기지 않는다. Framework의 drop·cancel·error 경로도 소유한 aggregate에 `Close`를
-호출한다. Go binding은 GC 실행 시점을 수명 계약으로 사용하지 않으므로 정상 경로와
-누락 방지는 모두 명시적인 `Close`/재사용에 의존한다.
-
-개별 `Message` part는 retained credit을 숨겨 소유하지 않는다. Native lease handle,
-별도 retry/application capacity, allowance나 중복 accounting 상태도 public API로
-노출하지 않는다.
+Core byte HWM charge는 `Recv` 또는 `Subscribe`가 payload를 dequeue할 때 끝난다.
+`Received`와 `TopicMessage`는 part, Routing ID, request sequence, topic과 multipart
+framing의 Go 수명만 소유한다. `Close`와 저장소 재사용은 그 payload와 metadata를
+정리하지만 Core HWM accounting에는 관여하지 않는다. 별도 retained receive, native
+lease handle, application byte capacity 또는 중복 accounting 상태는 public이나
+internal API에 두지 않는다.
 
 Socket monitor는 typed event mask로 열고 `MonitorEvent`, `MonitorStatus`를 제공한다.
-Core 0.13.0의 각 monitor event mask와 delivered event value는 대응하는 typed constant로
+Core 0.13.1의 각 monitor event mask와 delivered event value는 대응하는 typed constant로
 제공한다. `MonitorEventMask`는 monitor를 열 때 사용하고 `MonitorEventType`은
 수신한 `MonitorEvent.Event`를 검사할 때 사용한다.
 `OpenSocketMonitor(socket, options...)`는 `MonitorEventMask`와
@@ -294,9 +281,10 @@ current/peak/provisional accounted byte, completion current/peak/pending과 tota
 monitor/instance aggregate, application/completion queue count,
 `OutstandingApplicationLeaseCount`, `RetiredQueueCount`, `DeferredOriginCreditBytes`,
 oversize·blocked·aggregate flag, `BudgetGeneration`과 `MeasurementEpoch`을 정확한
-`uint64`/boolean 값으로 제공한다. Reset은 current·pending·queue count와 위 세
-owner-lifecycle gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를 0으로 만든
-뒤 `MeasurementEpoch`을 증가시킨다. ABI version/size 불일치는 unsupported error다.
+`uint64`/boolean 값으로 제공한다. `ApplicationAccountedBytes`와 위 세 owner-lifecycle
+필드는 ABI 예약 필드이며 항상 `0`이다. Reset은 current·pending·queue count를 유지하고 두
+peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `MeasurementEpoch`을
+증가시킨다. ABI version/size 불일치는 unsupported error다.
 Poller는 socket, file descriptor와 timer source의 readiness를 `PollEvent`로 보고한다.
 Timer는 interval event를 poller 또는 직접 receive하는 데 사용한다. Monitor, poller와
 timer의 callback 또는 event result는 native callback thread를 public consumer callback
@@ -358,9 +346,9 @@ allowlist에 없다.
 Module package는 다음 file proxy layout을 사용한다.
 
 ```text
-zlink.systems/zlink/@v/v0.13.0.info
-zlink.systems/zlink/@v/v0.13.0.mod
-zlink.systems/zlink/@v/v0.13.0.zip
+zlink.systems/zlink/@v/v0.13.1.info
+zlink.systems/zlink/@v/v0.13.1.mod
+zlink.systems/zlink/@v/v0.13.1.zip
 ```
 
 지원 platform runtime은 module의 `native/<platform>/` 아래에 포함한다. Package

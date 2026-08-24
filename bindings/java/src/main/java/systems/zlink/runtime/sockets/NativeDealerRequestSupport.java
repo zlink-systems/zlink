@@ -33,14 +33,6 @@ final class NativeDealerRequestSupport {
             }
 
             @Override
-            public boolean routerRecvRetainedInto(Object support,
-                                                  Received target,
-                                                  RecvFlags flags) {
-                return ((NativeRouterReceiveSupport) support)
-                    .recvRetainedInto(target, flags);
-            }
-
-            @Override
             public void routerOnReceive(Object support,
                                         SocketMessageHandler handler) {
                 ((NativeRouterReceiveSupport) support).onReceive(handler);

@@ -1,124 +1,139 @@
+---
+title: "Runtime Boundary"
+---
+
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/08-runtime-boundary/) | English
 
 <!-- zlink-nav:start -->
 [Core Spec Index](README.en.md) | [Previous: Utilities](07-utilities.en.md) | [Next: Socket Overview](socket/README.en.md)
 <!-- zlink-nav:end -->
 
-# Core Runtime Boundary
+# Runtime Boundary
 
-This document defines the public C ABI boundary of ZLink Core. Core is a
-raw-socket runtime that encapsulates message transport and operating-system I/O.
-Framework owns application service topology and stateful-object runtimes.
+> **What this chapter defines** — The boundary that Core maintains exclusively for raw
+> sockets and transports, and that higher layers must not cross.
 
-## 1. Core capabilities
+## 1. Runtime boundary overview
 
-Core provides the following capabilities through its public C ABI:
+This document defines the runtime boundary provided by the zlink Core public C ABI. Core is
+a raw [socket](glossary.en.md#socket) runtime that encapsulates message transport and
+operating-system I/O—a socket is an endpoint that sends and receives messages. Framework
+owns application service topology and stateful object runtimes. The intended audience is
+developers who implement or review Core and Framework runtimes and this boundary.
 
-- Context and I/O-thread lifecycle
+Responsibilities on the two sides of the boundary are divided as follows.
+
+| Owner | Responsibility |
+|---|---|
+| Core | Provides, through its public C ABI, a raw socket runtime that encapsulates message transport and operating-system I/O. |
+| Framework | Owns application service topology and stateful object runtimes, and implements service contracts using only the public raw socket API of each language binding. |
+| Application (raw) | Uses raw sockets directly through the Core public C ABI or a language binding. If a transport liveness policy is needed, the application handles it through operating-system settings or its own application protocol ([§4](#4-transport-liveness-boundary)). |
+
+The following documents own the related contracts.
+
+| Related contract | Defining document |
+|---|---|
+| Socket creation, options, send, and receive | [Socket Common](socket/README.en.md) and each formal socket document |
+| Context lifetime and options | [Context](01-context.en.md) |
+| Message lifecycle and ownership | [Message](02-message.en.md) |
+| Socket monitor contract | [Monitoring](06-monitoring.en.md) |
+| Utilities such as pollers and timers | [Utilities](07-utilities.en.md) |
+| Exclusion of the completion progress lane from HWM and budget accounting | [Auto HWM](systems/06-auto-hwm.en.md) |
+
+## 2. Capabilities provided by Core
+
+Core provides the following capabilities through its public C ABI.
+
+- The lifecycle of [Context](glossary.en.md#context), the top-level container for I/O
+  threads and sockets, and [I/O threads](glossary.en.md#io-thread), which perform network
+  I/O
 - Message allocation, ownership, multipart frames, and routing IDs
 - PAIR, PUB, SUB, XPUB, XSUB, DEALER, ROUTER, and STREAM raw sockets
 - Bind, connect, disconnect, endpoint, and connection lifecycle
 - TCP, WebSocket, and TLS transports
 - Classic PUB/SUB and raw STREAM
-- Raw-socket monitoring, generic events, poll, and pollers
+- Raw socket monitors, generic events, poll, and pollers
 - Generic timers, threads, stopwatches, atomic counters, and proxies
 - Request, handshake, and reconnect timeouts
-- Paired DEALER/ROUTER receive-flow state
+- Receive-flow state for paired DEALER/ROUTER sockets
 
-## 2. Framework-owned capabilities
+## 3. Capabilities owned by Framework
 
-Core does not provide the following service concepts through its public C
-ABI, installed headers, exported symbols, or compatibility facades:
+Core does not provide the following service concepts through its public C ABI, installed
+headers, exported symbols, or compatibility facades.
 
 - MeshName, ChannelName membership, and service discovery
 - MeshNode lifecycle, peer admission, and node/channel messaging
 - Ready batches, claims, receive batches, and reply tokens
-- Spots, Actors, Instance Spot activation, and Logical Multicast
+- Spot, Actor, Instance Spot activation, and Logical Multicast
 - Actor transfer, bound STREAM sessions, and service drain
 - MeshNode monitors, service snapshots, and Spot-owned timers
 
-The Core installation therefore has no `zlink/service/*.h` headers, and the root
-`zlink.h` does not include a service header. Raw sockets have no ChannelName
-setter or getter. Generic pollers handle only sockets, file descriptors, and
-generic timers; they return no service owner or claim. Socket monitors report
-only transport and protocol state.
+The Core installation tree therefore has no `zlink/service/*.h`, and the root `zlink.h` does
+not include a service header. Raw sockets have no ChannelName setter or getter. Generic
+pollers handle only sockets, file descriptors, and generic timers; they return no service
+owner or claim. Socket monitors report only transport and protocol state.
 
-Framework runtimes implement service contracts using only the public raw-socket
-API of each language binding. The design does not add a shared native service
-runtime, a separate Core C SPI, a private binding entry point, or a
-language-neutral service C ABI.
+Framework runtimes implement service contracts using only the public raw socket API of each
+language binding. There is no shared native service runtime for Framework, separate Core C
+SPI, private binding entry point, or language-neutral service C ABI.
 
-Core carries the receive-flow state of a paired DEALER/ROUTER socket in frames
-on the completion lane and consumes those frames inside the runtime. The public
-surface for that state is `zlink_socket_set_receive_flow_state()` for setting
-it, the three receive-flow monitor events for observing it, and the
-receive-flow fields of the monitor status snapshot. There is no public API that
-receives, sends, encodes, or decodes a raw flow-state frame, and a flow-state
-frame is never delivered to an application receive call. A binding therefore
-never builds or parses one.
+Core carries the receive-flow state of a paired DEALER/ROUTER socket in frames on the
+[completion progress lane](glossary.en.md#completion-progress-lane) (a separate path used
+only to progress terminal replies and error replies, hereafter the completion lane) and
+consumes those frames inside the runtime. [Auto HWM](systems/06-auto-hwm.en.md) owns the
+contract that excludes this lane from [HWM](glossary.en.md#hwm) admission and the Auto HWM
+budget. The public surface for this state consists of
+`zlink_socket_set_receive_flow_state()` for configuration, three receive-flow monitor
+events for observation, and the receive-flow fields of the monitor status snapshot. There
+is no public API that receives, sends, encodes, or decodes a raw flow-state frame, and a
+flow-state frame is not delivered to an application receive call. A binding therefore does
+not create or interpret this frame directly.
 
-## 3. Transport-liveness boundary
+## 4. Transport liveness boundary
 
-Core reports orderly disconnects, transport failures, and protocol failures
-through socket monitors and reconnects configured endpoints. A raw application
-that needs to detect a half-open TCP connection configures operating-system TCP
-keepalive and the TCP retransmission limit, or defines that check in its own
-application protocol.
+Core reports orderly disconnects, transport failures, and protocol failures through socket
+monitors and reconnects configured endpoints. A raw application that needs a policy for
+detecting a half-open TCP connection configures operating-system TCP keepalive and the TCP
+retransmission limit, or checks the state through its own application protocol.
 
-Framework implements service-connection liveness messages, Location-owner
-leases, and STREAM-session ping/pong. Core neither interprets those service
-messages nor decides whether an application handler can process work.
+Framework handles liveness messages for service connections, Location owner leases, and
+STREAM session ping/pong. Core neither interprets these service messages nor determines
+whether an application handler is able to process work.
 
-The Core public-option set does not include `ZLINK_OPT_HEARTBEAT_IVL`,
-`ZLINK_OPT_HEARTBEAT_TTL`, or `ZLINK_OPT_HEARTBEAT_TIMEOUT`. The raw ZMP command
-set does not include `zmp_control_heartbeat` or `zmp_control_heartbeat_ack`.
-Aliases, deprecated options, and compatibility commands do not expose the same
-values.
+The Core public option set does not include `ZLINK_OPT_HEARTBEAT_IVL`,
+`ZLINK_OPT_HEARTBEAT_TTL`, or `ZLINK_OPT_HEARTBEAT_TIMEOUT`. The raw ZMP command set does
+not include `zmp_control_heartbeat` or `zmp_control_heartbeat_ack`. Aliases, deprecated
+options, and compatibility commands do not provide the same values.
 
-## 4. Ownership and error boundary
+## 5. Ownership and error boundary
 
-The Core public specification owns allocation, retain, copy, and close rules
-for raw messages and socket handles. Framework follows the ownership contract
-published by each binding and does not expose a Core-owned buffer view beyond
-the lifetime of an application callback.
+The Core public specification defines the allocation, retain, copy, and close rules for raw
+messages and socket handles. Framework follows the ownership contract exposed by each
+binding and does not expose a Core-owned buffer view beyond the lifetime of an application
+callback.
 
-Core errors describe raw-socket, transport, protocol, and operating-system
-failures. Framework maps them to typed terminal results for service operations.
-It does not promote Core error codes directly into the Framework application
-contract or add service retry policy to Core.
+Core errors represent raw socket, transport, protocol, and operating-system failures.
+Framework maps these errors to typed terminal results for service operations. It does not
+promote Core error codes directly into the Framework application contract or add service
+retry policy to Core.
 
-Core does not decide progress for accepted service work, handler completion,
-Actor transfer, checkpoints, or host termination. Each language Framework
-runtime separates raw-I/O progress from application-dispatch progress.
+Core does not determine the progress of accepted service work, handler completion, Actor
+transfer, checkpoints, or host termination. Each language Framework runtime separates raw
+I/O progress from application dispatch progress.
 
-## 5. Public-surface verification
+## 6. Internal structure
 
-Core public-surface verification must establish all of the following:
+> **Contract ownership for this section** — The contract sections of this document
+> ([§2](#2-capabilities-provided-by-core)–[§5](#5-ownership-and-error-boundary)) and the
+> [verification requirements](#7-implementation-and-contract-test-verification-requirements)
+> own the public boundary maintained by Core. This section explains how the internal layers
+> divide responsibilities to enforce that boundary.
 
-- The install tree and exported symbols contain no service headers, types, or functions.
-- `zlink_socket_set_channel_name`, `zlink_socket_get_channel_name`, MeshNode poll
-  and monitor support, and `zlink_spot_timer_new` are absent.
-- Public headers and exported symbols contain no Framework-only C SPI or service
-  compatibility facade.
-- Raw-socket, generic poller/timer, and socket-monitor contract tests pass.
-- The raw-option and ZMP-command inventories agree with the formal socket and
-  protocol specifications.
-- Framework runtimes use only the public Core raw surface.
-- Core public APIs and implementation contain no ChannelName, service dispatch,
-  Spot, Actor, transfer, or maintenance semantics.
-
-## Internals
-
-> **The document that owns this chapter's contract** — the public boundary
-> Core maintains is covered by the contract part of this document. This
-> section explains how the internal layers actually divide and enforce that
-> boundary.
-
-Core implements only raw sockets and transports. The public API facade
-validates arguments, handles, and ownership. Socket semantics implement routing
-for PAIR, PUB/SUB, DEALER/ROUTER, and STREAM. Runtime core manages connections,
-sessions, pipes, and I/O threads, while engines implement TCP, WebSocket, and
-TLS framing.
+Core 0.13.0 implements only raw sockets and transports. The public API facade validates
+arguments, handles, and ownership. The socket semantics layer determines routing for
+PAIR, PUB/SUB, DEALER/ROUTER, and STREAM. Runtime core manages connections, sessions,
+pipes, and I/O threads, while engines handle TCP, WebSocket, and TLS framing.
 
 ```text
 +------------------------------+
@@ -132,108 +147,150 @@ TLS framing.
 +------------------------------+
 ```
 
-Core source and public ABI contain no mesh topology, application mailbox,
-stateful object, discovery authority, or service lifecycle. Framework runtimes
-use only the public raw API of each language binding.
+Core source and public ABI contain no mesh topology, application mailbox, stateful object,
+discovery authority, or service lifecycle. Framework runtimes use the public raw API of
+each language binding.
 
 ### Public binding boundary
 
-Core public headers expose only context, message, raw socket, endpoint, option,
-poller, timer, and monitor contracts. The C++, .NET, JVM, and Node.js bindings
-project that raw contract into their languages. Framework runtimes use only the
-installed public API of the corresponding binding.
+Core public headers provide only context, message, raw socket, endpoint, option, poller,
+timer, and monitor contracts. The C++, .NET, JVM, and Node.js bindings project this raw
+contract into their languages. Framework runtimes use only the installed binding's public
+API.
 
-The design does not add a Framework-only service C ABI, private callback SPI,
-shared native service runtime, or separate loader. If a raw capability is
-missing, maintainers first determine whether it is a generally useful raw
-socket primitive and then update the public Core specification and all four
-binding contracts. Framework does not call private Core headers or unexported
-symbols.
+There is no Framework-only service C ABI, private callback SPI, shared native service
+runtime, or separate loader. If a raw capability is insufficient, maintainers first assess
+whether the primitive is also required by generic raw socket users, and then update the
+public Core specification and all four binding contracts together. Framework does not use
+Core private headers or unexported symbols directly.
 
 ### Socket and pipe ownership
 
-The context owns I/O threads and global runtime resources. A socket owns its
-options, endpoints, sessions, and pipes. A session manages one transport
-connection's protocol engine and reconnect state. A pipe carries messages
-between a socket queue and an engine.
+Context owns I/O threads and global runtime resources. A socket owns its options, endpoints,
+sessions, and pipes. A session manages one transport connection's protocol engine and
+reconnect state, while a pipe manages message flow between a socket queue and an engine.
 
-Socket close first blocks new send, receive, and callback registration, then
-terminates sessions and pipes, and finally invalidates the handle. Engine timers
-and monitor events belong to one connection lifetime. A late engine callback
-cannot modify a socket that has already closed.
+Socket close blocks new sends, receives, and callback registration, terminates sessions and
+pipes, and then invalidates the handle. Engine timers and monitor events belong to the
+corresponding connection lifetime. An engine callback that arrives late after close does
+not modify the terminated socket state.
 
-A Core connection identity distinguishes a physical lifetime. Core does not
-interpret it as a mesh lifecycle generation, descriptor revision, Actor
-authority-owner generation, or Location authority store version.
+A Core connection identity is a raw observable value that distinguishes a physical
+lifetime. Core does not interpret it as a Mesh lifecycle generation, descriptor revision,
+Actor authority owner generation, or Location authority store version.
 
-For DEALER/ROUTER request-reply, one logical peer owns an Application and a
-Completion transport connection. Core validates their pair ID, pair generation,
-lane, and peer identity before it releases Application writes. Failure of one
-lane terminates both lanes. Ordinary messages and requests use the Application
-lane; replies use the Completion lane. This keeps request completion available
-when Application ingress is backpressured.
+In DEALER/ROUTER request-reply, one logical peer has Application and Completion transport
+connections. Before allowing Application writes, Core validates the pair ID, pair
+generation, lane, and peer identity of both connections. Failure of either lane terminates
+both lanes. Ordinary messages and requests use the Application lane, while replies use the
+Completion lane. Therefore, requests already sent can complete even while Application
+ingress is stopped by [backpressure](glossary.en.md#backpressure) (behavior that limits
+additional submissions from a sender when receiving cannot keep pace with processing).
 
-Each lane retains payload only in its directional network pipe. Core does not
-place received application payload in a hidden PAIR queue and does not copy
-reply payload into a completion deque. The remaining terminal-callback metadata
-queue contains only payloadless timeout, disconnect, and shutdown outcomes; it
-is not a transport lane or wire record.
+Each lane retains payload only in its directional network pipe. Received application
+payload is not moved to a hidden PAIR queue, and reply payload is not copied to a completion
+deque. The remaining terminal callback metadata queue stores only payloadless timeout,
+disconnect, and shutdown results. This queue is neither a transport lane nor a wire record.
 
-### Transport-liveness boundary
+### Transport liveness implementation
 
-TCP and WebSocket engines deliver orderly disconnects, read/write failures, and
-protocol failures to their sessions. A session reports these conditions through
-the socket monitor and updates reconnect state for configured endpoints.
-Operating-system TCP keepalive and the TCP retransmission limit remain transport
-options; an engine creates no separate application control frame for them.
+TCP and WebSocket engines deliver orderly disconnects, read/write failures, and protocol
+failures to the session. The session reports them through the socket monitor and updates
+the reconnect state of configured endpoints. Operating-system TCP keepalive and the TCP
+retransmission limit are applied as transport options; the engine does not create separate
+application control frames.
 
-Framework service-protocol liveness messages travel as raw application payload.
-Core does not interpret their body or deadline. Each language Framework runtime
-handles them through its infrastructure queue and scheduler.
+Framework service protocol liveness messages are carried as raw application payload. Core
+does not interpret their body or deadline; each language Framework runtime processes them
+through its infrastructure queue and scheduler.
 
 The Core source boundary contains no `ZLINK_OPT_HEARTBEAT_IVL`,
 `ZLINK_OPT_HEARTBEAT_TTL`, `ZLINK_OPT_HEARTBEAT_TIMEOUT`,
-`zmp_control_heartbeat`, `zmp_control_heartbeat_ack`, or codec, parser, and engine
-state that handles those values. It also contains no `heartbeat_ivl_timer_id`,
-`heartbeat_ttl_timer_id`, `heartbeat_timeout_timer_id`, or corresponding
-callback branches. Generic engine timers and reconnect timers are raw-transport
-resources.
+`zmp_control_heartbeat`, `zmp_control_heartbeat_ack`, or codec, parser, and engine state
+that handles those values. It also contains no `heartbeat_ivl_timer_id`,
+`heartbeat_ttl_timer_id`, `heartbeat_timeout_timer_id`, or corresponding callback branches.
+Generic engine timers and reconnect timers are raw transport resources.
 
 ### Timer boundary
 
-Core timers are monotonic scheduling primitives for raw-socket engines,
-reconnect, and poller integration. They know nothing about application Spot
-turns, Actor lifecycles, Instance leases, or transfer phases. Framework object
-timers and deadline schedulers use the binding's public timer or poller API, or
-the scheduler provided by the language runtime.
+Core timers are monotonic scheduling primitives required for raw socket engines, reconnect,
+and poller integration. A timer knows nothing about application Spot turns, Actor
+lifecycles, Instance leases, or transfer phases. Framework object timers and deadline
+schedulers are implemented using the binding's public timer and poller APIs or the
+corresponding language scheduler.
 
-Closing a timer owner cancels callback registration and prevents a pending
-callback from referring to owner state again. A timer ID has meaning only
-within one owner lifetime and is not a Framework operation ID or generation.
+When a timer owner terminates, it cancels callback registration and prevents pending
+callbacks from referring to the owner state again. A timer ID has meaning only within the
+lifetime of the same owner and is not used as a Framework operation ID or generation.
 
 ### Monitor boundary
 
-Core monitors report raw bind, accept, connect, disconnect, retry, protocol,
-and transport failures. An event describes a raw socket and connection lifetime;
-it does not contain MeshName, ChannelName, peer admission, Spot, Actor, Location
-Store, or host termination results.
+Core monitors report raw bind, accept, connect, disconnect, retry, protocol, and transport
+failures. An event describes a raw socket and connection lifetime; it does not include
+MeshName, ChannelName, peer admission, Spot, Actor, Location Store, or host termination
+results.
 
-Framework consumes raw events through the binding's public monitor API and
-applies them to its own peer registry and state reducer. The Core monitor queue
-and Framework typed observer queues are separate resources. Core monitoring
-does not implement slow-observer handling, coalescing, or metric policy.
+Framework receives raw events through the binding's public monitor API and applies them to
+its own peer registry and state reducer. The Core raw monitor queue and Framework typed
+observer queue are separate resources. Core monitors do not handle slow consumption,
+coalescing, or metric policy for Framework observers.
 
 ### Raw-only invariants
 
 - Core source and public ABI own no service protocol command or state machine.
-- Core creates no application mailbox, ready owner, claim, reply token, or
-  terminal request state.
-- Core does not interpret Spot, Actor, or Instance identity, generation, or
-  activation barriers.
-- Core does not call a Location Store, Checkpoint Store, lease, owner CAS, or
-  maintenance recovery operation.
+- Core creates no application mailbox, ready owner, claim, reply token, or terminal request
+  state.
+- Core does not interpret Spot, Actor, or Instance identity, generation, or activation
+  barriers.
+- Core does not call a Location Store, Checkpoint Store, lease, owner CAS, or maintenance
+  recovery operation.
 - Raw engine timers and raw monitors are connection resources.
-- Framework uses only public binding APIs and does not depend on private Core
-  symbols.
-- Raw-socket options and monitor events are not exposed unchanged as Framework
+- Framework uses only public binding APIs and does not depend on private Core symbols.
+- Raw socket options and monitor events are not passed through unchanged to public Framework
   service APIs.
+
+## 7. Implementation and contract-test verification requirements
+
+Verify the following using only the public surface: the installed header tree, exported
+symbols, public option and command inventories, and the send, receive, and monitor results
+of public APIs. Each item maps to one check.
+
+**Installation surface and symbols**
+
+- The installation tree and exported symbols contain no service headers, types, or
+  functions—the Core installation tree has no `zlink/service/*.h`, and the root `zlink.h`
+  does not include a service header.
+- `zlink_socket_set_channel_name`, `zlink_socket_get_channel_name`, MeshNode poll and
+  monitor support, and `zlink_spot_timer_new` are absent.
+- Public headers and exported symbols contain no Framework-only C SPI or service
+  compatibility facade.
+
+**Option and command inventory**
+
+- The raw option and ZMP command inventories agree with the formal socket and protocol
+  specifications.
+- The public option set does not include `ZLINK_OPT_HEARTBEAT_IVL`,
+  `ZLINK_OPT_HEARTBEAT_TTL`, or `ZLINK_OPT_HEARTBEAT_TIMEOUT`; the raw ZMP command set does
+  not include `zmp_control_heartbeat` or `zmp_control_heartbeat_ack`; and aliases,
+  deprecated options, and compatibility commands do not provide the same values.
+
+**Raw surface behavior**
+
+- Raw socket, generic poller and timer, and socket monitor contract tests pass.
+- Generic pollers handle only sockets, file descriptors, and generic timers; they return no
+  service owner or claim.
+- Socket monitors report only transport and protocol state.
+
+**Receive-flow state**
+
+- The public surface for receive-flow state consists only of
+  `zlink_socket_set_receive_flow_state()`, three receive-flow monitor events, and the
+  receive-flow fields of the monitor status snapshot.
+- There is no public API that receives, sends, encodes, or decodes a raw flow-state frame,
+  and a flow-state frame is not delivered to an application receive call.
+
+**Framework boundary**
+
+- Framework runtimes use only the public Core raw surface.
+- Core public APIs and implementation contain no ChannelName, service dispatch, Spot,
+  Actor, transfer, or maintenance semantics.

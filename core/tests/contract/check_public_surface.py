@@ -35,8 +35,6 @@ INFRA_MACROS = re.compile(r"^ZLINK_.*_H_INCLUDED$|^ZLINK_EXPORT$|^ZLINK_DEFINED_
 # the formal C-block parse does not produce them.
 TABLE_ONLY_MACROS = {
     "ZLINK_DONTWAIT",
-    "ZLINK_MSG_METADATA_KEY_USER_MIN",
-    "ZLINK_MSG_METADATA_VALUE_MAX",
     "ZLINK_NULL",
     "ZLINK_PLAIN",
 }

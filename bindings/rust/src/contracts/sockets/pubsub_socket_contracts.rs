@@ -2,8 +2,8 @@
 
 use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, PubSocketOptions,
-    RecvError, RecvFlags, SubSocketOptions, SubscriptionEvent, TopicMessage,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, PubSocketOptions, RecvError,
+    RecvFlags, SubSocketOptions, SubscriptionEvent, TopicMessage,
 };
 use crate::{Empty, PublishOp};
 
@@ -148,7 +148,6 @@ impl PubSocket {
         crate::operations::socket_publish_op(crate::socket::pub_inner(self).handle, topic)
     }
 
-
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {
         CommonSocketOptions::new(crate::socket::pub_inner(self))
@@ -174,16 +173,6 @@ impl SubSocket {
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError> {
         crate::socket::sub_inner(self).subscribe_recv(out, flags)
-    }
-
-    /// Receives a matching topic message while retaining its physical Core
-    /// HWM credits in `out` until reuse, close, consumption, or drop.
-    pub fn subscribe_retained(
-        &self,
-        out: &mut TopicMessage,
-        flags: RecvFlags,
-    ) -> Result<bool, RecvError> {
-        crate::socket::sub_inner(self).subscribe_recv_retained(out, flags)
     }
 
     /// Adds a subscription for `filter` (an exact topic or pattern).
@@ -241,7 +230,6 @@ impl XPubSocket {
         crate::socket::xpub_inner(self).receive_subscription_event(out, flags)
     }
 
-
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {
         CommonSocketOptions::new(crate::socket::xpub_inner(self))
@@ -267,16 +255,6 @@ impl XSubSocket {
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError> {
         crate::socket::xsub_inner(self).subscribe_recv(out, flags)
-    }
-
-    /// Receives a matching topic message while retaining its physical Core
-    /// HWM credits in `out` until reuse, close, consumption, or drop.
-    pub fn subscribe_retained(
-        &self,
-        out: &mut TopicMessage,
-        flags: RecvFlags,
-    ) -> Result<bool, RecvError> {
-        crate::socket::xsub_inner(self).subscribe_recv_retained(out, flags)
     }
 
     /// Adds a subscription for `filter` (an exact topic or pattern).

@@ -97,8 +97,7 @@ pub(crate) enum SendOpKind {
 unsafe impl Send for SendOpStorage {}
 
 /// A PUB/XPUB publish builder. Publish is lossy and never waits on a HWM, so
-/// its terminal is synchronous (`bindings/doc/spec/async-coroutine-policy.ko.md`
-/// 3rd revision). With `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces an
+/// its terminal is synchronous. With `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces an
 /// immediate `Backpressured` error instead.
 pub struct PublishOp<State> {
     pub(crate) inner: PublishOpStorage,

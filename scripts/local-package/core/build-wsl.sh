@@ -14,9 +14,9 @@ usage() {
 Usage: build-wsl.sh [--build-dir DIR] [--output-root ABSOLUTE_DIR]
                     [--evidence ABSOLUTE_JSON]
 
-Builds Core from the current source, installs a versioned 0.11.1 local package,
-writes a generic provenance record, and verifies a clean C consumer. The ABI
-SONAME is libzlink.so.0.
+Builds Core from the current source, installs a local package at the repository
+VERSION, writes a generic provenance record, and verifies a clean C consumer.
+The ABI SONAME is libzlink.so.0.
 EOF
 }
 

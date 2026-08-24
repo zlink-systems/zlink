@@ -44,18 +44,6 @@ internal abstract class ReceivingMessageSocketBase : ConnectableSocketBase,
         return Kernel.ReceiveInto(result, (int)flags);
     }
 
-    /// <summary>
-    ///     Receive a message and retain its Core HWM credit with the supplied
-    ///     envelope until deterministic cleanup.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool RecvRetained(Received result,
-        RecvFlags flags = RecvFlags.None)
-    {
-        return Kernel.ReceiveRetainedInto(result, (int)flags);
-    }
-
-
     internal void OnReceive(SocketRecvHandler handler)
     {
         Kernel.RecvHandler(handler);

@@ -254,6 +254,36 @@ const version = process.env.VERSION;
 const runtimePath = process.env.RUNTIME_PATH;
 const files = [];
 
+if (process.env.PLATFORM.startsWith('linux-')) {
+  const cmakeDir = path.join(root, 'lib', 'cmake', 'zlink');
+  fs.mkdirSync(cmakeDir, {recursive: true});
+  fs.writeFileSync(path.join(cmakeDir, 'zlinkConfig.cmake'), `\
+# Materialized by scripts/local-package/core/fetch-release.sh.
+get_filename_component(_zlink_prefix "\${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+if(NOT TARGET libzlink)
+  add_library(libzlink SHARED IMPORTED)
+  set_target_properties(libzlink PROPERTIES
+    IMPORTED_LOCATION "\${_zlink_prefix}/${runtimePath}"
+    INTERFACE_INCLUDE_DIRECTORIES "\${_zlink_prefix}/include")
+endif()
+set(zlink_INCLUDE_DIR "\${_zlink_prefix}/include")
+set(zlink_LIBRARY "\${_zlink_prefix}/${runtimePath}")
+set(zlink_FOUND TRUE)
+unset(_zlink_prefix)
+`);
+  fs.writeFileSync(path.join(cmakeDir, 'zlinkConfigVersion.cmake'), `\
+set(PACKAGE_VERSION "${version}")
+if(PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
+  set(PACKAGE_VERSION_COMPATIBLE FALSE)
+else()
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+  if(PACKAGE_FIND_VERSION STREQUAL PACKAGE_VERSION)
+    set(PACKAGE_VERSION_EXACT TRUE)
+  endif()
+endif()
+`);
+}
+
 function walk(directory) {
   for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
     const full = path.join(directory, entry.name);

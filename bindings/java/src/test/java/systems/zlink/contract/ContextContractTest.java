@@ -65,6 +65,10 @@ public class ContextContractTest {
             assertTrue(before.aggregateHwmValid());
             assertFalse(before.budgetInsufficient());
             assertFalse(before.aggregateOverflow());
+            assertEquals(0L, before.applicationAccountedBytes());
+            assertEquals(0L, before.outstandingApplicationLeaseCount());
+            assertEquals(0L, before.retiredQueueCount());
+            assertEquals(0L, before.deferredOriginCreditBytes());
             assertTrue(before.reservedUInt64().stream()
                 .allMatch(value -> value == 0L));
 

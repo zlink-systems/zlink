@@ -358,6 +358,11 @@ public final class Native {
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_DEALER_RECV_PART = downcall(
+      "zlink_dealer_recv_part",
+      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     // DONT_WAIT-only critical variant. zlink_router_recv_part is non-blocking
     // when called with DONT_WAIT flag, so the JVM can elide GC safepoint
     // transition for this call. Caller must guarantee DONT_WAIT bit is set.
@@ -805,18 +810,6 @@ public final class Native {
         }
     }
 
-    public static int recvPartWithHwmBudgetLease(
-            MemorySegment socket, MemorySegment sourceRidOut,
-            MemorySegment partOut, MemorySegment leaseOut,
-            MemorySegment hasMoreOut, int flags) {
-        leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-        return recv(socket, sourceRidOut, partOut, hasMoreOut, flags);
-    }
-
-    public static void hwmBudgetLeaseRelease(MemorySegment leaseOut) {
-        leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-    }
-
     public static int recvPartNoWaitCritical(MemorySegment socket,
                                              MemorySegment sourceRidOut,
                                              MemorySegment partOut,
@@ -1152,16 +1145,6 @@ public final class Native {
         } catch (Throwable t) {
             throw new RuntimeException("zlink_subscribe_part failed", t);
         }
-    }
-
-    public static int subscribePartWithHwmBudgetLease(
-            MemorySegment subject, MemorySegment sourceRidOut,
-            MemorySegment topicIdOut, long topicCapacity,
-            MemorySegment topicIdLenOut, MemorySegment partOut,
-            MemorySegment leaseOut, MemorySegment hasMoreOut, int flags) {
-        leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-        return subscribePart(subject, sourceRidOut, topicIdOut, topicCapacity,
-            topicIdLenOut, partOut, hasMoreOut, flags);
     }
 
     // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT set.
@@ -1512,25 +1495,18 @@ public final class Native {
         }
     }
 
-    public static int routerRecvPartV2WithHwmBudgetLease(
-            MemorySegment router, MemorySegment sourceNodeRidOut,
-            MemorySegment requestSeqOut, MemorySegment transportPairIdOut,
-            MemorySegment transportPairGenerationOut, MemorySegment partOut,
-            MemorySegment leaseOut, MemorySegment hasMoreOut, int flags) {
-        transportPairIdOut.set(ValueLayout.JAVA_LONG, 0, 0L);
-        transportPairGenerationOut.set(ValueLayout.JAVA_LONG, 0, 0L);
-        leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-        return routerRecvPart(router, sourceNodeRidOut, requestSeqOut,
-            partOut, hasMoreOut, flags);
-    }
-
-    public static int dealerRecvPartWithHwmBudgetLease(
-            MemorySegment dealer, MemorySegment messageTypeOut,
-            MemorySegment requestSeqOut, MemorySegment partOut,
-            MemorySegment leaseOut, MemorySegment hasMoreOut, int flags) {
-        leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-        return dealerRecvPart(dealer, messageTypeOut, requestSeqOut, partOut,
-            hasMoreOut, flags);
+    public static int dealerRecvPart(MemorySegment dealer,
+                                     MemorySegment messageTypeOut,
+                                     MemorySegment requestSeqOut,
+                                     MemorySegment partOut,
+                                     MemorySegment hasMoreOut,
+                                     int flags) {
+        try {
+            return (int) MH_DEALER_RECV_PART.invokeExact(dealer,
+                messageTypeOut, requestSeqOut, partOut, hasMoreOut, flags);
+        } catch (Throwable t) {
+            throw new RuntimeException("zlink_dealer_recv_part failed", t);
+        }
     }
 
     // DONT_WAIT-only critical variant. Caller MUST guarantee the DONT_WAIT

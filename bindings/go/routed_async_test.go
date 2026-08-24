@@ -11,7 +11,7 @@ import (
 	zlink "zlink.systems/zlink"
 )
 
-// This file covers the routed send/request contract after the 0.13.0
+// This file covers the routed send/request contract for the 0.13.1
 // realignment: routed send is a SYNCHRONOUS Submit(ctx) error, the HWM wait
 // lives inside Core (bounded by SNDTIMEO), and the binding owns no thread,
 // queue or retry. Request keeps its completion channel, but the submit itself
@@ -415,9 +415,8 @@ func TestRoutedSendConcurrentMultipartRecordsDoNotInterleave(t *testing.T) {
 	}
 	// Record contiguity is the subject here, not backpressure: give both
 	// queues enough headroom that no record has to park on the Core HWM wait.
-	// (A record that does park can be dropped by Core 0.13.0 — see the Go
-	// realignment log, 2026-08-24-go-realignment.md, "Core 결함" section — and
-	// that loss is not a binding behaviour.)
+	// Parked-record behavior has a separate Core regression gate; this test
+	// isolates binding record contiguity by avoiding that condition.
 	if err := f.router.SetSendHighWaterMark(1 << 20); err != nil {
 		t.Fatalf("router SetSendHighWaterMark() error = %v", err)
 	}

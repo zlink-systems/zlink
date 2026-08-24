@@ -145,16 +145,6 @@ typedef void (zlink_free_fn) (void *data_, void *hint_);
 callback 타입이다. message data buffer가 더 이상 필요하지 않을 때 library가 이 함수를
 호출한다.
 
-### Metadata 매크로
-
-```c
-#define ZLINK_MSG_METADATA_KEY_USER_MIN  0x0100  // 사용자 정의 metadata key의 최소값
-#define ZLINK_MSG_METADATA_VALUE_MAX     65535   // metadata 값의 최대 byte 길이
-```
-
-이 두 상수는 raw ZMP metadata codec의 사용자 정의 key와 value 범위를 고정한다. 일반
-`zlink_msg_t` payload part에는 metadata 값을 읽거나 쓰는 API가 없다.
-
 ## 6. 함수
 
 모든 `zlink_msg_*` 함수에 공통인 입력 규칙: handle이 `NULL`이거나 message가 유효하지

@@ -39,9 +39,9 @@ class RoutedMultipartAdmissionContractTest {
             var serverResult = server.submit(() -> {
                 try (Received request = new Received()) {
                     router.recv(request, RecvFlags.NONE);
-                    // Core 0.13.0 currently has a multipart async ROUTER
-                    // abort/DEALER generic-target defect. Keep this async
-                    // contract probe to one part until that Core fix lands.
+                    // Multipart async generic-target behavior has a separate
+                    // Core regression gate. Keep this probe one-part so it
+                    // tests only admission and reply completion.
                     assertEquals(List.of("first"), request.parts()
                         .stream().map(Message::toUtf8String).toList());
                     request.reply()

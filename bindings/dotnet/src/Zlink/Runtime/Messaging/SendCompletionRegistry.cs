@@ -6,7 +6,7 @@ using Systems.Zlink.Runtime.Native;
 namespace Systems.Zlink;
 
 /// <summary>
-///     Binds one socket's asynchronous send terminal to the Core 0.13.0
+///     Binds one socket's asynchronous send terminal to the Core 0.13.1
 ///     send-completion contract (<c>zlink_send_async</c> /
 ///     <c>zlink_send_complete_handler</c> / <c>zlink_send_async_cancel</c>).
 /// </summary>

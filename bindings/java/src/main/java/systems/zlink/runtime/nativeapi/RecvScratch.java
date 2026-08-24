@@ -15,7 +15,6 @@ public final class RecvScratch {
         NativeLayouts.ROUTING_ID_LAYOUT);
     public final MemorySegment subscribedOut = arena.allocate(ValueLayout.JAVA_INT);
     public final MemorySegment hasMoreOut = arena.allocate(ValueLayout.JAVA_INT);
-    public final MemorySegment leaseOut = arena.allocate(ValueLayout.ADDRESS);
     public final MemorySegment dealerMessageTypeOut =
         arena.allocate(ValueLayout.JAVA_BYTE);
     public final MemorySegment requestSequenceOut =

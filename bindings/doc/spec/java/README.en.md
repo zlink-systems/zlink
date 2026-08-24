@@ -51,7 +51,7 @@ constructors only to preserve the old Java surface.
 | [Socket Contract Shape](#socket-contract-shape) | Common and per-type socket behavior |
 | [Operation Builder Shape](#operation-builder-shape) | Builder start methods and terminal methods |
 | [Messaging Values](#messaging-values) | The `Message`/`Received`/`TopicMessage`/`SubscriptionEvent` contract |
-| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage, no-data, and the Framework retained-credit boundary |
+| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage, no-data, and the Core-HWM ownership boundary |
 | [Handler Registration Naming](#handler-registration-naming) | The `set...Handler` naming rule |
 | [Byte HWM And Monitoring ABI v4](#byte-hwm-and-monitoring-abi-v4) | Non-negative `long` HWM and monitor snapshot fields |
 | [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
@@ -456,7 +456,6 @@ Handler and callback roles may be interfaces or functional interfaces when
 callers provide behavior to the runtime:
 
 - socket receive handler
-- send-ready handler
 - stream packet handler
 - monitor handler
 - timer handler
@@ -621,7 +620,6 @@ Common socket behavior belongs in `Socket`:
 - `setChannelName`
 - `getChannelName`
 - `options`
-- `setSendReadyHandler`
 - `close`
 
 Typed socket contracts add only capabilities that are meaningful for that
@@ -786,33 +784,13 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 No-data is a normal `false` result for caller-provided no-wait receive.
 Hard receive failures throw the documented exception type.
 
-Ordinary `recv(...)` and `subscribe(...)` return Core queue credit immediately
-when a part is dequeued. The lifetime of an ordinary receive result therefore
-does not remain in HWM accounting, and this existing behavior does not change.
-
-A Framework backend uses only the following explicit retained aggregate entry
-points:
-
-```java
-boolean received = router.recvRetained(result, flags);
-boolean subscribed = sub.subscribeRetained(topicMessage, flags);
-```
-
-- `recvRetained(...)` is available on `PairSocket`, `DealerSocket`,
-  `RouterSocket`, and `StreamSocket`; `subscribeRetained(...)` is available on
-  `SubSocket` and `XSubSocket`. This surface is for a Framework backend and is
-  not the default application receive path.
-- The returned `Received` or `TopicMessage` privately owns one opaque Core
-  retained credit for every caller-visible physical payload part. Routing ID,
-  request sequence, topic, and multipart framing are preserved exactly as on
-  the ordinary aggregate receive path.
-- Closing or reusing the result returns every retained credit exactly once.
-  Partial multipart failure, cancellation, and error also return credits
-  already acquired. `Cleaner` is only a fallback for missed deterministic
-  cleanup; normal lifecycle code uses `close()`.
-- Individual `Message` parts and bare part receive primitives do not hide a
-  lease. No raw lease handle, separate capacity, allowance, or duplicate
-  accounting state is exposed through the public API.
+Core byte-HWM charge ends when ordinary `recv(...)` or `subscribe(...)`
+dequeues the payload. `Received` and `TopicMessage` own only the Java lifetime
+of parts, routing ID, request sequence, topic, and multipart framing. Closing
+or reusing the output cleans up payload and metadata but does not participate
+in Core HWM accounting. No separate retained receive, raw lease handle,
+application byte capacity, or duplicate accounting state exists in a public or
+internal API.
 
 SPOT readable dispatch events are readiness notifications. Callers drain the
 corresponding receive API until no-data.
@@ -832,6 +810,8 @@ RID, target Spot RID, target Actor ref, and channel name. Fields that do not
 apply to the destination kind retain the empty value supplied by Core.
 `ReceiveRecord.sendReady()` returns this value only when the kind data has that
 type and returns `null` for other record kinds.
+This record kind belongs to the service-wire dispatch protocol; it is not a
+Core HWM send-ready callback or an asynchronous-send completion.
 
 ## Handler Registration Naming
 
@@ -845,7 +825,6 @@ Handler registration names describe registration, not event occurrence.
 
 Canonical Java names:
 
-- `setSendReadyHandler`
 - `setPacketHandler`
 - `setDispatchHandler`
 - `recvRouted`
@@ -923,10 +902,11 @@ aggregates, application/completion queue counts,
 `outstandingApplicationLeaseCount()`, `retiredQueueCount()`,
 `deferredOriginCreditBytes()`, oversize/blocked/aggregate flags,
 `budgetGeneration()`, and `measurementEpoch()` without unit conversion. Reset
-preserves current, pending, queue-count, and those three owner-lifecycle gauges,
-rebases both peaks to current, clears epoch counters, and increments
-`measurementEpoch`. A budget snapshot ABI version/size mismatch raises
-`UnsupportedOperationException`.
+preserves current, pending, and queue-count gauges, rebases both peaks to
+current, clears epoch counters, and increments `measurementEpoch`.
+`applicationAccountedBytes()` and the three owner-lifecycle fields are
+ABI-reserved and always zero. A budget snapshot ABI version/size mismatch
+raises `UnsupportedOperationException`.
 
 Java and Kotlin call the same Java methods. No Kotlin-only adapter or option
 with a different unit is added. Request/reply APIs do not take an HWM argument

@@ -8,38 +8,6 @@ title: "바인딩 routed 전송 계약과 비동기 완료 표면 정책"
 
 # 바인딩 routed 전송 계약과 비동기 완료 표면 정책
 
-> **개정 기록 (1차)** — 2026-08-23, 소유자 결정으로 이 문서를 개정했다. HWM-managed
-> routed **send**의 canonical terminal을 동기 `submit()`으로 되돌리고, 그
-> 도입 근거였던 binding-owned admission 기계장치(park queue, WRITABLE-callback
-> 재시도, deadline timer, dispatcher thread)와 "HWM-managed routed는 async
-> 전용" 규칙을 폐지했다. **request**의 비동기 완료 표면(Core가 reply로 완료를
-> 구동하는 suspension)은 그대로 유지한다. 근거와 실측은
-> `doc/plan/cpp-routed-async-contract-issue.ko.md` (§0 지배 원칙, §3.1 선행
-> 확인, §3.2 최종 설계 확정)를 참고한다.
-
-> **개정 기록 (2차)** — 2026-08-23, 같은 날 소유자 결정으로 이 문서를 다시
-> 개정했다. terminal-surface 표면을 정규화한다: (1) 당시 규칙에 따라
-> HWM 대기가 발생할 수 있는 조작(PAIR send, DEALER/ROUTER의 routed send,
-> request)은 그 사실 하나로 전부 ASYNC로 분류한다는 원칙을 명문화하고,
-> (2) 1차 개정이 되돌렸던 C++ routed send의 "동기 전용" 표면을 다시 확장해
-> `submit()`(blocking) + `async()`(coroutine) 두 terminal 체제로 정리하며,
-> (3) C++ **request**의 세 terminal(`submit()` / `submit(callback)` /
-> `async()`) 표면을 2026-08-15 이전 상태로 복원한다. 자세한 사유는 아래
-> [분류 원칙](#분류-원칙)과 각 절을 참고한다. C++ send의 async
-> 완료는 Core send-completion 통지 설계에 의존하며, 그 설계는
-> `doc/plan/core-send-completion-design.ko.md`에서 진행 중이다(forward
-> reference — 통지 표면이 확정되면 이 문서의 관련 절을 그 계약에 맞춰
-> 갱신한다).
-
-> **개정 기록 (3차)** — 2026-08-24, 소유자 결정으로 PUB/XPUB
-> `publish`를 synchronous-only로 재분류했다. 기본 PUB 의미론은 lossy다.
-> subscriber의 queue가 HWM에 도달하면 해당 subscriber에게 보내는 copy를
-> drop하고 publisher는 즉시 진행하며, publisher는 HWM에서 대기하지 않는다.
-> `ZLINK_PUB_OPT_NODROP`(ZMQ `XPUB_NODROP`과 동등한 opt-in)을 사용하면
-> 가득 찬 subscriber가 동기 `submit()`에서 즉시 `BACKPRESSURED`/`EAGAIN`
-> 오류를 표면화한다. 재시도 정책은 어플리케이션이 소유한다. Core의
-> `zlink_send_async`는 PUB/XPUB에서 `ENOTSUP`을 반환한다.
-
 > **이 장이 정의하는 것** — C를 제외한 언어별 바인딩이 (1) HWM-managed
 > **send**(PAIR send, DEALER/ROUTER routed send)의 async 완료 표면,
 > (2) PUB/XPUB **publish**의 동기 `submit()` 완료 표면, (3) **request**의
@@ -57,15 +25,15 @@ virtual thread 실행, event loop 연결, handler dispatcher 연결은 framework
 맡는다.
 
 **bindings 라이브러리는 스레드를 하나도 소유하지 않는다.** HWM-managed
-send와 routed send는 HWM 대기가 발생할 수 있으므로 async로 분류하지만, 완료를
-구동하는 주체는 여전히 Core다. C++의 blocking `submit()`은 Core 내부에서
-대기하다 Core 신호로 재개하고, `SNDTIMEO`가 대기 상한을 정하며, `DONTWAIT`은
-즉시 `EAGAIN`을 반환한다. 다른 언어의 단일 `submit()`(Go는 `Submit(ctx)`)은
-Core send를 감싸되 언어 관용의 awaitable을 반환하며, 그 awaitable의 완료는 곧
-도입될 Core send-completion 통지(`doc/plan/core-send-completion-design.ko.md`,
-설계 진행 중)가 구동한다. `publish`는 HWM에서 대기하지 않으므로 동기
-`submit()`으로 완료한다. 백프레셔 정책의 소유자는 어플리케이션이다.
-request는 이미 Core 자신이 완료를
+send와 routed send의 수용 대기와 재시도는 Core가 소유한다. C++의 blocking
+`submit()`과 Go의 `Submit(ctx)`는 Core 안에서 대기하고, 그 밖의 언어별 비동기
+terminal은 `zlink_send_async`를 제출한 뒤 `zlink_send_complete_handler`가 전달하는
+최종 완료로 awaitable을 끝낸다. Core가 수용한 operation은
+`ZLINK_SEND_ADMITTED`, `ZLINK_SEND_TIMED_OUT`, `ZLINK_SEND_TERMINAL` 중 하나로
+정확히 한 번 완료된다. Binding은 operation id와 언어별 완료 객체만 연결하며
+재시도하지 않는다. Core의 pending-operation 상한 때문에 최초 제출이 거부된
+경우에만 어플리케이션이 재시도 여부를 정한다. `publish`는 HWM에서 대기하지
+않으므로 동기 `submit()`으로 완료한다. request는 이미 Core 자신이 완료를
 구동하는 지점(reply handler callback, `ZLINK_REQUEST_TIMED_OUT`)이 있으므로,
 바인딩은 그 지점이 suspension·callback·completion channel을 완료하도록
 연결할 뿐 자체 재시도나 스레드를 두지 않는다. suspension 재개는 Core가
@@ -93,6 +61,8 @@ executor가 아니다.
   DEALER/ROUTER의 routed send, request는 HWM 대기가 발생할 *수* 있는 지점을
   지나므로 ASYNC로 분류한다. 분류 기준은 "HWM 대기가 실제로 자주 발생하는가"가
   아니라 "HWM 대기가 발생할 가능성이 있는가"다.
+  이 operation 분류가 모든 언어의 terminal 반환형을 강제하지는 않는다. Go는
+  `Submit(ctx) error`가 Core 안에서 대기하는 동기 terminal이다.
 - **raw reply는 HWM-free이며 진짜 synchronous다.** raw ROUTER/`Received`
   reply는 HWM 경로를 전혀 거치지 않으므로 순수 동기인 completion lane이다.
 - **PUB/XPUB `publish`는 이 ASYNC 분류에 포함하지 않는다.** 기본 PUB
@@ -140,17 +110,14 @@ executor가 아니다.
   async-classified operation의 terminal이 반환하는 awaitable은 각 언어가
   관용적인 방식(await / join / block_on / channel recv)으로 소비하고,
   synchronous publish와 raw reply의 terminal은 호출 즉시 소비한다. 같은
-  원칙에 따라 Go의 send `Submit(ctx)`는 `error`를 반환하는 동기형이다 —
+  원칙에 따라 Go의 send `Submit(ctx)`는 `error`를 반환하는 동기형이다.
   goroutine 안에서의 blocking 호출이 Go의 관용적 대기 방식이고
-  `context.Context`가 취소와 시한을 담당하기 때문이다 (소유자 확정,
-  2026-08-23).
+  `context.Context`는 제출 전 취소와 시한을 확인한다.
 - C++ request builder는 `submit()`(blocking) · `submit(callback)`(completion
   전달 전용) · `async()`(coroutine) 세 terminal을 함께 노출한다 — 위 이름
   구분 원칙에 따라 C++만 이 세 terminal이 필요하기 때문이다. 다른 언어는
   단일 terminal만 유지한다 — 그 terminal이 반환하는 awaitable이 이미 모든
-  소비 방식을 지원하므로 별도 terminal을 늘릴 이유가 없다. (suspension
-  terminal과 callback terminal의 병행 노출을 금지하던 이전 규칙은 2026-08-23
-  2차 개정으로 폐지되었다.)
+  소비 방식을 지원하므로 별도 terminal을 늘릴 이유가 없다.
 
 ## HWM-managed send 완료 계약
 
@@ -164,39 +131,44 @@ entrypoint가 반환하는 builder에서 언어별 canonical terminal을 호출�
   (coroutine용, move-only `async_result_t<T>`를 반환한다) 두 terminal을 모두
   노출한다. 이름 구분 원칙에 따라 plain-thread 호출과 coroutine 호출을
   나눈 것이다.
-- **다른 모든 언어**: 단일 `submit()`(Go는 `Submit(ctx)`) terminal만
-  노출하며, 각 언어 관용의 awaitable(`CompletionStage`, `Promise`, coroutine
-  object, `Future` 등)을 반환한다. 사용자는 그 awaitable을 `await`/`join`/
-  `block_on`/channel recv 등 언어 관용 방식으로 소비한다.
-- **완료 구동.** C++ `async()`가 반환하는 `async_result_t<T>`와 다른 언어의
-  `submit()`이 반환하는 awaitable은 모두 Core send-completion 통지가
-  완료를 구동한다. 이 통지 메커니즘은 설계 진행 중이며
-  `doc/plan/core-send-completion-design.ko.md`를 참고한다(forward
-  reference — 그 문서가 확정되면 이 절의 세부 계약을 그 표면에 맞춰
-  갱신한다). C++ `submit()`(blocking)은 이 통지에 의존하지 않고 기존과
-  동일하게 Core 내부 대기·재개를 그대로 쓴다.
-- `send_ready` readiness-hint 시맨틱은 폐지한다. completion 통지는 callback
-  으로 전달받거나 receivable event로 받는 두 채널 중 소비자가 선택할 수
-  있다 — 이는 두 가지 옵션이지 중복 표면이 아니다.
+- **.NET·Java·Node·Python·Rust**: 언어별 단일 비동기 terminal이 `Task`,
+  `CompletionStage`, `Promise`, coroutine object, `Future` 같은 awaitable을
+  반환한다. 사용자는 `await`/`join`/`block_on` 등 언어 관용 방식으로 소비한다.
+- **Go**: `Submit(ctx) error`는 동기 terminal이며 Core 안에서 대기한다. `ctx`는
+  submit 경계에서 확인하고, Core가 record를 수용한 뒤의 대기는 Core가 소유한다.
+- **완료 구동.** C++ `async()`와 .NET·Java·Node·Python·Rust의 비동기 send
+  terminal은 Core `zlink_send_async`를 사용한다. 먼저
+  `zlink_send_complete_handler`를 설치하고, 수용된 operation의 socket-local
+  operation id를 awaitable에 연결한다. `zlink_send_complete_event_t`는 admission,
+  deadline 만료 또는 terminal 실패를 정확히 한 번 전달한다. 같은 target의 완료는
+  제출 순서를 유지하고 한 socket의 completion callback은 서로 동시에 실행되지
+  않는다. `ZLINK_POLLCOMPLETION` 등록은 같은 callback과 event의 dispatch 위치를
+  `zlink_poller_wait` 호출 thread로 옮길 뿐 별도 완료 경로를 만들지 않는다.
+  C++ `submit()`과 Go `Submit(ctx)`는 이 비동기 통지 대신 Core 내부 blocking
+  대기·재개를 사용한다.
+- 공개 send-ready handler는 없다. `ZLINK_POLLOUT`은 동기 nonblocking send의
+  재시도를 위한 readiness 값이고, accepted async operation의 완료가 아니다.
 - 바인딩은 이 완료 표면을 위해 park queue, WRITABLE-callback 재시도,
   deadline timer, dispatcher thread를 두지 않는다 — 완료는 Core
   send-completion 통지가 구동한다.
 - submit flags는 언어 관용 방식(옵션 인자 또는 builder 단계)으로 받을 수
   있다.
-- 백프레셔 정책의 소유자는 어플리케이션이다. 바인딩은 재시도하지 않는다.
+- accepted async operation의 HWM 재시도는 Core가 소유한다. Binding은 재시도하지
+  않으며, 최초 submit이 pending-operation 상한에서 즉시 거부된 경우의 정책만
+  어플리케이션이 소유한다.
 
 | 구분 | bindings 완료 표면 |
 |---|---|
 | 분류 | ASYNC (HWM 대기 가능) |
 | C++ 실행 의미 | `submit()`은 Core 내부에서 대기하다 Core 신호로 재개하는 blocking 호출. `async()`는 coroutine에서 `co_await`하는 awaitable |
-| 다른 언어 실행 의미 | 단일 `submit()`(Go는 `Submit(ctx)`)이 언어 관용 awaitable을 반환한다 |
+| 다른 언어 실행 의미 | .NET·Java·Node·Python·Rust는 언어 관용 awaitable을 반환한다. Go `Submit(ctx) error`는 Core 안에서 대기한다 |
 | Blocking 모드(C++ `submit()`) | Core 내부에서 대기하다 Core 신호로 재개한다 (바인딩 대기 없음) |
 | `SNDTIMEO` | Core가 대기 상한으로 사용한다 |
 | `DONTWAIT` | Core가 즉시 `EAGAIN`을(언어별 `BACKPRESSURED`로) 반환한다 |
-| completion 통지 | Core send-completion 통지(설계 진행 중, `doc/plan/core-send-completion-design.ko.md`)가 awaitable/callback completion을 구동한다. callback 또는 receivable event 중 소비자가 선택한다 |
+| completion 통지 | `zlink_send_complete_handler`가 accepted operation마다 `zlink_send_complete_event_t`를 정확히 한 번 전달한다. `ZLINK_POLLCOMPLETION`은 같은 callback의 dispatch 소유자만 바꾼다 |
 | submit flags | 언어 관용 방식(옵션 인자 또는 builder 단계)으로 받을 수 있다 |
 | 실패 | 언어 관용의 예외 또는 `Result`/`error` 반환 |
-| 백프레셔 정책 | 어플리케이션이 소유한다. 바인딩은 재시도하지 않는다 |
+| 백프레셔 정책 | accepted operation은 Core가 재시도한다. 최초 submit 거부만 어플리케이션 정책이다 |
 
 ### Publish 동기 제출 계약
 
@@ -229,11 +201,9 @@ DEALER/ROUTER **request**도 [분류 원칙](#분류-원칙)에 따라 ASYNC로 
 `requestCoroutine`, `request_async`, `submit_async` 같은 별도 이름은 만들지
 않는다.
 
-### C++ request의 세 terminal (2026-08-15 이전 표면 복원)
+### C++ request의 세 terminal
 
-C++ request builder는 세 개의 terminal을 노출한다 — 2026-08-15 개정에서 단일
-canonical suspension terminal만 허용하도록 좁혔던 규칙을 이번 2차 개정으로
-폐지하고, 그 이전 표면을 복원한다:
+C++ request builder는 세 개의 terminal을 노출한다.
 
 1. **`submit()`** — blocking. Core-owned 대기 끝에 reply
    (`std::vector<message_t>`)를 직접 반환한다. timeout 만료는

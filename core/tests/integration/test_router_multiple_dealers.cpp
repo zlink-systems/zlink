@@ -689,6 +689,78 @@ void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
     close_sync_socket (owner_handle);
 }
 
+void test_drained_pipe_oversize_multipart_uses_fresh_peer_credit ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwm = 4096;
+    const uint64_t hwms[] = {hwm, hwm};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    //  Drain several small multipart messages without crossing the reader LWM.
+    //  The completed-read snapshot is current, but no credit command updates the
+    //  writer's cached value.
+    for (size_t i = 0; i < 5; ++i) {
+        zlink::msg_t first;
+        zlink::msg_t final;
+        TEST_ASSERT_SUCCESS_ERRNO (first.init_size (1));
+        TEST_ASSERT_SUCCESS_ERRNO (final.init_size (1));
+        first.set_flags (zlink::msg_t::more);
+        TEST_ASSERT_TRUE (pipes[0]->write (&first));
+        TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&final));
+
+        zlink::msg_t received;
+        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&received));
+        TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::more) != 0);
+        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&received));
+        TEST_ASSERT_FALSE ((received.flags () & zlink::msg_t::more) != 0);
+        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+        TEST_ASSERT_FALSE (pipes[1]->check_read ());
+
+        TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+        TEST_ASSERT_SUCCESS_ERRNO (final.close ());
+    }
+
+    zlink::msg_t first;
+    zlink::msg_t oversize_final;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (1));
+    TEST_ASSERT_SUCCESS_ERRNO (oversize_final.init_size (hwm));
+    first.set_flags (zlink::msg_t::more);
+    TEST_ASSERT_TRUE (pipes[0]->write (&first));
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&oversize_final));
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_FALSE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_UINT64 (hwm, received.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
 void test_physical_queue_snapshot_accounts_multipart_once ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
@@ -1163,6 +1235,7 @@ int main ()
     RUN_TEST (test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm);
     RUN_TEST (test_empty_pipe_incomplete_multipart_stops_at_max_message_size);
     RUN_TEST (test_empty_pipe_oversize_exception_applies_only_to_complete_message);
+    RUN_TEST (test_drained_pipe_oversize_multipart_uses_fresh_peer_credit);
     RUN_TEST (test_physical_queue_snapshot_accounts_multipart_once);
     RUN_TEST (test_physical_queue_deferred_shrink_applies_on_drain);
     RUN_TEST (test_completion_pipe_does_not_apply_hwm_admission);

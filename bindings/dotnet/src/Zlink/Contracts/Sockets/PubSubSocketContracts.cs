@@ -59,32 +59,7 @@ public interface ISubscriberSocket : IConnectableSocket
     ///     true on success; false when <see cref="RecvFlags.DontWait" /> is set and
     ///     no message is available.
     /// </returns>
-    /// <remarks>
-    ///     Queue-admission credit returns at dequeue; use
-    ///     <see cref="SubscribeRetained(TopicMessage, RecvFlags)" /> only when the
-    ///     result lifetime must retain that credit.
-    /// </remarks>
     bool Subscribe(TopicMessage result, RecvFlags flags = RecvFlags.None);
-
-    /// <summary>
-    ///     Receives the next matching topic message while retaining its
-    ///     queue-admission credit with the supplied storage.
-    /// </summary>
-    /// <param name="result">Reusable storage that owns the retained credit.</param>
-    /// <param name="flags">Receive behavior flags.</param>
-    /// <returns>
-    ///     true on success; false when <see cref="RecvFlags.DontWait" /> is set
-    ///     and no message is available.
-    /// </returns>
-    /// <remarks>
-    ///     Starting this receive releases any message and retained credit already
-    ///     held by <paramref name="result" />. A successful receive holds its
-    ///     credit until the result is disposed or reused. Ordinary
-    ///     <see cref="Subscribe(TopicMessage, RecvFlags)" /> returns queue credit
-    ///     at dequeue.
-    /// </remarks>
-    bool SubscribeRetained(TopicMessage result,
-        RecvFlags flags = RecvFlags.None);
 }
 
 /// <summary>

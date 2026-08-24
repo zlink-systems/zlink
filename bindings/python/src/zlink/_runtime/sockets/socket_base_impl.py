@@ -86,6 +86,11 @@ _native_router_recv_owner_func = (
     if _native_extension is not None
     else None
 )
+_native_dealer_recv_owner_func = (
+    getattr(_native_extension, "dealer_recv_owner", None)
+    if _native_extension is not None
+    else None
+)
 
 
 def _native_socket_send_op(socket):
@@ -628,6 +633,66 @@ class DealerSocket(
                 None, parts, timeout_ms
             )
         )
+
+    def recv_into(self, received, *, flags=0):
+        if received is None:
+            raise TypeError("received must be a Received")
+        if _native_dealer_recv_owner_func is not None and not _in_callback():
+            result = _native_dealer_recv_owner_func(
+                int(self._socket_handle.handle), int(flags)
+            )
+            if result is False:
+                return False
+            rc, err, request_seq, owner = result
+            if int(rc) != 0:
+                _raise_result_error(RecvError, RecvResult, rc, err)
+            received._replace(
+                owner,
+                request_seq=int(request_seq) if int(request_seq) != 0 else None,
+            )
+            return True
+        try:
+            request_seq = ctypes.c_uint64()
+            native_parts = []
+            has_more = ctypes.c_int()
+            recv_flags = int(flags)
+            try:
+                while True:
+                    native_part = ZlinkMsg()
+                    rc = lib().zlink_msg_init(ctypes.byref(native_part))
+                    if rc != 0:
+                        _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+                    message_type = ctypes.c_uint8()
+                    rc = lib().zlink_dealer_recv_part(
+                        self._handle,
+                        ctypes.byref(message_type),
+                        ctypes.byref(request_seq),
+                        ctypes.byref(native_part),
+                        ctypes.byref(has_more),
+                        recv_flags,
+                    )
+                    if rc != 0:
+                        lib().zlink_msg_close(ctypes.byref(native_part))
+                        _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+                    native_parts.append(native_part)
+                    if has_more.value == 0:
+                        break
+                    recv_flags = 1
+            except Exception:
+                _close_native_parts(native_parts)
+                raise
+        except RecvError as ex:
+            if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
+                return False
+            raise
+        parts_array = (ZlinkMsg * len(native_parts))()
+        for index, native_part in enumerate(native_parts):
+            parts_array[index] = native_part
+        received._replace(
+            _ReceivedPartsOwner(parts_array, len(native_parts)),
+            request_seq=int(request_seq.value) if request_seq.value != 0 else None,
+        )
+        return True
 
 class RouterSocket(
     _RoutedAsyncSocket,

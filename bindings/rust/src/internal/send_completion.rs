@@ -2,9 +2,8 @@
 
 //! Per-socket Core send-completion delivery.
 //!
-//! The 0.13.0 contract (`bindings/doc/spec/async-coroutine-policy.ko.md`, 3rd
-//! revision; `doc/plan/core-send-completion-design.ko.md`) makes the binding a
-//! pure Core wrapper: every HWM wait, retry and deadline belongs to Core. This
+//! The 0.13.1 contract makes the binding a pure Core wrapper: every HWM wait,
+//! retry and deadline belongs to Core. This
 //! module owns nothing but the map from one in-flight operation to the waker of
 //! the `Future` that awaits it. The registered
 //! `zlink_send_complete_handler` only stores the result and wakes; it never

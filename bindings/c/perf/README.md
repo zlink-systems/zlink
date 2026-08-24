@@ -12,7 +12,7 @@ cached by `scripts/local-package/core/fetch-release.sh` or
 need a Core source build before running binding performance.
 
 ```bash
-./scripts/local-package/core/fetch-release.sh --version 0.13.0
+./scripts/local-package/core/fetch-release.sh --version 0.13.1
 ./bindings/c/perf/run_benchmarks_multi.sh --pattern ROUTER_ROUTER_REQREP
 ```
 

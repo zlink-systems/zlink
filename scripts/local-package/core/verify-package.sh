@@ -11,8 +11,8 @@ usage() {
 Usage: verify-package.sh --prefix ABSOLUTE_DIR [--allow-version-mismatch]
 
 Checks the installed Core package version, public headers, exact runtime,
-runtime ABI SONAME, and a clean C consumer. The current release is 0.11.1 and
-the SONAME is libzlink.so.0.
+runtime ABI SONAME, and a clean C consumer. The expected release comes from
+the repository VERSION file; the SONAME is libzlink.so.0.
 EOF
 }
 

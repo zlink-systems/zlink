@@ -543,9 +543,10 @@ planned/applied/manual-reserved HWM, Core queue/application/current/peak/provisi
 byte, completion current/peak/pending과 total messaging byte, monitor/instance aggregate,
 application/completion queue count, `outstanding_application_lease_count`, `retired_queue_count`,
 `deferred_origin_credit_bytes`, oversize·blocked·aggregate flag, `budget_generation`과
-`measurement_epoch`을 빠짐없이 노출한다. Metrics reset은 current·pending·queue count와 위 세
-owner-lifecycle gauge를 유지하고 budgeted/completion peak를 각 current로 재기준화하며 epoch
-counter를 0으로 만든 뒤 `measurement_epoch`을 증가시킨다.
+`measurement_epoch`을 빠짐없이 노출한다. `application_accounted_bytes`와 위 세
+owner-lifecycle 필드는 ABI 예약 필드이며 항상 `0`이다. Metrics reset은
+current·pending·queue count를 유지하고 budgeted/completion peak를 각 current로
+재기준화하며 epoch counter를 0으로 만든 뒤 `measurement_epoch`을 증가시킨다.
 
 실제 send/receive admission은 C++ 바인딩이 판단하지 않는다. Core pipe가 보관한
 accounted byte가 적용된 HWM에 도달하면 Core가 backpressure를 반환한다. C++
@@ -557,22 +558,12 @@ accounted byte가 적용된 HWM에 도달하면 Core가 backpressure를 반환�
 `0`은 Core monitor 기본값을 선택하고, 양수는 정확한 monitor queue byte HWM으로
 변환 없이 전달한다. Message-count overload나 alias는 없다.
 
-Framework backend가 사용하는 `recv_retained(received_t&)`와
-`subscribe_retained(topic_message_t&)`는 기존 framing을 유지하면서 각
-실제 payload part와 함께 반환된 Core HWM budget lease를 출력 객체에 붙인다. ROUTER의
-합성 routing-id frame과 SUB의 내부 topic frame에는 공개 lease를 만들지 않는다. Multipart는
-part별 non-null lease를 출력 객체의 한 내부 소유자에 모으고, 수신 도중 실패하면 이미 받은
-lease를 모두 반환한다.
-
-`received_t` 또는 `topic_message_t`를 복사하면 이 내부 소유자를 공유한다. 한 복사본의
-`close()`는 그 복사본의 part와 소유권만 정리하며, 다른 복사본이 남아 있으면 Core credit을
-반환하지 않는다. 마지막 복사본이 `close()`되거나 소멸할 때 lease를 각각 정확히 한 번
-반환한다. `message_t` part만 따로 복사해도 lease 수명은 늘어나지 않는다. Caller가 payload
-복사만 남기려면 출력 객체를 닫아 credit을 반환한다. 일반 `recv(received_t&)`,
-`subscribe(topic_message_t&)`, `recv(message_t&)`와 `subscribe_part(...)`는 retained lease를
-숨겨서 보관하지 않고 기존처럼 dequeue에서 credit을 즉시 반환한다. 같은 출력 객체를 다음
-retained receive에 다시 넘기면 바인딩은 native receive를
-시작하기 전에 그 복사본의 이전 part와 lease 소유권을 초기화한다.
+Core byte HWM은 Core queue가 실제로 보관하는 payload만 계산하며 receive dequeue에서
+charge가 끝난다. 일반 `recv(received_t&)`, `subscribe(topic_message_t&)`,
+`recv(message_t&)`, `subscribe_part(...)`는 part와 routing/topic/request metadata의
+정상 C++ ownership만 출력 객체로 옮긴다. 출력 객체의 복사, `close()`와 소멸은 payload
+수명을 관리하지만 Core HWM credit이나 application byte capacity를 관리하지 않는다.
+별도 retained receive나 lease handle은 public 또는 internal API에 두지 않는다.
 
 Legacy `auto_hwm_msg_unit_bytes`, slot·size-cap·connection-bucket planner property는 alias 없이
 제거한다. Monitor snapshot은 Core monitoring ABI v4의 byte pending field를 투영하고,
@@ -630,10 +621,8 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - mutable 핸들을 공유 소유하는 대신 move-only 리소스 클래스를 선호한다.
 - 메시지 값은 효율적인 move를 지원하고, 복사를 요청할 때 명시적 copy를 지원한다.
 - data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 쓴다.
-- `recv_retained`와 `subscribe_retained`가 채운 `received_t`와 `topic_message_t`만 수신
-  part와 함께 Core HWM budget lease의 공유 수명을 소유한다. 일반 receive는 즉시 credit을
-  반환한다. Part만 복사한 값은 lease를 소유하지 않으며 마지막 retained 출력 객체의
-  close/drop이 credit을 반환한다.
+- `received_t`와 `topic_message_t`는 수신 part와 metadata의 C++ 수명만 소유한다.
+  Core HWM byte charge는 dequeue에서 끝나며 출력 객체의 copy/close/drop과 연결하지 않는다.
 - Actor join 요청 수신처럼 service 제어/입장 수신 경로는 C++ 호출자에게 더 명확하면
   optional이나 타입 지정 결과 반환을 써도 된다. 다만 data 없음과 강한 수신 실패는 여전히
   구분해야 한다.

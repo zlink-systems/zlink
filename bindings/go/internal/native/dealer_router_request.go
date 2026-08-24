@@ -57,8 +57,7 @@ const (
 // submitRoutedSend is the synchronous routed-send terminal
 // (`RoutedSendSubmitOp.Submit(ctx) error`).
 //
-// Contract (bindings/doc/spec/async-coroutine-policy.ko.md, 3rd revision):
-// the binding owns no thread, no queue and no retry. The whole HWM wait lives
+// The binding owns no thread, no queue and no retry. The whole HWM wait lives
 // inside Core: a blocking `zlink_send_part`/`zlink_send_part_rid` parks in Core
 // and resumes on a Core credit signal, bounded by the socket's `SNDTIMEO`
 // (`SNDTIMEO=0` is the DONTWAIT contract and returns BACKPRESSURED at once).

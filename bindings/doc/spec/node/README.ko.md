@@ -648,10 +648,10 @@ peak/provisional accounted byte, completion current/peak/pending과 total messag
 monitor/instance aggregate, application/completion queue count,
 `outstandingApplicationLeaseCount`, `retiredQueueCount`, `deferredOriginCreditBytes`,
 oversize·blocked·aggregate flag, `budgetGeneration`과 `measurementEpoch`을 정확한
-`bigint`/boolean 값으로 제공한다. Reset은 current·pending·queue count와 위 세
-owner-lifecycle gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를 0으로 만든
-뒤 `measurementEpoch`을 증가시킨다. ABI version/size 불일치는 `TypeError`가 아니라 기존
-unsupported error로 전달한다.
+`bigint`/boolean 값으로 제공한다. `applicationAccountedBytes`와 위 세 owner-lifecycle
+필드는 ABI 예약 필드이며 항상 `0n`이다. Reset은 current·pending·queue count를 유지하고 두
+peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measurementEpoch`을
+증가시킨다. ABI version/size 불일치는 `TypeError`가 아니라 기존 unsupported error로 전달한다.
 
 ## Receive flow state
 
@@ -711,20 +711,13 @@ Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
   addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
   읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
   Node가 관리한다.
-- 일반 `recv`와 `subscribe`는 Core에서 dequeue할 때 HWM credit을 즉시 반환한다.
-  Framework backend가 payload 처리 수명까지 credit을 유지해야 할 때만 Pair, Dealer,
-  Router, Stream의 명시적 `recvRetained(result, flags?)` 또는 Sub, XSub의
-  `subscribeRetained(result, flags?)`를 사용한다. 두 형식 모두 호출자 제공 aggregate를
-  채우고 논블로킹 no-data에는 `false`를 반환한다.
-- retained 형식은 multipart의 각 물리적 payload part에 해당하는 Core lease를 binding
-  내부에서 하나의 opaque aggregate owner로 묶는다. 성공적인 result 재사용이나
-  `result.close()`가 모든 credit을 정확히 한 번 반환하며, 호출자가 result를 버린 경우에는
-  native finalizer가 최종 fallback으로 반환한다. Payload `Buffer`를 복사해 보관하는 것은
-  credit 수명을 연장하지 않는다.
-- retained 형식도 일반 receive와 같은 multipart framing과 metadata를 보존한다. Dealer는
-  typed `requestSeq`, Router는 source `RoutingId`와 `requestSeq`, Sub와 XSub는 topic과 Core가
-  제공한 source `RoutingId`를 유지한다. Raw lease handle, accounting setter, part 단위 release는
-  public API로 노출하지 않는다.
+- Core byte HWM charge는 일반 `recv`와 `subscribe`가 message를 dequeue할 때 끝난다.
+  결과 객체는 `Message`, `Buffer`와 metadata의 JavaScript 수명만 소유하며, 재사용이나
+  close를 Core HWM accounting에 연결하지 않는다.
+- 일반 receive는 multipart framing과 metadata를 보존한다. Dealer는 typed `requestSeq`,
+  Router는 source `RoutingId`와 `requestSeq`, Sub와 XSub는 topic과 Core가 제공한 source
+  `RoutingId`를 유지한다. 별도 retained receive, raw lease handle, application byte
+  capacity, accounting setter 또는 part 단위 release는 public이나 internal API에 두지 않는다.
 - Actor join 요청 receive 같은 서비스 제어/admission receive 경로는 재사용 가능한
   데이터 평면 저장보다 더 명확할 때 nullable, `undefined`, 또는 태그된 결과 반환
   형태를 사용할 수 있다. 그래도 no-data와 throw된 하드 receive 에러는 구별한다.

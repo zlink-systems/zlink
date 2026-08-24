@@ -36,9 +36,8 @@ public enum ReceivedMessageType
 /// <remarks>
 ///     A received envelope owns its message parts until disposed, passed to
 ///     another receive attempt for reuse, or until an API explicitly transfers
-///     ownership. An envelope populated by <c>RecvRetained</c> also owns its Core
-///     HWM credit for the same lifetime. Reuse instances created by
-///     <c>Create</c> with receive APIs that accept caller-provided storage.
+///     ownership. Reuse instances created by <c>Create</c> with receive APIs
+///     that accept caller-provided storage.
 /// </remarks>
 public sealed partial class Received : IDisposable
 {

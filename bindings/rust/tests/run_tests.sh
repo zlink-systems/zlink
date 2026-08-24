@@ -73,15 +73,16 @@ rm -f "$LIB_LOG"
 
 run_test_file surface_tests
 run_test_file contract_tests
+run_test_file ffi_layout_tests
 run_test_file behavior_tests
 run_test_file send_failure_tests
 run_test_file receive_failure_tests
+run_test_file routed_async_tests
 run_test_file boundary_tests
 run_test_file option_tests
 run_test_file flow_state_tests
 run_test_file ownership_tests
 run_test_file monitor_tests
-run_test_file optimization_guard_tests
 
 TOTAL=$((TOTAL + 1))
 echo -n "  samples ... "

@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
 
 
-def test_ffi_layouts_are_the_core_0_13_0_layouts():
-    """Byte parity with `core/include/zlink/socket/api.h` (Core 0.13.0).
+def test_ffi_layouts_are_the_core_0_13_1_layouts():
+    """Byte parity with `core/include/zlink/socket/api.h` (Core 0.13.1).
 
     Expected sizes are cross-checked against a C translation unit that
     includes the real header (see the async-coroutine-policy realignment
@@ -71,10 +71,8 @@ def test_exact_routed_send_and_send_complete_symbols_are_bound_directly():
         assert callable(getattr(native, name))
 
 
-def test_send_ready_symbols_are_removed():
-    """`send_ready` readiness-hint semantics is abolished (2026-08-23, 2nd
-    revision, `bindings/doc/spec/async-coroutine-policy.ko.md`) — completion
-    is Core's `zlink_send_complete_handler` only."""
+def test_send_ready_symbols_are_absent():
+    """Completion uses `zlink_send_complete_handler`; no send-ready symbol exists."""
     native = lib()
     for name in ("zlink_send_ready_handler", "zlink_routed_send_ready_handler"):
         assert not hasattr(native, name), name
@@ -99,13 +97,10 @@ def test_native_extension_exposes_only_raw_bridge_operations():
         "publish_parts",
         "recv_parts",
         "recv_owner",
-        "recv_retained_owner",
-        "dealer_recv_retained_owner",
+        "dealer_recv_owner",
         "router_recv_owner",
-        "router_recv_retained_owner",
         "subscribe_parts",
         "subscribe_owner",
-        "subscribe_retained_owner",
     }
     assert not (SRC / "_native" / "_zlink_perf_native.c").exists()
     assert "_zlink_perf_native" not in (ROOT / "setup.py").read_text(encoding="utf-8")
@@ -158,7 +153,7 @@ def test_package_platform_policy_is_explicit_for_supported_native_targets():
         assert {
             "linux-x86_64/libzlink.so",
             "linux-x86_64/libzlink.so.0",
-            "linux-x86_64/libzlink.so.0.13.0",
+            "linux-x86_64/libzlink.so.0.13.2",
         }.issubset(payloads)
 
 

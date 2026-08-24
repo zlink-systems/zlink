@@ -7,7 +7,6 @@ namespace Systems.Zlink;
 public sealed partial class Received
 {
     private bool _closed;
-    private HwmBudgetLeaseOwner? _hwmBudgetLeases;
     private ReceivedMetadata? _metadata;
     private MultipartMessageCollection? _parts;
     private RoutingId? _routingId;
@@ -122,29 +121,19 @@ public sealed partial class Received
         if (_closed)
             return;
         _closed = true;
-        try
+        if (_singlePart != null)
         {
-            if (_singlePart != null)
-            {
-                _singlePart.DisposeNativeOwned();
-                _singlePart = null;
-            }
-            else
-            {
-                _parts?.Dispose();
-            }
+            _singlePart.DisposeNativeOwned();
+            _singlePart = null;
         }
-        finally
+        else
         {
-            _hwmBudgetLeases?.Dispose();
-            _hwmBudgetLeases = null;
+            _parts?.Dispose();
         }
     }
 
     internal IReadOnlyList<Message> TakePartsOwnership()
     {
-        _hwmBudgetLeases?.Dispose();
-        _hwmBudgetLeases = null;
         if (_singlePart != null)
         {
             var part = _singlePart;

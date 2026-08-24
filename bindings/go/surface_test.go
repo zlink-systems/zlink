@@ -140,7 +140,7 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 	if hasMethod((*zlink.PairSocket)(nil), "SetMandatory") {
 		t.Fatalf("PairSocket should not expose router-specific options")
 	}
-	// Core 0.13.0 retired the send_ready readiness hint: send completion is
+	// Core 0.13.1 has no send_ready readiness hint: send completion is
 	// Core-owned, so no socket may expose a readiness callback.
 	for _, target := range []any{
 		(*zlink.PairSocket)(nil),

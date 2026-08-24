@@ -321,7 +321,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                         #
                         # Single part only: a >1-part DEALER record through
                         # `zlink_send_async` (target committed by Core at
-                        # submit time) never admits on this Core 0.13.0
+                        # submit time) never admits under this Core contract
                         # build — every attempt reports
                         # `SubmitResult.NOT_FOUND`/`EHOSTUNREACH` even long
                         # after the pipe is connected, while the identical

@@ -15,7 +15,6 @@ import {
   materializeTopicMessage,
   routedReceivedCachedRoutingBytes,
   routedReceivedPrefersManagedBuffer,
-  type NativeReceivedRaw,
 } from '../messaging/message_materializer';
 import {
   normalizeMessageLikePayload,
@@ -80,6 +79,7 @@ export class ReceiveSocket extends ConnectableSocket {
     materializeReceivedInto(result, raw);
     return true;
   }
+}
 
 export class SendSocket extends ReceiveSocket {
   private readonly sendCompletion: SendCompletionOwner;

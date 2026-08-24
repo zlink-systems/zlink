@@ -80,8 +80,6 @@ public final class InternalAccess {
         Received routerRecv(Object support, RecvFlags flags);
         boolean routerRecvInto(Object support, Received target,
                                RecvFlags flags);
-        boolean routerRecvRetainedInto(Object support, Received target,
-                                       RecvFlags flags);
         void routerOnReceive(Object support, SocketMessageHandler handler);
         void routerReceiveBeginClose(Object support);
         void routerReceiveFinishClose(Object support);
@@ -424,13 +422,6 @@ public final class InternalAccess {
     public static boolean routerRecvInto(Object support, Received target,
                                          RecvFlags flags) {
         return runtimeSocketAccess().routerRecvInto(support, target, flags);
-    }
-
-    public static boolean routerRecvRetainedInto(Object support,
-                                                 Received target,
-                                                 RecvFlags flags) {
-        return runtimeSocketAccess().routerRecvRetainedInto(support, target,
-            flags);
     }
 
     public static void routerOnReceive(Object support,

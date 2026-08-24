@@ -535,7 +535,7 @@ using TypeScript spelling.
 - Use the same canonical action names as the other bindings, differing only
   in case: `send`, `request`, `reply`, `publish`, `subscribe`,
   `unsubscribe`, `recv`, `recvRouted`, `receiveSubscriptionEvent`,
-  `setSendReadyHandler`, `setPacketHandler`, `setDispatchHandler`,
+  `setPacketHandler`, `setDispatchHandler`,
   `getOrCreateSpot`, `sendToChannel`, `requestToChannel`, `sendToSpot`, and
   `requestToSpot`.
 - Do not keep an old alias only for compatibility. When a pre-refactor name
@@ -738,7 +738,8 @@ aggregates, application/completion queue counts,
 `outstandingApplicationLeaseCount`, `retiredQueueCount`,
 `deferredOriginCreditBytes`, oversize/blocked/aggregate flags,
 `budgetGeneration`, and `measurementEpoch` as exact `bigint`/boolean values.
-Reset preserves current, pending, queue-count, and those three owner-lifecycle
+`applicationAccountedBytes` and those three owner-lifecycle fields are
+ABI-reserved and always `0n`. Reset preserves current, pending, and queue-count
 gauges, rebases both peaks to current, clears epoch counters, and increments
 `measurementEpoch`. An ABI version/size mismatch uses the existing unsupported
 error, not `TypeError`.
@@ -806,22 +807,15 @@ created the logical spot.
   `Buffer` created by the addon. Reading the payload does not require another
   native call, and Node manages the `Buffer` lifetime after the `Message` is
   closed.
-- Ordinary `recv` and `subscribe` return HWM credit immediately when Core
-  dequeues the message. Only a Framework backend that must keep credit for its
-  payload-processing lifetime uses the explicit `recvRetained(result, flags?)`
-  on Pair, Dealer, Router, and Stream, or `subscribeRetained(result, flags?)`
-  on Sub and XSub. Both shapes fill caller-provided aggregate storage and
-  return `false` for non-blocking no-data.
-- A retained receive privately groups one Core lease per physical multipart
-  payload part under one opaque aggregate owner. Successful result reuse or
-  `result.close()` returns every credit exactly once. If the caller abandons
-  the result, a native finalizer is the last-resort fallback. Keeping a copy of
-  a payload `Buffer` does not extend the credit lifetime.
-- Retained receive preserves the same multipart framing and metadata as the
-  ordinary shape: typed `requestSeq` for Dealer, source `RoutingId` plus
-  `requestSeq` for Router, and topic plus any Core-provided source `RoutingId`
-  for Sub and XSub. No raw lease handle, accounting setter, or per-part release
-  is public API.
+- Core byte-HWM charge ends when ordinary `recv` or `subscribe` dequeues the
+  message. The result object owns only the JavaScript lifetime of its `Message`
+  values, buffers, and metadata. Reusing or closing it does not participate in
+  Core HWM accounting.
+- Ordinary receive preserves multipart framing and metadata: typed
+  `requestSeq` for Dealer, source `RoutingId` plus `requestSeq` for Router, and
+  topic plus any Core-provided source `RoutingId` for Sub and XSub. No separate
+  retained receive, raw lease handle, application byte capacity, accounting
+  setter, or per-part release exists in a public or internal API.
 - A service control/admission receive path such as Actor join request
   receive can use a nullable, `undefined`, or tagged result-return shape
   when that is clearer than reusable data-plane storage. It still

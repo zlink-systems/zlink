@@ -650,64 +650,6 @@ void test_pair_send_recv_multipart ()
     assert (inbound.parts ()[1].to_string () == "two");
 }
 
-void test_received_lifetime_retains_and_releases_core_hwm_credit ()
-{
-    zlink::context_t ctx;
-    ctx.options ().auto_hwm_enabled (false);
-    zlink::pair_socket_t receiver (ctx);
-    zlink::pair_socket_t sender (ctx);
-    receiver.options ().recv_hwm (zlink::byte_count_t::bytes (128));
-    sender.options ().send_hwm (zlink::byte_count_t::bytes (128));
-
-    const std::string endpoint = zlink_cpp_contract::unique_inproc ("pair-retained-credit");
-    receiver.bind (endpoint);
-    sender.connect (endpoint);
-
-    zlink::message_t outbound (1024);
-    assert (outbound.valid ());
-    std::memset (outbound.data (), 0x6a, outbound.size ());
-    assert (sender.send ().message (outbound).submit ());
-
-    const zlink::core_hwm_budget_snapshot_t queued = ctx.core_hwm_budget_snapshot ();
-    assert (queued.core_queue_accounted_bytes () > 0u);
-    assert (queued.application_accounted_bytes () == 0u);
-
-    zlink::received_t received;
-    assert (receiver.recv_retained (received) == 0);
-    assert (received.first_part ().size () == 1024u);
-
-    const zlink::core_hwm_budget_snapshot_t retained = ctx.core_hwm_budget_snapshot ();
-    assert (retained.core_queue_accounted_bytes () == 0u);
-    assert (retained.application_accounted_bytes () == queued.core_queue_accounted_bytes ());
-    assert (retained.current_accounted_bytes () == queued.current_accounted_bytes ());
-    assert (retained.outstanding_application_lease_count () == 1u);
-    assert (retained.deferred_origin_credit_bytes ()
-            == retained.application_accounted_bytes ());
-
-    zlink::received_t copy = received;
-    const int no_data = receiver.recv (received, zlink::recv_flags_t::dontwait);
-    assert (no_data == static_cast<int> (zlink::recv_result_t::no_data));
-    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 1u);
-    assert (copy.first_part ().size () == 1024u);
-
-    copy.close ();
-    const zlink::core_hwm_budget_snapshot_t released = ctx.core_hwm_budget_snapshot ();
-    assert (released.application_accounted_bytes () == 0u);
-    assert (released.outstanding_application_lease_count () == 0u);
-    assert (released.deferred_origin_credit_bytes () == 0u);
-    assert (released.current_accounted_bytes () == 0u);
-
-    zlink::message_t ordinary_outbound = zlink::message_t::from ("ordinary");
-    assert (sender.send ().message (ordinary_outbound).submit ());
-    zlink::received_t ordinary;
-    assert (receiver.recv (ordinary) == 0);
-    const zlink::core_hwm_budget_snapshot_t ordinary_released =
-      ctx.core_hwm_budget_snapshot ();
-    assert (ordinary_released.application_accounted_bytes () == 0u);
-    assert (ordinary_released.outstanding_application_lease_count () == 0u);
-    ordinary.close ();
-}
-
 void test_publisher_synchronous_multipart ()
 {
     zlink::context_t ctx;
@@ -739,19 +681,13 @@ void test_publisher_synchronous_multipart ()
     publisher.publish (topic).message (outbound[0]).message (outbound[1]).submit ();
 
     zlink::topic_message_t inbound;
-    assert (subscriber.subscribe_retained (inbound)
+    assert (subscriber.subscribe (inbound)
             == static_cast<int> (zlink::recv_result_t::ok));
     assert (inbound.topic () == topic);
     assert (inbound.parts ().size () == 2);
     assert (inbound.parts ()[0].to_string () == "alpha");
     assert (inbound.parts ()[1].to_string () == "beta");
 
-    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 2u);
-    zlink::topic_message_t copy = inbound;
-    inbound.close ();
-    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 2u);
-    copy.close ();
-    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 0u);
 }
 
 void test_pair_ipc_large_message_shutdown ()
@@ -798,7 +734,6 @@ int main ()
     test_router_direct_recv_no_data_preserves_output ();
     test_router_direct_recv_multipart_failure_preserves_output ();
     test_pair_send_recv_multipart ();
-    test_received_lifetime_retains_and_releases_core_hwm_credit ();
     test_publisher_synchronous_multipart ();
 #if !defined(_WIN32)
     test_pair_ipc_large_message_shutdown ();

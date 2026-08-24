@@ -294,8 +294,8 @@ class RoutedSendOwner:
         # doc, core/include/zlink/socket/api.h).
         target = self._select_target(router_rid) if self._role == SocketType.ROUTER else None
         # `zlink_send_async_options_t.timeout_ms` is a per-operation Core
-        # deadline, unrelated to `ZLINK_OPT_SNDTIMEO` (doc/plan/
-        # core-send-completion-design.ko.md). 0 means no deadline: Core's own
+        # deadline, unrelated to `ZLINK_OPT_SNDTIMEO`. 0 means no deadline:
+        # Core's own
         # pending-queue bound (`ZLINK_OPT_SEND_PENDING_MAX_MSGS`/`_BYTES`)
         # governs backpressure rejection, not a binding-owned timer.
         await self._send_completion.submit(payload, target=target, timeout_ms=0)

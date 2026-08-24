@@ -10,7 +10,7 @@
 %endif
 %define lib_name libzlink0
 Name:          zlink
-Version:       0.13.1
+Version:       0.13.2
 Release:       1%{?dist}
 Summary:       The Zlink messaging library
 Group:         Development/Libraries/C and C++

@@ -6,15 +6,15 @@ title: "Python Bindings Public Contract"
 [Spec index](../README.en.md) | [Previous: Node.js](../node/README.en.md) | [Next: Go](../go/README.en.md)
 <!-- bindings-nav:end -->
 
-# Python binding Core 0.13.0 public contract
+# Python binding Core 0.13.1 public contract
 
 > **What this chapter defines** — the public type, ownership, and error
-> contract the `zlink` Python package provides on top of Core 0.13.0 raw
+> contract the `zlink` Python package provides on top of Core 0.13.1 raw
 > messaging.
 
-- This document defines the Core 0.13.0 raw messaging contract the `zlink` Python package provides.
+- This document defines the Core 0.13.1 raw messaging contract the `zlink` Python package provides.
 - A feature not in the current implementation and public header is not part of this contract.
-- It supports Python 3.9 and later; the current candidate package version is `0.13.0`.
+- It supports Python 3.9 and later; the package version is `0.13.1`.
 - The current native package target is Linux x86_64; other targets are outside this contract's supported scope until a separate candidate payload and clean-consumer verification exist.
 
 | Section | Covers |
@@ -102,7 +102,8 @@ aggregates, application/completion queue counts,
 `outstanding_application_lease_count`, `retired_queue_count`,
 `deferred_origin_credit_bytes`, oversize/blocked/aggregate flags,
 `budget_generation`, and `measurement_epoch` as Python `int`/boolean values.
-Reset preserves current, pending, queue-count, and those three owner-lifecycle
+`application_accounted_bytes` and those three owner-lifecycle fields are
+ABI-reserved and always zero. Reset preserves current, pending, and queue-count
 gauges, rebases both peaks to current, clears epoch counters, and increments
 `measurement_epoch`. An ABI version/size mismatch is an unsupported error.
 
@@ -115,22 +116,13 @@ gauges, rebases both peaks to current, clears epoch counters, and increments
 - The native view `Received`'s `parts` provides is valid only while its owner stays open. If it must outlive that, copy the value with `to_bytes()` or `to_bytes_list()`.
 - Once a callback is registered, the callback and any Python references it needs are not released before the native callback registration is. A callback exception is delivered per the binding's callback error policy.
 
-Ordinary `recv_into` and `subscribe_into` return Core queue credit as each
-part is dequeued. Only a Framework backend explicitly selects
-`recv_retained_into` or `subscribe_retained_into`. Those retained paths keep
-the same `Received`/`TopicMessage`, routing id, request sequence, topic, and
-multipart framing as ordinary receive while the aggregate owner privately
-holds one Core credit per caller-visible physical part.
-
-Closing a retained result, leaving its context manager, or starting the next
-retained receive with the same storage returns the native parts and every
-credit exactly once. The old result is therefore not preserved when that reuse
-attempt ends with no data. Framework
-drop, cancellation, and error paths explicitly close their aggregate in the
-normal path; Python reference-count/GC cleanup is a leak-prevention fallback.
-Neither an individual `ReceivedMessage` nor any public API exposes a raw lease
-handle, separate application capacity, allowance, or duplicate accounting
-state.
+Core byte-HWM charge ends when ordinary `recv_into` or `subscribe_into`
+dequeues the payload. `Received` and `TopicMessage` own only the Python
+lifetime of native parts, routing id, request sequence, topic, and multipart
+framing. Closing, leaving a context manager, or reusing storage does not
+participate in Core HWM accounting. No separate retained receive, raw lease
+handle, application byte capacity, allowance, or duplicate accounting state
+exists in a public or internal API.
 
 ## Callback surface
 
@@ -138,18 +130,15 @@ Core FFI's `zlink_recv_handler()` is a private implementation primitive the
 Python package does not expose directly. Python's public
 callback surface is fixed to `on_packet` for a STREAM packet and `on_event`
 for a monitor event. It provides no separate public method to register a raw
-receive or routed request completion callback. `send_ready` readiness-hint
-semantics is abolished
-(`bindings/doc/spec/async-coroutine-policy.ko.md`, 2nd revision) — there is
-no `on_send_ready`. HWM-managed send completion is delivered only through the
+receive or routed request completion callback. There is no public
+`on_send_ready`. HWM-managed send completion is delivered only through the
 awaitable `submit()` already returns (Core's `zlink_send_complete_handler`
 notification), never through a separate readiness callback.
 
 ## Send/receive and no-data
 
 The bindings own zero threads, queues, or retry anywhere in this surface
-(`bindings/doc/spec/async-coroutine-policy.ko.md`, 3rd revision;
-`doc/plan/core-send-completion-design.ko.md`).
+(`bindings/doc/spec/async-coroutine-policy.ko.md`).
 
 - Unrelated synchronous builders such as PUB and STREAM sends and a
   ROUTER reply add message parts, then call `submit()`. Raw ROUTER/`Received`

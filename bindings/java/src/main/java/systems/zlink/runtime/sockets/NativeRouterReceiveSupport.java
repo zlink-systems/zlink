@@ -61,9 +61,6 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
         final MemorySegment partsOut;
         final MemorySegment partCountOut;
         final MemorySegment hasMoreOut;
-        final MemorySegment transportPairIdOut;
-        final MemorySegment transportPairGenerationOut;
-        final MemorySegment leaseOut;
 
         RecvOutScratch() {
             Arena auto = Arena.ofAuto();
@@ -72,9 +69,6 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
             partsOut = auto.allocate(ValueLayout.ADDRESS);
             partCountOut = auto.allocate(ValueLayout.JAVA_LONG);
             hasMoreOut = auto.allocate(ValueLayout.JAVA_INT);
-            transportPairIdOut = auto.allocate(ValueLayout.JAVA_LONG);
-            transportPairGenerationOut = auto.allocate(ValueLayout.JAVA_LONG);
-            leaseOut = auto.allocate(ValueLayout.ADDRESS);
         }
     }
 
@@ -185,96 +179,6 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
         }
         boolean dontWait = (flags == RecvFlags.DONT_WAIT);
         return recvDirectOnceIntoImpl(target, flags, dontWait);
-    }
-
-    public boolean recvRetainedInto(Received target, RecvFlags flags) {
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(flags, "flags");
-        if (dataHandler != null) {
-            throw new IllegalStateException(
-                "socket is in callback mode; direct recv is not allowed");
-        }
-        target.close();
-
-        HwmBudgetLeaseOwner leases = new HwmBudgetLeaseOwner();
-        ArrayList<Message> parts = null;
-        Message firstPart = null;
-        boolean ownerAdopted = false;
-        try {
-            RecvOutScratch scratch = RECV_OUT_SCRATCH.get();
-            firstPart = recvRetainedPartOrNull(scratch, flags,
-                flags == RecvFlags.DONT_WAIT, leases);
-            if (firstPart == null)
-                return false;
-
-            byte[] nodeRidBytes =
-                NativeRoutingIds.readBytesOut(scratch.sourceNodeRidOut);
-            long requestSequence =
-                scratch.requestSeqOut.get(ValueLayout.JAVA_LONG, 0);
-            long transportPairId =
-                scratch.transportPairIdOut.get(ValueLayout.JAVA_LONG, 0);
-            long transportPairGeneration =
-                scratch.transportPairGenerationOut.get(
-                    ValueLayout.JAVA_LONG, 0);
-            if (!firstPart.more() && requestSequence == 0L) {
-                ContractAccess.receivedPopulateRoutedSinglePart(target,
-                    nodeRidBytes, firstPart, 0L, false, null, null);
-                ContractAccess.receivedSetTransportPair(target,
-                    transportPairId, transportPairGeneration);
-                firstPart = null;
-                ContractAccess.receivedAdoptRetainedCredit(target, leases);
-                ownerAdopted = true;
-                return true;
-            }
-
-            parts = new ArrayList<>(firstPart.more() ? 4 : 1);
-            parts.add(firstPart);
-            firstPart = null;
-            while (parts.get(parts.size() - 1).more()) {
-                Message next = recvRetainedPartOrNull(scratch, flags, false,
-                    leases);
-                if (next == null)
-                    throw new ZlinkRecvException(RecvResult.NO_DATA,
-                        NativeErrno.EAGAIN);
-                parts.add(next);
-            }
-
-            Received fresh;
-            Message[] receivedParts = parts.toArray(Message[]::new);
-            if (requestSequence == 0L) {
-                fresh = InternalAccess.received(nodeRidBytes, receivedParts,
-                    true, 0L, false, null, null);
-            } else {
-                RoutingId nodeRid = InternalAccess.routingIdFromTrusted(
-                    nodeRidBytes);
-                fresh = InternalAccess.received(nodeRid, receivedParts, true,
-                    requestSequence, true,
-                    replySender(nodeRid, requestSequence), null);
-            }
-            parts = null;
-            ContractAccess.receivedAdoptRetainedCredit(fresh, leases);
-            try {
-                ContractAccess.receivedAdoptFrom(target, fresh);
-            } catch (RuntimeException | Error ex) {
-                fresh.close();
-                throw ex;
-            }
-            ContractAccess.receivedSetTransportPair(target,
-                transportPairId, transportPairGeneration);
-            ownerAdopted = true;
-            return true;
-        } finally {
-            if (firstPart != null) {
-                try {
-                    firstPart.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-            if (parts != null)
-                Message.closeAll(parts);
-            if (!ownerAdopted)
-                leases.close();
-        }
     }
 
     Optional<Received> recvNoWait() {
@@ -600,56 +504,6 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
             InternalAccess.routerReply(socket, nodeRid, requestSequence,
                 replyParts);
         };
-    }
-
-    private Message recvRetainedPartOrNull(RecvOutScratch scratch,
-                                           RecvFlags flags,
-                                           boolean nullOnNoData,
-                                           HwmBudgetLeaseOwner leases) {
-        while (true) {
-            Message part = InternalAccess.messageAcquireReceive();
-            boolean success = false;
-            scratch.leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-            scratch.requestSeqOut.set(ValueLayout.JAVA_LONG, 0, 0L);
-            scratch.transportPairIdOut.set(ValueLayout.JAVA_LONG, 0, 0L);
-            scratch.transportPairGenerationOut.set(ValueLayout.JAVA_LONG, 0,
-                0L);
-            try {
-                int rc = Native.routerRecvPartV2WithHwmBudgetLease(
-                    InternalAccess.socketHandle(socket),
-                    scratch.sourceNodeRidOut, scratch.requestSeqOut,
-                    scratch.transportPairIdOut,
-                    scratch.transportPairGenerationOut,
-                    InternalAccess.messageNativeHandle(part),
-                    scratch.leaseOut, scratch.hasMoreOut, flags.value());
-                if (rc == RecvResult.OK.value()) {
-                    leases.adopt(scratch.leaseOut);
-                    boolean hasMore =
-                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
-                    InternalAccess.messageFinishReceive(part, hasMore);
-                    success = true;
-                    return part;
-                }
-
-                HwmBudgetLeaseOwner.releaseNative(scratch.leaseOut);
-                int errno = Native.errno();
-                if (errno == NativeErrno.EINTR)
-                    continue;
-                RecvResult result = RecvResult.fromValue(rc);
-                if (nullOnNoData && (result == RecvResult.NO_DATA
-                    || result == RecvResult.BUSY)) {
-                    return null;
-                }
-                throw new ZlinkRecvException(result, errno);
-            } finally {
-                if (!success) {
-                    try {
-                        part.close();
-                    } catch (RuntimeException ignored) {
-                    }
-                }
-            }
-        }
     }
 
     private int routerRecvPart(MemorySegment sourceNodeRidOut,

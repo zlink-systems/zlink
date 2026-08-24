@@ -55,9 +55,8 @@ public sealed partial class TopicMessage : IDisposable
     /// </summary>
     /// <remarks>
     ///     Call this only after consumers have finished using the current
-    ///     message. It also returns retained receive credit when the message was
-    ///     populated by <c>SubscribeRetained</c>. Unlike <see cref="Dispose" />,
-    ///     this method retains the internal topic receive buffers so repeated
+    ///     message. Unlike <see cref="Dispose" />, this method retains the
+    ///     internal topic receive buffers so repeated
     ///     receives can reuse them.
     /// </remarks>
     public void ReleaseForReuse()

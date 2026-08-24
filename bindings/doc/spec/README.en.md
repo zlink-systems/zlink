@@ -204,7 +204,6 @@ The representative canonical semantic names are:
 
 | Meaning | Canonical name |
 |------|----------------|
-| Registering a send-ready handler | `setSendReadyHandler` |
 | Registering a raw STREAM packet handler | `setPacketHandler` |
 | Registering a SPOT dispatch event handler | `setDispatchHandler` |
 | SPOT routed receive | `recvRouted` |
@@ -1494,18 +1493,16 @@ is the baseline.
   budgetInsufficient, budgetGeneration, measurementEpoch
   ```
 
-  `currentAccountedBytes = coreQueueAccountedBytes +
-  applicationAccountedBytes`, and `totalMessagingAccountedBytes =
+  `applicationAccountedBytes` is ABI-reserved and always `0`. Therefore
+  `currentAccountedBytes = coreQueueAccountedBytes`, and
+  `totalMessagingAccountedBytes =
   currentAccountedBytes + completionCurrentAccountedBytes`. Completion values
   are diagnostic only and change neither HWM admission nor the Core budget.
   Send and receive counts are perspective-specific and must not be added to
-  derive the physical directional queue count. `outstandingApplicationLeaseCount`
-  is the number of public retained-credit leases not yet returned,
-  `retiredQueueCount` is the number of queue generations retained after detach
-  or generation replacement because they still have a retained origin, and
-  `deferredOriginCreditBytes` is exact-origin credit held by an internal framing
-  token or public lease and not yet published to the writer. Metrics reset
-  preserves these three gauges as well.
+  derive the physical directional queue count. `outstandingApplicationLeaseCount`,
+  `retiredQueueCount`, and `deferredOriginCreditBytes` are also ABI-reserved and
+  always `0`. A binding does not use these reserved fields for application
+  lifetime or Framework queue accounting.
 - `MonitorStatus` projects Core monitoring ABI v3 byte HWM and pending
   diagnostics. Legacy message-unit, slot, size-cap, and connection-bucket
   planner properties are removed without aliases.
@@ -1531,41 +1528,35 @@ Pending message counts are display diagnostics, not admission inputs. Planned,
 applied, and deferred HWM and pending/accounted values use bytes. A binding
 preserves Core ABI values and flags unchanged.
 
-##### Retained credit and routed completion (revised 2026-08-23)
-
-> This section was revised by owner decision on 2026-08-23. For the rationale
-> and the superseded prior design, see
-> `doc/plan/cpp-routed-async-contract-issue.ko.md` §3.2.
+##### Receive ownership and routed completion
 
 Terminal replies and error replies use the HWM-free completion lane. A binding
 applies no SNDHWM, RCVHWM, HWM-readiness wait, or backpressure retry to this
 completion submit.
 
-For Framework data-plane receive, the binding's `Received`-family owner holds a
-Core HWM budget lease together with the message returned through the existing
-receive framing. This contract adds no multipart transaction ABI. A multipart
-job retains the leases returned with its receive results and releases each
-lease exactly once when `Received` is closed, disposed, dropped, or terminally
-cleaned up. A lease is not a separate application capacity, and a payload copy
-retained by user code does not retain it.
+Core byte HWM accounts only payload bytes physically retained by a Core queue.
+The charge ends when receive dequeues the payload and hands it to the binding.
+Ordinary binding `recv` and `subscribe` transfer normal ownership of message
+parts, routing IDs, request sequences, and topic metadata into a
+`Received`/`TopicMessage`-family result. The result owns the payload until the
+language-specific close, dispose, drop, or next receive, but that application
+lifetime is never joined back into Core HWM accounting. No separate retained
+receive, raw lease handle, or application byte capacity exists in either the
+public or internal binding path.
 
-This behavior applies only to the retained aggregate receive entrypoint that a
-Framework backend selects explicitly. Ordinary binding `recv` and `subscribe`
-keep their existing behavior of returning Core credit at dequeue. A binding
-does not silently change ordinary receive semantics; it exposes a
-language-idiomatic `recvRetained`/`subscribeRetained` family without exposing a
-raw lease handle.
+A Framework that limits handler work counts its own application jobs
+separately. The binding never adds that queue count to a Core byte snapshot.
+The single dynamic control boundary a Framework uses to slow Core receive is
+the socket's `RUNNING`/`PAUSED` receive-flow-state setter.
 
-Routed DEALER/ROUTER **send** is a synchronous `submit()` terminal that wraps
-the Core send directly. HWM wait, resume, and timeout semantics are entirely
-Core-owned: blocking mode waits inside Core and resumes on Core's signal,
-`SNDTIMEO` bounds the wait, and `DONTWAIT` returns `EAGAIN` immediately.
-Backpressure policy belongs to the application. A binding keeps no park queue,
-WRITABLE-callback retry, deadline timer, or dispatcher thread. The
-"HWM-managed routed is async-only" rule, and the machinery that implemented
-it — long-lived readiness-handler registration, `pendingByTarget`/
-`readyTargets`/`readySet` state, and a binding pump retrying `DONTWAIT` outside
-the callback thread — are all abolished.
+The asynchronous terminal for HWM-managed PAIR **send** and DEALER/ROUTER
+**routed send** wraps Core `zlink_send_async` and send completion. Core owns HWM
+wait/retry, the operation deadline, route termination, and cancellation, and
+delivers exactly one completion for every accepted operation. A binding only
+correlates the Core operation id with a language awaitable; it owns no park
+queue, readiness-callback retry, deadline timer, or dispatcher thread. The
+application owns policy only when Core rejects the initial submit because its
+pending-operation bound is full.
 
 A binding that uses part-level Core APIs has a short complete-record attempt
 gate shared by every outbound path on the same native handle. Inside the gate
@@ -1582,17 +1573,17 @@ cancellation — timeout is already Core-owned (`ZLINK_REQUEST_TIMED_OUT`).
 Waiting never extends the original deadline. A binding owns no thread or retry
 queue for the request completion surface either.
 
-Routed **send**'s language canonical terminal takes the same synchronous form
-as raw reply's submit: C++ `submit()` (throws `submit_error_t`), .NET
-`Submit()` (throws), Java `submit()` (throws), Node `submit()` (throws), Go
-`Submit(ctx) error`, Python `submit()` (raises), and Rust
-`submit() -> Result<(), SubmitError>`. **Request**'s canonical terminal keeps
+Routed **send**'s asynchronous terminal is C++ `async()`, .NET `Async(...)`,
+and Java/Node/Python/Rust `submit()`. C++ also provides blocking `submit()` for
+a plain thread; Go's canonical `Submit(ctx) error` is synchronous and waits
+inside Core. **Request**'s canonical terminal keeps
 the language-native suspension surface: C++ `async()`, .NET `Async(...)`,
 Java/Node/Python/Rust `submit()` (an async return type), Kotlin
 `submit().await()`, and the completion channel returned by Go `Submit(ctx)`. A
-request builder does not pair that terminal with callback or blocking
-compatibility terminals, and no language adds a new operation start point such
-as `request_async`.
+request builder keeps callback and blocking compatibility terminals only in
+C++, whose existing terminals are `submit()`, `submit(callback)`, and
+`async()`. Other languages do not pair such terminals, and no language adds a
+new operation start point such as `request_async`.
 
 Each binding maps HWM values as follows.
 
@@ -1665,13 +1656,14 @@ Each binding maps HWM values as follows.
 - The first SPOT routed recv must not perform hidden activation, hidden
   queue open, or hidden target registration. A binding assumes the same
   premise and does not layer lazy bootstrap logic on top.
-#### Send-Ready, Peer Weight, And STREAM Receive Modes
+#### Send Completion, Peer Weight, And STREAM Receive Modes
 
-- `zlink_send_ready_handler()` and the poller's `ZLINK_POLLOUT` point to
-  the same send-recovery readiness axis. A binding's documentation must
-  describe them with the same meaning. `ZLINK_POLLOUT` is described as
-  "send recovery readiness / backpressure recovery notification," not as
-  "transport writable."
+- `zlink_send_complete_handler()` delivers the final result of an operation
+  accepted by `zlink_send_async()`. `ZLINK_POLLCOMPLETION` transfers dispatch
+  of that same callback and `zlink_send_complete_event_t` to the thread calling
+  `zlink_poller_wait()`. `ZLINK_POLLOUT` is readiness to retry a synchronous
+  nonblocking send; it is not async-send completion. No public send-ready
+  handler exists.
 - A binding must expose the peer-weight surface as a per-language typed
   option/property. It applies to `ROUTER` and `DEALER`; the value range
   is `0..10000`, and the default is `100`. `0` means exclusion from new
@@ -1920,7 +1912,6 @@ placement follows the `Actor Dispatch Policy` section below.
   - `receiveSubscriptionEvent()`
   - raw direct receive handler registration
   - `onSubscribe(...)`
-  - `setSendReadyHandler(...)`
   - `setRoutingId(...)`, `getRoutingId()`
   - `attachStreamRaw(...)`, `detachStream()`
   - `streamAttach(...)`, `streamAttachRaw(...)`, `streamDetach()`
@@ -1934,7 +1925,7 @@ placement follows the `Actor Dispatch Policy` section below.
   every descendant.
   - example: `setSubscription`, `unsetSubscription`, `subscribe` on a
     subscriber-only base
-  - example: `publish`, `setSendReadyHandler` on a publisher-only base
+  - example: `publish` on a publisher-only base
 - The roles above must exist as public only on a concrete socket type
   marked `Y` in the role matrix.
 - A base-mediated bypass call must not be possible for a socket type
@@ -2741,7 +2732,6 @@ handled by the `SpotNode.disconnectPeerRid` family.
 | `setPacketHandler` | — | — | — | — | — | — | — | Y |
 | `onReceive` | — | — | — | — | — | — | — | — |
 | `onSubscribe` | — | — | — | — | — | — | — | — |
-| `setSendReadyHandler` | Y | Y | Y | Y | — | Y | — | Y |
 
 The `STREAM` public surface must provide `recv` and `setPacketHandler`.
 The raw direct callback `onReceive` is not canonical public binding API.
@@ -2928,7 +2918,7 @@ Spot
   |-- actor join: recvActorJoin, replyActorJoin, actors
   |-- actor lifecycle: recvActorLifecycle
   |-- setSubscription, unsetSubscription
-  |-- setDispatchHandler, setSendReadyHandler
+  |-- setDispatchHandler
   `-- close facade only
 
 Actor
@@ -3177,7 +3167,6 @@ convention.
 | `replyToSpot` | Routed reply surface (spot → spot) |
 | `replyToRouter` | Routed reply surface (spot → router) |
 | `setDispatchHandler` | Y |
-| `setSendReadyHandler` | Y |
 | `recvActorLifecycle` | Y |
 | `close` | Y |
 
@@ -3274,7 +3263,6 @@ compatibility alias as current API.
 | Spot | `setSubscription` / `unsetSubscription` | Manages a subscription filter |
 | Spot | `sendToChannel` / `requestToChannel` | A channel-targeted routed send/request |
 | Spot | `setDispatchHandler` | Registers the topic/routed/channel-reply/timer readable notification handler |
-| Spot | `setSendReadyHandler` | Registers the send-ready callback handler |
 | Spot | `recvActorLifecycle` | Receives an Actor join/leave lifecycle event |
 | Spot | `close` | Terminates the facade |
 
@@ -3305,7 +3293,6 @@ compatibility alias as current API.
 - Spot subscribe → returns empty when there's no data (non-blocking)
 - Confirm exception on Spot publish failure
 - Confirm the Spot dispatch event callback fires
-- Confirm the Spot setSendReadyHandler callback fires
 - Confirm the Spot receiveSubscriptionEvent path
 - Confirm SpotRouteBridge attach/send/request/handleReceived paths work
 - Confirm the SpotNode publisher handle publish path works
@@ -3353,7 +3340,6 @@ compatibility alias as current API.
 - Canonical handler registration names:
   - `setDispatchHandler`: registers the SPOT unified readable
     notification callback
-  - `setSendReadyHandler`: registers the send-ready status callback
 - SPOT routed receive and Actor lifecycle do not expose a direct
   callback registration API. `setDispatchHandler` announces a readable
   event, and the user explicitly drains the queue with `recvRouted` or
@@ -3668,8 +3654,7 @@ Binding rules:
   - `NOT_FOUND`: for channel-aware send/request, no matching
     `channel_name` or attach target exists; for topic publish, there is
     no target on the topic plane to publish to.
-  - `NOT_CONNECTED`: an attachment exists, but there is no active/
-    send-ready path
+  - `NOT_CONNECTED`: an attachment exists, but there is no active send path
   - `BACKPRESSURED`: a path exists, but the HWM has been reached
   - `NOT_ADMITTED`: the target peer is draining, so a new submit is
     rejected
@@ -3833,7 +3818,7 @@ Binding rules:
 ### SPOT Event Dispatcher Policy
 
 Core provides a callback-based event dispatcher model. It can handle
-multiple event sources (sub recv, routed recv, timer, send-ready)
+multiple event sources (sub recv, routed recv, timer)
 without synchronization, inside a single I/O thread context.
 
 Core principles:
@@ -3856,17 +3841,21 @@ zlink_handler_result_t zlink_recv_handler(void *s,
 zlink_handler_result_t zlink_stream_packet_handler(void *stream,
     zlink_stream_packet_handler_fn handler, void *userdata);
 
-/* register writable notification callback */
-zlink_handler_result_t zlink_send_ready_handler(void *s,
-    zlink_send_ready_handler_fn handler, void *userdata);
+/* install or replace the async-send completion callback */
+zlink_handler_result_t zlink_send_complete_handler(void *s,
+    zlink_send_complete_handler_fn handler, void *userdata);
 ```
 
 Rules:
-- A core C attach function allows only one active handler per subject.
+- A receive-side core C attach function allows only one active handler per subject.
   Attaching again while a native handler is already attached can return
   `EBUSY`. A public binding's `set...Handler` surface does not directly
   repeat this raw attach function — it provides the meaning of storing
   or replacing the current public handler.
+- `zlink_send_complete_handler()` is replace-only. It rejects `NULL`, and
+  replacing it from the same socket's completion callback fails with
+  `EDEADLK`. The callback only hands completion to application state; calling
+  send, publish, or request inside it fails with `EDEADLK`.
 - `zlink_recv_handler()` is allowed only on raw `STREAM`.
 - `zlink_stream_packet_handler()` is also allowed only on raw `STREAM`,
   and the three modes — `recv`/raw callback/packet callback — are
@@ -4637,7 +4626,7 @@ submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
 | 301 | `INVALID_ARGUMENT` | `EINVAL` | a NULL handler |
 | 302 | `BUSY` | `EBUSY` | a handler is already attached |
 | 303 | `NOT_SUPPORTED` | `ENOTSUP` | an unsupported subject |
-| 304 | `DEADLOCK` | `EDEADLK` | a reentrant call (send-ready handler only) |
+| 304 | `DEADLOCK` | `EDEADLK` | reentrant handler replacement in callback scope |
 | 305 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
 | 306 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal handler-registration failure (see `zlink_errno()` for detail) |
 
@@ -4945,7 +4934,7 @@ Examples:
   - `subscribe`
   - `receiveSubscriptionEvent`
   - `setSubscription`, `unsetSubscription`
-  - `setPacketHandler`, `setDispatchHandler`, `setSendReadyHandler`
+  - `setPacketHandler`, `setDispatchHandler`
 
 ### Method Name Conciseness
 - This rule applies strictly to the public API.
@@ -5102,7 +5091,7 @@ target state.
 | `setPacketHandler` callback registration | STREAM packet fn ptr | Required | Required | Required | Required | Required | Required | Required |
 | `setDispatchHandler` callback registration | SPOT raw fn ptr | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented | Required once implemented |
 | `recvActorLifecycle` | SPOT lifecycle queue | Required | Required | Required | Required | Required | Required | Required |
-| `setSendReadyHandler` callback registration | Raw fn ptr | Required | Required | Required | Required | Required | Required | Required |
+| HWM-managed send completion | Core-owned completion | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `connect` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
 | StreamSocket `disconnectRid` blocked | N/A | Required | Required | Required | Required | Required | Required | Required |
 | Public `detachStream` not exposed | N/A | Required | Required | Required | Required | Required | Required | Required |
@@ -5606,7 +5595,7 @@ The perf policy is managed across every language in a shared way, in
   - `connect()` exposed on StreamSocket → remove
   - `disconnectRid()` exposed on StreamSocket → remove
   - `detachStream()` exposed on StreamSocket → remove
-  - `setSendReadyHandler` missing on Node → add
+  - async send uses a binding retry queue instead of Core completion → wire it to Core completion
   - publish/subscribe exposed on the wrong socket → remove
 
 #### Step 2: Normalize Names
@@ -5745,7 +5734,7 @@ The perf policy is managed across every language in a shared way, in
    - Every public API uses the Naming Policy's canonical name.
    - No deprecated alias remains.
    - The Callback API Policy's canonical names (`setPacketHandler`,
-     `setDispatchHandler`, `setSendReadyHandler`) exist matching their
+     `setDispatchHandler`) exist matching their
      roles.
 
 3. **Shallow Wrappers Removed**

@@ -21,32 +21,9 @@ public interface IReceivingMessageSocket : ISocket
     ///     Receive is a single-consumer operation for one socket. The caller must
     ///     not use the same <paramref name="result" /> concurrently or start a
     ///     second receive on this socket until the first receive has returned.
-    ///     Queue-admission credit returns at dequeue; use
-    ///     <see cref="RecvRetained(Received, RecvFlags)" /> only when the result
-    ///     lifetime must retain that credit.
     /// </remarks>
     bool Recv(Received result, RecvFlags flags = RecvFlags.None);
 
-    /// <summary>
-    ///     Receive a message while retaining its queue-admission credit with the
-    ///     supplied envelope.
-    /// </summary>
-    /// <param name="result">Reusable storage that owns the retained credit.</param>
-    /// <param name="flags">Receive behavior flags.</param>
-    /// <returns>
-    ///     true on success; false when <see cref="RecvFlags.DontWait" /> is set
-    ///     and no message is available.
-    /// </returns>
-    /// <remarks>
-    ///     Starting this receive releases any message and retained credit already
-    ///     held by <paramref name="result" />. A successful receive holds its
-    ///     credit until the result is disposed or reused. An API that transfers
-    ///     message ownership out of the result releases the credit before
-    ///     returning the messages. Ordinary
-    ///     <see cref="Recv(Received, RecvFlags)" /> returns queue credit at
-    ///     dequeue.
-    /// </remarks>
-    bool RecvRetained(Received result, RecvFlags flags = RecvFlags.None);
 }
 
 /// <summary>

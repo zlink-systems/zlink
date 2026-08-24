@@ -335,6 +335,18 @@ int router_reply_parts (void *router,
     });
 }
 
+int dealer_reply_parts (void *dealer,
+                        uint64_t request_seq,
+                        zlink_msg_t *parts,
+                        size_t part_count)
+{
+    return submit_msg_parts (parts, part_count, [dealer, request_seq] (
+                                                  zlink_msg_t *part,
+                                                  zlink_part_flag_t part_flag, bool) {
+        return zlink_dealer_reply_part (dealer, request_seq, part, part_flag);
+    });
+}
+
 napi_value create_recv_message_value (napi_env env,
                                       const zlink_routing_id_t &routing_id,
                                       zlink_msg_t *parts,
@@ -2924,6 +2936,90 @@ int recv_message_value (napi_env env,
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
 
+int dealer_recv_message_value (napi_env env,
+                               void *dealer,
+                               int32_t flags,
+                               napi_value *out)
+{
+    if (!out)
+        return ZLINK_RECV_INTERNAL_ERROR;
+
+    *out = NULL;
+    zlink_msg_t first_part;
+    if (zlink_msg_init (&first_part) != 0)
+        return ZLINK_RECV_INTERNAL_ERROR;
+
+    uint8_t message_type = ZLINK_DEALER_MESSAGE_RAW;
+    uint64_t request_seq = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    const int rc = zlink_dealer_recv_part (
+      dealer, &message_type, &request_seq, &first_part, &has_more,
+      static_cast<zlink_recv_flags_t> (flags));
+    if (rc != ZLINK_RECV_OK) {
+        zlink_msg_close (&first_part);
+        return rc;
+    }
+
+    zlink_routing_id_t empty_routing_id;
+    memset (&empty_routing_id, 0, sizeof (empty_routing_id));
+    if (has_more == ZLINK_PART_FINAL) {
+        *out = create_recv_message_value (env, empty_routing_id, &first_part, 1);
+        zlink_msg_close (&first_part);
+    } else {
+        std::vector<zlink_msg_t> parts;
+        if (!append_msg_move (&parts, &first_part)) {
+            zlink_msg_close (&first_part);
+            errno = ENOMEM;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+
+        while (has_more != ZLINK_PART_FINAL) {
+            zlink_msg_t next_part;
+            if (zlink_msg_init (&next_part) != 0) {
+                close_msg_vector (parts);
+                return ZLINK_RECV_INTERNAL_ERROR;
+            }
+            uint8_t next_message_type = ZLINK_DEALER_MESSAGE_RAW;
+            uint64_t next_request_seq = 0;
+            zlink_part_flag_t next_has_more = ZLINK_PART_FINAL;
+            const int next_rc = zlink_dealer_recv_part (
+              dealer, &next_message_type, &next_request_seq, &next_part, &next_has_more,
+              ZLINK_RECV_FLAGS_DONTWAIT);
+            if (next_rc != ZLINK_RECV_OK) {
+                zlink_msg_close (&next_part);
+                close_msg_vector (parts);
+                return next_rc;
+            }
+            if (next_message_type != message_type || next_request_seq != request_seq) {
+                zlink_msg_close (&next_part);
+                close_msg_vector (parts);
+                errno = EPROTO;
+                return ZLINK_RECV_INTERNAL_ERROR;
+            }
+            if (!append_msg_move (&parts, &next_part)) {
+                zlink_msg_close (&next_part);
+                close_msg_vector (parts);
+                errno = ENOMEM;
+                return ZLINK_RECV_INTERNAL_ERROR;
+            }
+            has_more = next_has_more;
+        }
+
+        *out = create_recv_message_value (
+          env, empty_routing_id, parts.data (), parts.size ());
+        close_msg_vector (parts);
+    }
+
+    if (!*out)
+        return ZLINK_RECV_INTERNAL_ERROR;
+    if (message_type == ZLINK_DEALER_MESSAGE_REQUEST && request_seq != 0) {
+        napi_value request_seq_value;
+        napi_create_bigint_uint64 (env, request_seq, &request_seq_value);
+        napi_set_named_property (env, *out, "requestSeq", request_seq_value);
+    }
+    return ZLINK_RECV_OK;
+}
+
 napi_value socket_recv_message (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2962,6 +3058,87 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
         return throw_last_error (env, "tryReceive failed");
     }
     return out;
+}
+
+napi_value dealer_recv_message (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *dealer = NULL;
+    napi_get_value_external (env, argv[0], &dealer);
+    int32_t flags = 0;
+    if (argc >= 2)
+        napi_get_value_int32 (env, argv[1], &flags);
+
+    napi_value out;
+    const int rc = dealer_recv_message_value (env, dealer, flags, &out);
+    if (rc != ZLINK_RECV_OK)
+        return throw_last_error (env, "dealerRecvMessage failed");
+    return out;
+}
+
+napi_value dealer_try_recv_message (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *dealer = NULL;
+    napi_get_value_external (env, argv[0], &dealer);
+
+    napi_value out;
+    const int rc = dealer_recv_message_value (
+      env, dealer, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT), &out);
+    if (rc != ZLINK_RECV_OK) {
+        if (zlink_errno () == EAGAIN) {
+            napi_value none;
+            napi_get_null (env, &none);
+            return none;
+        }
+        return throw_last_error (env, "dealerRecvMessageNoWait failed");
+    }
+    return out;
+}
+
+napi_value dealer_reply (napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    size_t argc = 3;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 3) {
+        napi_throw_type_error (env, NULL,
+                               "dealerReply requires (socket, requestSeq, parts)");
+        return NULL;
+    }
+    void *dealer = NULL;
+    napi_get_value_external (env, argv[0], &dealer);
+    uint64_t request_seq = 0;
+    if (!get_uint64_like (env, argv[1], &request_seq)) {
+        napi_throw_type_error (env, NULL, "requestSeq must be uint64");
+        return NULL;
+    }
+
+    std::vector<zlink_msg_t> parts;
+    zlink_msg_t single_part;
+    bool use_single_part = false;
+    bool is_array = false;
+    if (napi_is_array (env, argv[2], &is_array) == napi_ok && is_array) {
+        if (!build_msg_vector (env, argv[2], &parts))
+            return NULL;
+    } else {
+        if (!init_msg_from_value (env, argv[2], &single_part))
+            return NULL;
+        use_single_part = true;
+    }
+    const int rc = dealer_reply_parts (
+      dealer, request_seq, use_single_part ? &single_part : parts.data (),
+      use_single_part ? 1 : parts.size ());
+    if (rc != ZLINK_SUBMIT_OK)
+        return throw_last_error (env, "dealerReply failed");
+    consume_native_message_value (env, argv[2]);
+    napi_value ok;
+    napi_get_undefined (env, &ok);
+    return ok;
 }
 
 class subscribe_topic_buffer_t
