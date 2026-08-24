@@ -1,0 +1,144 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "lifecycle-transcript",
+  "records": [
+    {
+      "scenario_id": "ZW-G1",
+      "producer_role": "zone-node-1/2",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "rid_shape": "^zn-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "distinct": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/routing-id-self-check.log",
+          "selector": "scenario ZW-G1 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "two observed RIDs match regex and differ"
+      }
+    },
+    {
+      "scenario_id": "ZW-G2",
+      "producer_role": "zone-node-2",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "start_order": [
+          "zone-node-2",
+          "zone-node-1"
+        ],
+        "canonical_rid": true,
+        "topology_ready": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/routing-id-self-check.log",
+          "selector": "scenario ZW-G2-rid passed"
+        },
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-G2 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "typed WatchNodesRes reports both nodes"
+      }
+    },
+    {
+      "scenario_id": "ZW-G3",
+      "producer_role": "replacement-zone-node-2",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "stop": "normal",
+        "node_id_before": "zone-node-2",
+        "node_id_after": "zone-node-2",
+        "rid_before": "<RID:G3_OLD>",
+        "rid_after": "<RID:G3_NEW>",
+        "rid_changed": true,
+        "fresh_join": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "node status observed. node=zone-node-2, rid=zn-"
+        },
+        {
+          "path": "raw/full-reference/logs/routing-id-self-check.log",
+          "selector": "scenario ZW-G3 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "JoinWorldRes"
+      }
+    },
+    {
+      "scenario_id": "ZW-G4",
+      "producer_role": "ready-target",
+      "consumer_role": "source-caller",
+      "normalized_payload": {
+        "stop": "crash",
+        "inflight_terminal": "Unavailable",
+        "automatic_failover": false
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/g4-reference/logs/client.log",
+          "selector": "packet=CrashRelocationProbeRes"
+        },
+        {
+          "path": "raw/g4-reference/logs/client.log",
+          "selector": "scenario ZW-G4 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "CrashRelocationProbeRes.error == Unavailable"
+      }
+    },
+    {
+      "scenario_id": "ZW-G4",
+      "producer_role": "replacement-zone-node-2",
+      "consumer_role": "gateway-probe",
+      "normalized_payload": {
+        "node_id": "zone-node-2",
+        "rid_before": "<RID:G4_OLD>",
+        "rid_after": "<RID:G4_NEW>",
+        "rid_changed": true,
+        "fresh_actor_only": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/g4-reference/logs/client.log",
+          "selector": "scenario ZW-G4-fresh owner="
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "FreshActorProbeRes owner equals replacement RID"
+      }
+    },
+    {
+      "scenario_id": "ZW-G5",
+      "producer_role": "zone-node-config",
+      "consumer_role": "runner",
+      "normalized_payload": {
+        "fixed_routing_id_occurrences": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/routing-id-self-check.log",
+          "selector": "scenario ZW-G5 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "observed RIDs are generated and source/config scan is empty"
+      }
+    }
+  ]
+}

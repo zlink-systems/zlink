@@ -1,0 +1,89 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "browser-transcript",
+  "records": [
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "browser-game",
+      "consumer_role": "gateway",
+      "normalized_payload": {
+        "supplied_endpoints": [
+          "gateway",
+          "ops"
+        ],
+        "join_visible": true,
+        "cross_owner_move_visible": true,
+        "authoritative_state_preserved": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/extraction-full/runner.stdout.log",
+          "selector": "one browser socket keeps authoritative state across an Ops-observed owner boundary"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "JoinWorldRes + ZoneChangedNotify + ZoneStateNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-E1",
+      "producer_role": "browser-ops",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "maintenance_applied": true,
+        "diagnostics_visible": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/extraction-full/runner.stdout.log",
+          "selector": "operations page applies owner-targeted maintenance and diagnostics"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "SetMaintenanceRes + NodeDiagnosticsRes"
+      }
+    },
+    {
+      "scenario_id": "ZW-C3",
+      "producer_role": "zone-node-2",
+      "consumer_role": "browser-ops",
+      "normalized_payload": {
+        "node_loss_push_visible": true,
+        "replacement_connected": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/extraction-full/runner.stdout.log",
+          "selector": "operations page receives node loss through server push"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "assert": "NodeStatusNotify connected=false then true"
+      }
+    },
+    {
+      "scenario_id": "browser",
+      "producer_role": "playwright",
+      "consumer_role": "reference-gate",
+      "normalized_payload": {
+        "tests": 3,
+        "passed": 3,
+        "failed": 0,
+        "headless": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/extraction-full/runner.stdout.log",
+          "selector": "3 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "API/headless transcript scenario markers also pass in same lane"
+      }
+    }
+  ]
+}

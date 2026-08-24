@@ -1,0 +1,249 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "ops-fanout-transcript",
+  "records": [
+    {
+      "scenario_id": "ZW-C1",
+      "producer_role": "zone-node",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "registered": true,
+        "connected": true,
+        "states_are_distinct": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-C1 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "WatchNodesRes"
+      }
+    },
+    {
+      "scenario_id": "ZW-C2",
+      "producer_role": "zone-node-2",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "shutdown": "graceful",
+        "registered": false,
+        "connected": false
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-C2 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "NodeStatusNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-C3",
+      "producer_role": "zone-node-2",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "shutdown": "crash",
+        "connected": false,
+        "registered_after_ttl": false
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-C3 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "NodeStatusNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-C4",
+      "producer_role": "zone-node-1",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "kind": "TimerHandlerFailed",
+        "node": "zone-node-1",
+        "delivery_count": 1
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "kind=TimerHandlerFailed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "NodeAlertNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-D1",
+      "producer_role": "ops",
+      "consumer_role": "all-zone-spots",
+      "normalized_payload": {
+        "announcement_id": "<ANNOUNCEMENT_ID:1>",
+        "client_duplicates": 0,
+        "subscriber_delivery_per_node": 1,
+        "spot_delivery_per_zone": 1
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-D1 passed"
+        },
+        {
+          "path": "raw/full-reference/logs/runner.log",
+          "selector": "scenario ZW-D1-subscribers passed"
+        },
+        {
+          "path": "raw/full-reference/logs/runner.log",
+          "selector": "scenario ZW-D1-spots passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "AnnounceWorldRes/WorldAnnounceNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-D2",
+      "producer_role": "ops",
+      "consumer_role": "subscriber-only-zone-node-3",
+      "normalized_payload": {
+        "publisher_node_list": null,
+        "received": true,
+        "hosted_zones": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/runner.log",
+          "selector": "scenario ZW-D2 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "typed WorldAnnounceEvent reaches unknown subscriber"
+      }
+    },
+    {
+      "scenario_id": "ZW-E1",
+      "producer_role": "ops-client",
+      "consumer_role": "target-node",
+      "normalized_payload": {
+        "target": "zone-node-2",
+        "enabled": true,
+        "non_target_unchanged": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E1 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "SetMaintenanceRes"
+      }
+    },
+    {
+      "scenario_id": "ZW-E2",
+      "producer_role": "source-player",
+      "consumer_role": "maintenance-target",
+      "normalized_payload": {
+        "cross_node_entry": "ZoneMaintenance"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E2 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "MoveRejectedNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-E3",
+      "producer_role": "player",
+      "consumer_role": "same-zone-spot",
+      "normalized_payload": {
+        "same_zone_move_allowed": true,
+        "maintenance": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E3 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "ZoneStateNotify advances position"
+      }
+    },
+    {
+      "scenario_id": "ZW-E4",
+      "producer_role": "player",
+      "consumer_role": "different-zone-same-owner",
+      "normalized_payload": {
+        "cross_zone_entry": "ZoneMaintenance"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E4 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "MoveRejectedNotify"
+      }
+    },
+    {
+      "scenario_id": "ZW-E5",
+      "producer_role": "replacement-node",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "desired_state_persisted": true,
+        "maintenance_after_restart": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E5 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "store_record": "after-restart"
+      }
+    },
+    {
+      "scenario_id": "ZW-E6",
+      "producer_role": "target-node",
+      "consumer_role": "ops-client",
+      "normalized_payload": {
+        "diagnostics_reachable": true,
+        "maintenance": true,
+        "error": null
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-E6 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-wire",
+        "wire_record": "NodeDiagnosticsRes"
+      }
+    }
+  ]
+}

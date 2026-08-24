@@ -1,0 +1,124 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "package_version": "1.0.0",
+  "authority": ".NET ZoneWorld reference implementation",
+  "record_required_fields": [
+    "scenario_id",
+    "producer_role",
+    "consumer_role",
+    "normalized_payload",
+    "raw_artifacts",
+    "typed_or_state_oracle"
+  ],
+  "sets": [
+    {
+      "name": "typed-json-wire-vectors",
+      "path": "sets/typed-json-wire-vectors.json",
+      "record_count": 22,
+      "sha256": "5fd0e1b494c5eff5dc82651425bf431055818e43b7eb5610cfc8fd5a01c006f8",
+      "port_completion_bar": "decoder/encoder exact match plus live client receives same semantic payload."
+    },
+    {
+      "name": "world-state-transcript",
+      "path": "sets/world-state-transcript.json",
+      "record_count": 8,
+      "sha256": "4f9669306beaa70518dbd64b12e59de7a8142811faabb94d224574143cff6b39",
+      "port_completion_bar": "same ordered transcript at specified steps."
+    },
+    {
+      "name": "relocation-transcript",
+      "path": "sets/relocation-transcript.json",
+      "record_count": 7,
+      "sha256": "970760d7f78ac83262b67236b3f31ea727f25d6a1f599d58e33f7ae3710e3d26",
+      "port_completion_bar": "all correlations and generation predicates pass; no source re-resolve/retry evidence."
+    },
+    {
+      "name": "stage-flow-event-ledger",
+      "path": "sets/stage-flow-event-ledger.json",
+      "record_count": 8,
+      "sha256": "b8cb13e20e2122b2b2aea335786dae2bbc6b6c1789c60b52fc563d8f97345f5b",
+      "port_completion_bar": "expected ordered partial order and exactly-once handlers."
+    },
+    {
+      "name": "store-snapshots",
+      "path": "sets/store-snapshots.json",
+      "record_count": 7,
+      "sha256": "1a95306796edc3ebe073e95b80ae3d351dc7128b9ded5ee93ca6b05e2cc9b86b",
+      "port_completion_bar": "same key namespaces/separation and state transition invariants, including both relocation-prefix absence assertions."
+    },
+    {
+      "name": "ops-fanout-transcript",
+      "path": "sets/ops-fanout-transcript.json",
+      "record_count": 12,
+      "sha256": "a39ef6af1a42921642b6d7c6558055e3f490a40322ddcc7e23c85a7569087eff",
+      "port_completion_bar": "identical observable states and duplicate/absence assertions."
+    },
+    {
+      "name": "bot-transcript",
+      "path": "sets/bot-transcript.json",
+      "record_count": 4,
+      "sha256": "1d33c4882a807435c25bd20423c3137593ab7dae63e59a1ac210c25f9a2cf675",
+      "port_completion_bar": "normalized sequence and negative evidence."
+    },
+    {
+      "name": "lifecycle-transcript",
+      "path": "sets/lifecycle-transcript.json",
+      "record_count": 6,
+      "sha256": "760cdff633daa8e7b167ba154ddbf05e753f0769b94a5c8d5feee5894555f1f3",
+      "port_completion_bar": "exact replacement and Unavailable boundaries."
+    },
+    {
+      "name": "browser-transcript",
+      "path": "sets/browser-transcript.json",
+      "record_count": 4,
+      "sha256": "3a6e3101e0d30760cb57096591b14359b7a2c9a01bf61976e63b0ce29c87ea04",
+      "port_completion_bar": "headless test and API/headless transcript both green."
+    }
+  ],
+  "raw_artifact_roots": [
+    "raw/full-reference",
+    "raw/g4-reference",
+    "raw/b8-reference",
+    "raw/redis-b2-reference",
+    "raw/redis-e5-reference",
+    "raw/redis-pending-follow-reference",
+    "raw/extraction-full",
+    "raw/verification-full"
+  ],
+  "normalization": {
+    "dynamic_values": "tagged placeholders; never drop the containing assertion",
+    "stable_semantics": "zone/node names, field names, null/optional presence, error kinds, ordering, counts, and predicates remain literal",
+    "placeholder_classes": [
+      "RID",
+      "UUID",
+      "ACTOR",
+      "PLAYER",
+      "SESSION_ID",
+      "OPID",
+      "PROBE",
+      "FLOW",
+      "CORR",
+      "PORT",
+      "TIMESTAMP",
+      "TICK",
+      "COUNT",
+      "DIRECTION",
+      "OWNER_GENERATION",
+      "OBJECT_GENERATION",
+      "RELOCATION_ID",
+      "SHA256"
+    ],
+    "widened_not_dropped": [
+      "periodic tick values",
+      "runtime population counts sampled while bots move",
+      "process-assigned identities and endpoints",
+      "flow/correlation and lifecycle tokens",
+      "wall-clock timestamps"
+    ]
+  },
+  "verification": {
+    "reference_capture": "raw/extraction-full",
+    "post_extraction_capture": "raw/verification-full",
+    "semantic_comparison": "phase/browser markers, typed packet field order, rejection reasons, and crash Unavailable terminal"
+  }
+}

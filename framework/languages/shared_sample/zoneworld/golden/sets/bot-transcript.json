@@ -1,0 +1,154 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "bot-transcript",
+  "records": [
+    {
+      "scenario_id": "ZW-F1",
+      "producer_role": "bot-spawner",
+      "consumer_role": "world",
+      "normalized_payload": {
+        "count": 8,
+        "roster": [
+          [
+            "bot-nw-x",
+            "zone-nw",
+            10,
+            15,
+            1,
+            0
+          ],
+          [
+            "bot-nw-y",
+            "zone-nw",
+            15,
+            10,
+            0,
+            1
+          ],
+          [
+            "bot-ne-x",
+            "zone-ne",
+            90,
+            15,
+            -1,
+            0
+          ],
+          [
+            "bot-ne-y",
+            "zone-ne",
+            85,
+            10,
+            0,
+            1
+          ],
+          [
+            "bot-sw-x",
+            "zone-sw",
+            10,
+            85,
+            1,
+            0
+          ],
+          [
+            "bot-sw-y",
+            "zone-sw",
+            15,
+            90,
+            0,
+            -1
+          ],
+          [
+            "bot-se-x",
+            "zone-se",
+            90,
+            85,
+            -1,
+            0
+          ],
+          [
+            "bot-se-y",
+            "zone-se",
+            85,
+            90,
+            0,
+            -1
+          ]
+        ]
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/runner.log",
+          "selector": "scenario ZW-F1-population passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "eight distinct actor ids with fixed initial state"
+      }
+    },
+    {
+      "scenario_id": "ZW-F2",
+      "producer_role": "source-bot-actor",
+      "consumer_role": "target-zone-spot",
+      "normalized_payload": {
+        "actor": "<BOT:X_AXIS_WITNESS>",
+        "initial_entry": false,
+        "seen_on_distinct_owners": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-1.log",
+          "selector": "bot=True, initial=False"
+        },
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "same bot id, bot=True, initial=False"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "store-state",
+        "assert": "same actor authority changes RID"
+      }
+    },
+    {
+      "scenario_id": "ZW-F3",
+      "producer_role": "zone-spot",
+      "consumer_role": "bot-actor",
+      "normalized_payload": {
+        "bound_session": false,
+        "push_attempt_count": 0
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/runner.log",
+          "selector": "scenario ZW-F4-no-push passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "bot excluded from DeliverZoneStateMsg/DeliverWorldAnnounceMsg recipients"
+      }
+    },
+    {
+      "scenario_id": "ZW-F4",
+      "producer_role": "maintenance-target",
+      "consumer_role": "bot-actor",
+      "normalized_payload": {
+        "rejection": "ZoneMaintenance",
+        "direction_before": "<DIRECTION:1>",
+        "direction_after": "negate(<DIRECTION:1>)",
+        "later_move_away": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/client.log",
+          "selector": "scenario ZW-F4 passed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "bot position reverses in subsequent ZoneState"
+      }
+    }
+  ]
+}

@@ -1,0 +1,187 @@
+{
+  "schema_version": "zoneworld-golden/v1",
+  "golden_set": "stage-flow-event-ledger",
+  "records": [
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "source-zone",
+      "consumer_role": "target-zone",
+      "normalized_payload": {
+        "stage": "join-sent",
+        "event_id": "zlink.message_flow",
+        "phase": "sent",
+        "packet": "JoinSpot",
+        "flow": "<FLOW:JOIN>",
+        "corr": "<CORR:JOIN>",
+        "outcome": "succeeded"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-1.log",
+          "selector": "packet=JoinSpot"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "target-zone",
+      "consumer_role": "source-zone",
+      "normalized_payload": {
+        "stage": "target-ready",
+        "event": "canonical_ready_sent",
+        "relocation": "<RELOCATION_ID:1>",
+        "attempt": 1
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "canonical_ready_sent"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "target-zone",
+      "consumer_role": "location-store",
+      "normalized_payload": {
+        "stage": "authority-cutover",
+        "event": "relocation_session_route",
+        "commit": "present",
+        "actor": "<ACTOR:ZW-B2>"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "relocation_session_route commit=present actor=b2-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-B2",
+      "producer_role": "target-zone",
+      "consumer_role": "actor-runtime",
+      "normalized_payload": {
+        "stage": "restore",
+        "object_generation": "<OBJECT_GENERATION:1>",
+        "owner": "<RID:TARGET>",
+        "restored_application_state": true
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/zone-node-2.log",
+          "selector": "actor_state_native_bound actor=b2-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-B5",
+      "producer_role": "source-old-route",
+      "consumer_role": "target-actor",
+      "normalized_payload": {
+        "stage": "follow-relay-one-way",
+        "event_id": "zlink.message_flow",
+        "packet": "MessageFollowProbeMsg",
+        "flow": "<FLOW:FOLLOW_ONE_WAY>",
+        "corr": "<CORR:FOLLOW_ONE_WAY>",
+        "outcome": "succeeded"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=MessageFollowProbeMsg actor=b5-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6",
+      "producer_role": "source-old-route",
+      "consumer_role": "target-actor",
+      "normalized_payload": {
+        "stage": "follow-relay-request",
+        "event_id": "zlink.message_flow",
+        "packet": "MessageFollowProbeReq",
+        "flow": "<FLOW:FOLLOW_REQUEST>",
+        "corr": "<CORR:FOLLOW_REQUEST>",
+        "outcome": "succeeded"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "packet=MessageFollowProbeReq actor=b6-"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-B6",
+      "producer_role": "target-actor",
+      "consumer_role": "gateway-probe",
+      "normalized_payload": {
+        "stage": "reply-received",
+        "event_id": "zlink.message_flow",
+        "phase": "reply_received",
+        "packet": "MessageFollowProbeReq",
+        "flow": "<FLOW:FOLLOW_REQUEST>",
+        "corr": "<CORR:FOLLOW_REQUEST>",
+        "outcome": "succeeded"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/gateway.log",
+          "selector": "phase=reply_received surface=actor kind=request"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    },
+    {
+      "scenario_id": "ZW-C4",
+      "producer_role": "zone-timer",
+      "consumer_role": "ops",
+      "normalized_payload": {
+        "stage": "timer-failure-report",
+        "event_id": "zlink.message_flow",
+        "packet": "ReportSpotEventMsg",
+        "kind": "TimerHandlerFailed",
+        "trigger_outcome": "error",
+        "error_type": "InvalidOperationException",
+        "report_flow_outcome": "succeeded"
+      },
+      "raw_artifacts": [
+        {
+          "path": "raw/full-reference/logs/ops.log",
+          "selector": "kind=TimerHandlerFailed"
+        }
+      ],
+      "typed_or_state_oracle": {
+        "kind": "typed-state",
+        "assert": "event payload/ordering is paired with the named scenario wire or state record"
+      }
+    }
+  ]
+}
