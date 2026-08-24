@@ -149,8 +149,8 @@ inline bool validate_multi_perf_pattern (const char *pattern)
 
 inline size_t resolve_multi_default_clients (const std::string &pattern)
 {
-    return is_stream_pattern (pattern.c_str ()) ? static_cast<size_t> (10000)
-                                                : static_cast<size_t> (100);
+    (void) pattern;
+    return static_cast<size_t> (100);
 }
 
 inline uint64_t resolve_multi_default_hwm (const std::string &pattern, size_t)

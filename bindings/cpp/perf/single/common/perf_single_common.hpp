@@ -571,9 +571,10 @@ inline int send_payload_active (zlink::pair_socket_t &socket_, const void *data_
     if (!msg.valid ())
         return -1;
     try {
-        const bool sent = std::move (socket_.send ().message (msg).flags (
-                                       static_cast<int> (zlink::send_flags_t::none)))
-                            .submit ();
+        // operation_state_t defaults and resets flags to none.  Calling the
+        // out-of-line flags(none) setter for every message adds C++-only
+        // harness work while preserving no observable send semantics.
+        const bool sent = std::move (socket_.send ().message (msg)).submit ();
         return sent ? 1 : 0;
     }
     catch (const zlink::binding_error_t &err) {

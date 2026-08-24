@@ -49,7 +49,9 @@ bool record_pair_payload (const zlink::message_t &payload,
         return true;
     }
 
-    received_count.fetch_add (1, std::memory_order_release);
+    // The receiver thread is joined before this counter is read, matching the
+    // C reference harness; no release operation is needed for synchronization.
+    received_count.fetch_add (1, std::memory_order_relaxed);
     const uint64_t now = perf_single_metric::now_ns ();
     latency_builder.add (perf_single_metric::elapsed_latency_ns (now, header.sent_ts_ns));
     return true;

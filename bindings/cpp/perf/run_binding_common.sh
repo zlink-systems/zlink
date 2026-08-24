@@ -90,6 +90,34 @@ resolve_core_runtime_library() {
   return 1
 }
 
+prepare_core_runtime_metadata() {
+  local core_build_dir=""
+  local provenance_manifest=""
+
+  core_build_dir="$(resolve_configured_core_build_dir "${OFFICIAL_BUILD_DIR}")"
+  PERF_CORE_RUNTIME_PATH="$(resolve_core_runtime_library "${core_build_dir}")"
+  PERF_CORE_PROVENANCE_REVISION=""
+  PERF_CORE_RELEASE_TAG_VALUE=""
+  PERF_CORE_DIRTY_VALUE="0"
+
+  if [[ "${ZLINK_CORE_RELEASE_MODE:-0}" -eq 1 ]]; then
+    provenance_manifest="${ZLINK_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json"
+    PERF_CORE_PROVENANCE_REVISION="$(
+      sed -n 's/^[[:space:]]*"revision":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${provenance_manifest}" | head -n 1
+    )"
+    PERF_CORE_RELEASE_TAG_VALUE="$(
+      sed -n 's/^[[:space:]]*"tag":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "${provenance_manifest}" | head -n 1
+    )"
+  else
+    PERF_CORE_PROVENANCE_REVISION="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
+    if ! git -C "${ROOT_DIR}" diff --quiet -- core; then
+      PERF_CORE_DIRTY_VALUE="1"
+    fi
+  fi
+}
+
 print_core_runtime_binding() {
   local build_dir="${1:-${OFFICIAL_BUILD_DIR}}"
   local core_build_dir=""

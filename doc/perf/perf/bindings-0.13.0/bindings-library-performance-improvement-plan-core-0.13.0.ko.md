@@ -24,6 +24,13 @@
 - `core/CMakeLists.txt`: `project(zlink VERSION 0.13.0 ...)`
 - `core/include/zlink.h`: major, minor, patch values matching 0.13.0
 
+2026-08-25 현재 작업 브랜치는 사용자 요청에 따라 최신 `main`을 병합해 source version이
+0.13.2이며 위 세 파일도 0.13.2로 서로 일치한다. 이 작업의 측정 대상은 계속 Core 0.13.0
+release runtime이다. 따라서 공식 report에서 `core_source=release`, `core_version=0.13.0`,
+`core_revision=dc9930877041649fc7400de0ebe5382ad9b33ff9`,
+`core_release_tag=core/v0.13.0`과 실제 runtime 경로가 모두 일치하는지를 source version과
+분리해 확인한다.
+
 `bindings/tools/local_core_runtime.sh`는 `VERSION`의 값을 이용해 GitHub의
 `core/v0.13.0` release asset을 기존 release 절차로 가져오고 versioned
 runtime 경로를 선택한다. 따라서 파일 이름이나 `Perf runtime libzlink: ...` 경로만
@@ -676,15 +683,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `미측정`
+- Single 상태: `진행 중` (`PAIR / tcp` 보류, 나머지 미측정)
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- 다음 작업: `PUBSUB / tcp` paired 측정과 개선 pass를 진행한다.
 
 #### 9.1.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 보류(83.47%) | 보류(88.98%) | 보류(93.28%) | 보류(90.63%) | 보류(79.45%) | 보류(98.72%) | aggregate throughput 89.09%, latency 1.131x; `cpp-pair-tcp-core0130-parity-ab-{c,cpp}-20260825`; [log](log/2026-08-25-cpp-pair-tcp.md) |
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1221,29 +1228,29 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
-| 버전 3곳 일치 | 미확인 |  |
-| 실제 runtime 버전 | 미확인 |  |
-| runner inventory | 미확인 |  |
-| Multi size 정책 | 미확인 |  |
-| 무시되는 runner option | 미확인 |  |
-| memory guard | 미확인 |  |
-| 재현 환경 manifest | 미확인 |  |
+| 버전 3곳 일치 | 확인 | 최신 main source 0.13.2로 일치; 공식 측정 runtime은 release 0.13.0으로 분리 |
+| 실제 runtime 버전 | 확인 | `libzlink.so.0.13.0`, release tag와 provenance 일치 |
+| runner inventory | 확인 | C/C++ Single 7 patterns 일치, Multi STREAM 복원 확인 |
+| Multi size 정책 | 확인 | 일반 64,256,1024,4096,65536,131072; STREAM 64,256,1024,65536 |
+| 무시되는 runner option | 확인 | PAIR/tcp report의 Effective Options C/C++ 일치 |
+| memory guard | 확인 | PAIR/tcp는 single suite로 해당 없음; Multi 실행 시 별도 기록 |
+| 재현 환경 manifest | 확인 | `log/2026-08-25-cpp-pair-tcp.md` |
 
 ### 10.2 Pattern별 paired 기준 측정
 
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
-| 현재 언어 | 미정 |  |
-| 현재 pattern | 미측정 |  |
-| paired C | 미측정 |  |
-| 개선 반복 | 미측정 |  |
-| 커밋과 푸시 | 미측정 |  |
+| 현재 언어 | C++ |  |
+| 현재 pattern | `PAIR / tcp` 보류, 다음 `PUBSUB / tcp` |  |
+| paired C | 완료 | `perf_c_single_linux_20260825_084219_cpp-pair-tcp-core0130-parity-ab-c-20260825.txt` |
+| 개선 반복 | 완료 | parity 수정, 자체 분석, C7 crossover, Sol read-only pass 완료 |
+| 커밋과 푸시 | 진행 중 | PAIR/tcp 문서·runner 변경 검증 후 수행 |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 1 | C++ | 진행 중 | 미측정 | `PUBSUB / tcp` paired 측정과 개선 pass를 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1259,6 +1266,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 날짜 | 언어 | suite / 범위 | pair tag | 측정 조건 | 결과 | report |
 |------|------|---------------|----------|----------------|------|---------------|
 | 2026-08-24 | 전체 | 계획 초기화 | - | Core 0.13.0 release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
+| 2026-08-25 | C++ | Single `PAIR / tcp` | `cpp-pair-tcp-core0130-parity-ab-{c,cpp}-20260825` | 6 sizes, 5초, 3회 중앙값, Core 0.13.0 release, C/C++ Effective Options 일치 | 처리량 평균 89.09%로 보류, latency 평균 1.131x 통과 | C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260825_084219_cpp-pair-tcp-core0130-parity-ab-c-20260825.txt`; C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260825_084400_cpp-pair-tcp-core0130-parity-ab-cpp-20260825.txt` |
 
 ## 12. 완료 기준
 

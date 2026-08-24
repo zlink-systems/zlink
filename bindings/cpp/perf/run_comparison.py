@@ -1474,7 +1474,7 @@ def detect_special_status(stdout, expected_lib, expected_pattern, expected_trans
 
 def pattern_default_clients(pattern_name, transport=None):
     if pattern_name in STREAM_VARIANT_PATTERNS:
-        base = 10000
+        base = 100
         tr = (transport or "").strip().lower()
         if tr in ("tls", "ws", "wss"):
             non_tcp_cap = max(
@@ -3900,7 +3900,7 @@ def resolve_clients_meta(selected_patterns):
     if not selected_patterns or not all(is_pattern(p) for p in selected_patterns):
         return ""
 
-    stream_default = 10000
+    stream_default = 100
     general_default = 100
     if len(selected_patterns) == 1 and selected_patterns[0] in STREAM_VARIANT_PATTERNS:
         return str(stream_default)
@@ -3916,6 +3916,17 @@ def build_meta_items(num_runs, selected_patterns):
     meta_items.append(("cores", str(os.cpu_count() or 0)))
     meta_items.append(("build", detect_build_type(BUILD_DIR)))
     meta_items.append(("commit", get_commit_short_sha()))
+    for key, env_name in (
+        ("core_source", "PERF_CORE_SOURCE"),
+        ("core_version", "PERF_CORE_VERSION"),
+        ("core_runtime", "PERF_CORE_RUNTIME"),
+        ("core_revision", "PERF_CORE_REVISION"),
+        ("core_dirty", "PERF_CORE_DIRTY"),
+        ("core_release_tag", "PERF_CORE_RELEASE_TAG"),
+    ):
+        value = _read_env_value(env_name)
+        if value:
+            meta_items.append((key, value))
     local_now = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     meta_items.append(("timestamp", local_now))
     load_avg = get_load_avg()

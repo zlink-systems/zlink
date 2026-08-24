@@ -624,6 +624,7 @@ fi
 print_core_runtime_binding "${BUILD_DIR}"
 ensure_core_runtime_not_stale "${BUILD_DIR}" "run_benchmarks.sh"
 ensure_cpp_core_build_runtime_enabled "${BUILD_DIR}"
+prepare_core_runtime_metadata
 
 PATTERN_CSV="$(IFS=,; echo "${PATTERN_LIST[*]}")"
 RUNTIME_BUILD_DIR="$(prepare_cpp_runtime_dir)"
@@ -647,6 +648,14 @@ RUN_CMD+=("--result-file" "${RESULT_FILE}")
 
 RUN_ENV=()
 RUN_ENV+=(PYTHONUNBUFFERED=1)
+RUN_ENV+=(PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}")
+RUN_ENV+=(PERF_CORE_VERSION="${ZLINK_CORE_VERSION}")
+RUN_ENV+=(PERF_CORE_RUNTIME="${PERF_CORE_RUNTIME_PATH}")
+RUN_ENV+=(PERF_CORE_REVISION="${PERF_CORE_PROVENANCE_REVISION:-unknown}")
+RUN_ENV+=(PERF_CORE_DIRTY="${PERF_CORE_DIRTY_VALUE}")
+if [[ -n "${PERF_CORE_RELEASE_TAG_VALUE}" ]]; then
+  RUN_ENV+=(PERF_CORE_RELEASE_TAG="${PERF_CORE_RELEASE_TAG_VALUE}")
+fi
 if [[ -n "${PERF_IO_THREADS}" ]]; then
   RUN_ENV+=(PERF_IO_THREADS="${PERF_IO_THREADS}")
 fi
