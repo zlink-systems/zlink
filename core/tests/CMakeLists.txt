@@ -88,6 +88,8 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_ctx_options
   ${INTEGRATION_TEST_ROOT}/test_socket_null
   ${INTEGRATION_TEST_ROOT}/test_multi_socket_contract_regressions
+  ${INTEGRATION_TEST_ROOT}/test_gap_h3_pair_contract
+  ${INTEGRATION_TEST_ROOT}/test_gap_h3_pubsub_contract
   ${INTEGRATION_TEST_ROOT}/test_backpressure_matrix
   ${INTEGRATION_TEST_ROOT}/test_backpressure_oneway_matrix
   ${INTEGRATION_TEST_ROOT}/test_public_inproc_multipart_send
@@ -509,6 +511,15 @@ endif()
 if(TARGET test_xpub_nodrop)
   set_tests_properties(test_xpub_nodrop PROPERTIES TIMEOUT 45)
 endif()
+
+foreach(h3_contract_test
+        test_gap_h3_pair_contract
+        test_gap_h3_pubsub_contract
+        test_flow_state_c_api)
+  if(TARGET ${h3_contract_test})
+    set_tests_properties(${h3_contract_test} PROPERTIES TIMEOUT 30)
+  endif()
+endforeach()
 if(TARGET test_zmp_request_reply)
   set_tests_properties(
     test_zmp_request_reply
@@ -757,6 +768,13 @@ set(BACKPRESSURE_ONEWAY_REGRESSION_TEST_SPECS
     test_backpressure_oneway_matrix_single_socket_regression=test_single_socket_backpressure_oneway_matrix
     test_backpressure_oneway_matrix_pubsub_regression=test_multi_pubsub_backpressure_oneway_matrix)
 
+set(H3_FLOW_CONTRACT_TEST_SPECS
+    test_gap_h3_flow_same_state=same-state
+    test_gap_h3_flow_resumed_stale=resumed-stale
+    test_gap_h3_flow_hwm_resumed=hwm-resumed
+    test_gap_h3_flow_event_mask=mask
+    test_gap_h3_flow_ordering=ordering)
+
 if(TARGET test_stream_socket)
   add_env_case_suite(
     test_stream_socket
@@ -806,6 +824,15 @@ if(TARGET test_backpressure_oneway_matrix)
   set_zlink_network_case_properties(
     BACKPRESSURE_ONEWAY_REGRESSION_TEST_NAMES
     120)
+endif()
+if(TARGET test_flow_state_c_api)
+  add_env_case_suite(
+    test_flow_state_c_api
+    H3_FLOW_CONTRACT_TEST_SPECS
+    H3_FLOW_CONTRACT_TEST_NAMES)
+  set_tests_properties(
+    ${H3_FLOW_CONTRACT_TEST_NAMES}
+    PROPERTIES TIMEOUT 15)
 endif()
 
 set_zlink_scenario_properties(
@@ -857,7 +884,8 @@ set(INTEGRATION_SERIAL_TESTS ${REGISTERED_TESTS})
 list(REMOVE_ITEM INTEGRATION_SERIAL_TESTS ${E2E_SERIAL_TESTS} ${REGRESSION_SERIAL_TESTS})
 list(APPEND INTEGRATION_SERIAL_TESTS
      ${BACKPRESSURE_MATRIX_INTEGRATION_TEST_NAMES}
-     ${BACKPRESSURE_ONEWAY_INTEGRATION_TEST_NAMES})
+     ${BACKPRESSURE_ONEWAY_INTEGRATION_TEST_NAMES}
+     ${H3_FLOW_CONTRACT_TEST_NAMES})
 list(REMOVE_ITEM INTEGRATION_SERIAL_TESTS ${E2E_SERIAL_TESTS} ${REGRESSION_SERIAL_TESTS})
 list(REMOVE_DUPLICATES INTEGRATION_SERIAL_TESTS)
 
