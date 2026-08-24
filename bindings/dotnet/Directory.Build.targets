@@ -6,6 +6,9 @@
         <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <PackageReadmeFile Condition="'$(PackageReadmeFile)' == ''">README.md</PackageReadmeFile>
+        <ZLinkCoreSource Condition="'$(ZLinkCoreSource)' == ''">$(ZLINK_CORE_SOURCE)</ZLinkCoreSource>
+        <ZLinkLinuxX64NativeRoot Condition="'$(ZLinkCoreSource)' == 'local' And '$(ZLinkLinuxX64NativeRoot)' == ''">$(ZLINK_CORE_LIB_DIR)</ZLinkLinuxX64NativeRoot>
+        <ZLinkCoreVersion Condition="'$(ZLinkCoreSource)' == 'local' And '$(ZLinkCoreVersion)' == ''">$(ZLINK_CORE_VERSION)</ZLinkCoreVersion>
     </PropertyGroup>
 
     <ItemGroup Condition="'$(PackageReadmeFile)' == 'README.md' and Exists('$(MSBuildThisFileDirectory)README.md')">

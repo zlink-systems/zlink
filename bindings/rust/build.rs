@@ -15,12 +15,31 @@ fn main() {
         ),
     };
 
+    println!("cargo:rerun-if-env-changed=ZLINK_CORE_SOURCE");
+    println!("cargo:rerun-if-env-changed=ZLINK_CORE_INCLUDE_DIR");
+    println!("cargo:rerun-if-env-changed=ZLINK_CORE_LIB_DIR");
     println!("cargo:rerun-if-env-changed=ZLINK_RUST_NATIVE_DIR");
-    let native_dir = match env::var_os("ZLINK_RUST_NATIVE_DIR") {
+    let local_core = env::var("ZLINK_CORE_SOURCE").ok().as_deref() == Some("local");
+    let native_dir = if local_core {
+        let include_dir = env::var_os("ZLINK_CORE_INCLUDE_DIR").map(PathBuf::from)
+            .unwrap_or_else(|| panic!(
+                "ZLINK_CORE_SOURCE=local requires ZLINK_CORE_INCLUDE_DIR; source bindings/tools/local_core_runtime.sh first"
+            ));
+        let library_dir = env::var_os("ZLINK_CORE_LIB_DIR").map(PathBuf::from)
+            .unwrap_or_else(|| panic!(
+                "ZLINK_CORE_SOURCE=local requires ZLINK_CORE_LIB_DIR; source bindings/tools/local_core_runtime.sh first"
+            ));
+        if !include_dir.join("zlink.h").is_file() {
+            panic!("Core headers are missing from {}", include_dir.display());
+        }
+        library_dir
+    } else {
+        match env::var_os("ZLINK_RUST_NATIVE_DIR") {
         Some(path) => PathBuf::from(path),
         None => manifest_dir
             .join("native")
             .join(format!("{os_dir}-{arch_dir}")),
+        }
     };
     if !native_dir.is_dir() {
         panic!(
@@ -28,7 +47,8 @@ fn main() {
             native_dir.display()
         );
     }
-    // The crate payload is the only implicit runtime source. In particular,
+    // Outside an explicit local selection, the crate payload is the only
+    // implicit runtime source. In particular,
     // do not discover or prefer a repository `core/build` directory here:
     // that would let a clean consumer silently execute a different Core
     // candidate than the one packaged with this crate.
@@ -46,17 +66,21 @@ fn main() {
         println!("cargo:rerun-if-changed={}", import_library.display());
     } else {
         let versioned_runtime = native_dir.join(format!("libzlink.so.{package_version}"));
-        if !native_dir.join("libzlink.so").is_file() || !versioned_runtime.is_file() {
+        let runtime = native_dir.join("libzlink.so");
+        if !runtime.is_file() || (!local_core && !versioned_runtime.is_file()) {
             panic!(
-                "Rust native payload must contain libzlink.so and libzlink.so.{package_version}: {}",
+                "Rust native runtime must contain libzlink.so{}: {}",
+                if local_core { "" } else { " and its exact versioned payload" },
                 native_dir.display()
             );
         }
         println!(
             "cargo:rerun-if-changed={}",
-            native_dir.join("libzlink.so").display()
+            runtime.display()
         );
-        println!("cargo:rerun-if-changed={}", versioned_runtime.display());
+        if versioned_runtime.is_file() {
+            println!("cargo:rerun-if-changed={}", versioned_runtime.display());
+        }
     }
     println!("cargo:rustc-link-search=native={}", native_dir.display());
     println!("cargo:rustc-link-lib=dylib=zlink");

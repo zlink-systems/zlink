@@ -28,7 +28,7 @@
             <CopyToOutputDirectory>Never</CopyToOutputDirectory>
         </None>
     </ItemGroup>
-    <ItemGroup>
+    <ItemGroup Condition="'$(ZLinkCoreProvenancePath)' != ''">
         <None Include="$(ZLinkCoreProvenancePath)">
             <Pack>true</Pack>
             <PackagePath>provenance\core-package-provenance.json</PackagePath>
@@ -41,7 +41,7 @@
                 Text="ZLinkLinuxX64NativeRoot or ZLinkWindowsX64NativeRoot must identify the approved Core 0.13.0 package runtime directory." />
         <Error Condition="'$(ZLinkCoreVersion)' == ''"
                Text="ZLinkCoreVersion must identify the approved Core 0.13.0 package version." />
-        <Error Condition="'$(ZLinkCoreProvenancePath)' == '' Or !Exists('$(ZLinkCoreProvenancePath)')"
+        <Error Condition="'$(ZLinkCoreSource)' != 'local' And ('$(ZLinkCoreProvenancePath)' == '' Or !Exists('$(ZLinkCoreProvenancePath)'))"
                Text="ZLinkCoreProvenancePath must identify the approved Core 0.13.0 package provenance." />
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' != '' And !Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so')"
                Text="The approved Core 0.13.0 package is missing libzlink.so." />

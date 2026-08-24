@@ -22,6 +22,10 @@ def nativeOs = System.getProperty('os.name').toLowerCase()
 def nativeArch = System.getProperty('os.arch').toLowerCase()
 def nativeBridgeSupported = nativeOs.contains('linux')
     && ['amd64', 'x86_64'].contains(nativeArch)
+def coreSource = System.getenv('ZLINK_CORE_SOURCE') ?: 'release'
+if (!['release', 'local'].contains(coreSource)) {
+    throw new GradleException('ZLINK_CORE_SOURCE must be release or local')
+}
 def configuredCorePackagePrefix = System.getenv('ZLINK_CORE_PACKAGE_PREFIX')
 def configuredCorePackageSummary = System.getenv('ZLINK_CORE_PACKAGE_SUMMARY')
 def approvedCorePackage = configuredCorePackageSummary != null
@@ -31,6 +35,16 @@ def approvedCorePackage = configuredCorePackageSummary != null
 def corePackagePrefix = configuredCorePackagePrefix != null
     && !configuredCorePackagePrefix.trim().isEmpty()
     ? new File(configuredCorePackagePrefix).absoluteFile
+    : null
+def configuredCoreIncludeDir = System.getenv('ZLINK_CORE_INCLUDE_DIR')
+def configuredCoreLibDir = System.getenv('ZLINK_CORE_LIB_DIR')
+def coreIncludeDir = coreSource == 'local' && configuredCoreIncludeDir != null
+    && !configuredCoreIncludeDir.trim().isEmpty()
+    ? new File(configuredCoreIncludeDir).absoluteFile
+    : null
+def coreLinkDir = coreSource == 'local' && configuredCoreLibDir != null
+    && !configuredCoreLibDir.trim().isEmpty()
+    ? new File(configuredCoreLibDir).absoluteFile
     : null
 def generatedNativeResourcesDir = layout.buildDirectory.dir(
     'generated/zlink-native-resources/main')
@@ -76,7 +90,14 @@ tasks.register('buildZlinkJavaBridge', Exec) {
     def jniIncludeDir = new File(javaHome, 'include')
     def jniOsIncludeDir = new File(jniIncludeDir, 'linux')
     inputs.file(source)
-    if (corePackagePrefix != null) {
+    if (coreSource == 'local') {
+        if (coreIncludeDir != null) {
+            inputs.dir(coreIncludeDir)
+        }
+        if (coreLinkDir != null) {
+            inputs.dir(coreLinkDir)
+        }
+    } else if (corePackagePrefix != null) {
         inputs.dir(new File(corePackagePrefix, 'include'))
         inputs.dir(new File(corePackagePrefix, 'lib'))
         inputs.file(new File(corePackagePrefix,
@@ -89,6 +110,50 @@ tasks.register('buildZlinkJavaBridge', Exec) {
         new File(generatedNativeResourcesDir.get().asFile,
             'META-INF/zlink/core-package-provenance.json'))
     doFirst {
+        if (coreSource == 'local') {
+            if (coreIncludeDir == null || !coreIncludeDir.isAbsolute()
+                || coreLinkDir == null || !coreLinkDir.isAbsolute()) {
+                throw new GradleException(
+                    'ZLINK_CORE_SOURCE=local requires absolute ZLINK_CORE_INCLUDE_DIR and ZLINK_CORE_LIB_DIR; source bindings/tools/local_core_runtime.sh first')
+            }
+            def runtime = new File(coreLinkDir, 'libzlink.so')
+            def sonameRuntime = new File(coreLinkDir, 'libzlink.so.0')
+            if (!new File(coreIncludeDir, 'zlink.h').isFile()
+                || !runtime.isFile()) {
+                throw new GradleException(
+                    'Local Core is incomplete; build core/build before the Java binding')
+            }
+            outputDir.mkdirs()
+            copy {
+                from runtime
+                into outputDir
+                rename { 'libzlink.so' }
+            }
+            if (sonameRuntime.isFile()) {
+                copy {
+                    from sonameRuntime
+                    into outputDir
+                    rename { 'libzlink.so.0' }
+                }
+            }
+            commandLine 'c++',
+                '-shared',
+                '-fPIC',
+                '-std=c++17',
+                '-O2',
+                '-pthread',
+                '-I', coreIncludeDir.absolutePath,
+                '-I', jniIncludeDir.absolutePath,
+                '-I', jniOsIncludeDir.absolutePath,
+                '-L', coreLinkDir.absolutePath,
+                '-Wl,-rpath,$ORIGIN',
+                '-Wl,--no-undefined',
+                '-o', output.absolutePath,
+                source.absolutePath,
+                '-Wl,--no-as-needed',
+                '-lzlink'
+            return
+        }
         if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
             throw new GradleException(
                 'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 0.13.0 install prefix')
