@@ -8,7 +8,7 @@
 
 DEALER is an asynchronous raw socket that fair-queues inbound messages and
 sends to connected peers using round-robin or weight-aware selection. The same
-socket can process ordinary raw messages and request/reply records.
+socket can process ordinary raw messages and received request records.
 
 ## 1. Public types
 
@@ -23,9 +23,7 @@ typedef enum zlink_dealer_option_t {
 
 typedef enum zlink_dealer_message_type_t {
   ZLINK_DEALER_MESSAGE_RAW         = 0,
-  ZLINK_DEALER_MESSAGE_REQUEST     = 1,
-  ZLINK_DEALER_MESSAGE_REPLY       = 2,
-  ZLINK_DEALER_MESSAGE_ERROR_REPLY = 3
+  ZLINK_DEALER_MESSAGE_REQUEST     = 1
 } zlink_dealer_message_type_t;
 
 typedef enum zlink_part_flag_t {
@@ -140,12 +138,11 @@ with each payload part.
 |---|---:|---|
 | `ZLINK_DEALER_MESSAGE_RAW` (`0`) | `0` | An ordinary raw multipart message without a request/reply envelope |
 | `ZLINK_DEALER_MESSAGE_REQUEST` (`1`) | Nonzero | A request received by this DEALER; the returned value is a reply token for `zlink_dealer_reply_part()` |
-| `ZLINK_DEALER_MESSAGE_REPLY` (`2`) | Nonzero | A successful reply record |
-| `ZLINK_DEALER_MESSAGE_ERROR_REPLY` (`3`) | Nonzero | A failed reply record |
 
 Every part of one multipart record returns the same message type and request
 sequence. Replies and terminal failures for work started through a request API
-are delivered through the `zlink_reply_handler_fn` completion. The following
+are not returned as receive records; they are delivered only through the
+`zlink_reply_handler_fn` completion. The following
 API sends an ordinary raw message and does not create a request sequence.
 
 ```c

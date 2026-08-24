@@ -422,33 +422,6 @@ raw socket returns `ZLINK_CONFIG_INVALID_HANDLE`.
 
 ---
 
-### zlink_proxy_steerable
-
-Run a bidirectional proxy whose state can be controlled through a control
-socket.
-
-```c
-ZLINK_EXPORT zlink_config_result_t zlink_proxy_steerable (void *frontend_,
-                                                          void *backend_,
-                                                          void *capture_,
-                                                          void *control_);
-```
-
-`frontend_` and `backend_` are required. `capture_` and `control_` may each be
-NULL. A non-NULL `control_` accepts `PAUSE`, `RESUME`, `TERMINATE`, and
-`STATISTICS` commands. The call blocks until `TERMINATE`, context termination,
-or an error ends the proxy loop.
-
-Every handle is borrowed; the function neither closes nor owns it. Ownership of
-the `STATISTICS` reply follows the control socket's ordinary raw send/receive
-contract.
-
-**Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally; otherwise a
-`zlink_config_result_t` error. A NULL required handle or a non-NULL optional
-handle that is not a raw socket returns `ZLINK_CONFIG_INVALID_HANDLE`.
-
----
-
 ### zlink_sleep
 
 Sleep for the given number of seconds.

@@ -316,7 +316,7 @@ if (rc == ZLINK_SUBMIT_NOT_ADMITTED) {
 재시도해야 한다.
 
 > 상세 규약은 DEALER spec
-> [§2 DEALER option](../spec/core/socket/06-dealer.ko.md#2-dealer-option)의
+> [§2 DEALER option](../spec/core/socket/06-dealer.ko.md#8-dealer-option)의
 > `ZLINK_DEALER_OPT_WEIGHT` 항목을 참고.
 
 ### routing_id는 connect 전에 설정
