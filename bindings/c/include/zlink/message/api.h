@@ -35,8 +35,6 @@ typedef struct zlink_routing_id_t
 } zlink_routing_id_t;
 
 typedef void (zlink_free_fn) (void *data_, void *hint_);
-#define ZLINK_MSG_METADATA_KEY_USER_MIN 0x0100
-#define ZLINK_MSG_METADATA_VALUE_MAX 65535
 
 /** @brief Initialize an empty message. Must be closed with zlink_msg_close(). */
 ZLINK_EXPORT zlink_config_result_t zlink_msg_init (zlink_msg_t *msg_);
