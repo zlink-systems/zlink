@@ -124,6 +124,25 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             await connection.DisposeAsync().ConfigureAwait(false);
     }
 
+    internal async ValueTask ClearAsync(
+        ZLinkLocationRuntimeSnapshot location)
+    {
+        List<Connection> removed;
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+                return;
+            _location = location;
+            _excluded = Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
+            removed = _connections.Values.ToList();
+            _connections.Clear();
+            PublishSnapshotNoLock();
+        }
+
+        foreach (var connection in removed)
+            await connection.DisposeAsync().ConfigureAwait(false);
+    }
+
     internal void RecordLocationFailure(
         DateTimeOffset? lastSuccessAt,
         DateTimeOffset failureAt)
