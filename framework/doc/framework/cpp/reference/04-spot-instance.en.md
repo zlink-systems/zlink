@@ -347,7 +347,7 @@ that is no longer needed at an Entry Spot.
 
 ## `relocation_ready().defer()` (inside Spot code)
 
-In a `spot_wide` Spot that has chosen `application_signaled` readiness mode, defers the
+In a `spot_wide` Spot that has chosen `application_signaled` coordination mode, defers the
 relocation boundary to just before the next application turn.
 
 ```cpp
@@ -359,12 +359,12 @@ context_.relocation_ready().defer();
 **Completion result.** No return value. Registers the relocation boundary after the current
 handler ends. If it did not move, or aborted before commit, it receives a `continued` completion
 at the source; if it moved, it receives a `relocated` completion at the target, via
-`on_relocation_ready_completed(...)`. `any_turn_boundary` mode, a `per_actor` Spot, an
+`on_relocation_ready_completed(...)`. `framework_managed` mode, a `per_actor` Spot, an
 Entry/Instance Spot, outside a Spot turn, or a duplicate call in the same turn all complete with
 `invalid_operation`.
 
 **When to use.** Use this when the application must precisely control the relocation moment down
-to a specific turn boundary. This call is not needed under the default `any_turn_boundary` mode.
+to a specific turn boundary. This call is not needed under the default `framework_managed` mode.
 
 ---
 

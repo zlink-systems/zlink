@@ -372,9 +372,9 @@ void configure_host_relocation_app (
                   factory.set_execution_mode (
                     zlink::framework::
                       user_spot_execution_mode_t::spot_wide);
-                  factory.set_relocation_readiness (
+                  factory.set_relocation_coordination_mode (
                     zlink::framework::
-                      spot_relocation_readiness_mode_t::
+                      spot_relocation_coordination_mode_t::
                         application_signaled);
                   factory.template preserve_state_with<
                     host_relocation_spot_adapter_t> ();
@@ -532,13 +532,13 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
 {
     namespace detail = zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
-    using zlink::framework::spot_relocation_readiness_mode_t;
+    using zlink::framework::spot_relocation_coordination_mode_t;
     using zlink::framework::spot_relocation_ready_outcome_t;
     using zlink::framework::user_spot_execution_mode_t;
 
     auto state = std::make_shared<detail::spot_context_state_t> ();
     state->execution_mode = user_spot_execution_mode_t::spot_wide;
-    state->relocation_readiness = spot_relocation_readiness_mode_t::application_signaled;
+    state->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
     state->serial_executor =
       std::make_shared<runtime::offload_executor_t> (2, 64, "relocation-ready-test");
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
@@ -617,7 +617,7 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
                   "prepared relocation must consume the boundary and complete "
                   "relocated exactly once");
 
-    state->relocation_readiness = spot_relocation_readiness_mode_t::any_turn_boundary;
+    state->relocation_coordination_mode = spot_relocation_coordination_mode_t::framework_managed;
     bool rejected = false;
     try {
         (void) state->run_serial_sync ("reject-relocation-defer",
@@ -626,7 +626,7 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
     catch (const zlink::framework::framework_exception_t &error) {
         rejected = error.kind () == zlink::framework::framework_error_kind_t::not_configured;
     }
-    test.require (rejected, "AnyTurnBoundary must reject relocation_ready().defer()");
+    test.require (rejected, "FrameworkManaged must reject relocation_ready().defer()");
 }
 
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
@@ -637,7 +637,7 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
     using zlink::framework::node_rid_t;
     using zlink::framework::spot_context_t;
     using zlink::framework::spot_id_t;
-    using zlink::framework::spot_relocation_readiness_mode_t;
+    using zlink::framework::spot_relocation_coordination_mode_t;
     using zlink::framework::user_spot_execution_mode_t;
 
     struct test_actor_t
@@ -661,7 +661,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_cont
         state->lifecycle_domain = entry_spot ? detail::spot_lifecycle_domain_t::entry ()
                                              : detail::spot_lifecycle_domain_t::user ();
         state->execution_mode = user_spot_execution_mode_t::spot_wide;
-        state->relocation_readiness = spot_relocation_readiness_mode_t::application_signaled;
+        state->relocation_coordination_mode =
+          spot_relocation_coordination_mode_t::application_signaled;
         state->serial_executor =
           std::make_shared<runtime::offload_executor_t> (2, 64, "actor-leave-after-defer");
         state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
@@ -2799,8 +2800,7 @@ void test_application_relocation_remote_production_path (test_context_t &test)
     std::thread target_dispatch ([&] { dispatch (target); });
     std::thread session_owner_dispatch ([&] { dispatch (session_owner); });
     relocation_thread.join ();
-    const auto source_relocation_gate =
-      source.native_node ().maintenance ()->gate_snapshot ();
+    const auto source_relocation_gate = source.native_node ().maintenance ()->gate_snapshot ();
     const auto route_deadline = std::chrono::steady_clock::now () + 5s;
     while (std::chrono::steady_clock::now () < route_deadline) {
         const auto current =
@@ -3062,8 +3062,8 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
           },
           [] (auto &factory) {
               factory.set_execution_mode (framework::user_spot_execution_mode_t::spot_wide);
-              factory.set_relocation_readiness (
-                framework::spot_relocation_readiness_mode_t::application_signaled);
+              factory.set_relocation_coordination_mode (
+                framework::spot_relocation_coordination_mode_t::application_signaled);
               factory.template preserve_state_with<aggregate_materialized_spot_adapter_t> ();
           });
         state->spot_builder.add_actor_factory<aggregate_materialized_actor_t> (

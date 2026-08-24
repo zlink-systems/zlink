@@ -3,7 +3,7 @@ package systems.zlink.framework.runtime.internal.configuration;
 import java.util.Objects;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -36,7 +36,7 @@ public final class ZLinkObjectFactoryRegistration {
     public record UserSpotFactoryConfiguration(
         int stableTypeLimit,
         ZLinkUserSpotExecutionMode executionMode,
-        ZLinkSpotRelocationReadinessMode relocationReadiness) {
+        ZLinkSpotRelocationCoordinationMode relocationCoordinationMode) {
     }
 
     public record InstanceSpotFactoryConfiguration(int stableTypeLimit) {

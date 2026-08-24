@@ -137,15 +137,15 @@ Spot-level schedule은 application이 node 밖의 저장소에서 관리한다. 
 같은 SpotId와 ObjectGeneration으로 Spot instance를 다시 만들고 Actor state,
 Actor queue와 Actor timer만 Actor별로 이전한다.
 
-<a id="spot-relocation-readiness-mode"></a>
-### Spot relocation readiness mode
+<a id="spot-relocation-coordination-mode"></a>
+### Spot relocation coordination mode
 
 `SpotWide` User Spot이 어느 turn 경계에서 relocation을 시작할 수 있는지 정하는
 startup 등록 옵션이다.
 
 | Mode | 의미 |
 |---|---|
-| `AnyTurnBoundary` | Framework가 일반적인 안전한 turn 경계를 선택한다. 기본값이다. |
+| `FrameworkManaged` | Framework가 일반적인 안전한 turn 경계를 선택한다. 기본값이다. |
 | `ApplicationSignaled` | Application이 현재 turn 뒤가 안전하다고 `RelocationReady().Defer()`로 알린 경계만 사용한다. |
 
 `ApplicationSignaled`에서 `Defer()`는 relocation을 요청하지 않는다. 현재 host에
@@ -155,7 +155,7 @@ startup 등록 옵션이다.
 
 Callback은 언어별 Spot interface에 기본 no-op 구현으로 제공한다. Application은
 round나 match의 다음 단계를 callback에서 시작해야 할 때만 구현한다.
-`AnyTurnBoundary`, `PerActor`, Entry Spot과 Instance Spot에서 `Defer()`를 호출하면
+`FrameworkManaged`, `PerActor`, Entry Spot과 Instance Spot에서 `Defer()`를 호출하면
 queue를 바꾸기 전에 `InvalidOperation`으로 실패한다.
 
 <a id="meshnode"></a>

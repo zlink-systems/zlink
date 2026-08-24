@@ -14,8 +14,8 @@ public interface ZLinkUserSpotFactoryBuilder<TSpot extends ZLinkSpot<?>> {
     ZLinkUserSpotFactoryBuilder<TSpot> executionMode(
         ZLinkUserSpotExecutionMode mode);
 
-    ZLinkUserSpotFactoryBuilder<TSpot> relocationReadiness(
-        ZLinkSpotRelocationReadinessMode mode);
+    ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(
+        ZLinkSpotRelocationCoordinationMode mode);
 
     void disableRelocation();
 

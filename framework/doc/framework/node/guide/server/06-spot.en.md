@@ -763,7 +763,7 @@ chosen at factory registration.
 
 | Mode | Who decides the safe point | Applies to |
 | --- | --- | --- |
-| `AnyTurnBoundary` (default) | The Framework -- between a completed turn and the next | Most Spots |
+| `FrameworkManaged` (default) | The Framework -- between a completed turn and the next | Most Spots |
 | `ApplicationSignaled` | The application -- the end of the turn that called `defer()` | A Spot whose state-consistency unit spans multiple turns |
 
 **The condition under which the default mode holds.** The Framework doesn't interrupt a
@@ -784,7 +784,7 @@ mesh.objects().server()
   .addSpotFactory('game-room', GameRoom, (factory) => factory
     // Only usable in this mode.
     .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
-    .relocationReadiness(ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+    .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
     .preserveStateWith(GameRoomRelocationAdapter));
 ```
 
@@ -822,7 +822,7 @@ Follow these rules.
   operation (send, request, close, etc.) in the same turn afterward is an error.
 - **Call it only once per turn.** A second `defer()` in the same turn is an error.
 - **It's exclusive to a `SpotWide` User Spot.** It can't be called from an Entry Spot, a
-  `PerActor` User Spot, an Instance Spot, or under the default `AnyTurnBoundary` mode.
+  `PerActor` User Spot, an Instance Spot, or under the default `FrameworkManaged` mode.
 
 ## 8. Related Documents
 

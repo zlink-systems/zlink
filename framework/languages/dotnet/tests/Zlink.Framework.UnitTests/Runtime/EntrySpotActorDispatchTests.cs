@@ -3402,7 +3402,7 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
-            ZLinkSpotRelocationReadinessMode.ApplicationSignaled);
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled);
         var spot = new RelocationReadyProbeSpot(activation);
         activation.AttachSpot(spot);
         await using var cleanup = activation.ConfigureAwait(false);
@@ -3460,7 +3460,7 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
-            ZLinkSpotRelocationReadinessMode.ApplicationSignaled);
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled);
         var spot = new RelocationReadyProbeSpot(activation);
         activation.AttachSpot(spot);
         await using var cleanup = activation.ConfigureAwait(false);
@@ -3512,7 +3512,7 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(1),
             ZLinkUserSpotExecutionMode.SpotWide,
-            ZLinkSpotRelocationReadinessMode.ApplicationSignaled);
+            ZLinkSpotRelocationCoordinationMode.ApplicationSignaled);
         var spot = new RelocationReadyProbeSpot(
             activation,
             failFirstRelocatedCallback: true);

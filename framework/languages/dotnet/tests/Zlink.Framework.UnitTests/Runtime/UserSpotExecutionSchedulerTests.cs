@@ -21,16 +21,16 @@ public sealed class UserSpotExecutionSchedulerTests
             factory => factory
                 .StableTypeLimit(8)
                 .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
-                .RelocationReadiness(
-                    ZLinkSpotRelocationReadinessMode.AnyTurnBoundary)
+                .RelocationCoordinationMode(
+                    ZLinkSpotRelocationCoordinationMode.FrameworkManaged)
                 .RecreateOnRelocation());
 
         var configured = registration.UserSpotFactoryOptions[typeof(ExecutionTestSpot)];
         Assert.Equal(8, configured.StableTypeLimit);
         Assert.Equal(ZLinkUserSpotExecutionMode.PerActor, configured.ExecutionMode);
         Assert.Equal(
-            ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
-            configured.RelocationReadiness);
+            ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
+            configured.RelocationCoordinationMode);
 
         var invalidRegistration = new ZLinkSpotNodeRegistration
         {
@@ -51,8 +51,8 @@ public sealed class UserSpotExecutionSchedulerTests
                 "invalid.application-signaled.spot",
                 factory => factory
                     .ExecutionMode(ZLinkUserSpotExecutionMode.PerActor)
-                    .RelocationReadiness(
-                        ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+                    .RelocationCoordinationMode(
+                        ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
                     .DisableRelocation()));
     }
 

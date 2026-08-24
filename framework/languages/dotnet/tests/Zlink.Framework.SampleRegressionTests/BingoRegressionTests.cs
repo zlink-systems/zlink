@@ -75,7 +75,7 @@ public sealed partial class RegressionTests
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Actors",
             "PlayerActorRelocationAdapter.cs"));
 
-        Assert.Contains(".RelocationReadiness(", host, StringComparison.Ordinal);
+        Assert.Contains(".RelocationCoordinationMode(", host, StringComparison.Ordinal);
         Assert.Contains("ApplicationSignaled", host, StringComparison.Ordinal);
         Assert.Contains(
             "PreserveStateWith<BingoRoomRelocationAdapter>()",

@@ -22,7 +22,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
@@ -51,19 +51,19 @@ final class ZLinkDefaultSpotContextTest {
     void lifecycleRelocationReadyFollowsSpotFactoryPolicy() {
         assertTrue(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
             false));
         assertFalse(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY,
+            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED,
             false));
         assertFalse(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.PER_ACTOR,
-            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
             false));
         assertFalse(DefaultSpotContext.relocationReadyAllowed(
             ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
             true));
     }
 
@@ -366,7 +366,7 @@ final class ZLinkDefaultSpotContextTest {
             TestHost host = new TestHost(executor);
             DefaultSpotContext context = host.userContext(
                 ZLinkUserSpotExecutionMode.SPOT_WIDE,
-                ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED);
+                ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
             CompletableFuture<Void> applicationRelease =
                 new CompletableFuture<>();
             CompletableFuture<Void> applicationStarted =
@@ -629,12 +629,12 @@ final class ZLinkDefaultSpotContextTest {
             ZLinkUserSpotExecutionMode executionMode) {
             return userContext(
                 executionMode,
-                ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY);
+                ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED);
         }
 
         DefaultSpotContext userContext(
             ZLinkUserSpotExecutionMode executionMode,
-            ZLinkSpotRelocationReadinessMode relocationReadiness) {
+            ZLinkSpotRelocationCoordinationMode relocationCoordinationMode) {
             return new DefaultSpotContext(
                 this,
                 null,
@@ -645,7 +645,7 @@ final class ZLinkDefaultSpotContextTest {
                 executionMode,
                 false,
                 null,
-                relocationReadiness);
+                relocationCoordinationMode);
         }
 
         DefaultEntrySpotContext entryContext() {

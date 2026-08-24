@@ -7,8 +7,8 @@ export enum ZLinkUserSpotExecutionMode {
   PerActor = 'per_actor'
 }
 
-export enum ZLinkSpotRelocationReadinessMode {
-  AnyTurnBoundary = 'any_turn_boundary',
+export enum ZLinkSpotRelocationCoordinationMode {
+  FrameworkManaged = 'framework_managed',
   ApplicationSignaled = 'application_signaled'
 }
 
@@ -33,7 +33,7 @@ export interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
 export interface ZLinkUserSpotFactoryBuilder<TSpot extends ZLinkSpot> {
   stableTypeLimit(limit: number): this;
   executionMode(mode: ZLinkUserSpotExecutionMode): this;
-  relocationReadiness(mode: ZLinkSpotRelocationReadinessMode): this;
+  relocationCoordinationMode(mode: ZLinkSpotRelocationCoordinationMode): this;
   disableRelocation(): void;
   recreateOnRelocation(): void;
   preserveStateWith(adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>): void;

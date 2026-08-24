@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
 #include "Application/ConversationAssignment/agent_assignment_service.hpp"
 #include "Domain/SupportChat/conversation.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -33,14 +33,12 @@ struct schedule_conversation_join_req_t
     std::string conversation_id;
 };
 
-inline void to_json (nlohmann::json &json,
-                     const schedule_conversation_join_req_t &value)
+inline void to_json (nlohmann::json &json, const schedule_conversation_join_req_t &value)
 {
     json = {{"conversationId", value.conversation_id}};
 }
 
-inline void from_json (const nlohmann::json &json,
-                       schedule_conversation_join_req_t &value)
+inline void from_json (const nlohmann::json &json, schedule_conversation_join_req_t &value)
 {
     value.conversation_id = json.value ("conversationId", "");
 }
@@ -58,36 +56,32 @@ class support_user_actor_t : public actor_t
     actor_context_t &context () noexcept override { return actor_context; }
     const actor_context_t &context () const noexcept override { return actor_context; }
 
-    join_conversation_res_t schedule_conversation_join (
-      const std::string &conversation_id,
-      bool notify_bound_session)
+    join_conversation_res_t schedule_conversation_join (const std::string &conversation_id,
+                                                        bool notify_bound_session)
     {
         _pending_joins.push_back ({conversation_id, notify_bound_session});
         try {
             actor_context
-              .join_spot (
-                spot_id_t (conversation_id),
-                join_conversation_req_t{participant_id, role, display_name})
+              .join_spot (spot_id_t (conversation_id),
+                          join_conversation_req_t{participant_id, role, display_name})
               .defer ();
-        } catch (...) {
+        }
+        catch (...) {
             _pending_joins.pop_back ();
             throw;
         }
-        return {
-          true,
-          conversation_state_t{
-            conversation_id,
-            {},
-            conversation_status_t::waiting_for_agent,
-            role == role_t::customer ? participant_id : std::string{},
-            std::nullopt,
-            0,
-            std::nullopt,
-            std::nullopt}};
+        return {true,
+                conversation_state_t{conversation_id,
+                                     {},
+                                     conversation_status_t::waiting_for_agent,
+                                     role == role_t::customer ? participant_id : std::string{},
+                                     std::nullopt,
+                                     0,
+                                     std::nullopt,
+                                     std::nullopt}};
     }
 
-    task_t<void>
-    on_join_completed (const actor_join_completion_t &completion) override
+    task_t<void> on_join_completed (const actor_join_completion_t &completion) override
     {
         const auto operation_key = std::visit (
           [] (const auto &value) {
@@ -106,11 +100,9 @@ class support_user_actor_t : public actor_t
             notify_bound_session = _pending_joins.front ().notify_bound_session;
         } else {
             const std::optional<zlink::framework::message_t> *reply = nullptr;
-            if (const auto *accepted =
-                  std::get_if<actor_join_accepted_t> (&completion)) {
+            if (const auto *accepted = std::get_if<actor_join_accepted_t> (&completion)) {
                 reply = &accepted->reply;
-            } else if (const auto *rejected =
-                         std::get_if<actor_join_rejected_t> (&completion)) {
+            } else if (const auto *rejected = std::get_if<actor_join_rejected_t> (&completion)) {
                 reply = &rejected->reply;
             }
             if (reply != nullptr && reply->has_value ()) {
@@ -119,8 +111,7 @@ class support_user_actor_t : public actor_t
             }
         }
 
-        if (const auto *accepted =
-              std::get_if<actor_join_accepted_t> (&completion)) {
+        if (const auto *accepted = std::get_if<actor_join_accepted_t> (&completion)) {
             if (accepted->reply) {
                 current_conversation_id =
                   accepted->reply->decode<join_conversation_res_t> ().state.conversation_id;
@@ -130,16 +121,14 @@ class support_user_actor_t : public actor_t
         } else if (notify_bound_session && !conversation_id.empty ()) {
             if (std::holds_alternative<actor_join_rejected_t> (completion)) {
                 co_await actor_context.bound_session ()
-                  .send (join_conversation_failed_notify_t{
-                    conversation_id, "Rejected"})
+                  .send (join_conversation_failed_notify_t{conversation_id, "Rejected"})
                   .metadata (conversation_id_metadata_key, conversation_id)
                   .submit ();
             } else {
                 const auto &failed = std::get<actor_join_failed_t> (completion);
                 co_await actor_context.bound_session ()
                   .send (join_conversation_failed_notify_t{
-                    conversation_id,
-                    std::to_string (static_cast<int> (failed.error_kind))})
+                    conversation_id, std::to_string (static_cast<int> (failed.error_kind))})
                   .metadata (conversation_id_metadata_key, conversation_id)
                   .submit ();
             }
@@ -213,35 +202,25 @@ class support_user_actor_relocation_adapter_t final
     : public actor_relocation_adapter_t<support_user_actor_t>
 {
   public:
-    task_t<std::vector<std::byte>>
-    capture (support_user_actor_t &actor, std::stop_token) override
+    task_t<std::vector<std::byte>> capture (support_user_actor_t &actor, std::stop_token) override
     {
-        const auto message = zlink::message_t::from_json (
-          support_user_actor_relocation_state_t{
-            actor.display_name,
-            actor.role,
-            actor.participant_id,
-            actor.current_conversation_id,
-            actor.completed_join_operations ()});
-        co_return std::vector<std::byte> (
-          message.bytes ().begin (), message.bytes ().end ());
+        const auto message = zlink::message_t::from_json (support_user_actor_relocation_state_t{
+          actor.display_name, actor.role, actor.participant_id, actor.current_conversation_id,
+          actor.completed_join_operations ()});
+        co_return std::vector<std::byte> (message.bytes ().begin (), message.bytes ().end ());
     }
 
     task_t<void>
-    restore (support_user_actor_t &actor,
-             std::vector<std::byte> payload,
-             std::stop_token) override
+    restore (support_user_actor_t &actor, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto message = zlink::message_t::from (
-          std::span<const std::byte> (payload.data (), payload.size ()));
-        auto relocated =
-          message.parse_json<support_user_actor_relocation_state_t> ();
+        const auto message =
+          zlink::message_t::from (std::span<const std::byte> (payload.data (), payload.size ()));
+        auto relocated = message.parse_json<support_user_actor_relocation_state_t> ();
         actor.display_name = std::move (relocated.display_name);
         actor.role = std::move (relocated.role);
         actor.participant_id = std::move (relocated.participant_id);
         actor.current_conversation_id = std::move (relocated.conversation_id);
-        actor.restore_completed_join_operations (
-          std::move (relocated.completed_join_operations));
+        actor.restore_completed_join_operations (std::move (relocated.completed_join_operations));
         co_return;
     }
 };
@@ -356,8 +335,7 @@ struct conversation_idle_timer_handler_t
 class conversation_spot_t : public spot_t<support_user_actor_t>
 {
   public:
-    conversation_spot_t (spot_context_t context,
-                         supportchat_conversation_runtime_t &runtime) :
+    conversation_spot_t (spot_context_t context, supportchat_conversation_runtime_t &runtime) :
         _runtime (runtime), _context (std::move (context))
     {
     }
@@ -380,9 +358,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
      * 대화를 닫고 closed 알림을 **모든 참가자**에게 보낸다. */
     task_t<void> on_initialize () override
     {
-        _idle_timer =
-          _context.add_timer<conversation_idle_timer_handler_t> ("conversation-idle",
-                                                                 std::chrono::milliseconds (500));
+        _idle_timer = _context.add_timer<conversation_idle_timer_handler_t> (
+          "conversation-idle", std::chrono::milliseconds (500));
         co_return;
     }
 
@@ -402,27 +379,25 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         co_return;
     }
 
-    task_t<spot_create_response_t>
-    on_create (const zlink::framework::message_t &request) override
+    task_t<spot_create_response_t> on_create (const zlink::framework::message_t &request) override
     {
         auto create = request.decode<conversation_create_req_t> ();
-        _conversation = conversation_t (_context.spot_id (), create.subject,
-                                        create.customer_actor_id);
+        _conversation =
+          conversation_t (_context.spot_id (), create.subject, create.customer_actor_id);
         co_return spot_create_response_t::accept (
           conversation_create_res_t{_conversation->snapshot ()});
     }
 
     task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view actor_id,
-                   const zlink::framework::message_t &message) override
+    on_actor_join (std::string_view actor_id, const zlink::framework::message_t &message) override
     {
         const auto profile = _runtime.actor_profile (std::string (actor_id));
         if (!profile) {
             co_return spot_actor_join_result_t::reject ();
         }
         const auto request = message.decode<join_conversation_req_t> ();
-        const auto participant_id = profile->participant_id.empty () ? profile->actor_id
-                                                                      : profile->participant_id;
+        const auto participant_id =
+          profile->participant_id.empty () ? profile->actor_id : profile->participant_id;
         if (request.participant_id != participant_id || request.role != profile->role
             || request.display_name != profile->display_name) {
             co_return spot_actor_join_result_t::reject ();
@@ -442,70 +417,63 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             }
         }
         _pending_actor_joins.insert (std::string (actor_id));
-        co_return spot_actor_join_result_t::accept (
-          join_conversation_res_t{true, admission_state});
+        co_return spot_actor_join_result_t::accept (join_conversation_res_t{true, admission_state});
     }
 
     task_t<void> on_actor_joined (support_user_actor_t &actor) override
     {
-        std::cerr << "supportchat conversation: actor_joined_begin actor="
-                  << actor.actor_id << " role=" << actor.role << "\n";
+        std::cerr << "supportchat conversation: actor_joined_begin actor=" << actor.actor_id
+                  << " role=" << actor.role << "\n";
         if (_pending_actor_joins.erase (actor.actor_id) == 0) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "accepted support actor admission is missing");
         }
         (void) co_await join_actor (actor);
-        std::cerr << "supportchat conversation: actor_joined_complete actor="
-                  << actor.actor_id << "\n";
+        std::cerr << "supportchat conversation: actor_joined_complete actor=" << actor.actor_id
+                  << "\n";
         co_return;
     }
 
     task_t<void> on_leave_actor (support_user_actor_t &) override { co_return; }
 
-    task_t<join_conversation_res_t> join (support_user_actor_t &actor,
-                                          message_context_t &,
-                                          const join_conversation_req_t &)
+    task_t<join_conversation_res_t>
+    join (support_user_actor_t &actor, message_context_t &, const join_conversation_req_t &)
     {
         auto current = co_await join_actor (actor);
         current.scheduled = false;
         co_return current;
     }
 
-    task_t<send_chat_message_res_t> send_message (
-      support_user_actor_t &actor,
-      message_context_t &,
-      const send_chat_message_req_t &request)
+    task_t<send_chat_message_res_t> send_message (support_user_actor_t &actor,
+                                                  message_context_t &,
+                                                  const send_chat_message_req_t &request)
     {
-        auto sent = require_conversation ().send_message (actor.participant_id, request.text,
-                                                          now_unix_ms ());
+        auto sent =
+          require_conversation ().send_message (actor.participant_id, request.text, now_unix_ms ());
         if (auto peer = peer_for (actor.participant_id)) {
             co_await send_to_actor (
-              *peer,
-              chat_message_notify_t{sent.state.conversation_id, sent.message, sent.state},
+              *peer, chat_message_notify_t{sent.state.conversation_id, sent.message, sent.state},
               chat_message_notify_t::packet_name);
         }
         co_return sent;
     }
 
-    task_t<void> set_typing (support_user_actor_t &actor,
-                             message_context_t &,
-                             const set_typing_msg_t &request)
+    task_t<void>
+    set_typing (support_user_actor_t &actor, message_context_t &, const set_typing_msg_t &request)
     {
         if (require_conversation ().snapshot ().status == conversation_status_t::closed) {
             co_return;
         }
-        auto typing = require_conversation ().set_typing (actor.participant_id,
-                                                          request.is_typing);
+        auto typing = require_conversation ().set_typing (actor.participant_id, request.is_typing);
         if (auto peer = peer_for (actor.participant_id)) {
             co_await send_to_actor (*peer, typing, typing_changed_notify_t::packet_name);
         }
         co_return;
     }
 
-    task_t<close_conversation_res_t> close (
-      support_user_actor_t &actor,
-      message_context_t &,
-      const close_conversation_req_t &request)
+    task_t<close_conversation_res_t> close (support_user_actor_t &actor,
+                                            message_context_t &,
+                                            const close_conversation_req_t &request)
     {
         (void) request;
         auto closed = require_conversation ().close ();
@@ -524,19 +492,17 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             actor.participant_id = actor.actor_id;
         }
         if (actor.role == role_t::agent) {
-            auto joined = require_conversation ().join_agent (actor.participant_id,
-                                                             actor.display_name);
-            co_await broadcast (
-              participant_joined_notify_t{joined.conversation_id,
-                                          actor.participant_id,
-                                          actor.role,
-                                          joined.state},
-              participant_joined_notify_t::packet_name);
+            auto joined =
+              require_conversation ().join_agent (actor.participant_id, actor.display_name);
+            co_await broadcast (participant_joined_notify_t{joined.conversation_id,
+                                                            actor.participant_id, actor.role,
+                                                            joined.state},
+                                participant_joined_notify_t::packet_name);
             co_return join_conversation_res_t{false, joined.state};
         }
 
-        auto joined = require_conversation ().join_customer (actor.participant_id,
-                                                            actor.display_name);
+        auto joined =
+          require_conversation ().join_customer (actor.participant_id, actor.display_name);
         const auto pending = _pending_agent_assignments.find (actor.actor_id);
         if (pending != _pending_agent_assignments.end ()) {
             const auto assigned = pending->second;
@@ -544,8 +510,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             auto assignment = require_conversation ().assign_agent (assigned);
             co_await send_to_actor (
               assigned,
-              conversation_assigned_notify_t{assignment.state.conversation_id,
-                                               assignment.state},
+              conversation_assigned_notify_t{assignment.state.conversation_id, assignment.state},
               conversation_assigned_notify_t::packet_name);
             co_return join_conversation_res_t{false, assignment.state};
         }
@@ -624,20 +589,18 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     std::map<std::string, std::string> _pending_agent_assignments;
 };
 
-struct support_user_actor_factory_t final
-    : public actor_factory_t<support_user_actor_t>
+struct support_user_actor_factory_t final : public actor_factory_t<support_user_actor_t>
 {
-    task_t<std::shared_ptr<support_user_actor_t>>
-    create (actor_context_t context, std::stop_token) override
+    task_t<std::shared_ptr<support_user_actor_t>> create (actor_context_t context,
+                                                          std::stop_token) override
     {
-        co_return std::make_shared<support_user_actor_t> (
-          std::move (context));
+        co_return std::make_shared<support_user_actor_t> (std::move (context));
     }
 };
 
-inline task_t<void> conversation_idle_timer_handler_t::handle (
-  conversation_spot_t &spot,
-  const zlink::framework::timer_tick_t &) const
+inline task_t<void>
+conversation_idle_timer_handler_t::handle (conversation_spot_t &spot,
+                                           const zlink::framework::timer_tick_t &) const
 {
     co_await spot.on_idle_tick ();
 }
@@ -648,16 +611,12 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     support_entry_spot_t (entry_spot_context_t context,
                           supportchat_conversation_runtime_t &runtime,
                           channel_client_t &channels) :
-        _runtime (runtime), _context (std::move (context)),
-        _channels (channels)
+        _runtime (runtime), _context (std::move (context)), _channels (channels)
     {
     }
 
     entry_spot_context_t &context () noexcept override { return _context; }
-    const entry_spot_context_t &context () const noexcept override
-    {
-        return _context;
-    }
+    const entry_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {
@@ -671,8 +630,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     }
 
     task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view actor_id,
-                   const zlink::framework::message_t &request) override
+    on_actor_join (std::string_view actor_id, const zlink::framework::message_t &request) override
     {
         auto join = request.decode<ensure_support_user_actor_req_t> ();
         _pending_profiles[std::string (actor_id)] = std::move (join);
@@ -721,18 +679,16 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     }
 
     join_conversation_res_t
-    schedule_conversation_join (
-      support_user_actor_t &actor,
-      message_context_t &,
-      const schedule_conversation_join_req_t &request)
+    schedule_conversation_join (support_user_actor_t &actor,
+                                message_context_t &,
+                                const schedule_conversation_join_req_t &request)
     {
         if (request.conversation_id.empty ()) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "ScheduleConversationJoinReq is missing ConversationId");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "ScheduleConversationJoinReq is missing ConversationId");
         }
-        return actor.schedule_conversation_join (
-          request.conversation_id, actor.role == role_t::agent);
+        return actor.schedule_conversation_join (request.conversation_id,
+                                                 actor.role == role_t::agent);
     }
 
     task_t<open_conversation_res_t> open_conversation (support_user_actor_t &actor,
@@ -743,22 +699,18 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "only customer actors can open conversations");
         }
-        auto allocated =
-          co_await _channels.request ("supportchat.api",
-                                      open_conversation_api_req_t{
-                                        actor.actor_id, actor.display_name,
-                                        request.subject})
-            .submit<open_conversation_api_res_t> ();
+        auto allocated = co_await _channels
+                           .request ("supportchat.api",
+                                     open_conversation_api_req_t{actor.actor_id, actor.display_name,
+                                                                 request.subject})
+                           .submit<open_conversation_api_res_t> ();
         const auto conversation_id = allocated.state.conversation_id;
-        auto scheduled =
-          actor.schedule_conversation_join (conversation_id, false);
-        co_return open_conversation_res_t{
-          conversation_id, std::move (scheduled.state)};
+        auto scheduled = actor.schedule_conversation_join (conversation_id, false);
+        co_return open_conversation_res_t{conversation_id, std::move (scheduled.state)};
     }
 
   private:
-    void apply_actor_profile (support_user_actor_t &actor,
-                              ensure_support_user_actor_req_t profile)
+    void apply_actor_profile (support_user_actor_t &actor, ensure_support_user_actor_req_t profile)
     {
         actor.display_name = std::move (profile.display_name);
         actor.role = std::move (profile.role);
@@ -773,7 +725,8 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     }
 
     template <typename TMessage>
-    void send_to_actor (const std::string &actor_id, const TMessage &message, const char *packet_name)
+    void
+    send_to_actor (const std::string &actor_id, const TMessage &message, const char *packet_name)
     {
         const auto found = _actors.find (actor_id);
         if (found == _actors.end ()) {
@@ -801,31 +754,21 @@ class ensure_support_user_actor_handler_t
     using dependency_types = dependency_list_t<actor_manager_t>;
     static constexpr const char *topic_name = "EnsureSupportUserActorReq";
 
-    explicit ensure_support_user_actor_handler_t (actor_manager_t &actors) :
-        _actors (actors)
-    {
-    }
+    explicit ensure_support_user_actor_handler_t (actor_manager_t &actors) : _actors (actors) {}
 
-    task_t<ensure_support_user_actor_res_t>
-    handle (const ensure_support_user_actor_req_t &request)
+    task_t<ensure_support_user_actor_res_t> handle (const ensure_support_user_actor_req_t &request)
     {
-        auto created = co_await _actors
-                         .get_or_create (
-                           actor_id_t (request.actor_id), support_user_actor_type)
-                         .in_mesh (sample_names_t::mesh)
-                         .creation_request (request)
-                         .submit ();
-        if (const auto *existing =
-              std::get_if<actor_create_existing_t> (&created))
-            co_return ensure_support_user_actor_res_t{
-              actor_location_t::from (existing->actor)};
-        if (const auto *actor =
-              std::get_if<actor_create_created_t> (&created))
-            co_return ensure_support_user_actor_res_t{
-              actor_location_t::from (actor->actor)};
-        throw framework_exception_t (
-          framework_error_kind_t::rejected,
-          "support actor creation was rejected");
+        auto created =
+          co_await _actors.get_or_create (actor_id_t (request.actor_id), support_user_actor_type)
+            .in_mesh (sample_names_t::mesh)
+            .creation_request (request)
+            .submit ();
+        if (const auto *existing = std::get_if<actor_create_existing_t> (&created))
+            co_return ensure_support_user_actor_res_t{actor_location_t::from (existing->actor)};
+        if (const auto *actor = std::get_if<actor_create_created_t> (&created))
+            co_return ensure_support_user_actor_res_t{actor_location_t::from (actor->actor)};
+        throw framework_exception_t (framework_error_kind_t::rejected,
+                                     "support actor creation was rejected");
     }
 
   private:
@@ -838,9 +781,7 @@ class ensure_agent_conversation_handler_t
     using request_type = ensure_agent_conversation_req_t;
     using reply_type = ensure_agent_conversation_res_t;
     using dependency_types =
-      dependency_list_t<actor_manager_t,
-                        actor_client_t,
-                        supportchat_conversation_runtime_t>;
+      dependency_list_t<actor_manager_t, actor_client_t, supportchat_conversation_runtime_t>;
     static constexpr const char *topic_name = "EnsureAgentConversationReq";
 
     ensure_agent_conversation_handler_t (actor_manager_t &actors,
@@ -852,55 +793,39 @@ class ensure_agent_conversation_handler_t
 
     task_t<ensure_agent_conversation_res_t> handle (const ensure_agent_conversation_req_t &request)
     {
-        const auto conversation_actor_id =
-          request.roster_actor_id + "@" + request.conversation_id;
+        const auto conversation_actor_id = request.roster_actor_id + "@" + request.conversation_id;
         const auto already_exists =
-          (co_await _actors.find (actor_id_t (conversation_actor_id)))
-            .has_value ();
-        auto created = co_await _actors
-                         .get_or_create (
-                           actor_id_t (conversation_actor_id),
-                           support_user_actor_type)
-                         .in_mesh (sample_names_t::mesh)
-                         .creation_request (
-                           ensure_support_user_actor_req_t{
-                             conversation_actor_id,
-                             request.display_name,
-                             role_t::agent,
-                             request.roster_actor_id})
-                         .submit ();
+          (co_await _actors.find (actor_id_t (conversation_actor_id))).has_value ();
+        auto created =
+          co_await _actors
+            .get_or_create (actor_id_t (conversation_actor_id), support_user_actor_type)
+            .in_mesh (sample_names_t::mesh)
+            .creation_request (ensure_support_user_actor_req_t{
+              conversation_actor_id, request.display_name, role_t::agent, request.roster_actor_id})
+            .submit ();
         std::optional<actor_ref_t> actor;
-        if (const auto *existing =
-              std::get_if<actor_create_existing_t> (&created))
+        if (const auto *existing = std::get_if<actor_create_existing_t> (&created))
             actor = existing->actor;
-        else if (const auto *materialized =
-                   std::get_if<actor_create_created_t> (&created))
+        else if (const auto *materialized = std::get_if<actor_create_created_t> (&created))
             actor = materialized->actor;
         else
-            throw framework_exception_t (
-              framework_error_kind_t::rejected,
-              "support conversation actor creation was rejected");
+            throw framework_exception_t (framework_error_kind_t::rejected,
+                                         "support conversation actor creation was rejected");
         join_conversation_res_t joined;
         if (already_exists) {
-            joined =
-              co_await _actor_client
-                .request (
-                  actor->actor_id (),
-                  join_conversation_req_t{
-                    request.roster_actor_id, role_t::agent, request.display_name})
-                .submit<join_conversation_res_t> ();
+            joined = co_await _actor_client
+                       .request (actor->actor_id (),
+                                 join_conversation_req_t{request.roster_actor_id, role_t::agent,
+                                                         request.display_name})
+                       .submit<join_conversation_res_t> ();
         } else {
-            joined =
-              co_await _actor_client
-                .request (
-                  actor->actor_id (),
-                  schedule_conversation_join_req_t{request.conversation_id})
-                .submit<join_conversation_res_t> ();
+            joined = co_await _actor_client
+                       .request (actor->actor_id (),
+                                 schedule_conversation_join_req_t{request.conversation_id})
+                       .submit<join_conversation_res_t> ();
         }
-        co_return ensure_agent_conversation_res_t{
-          actor_location_t::from (*actor),
-          joined.scheduled,
-          joined.state};
+        co_return ensure_agent_conversation_res_t{actor_location_t::from (*actor), joined.scheduled,
+                                                  joined.state};
     }
 
   private:
@@ -922,8 +847,8 @@ class supportchat_server_story_t
 
         auto room1 = open_conversation ("supportchat-conversation-1", "checkout payment failed",
                                         "customer-1", assignment);
-        auto room2 = open_conversation ("supportchat-conversation-2", "cannot log in",
-                                        "customer-2", assignment);
+        auto room2 = open_conversation ("supportchat-conversation-2", "cannot log in", "customer-2",
+                                        assignment);
         require (room1.snapshot ().agent_actor_id == std::optional<std::string>{"agent-1"},
                  "room1 assigned agent mismatch");
         require (room2.snapshot ().agent_actor_id == std::optional<std::string>{"agent-1"},
@@ -962,8 +887,7 @@ class supportchat_server_story_t
                    && idle_notify->state.status == conversation_status_t::waiting_for_close,
                  "idle did not move to WaitingForClose");
         const auto resumed = room1.send_message (
-          "customer-1", "The customer resumed the conversation.",
-          *room1_idle_deadline + 1);
+          "customer-1", "The customer resumed the conversation.", *room1_idle_deadline + 1);
         require (resumed.message.message_seq == 3
                    && resumed.state.status == conversation_status_t::active,
                  "idle conversation did not resume within grace");
@@ -990,8 +914,8 @@ class supportchat_server_story_t
         const auto idle_again = room1.advance_time (*room1_state.idle_deadline_unix_ms);
         require (std::get_if<conversation_idle_notify_t> (&idle_again) != nullptr,
                  "resumed conversation did not reach idle again");
-        const auto closed1 = room1.advance_time (*room1_state.idle_deadline_unix_ms
-                                                 + conversation_t::close_grace_ms);
+        const auto closed1 =
+          room1.advance_time (*room1_state.idle_deadline_unix_ms + conversation_t::close_grace_ms);
         const auto *closed_notify = std::get_if<conversation_closed_notify_t> (&closed1);
         require (closed_notify != nullptr
                    && closed_notify->state.status == conversation_status_t::closed,
@@ -999,7 +923,7 @@ class supportchat_server_story_t
         record ("idle-close=verified");
 
         auto no_agent = open_conversation ("supportchat-conversation-3", "agent unavailable",
-                                          "customer-3", assignment);
+                                           "customer-3", assignment);
         require (!no_agent.snapshot ().agent_actor_id
                    && no_agent.snapshot ().status == conversation_status_t::waiting_for_agent,
                  "no-agent conversation did not wait");
@@ -1072,62 +996,42 @@ int main (int argc, char **argv)
     std::filesystem::create_directories (configuration.role.log_dir);
 
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        add_supportchat_location_store (options, topology);
-        auto runtime = std::make_unique<supportchat_conversation_runtime_t> ();
-        auto *runtime_ptr = runtime.get ();
-        options.services ().add_singleton<supportchat_conversation_runtime_t> (std::move (runtime));
-        options.services ().add_singleton<supportchat_server_story_t> ();
-        options.add_client_server_channel ("supportchat.support")
-          .server ()
-          .set_bind_host (host_from_tcp_endpoint (
-            topology.support_route_endpoint))
-          .set_advertise_host (host_from_tcp_endpoint (
-            topology.support_route_endpoint))
-          .listen (port_from_tcp_endpoint (
-            topology.support_route_endpoint))
-          .add_handler_group ("supportchat-support");
-        options.add_client_server_channel ("supportchat.api").client ();
-        options.handlers ()
-          .group ("supportchat-support")
-          .add<ensure_support_user_actor_handler_t> ()
-          .add<ensure_agent_conversation_handler_t> ();
-        auto services = options.services ().build_provider ();
-        options.http ()
-          .listen (topology.support_http_url)
-          .map_health ("/health")
-          .map_post<supportchat_assert_handler_t> ("/self-check/assert");
-        auto support_spot = options.add_route_mesh (sample_names_t::mesh);
-        support_spot.set_routing_id (
-          zlink::routing_id_t::from ("supportchat-support"));
-        support_spot.listen (topology.support_spot_router_endpoint)
-          .add_entry_spot<support_entry_spot_t> (
-            [runtime_ptr, services] (entry_spot_context_t context) mutable {
-                return std::make_shared<support_entry_spot_t> (
-                  std::move (context), *runtime_ptr,
-                  services.get_required<channel_client_t> ());
-            })
-          .add_spot_factory<conversation_spot_t> (
-            sample_names_t::conversation_spot,
-            [runtime_ptr] (spot_context_t context) {
-                return std::make_shared<conversation_spot_t> (
-                  std::move (context), *runtime_ptr);
-            },
-            [] (auto &factory) {
-                factory.disable_relocation ();
-            })
-          .add_actor_factory<
-            support_user_actor_t,
-            support_user_actor_factory_t> (
-            support_user_actor_type,
-            std::make_shared<support_user_actor_factory_t> (),
-            [] (auto &factory) {
-                factory
-                  .template preserve_state_with<
-                    support_user_actor_relocation_adapter_t> ();
-            });
-    });
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "location:");
+    options.add_relocation_store<redis::redis_relocation_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    options.services ().add_singleton<supportchat_conversation_runtime_t> ();
+    options.services ().add_singleton<supportchat_server_story_t> ();
+    options.add_client_server_channel ("supportchat.support")
+      .server ()
+      .set_bind_host (host_from_tcp_endpoint (topology.support_route_endpoint))
+      .set_advertise_host (host_from_tcp_endpoint (topology.support_route_endpoint))
+      .listen (port_from_tcp_endpoint (topology.support_route_endpoint))
+      .add_handler_group ("supportchat-support");
+    options.add_client_server_channel ("supportchat.api").client ();
+    options.handlers ()
+      .group ("supportchat-support")
+      .add<ensure_support_user_actor_handler_t> ()
+      .add<ensure_agent_conversation_handler_t> ();
+    options.http ()
+      .listen (topology.support_http_url)
+      .map_health ("/health")
+      .map_post<supportchat_assert_handler_t> ("/self-check/assert");
+    auto support_spot = options.add_route_mesh (sample_names_t::mesh);
+    support_spot.set_routing_id (zlink::routing_id_t::from ("supportchat-support"));
+    support_spot.listen (topology.support_spot_router_endpoint);
+    support_spot.objects ()
+      .server ()
+      .add_entry_spot<support_entry_spot_t, supportchat_conversation_runtime_t, channel_client_t> ()
+      .add_spot_factory<conversation_spot_t, supportchat_conversation_runtime_t> (
+        sample_names_t::conversation_spot)
+      .disable_relocation ()
+      .add_actor_factory<support_user_actor_t, support_user_actor_factory_t> (
+        support_user_actor_type)
+      .preserve_state_with<support_user_actor_relocation_adapter_t> ();
     return app.run (argc, argv);
 }

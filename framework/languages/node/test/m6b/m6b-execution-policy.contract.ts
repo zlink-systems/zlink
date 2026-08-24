@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
 import {
@@ -45,7 +45,7 @@ function activation(
     domain: {
       kind: 'user',
       executionMode,
-      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.FrameworkManaged
     },
     timers: {} as never,
     actorHandlers: {} as never,

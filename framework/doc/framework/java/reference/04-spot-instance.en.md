@@ -332,7 +332,7 @@ that is no longer needed at an Entry Spot.
 
 ## `relocationReady().defer()` (inside Spot code)
 
-In a `SPOT_WIDE` Spot that has chosen `APPLICATION_SIGNALED` readiness mode, defers the
+In a `SPOT_WIDE` Spot that has chosen `APPLICATION_SIGNALED` coordination mode, defers the
 relocation boundary to just before the next application turn.
 
 ```java
@@ -344,12 +344,12 @@ context.relocationReady().defer();
 **Completion result.** No return value. Registers the relocation boundary after the current
 handler ends. If it did not move, or aborted before commit, it receives a `CONTINUED` completion
 at the source; if it moved, it receives a `RELOCATED` completion at the target, via
-`onRelocationReadyCompleted(...)`. `ANY_TURN_BOUNDARY` mode, a `PER_ACTOR` Spot, an
+`onRelocationReadyCompleted(...)`. `FRAMEWORK_MANAGED` mode, a `PER_ACTOR` Spot, an
 Entry/Instance Spot, outside a Spot turn, or a duplicate call in the same turn all complete with
 `INVALID_OPERATION`.
 
 **When to use.** Use this when the application must precisely control the relocation moment down
-to a specific turn boundary. This call is not needed under the default `ANY_TURN_BOUNDARY` mode.
+to a specific turn boundary. This call is not needed under the default `FRAMEWORK_MANAGED` mode.
 
 ---
 

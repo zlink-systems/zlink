@@ -13,7 +13,7 @@ import org.springframework.core.env.StandardEnvironment
 import java.nio.file.Path
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -73,8 +73,8 @@ class PlayServerApplication {
                     BingoRoomSpot::class.java,
                 ) { factory ->
                     factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                    factory.relocationReadiness(
-                        ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED,
+                    factory.relocationCoordinationMode(
+                        ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED,
                     )
                     factory.preserveStateWith(BingoRoomRelocationAdapter::class.java)
                 }

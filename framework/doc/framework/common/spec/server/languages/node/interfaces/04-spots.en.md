@@ -173,7 +173,7 @@ optional `onRelocationReadyCompleted(...)`. If there's no callback, it
 completes as a no-op. Held application messages and timers aren't run
 before the callback completes.
 
-A duplicate `defer()` on the default `AnyTurnBoundary`, on `PerActor`,
+A duplicate `defer()` on the default `FrameworkManaged`, on `PerActor`,
 on Entry/Instance Spot, outside the Spot turn, or in the same turn fails
 with `InvalidOperation` before any queue mutation. A different
 Framework operation in the same turn after `defer()` is the same error.

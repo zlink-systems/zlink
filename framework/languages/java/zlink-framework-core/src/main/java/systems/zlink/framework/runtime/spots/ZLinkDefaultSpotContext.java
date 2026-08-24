@@ -19,7 +19,7 @@ import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
@@ -354,7 +354,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
         new ConcurrentHashMap<>();
     private final ZLinkUserSpotExecutionMode executionMode;
-    private final ZLinkSpotRelocationReadinessMode relocationReadiness;
+    private final ZLinkSpotRelocationCoordinationMode relocationCoordinationMode;
     private final boolean instanceSpot;
     private final Object relocationReadyLock = new Object();
     private RelocationReadyWaiter relocationReadyWaiter;
@@ -417,7 +417,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             executionMode,
             instanceSpot,
             null,
-            ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY);
+            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED);
     }
 
     DefaultSpotContext(
@@ -440,7 +440,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             executionMode,
             instanceSpot,
             sharedHandlerInstances,
-            ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY);
+            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED);
     }
 
     DefaultSpotContext(
@@ -453,7 +453,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         ZLinkUserSpotExecutionMode executionMode,
         boolean instanceSpot,
         ZLinkHandlerInstanceOwner sharedHandlerInstances,
-        ZLinkSpotRelocationReadinessMode relocationReadiness) {
+        ZLinkSpotRelocationCoordinationMode relocationCoordinationMode) {
         this.host = host;
         this.workerPool = workerPool;
         this.handlerLoader = handlerLoader;
@@ -463,8 +463,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         this.infrastructureQueue = new ZLinkAsyncSerialQueue(
             host.infrastructureExecutor(), false);
         this.executionMode = Objects.requireNonNull(executionMode, "executionMode");
-        this.relocationReadiness = Objects.requireNonNull(
-            relocationReadiness, "relocationReadiness");
+        this.relocationCoordinationMode = Objects.requireNonNull(
+            relocationCoordinationMode, "relocationCoordinationMode");
         this.instanceSpot = instanceSpot;
         this.handlerInstances = sharedHandlerInstances == null
             ? host.createHandlerInstances()
@@ -864,8 +864,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return executionMode;
     }
 
-    ZLinkSpotRelocationReadinessMode relocationReadiness() {
-        return relocationReadiness;
+    ZLinkSpotRelocationCoordinationMode relocationCoordinationMode() {
+        return relocationCoordinationMode;
     }
 
     CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>
@@ -874,8 +874,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             BooleanSupplier cancelled) {
         Objects.requireNonNull(claim, "claim");
         Objects.requireNonNull(cancelled, "cancelled");
-        if (relocationReadiness
-                != ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED
+        if (relocationCoordinationMode
+                != ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED
             || executionMode != ZLinkUserSpotExecutionMode.SPOT_WIDE
             || instanceSpot) {
             return CompletableFuture.failedFuture(
@@ -902,8 +902,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     CompletionStage<Void> runRelocationReadyCompletion(
         ZLinkSpotRelocationReadyOutcome outcome) {
-        if (relocationReadiness
-            != ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED) {
+        if (relocationCoordinationMode
+            != ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED) {
             return CompletableFuture.completedFuture(null);
         }
         return runLifecycleExecution(() ->
@@ -956,7 +956,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private boolean relocationReadyAllowed() {
         return relocationReadyAllowed(
             executionMode,
-            relocationReadiness,
+            relocationCoordinationMode,
             instanceSpot);
     }
 
@@ -969,12 +969,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     static boolean relocationReadyAllowed(
         ZLinkUserSpotExecutionMode executionMode,
-        ZLinkSpotRelocationReadinessMode relocationReadiness,
+        ZLinkSpotRelocationCoordinationMode relocationCoordinationMode,
         boolean instanceSpot) {
         return !instanceSpot
             && executionMode == ZLinkUserSpotExecutionMode.SPOT_WIDE
-            && relocationReadiness
-                == ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED;
+            && relocationCoordinationMode
+                == ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED;
     }
 
     private CompletionStage<Void> runApplicationExecution(

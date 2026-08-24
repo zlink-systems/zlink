@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Configuration/configuration.hpp"
-#include "../Configuration/location_store.hpp"
 #include "../../Shared/world_rules.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <array>
 #include <iostream>
@@ -258,23 +258,28 @@ int main (int argc, char **argv)
     auto app = fw::app_t::create ();
     const auto configuration = load_configuration (app, argc, argv);
     app.logging ().use_console ().set_min_level (fw::log_level_t::info);
-    app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
-        add_stores (options, configuration);
-        auto mesh = options.add_route_mesh (names_t::mesh);
-        mesh.set_automatic_routing_id_prefix ("gw").set_object_role (fw::object_role_t::client);
-        if (configuration.mesh_advertise_host)
-            mesh.set_advertise_host (*configuration.mesh_advertise_host);
-        mesh.channel_name (names_t::zone_channel).client ();
-        mesh.listen (configuration.mesh_endpoint);
-        options.add_stream_node (names_t::gateway_stream)
-          .bind (configuration.stream_endpoint)
-          .enable_actor_dispatch ()
-          .register_session<game_session_t> ();
-        options.http ()
-          .listen (configuration.bootstrap_http_endpoint)
-          .map_health ("/health")
-          .map_post<world_bootstrap_handler_t> ("/bootstrap-world");
-    });
+    auto &options = app.add_zlink_framework ();
+    options.add_location_store<fw::redis::redis_location_store_t> ()
+      .set_connection_string (configuration.redis_endpoint)
+      .set_key_prefix (configuration.redis_key_prefix + "location:");
+    options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+      .set_connection_string (configuration.redis_endpoint)
+      .set_key_prefix (configuration.redis_key_prefix + "relocation:");
+    auto mesh = options.add_route_mesh (names_t::mesh);
+    mesh.set_automatic_routing_id_prefix ("gw");
+    if (configuration.mesh_advertise_host)
+        mesh.set_advertise_host (*configuration.mesh_advertise_host);
+    mesh.channel (names_t::zone_channel).client ();
+    mesh.listen (configuration.mesh_endpoint);
+    mesh.objects ().client ();
+    options.add_stream_node (names_t::gateway_stream)
+      .bind (configuration.stream_endpoint)
+      .enable_actor_dispatch ()
+      .register_session<game_session_t> ();
+    options.http ()
+      .listen (configuration.bootstrap_http_endpoint)
+      .map_health ("/health")
+      .map_post<world_bootstrap_handler_t> ("/bootstrap-world");
     std::cout << "zoneworld-role-ready role=gateway\n";
     return app.run (argc, argv);
 }

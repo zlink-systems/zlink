@@ -154,9 +154,9 @@ final class ZLinkUserSpotRelocationBarrier {
     CompletionStage<Optional<Seal>> sealForRelocation(
         Predicate<Preview> admission,
         BooleanSupplier cancelled) {
-        if (context.relocationReadiness()
+        if (context.relocationCoordinationMode()
             != systems.zlink.framework.configuration
-                .ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED) {
+                .ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED) {
             return sealAtTurnBoundary(admission, cancelled);
         }
         return context.awaitRelocationReadySignal(

@@ -2150,7 +2150,7 @@ bool spot_context_state_t::owns_current_serial_turn () const
 void spot_context_state_t::defer_relocation_ready ()
 {
     if (execution_mode != user_spot_execution_mode_t::spot_wide
-        || relocation_readiness != spot_relocation_readiness_mode_t::application_signaled
+        || relocation_coordination_mode != spot_relocation_coordination_mode_t::application_signaled
         || is_entry_spot () || is_instance_spot () || !owns_current_serial_turn ()) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "relocation readiness can be deferred only from an "
@@ -3782,14 +3782,14 @@ spot_node_builder_t::accept_implicit_route_mesh (std::string route_channel_name,
     return *this;
 }
 
-spot_node_builder_t &
-spot_node_builder_t::add_spot_factory_erased (std::string spot_name,
-                                              std::type_index spot_type,
-                                              detail::spot_runtime_kind_t kind,
-                                              user_spot_execution_mode_t execution_mode,
-                                              std::int32_t stable_type_limit,
-                                              spot_relocation_readiness_mode_t relocation_readiness,
-                                              detail::factory_relocation_configuration_t relocation)
+spot_node_builder_t &spot_node_builder_t::add_spot_factory_erased (
+  std::string spot_name,
+  std::type_index spot_type,
+  detail::spot_runtime_kind_t kind,
+  user_spot_execution_mode_t execution_mode,
+  std::int32_t stable_type_limit,
+  spot_relocation_coordination_mode_t relocation_coordination_mode,
+  detail::factory_relocation_configuration_t relocation)
 {
     const bool entry_spot = kind == detail::spot_runtime_kind_t::entry;
     const bool instance_spot = kind == detail::spot_runtime_kind_t::instance;
@@ -3820,7 +3820,8 @@ spot_node_builder_t::add_spot_factory_erased (std::string spot_name,
     if (!entry_spot) {
         _state->spot_factory_relocations.emplace (spot_name, relocation);
         _state->spot_stable_type_limits.emplace (spot_name, stable_type_limit);
-        _state->spot_relocation_readiness.emplace (spot_name, relocation_readiness);
+        _state->spot_relocation_coordination_modes.emplace (spot_name,
+                                                            relocation_coordination_mode);
     }
     _state->snapshot.spot_execution_modes.emplace (spot_name, execution_mode);
     _state->snapshot.spot_names.push_back (std::move (spot_name));
@@ -5262,8 +5263,7 @@ bool spot_node_runtime_t::commit_session_relocation_route_authority (
   std::uint64_t target_authority_owner_generation)
 {
     return _state->actor_transfer_coordinator.commit_session_relocation_route_authority (
-      transfer_id, previous_authority_owner_generation,
-      target_authority_owner_generation);
+      transfer_id, previous_authority_owner_generation, target_authority_owner_generation);
 }
 
 bool spot_node_runtime_t::adopt_committed_actor_relocation_authority (
@@ -5581,8 +5581,8 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
         const auto created = materialized.state == spot_create_state_t::created;
         if (created && materialized.context._state
             && materialized.context._state->execution_mode == user_spot_execution_mode_t::spot_wide
-            && materialized.context._state->relocation_readiness
-                 == spot_relocation_readiness_mode_t::application_signaled) {
+            && materialized.context._state->relocation_coordination_mode
+                 == spot_relocation_coordination_mode_t::application_signaled) {
             std::lock_guard callback_lock (materialized.context._state->callback_mutex);
             materialized.context._state->relocation_boundary_active = true;
             materialized.context._state->relocation_ready_deferred = true;
@@ -7804,11 +7804,9 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         }
     }
     if (committed_previous_authority_owner_generation != nullptr)
-        *committed_previous_authority_owner_generation =
-          current->source.authority_owner_generation;
+        *committed_previous_authority_owner_generation = current->source.authority_owner_generation;
     if (committed_target_authority_owner_generation != nullptr)
-        *committed_target_authority_owner_generation =
-          current->target.authority_owner_generation;
+        *committed_target_authority_owner_generation = current->target.authority_owner_generation;
     if (actor_transfer_marker_enabled ()) {
         emit_actor_transfer_marker ("location_committed", target_actor, transfer_id,
                                     target_spot_id);
@@ -8744,8 +8742,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               current != _state->actor_authority_fences.end ()
                 ? current->second == *admitted_message_follow_target
                 : !_state->actor_transfer_coordinator.has_message_follow_route (key);
-            if (!targets_current_authority
-                && current != _state->actor_authority_fences.end ()) {
+            if (!targets_current_authority && current != _state->actor_authority_fences.end ()) {
                 const auto &m = *admitted_message_follow_target;
                 targets_current_authority =
                   current->second.actor_id == m.actor_id
@@ -8771,8 +8768,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
             ? detail::handoff_append_result_t::not_moving
             : _state->actor_transfer_coordinator.try_append_backlog (
                 key, detail::handoff_packet_t{std::string (packet_name), message.to_bytes (),
-                                              metadata.content_type, metadata.values,
-                                              is_request});
+                                              metadata.content_type, metadata.values, is_request});
         const auto append_result_name = [&] {
             switch (append_result) {
                 case detail::handoff_append_result_t::not_moving:
@@ -9322,9 +9318,9 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
         mode != _state->snapshot.spot_execution_modes.end ()) {
         context_state->execution_mode = mode->second;
     }
-    if (const auto readiness = _state->spot_relocation_readiness.find (spot_name);
-        readiness != _state->spot_relocation_readiness.end ()) {
-        context_state->relocation_readiness = readiness->second;
+    if (const auto mode = _state->spot_relocation_coordination_modes.find (spot_name);
+        mode != _state->spot_relocation_coordination_modes.end ()) {
+        context_state->relocation_coordination_mode = mode->second;
     }
     context_state->lifecycle = lifecycle;
     if (_state->root_services) {
@@ -9341,15 +9337,19 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
 
     if (lifecycle.create_entry_context_instance || lifecycle.create_instance_context_instance
         || lifecycle.create_spot_context_instance) {
+        service_provider_t empty_services;
+        auto &activation_services = context_state->activation_scope
+                                      ? context_state->activation_scope->provider ()
+                                      : empty_services;
         if (lifecycle.create_entry_context_instance) {
-            context_state->spot_instance =
-              lifecycle.create_entry_context_instance (entry_spot_context_t (context_state));
+            context_state->spot_instance = lifecycle.create_entry_context_instance (
+              entry_spot_context_t (context_state), activation_services);
         } else if (lifecycle.create_instance_context_instance) {
-            context_state->spot_instance =
-              lifecycle.create_instance_context_instance (instance_spot_context_t (context_state));
+            context_state->spot_instance = lifecycle.create_instance_context_instance (
+              instance_spot_context_t (context_state), activation_services);
         } else {
-            context_state->spot_instance =
-              lifecycle.create_spot_context_instance (spot_context_t (context_state));
+            context_state->spot_instance = lifecycle.create_spot_context_instance (
+              spot_context_t (context_state), activation_services);
         }
         if (!context_state->spot_instance) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,
@@ -10554,8 +10554,8 @@ spot_node_runtime_t::application_relocation_units () const
         const auto state = context._state;
         if (!state || state->is_entry_spot () || state->is_instance_spot ()
             || state->execution_mode != user_spot_execution_mode_t::spot_wide
-            || state->relocation_readiness
-                 != spot_relocation_readiness_mode_t::application_signaled)
+            || state->relocation_coordination_mode
+                 != spot_relocation_coordination_mode_t::application_signaled)
             continue;
         application_relocation_unit_t unit{state->spot_id, state->spot_name, false, {}};
         {
@@ -10588,8 +10588,8 @@ void spot_node_runtime_t::begin_relocation_readiness ()
         const auto state = context._state;
         if (!state || state->is_entry_spot () || state->is_instance_spot ()
             || state->execution_mode != user_spot_execution_mode_t::spot_wide
-            || state->relocation_readiness
-                 != spot_relocation_readiness_mode_t::application_signaled)
+            || state->relocation_coordination_mode
+                 != spot_relocation_coordination_mode_t::application_signaled)
             continue;
         std::lock_guard callback_lock (state->callback_mutex);
         state->relocation_boundary_active = true;

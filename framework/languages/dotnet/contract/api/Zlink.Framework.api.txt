@@ -511,7 +511,7 @@ assembly Zlink.Framework
       generic TAdapter variance=invariant nullable=unspecified
       where TAdapter : class, Zlink.Framework.Contracts.Spots.IZLinkSpotRelocationAdapter<TSpot>
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot> RecreateOnRelocation() [return=read:not-null,write:not-null]
-    method abstract Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot> RelocationReadiness(Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationReadinessMode mode [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode mode [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(System.Int32 limit [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type enum Zlink.Framework.Contracts.Configuration.ZLinkApplicationJobQueueProfile : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
     field const Zlink.Framework.Contracts.Configuration.ZLinkApplicationJobQueueProfile Balanced = 2 [nullability=read:not-null,write:not-null]
@@ -831,9 +831,9 @@ assembly Zlink.Framework
     method override System.String ToString() [return=read:not-null,write:not-null]
     method static System.Boolean op_Equality(Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? left [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
     method static System.Boolean op_Inequality(Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? left [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
-  type enum Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationReadinessMode : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-    field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationReadinessMode AnyTurnBoundary = 0 [nullability=read:not-null,write:not-null]
-    field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationReadinessMode ApplicationSignaled = 1 [nullability=read:not-null,write:not-null]
+  type enum Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode FrameworkManaged = 0 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode ApplicationSignaled = 1 [nullability=read:not-null,write:not-null]
   type enum Zlink.Framework.Contracts.Configuration.ZLinkTopologyReason : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
     field const Zlink.Framework.Contracts.Configuration.ZLinkTopologyReason CapacityExceeded = 4 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Configuration.ZLinkTopologyReason Draining = 5 [nullability=read:not-null,write:not-null]

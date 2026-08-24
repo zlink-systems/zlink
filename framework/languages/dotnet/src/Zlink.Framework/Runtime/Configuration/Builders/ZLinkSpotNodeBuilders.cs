@@ -406,14 +406,14 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         if (!Enum.IsDefined(options.ExecutionMode))
             throw new ZLinkConfigurationException(
                 "User Spot execution mode is not supported.");
-        if (!Enum.IsDefined(options.RelocationReadiness))
+        if (!Enum.IsDefined(options.RelocationCoordinationMode))
             throw new ZLinkConfigurationException(
-                "User Spot relocation readiness mode is not supported.");
+                "User Spot relocation coordination mode is not supported.");
         if (options.ExecutionMode != ZLinkUserSpotExecutionMode.SpotWide
-            && options.RelocationReadiness
-            == ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+            && options.RelocationCoordinationMode
+            == ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
             throw new ZLinkConfigurationException(
-                "ApplicationSignaled relocation readiness is valid only for SpotWide User Spots.");
+                "ApplicationSignaled relocation coordination mode is valid only for SpotWide User Spots.");
     }
 
     private static void ValidateStableTypeLimit(int limit, string kind)
@@ -506,11 +506,11 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
     private int _stableTypeLimit;
     private ZLinkUserSpotExecutionMode _executionMode =
         ZLinkUserSpotExecutionMode.SpotWide;
-    private ZLinkSpotRelocationReadinessMode _relocationReadiness =
-        ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
+    private ZLinkSpotRelocationCoordinationMode _relocationCoordinationMode =
+        ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
 
     internal ZLinkUserSpotFactoryConfiguration Configuration =>
-        new(_stableTypeLimit, _executionMode, _relocationReadiness);
+        new(_stableTypeLimit, _executionMode, _relocationCoordinationMode);
 
     public IZLinkUserSpotFactoryBuilder<TSpot> StableTypeLimit(int limit)
     {
@@ -530,11 +530,11 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
         return this;
     }
 
-    public IZLinkUserSpotFactoryBuilder<TSpot> RelocationReadiness(
-        ZLinkSpotRelocationReadinessMode mode)
+    public IZLinkUserSpotFactoryBuilder<TSpot> RelocationCoordinationMode(
+        ZLinkSpotRelocationCoordinationMode mode)
     {
         EnsureConfigurationIsOpen();
-        _relocationReadiness = mode;
+        _relocationCoordinationMode = mode;
         return this;
     }
 

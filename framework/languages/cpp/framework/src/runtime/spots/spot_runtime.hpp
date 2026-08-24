@@ -255,7 +255,7 @@ class spot_node_builder_state_t
     std::map<std::string, actor_factory_registration_t> actor_factories;
     std::map<std::string, factory_relocation_configuration_t> spot_factory_relocations;
     std::map<std::string, std::int32_t> spot_stable_type_limits;
-    std::map<std::string, spot_relocation_readiness_mode_t> spot_relocation_readiness;
+    std::map<std::string, spot_relocation_coordination_mode_t> spot_relocation_coordination_modes;
     actor_transfer_coordinator_t actor_transfer_coordinator;
     struct actor_join_relocation_recovery_t
     {
@@ -560,8 +560,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     std::uint64_t authority_owner_generation = 1;
     std::string spot_name;
     user_spot_execution_mode_t execution_mode = user_spot_execution_mode_t::spot_wide;
-    spot_relocation_readiness_mode_t relocation_readiness =
-      spot_relocation_readiness_mode_t::any_turn_boundary;
+    spot_relocation_coordination_mode_t relocation_coordination_mode =
+      spot_relocation_coordination_mode_t::framework_managed;
     spot_lifecycle_domain_t lifecycle_domain = spot_lifecycle_domain_t::user ();
     bool relocation_boundary_active = false;
     bool relocation_ready_deferred = false;
@@ -1009,18 +1009,18 @@ class spot_node_runtime_t
                                                                zlink::message_t transfer_state,
                                                                actor_context_t actor_context = {},
                                                                bool defer_joined_callback = false);
-    result_t<void>
-    commit_remote_actor_authority (const std::string &transfer_id,
-                                   const actor_ref_t &actor_ref,
-                                   const spot_id_t &target_spot_id,
-                                   std::uint64_t target_spot_generation,
-                                   std::uint64_t source_authority_owner_generation,
-                                   std::string source_mesh_name,
-                                   std::string target_mesh_name,
-                                   std::uint64_t target_node_lifecycle_generation,
-                                   location_owner_token_t target_owner,
-                                   std::uint64_t *committed_previous_authority_owner_generation = nullptr,
-                                   std::uint64_t *committed_target_authority_owner_generation = nullptr);
+    result_t<void> commit_remote_actor_authority (
+      const std::string &transfer_id,
+      const actor_ref_t &actor_ref,
+      const spot_id_t &target_spot_id,
+      std::uint64_t target_spot_generation,
+      std::uint64_t source_authority_owner_generation,
+      std::string source_mesh_name,
+      std::string target_mesh_name,
+      std::uint64_t target_node_lifecycle_generation,
+      location_owner_token_t target_owner,
+      std::uint64_t *committed_previous_authority_owner_generation = nullptr,
+      std::uint64_t *committed_target_authority_owner_generation = nullptr);
     result_t<void>
     stage_remote_actor_commit_backlog (const std::string &transfer_id,
                                        std::vector<handoff_packet_t> handoff_backlog);
@@ -1058,9 +1058,10 @@ class spot_node_runtime_t
                                          std::vector<std::uint8_t> route,
                                          std::string actor_type,
                                          std::uint64_t target_owner_lease_generation);
-    bool commit_session_relocation_route_authority (const std::string &transfer_id,
-                                                    std::uint64_t previous_authority_owner_generation,
-                                                    std::uint64_t target_authority_owner_generation);
+    bool
+    commit_session_relocation_route_authority (const std::string &transfer_id,
+                                               std::uint64_t previous_authority_owner_generation,
+                                               std::uint64_t target_authority_owner_generation);
     bool adopt_committed_actor_relocation_authority (const runtime::stateful::object_ref_t &target,
                                                      std::uint64_t target_node_generation,
                                                      std::uint64_t target_owner_lease_generation);

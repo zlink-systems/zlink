@@ -8,7 +8,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -70,8 +70,8 @@ public final class PlayServerApplication {
                     BingoRoomSpot.class,
                     factory -> {
                         factory.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE);
-                        factory.relocationReadiness(
-                            ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED);
+                        factory.relocationCoordinationMode(
+                            ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
                         factory.preserveStateWith(BingoRoomRelocationAdapter.class);
                     })
                 .addActorFactory(

@@ -22,7 +22,7 @@ import systems.zlink.framework.configuration.ZLinkFrameworkOptions;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -152,8 +152,8 @@ final class RelocationPublicContractTest {
                     Class.class,
                     Consumer.class)
                 .getReturnType());
-        assertEquals(0, ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY.value());
-        assertEquals(1, ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED.value());
+        assertEquals(0, ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED.value());
+        assertEquals(1, ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED.value());
         assertEquals(0, ZLinkSpotRelocationReadyOutcome.CONTINUED.value());
         assertEquals(1, ZLinkSpotRelocationReadyOutcome.RELOCATED.value());
         assertEquals(

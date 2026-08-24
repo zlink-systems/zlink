@@ -819,7 +819,7 @@ chosen at factory registration.
 
 | Mode | Who decides the safe point | Applies to |
 | --- | --- | --- |
-| `AnyTurnBoundary` (default) | The Framework -- between a completed turn and the next | Most Spots |
+| `FrameworkManaged` (default) | The Framework -- between a completed turn and the next | Most Spots |
 | `ApplicationSignaled` | The application -- the end of the turn that called `Defer()` | A Spot whose state-consistency unit spans multiple turns |
 
 **The condition under which the default mode holds.** The Framework doesn't interrupt a
@@ -841,8 +841,8 @@ mesh.Objects().Server()
         "game-room",
         factory => factory
             .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide) // Only usable in this mode.
-            .RelocationReadiness(
-                ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+            .RelocationCoordinationMode(
+                ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
             .PreserveStateWith<GameRoomRelocationAdapter>());
 ```
 
@@ -890,7 +890,7 @@ Follow these rules.
   operation (send, request, close, etc.) in the same turn afterward is an error.
 - **Call it only once per turn.** A second `Defer()` in the same turn is an error.
 - **It's exclusive to a `SpotWide` User Spot.** It can't be called from an Entry Spot, a
-  `PerActor` User Spot, an Instance Spot, or under the default `AnyTurnBoundary` mode.
+  `PerActor` User Spot, an Instance Spot, or under the default `FrameworkManaged` mode.
 
 ## 8. Related Documents
 

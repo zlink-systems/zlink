@@ -12,6 +12,9 @@ int main (int argc, char **argv)
     auto app = app_t::create ();
     load_sample_configuration (app, argc, argv);
     const auto topology = sample_topology_from_config (app);
-    session_server_host_factory_t::configure (app, topology, !sample_keep_running (app));
+    session_server_host_factory_t::configure (app, topology);
+    if (!sample_keep_running (app)) {
+        app.add_hosted_service (std::make_unique<stop_after_start_service_t> (app));
+    }
     return app.run (argc, argv);
 }

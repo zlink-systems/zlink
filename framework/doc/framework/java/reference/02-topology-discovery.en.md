@@ -74,7 +74,7 @@ play.objects().server()
 | --- | --- | --- |
 | `.client()` / `.server()` | — | Selects the Object Client (reference only) or Object Server (hosting) role. `server()` includes `client()` capability, and both require a Location Store. `None` if omitted |
 | `.addEntrySpot(entrySpotClass)` | None | Registers an Entry Spot type dedicated to external entry |
-| `.addSpotFactory(spotType, spotClass, configure)` | None | Registers a stable User Spot type. `configure` must call exactly one of `disableRelocation()`/`recreateOnRelocation()`/`preserveStateWith(...)`, in addition to `stableTypeLimit`/`executionMode`/`relocationReadiness` |
+| `.addSpotFactory(spotType, spotClass, configure)` | None | Registers a stable User Spot type. `configure` must call exactly one of `disableRelocation()`/`recreateOnRelocation()`/`preserveStateWith(...)`, in addition to `stableTypeLimit`/`executionMode`/`relocationCoordinationMode` |
 | `.addInstanceSpotFactory(instanceSpotType, spotClass, configure)` | None | Registers a cold-activation Instance Spot type. `configure` must call exactly one relocation behavior, in addition to `stableTypeLimit` |
 | `.addActorFactory(actorType, actorClass, factoryClass, configure)` | None | Registers a stable Actor type. `configure` must call exactly one relocation behavior (an Actor factory has no `stableTypeLimit`) |
 

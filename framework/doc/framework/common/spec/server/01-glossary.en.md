@@ -147,15 +147,15 @@ that needs to survive is managed by the application in storage outside the node.
 the target, the Spot instance is re-created with the same SpotId and ObjectGeneration,
 and only Actor state, Actor queues, and Actor timers are moved, per Actor.
 
-<a id="spot-relocation-readiness-mode"></a>
-### Spot Relocation Readiness Mode
+<a id="spot-relocation-coordination-mode"></a>
+### Spot Relocation Coordination Mode
 
 A startup registration option that decides at which turn boundary a `SpotWide` User
 Spot can start relocation.
 
 | Mode | Meaning |
 |---|---|
-| `AnyTurnBoundary` | The framework picks a generally safe turn boundary. This is the default. |
+| `FrameworkManaged` | The framework picks a generally safe turn boundary. This is the default. |
 | `ApplicationSignaled` | Only uses the boundary the application signals as safe, after the current turn, via `RelocationReady().Defer()`. |
 
 In `ApplicationSignaled`, `Defer()` doesn't request relocation. If a relocation is
@@ -165,7 +165,7 @@ callback before the next application job.
 
 The callback is provided with a no-op default implementation in each language's Spot
 interface. The application implements it only when it needs to start the next stage
-of a round or match from the callback. Calling `Defer()` under `AnyTurnBoundary`,
+of a round or match from the callback. Calling `Defer()` under `FrameworkManaged`,
 `PerActor`, Entry Spot, or Instance Spot fails with `InvalidOperation` before the
 queue changes.
 

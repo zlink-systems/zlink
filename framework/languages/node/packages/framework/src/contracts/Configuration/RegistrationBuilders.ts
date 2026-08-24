@@ -40,7 +40,7 @@ import type {
   ZLinkUserSpotFactoryBuilder
 } from './ObjectRoles';
 import {
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from './ObjectRoles';
 import type { ZLinkSpotNodeBuilder } from '../Spots/Builders';
@@ -1062,7 +1062,7 @@ class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
   implements ZLinkUserSpotFactoryBuilder<TSpot> {
   private stableTypeLimitValue: number | undefined;
   private executionModeValue = ZLinkUserSpotExecutionMode.SpotWide;
-  private relocationReadinessValue = ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
+  private relocationCoordinationModeValue = ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
 
   stableTypeLimit(limit: number): this {
     this.assertMutable();
@@ -1077,9 +1077,9 @@ class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
     return this;
   }
 
-  relocationReadiness(mode: ZLinkSpotRelocationReadinessMode): this {
+  relocationCoordinationMode(mode: ZLinkSpotRelocationCoordinationMode): this {
     this.assertMutable();
-    this.relocationReadinessValue = mode;
+    this.relocationCoordinationModeValue = mode;
     return this;
   }
 
@@ -1105,7 +1105,7 @@ class DefaultUserSpotFactoryBuilder<TSpot extends ZLinkSpot>
     const options = {
       stableTypeLimit: this.stableTypeLimitValue,
       executionMode: this.executionModeValue,
-      relocationReadiness: this.relocationReadinessValue
+      relocationCoordinationMode: this.relocationCoordinationModeValue
     };
     validateUserSpotFactoryOptions(options);
     if (
@@ -1431,17 +1431,17 @@ function validateUserSpotFactoryOptions(
     throw new ZLinkConfigurationException('User Spot executionMode is invalid.');
   }
   if (
-    options?.relocationReadiness !== ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
-    && options?.relocationReadiness !== ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    options?.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+    && options?.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
   ) {
-    throw new ZLinkConfigurationException('User Spot relocationReadiness is invalid.');
+    throw new ZLinkConfigurationException('User Spot relocationCoordinationMode is invalid.');
   }
   if (
     options.executionMode === ZLinkUserSpotExecutionMode.PerActor
-    && options.relocationReadiness === ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    && options.relocationCoordinationMode === ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
   ) {
     throw new ZLinkConfigurationException(
-      'ApplicationSignaled relocation readiness is valid only for SpotWide User Spots.'
+      'ApplicationSignaled relocation coordination mode is valid only for SpotWide User Spots.'
     );
   }
 }

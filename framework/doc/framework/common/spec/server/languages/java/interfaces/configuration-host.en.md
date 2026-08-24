@@ -186,10 +186,10 @@ public enum ZLinkUserSpotExecutionMode {
     public int value() { return value; }
 }
 
-public enum ZLinkSpotRelocationReadinessMode {
-    ANY_TURN_BOUNDARY(0), APPLICATION_SIGNALED(1);
+public enum ZLinkSpotRelocationCoordinationMode {
+    FRAMEWORK_MANAGED(0), APPLICATION_SIGNALED(1);
     private final int value;
-    ZLinkSpotRelocationReadinessMode(int value) { this.value = value; }
+    ZLinkSpotRelocationCoordinationMode(int value) { this.value = value; }
     public int value() { return value; }
 }
 
@@ -203,8 +203,8 @@ public interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
 public interface ZLinkUserSpotFactoryBuilder<TSpot extends ZLinkSpot> {
     ZLinkUserSpotFactoryBuilder<TSpot> stableTypeLimit(int limit);
     ZLinkUserSpotFactoryBuilder<TSpot> executionMode(ZLinkUserSpotExecutionMode mode);
-    ZLinkUserSpotFactoryBuilder<TSpot> relocationReadiness(
-        ZLinkSpotRelocationReadinessMode mode);
+    ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(
+        ZLinkSpotRelocationCoordinationMode mode);
     void disableRelocation();
     void recreateOnRelocation();
     void preserveStateWith(
@@ -350,7 +350,7 @@ the caller.
 startup configuration error. A PerActor Spot is a stateless execution
 shell, and the Actor policy and adapter each handle Actor state.
 
-`relocationReadiness`'s default is `ANY_TURN_BOUNDARY`.
+`relocationCoordinationMode`'s default is `FRAMEWORK_MANAGED`.
 `APPLICATION_SIGNALED` is only allowed with `SPOT_WIDE`, and registering
 it together with `PER_ACTOR` is a startup configuration error before
 socket bind. Since the Spot callback is a default no-op method, an
@@ -767,11 +767,11 @@ public final class systems.zlink.framework.configuration.ZLinkUserSpotExecutionM
   public static systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode valueOf(java.lang.String);
   public int value();
 }
-public final class systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode> {
-  public static final systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode ANY_TURN_BOUNDARY;
-  public static final systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode APPLICATION_SIGNALED;
-  public static systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode[] values();
-  public static systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode valueOf(java.lang.String);
+public final class systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode> {
+  public static final systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode FRAMEWORK_MANAGED;
+  public static final systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode APPLICATION_SIGNALED;
+  public static systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode[] values();
+  public static systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode valueOf(java.lang.String);
   public int value();
 }
 public interface systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<TActor extends systems.zlink.framework.actors.ZLinkActor> {
@@ -782,7 +782,7 @@ public interface systems.zlink.framework.configuration.ZLinkActorFactoryBuilder<
 public interface systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot extends systems.zlink.framework.spots.ZLinkSpot<?>> {
   public abstract systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot> stableTypeLimit(int);
   public abstract systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot> executionMode(systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode);
-  public abstract systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot> relocationReadiness(systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode);
+  public abstract systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode);
   public abstract void disableRelocation();
   public abstract void recreateOnRelocation();
   public abstract void preserveStateWith(java.lang.Class<? extends systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot>>);

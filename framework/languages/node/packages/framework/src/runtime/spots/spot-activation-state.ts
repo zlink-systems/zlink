@@ -7,7 +7,7 @@ import type {
 } from '../../contracts';
 import {
   ZLinkSpotCloseReason,
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkSpotRelocationReadyOutcome,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
@@ -31,7 +31,7 @@ export type ZLinkSpotActivationDomain =
   | {
       readonly kind: 'user';
       readonly executionMode: ZLinkUserSpotExecutionMode;
-      readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
+      readonly relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode;
     }
   | {
       readonly kind: 'instance';
@@ -145,16 +145,16 @@ export class ZLinkSpotActivation {
       : ZLinkUserSpotExecutionMode.SpotWide;
   }
 
-  get relocationReadiness(): ZLinkSpotRelocationReadinessMode {
+  get relocationCoordinationMode(): ZLinkSpotRelocationCoordinationMode {
     return this.domain.kind === 'user'
-      ? this.domain.relocationReadiness
-      : ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
+      ? this.domain.relocationCoordinationMode
+      : ZLinkSpotRelocationCoordinationMode.FrameworkManaged;
   }
 
   relocationReadyCall(): ZLinkSpotRelocationReadyCall {
     return {
       defer: () => {
-        if (this.relocationReadiness !== ZLinkSpotRelocationReadinessMode.ApplicationSignaled) {
+        if (this.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled) {
           throw new ZLinkConfigurationException(
             'relocationReady().defer() requires ApplicationSignaled relocation readiness.'
           );
@@ -212,7 +212,7 @@ export class ZLinkSpotActivation {
   }
 
   async waitForRelocationBoundary(signal?: AbortSignal): Promise<boolean> {
-    if (this.relocationReadiness !== ZLinkSpotRelocationReadinessMode.ApplicationSignaled) {
+    if (this.relocationCoordinationMode !== ZLinkSpotRelocationCoordinationMode.ApplicationSignaled) {
       return false;
     }
     if (this.relocationReadyWaiter !== undefined) {

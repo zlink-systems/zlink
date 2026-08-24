@@ -47,8 +47,8 @@ internal sealed class ZLinkSpotRelocationReadyHandlerScope : IDisposable
             throw Invalid(
                 "RelocationReady Defer must target the Spot that owns the current handler.");
         if (activation.ExecutionMode != ZLinkUserSpotExecutionMode.SpotWide
-            || activation.RelocationReadiness
-            != ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+            || activation.RelocationCoordinationMode
+            != ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
             throw Invalid(
                 "RelocationReady Defer requires a SpotWide User Spot registered with ApplicationSignaled readiness.");
         if (scope._completed)

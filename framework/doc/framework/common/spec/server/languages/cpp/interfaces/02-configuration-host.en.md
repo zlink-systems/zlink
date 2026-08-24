@@ -184,7 +184,7 @@ move as finished only when the relocation result is `relocated/none`.
 
 `app_t` is the framework's outermost public type. The user builds an
 app with `app_t::create()`, configures services, handlers, and zlink
-runtime together in `add_zlink_framework(...)`, and then calls `run`.
+runtime through the options builder returned by `add_zlink_framework()`, and then calls `run`.
 A low-level runtime builder isn't exposed directly on the ordinary
 application surface.
 
@@ -207,6 +207,7 @@ public:
     health_builder_t &health() noexcept;
 
     app_t &add_module(module_t &module);
+    zlink_framework_options_t &add_zlink_framework();
     app_t &add_zlink_framework(
       std::function<void(zlink_framework_options_t &)> configure);
     template <typename TModule, typename... TArgs>
@@ -374,9 +375,10 @@ handler registration into one `zlink_framework_options_t`. It doesn't
 expose runtime wiring order to the application by passing a separate
 low-level builder and handler registry.
 
-`app_t::add_zlink_framework(options_callback)` is the C++ high-level
-configuration entry point corresponding to `.NET`'s
-`AddZLinkFramework(options => ...)`. Since C++ has no assembly
+`app_t::add_zlink_framework()` is the C++ high-level configuration entry point corresponding to
+`.NET`'s `AddZLinkFramework(...)`. The returned builder is configured directly, so the whole
+configuration does not need a wrapping lambda. The callback overload remains for compatibility.
+Since C++ has no assembly
 reflection, it doesn't directly port only `.NET`'s
 `AddHandlersFromAssemblyOf(...)`. Instead, it first picks a handler
 group, then specifies the handler type inside that group and registers
@@ -434,34 +436,30 @@ category is needed, `logger_factory_t` can be received as a dependency
 to build a category logger inside the handler.
 
 ```cpp
-app.add_zlink_framework ([&](zlink::framework::zlink_framework_options_t &options) {
-    options.use_filter<audit_filter_t>();
-    options.metadata()
-      .allow_session_to_actor("trace-id")
-      .allow_actor_to_session("trace-id");
+auto &options = app.add_zlink_framework();
+options.use_filter<audit_filter_t>();
+options.metadata()
+  .allow_session_to_actor("trace-id")
+  .allow_actor_to_session("trace-id");
 
-    auto mesh = options.add_route_mesh(sample_names_t::application_mesh)
-      .listen(7300)
-      .set_routing_id(topology.application_rid);
-    mesh.channel(sample_names_t::api_channel)
-      .server()
-      .add_handler_group("api");
-    mesh.channel(sample_names_t::play_channel).client();
+auto mesh = options.add_route_mesh(sample_names_t::application_mesh);
+mesh.listen(7300).set_routing_id(topology.application_rid);
+mesh.channel(sample_names_t::api_channel).server().add_handler_group("api");
+mesh.channel(sample_names_t::play_channel).client();
 
     // sets the message-flow observation level used at startup.
-    options.configure_dispatch().message_flow(
-      zlink::framework::message_flow_log_mode_t::errors);
+options.configure_dispatch().message_flow(
+  zlink::framework::message_flow_log_mode_t::errors);
 
-    options.handlers()
-      .group("api")
-      .add<authenticate_player_handler_t>()
-      .add<match_bingo_api_handler_t>()
-      .add_send<player_command_handler_t>();
+options.handlers()
+  .group("api")
+  .add<authenticate_player_handler_t>()
+  .add<match_bingo_api_handler_t>()
+  .add_send<player_command_handler_t>();
 
-    options.handlers()
-      .group("events")
-      .add_publish<notification_event_handler_t>();
-});
+options.handlers()
+  .group("events")
+  .add_publish<notification_event_handler_t>();
 ```
 
 Using automatic peer discovery looks up the same
@@ -675,6 +673,8 @@ public:
 class codec_options_builder_t {
 public:
     template <typename TExtension>
+    codec_options_builder_t &use();
+    template <typename TExtension>
     codec_options_builder_t &use(const TExtension &extension);
 };
 
@@ -713,6 +713,8 @@ public:
     service_collection_t &services() noexcept;
     zlink_framework_options_t &add_location_store(
       std::shared_ptr<location_store_t> store);
+    template <typename TStore>
+    typename TStore::options_builder_type add_location_store();
     client_server_channel_builder_t add_client_server_channel(
       std::string channel_name);
     fanout_channel_builder_t add_fanout_channel(std::string channel_name);
@@ -728,6 +730,8 @@ public:
     std::size_t handler_coroutine_workers() const noexcept;
     zlink_framework_options_t &add_relocation_store(
       std::shared_ptr<relocation_store_t> store);
+    template <typename TStore>
+    typename TStore::options_builder_type add_relocation_store();
 };
 
 } // namespace zlink::framework
@@ -759,8 +763,10 @@ Building an `http_options_builder_t` snapshot and running validation are
 internal host-startup responsibilities, not public interfaces. An
 application configures HTTP only through the builder methods above.
 
-An application using location runtime registers exactly one Location
-Store with `add_location_store(...)`. If there's even one
+An application using location runtime configures connection details and the key prefix through the
+store options builder returned by `add_location_store<TStore>()`. The overload taking a prebuilt
+store instance remains for compatibility. The application registers exactly one Location Store.
+If there's even one
 `RecreateOnRelocation` or `PreserveStateWith` factory, or even one
 Instance Spot factory, it also registers exactly one Relocation Store
 with `add_relocation_store(...)`. A same-node configuration with no
@@ -798,20 +804,19 @@ empty optional wave means maintenance wave exclusion isn't used.
 A usage example is below.
 
 ```cpp
-app.add_zlink_framework([&](auto &options) {
-    auto mesh = options.add_route_mesh(sample_names_t::application_mesh)
-      .listen(7300) // opens the endpoint this RouteMesh receives peer messages on.
-      .set_routing_id(topology.application_rid); // identifies this node within the same mesh.
-    mesh.channel(sample_names_t::api_channel)
-      .server() // publishes this node as a request-processing candidate for api_channel.
-      .add_handler_group("api"); // connects the DI handler group to register with the Channel handler.
-    mesh.channel(sample_names_t::play_channel)
-      .client(); // registers only the play_channel call path, with no Server membership.
+auto &options = app.add_zlink_framework();
+auto mesh = options.add_route_mesh(sample_names_t::application_mesh);
+mesh.listen(7300) // opens the endpoint this RouteMesh receives peer messages on.
+  .set_routing_id(topology.application_rid); // identifies this node within the same mesh.
+mesh.channel(sample_names_t::api_channel)
+  .server() // publishes this node as a request-processing candidate for api_channel.
+  .add_handler_group("api"); // connects the DI handler group to register with the Channel handler.
+mesh.channel(sample_names_t::play_channel)
+  .client(); // registers only the play_channel call path, with no Server membership.
 
-    options.http()
-      .listen(topology.api_http_endpoint) // opens the listener an HTTP client connects to.
-      .map_post<create_game_http_handler_t>("/games"); // connects POST /games to the DI handler.
-});
+options.http()
+  .listen(topology.api_http_endpoint) // opens the listener an HTTP client connects to.
+  .map_post<create_game_http_handler_t>("/games"); // connects POST /games to the DI handler.
 ```
 
 The [C++ HTTP Hosting handler signature forms](../60-http-hosting.en.md#3-handler-signature-forms)

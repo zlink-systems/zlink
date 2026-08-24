@@ -467,6 +467,9 @@ class app_state_t
     health_builder_t health;
     zlink_builder_t zlink;
     serializer_registry_t serializers;
+    std::unique_ptr<zlink_framework_options_t> framework_options;
+    std::optional<std::size_t> framework_hosted_service_position;
+    bool framework_applied = false;
     std::vector<std::unique_ptr<hosted_service_t>> hosted_services;
     std::vector<std::shared_ptr<mesh_node_runtime_t>> route_mesh_nodes;
     std::function<bool ()> has_manual_service_topology;
@@ -985,8 +988,16 @@ serializer_registry_t &app_t::_serializers () noexcept
     return _state->serializers;
 }
 
-app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t &)> configure)
+zlink_framework_options_t &app_t::add_zlink_framework ()
 {
+    if (_state->framework_applied) {
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "ZLink Framework configuration is already applied");
+    }
+    if (_state->framework_options) {
+        return *_state->framework_options;
+    }
+    _state->framework_hosted_service_position = _state->hosted_services.size ();
     detail::channel_runtime_t::from (_state->zlink.message_bus ())
       .bind_serializers (_state->serializers);
     _state->monitoring->diagnostics_logger =
@@ -1026,11 +1037,28 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
           },
           service_lifetime_t::singleton);
     }
-    zlink_framework_options_t options (_state->services, _state->handlers, _state->serializers,
-                                       _state->zlink);
+    _state->framework_options = std::make_unique<zlink_framework_options_t> (
+      _state->services, _state->handlers, _state->serializers, _state->zlink);
+    return *_state->framework_options;
+}
+
+app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t &)> configure)
+{
+    auto &options = add_zlink_framework ();
     if (configure) {
         configure (options);
     }
+    _apply_zlink_framework ();
+    return *this;
+}
+
+void app_t::_apply_zlink_framework ()
+{
+    if (_state->framework_applied || !_state->framework_options) {
+        return;
+    }
+    auto &options = *_state->framework_options;
+    const auto first_framework_service = _state->hosted_services.size ();
     // Route message-flow records through the application's standard logging
     // provider. With no configured sink diagnostics remain silent.
     // Install the shared, runtime-mutable message-flow mode so set_message_flow_mode
@@ -2576,7 +2604,14 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
     }
     runtime::configure_handler_coroutine_executor (options.handler_coroutine_workers ());
     detail::configure_handler_invocation_executor ();
-    return *this;
+    if (_state->framework_hosted_service_position) {
+        const auto position = *_state->framework_hosted_service_position;
+        std::rotate (_state->hosted_services.begin () + static_cast<std::ptrdiff_t> (position),
+                     _state->hosted_services.begin ()
+                       + static_cast<std::ptrdiff_t> (first_framework_service),
+                     _state->hosted_services.end ());
+    }
+    _state->framework_applied = true;
 }
 
 app_t &app_t::add_module (module_t &module)
@@ -2599,6 +2634,7 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
 
 int app_t::run (int argc, char **argv)
 {
+    _apply_zlink_framework ();
     _state->config.load_cli (argc, argv);
     detail::serializer_registry_access_t::freeze (_state->serializers);
     _state->config.model ().set ("host.signal_handlers", "installed");

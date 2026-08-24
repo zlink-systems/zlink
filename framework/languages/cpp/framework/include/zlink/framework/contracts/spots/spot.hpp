@@ -57,8 +57,7 @@ struct mesh_node_builder_state_t;
 void drain_spot_node_executors (spot_node_builder_state_t &node);
 void cancel_spot_node_dispatch_queues (spot_node_builder_state_t &node);
 
-template <typename THandler, typename TDependencies>
-struct timer_handler_factory_t;
+template <typename THandler, typename TDependencies> struct timer_handler_factory_t;
 
 template <typename THandler, typename... TDependencies>
 struct timer_handler_factory_t<THandler, dependency_list_t<TDependencies...>>
@@ -89,11 +88,8 @@ struct timer_handler_factory_t<THandler, dependency_list_t<TDependencies...>>
 class actor_context_t;
 class actor_ref_t;
 class actor_t;
-template <typename TActor>
-requires std::derived_from<TActor, actor_t>
-class actor_factory_t;
-template <typename TActor>
-class actor_factory_builder_t;
+template <typename TActor> requires std::derived_from<TActor, actor_t> class actor_factory_t;
+template <typename TActor> class actor_factory_builder_t;
 class spot_publisher_client_t;
 class spot_manager_t;
 class spot_context_t;
@@ -125,29 +121,23 @@ enum class spot_relocation_ready_outcome_t : std::uint8_t
 
 struct spot_relocation_ready_completion_t final
 {
-    spot_relocation_ready_outcome_t outcome =
-      spot_relocation_ready_outcome_t::continued;
+    spot_relocation_ready_outcome_t outcome = spot_relocation_ready_outcome_t::continued;
 };
 
 class spot_relocation_ready_call_t
 {
   public:
     ~spot_relocation_ready_call_t ();
-    spot_relocation_ready_call_t (
-      spot_relocation_ready_call_t &&) noexcept;
-    spot_relocation_ready_call_t &
-    operator= (spot_relocation_ready_call_t &&) = delete;
-    spot_relocation_ready_call_t (
-      const spot_relocation_ready_call_t &) = delete;
-    spot_relocation_ready_call_t &
-    operator= (const spot_relocation_ready_call_t &) = delete;
+    spot_relocation_ready_call_t (spot_relocation_ready_call_t &&) noexcept;
+    spot_relocation_ready_call_t &operator= (spot_relocation_ready_call_t &&) = delete;
+    spot_relocation_ready_call_t (const spot_relocation_ready_call_t &) = delete;
+    spot_relocation_ready_call_t &operator= (const spot_relocation_ready_call_t &) = delete;
 
     void defer ();
 
   private:
     friend class spot_context_t;
-    explicit spot_relocation_ready_call_t (
-      std::shared_ptr<detail::spot_context_state_t> state);
+    explicit spot_relocation_ready_call_t (std::shared_ptr<detail::spot_context_state_t> state);
 
     std::shared_ptr<detail::spot_context_state_t> _state;
 };
@@ -165,10 +155,15 @@ enum class actor_join_completion_outcome_t : std::uint8_t
     failed
 };
 
-using actor_join_completion_callback_t = std::function<task_t<void> (
-  void *, actor_join_completion_outcome_t, std::uint64_t, std::uint64_t,
-  const actor_ref_t *, const std::optional<message_t> &,
-  framework_error_kind_t, bool)>;
+using actor_join_completion_callback_t =
+  std::function<task_t<void> (void *,
+                              actor_join_completion_outcome_t,
+                              std::uint64_t,
+                              std::uint64_t,
+                              const actor_ref_t *,
+                              const std::optional<message_t> &,
+                              framework_error_kind_t,
+                              bool)>;
 } // namespace detail
 
 namespace detail
@@ -308,10 +303,7 @@ class spot_ref_t final
     }
 
     const spot_id_t &spot_id () const noexcept { return _spot_id; }
-    std::uint64_t object_generation () const noexcept
-    {
-        return _object_generation;
-    }
+    std::uint64_t object_generation () const noexcept { return _object_generation; }
     std::string_view mesh_name () const noexcept { return _mesh_name; }
     const node_rid_t &node_rid () const noexcept { return _node_rid; }
 
@@ -365,11 +357,10 @@ struct spot_inbound_message_t
 {
     std::optional<std::string_view> find (std::string_view key) const
     {
-        const auto iterator = std::lower_bound (
-          values.begin (), values.end (), key,
-          [] (const auto &entry, std::string_view value) {
-              return std::string_view (entry.first) < value;
-          });
+        const auto iterator = std::lower_bound (values.begin (), values.end (), key,
+                                                [] (const auto &entry, std::string_view value) {
+                                                    return std::string_view (entry.first) < value;
+                                                });
         if (iterator == values.end () || iterator->first != key) {
             return std::nullopt;
         }
@@ -378,11 +369,10 @@ struct spot_inbound_message_t
 
     bool contains (std::string_view key) const
     {
-        const auto iterator = std::lower_bound (
-          values.begin (), values.end (), key,
-          [] (const auto &entry, std::string_view value) {
-              return std::string_view (entry.first) < value;
-          });
+        const auto iterator = std::lower_bound (values.begin (), values.end (), key,
+                                                [] (const auto &entry, std::string_view value) {
+                                                    return std::string_view (entry.first) < value;
+                                                });
         return iterator != values.end () && iterator->first == key;
     }
 
@@ -647,9 +637,9 @@ enum class user_spot_execution_mode_t
     per_actor = 1
 };
 
-enum class spot_relocation_readiness_mode_t
+enum class spot_relocation_coordination_mode_t
 {
-    any_turn_boundary = 0,
+    framework_managed = 0,
     application_signaled = 1
 };
 
@@ -667,44 +657,37 @@ struct factory_relocation_configuration_t
 {
     factory_relocation_kind_t kind{factory_relocation_kind_t::unspecified};
     std::type_index adapter_type{typeid (void)};
-    std::function<task_t<std::vector<std::byte>> (
-      void *, std::stop_token)> capture;
-    std::function<task_t<void> (
-      void *, std::vector<std::byte>, std::stop_token)> restore;
+    std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
+    std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
 };
 } // namespace detail
 
-template <typename TSpot>
-class spot_relocation_adapter_t
+template <typename TSpot> class spot_relocation_adapter_t
 {
   public:
     virtual ~spot_relocation_adapter_t () = default;
-    virtual task_t<std::vector<std::byte>>
-    capture (TSpot &spot, std::stop_token operation_cancellation) = 0;
-    virtual task_t<void>
-    restore (TSpot &spot,
-             std::vector<std::byte> payload,
-             std::stop_token operation_cancellation) = 0;
+    virtual task_t<std::vector<std::byte>> capture (TSpot &spot,
+                                                    std::stop_token operation_cancellation) = 0;
+    virtual task_t<void> restore (TSpot &spot,
+                                  std::vector<std::byte> payload,
+                                  std::stop_token operation_cancellation) = 0;
 };
 
-template <typename TSpot>
-class user_spot_factory_builder_t
+template <typename TSpot> class user_spot_factory_builder_t
 {
   public:
     user_spot_factory_builder_t &set_stable_type_limit (std::int32_t limit)
     {
         ensure_mutable ();
         if (limit < 1) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "User Spot stable type limit must be positive");
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "User Spot stable type limit must be positive");
         }
         _stable_type_limit = limit;
         return *this;
     }
 
-    user_spot_factory_builder_t &
-    set_execution_mode (user_spot_execution_mode_t mode)
+    user_spot_factory_builder_t &set_execution_mode (user_spot_execution_mode_t mode)
     {
         ensure_mutable ();
         _execution_mode = mode;
@@ -712,10 +695,10 @@ class user_spot_factory_builder_t
     }
 
     user_spot_factory_builder_t &
-    set_relocation_readiness (spot_relocation_readiness_mode_t mode)
+    set_relocation_coordination_mode (spot_relocation_coordination_mode_t mode)
     {
         ensure_mutable ();
-        _relocation_readiness = mode;
+        _relocation_coordination_mode = mode;
         return *this;
     }
 
@@ -732,34 +715,25 @@ class user_spot_factory_builder_t
     }
 
     template <typename TAdapter>
-    requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>>
-    void preserve_state_with ()
+    requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>> void
+    preserve_state_with ()
     {
         ensure_mutable ();
-        static_assert (
-          std::is_default_constructible_v<TAdapter>,
-          "C++ Spot relocation adapters must be default constructible");
-        select (detail::factory_relocation_kind_t::preserve_state,
-                typeid (TAdapter));
-        _relocation.capture = [] (
-          void *spot,
-          std::stop_token operation_cancellation)
-          -> task_t<std::vector<std::byte>> {
+        static_assert (std::is_default_constructible_v<TAdapter>,
+                       "C++ Spot relocation adapters must be default constructible");
+        select (detail::factory_relocation_kind_t::preserve_state, typeid (TAdapter));
+        _relocation.capture =
+          [] (void *spot,
+              std::stop_token operation_cancellation) -> task_t<std::vector<std::byte>> {
             auto adapter = std::make_shared<TAdapter> ();
-            co_return co_await adapter->capture (
-              *static_cast<TSpot *> (spot),
-              operation_cancellation);
+            co_return co_await adapter->capture (*static_cast<TSpot *> (spot),
+                                                 operation_cancellation);
         };
-        _relocation.restore = [] (
-          void *spot,
-          std::vector<std::byte> payload,
-          std::stop_token operation_cancellation)
-          -> task_t<void> {
+        _relocation.restore = [] (void *spot, std::vector<std::byte> payload,
+                                  std::stop_token operation_cancellation) -> task_t<void> {
             auto adapter = std::make_shared<TAdapter> ();
-            co_await adapter->restore (
-              *static_cast<TSpot *> (spot),
-              std::move (payload),
-              operation_cancellation);
+            co_await adapter->restore (*static_cast<TSpot *> (spot), std::move (payload),
+                                       operation_cancellation);
         };
     }
 
@@ -779,33 +753,28 @@ class user_spot_factory_builder_t
 
     void validate () const
     {
-        if (_relocation.kind
-            == detail::factory_relocation_kind_t::unspecified) {
+        if (_relocation.kind == detail::factory_relocation_kind_t::unspecified) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "User Spot factory must select exactly one relocation policy");
         }
         if (_execution_mode == user_spot_execution_mode_t::per_actor
-            && _relocation.kind
-                 != detail::factory_relocation_kind_t::recreate) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "Per-Actor User Spots require recreate_on_relocation");
+            && _relocation.kind != detail::factory_relocation_kind_t::recreate) {
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Per-Actor User Spots require recreate_on_relocation");
         }
         if (_execution_mode == user_spot_execution_mode_t::per_actor
-            && _relocation_readiness
-                 == spot_relocation_readiness_mode_t::application_signaled) {
+            && _relocation_coordination_mode
+                 == spot_relocation_coordination_mode_t::application_signaled) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "Application-signaled relocation readiness requires Spot-Wide execution");
         }
     }
 
-    void select (detail::factory_relocation_kind_t kind,
-                 std::type_index adapter_type)
+    void select (detail::factory_relocation_kind_t kind, std::type_index adapter_type)
     {
-        if (_relocation.kind
-            != detail::factory_relocation_kind_t::unspecified) {
+        if (_relocation.kind != detail::factory_relocation_kind_t::unspecified) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "User Spot factory must select exactly one relocation policy");
@@ -814,25 +783,22 @@ class user_spot_factory_builder_t
     }
 
     std::int32_t _stable_type_limit = 0;
-    user_spot_execution_mode_t _execution_mode =
-      user_spot_execution_mode_t::spot_wide;
-    spot_relocation_readiness_mode_t _relocation_readiness =
-      spot_relocation_readiness_mode_t::any_turn_boundary;
+    user_spot_execution_mode_t _execution_mode = user_spot_execution_mode_t::spot_wide;
+    spot_relocation_coordination_mode_t _relocation_coordination_mode =
+      spot_relocation_coordination_mode_t::framework_managed;
     detail::factory_relocation_configuration_t _relocation;
     bool _sealed = false;
 };
 
-template <typename TSpot>
-class instance_spot_factory_builder_t
+template <typename TSpot> class instance_spot_factory_builder_t
 {
   public:
     instance_spot_factory_builder_t &set_stable_type_limit (std::int32_t limit)
     {
         ensure_mutable ();
         if (limit < 1) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "Instance Spot stable type limit must be positive");
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Instance Spot stable type limit must be positive");
         }
         _stable_type_limit = limit;
         return *this;
@@ -851,34 +817,25 @@ class instance_spot_factory_builder_t
     }
 
     template <typename TAdapter>
-    requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>>
-    void preserve_state_with ()
+    requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>> void
+    preserve_state_with ()
     {
         ensure_mutable ();
-        static_assert (
-          std::is_default_constructible_v<TAdapter>,
-          "C++ Spot relocation adapters must be default constructible");
-        select (detail::factory_relocation_kind_t::preserve_state,
-                typeid (TAdapter));
-        _relocation.capture = [] (
-          void *spot,
-          std::stop_token operation_cancellation)
-          -> task_t<std::vector<std::byte>> {
+        static_assert (std::is_default_constructible_v<TAdapter>,
+                       "C++ Spot relocation adapters must be default constructible");
+        select (detail::factory_relocation_kind_t::preserve_state, typeid (TAdapter));
+        _relocation.capture =
+          [] (void *spot,
+              std::stop_token operation_cancellation) -> task_t<std::vector<std::byte>> {
             auto adapter = std::make_shared<TAdapter> ();
-            co_return co_await adapter->capture (
-              *static_cast<TSpot *> (spot),
-              operation_cancellation);
+            co_return co_await adapter->capture (*static_cast<TSpot *> (spot),
+                                                 operation_cancellation);
         };
-        _relocation.restore = [] (
-          void *spot,
-          std::vector<std::byte> payload,
-          std::stop_token operation_cancellation)
-          -> task_t<void> {
+        _relocation.restore = [] (void *spot, std::vector<std::byte> payload,
+                                  std::stop_token operation_cancellation) -> task_t<void> {
             auto adapter = std::make_shared<TAdapter> ();
-            co_await adapter->restore (
-              *static_cast<TSpot *> (spot),
-              std::move (payload),
-              operation_cancellation);
+            co_await adapter->restore (*static_cast<TSpot *> (spot), std::move (payload),
+                                       operation_cancellation);
         };
     }
 
@@ -890,27 +847,24 @@ class instance_spot_factory_builder_t
     void ensure_mutable () const
     {
         if (_sealed) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "Instance Spot factory builder cannot be changed after the configure callback returns");
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Instance Spot factory builder cannot be changed after "
+                                         "the configure callback returns");
         }
     }
 
     void validate () const
     {
-        if (_relocation.kind
-            == detail::factory_relocation_kind_t::unspecified) {
+        if (_relocation.kind == detail::factory_relocation_kind_t::unspecified) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "Instance Spot factory must select exactly one relocation policy");
         }
     }
 
-    void select (detail::factory_relocation_kind_t kind,
-                 std::type_index adapter_type)
+    void select (detail::factory_relocation_kind_t kind, std::type_index adapter_type)
     {
-        if (_relocation.kind
-            != detail::factory_relocation_kind_t::unspecified) {
+        if (_relocation.kind != detail::factory_relocation_kind_t::unspecified) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "Instance Spot factory must select exactly one relocation policy");
@@ -952,15 +906,14 @@ inline bool is_default_target_routing_id (const zlink::routing_id_t &rid)
 {
     const auto bytes = rid.to_bytes ();
     return bytes.size () == sizeof (std::uint32_t)
-           && std::all_of (bytes.begin (), bytes.end (), [] (std::uint8_t byte) {
-                  return byte == 0;
-              });
+           && std::all_of (bytes.begin (), bytes.end (),
+                           [] (std::uint8_t byte) { return byte == 0; });
 }
 
 inline node_rid_t node_rid_from_target (const zlink::routing_id_t &rid)
 {
     if (is_default_target_routing_id (rid)) {
-        return node_rid_t {};
+        return node_rid_t{};
     }
     return node_rid_t::from_string (rid.to_string ());
 }
@@ -1007,27 +960,23 @@ class spot_context_t
                                    serializer.content_type (), std::move (payload));
         }
         catch (const framework_exception_t &error) {
-            return send_call_t (
-              detail::result_access_t::failure<void> (error));
+            return send_call_t (detail::result_access_t::failure<void> (error));
         }
     }
 
     template <typename TRequest>
-    spot_request_call_t request_to_spot (spot_id_t target_spot_id,
-                                         TRequest request)
+    spot_request_call_t request_to_spot (spot_id_t target_spot_id, TRequest request)
     {
         ensure_submission_open ();
-        return spot_route_client ().request_to_spot (
-          std::move (target_spot_id), std::move (request));
+        return spot_route_client ().request_to_spot (std::move (target_spot_id),
+                                                     std::move (request));
     }
 
     template <typename TMessage>
-    spot_send_call_t send_to_spot (spot_id_t target_spot_id,
-                                   TMessage message)
+    spot_send_call_t send_to_spot (spot_id_t target_spot_id, TMessage message)
     {
         ensure_submission_open ();
-        return spot_route_client ().send_to_spot (
-          std::move (target_spot_id), std::move (message));
+        return spot_route_client ().send_to_spot (std::move (target_spot_id), std::move (message));
     }
 
     template <typename TPayload> spot_context_t &register_packet (std::string packet_name)
@@ -1043,17 +992,14 @@ class spot_context_t
         auto preflight = submission_preflight ();
         return worker_call_t<result_type> (
           [scheduler, preflight = std::move (preflight),
-           work = std::move (work)] (
-            std::stop_token cancellation) mutable -> task_t<result_type> {
+           work = std::move (work)] (std::stop_token cancellation) mutable -> task_t<result_type> {
               if (preflight) {
                   const auto admitted = preflight ();
                   if (!admitted) {
-                      return task_t<result_type> (
-                        result_t<result_type>::failure (
-                          admitted.error_kind (),
-                          admitted.error ()
-                            ? admitted.error ()->what ()
-                            : "Spot worker preflight failed"));
+                      return task_t<result_type> (result_t<result_type>::failure (
+                        admitted.error_kind (), admitted.error ()
+                                                  ? admitted.error ()->what ()
+                                                  : "Spot worker preflight failed"));
                   }
               }
               if (!scheduler) {
@@ -1066,10 +1012,9 @@ class spot_context_t
               auto shared_work = std::make_shared<TWork> (std::move (work));
               auto completed = std::make_shared<std::atomic_bool> (false);
               const auto scheduled =
-                scheduler->try_schedule ([scheduler, shared_work, completion,
-                                          completed, cancellation] (std::stop_token) mutable {
-                    auto result = detail::run_worker_body<result_type> (
-                      *shared_work, cancellation);
+                scheduler->try_schedule ([scheduler, shared_work, completion, completed,
+                                          cancellation] (std::stop_token) mutable {
+                    auto result = detail::run_worker_body<result_type> (*shared_work, cancellation);
                     if (cancellation.stop_requested ()) {
                         completed->store (true);
                         return;
@@ -1091,7 +1036,8 @@ class spot_context_t
                   scheduler->post_owner (std::move (complete_full));
               }
               return task;
-          }, scheduler ? scheduler->stop_token () : std::stop_token{});
+          },
+          scheduler ? scheduler->stop_token () : std::stop_token{});
     }
 
     template <typename TWork> auto run_io_worker (TWork work)
@@ -1102,50 +1048,43 @@ class spot_context_t
         auto preflight = submission_preflight ();
         return worker_call_t<result_type> (
           [scheduler, preflight = std::move (preflight),
-           work = std::move (work)] (
-            std::stop_token cancellation) mutable -> task_t<result_type> {
+           work = std::move (work)] (std::stop_token cancellation) mutable -> task_t<result_type> {
               if (preflight) {
                   const auto admitted = preflight ();
                   if (!admitted) {
-                      return task_t<result_type> (
-                        result_t<result_type>::failure (
-                          admitted.error_kind (),
-                          admitted.error ()
-                            ? admitted.error ()->what ()
-                            : "Spot worker preflight failed"));
+                      return task_t<result_type> (result_t<result_type>::failure (
+                        admitted.error_kind (), admitted.error ()
+                                                  ? admitted.error ()->what ()
+                                                  : "Spot worker preflight failed"));
                   }
               }
               if (!scheduler) {
                   return task_t<result_type> (result_t<result_type>::failure (
                     framework_error_kind_t::internal_failure, "worker runtime is not configured"));
               }
-              auto completion =
-                std::make_shared<detail::task_completion_source_t<result_type>> ();
+              auto completion = std::make_shared<detail::task_completion_source_t<result_type>> ();
               auto result = completion->task ();
               auto completed = std::make_shared<std::atomic_bool> (false);
               auto shared_work = std::make_shared<TWork> (std::move (work));
               const auto scheduled = scheduler->try_schedule (
-                [shared_work, completion, completed,
-                 cancellation] (std::stop_token) mutable {
+                [shared_work, completion, completed, cancellation] (std::stop_token) mutable {
                     try {
-                        auto pending =
-                          detail::invoke_worker_async (*shared_work, cancellation);
+                        auto pending = detail::invoke_worker_async (*shared_work, cancellation);
                         /* The inner task state owns this observer. Capturing
                          * pending in the observer would make an incomplete
                          * I/O task retain its own state after the wrapper has
                          * timed out. */
-                        observe_task_completion (
-                          pending,
-                          [completion, completed, cancellation] (
-                            const result_t<result_type> &value) mutable {
-                              if (cancellation.stop_requested ()) {
-                                  completed->store (true);
-                                  return;
-                              }
-                              if (!completed->exchange (true)) {
-                                  completion->complete (value);
-                              }
-                          });
+                        observe_task_completion (pending,
+                                                 [completion, completed, cancellation] (
+                                                   const result_t<result_type> &value) mutable {
+                                                     if (cancellation.stop_requested ()) {
+                                                         completed->store (true);
+                                                         return;
+                                                     }
+                                                     if (!completed->exchange (true)) {
+                                                         completion->complete (value);
+                                                     }
+                                                 });
                     }
                     catch (const framework_exception_t &error) {
                         if (!completed->exchange (true)) {
@@ -1174,7 +1113,8 @@ class spot_context_t
                   });
               }
               return result;
-          }, scheduler ? scheduler->stop_token () : std::stop_token{});
+          },
+          scheduler ? scheduler->stop_token () : std::stop_token{});
     }
 
     std::vector<spot_packet_descriptor_t> packet_registry () const;
@@ -1210,8 +1150,8 @@ class spot_context_t
                 THandler,
                 typename detail::handler_dependencies_t<THandler>::type>::create (services);
           },
-          [] (void *spot, void *handler_instance,
-              serializer_registry_t &serializers, const timer_tick_t &tick) {
+          [] (void *spot, void *handler_instance, serializer_registry_t &serializers,
+              const timer_tick_t &tick) {
               auto *typed_spot = static_cast<spot_type *> (spot);
               auto *handler = static_cast<THandler *> (handler_instance);
               auto captured_tick = std::make_shared<timer_tick_t> (tick);
@@ -1250,8 +1190,7 @@ class spot_context_t
         template <typename TReply> request_call_t<TReply> as () const
         {
             if (_error) {
-                return request_call_t<TReply> (
-                  detail::result_access_t::failure<TReply> (*_error));
+                return request_call_t<TReply> (detail::result_access_t::failure<TReply> (*_error));
             }
             auto serializers = _serializers;
             auto submit = _submit;
@@ -1297,14 +1236,12 @@ class spot_context_t
 
     bool has_same_source_fence (const spot_context_t &other) const noexcept;
     void ensure_submission_open () const;
-    std::function<result_t<void> ()>
-    submission_preflight () const;
+    std::function<result_t<void> ()> submission_preflight () const;
 
-    send_call_t
-    publish_erased (std::string topic,
-                    std::string packet_name,
-                    std::string content_type,
-                    zlink::message_t payload);
+    send_call_t publish_erased (std::string topic,
+                                std::string packet_name,
+                                std::string content_type,
+                                zlink::message_t payload);
     serializer_registry_t *serializer_registry () const noexcept;
     route_client_t spot_route_client () const;
     send_call_t send_to_erased (node_rid_t node_rid,
@@ -1321,20 +1258,18 @@ class spot_context_t
                         std::type_index actor_type,
                         void *actor,
                         std::function<void (void *, const actor_ref_t &)> update_actor_ref);
-    timer_t
-    add_timer_erased (std::string name,
-                      std::chrono::milliseconds period,
-                      timer_options_t options,
-                      std::type_index handler_type,
-                      std::function<std::shared_ptr<void> (service_provider_t *)> handler_factory,
-                      std::function<task_t<zlink::message_t> (
-                        void *, void *, serializer_registry_t &,
-                        const timer_tick_t &)> handler_invoker);
+    timer_t add_timer_erased (
+      std::string name,
+      std::chrono::milliseconds period,
+      timer_options_t options,
+      std::type_index handler_type,
+      std::function<std::shared_ptr<void> (service_provider_t *)> handler_factory,
+      std::function<task_t<zlink::message_t> (
+        void *, void *, serializer_registry_t &, const timer_tick_t &)> handler_invoker);
     task_t<bool> close_erased ();
 
     friend void detail::drain_spot_node_executors (detail::spot_node_builder_state_t &node);
-    friend void detail::cancel_spot_node_dispatch_queues (
-      detail::spot_node_builder_state_t &node);
+    friend void detail::cancel_spot_node_dispatch_queues (detail::spot_node_builder_state_t &node);
 
     std::shared_ptr<detail::spot_context_state_t> _state;
     std::shared_ptr<detail::worker_scheduler_t> _worker_scheduler;
@@ -1383,12 +1318,10 @@ class instance_spot_context_t : public spot_context_t
     friend class detail::spot_node_runtime_t;
     instance_spot_context_t ();
     explicit instance_spot_context_t (const spot_context_t &context);
-    explicit instance_spot_context_t (
-      std::shared_ptr<detail::spot_context_state_t> state);
+    explicit instance_spot_context_t (std::shared_ptr<detail::spot_context_state_t> state);
 };
 
-template <typename TActor>
-class spot_t
+template <typename TActor> class spot_t
 {
   public:
     using actor_type = TActor;
@@ -1397,30 +1330,27 @@ class spot_t
     virtual spot_context_t &context () noexcept = 0;
     virtual const spot_context_t &context () const noexcept = 0;
     virtual void configure () = 0;
-    virtual task_t<spot_create_response_t> on_create (
-      const message_t &request)
+    virtual task_t<spot_create_response_t> on_create (const message_t &request)
     {
         (void) request;
         co_return spot_create_response_t::accept ();
     }
     virtual task_t<void> on_initialize () { co_return; }
-    virtual task_t<void> on_closing (
-      const spot_closing_context_t &context,
-      std::stop_token cleanup_cancellation)
+    virtual task_t<void> on_closing (const spot_closing_context_t &context,
+                                     std::stop_token cleanup_cancellation)
     {
         (void) context;
         (void) cleanup_cancellation;
         co_return;
     }
-    virtual task_t<void> on_relocation_ready_completed (
-      const spot_relocation_ready_completion_t &completion)
+    virtual task_t<void>
+    on_relocation_ready_completed (const spot_relocation_ready_completion_t &completion)
     {
         (void) completion;
         co_return;
     }
-    virtual task_t<spot_actor_join_result_t> on_actor_join (
-      std::string_view actor_id,
-      const message_t &request) = 0;
+    virtual task_t<spot_actor_join_result_t> on_actor_join (std::string_view actor_id,
+                                                            const message_t &request) = 0;
     virtual task_t<void> on_actor_joined (TActor &actor) = 0;
     virtual task_t<void> on_leave_actor (TActor &actor) = 0;
     virtual task_t<void> on_disconnect_actor (TActor &actor)
@@ -1430,8 +1360,7 @@ class spot_t
     }
 };
 
-template <typename TActor>
-class entry_spot_t
+template <typename TActor> class entry_spot_t
 {
   public:
     using actor_type = TActor;
@@ -1441,25 +1370,22 @@ class entry_spot_t
     virtual const entry_spot_context_t &context () const noexcept = 0;
     virtual void configure () = 0;
     virtual task_t<void> on_initialize () { co_return; }
-    virtual task_t<void> on_closing (
-      const spot_closing_context_t &context,
-      std::stop_token cleanup_cancellation)
+    virtual task_t<void> on_closing (const spot_closing_context_t &context,
+                                     std::stop_token cleanup_cancellation)
     {
         (void) context;
         (void) cleanup_cancellation;
         co_return;
     }
-    virtual task_t<actor_create_response_t> on_create_actor (
-      TActor &actor,
-      const message_t &create_request)
+    virtual task_t<actor_create_response_t> on_create_actor (TActor &actor,
+                                                             const message_t &create_request)
     {
         (void) actor;
         (void) create_request;
         co_return actor_create_response_t::accept ();
     }
-    virtual task_t<spot_actor_join_result_t> on_actor_join (
-      std::string_view actor_id,
-      const message_t &request) = 0;
+    virtual task_t<spot_actor_join_result_t> on_actor_join (std::string_view actor_id,
+                                                            const message_t &request) = 0;
     virtual task_t<void> on_actor_joined (TActor &actor) = 0;
     virtual task_t<void> on_leave_actor (TActor &actor) = 0;
     virtual task_t<void> on_disconnect_actor (TActor &actor)
@@ -1477,9 +1403,8 @@ class instance_spot_t
     virtual const instance_spot_context_t &context () const noexcept = 0;
     virtual void configure () = 0;
     virtual task_t<void> on_initialize () { co_return; }
-    virtual task_t<void> on_closing (
-      const spot_closing_context_t &context,
-      std::stop_token cleanup_cancellation)
+    virtual task_t<void> on_closing (const spot_closing_context_t &context,
+                                     std::stop_token cleanup_cancellation)
     {
         (void) context;
         (void) cleanup_cancellation;
@@ -1489,15 +1414,17 @@ class instance_spot_t
 
 namespace detail
 {
-template <typename T>
-concept user_spot_type =
-  requires { typename T::actor_type; }
-  && std::derived_from<T, spot_t<typename T::actor_type>>;
+template <typename T> concept user_spot_type = requires
+{
+    typename T::actor_type;
+}
+&&std::derived_from<T, spot_t<typename T::actor_type>>;
 
-template <typename T>
-concept entry_spot_type =
-  requires { typename T::actor_type; }
-  && std::derived_from<T, entry_spot_t<typename T::actor_type>>;
+template <typename T> concept entry_spot_type = requires
+{
+    typename T::actor_type;
+}
+&&std::derived_from<T, entry_spot_t<typename T::actor_type>>;
 } // namespace detail
 
 struct spot_create_result_t
@@ -1523,13 +1450,12 @@ class spot_route_internal_dispatcher_t;
 class spot_handler_registry_t
 {
   public:
-    using invoker_t =
-      std::function<task_t<zlink::message_t> (void *,
-                                              void *,
-                                              service_provider_t &,
-                                              serializer_registry_t &,
-                                              const zlink::message_t &,
-                                              const spot_inbound_message_t &)>;
+    using invoker_t = std::function<task_t<zlink::message_t> (void *,
+                                                              void *,
+                                                              service_provider_t &,
+                                                              serializer_registry_t &,
+                                                              const zlink::message_t &,
+                                                              const spot_inbound_message_t &)>;
 
     spot_handler_registry_t ();
     ~spot_handler_registry_t ();
@@ -1563,8 +1489,8 @@ class spot_handler_registry_t
             void *spot, void *, service_provider_t &, serializer_registry_t &serializers,
             const zlink::message_t &message, const spot_inbound_message_t &metadata) {
               auto &typed_spot = *static_cast<spot_type *> (spot);
-              auto payload = std::make_shared<message_type> (
-                detail::deserialize_typed_payload<message_type> (
+              auto payload =
+                std::make_shared<message_type> (detail::deserialize_typed_payload<message_type> (
                   serializers, message, metadata.content_type));
               if constexpr (traits::arg_count == 2) {
                   auto context = std::make_shared<message_context_t> (
@@ -1605,8 +1531,8 @@ class spot_handler_registry_t
             void *spot, void *, service_provider_t &, serializer_registry_t &serializers,
             const zlink::message_t &message, const spot_inbound_message_t &metadata) {
               auto &typed_spot = *static_cast<spot_type *> (spot);
-              auto payload = std::make_shared<event_type> (
-                detail::deserialize_typed_payload<event_type> (
+              auto payload =
+                std::make_shared<event_type> (detail::deserialize_typed_payload<event_type> (
                   serializers, message, metadata.content_type));
               if constexpr (traits::arg_count == 2) {
                   auto context = std::make_shared<publish_message_context_t> (
@@ -1701,39 +1627,31 @@ class spot_handler_registry_t
 
     template <typename TSpot, typename TActor> void register_actor_admission ()
     {
-        static_assert (
-          std::same_as<TActor, typename TSpot::actor_type>,
-          "SPOT actor handler type must match the Spot base actor_type");
+        static_assert (std::same_as<TActor, typename TSpot::actor_type>,
+                       "SPOT actor handler type must match the Spot base actor_type");
         detail::spot_actor_admission_callbacks_t callbacks;
-        callbacks.join = [] (void *spot, std::string_view actor_id,
-                             const zlink::message_t &request,
+        callbacks.join = [] (void *spot, std::string_view actor_id, const zlink::message_t &request,
                              serializer_registry_t &serializers) {
             auto &typed_spot = *static_cast<TSpot *> (spot);
-            return typed_spot
-              .on_actor_join (
-                actor_id, message_t::from_raw (request, &serializers))
+            return typed_spot.on_actor_join (actor_id, message_t::from_raw (request, &serializers))
               .result ()
               .value ();
         };
         callbacks.on_actor_joined = [] (void *spot, void *actor) {
-            return static_cast<TSpot *> (spot)->on_actor_joined (
-              *static_cast<TActor *> (actor));
+            return static_cast<TSpot *> (spot)->on_actor_joined (*static_cast<TActor *> (actor));
         };
         callbacks.on_create_actor = [] (void *spot, void *actor, const zlink::message_t &request,
-                                      serializer_registry_t &serializers) {
+                                        serializer_registry_t &serializers) {
             if constexpr (detail::entry_spot_type<TSpot>) {
                 return static_cast<TSpot *> (spot)->on_create_actor (
-                  *static_cast<TActor *> (actor),
-                  message_t::from_raw (request, &serializers));
+                  *static_cast<TActor *> (actor), message_t::from_raw (request, &serializers));
             } else {
                 return task_t<actor_create_response_t> (
-                  result_t<actor_create_response_t>::success (
-                    actor_create_response_t::accept ()));
+                  result_t<actor_create_response_t>::success (actor_create_response_t::accept ()));
             }
         };
         callbacks.on_leave_actor = [] (void *spot, void *actor) {
-            return static_cast<TSpot *> (spot)->on_leave_actor (
-              *static_cast<TActor *> (actor));
+            return static_cast<TSpot *> (spot)->on_leave_actor (*static_cast<TActor *> (actor));
         };
         callbacks.on_disconnect_actor = [] (void *spot, void *actor) {
             return static_cast<TSpot *> (spot)->on_disconnect_actor (
@@ -1754,29 +1672,25 @@ class spot_handler_registry_t
                                                  std::type_index reply_type,
                                                  invoker_t invoker);
 
-    task_t<zlink::message_t> invoke_erased (spot_handler_kind_t kind,
-                                            std::string_view packet_name,
-                                            std::string_view topic,
-                                            std::type_index actor_type,
-                                            void *spot,
-                                            void *actor,
-                                            service_provider_t &services,
-                                            serializer_registry_t &serializers,
-                                            zlink::message_t message,
-                                            spot_inbound_message_t metadata = {},
-                                            bool serial_dispatch = true,
-                                            std::string actor_execution_key = {},
-                                            std::string actor_execution_spot_id = {},
-                                            std::function<std::optional<result_t<zlink::message_t>> (
-                                              const zlink::message_t &,
-                                              const spot_inbound_message_t &)>
-                                              before_invoke = {},
-                                            actor_queue_dispatch_t actor_queue_dispatch =
-                                              actor_queue_dispatch_t::acquire,
-                                            std::function<void ()>
-                                              before_application_handler = {},
-                                            std::function<void ()>
-                                              after_application_admission = {}) const;
+    task_t<zlink::message_t>
+    invoke_erased (spot_handler_kind_t kind,
+                   std::string_view packet_name,
+                   std::string_view topic,
+                   std::type_index actor_type,
+                   void *spot,
+                   void *actor,
+                   service_provider_t &services,
+                   serializer_registry_t &serializers,
+                   zlink::message_t message,
+                   spot_inbound_message_t metadata = {},
+                   bool serial_dispatch = true,
+                   std::string actor_execution_key = {},
+                   std::string actor_execution_spot_id = {},
+                   std::function<std::optional<result_t<zlink::message_t>> (
+                     const zlink::message_t &, const spot_inbound_message_t &)> before_invoke = {},
+                   actor_queue_dispatch_t actor_queue_dispatch = actor_queue_dispatch_t::acquire,
+                   std::function<void ()> before_application_handler = {},
+                   std::function<void ()> after_application_admission = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);
@@ -1804,8 +1718,8 @@ class spot_handler_registry_t
             const zlink::message_t &message, const spot_inbound_message_t &metadata) {
               auto &typed_spot = *static_cast<spot_type *> (spot);
               auto &typed_actor = *static_cast<actor_type *> (actor);
-              auto payload = std::make_shared<message_type> (
-                detail::deserialize_typed_payload<message_type> (
+              auto payload =
+                std::make_shared<message_type> (detail::deserialize_typed_payload<message_type> (
                   serializers, message, metadata.content_type));
               auto context = std::make_shared<message_context_t> (
                 metadata.to_message_context (registered_packet_name));
@@ -1836,7 +1750,7 @@ class spot_create_call_t
     template <typename TRequest>
     requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
               && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
-    spot_create_call_t &creation_request (TRequest request)
+      spot_create_call_t &creation_request (TRequest request)
     {
         return creation_request (message_t::from (std::move (request)));
     }
@@ -1846,8 +1760,7 @@ class spot_create_call_t
 
   private:
     friend class spot_manager_t;
-    explicit spot_create_call_t (
-      std::shared_ptr<detail::spot_create_call_state_t> state);
+    explicit spot_create_call_t (std::shared_ptr<detail::spot_create_call_state_t> state);
     std::shared_ptr<detail::spot_create_call_state_t> _state;
 };
 
@@ -1863,8 +1776,7 @@ class spot_manager_t
     spot_manager_t &operator= (const spot_manager_t &) = default;
 
     spot_create_call_t create (std::string stable_type);
-    spot_create_call_t get_or_create (spot_id_t spot_id,
-                                      std::string stable_type);
+    spot_create_call_t get_or_create (spot_id_t spot_id, std::string stable_type);
     task_t<std::optional<spot_ref_t>> find (spot_id_t spot_id) const;
     task_t<bool> close (spot_ref_t spot);
 
@@ -1873,11 +1785,9 @@ class spot_manager_t
     friend class spot_publisher_client_t;
     friend class detail::spot_node_runtime_t;
     friend class detail::spot_route_internal_dispatcher_t;
-    explicit spot_manager_t (
-      std::shared_ptr<detail::spot_node_builder_state_t> state);
-    spot_manager_t (
-      std::shared_ptr<detail::spot_node_builder_state_t> state,
-      std::weak_ptr<detail::spot_context_state_t> source);
+    explicit spot_manager_t (std::shared_ptr<detail::spot_node_builder_state_t> state);
+    spot_manager_t (std::shared_ptr<detail::spot_node_builder_state_t> state,
+                    std::weak_ptr<detail::spot_context_state_t> source);
     std::optional<actor_ref_t> current_actor_ref (const actor_ref_t &actor_ref) const;
     task_t<std::optional<zlink::message_t>>
     relay_actor_packet (const actor_ref_t &actor_ref,
@@ -1887,17 +1797,16 @@ class spot_manager_t
                         service_provider_t &services,
                         serializer_registry_t &serializers,
                         spot_inbound_message_t metadata = {});
-    task_t<std::optional<zlink::message_t>>
-    relay_actor_packet (const actor_ref_t &actor_ref,
-                        actor_context_t actor_context,
-                        detail::stream_message_kind_t message_kind,
-                        std::string_view packet_name,
-                        const zlink::message_t &message,
-                        service_provider_t &services,
-                        serializer_registry_t &serializers,
-                        spot_inbound_message_t metadata = {},
-                        const runtime::protocol::actor_route_fence_t *
-                          admitted_message_follow_target = nullptr);
+    task_t<std::optional<zlink::message_t>> relay_actor_packet (
+      const actor_ref_t &actor_ref,
+      actor_context_t actor_context,
+      detail::stream_message_kind_t message_kind,
+      std::string_view packet_name,
+      const zlink::message_t &message,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      spot_inbound_message_t metadata = {},
+      const runtime::protocol::actor_route_fence_t *admitted_message_follow_target = nullptr);
 
     std::shared_ptr<detail::spot_node_builder_state_t> _state;
     std::weak_ptr<detail::spot_context_state_t> _source;
@@ -1909,15 +1818,12 @@ class spot_publisher_client_t
     spot_publisher_client_t (spot_manager_t manager, serializer_registry_t &serializers);
 
     template <typename TEvent>
-    publish_call_t publish (std::string channel_name,
-                            std::string topic,
-                            const TEvent &event) const
+    publish_call_t publish (std::string channel_name, std::string topic, const TEvent &event) const
     {
         if (!_serializers) {
             return publish_call_t (
-              result_t<void>::failure (
-                framework_error_kind_t::not_configured,
-                "logical multicast has no serializer registry"));
+              result_t<void>::failure (framework_error_kind_t::not_configured,
+                                       "logical multicast has no serializer registry"));
         }
         try {
             const auto serializer = _serializers->get<TEvent> ();
@@ -1927,18 +1833,16 @@ class spot_publisher_client_t
                                 std::move (payload));
         }
         catch (const framework_exception_t &error) {
-            return publish_call_t (
-              detail::result_access_t::failure<void> (error));
+            return publish_call_t (detail::result_access_t::failure<void> (error));
         }
     }
 
   private:
-    publish_call_t
-    publish_raw (std::string channel_name,
-                 std::string topic,
-                 std::string packet_name,
-                 std::string content_type,
-                 zlink::message_t payload) const;
+    publish_call_t publish_raw (std::string channel_name,
+                                std::string topic,
+                                std::string packet_name,
+                                std::string content_type,
+                                zlink::message_t payload) const;
 
     spot_manager_t _manager;
     serializer_registry_t *_serializers = nullptr;
@@ -1948,17 +1852,18 @@ namespace detail
 {
 struct spot_lifecycle_callbacks_t
 {
-    std::function<std::shared_ptr<void> (spot_context_t)> create_spot_context_instance;
-    std::function<std::shared_ptr<void> (entry_spot_context_t)> create_entry_context_instance;
-    std::function<std::shared_ptr<void> (instance_spot_context_t)> create_instance_context_instance;
+    std::function<std::shared_ptr<void> (spot_context_t, service_provider_t &)>
+      create_spot_context_instance;
+    std::function<std::shared_ptr<void> (entry_spot_context_t, service_provider_t &)>
+      create_entry_context_instance;
+    std::function<std::shared_ptr<void> (instance_spot_context_t, service_provider_t &)>
+      create_instance_context_instance;
     std::function<task_t<spot_create_response_t> (
       void *, const zlink::message_t &, serializer_registry_t &)>
       on_create;
     std::function<void (void *)> on_initialize;
-    std::function<void (
-      void *, const spot_closing_context_t &, std::stop_token)> on_closing;
-    std::function<void (
-      void *, const spot_relocation_ready_completion_t &)>
+    std::function<void (void *, const spot_closing_context_t &, std::stop_token)> on_closing;
+    std::function<void (void *, const spot_relocation_ready_completion_t &)>
       on_relocation_ready_completed;
 };
 
@@ -1978,38 +1883,50 @@ class spot_node_builder_t
     // How long this node keeps the Message Follow route after a completed
     // relocation. The default is 30 seconds; zero disables Message Follow.
     spot_node_builder_t &set_message_follow_duration (std::chrono::milliseconds duration);
+    template <typename TEntrySpot, typename... TDependencies>
+    requires detail::entry_spot_type<TEntrySpot> &&std::
+      constructible_from<TEntrySpot, entry_spot_context_t, TDependencies &...> spot_node_builder_t &
+      add_entry_spot ()
+    {
+        auto &builder = add_spot_factory_erased (
+          std::string ("entry"), std::type_index (typeid (TEntrySpot)),
+          detail::spot_runtime_kind_t::entry, user_spot_execution_mode_t::spot_wide);
+        register_injected_context_lifecycle<TEntrySpot, entry_spot_context_t, TDependencies...> (
+          "entry");
+        return builder;
+    }
+
     template <typename TEntrySpot>
-    requires detail::entry_spot_type<TEntrySpot>
-    spot_node_builder_t &add_entry_spot (
-      std::function<std::shared_ptr<TEntrySpot> (entry_spot_context_t)> factory)
+    requires detail::entry_spot_type<TEntrySpot> spot_node_builder_t &
+    add_entry_spot (std::function<std::shared_ptr<TEntrySpot> (entry_spot_context_t)> factory)
     {
         if (!factory) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "Entry SPOT factory must not be empty");
         }
-        auto &builder =
-          add_spot_factory_erased (
-            std::string ("entry"), std::type_index (typeid (TEntrySpot)),
-            detail::spot_runtime_kind_t::entry,
-            user_spot_execution_mode_t::spot_wide);
-        register_context_lifecycle<TEntrySpot> ("entry", std::move (factory));
+        auto &builder = add_spot_factory_erased (
+          std::string ("entry"), std::type_index (typeid (TEntrySpot)),
+          detail::spot_runtime_kind_t::entry, user_spot_execution_mode_t::spot_wide);
+        register_context_lifecycle<TEntrySpot, entry_spot_context_t> (
+          "entry", [factory = std::move (factory)] (entry_spot_context_t context,
+                                                    service_provider_t &) mutable {
+              return factory (std::move (context));
+          });
         return builder;
     }
 
     template <typename TSpot>
-    requires detail::user_spot_type<TSpot>
-    spot_node_builder_t &add_spot_factory (
-      std::string stable_type,
-      std::function<std::shared_ptr<TSpot> (spot_context_t)> factory,
-      std::function<void (user_spot_factory_builder_t<TSpot> &)> configure)
+    requires detail::user_spot_type<TSpot> spot_node_builder_t &
+    add_spot_factory (std::string stable_type,
+                      std::function<std::shared_ptr<TSpot> (spot_context_t)> factory,
+                      std::function<void (user_spot_factory_builder_t<TSpot> &)> configure)
     {
         if (!factory || !configure) {
             throw framework_exception_t (
               framework_error_kind_t::not_configured,
               "User Spot factory and configure callback must not be empty");
         }
-        auto factory_builder =
-          std::make_shared<user_spot_factory_builder_t<TSpot>> ();
+        auto factory_builder = std::make_shared<user_spot_factory_builder_t<TSpot>> ();
         retain_factory_builder (factory_builder);
         try {
             configure (*factory_builder);
@@ -2021,24 +1938,60 @@ class spot_node_builder_t
         }
         const auto execution_mode = factory_builder->_execution_mode;
         const auto stable_type_limit = factory_builder->_stable_type_limit;
-        const auto relocation_readiness =
-          factory_builder->_relocation_readiness;
+        const auto relocation_coordination_mode = factory_builder->_relocation_coordination_mode;
         const auto relocation = factory_builder->_relocation;
         factory_builder->seal ();
         const auto registered_type = stable_type;
-        auto &builder = add_spot_factory_erased (
-          std::move (stable_type), std::type_index (typeid (TSpot)),
-          detail::spot_runtime_kind_t::user, execution_mode,
-          stable_type_limit, relocation_readiness,
-          relocation);
-        register_context_lifecycle<TSpot> (
-          registered_type, std::move (factory));
+        auto &builder =
+          add_spot_factory_erased (std::move (stable_type), std::type_index (typeid (TSpot)),
+                                   detail::spot_runtime_kind_t::user, execution_mode,
+                                   stable_type_limit, relocation_coordination_mode, relocation);
+        register_context_lifecycle<TSpot, spot_context_t> (
+          registered_type,
+          [factory = std::move (factory)] (spot_context_t context, service_provider_t &) mutable {
+              return factory (std::move (context));
+          });
+        return builder;
+    }
+
+    template <typename TSpot, typename... TDependencies>
+    requires detail::user_spot_type<TSpot> &&
+      std::constructible_from<TSpot, spot_context_t, TDependencies &...> spot_node_builder_t &
+      add_spot_factory (std::string stable_type,
+                        std::function<void (user_spot_factory_builder_t<TSpot> &)> configure)
+    {
+        if (!configure) {
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "User Spot configure callback must not be empty");
+        }
+        auto factory_builder = std::make_shared<user_spot_factory_builder_t<TSpot>> ();
+        retain_factory_builder (factory_builder);
+        try {
+            configure (*factory_builder);
+            factory_builder->validate ();
+        }
+        catch (...) {
+            factory_builder->seal ();
+            throw;
+        }
+        const auto execution_mode = factory_builder->_execution_mode;
+        const auto stable_type_limit = factory_builder->_stable_type_limit;
+        const auto relocation_coordination_mode = factory_builder->_relocation_coordination_mode;
+        const auto relocation = factory_builder->_relocation;
+        factory_builder->seal ();
+        const auto registered_type = stable_type;
+        auto &builder =
+          add_spot_factory_erased (std::move (stable_type), std::type_index (typeid (TSpot)),
+                                   detail::spot_runtime_kind_t::user, execution_mode,
+                                   stable_type_limit, relocation_coordination_mode, relocation);
+        register_injected_context_lifecycle<TSpot, spot_context_t, TDependencies...> (
+          registered_type);
         return builder;
     }
 
     template <typename TSpot>
-    requires std::derived_from<TSpot, instance_spot_t>
-    spot_node_builder_t &add_instance_spot_factory (
+    requires std::derived_from<TSpot, instance_spot_t> spot_node_builder_t &
+    add_instance_spot_factory (
       std::string stable_type,
       std::function<std::shared_ptr<TSpot> (instance_spot_context_t)> factory,
       std::function<void (instance_spot_factory_builder_t<TSpot> &)> configure)
@@ -2048,8 +2001,7 @@ class spot_node_builder_t
               framework_error_kind_t::not_configured,
               "Instance Spot factory and configure callback must not be empty");
         }
-        auto factory_builder =
-          std::make_shared<instance_spot_factory_builder_t<TSpot>> ();
+        auto factory_builder = std::make_shared<instance_spot_factory_builder_t<TSpot>> ();
         retain_factory_builder (factory_builder);
         try {
             configure (*factory_builder);
@@ -2065,12 +2017,47 @@ class spot_node_builder_t
         const auto registered_type = stable_type;
         auto &builder = add_spot_factory_erased (
           std::move (stable_type), std::type_index (typeid (TSpot)),
-          detail::spot_runtime_kind_t::instance,
-          user_spot_execution_mode_t::spot_wide,
-          stable_type_limit,
-          spot_relocation_readiness_mode_t::any_turn_boundary,
-          relocation);
-        register_context_lifecycle<TSpot> (registered_type, std::move (factory));
+          detail::spot_runtime_kind_t::instance, user_spot_execution_mode_t::spot_wide,
+          stable_type_limit, spot_relocation_coordination_mode_t::framework_managed, relocation);
+        register_context_lifecycle<TSpot, instance_spot_context_t> (
+          registered_type, [factory = std::move (factory)] (instance_spot_context_t context,
+                                                            service_provider_t &) mutable {
+              return factory (std::move (context));
+          });
+        return builder;
+    }
+
+    template <typename TSpot, typename... TDependencies>
+    requires std::derived_from<TSpot, instance_spot_t> &&std::
+      constructible_from<TSpot, instance_spot_context_t, TDependencies &...> spot_node_builder_t &
+      add_instance_spot_factory (
+        std::string stable_type,
+        std::function<void (instance_spot_factory_builder_t<TSpot> &)> configure)
+    {
+        if (!configure) {
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Instance Spot configure callback must not be empty");
+        }
+        auto factory_builder = std::make_shared<instance_spot_factory_builder_t<TSpot>> ();
+        retain_factory_builder (factory_builder);
+        try {
+            configure (*factory_builder);
+            factory_builder->validate ();
+        }
+        catch (...) {
+            factory_builder->seal ();
+            throw;
+        }
+        const auto stable_type_limit = factory_builder->_stable_type_limit;
+        const auto relocation = factory_builder->_relocation;
+        factory_builder->seal ();
+        const auto registered_type = stable_type;
+        auto &builder = add_spot_factory_erased (
+          std::move (stable_type), std::type_index (typeid (TSpot)),
+          detail::spot_runtime_kind_t::instance, user_spot_execution_mode_t::spot_wide,
+          stable_type_limit, spot_relocation_coordination_mode_t::framework_managed, relocation);
+        register_injected_context_lifecycle<TSpot, instance_spot_context_t, TDependencies...> (
+          registered_type);
         return builder;
     }
 
@@ -2093,8 +2080,10 @@ class spot_node_builder_t
     friend class detail::spot_node_runtime_t;
     explicit spot_node_builder_t (std::shared_ptr<detail::spot_node_builder_state_t> state);
     detail::local_spot_create_result_t create_spot (std::string spot_name);
-    detail::local_spot_create_result_t create_spot (std::string spot_name, const message_t &request);
-    detail::local_spot_create_result_t get_or_create_spot (std::string spot_name, spot_id_t spot_id);
+    detail::local_spot_create_result_t create_spot (std::string spot_name,
+                                                    const message_t &request);
+    detail::local_spot_create_result_t get_or_create_spot (std::string spot_name,
+                                                           spot_id_t spot_id);
     detail::local_spot_create_result_t
     get_or_create_spot (std::string spot_name, spot_id_t spot_id, const message_t &request);
     task_t<std::optional<spot_info_t>> find_spot (spot_id_t spot_id) const;
@@ -2103,21 +2092,20 @@ class spot_node_builder_t
     void retain_factory_builder (std::shared_ptr<void> builder);
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;
-    detail::local_spot_create_result_t create_spot_raw (
-      std::string spot_name, zlink::message_t request);
+    detail::local_spot_create_result_t create_spot_raw (std::string spot_name,
+                                                        zlink::message_t request);
     detail::local_spot_create_result_t
     get_or_create_spot_raw (std::string spot_name, spot_id_t spot_id, zlink::message_t request);
 
     spot_node_builder_t &
-    add_spot_factory_erased (
-      std::string spot_name,
-      std::type_index spot_type,
-      detail::spot_runtime_kind_t kind,
-      user_spot_execution_mode_t execution_mode,
-      std::int32_t stable_type_limit = 0,
-      spot_relocation_readiness_mode_t relocation_readiness =
-        spot_relocation_readiness_mode_t::any_turn_boundary,
-      detail::factory_relocation_configuration_t relocation = {});
+    add_spot_factory_erased (std::string spot_name,
+                             std::type_index spot_type,
+                             detail::spot_runtime_kind_t kind,
+                             user_spot_execution_mode_t execution_mode,
+                             std::int32_t stable_type_limit = 0,
+                             spot_relocation_coordination_mode_t relocation_coordination_mode =
+                               spot_relocation_coordination_mode_t::framework_managed,
+                             detail::factory_relocation_configuration_t relocation = {});
     spot_node_builder_t &
     accept_implicit_route_mesh (std::string route_channel_name,
                                 std::vector<std::string> manual_connections = {});
@@ -2130,29 +2118,26 @@ class spot_node_builder_t
         serialize_instance,
       std::function<void (void *, const zlink::message_t &, serializer_registry_t &)>
         deserialize_instance,
-      std::function<std::shared_ptr<void> (actor_context_t)>
-        create_context_instance = {},
+      std::function<std::shared_ptr<void> (actor_context_t)> create_context_instance = {},
       detail::actor_join_completion_callback_t on_join_completed = {},
       detail::factory_relocation_configuration_t relocation = {},
-      std::function<task_t<std::vector<std::byte>> (
-        void *, std::stop_token)> capture = {},
-      std::function<task_t<void> (
-        void *, std::vector<std::byte>, std::stop_token)> restore = {});
+      std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture = {},
+      std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore = {});
 
     template <typename TSpot, typename TContext>
     void register_context_lifecycle (
       std::string spot_name,
-      std::function<std::shared_ptr<TSpot> (TContext)> factory)
+      std::function<std::shared_ptr<TSpot> (TContext, service_provider_t &)> factory)
     {
         detail::spot_lifecycle_callbacks_t callbacks;
-        auto create = [factory = std::move (factory)] (TContext context) {
+        auto create = [factory = std::move (factory)] (TContext context,
+                                                       service_provider_t &services) {
             const auto expected_state = context._state;
-            auto instance = factory (std::move (context));
+            auto instance = factory (std::move (context), services);
             if (!instance) {
                 return std::shared_ptr<void>{};
             }
-            if (!instance->context ().has_same_source_fence (
-                  spot_context_t (expected_state))) {
+            if (!instance->context ().has_same_source_fence (spot_context_t (expected_state))) {
                 throw framework_exception_t (
                   framework_error_kind_t::not_configured,
                   "Spot factory must return a Spot that exposes the provided Context");
@@ -2168,20 +2153,17 @@ class spot_node_builder_t
             callbacks.create_spot_context_instance = std::move (create);
         }
         if constexpr (detail::user_spot_type<TSpot>) {
-            callbacks.on_create =
-              [] (void *spot, const zlink::message_t &request,
-                  serializer_registry_t &serializers) {
-                  return static_cast<TSpot *> (spot)->on_create (
-                    message_t::from_raw (request, &serializers));
-              };
+            callbacks.on_create = [] (void *spot, const zlink::message_t &request,
+                                      serializer_registry_t &serializers) {
+                return static_cast<TSpot *> (spot)->on_create (
+                  message_t::from_raw (request, &serializers));
+            };
         }
         callbacks.on_initialize = [] (void *spot) {
             static_cast<TSpot *> (spot)->on_initialize ().result ().value ();
         };
-        callbacks.on_closing =
-          [] (void *spot,
-              const spot_closing_context_t &context,
-              std::stop_token cleanup_cancellation) {
+        callbacks.on_closing = [] (void *spot, const spot_closing_context_t &context,
+                                   std::stop_token cleanup_cancellation) {
             static_cast<TSpot *> (spot)
               ->on_closing (context, cleanup_cancellation)
               .result ()
@@ -2189,8 +2171,7 @@ class spot_node_builder_t
         };
         if constexpr (detail::user_spot_type<TSpot>) {
             callbacks.on_relocation_ready_completed =
-              [] (void *spot,
-                  const spot_relocation_ready_completion_t &completion) {
+              [] (void *spot, const spot_relocation_ready_completion_t &completion) {
                   static_cast<TSpot *> (spot)
                     ->on_relocation_ready_completed (completion)
                     .result ()
@@ -2198,6 +2179,19 @@ class spot_node_builder_t
               };
         }
         register_lifecycle_erased (std::move (spot_name), std::move (callbacks));
+    }
+
+    template <typename TSpot, typename TContext, typename... TDependencies>
+    void register_injected_context_lifecycle (std::string spot_name)
+    {
+        static_assert (
+          std::constructible_from<TSpot, TContext, TDependencies &...>,
+          "Spot must be constructible from its Context followed by the declared dependencies");
+        register_context_lifecycle<TSpot, TContext> (
+          std::move (spot_name), [] (TContext context, service_provider_t &services) {
+              return std::make_shared<TSpot> (std::move (context),
+                                              services.get_required<TDependencies> ()...);
+          });
     }
     void register_lifecycle_erased (std::string spot_name,
                                     detail::spot_lifecycle_callbacks_t callbacks);

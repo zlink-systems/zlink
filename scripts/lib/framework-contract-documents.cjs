@@ -1,6 +1,5 @@
 'use strict';
 
-const {createHash} = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -19,6 +18,7 @@ function exactDocumentPaths(root, language) {
 function headedFencedBlocks(source, acceptedTags = undefined) {
   const accepted = acceptedTags ? new Set(acceptedTags) : undefined;
   const blocks = [];
+  const headingOrdinals = new Map();
   let heading = '';
   let ordinal = 0;
   const lines = source.split(/\r?\n/u);
@@ -37,8 +37,12 @@ function headedFencedBlocks(source, acceptedTags = undefined) {
       body.push(lines[index]);
     }
     if (accepted && !accepted.has(tag)) continue;
+    const headingKey = `${heading}\0${tag}`;
+    const headingOrdinal = headingOrdinals.get(headingKey) || 0;
+    headingOrdinals.set(headingKey, headingOrdinal + 1);
     blocks.push({
       heading,
+      headingOrdinal,
       ordinal: ordinal++,
       source: body.join('\n').replace(/[ \t]+$/gmu, '').trim(),
       startLine,
@@ -53,9 +57,11 @@ function fencedBlocks(source, acceptedTags = undefined) {
 }
 
 function exactInterfaceBlockRole(config, languageConfig, document, block) {
-  const digest = createHash('sha256').update(block.source).digest('hex');
   const overrides = (config.blockRoleOverrides || [])
-    .filter(rule => rule.document === document && rule.sha256 === digest);
+    .filter(rule => rule.document === document
+      && rule.heading === block.heading
+      && rule.tag === block.tag
+      && rule.headingOrdinal === block.headingOrdinal);
   if (overrides.length > 1) {
     throw new Error(`code block has multiple role overrides: ${document}:${block.startLine}`);
   }

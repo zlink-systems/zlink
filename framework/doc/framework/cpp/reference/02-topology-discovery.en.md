@@ -83,7 +83,7 @@ play.add_actor_factory<player_actor_t, player_actor_factory_t>(
 | Modifier | Default | Meaning |
 | --- | --- | --- |
 | `.add_entry_spot<TEntrySpot>()` / `.add_entry_spot<TEntrySpot>(factory)` | None | Registers an Entry Spot type dedicated to external entry. Omitting the factory uses the `TEntrySpot(entry_spot_context_t)` constructor |
-| `.add_spot_factory<TSpot>(stable_type, factory, configure)` | None | Registers a stable User Spot type. `configure` receives exactly one of `preserve_state_with<TAdapter>`/`recreate_on_relocation`/`disable_relocation`, in addition to `set_stable_type_limit`/`set_execution_mode`/`set_relocation_readiness` |
+| `.add_spot_factory<TSpot>(stable_type, factory, configure)` | None | Registers a stable User Spot type. `configure` receives exactly one of `preserve_state_with<TAdapter>`/`recreate_on_relocation`/`disable_relocation`, in addition to `set_stable_type_limit`/`set_execution_mode`/`set_relocation_coordination_mode` |
 | `.add_instance_spot_factory<TSpot>(stable_type, factory, configure)` | None | Registers a cold-activation Instance Spot type. `configure` receives exactly one relocation policy, in addition to `set_stable_type_limit` |
 | `.add_actor_factory<TActor, TFactory>(stable_type, factory, configure)` | None | Registers a stable Actor type. `configure` receives exactly one relocation policy (an Actor factory has no `stable_type_limit`) |
 

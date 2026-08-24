@@ -635,7 +635,7 @@ public sealed partial class RegressionTests
             payloadFactoryStart >= 0 && nextFactoryStart > payloadFactoryStart,
             "The registered RelocationPayloadUserSpot factory was not found.");
         Assert.DoesNotContain(
-            ".RelocationReadiness(",
+            ".RelocationCoordinationMode(",
             host[payloadFactoryStart..nextFactoryStart],
             StringComparison.Ordinal);
         var payloadSpotStart = actorRuntime.IndexOf(

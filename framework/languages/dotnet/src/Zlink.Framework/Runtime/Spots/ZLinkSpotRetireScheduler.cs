@@ -321,8 +321,8 @@ internal sealed class ZLinkSpotRetireScheduler(
         ZLinkSpotRelocationSeal admittedSeal;
         try
         {
-            admittedSeal = activation.RelocationReadiness
-                           == ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+            admittedSeal = activation.RelocationCoordinationMode
+                           == ZLinkSpotRelocationCoordinationMode.ApplicationSignaled
                 ? await activation
                     .WaitForRelocationReadyTurnAsync(cancellationToken)
                     .ConfigureAwait(false)

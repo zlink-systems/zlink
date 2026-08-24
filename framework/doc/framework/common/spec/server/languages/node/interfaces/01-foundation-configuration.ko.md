@@ -38,8 +38,8 @@ export declare enum ZLinkUserSpotExecutionMode {
     PerActor = "per_actor"
 }
 
-export declare enum ZLinkSpotRelocationReadinessMode {
-    AnyTurnBoundary = "any_turn_boundary",
+export declare enum ZLinkSpotRelocationCoordinationMode {
+    FrameworkManaged = "framework_managed",
     ApplicationSignaled = "application_signaled"
 }
 
@@ -117,7 +117,7 @@ export interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
 export interface ZLinkUserSpotFactoryBuilder<TSpot extends ZLinkSpot> {
     stableTypeLimit(limit: number): this;
     executionMode(mode: ZLinkUserSpotExecutionMode): this;
-    relocationReadiness(mode: ZLinkSpotRelocationReadinessMode): this;
+    relocationCoordinationMode(mode: ZLinkSpotRelocationCoordinationMode): this;
     disableRelocation(): void;
     recreateOnRelocation(): void;
     preserveStateWith(adapterType: Type<ZLinkSpotRelocationAdapter<TSpot>>): void;
@@ -351,7 +351,7 @@ route는 operation identity, generation, deadline, correlation과 reply route를
 relay한다. Actor queue seal부터 target admission까지 1초는 운영 목표이며 초과해도
 relocation을 취소하거나 rollback하지 않는다.
 
-`relocationReadiness`를 생략하면 `AnyTurnBoundary`다. `ApplicationSignaled`는
+`relocationCoordinationMode`를 생략하면 `FrameworkManaged`다. `ApplicationSignaled`는
 `SpotWide`에서만 허용하며 `PerActor`와 함께 등록하면 socket bind 전에
 startup configuration error다. Spot callback은 optional이며 없으면 no-op으로 처리한다.
 

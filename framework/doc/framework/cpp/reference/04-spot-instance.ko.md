@@ -328,7 +328,7 @@ co_await entry_context_.destroy_actor(actor); // Entry Spot: Actor를 완전히 
 
 ## `relocation_ready().defer()` (Spot 코드 안)
 
-`application_signaled` readiness mode를 선택한 `spot_wide` Spot에서, relocation 경계를 다음
+`application_signaled` coordination mode를 선택한 `spot_wide` Spot에서, relocation 경계를 다음
 application turn 앞으로 미룬다.
 
 ```cpp
@@ -339,11 +339,11 @@ context_.relocation_ready().defer();
 
 **완료 결과.** 반환값 없음. 현재 handler가 끝난 뒤 relocation 경계를 등록한다. 이동하지 않았거나
 commit 전에 abort했으면 source에서 `continued`, 이동했으면 target에서 `relocated` completion을
-`on_relocation_ready_completed(...)`로 받는다. `any_turn_boundary` mode, `per_actor` Spot, Entry·
+`on_relocation_ready_completed(...)`로 받는다. `framework_managed` mode, `per_actor` Spot, Entry·
 Instance Spot, Spot turn 밖, 같은 turn의 중복 호출은 `invalid_operation`으로 완료한다.
 
 **선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 쓴다.
-기본 `any_turn_boundary` mode에서는 이 호출이 필요하지 않다.
+기본 `framework_managed` mode에서는 이 호출이 필요하지 않다.
 
 ---
 

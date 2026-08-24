@@ -25,7 +25,7 @@ import type { ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import type { ZLinkNetworkOptions } from './Builders';
 import type { ZLinkLocationOptionValues } from '../RouteMesh';
 import {
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from './ObjectRoles';
 
@@ -42,7 +42,7 @@ export interface ZLinkActorFactoryConfiguration {}
 export interface ZLinkUserSpotFactoryConfiguration {
   readonly stableTypeLimit?: number;
   readonly executionMode: ZLinkUserSpotExecutionMode;
-  readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
+  readonly relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode;
 }
 
 export interface ZLinkInstanceSpotFactoryConfiguration {

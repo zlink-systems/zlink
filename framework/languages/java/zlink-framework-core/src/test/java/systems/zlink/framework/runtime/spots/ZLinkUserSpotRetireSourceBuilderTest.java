@@ -479,9 +479,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             factory -> {
                 factory.preserveStateWith(SnapshotAdapter.class);
                 if (applicationSignaled) {
-                    factory.relocationReadiness(
+                    factory.relocationCoordinationMode(
                         systems.zlink.framework.configuration
-                            .ZLinkSpotRelocationReadinessMode
+                            .ZLinkSpotRelocationCoordinationMode
                             .APPLICATION_SIGNALED);
                 }
             });

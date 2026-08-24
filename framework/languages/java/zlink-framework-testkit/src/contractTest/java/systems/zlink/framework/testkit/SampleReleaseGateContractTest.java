@@ -2017,7 +2017,7 @@ final class SampleReleaseGateContractTest {
                 && playHostSource.contains("addClientServerChannel(SampleNames.ApiChannel).client()")
                 && playHostSource.contains("ZLinkRedisRelocationStore")
                 && playHostSource.contains("ZLinkUserSpotExecutionMode.SPOT_WIDE")
-                && playHostSource.contains("ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED")
+                && playHostSource.contains("ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED")
                 && playHostSource.contains("preserveStateWith(BingoRoomRelocationAdapter.class)")
                 && !playHostSource.contains("addRequestHandler"),
             "Bingo Api/Play roles must separate ClientServer from RouteMesh and configure relocatable rooms");
@@ -2274,7 +2274,7 @@ final class SampleReleaseGateContractTest {
                 && playHostSource.contains("addClientServerChannel(SampleNames.ApiChannel).client()")
                 && playHostSource.contains("ZLinkRedisRelocationStore")
                 && playHostSource.contains("ZLinkUserSpotExecutionMode.SPOT_WIDE")
-                && playHostSource.contains("ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED")
+                && playHostSource.contains("ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED")
                 && playHostSource.contains("preserveStateWith(BingoRoomRelocationAdapter::class.java)")
                 && !playHostSource.contains("addRequestHandler"),
             "Kotlin Bingo Api/Play roles must separate ClientServer from RouteMesh and configure relocatable rooms");

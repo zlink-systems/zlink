@@ -71,6 +71,7 @@ class app_t
     message_flow_log_mode_t message_flow_mode () const noexcept;
 
     app_t &add_module (module_t &module);
+    zlink_framework_options_t &add_zlink_framework ();
     app_t &add_zlink_framework (std::function<void (zlink_framework_options_t &)> configure);
     template <typename TModule, typename... TArgs>
     requires framework_module_contract_t<TModule> app_t &add_zlink_framework (TArgs &&...args)
@@ -85,12 +86,11 @@ class app_t
 
     int run (int argc, char **argv);
 
-    task_t<relocation_result_t> relocate (
-      relocation_options_t options,
-      std::stop_token wait_cancellation = {});
-    task_t<termination_result_t> shutdown (
-      std::chrono::milliseconds deadline = std::chrono::seconds (30),
-      std::stop_token wait_cancellation = {});
+    task_t<relocation_result_t> relocate (relocation_options_t options,
+                                          std::stop_token wait_cancellation = {});
+    task_t<termination_result_t>
+    shutdown (std::chrono::milliseconds deadline = std::chrono::seconds (30),
+              std::stop_token wait_cancellation = {});
     framework_runtime_state_t runtime_state () const noexcept;
     bool is_ready () const noexcept;
 
@@ -107,6 +107,7 @@ class app_t
     handler_registry_t &_handlers () noexcept;
     zlink_builder_t &_zlink_builder () noexcept;
     serializer_registry_t &_serializers () noexcept;
+    void _apply_zlink_framework ();
 
     std::unique_ptr<detail::app_state_t> _state;
 };

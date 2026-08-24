@@ -2275,7 +2275,7 @@ chosen at factory registration.
 
 | Mode | Who decides the safe point | Applies to |
 | --- | --- | --- |
-| `AnyTurnBoundary` (default) | The Framework -- between a completed turn and the next | Most Spots |
+| `FrameworkManaged` (default) | The Framework -- between a completed turn and the next | Most Spots |
 | `ApplicationSignaled` | The application -- the end of the turn that called `Defer()` | A Spot whose state-consistency unit spans multiple turns |
 
 **The condition under which the default mode holds.** The Framework doesn't interrupt a
@@ -2299,8 +2299,8 @@ until the point the application signals.
             "game-room",
             factory => factory
                 .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide) // Only usable in this mode.
-                .RelocationReadiness(
-                    ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+                .RelocationCoordinationMode(
+                    ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
                 .PreserveStateWith<GameRoomRelocationAdapter>());
     ```
 
@@ -2314,7 +2314,7 @@ until the point the application signals.
         [] (auto &factory) {
             // Only usable in this mode.
             factory.execution_mode (user_spot_execution_mode_t::spot_wide);
-            factory.relocation_readiness (spot_relocation_readiness_mode_t::application_signaled);
+            factory.set_relocation_coordination_mode (spot_relocation_coordination_mode_t::application_signaled);
             factory.template preserve_state_with<game_room_relocation_adapter_t> ();
         });
     ```
@@ -2329,7 +2329,7 @@ until the point the application signals.
             factory -> factory
                 // Only usable in this mode.
                 .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                .relocationReadiness(ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED)
+                .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED)
                 .preserveStateWith(GameRoomRelocationAdapter.class));
     ```
 
@@ -2341,7 +2341,7 @@ until the point the application signals.
             factory
                 // Only usable in this mode.
                 .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                .relocationReadiness(ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED)
+                .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED)
                 .preserveStateWith(GameRoomRelocationAdapter::class.java)
         }
     ```
@@ -2353,7 +2353,7 @@ until the point the application signals.
       .addSpotFactory('game-room', GameRoom, (factory) => factory
         // Only usable in this mode.
         .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
-        .relocationReadiness(ZLinkSpotRelocationReadinessMode.ApplicationSignaled)
+        .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
         .preserveStateWith(GameRoomRelocationAdapter));
     ```
 
@@ -2514,7 +2514,7 @@ Follow these rules.
   operation (send, request, close, etc.) in the same turn afterward is an error.
 - **Call it only once per turn.** A second `Defer()` in the same turn is an error.
 - **It's exclusive to a `SpotWide` User Spot.** It can't be called from an Entry Spot, a
-  `PerActor` User Spot, an Instance Spot, or under the default `AnyTurnBoundary` mode.
+  `PerActor` User Spot, an Instance Spot, or under the default `FrameworkManaged` mode.
 
 ## 8. Related Documents
 

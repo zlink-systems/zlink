@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_configuration.hpp"
-#include "../common_codecs.hpp"
+#include "../../Shared/Contracts/messages.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 
 #include <chrono>
@@ -66,8 +66,7 @@ class quest_event_store_t
         auto &stream = _streams[event.player_id];
         const auto already_applied =
           std::any_of (stream.begin (), stream.end (), [&] (const stored_quest_event_t &stored) {
-              return stored.source_event_id
-                     && *stored.source_event_id == event.event_id;
+              return stored.source_event_id && *stored.source_event_id == event.event_id;
           });
         if (already_applied) {
             /* reward 멱등: 이미 반영한 gameplay event는 stream을 늘리지 않고 현재 projection만
@@ -130,9 +129,8 @@ class quest_event_store_t
         const std::lock_guard lock (_mutex);
         auto &projection = _projections[player_id];
         projection.erase (
-          std::remove_if (projection.begin (), projection.end (), [&] (const auto &item) {
-              return item.quest_id == quest_id;
-          }),
+          std::remove_if (projection.begin (), projection.end (),
+                          [&] (const auto &item) { return item.quest_id == quest_id; }),
           projection.end ());
     }
 
@@ -223,11 +221,9 @@ class quest_event_store_t
             return projection;
         }
         for (const auto &stored : stream->second) {
-            auto found =
-              std::find_if (projection.begin (), projection.end (),
-                            [&] (const quest_progress_t &item) {
-                                return item.quest_id == stored.quest_id;
-                            });
+            auto found = std::find_if (
+              projection.begin (), projection.end (),
+              [&] (const quest_progress_t &item) { return item.quest_id == stored.quest_id; });
             if (found == projection.end ()) {
                 quest_progress_t progress;
                 progress.player_id = stored.player_id;
@@ -271,16 +267,12 @@ class player_quest_spot_t : public instance_spot_t
                          quest_event_store_t &store,
                          actor_directory_t &directory,
                          actor_client_t &actors) :
-        _store (store), _directory (directory), _actors (actors),
-        _context (std::move (context))
+        _store (store), _directory (directory), _actors (actors), _context (std::move (context))
     {
     }
 
     instance_spot_context_t &context () noexcept override { return _context; }
-    const instance_spot_context_t &context () const noexcept override
-    {
-        return _context;
-    }
+    const instance_spot_context_t &context () const noexcept override { return _context; }
 
     void configure () override
     {
@@ -296,10 +288,7 @@ class player_quest_spot_t : public instance_spot_t
     {
         const auto spot_id = _context.spot_id ();
         constexpr std::string_view prefix = "player:";
-        _player_id =
-          spot_id.starts_with (prefix)
-            ? spot_id.substr (prefix.size ())
-            : spot_id;
+        _player_id = spot_id.starts_with (prefix) ? spot_id.substr (prefix.size ()) : spot_id;
         _store.rehydrate_owner (_player_id);
         std::cerr << "gamequest player quest spot ready player=" << _player_id
                   << " spot=" << _player_id << "\n";
@@ -319,8 +308,8 @@ class player_quest_spot_t : public instance_spot_t
         }
         co_await _actors
           .send (actor->actor_id (),
-                          notify_quest_progress_msg_t{message.player_id, result.projection,
-                                                      result.completed_quest_id})
+                 notify_quest_progress_msg_t{message.player_id, result.projection,
+                                             result.completed_quest_id})
           .submit ();
         std::cerr << "gamequest mission notified player=" << message.player_id
                   << " completed=" << result.completed_quest_id << "\n";
@@ -330,12 +319,11 @@ class player_quest_spot_t : public instance_spot_t
     sync_quest_progress_res_t sync (const sync_quest_progress_owner_req_t &request)
     {
         if (request.snapshot_kill_count > 0) {
-            const gameplay_msg_t snapshot{
-              request.player_id + "-snapshot-" + std::to_string (request.snapshot_kill_count),
-              request.player_id,
-              "SnapshotKillCount",
-              gameplay_payload ("kills", request.snapshot_kill_count),
-              static_cast<long long> (std::time (nullptr)) * 1000LL};
+            const gameplay_msg_t snapshot{request.player_id + "-snapshot-"
+                                            + std::to_string (request.snapshot_kill_count),
+                                          request.player_id, "SnapshotKillCount",
+                                          gameplay_payload ("kills", request.snapshot_kill_count),
+                                          static_cast<long long> (std::time (nullptr)) * 1000LL};
             return {_store.apply (decode_gameplay (snapshot)).projection};
         }
         return {_store.projection (request.player_id)};
@@ -356,20 +344,17 @@ class player_quest_spot_t : public instance_spot_t
     {
         if (request.operation == "delete") {
             _store.delete_projection (request.player_id, request.quest_id);
-            co_return projection_admin_res_t{
-              true, _store.projection (request.player_id)};
+            co_return projection_admin_res_t{true, _store.projection (request.player_id)};
         }
         if (request.operation == "rebuild") {
-            co_return projection_admin_res_t{
-              true, _store.rebuild_projection (request.player_id)};
+            co_return projection_admin_res_t{true, _store.rebuild_projection (request.player_id)};
         }
         if (request.operation == "deactivate") {
             const auto projection = _store.projection (request.player_id);
             (void) co_await _context.close ();
             co_return projection_admin_res_t{true, projection};
         }
-        co_return projection_admin_res_t{
-          false, _store.projection (request.player_id)};
+        co_return projection_admin_res_t{false, _store.projection (request.player_id)};
     }
 
   private:
@@ -390,41 +375,32 @@ int main (int argc, char **argv)
     auto app = app_t::create ();
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
-    auto quest_store = std::make_unique<quest_event_store_t> ();
-    auto *quest_store_ptr = quest_store.get ();
     app.logging ().use_file (configuration.flow_log_path ());
-    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-        options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal);
-        options.services ().add_singleton<quest_event_store_t> (std::move (quest_store));
-        options.services ().add_singleton<sample_topology_t> (
-          std::make_unique<sample_topology_t> (topology));
-        add_gamequest_json_codecs (options.codecs ());
-        add_gamequest_location_store (options, topology);
-        /* QuestMission은 PlayerQuestSpot factory를 제공하는 Object Server다. API와
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+    options.services ().add_singleton<quest_event_store_t> ();
+    options.services ().add_singleton<sample_topology_t> (
+      std::make_unique<sample_topology_t> (topology));
+    options.add_location_store<redis::redis_location_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix);
+    options.add_relocation_store<redis::redis_relocation_store_t> ()
+      .set_connection_string (topology.redis_endpoint)
+      .set_key_prefix (topology.redis_key_prefix + "relocation:");
+    /* QuestMission은 PlayerQuestSpot factory를 제공하는 Object Server다. API와
          * 같은 RouteMesh를 사용하므로 별도 spot router와 ChannelName을 만들지 않는다. */
-        auto gamequest = options.add_route_mesh ("gamequest");
-        gamequest
-          .set_routing_id (zlink::routing_id_t::from (
-            "gamequest-" + topology.mission_name + "-spot"))
-          .set_object_role (object_role_t::server)
-          .listen (topology.selected_mission_spot_route_endpoint ());
-        /* GameApi owns the outbound peer connections for this RouteMesh. A
+    auto gamequest = options.add_route_mesh ("gamequest");
+    gamequest
+      .set_routing_id (zlink::routing_id_t::from ("gamequest-" + topology.mission_name + "-spot"))
+      .listen (topology.selected_mission_spot_route_endpoint ());
+    /* GameApi owns the outbound peer connections for this RouteMesh. A
          * RouteMesh connection carries traffic in both directions, so the
          * owner spot can send notifications over the accepted API link
          * without creating a duplicate admission path here. */
-        auto spot_services = options.services ().build_provider ();
-        gamequest.add_instance_spot_factory<player_quest_spot_t> (
-            sample_names_t::player_quest_spot,
-            [quest_store_ptr, spot_services] (
-              instance_spot_context_t context) mutable {
-                return std::make_shared<player_quest_spot_t> (
-                  std::move (context),
-                  *quest_store_ptr,
-                  spot_services.get_required<actor_directory_t> (),
-                  spot_services.get_required<actor_client_t> ());
-            },
-            [] (auto &factory) { factory.disable_relocation (); });
-    });
+    gamequest.objects ()
+      .server ()
+      .add_instance_spot_factory<player_quest_spot_t, quest_event_store_t, actor_directory_t,
+                                 actor_client_t> (sample_names_t::player_quest_spot)
+      .disable_relocation ();
     return app.run (argc, argv);
 }

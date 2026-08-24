@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
 import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
@@ -42,7 +42,7 @@ function activation(
     domain: {
       kind: 'user',
       executionMode,
-      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.FrameworkManaged
     },
     timers,
     actorHandlers: {} as never,
@@ -171,7 +171,7 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
     domain: {
       kind: 'user',
       executionMode: ZLinkUserSpotExecutionMode.SpotWide,
-      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.FrameworkManaged
     },
     spotType: class ClosingSpot {} as never,
     spot: {

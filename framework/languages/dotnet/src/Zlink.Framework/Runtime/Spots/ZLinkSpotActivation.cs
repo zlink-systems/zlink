@@ -57,8 +57,8 @@ internal abstract partial class ZLinkSpotActivation :
         TimeSpan defaultRequestTimeout,
         TimeSpan? sendTimeout,
         ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide,
-        ZLinkSpotRelocationReadinessMode relocationReadiness =
-            ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
+        ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
+            ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
         bool restoreLogicalTimers = false,
         ZLinkTimerScheduler? timerScheduler = null)
     {
@@ -81,7 +81,7 @@ internal abstract partial class ZLinkSpotActivation :
             nameof(channelName));
         DefaultRequestTimeout = defaultRequestTimeout;
         ExecutionMode = executionMode;
-        RelocationReadiness = relocationReadiness;
+        RelocationCoordinationMode = relocationCoordinationMode;
         _outbound = new ZLinkSpotOutboundTransport(
             nativeSpot,
             sendTimeout,
@@ -160,7 +160,7 @@ internal abstract partial class ZLinkSpotActivation :
 
     public ZLinkUserSpotExecutionMode ExecutionMode { get; }
 
-    internal ZLinkSpotRelocationReadinessMode RelocationReadiness { get; }
+    internal ZLinkSpotRelocationCoordinationMode RelocationCoordinationMode { get; }
 
     internal ZLinkPerActorShellRelocationPlan?
         PerActorShellRelocationPlan =>
@@ -280,8 +280,8 @@ internal sealed class ZLinkUserSpotActivation :
         TimeSpan defaultRequestTimeout,
         TimeSpan? sendTimeout,
         ZLinkUserSpotExecutionMode executionMode = ZLinkUserSpotExecutionMode.SpotWide,
-        ZLinkSpotRelocationReadinessMode relocationReadiness =
-            ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
+        ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
+            ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
         bool restoreLogicalTimers = false,
         ZLinkTimerScheduler? timerScheduler = null)
         : base(
@@ -295,7 +295,7 @@ internal sealed class ZLinkUserSpotActivation :
             defaultRequestTimeout,
             sendTimeout,
             executionMode,
-            relocationReadiness,
+            relocationCoordinationMode,
             restoreLogicalTimers,
             timerScheduler)
     {

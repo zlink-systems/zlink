@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "../Configuration/configuration.hpp"
-#include "../Configuration/location_store.hpp"
 #include "../Configuration/maintenance_store.hpp"
 #include "player_actor_relocation_adapter.hpp"
 #include "../../Shared/world_rules.hpp"
 
 #include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -768,47 +768,42 @@ int main (int argc, char **argv)
       .add_spot_events (names_t::mesh)
       .on_spot_event (
         [] (const fw::spot_event_t &event) { g_node_state->record_spot_event (event); });
-    app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
-        if (configuration.subscriber_only) {
-            options.handlers ()
-              .group ("zoneworld-extra-broadcast")
-              .add_publish<extra_announce_handler_t> ();
-            options.add_fanout_channel (names_t::broadcast_channel)
-              .enable_subscriber ()
-              .use_handler_group ("zoneworld-extra-broadcast");
-            return;
-        }
-
-        add_stores (options, configuration);
+    auto &options = app.add_zlink_framework ();
+    if (configuration.subscriber_only) {
+        options.handlers ()
+          .group ("zoneworld-extra-broadcast")
+          .add_publish<extra_announce_handler_t> ();
+        options.add_fanout_channel (names_t::broadcast_channel)
+          .enable_subscriber ()
+          .use_handler_group ("zoneworld-extra-broadcast");
+    } else {
+        options.add_location_store<fw::redis::redis_location_store_t> ()
+          .set_connection_string (configuration.redis_endpoint)
+          .set_key_prefix (configuration.redis_key_prefix + "location:");
+        options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+          .set_connection_string (configuration.redis_endpoint)
+          .set_key_prefix (configuration.redis_key_prefix + "relocation:");
         auto mesh = options.add_route_mesh (names_t::mesh);
-        mesh.set_automatic_routing_id_prefix ("zn").set_object_role (fw::object_role_t::server);
+        mesh.set_automatic_routing_id_prefix ("zn");
         if (configuration.mesh_advertise_host)
             mesh.set_advertise_host (*configuration.mesh_advertise_host);
         mesh.listen (configuration.mesh_endpoint);
-        mesh.channel_name (names_t::zone_channel).server ();
-        mesh.channel_name (names_t::report_channel).client ();
-        mesh.channel_name (names_t::ops_channel (configuration.node_id))
+        mesh.channel (names_t::zone_channel).server ();
+        mesh.channel (names_t::report_channel).client ();
+        mesh.channel (names_t::ops_channel (configuration.node_id))
           .server ()
           .add_request_handler<apply_maintenance_handler_t, apply_node_maintenance_req_t,
                                apply_node_maintenance_res_t> ()
           .add_request_handler<diagnostics_handler_t, get_node_diagnostics_req_t,
                                get_node_diagnostics_res_t> ();
-        auto spot_services = options.services ().build_provider ();
-        mesh
-          .add_entry_spot<zone_entry_spot_t> ([] (fw::entry_spot_context_t context) {
-              return std::make_shared<zone_entry_spot_t> (std::move (context));
-          })
-          .add_spot_factory<zone_spot_t> (
-            names_t::zone_spot,
-            [spot_services] (fw::spot_context_t context) mutable {
-                return std::make_shared<zone_spot_t> (
-                  std::move (context), spot_services.get_required<fw::actor_client_t> ());
-            },
-            [] (auto &factory) { factory.set_stable_type_limit (2).disable_relocation (); })
-          .add_actor_factory<player_actor_t, player_actor_factory_t> (
-            names_t::player_actor, std::make_shared<player_actor_factory_t> (), [] (auto &factory) {
-                factory.template preserve_state_with<player_relocation_adapter_t> ();
-            });
+        mesh.objects ()
+          .server ()
+          .add_entry_spot<zone_entry_spot_t> ()
+          .add_spot_factory<zone_spot_t, fw::actor_client_t> (names_t::zone_spot)
+          .set_stable_type_limit (2)
+          .disable_relocation ()
+          .add_actor_factory<player_actor_t, player_actor_factory_t> (names_t::player_actor)
+          .preserve_state_with<player_relocation_adapter_t> ();
         options.handlers ()
           .group ("zoneworld-broadcast")
           .add_publish<maintenance_fanout_handler_t> ()
@@ -817,7 +812,7 @@ int main (int argc, char **argv)
           .enable_subscriber ()
           .use_handler_group ("zoneworld-broadcast");
         options.http ().listen (configuration.bootstrap_http_endpoint).map_health ("/health");
-    });
+    }
     if (!configuration.subscriber_only)
         app.add_hosted_service (std::make_unique<node_report_service_t> ());
     std::cout << "zoneworld-role-ready role=zone-node node=" << configuration.node_id

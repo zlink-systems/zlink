@@ -409,8 +409,8 @@ generation, deadline, correlation과 reply route를 보존해 relay한다. Actor
 cutover submit의 성공 또는 실패 terminal까지 source-local 1초는 운영 목표이며 초과해도 relocation을
 취소하거나 rollback하지 않는다.
 
-Factory configure callback에서 `relocationReadiness(...)`를 생략하면
-`ANY_TURN_BOUNDARY`다. `APPLICATION_SIGNALED`은 `SPOT_WIDE`에서만 허용한다.
+Factory configure callback에서 `relocationCoordinationMode(...)`를 생략하면
+`FRAMEWORK_MANAGED`다. `APPLICATION_SIGNALED`은 `SPOT_WIDE`에서만 허용한다.
 이 mode의 Spot turn에서는 `context.relocationReady().defer()`로 현재 turn 뒤의
 경계를 등록한다. Framework는 source의 `CONTINUED` 또는 target의 `RELOCATED`
 completion을 `onRelocationReadyCompletedSuspending(...)`에 전달하며 기본 구현은

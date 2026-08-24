@@ -15,7 +15,7 @@ import systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -201,8 +201,8 @@ public final class SpotBuilders {
             return this;
         }
         @Override
-        public ZLinkUserSpotFactoryBuilder<TSpot> relocationReadiness(
-            ZLinkSpotRelocationReadinessMode mode) {
+        public ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(
+            ZLinkSpotRelocationCoordinationMode mode) {
             return this;
         }
         @Override public void disableRelocation() { select(); }

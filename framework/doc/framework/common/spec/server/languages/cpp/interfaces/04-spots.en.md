@@ -40,8 +40,8 @@ class user_spot_factory_builder_t {
 public:
     user_spot_factory_builder_t &set_stable_type_limit(std::int32_t limit);
     user_spot_factory_builder_t &set_execution_mode(user_spot_execution_mode_t mode);
-    user_spot_factory_builder_t &set_relocation_readiness(
-      spot_relocation_readiness_mode_t mode);
+    user_spot_factory_builder_t &set_relocation_coordination_mode(
+      spot_relocation_coordination_mode_t mode);
     void disable_relocation();
     void recreate_on_relocation();
     template <typename TAdapter>
@@ -848,7 +848,7 @@ the target if it moved, to
 implementation is a no-op. Before callback completion, pending
 application messages and timers aren't run.
 
-A duplicate `defer()` in the default `any_turn_boundary`, `per_actor`,
+A duplicate `defer()` in the default `framework_managed`, `per_actor`,
 Entry/Instance Spot, or outside a Spot turn on the same turn fails with
 `invalid_operation` before queue mutation. A different Framework
 operation on the same turn after `defer()` is the same error. Since a

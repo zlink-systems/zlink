@@ -23,7 +23,7 @@ import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 
 final class ZLinkSpotActivationFactory {
     private final ZLinkSpotRuntime host;
@@ -34,8 +34,8 @@ final class ZLinkSpotActivationFactory {
     private final Map<
         Class<? extends ZLinkSpot<?>>, ZLinkUserSpotExecutionMode> executionModes;
     private final Map<
-        Class<? extends ZLinkSpot<?>>, ZLinkSpotRelocationReadinessMode>
-            relocationReadinessModes;
+        Class<? extends ZLinkSpot<?>>, ZLinkSpotRelocationCoordinationMode>
+            relocationCoordinationModes;
 
     ZLinkSpotActivationFactory(
         ZLinkSpotRuntime host,
@@ -46,16 +46,16 @@ final class ZLinkSpotActivationFactory {
         Map<
             Class<? extends ZLinkSpot<?>>, ZLinkUserSpotExecutionMode> executionModes,
         Map<
-            Class<? extends ZLinkSpot<?>>, ZLinkSpotRelocationReadinessMode>
-                relocationReadinessModes) {
+            Class<? extends ZLinkSpot<?>>, ZLinkSpotRelocationCoordinationMode>
+                relocationCoordinationModes) {
         this.host = host;
         this.workerPool = workerPool;
         this.handlerLoader = handlerLoader;
         this.handlerInvoker = handlerInvoker;
         this.handlerFactory = handlerFactory;
         this.executionModes = Map.copyOf(executionModes);
-        this.relocationReadinessModes =
-            Map.copyOf(relocationReadinessModes);
+        this.relocationCoordinationModes =
+            Map.copyOf(relocationCoordinationModes);
     }
 
     CompletionStage<SpotActivationCreateResult> activate(
@@ -76,9 +76,9 @@ final class ZLinkSpotActivationFactory {
                 ZLinkUserSpotExecutionMode.SPOT_WIDE),
             ZLinkInstanceSpot.class.isAssignableFrom(spotType),
             null,
-            relocationReadinessModes.getOrDefault(
+            relocationCoordinationModes.getOrDefault(
                 spotType,
-                ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY));
+                ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
         ZLinkSpot<?> spot;
         try {
             spot = createSpot(spotType, context);

@@ -22,7 +22,7 @@ import {
   ZLinkFrameworkException,
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
-  ZLinkSpotRelocationReadinessMode,
+  ZLinkSpotRelocationCoordinationMode,
   ZLinkSpotRelocationReadyOutcome,
   ZLinkSpotKind,
   ZLinkUserSpotExecutionMode
@@ -4245,8 +4245,8 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       );
       const applicationSignaled =
         hidden.participant.objectKind === 'user_spot'
-        && registration.options?.relocationReadiness
-          === ZLinkSpotRelocationReadinessMode.ApplicationSignaled;
+        && registration.options?.relocationCoordinationMode
+          === ZLinkSpotRelocationCoordinationMode.ApplicationSignaled;
       await this.requireSpotManager().publishRelocationSpot(
         hidden.activation,
         applicationSignaled

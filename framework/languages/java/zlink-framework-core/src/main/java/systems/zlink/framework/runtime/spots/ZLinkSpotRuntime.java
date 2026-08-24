@@ -515,8 +515,8 @@ public final class ZLinkSpotRuntime
                 initializedSpotExecutionModes = new HashMap<>();
         Map<Class<? extends ZLinkSpot<?>>,
             systems.zlink.framework.configuration
-                .ZLinkSpotRelocationReadinessMode>
-                initializedSpotRelocationReadiness = new HashMap<>();
+                .ZLinkSpotRelocationCoordinationMode>
+                initializedSpotRelocationCoordinationModes = new HashMap<>();
         List<EntrySpotInitialization> entrySpotInitializations =
             new ArrayList<>();
         for (SpotNodeRegistration nodeRegistration : registration.spotNodes()) {
@@ -570,10 +570,10 @@ public final class ZLinkSpotRuntime
                     systems.zlink.framework.configuration
                         .ZLinkUserSpotExecutionMode.SPOT_WIDE));
             nodeRegistration.spotFactories().forEach(type ->
-                initializedSpotRelocationReadiness.putIfAbsent(
+                initializedSpotRelocationCoordinationModes.putIfAbsent(
                     type,
                     systems.zlink.framework.configuration
-                        .ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY));
+                        .ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
             if (nodeRegistration.pubSubEnabled()) {
                 publishers.register(nodeRegistration.meshName(), node);
             }
@@ -639,10 +639,10 @@ public final class ZLinkSpotRuntime
                     systems.zlink.framework.configuration
                         .ZLinkUserSpotExecutionMode.SPOT_WIDE));
             nodeRegistration.spotFactories().forEach(type ->
-                initializedSpotRelocationReadiness.putIfAbsent(
+                initializedSpotRelocationCoordinationModes.putIfAbsent(
                     type,
                     systems.zlink.framework.configuration
-                        .ZLinkSpotRelocationReadinessMode.ANY_TURN_BOUNDARY));
+                        .ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
             nodeRegistration.relocatableSpotFactories().values().forEach(factory -> {
                 var previous = initializedSpotExecutionModes.put(
                     factory.spotType(),
@@ -654,9 +654,9 @@ public final class ZLinkSpotRuntime
                             + "execution modes: "
                             + factory.spotType().getName());
                 }
-                initializedSpotRelocationReadiness.put(
+                initializedSpotRelocationCoordinationModes.put(
                     factory.spotType(),
-                    factory.options().relocationReadiness());
+                    factory.options().relocationCoordinationMode());
             });
             if (!nodeRegistration.channelNames().isEmpty()) {
                 publishers.register(nodeRegistration.meshName(), node);
@@ -697,7 +697,7 @@ public final class ZLinkSpotRuntime
             spotHandlerInvoker,
             handlerFactory,
             initializedSpotExecutionModes,
-            initializedSpotRelocationReadiness);
+            initializedSpotRelocationCoordinationModes);
         this.spotLifecycle = new ZLinkSpotLifecycle(
             primaryNode,
             primaryNodeSourceName,

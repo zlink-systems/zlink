@@ -315,7 +315,7 @@ entryContext.destroyActor(actor).toCompletableFuture().get();  // Entry Spot: Ac
 
 ## `relocationReady().defer()` (Spot 코드 안)
 
-`APPLICATION_SIGNALED` readiness mode를 선택한 `SPOT_WIDE` Spot에서, relocation 경계를 다음
+`APPLICATION_SIGNALED` coordination mode를 선택한 `SPOT_WIDE` Spot에서, relocation 경계를 다음
 application turn 앞으로 미룬다.
 
 ```java
@@ -326,11 +326,11 @@ context.relocationReady().defer();
 
 **완료 결과.** 반환값 없음. 현재 handler가 끝난 뒤 relocation 경계를 등록한다. 이동하지 않았거나
 commit 전에 abort했으면 source에서 `CONTINUED`, 이동했으면 target에서 `RELOCATED` completion을
-`onRelocationReadyCompleted(...)`로 받는다. `ANY_TURN_BOUNDARY` mode, `PER_ACTOR` Spot, Entry·
+`onRelocationReadyCompleted(...)`로 받는다. `FRAMEWORK_MANAGED` mode, `PER_ACTOR` Spot, Entry·
 Instance Spot, Spot turn 밖, 같은 turn의 중복 호출은 `INVALID_OPERATION`으로 완료한다.
 
 **선택 기준.** Application이 relocation 시점을 특정 turn 경계로 정밀하게 제어해야 할 때 쓴다.
-기본 `ANY_TURN_BOUNDARY` mode에서는 이 호출이 필요하지 않다.
+기본 `FRAMEWORK_MANAGED` mode에서는 이 호출이 필요하지 않다.
 
 ---
 
