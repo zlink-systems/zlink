@@ -466,6 +466,47 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
   ]);
 });
 
+test('rejected deferred Join yields its completion turn while source backlog replays', async () => {
+  const events = [];
+  const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
+  const completionResult = {
+    accepted: false,
+    async finalizeDeferredJoin() {
+      events.push('finalize:start');
+      await serial.post(() => {
+        events.push('source:replayed');
+      });
+      events.push('finalize:end');
+    }
+  };
+  const { actor, context } = actorHarness(events, completionResult);
+  actor.onJoinCompleted = async (completion) => {
+    events.push(`completion:${completion.status}`);
+  };
+
+  const completed = serial.execute(() => runActorHandlerWithDeferredJoins(() => {
+    events.push('handler');
+    context.joinSpot('room-b').defer();
+  }));
+  await Promise.race([
+    completed,
+    new Promise((_, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error('source backlog replay deadlocked behind Join completion')),
+        1_000
+      );
+      timeout.unref();
+    })
+  ]);
+
+  assert.deepEqual(events.slice(-4), [
+    'completion:rejected',
+    'finalize:start',
+    'source:replayed',
+    'finalize:end'
+  ]);
+});
+
 test('SpotWide deferred Actor Join yields the shared Spot gate while waiting for the target', async () => {
   const events = [];
   let signalJoinStarted;

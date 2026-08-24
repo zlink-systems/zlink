@@ -90,6 +90,7 @@ export type RawServiceIngressHandler = (
 
 export interface RawServiceMeshRuntimeOptions {
   readonly descriptor: ServiceNodeDescriptor;
+  readonly resolveAdvertisedEndpoint?: (boundEndpoint: string) => string;
   readonly mailbox?: Partial<ServiceMailboxLimits>;
   readonly probeIntervalMs?: number;
   readonly peerTimeoutMs?: number;
@@ -178,6 +179,7 @@ export class RawServiceMeshRuntime {
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
   private readonly onProtocolError?: RawServiceMeshRuntimeOptions['onProtocolError'];
+  private readonly resolveAdvertisedEndpoint?: RawServiceMeshRuntimeOptions['resolveAdvertisedEndpoint'];
   private descriptor: ServiceNodeDescriptor;
   private host?: ZLinkRawHostPort;
   private router?: ZLinkRawRouterPort;
@@ -199,6 +201,7 @@ export class RawServiceMeshRuntime {
     this.onPeerNotRequired = options.onPeerNotRequired;
     this.onPeerDisconnected = options.onPeerDisconnected;
     this.onProtocolError = options.onProtocolError;
+    this.resolveAdvertisedEndpoint = options.resolveAdvertisedEndpoint;
   }
 
   start(): void {
@@ -209,9 +212,11 @@ export class RawServiceMeshRuntime {
       const router = host.createRouter();
       router.setRoutingId(this.descriptor.nodeRoutingId);
       router.bind(this.descriptor.advertisedEndpoint);
+      const boundEndpoint = router.localEndpoint();
       const next = {
         ...this.descriptor,
-        advertisedEndpoint: router.localEndpoint(),
+        advertisedEndpoint: this.resolveAdvertisedEndpoint?.(boundEndpoint)
+          ?? boundEndpoint,
         descriptorRevision: this.descriptor.descriptorRevision + 1n,
         state: 'serving' as const
       };

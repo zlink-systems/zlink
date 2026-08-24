@@ -22,7 +22,7 @@ function createOpsModule() {
         if (ops === undefined) throw new Error('Ops configuration is required.');
         const builder = zlinkFramework();
         builder.addLocationStore(createZoneWorldLocationStore(config.shared));
-        zoneWorldLocationOptions(builder.configureLocations());
+        zoneWorldLocationOptions(builder.configureLocations(), config.shared);
         builder.configureDispatch()
           .messageFlow('normal');
         builder.addStreamNode(ZoneWorldNames.opsStreamNode)

@@ -6,7 +6,7 @@ import {
 } from '@zlink-systems/nestjs';
 import { ZoneWorldNames, ZoneWorldSpec } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
-import { BotTickMsg, EnterZoneReq, EnterZoneRes, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
+import { BotTickMsg, EnterZoneReq, EnterZoneRes, JoinWorldRes, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -130,6 +130,27 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   }
 
   async onDisconnectActor(_actor: PlayerActor): Promise<void> {}
+
+  rejoin(actor: PlayerActor): JoinWorldRes {
+    const state = this.requireState();
+    const participant: ZoneParticipant = {
+      actorId: actor.actorId,
+      x: actor.x,
+      y: actor.y,
+      zoneId: state.zoneId,
+      isBot: actor.isBot
+    };
+    this.actors.set(actor.actorId, participant);
+    this.nodeState.joined(actor.actorId, participant.zoneId);
+    state.enter(actor.actorId, participant.x, participant.y, participant.isBot);
+    return new JoinWorldRes(
+      actor.actorId,
+      participant.zoneId,
+      participant.x,
+      participant.y,
+      null
+    );
+  }
 
   updatePosition(actorId: string, x: number, y: number): void {
     const actor = this.actors.get(actorId);

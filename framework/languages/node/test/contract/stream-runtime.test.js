@@ -825,6 +825,50 @@ test('remote actor session binding uses a non-correlated command over the actor 
   assert.equal(routed[0].request.boundSessionSpotId, 'session-node');
 });
 
+test('one-way remote actor session bind completes only after its route send is submitted', async () => {
+  const actorRef = {
+    nodeRid: 'actor-node',
+    actorId: 'actor-bind-submit-order',
+    objectGeneration: 3n,
+    meshName: 'actor.route'
+  };
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      routeChannels: [{ routerChannelId: 'actor.route' }]
+    })
+  });
+  host.setActorManager({
+    getState() {
+      return {
+        remoteActorPacketTarget: {
+          routerChannelId: 'actor.route',
+          targetNodeRid: actorRef.nodeRid,
+          spotId: actorRef.nodeRid,
+          spotKind: framework.ZLinkSpotKind.Entry
+        }
+      };
+    }
+  });
+  let releaseSend;
+  const sendSubmitted = new Promise((resolve) => { releaseSend = resolve; });
+  host.routeTransport.sendToSpot = async () => { await sendSubmitted; };
+  let completed = false;
+
+  const binding = host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+    actorRef,
+    'session-node',
+    'session-rid',
+    undefined,
+    { waitForAcknowledgement: false }
+  ).then(() => { completed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(completed, false);
+  releaseSend();
+  await binding;
+  assert.equal(completed, true);
+});
+
 test('acknowledged remote actor session bind nack surfaces the remote failure classification', async () => {
   //  Spec 32-framework-error-model: an immediate {ok:false} reply is a remote
   //  rejection, not a deadline elapse — DeadlineExceeded(7) is reserved for
@@ -7097,6 +7141,82 @@ test('stream session replacement confirmation failure keeps the new binding curr
     'bind:session-old',
     'bind:session-new'
   ]);
+});
+
+test('stream session replacement waits for the one-way remote binding submission', async () => {
+  const socket = {
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; },
+    async bindActor() {},
+    async unbindActor() {},
+    sendBoundActor() { return true; }
+  };
+  let confirmationCount = 0;
+  let releaseReplacement;
+  const replacementSubmitted = new Promise((resolve) => {
+    releaseReplacement = resolve;
+  });
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async confirmRemoteActorSessionBinding(_actor, _sessionRid, _signal, options) {
+      confirmationCount += 1;
+      if (confirmationCount === 1) {
+        assert.equal(options.waitForAcknowledgement, true);
+        return;
+      }
+      assert.equal(options.waitForAcknowledgement, false);
+      await replacementSubmitted;
+    }
+  });
+  const previous = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-old'));
+  const replacement = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-new'));
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-submit-order', generation: 1n };
+  await previous.actors.bindOrGet(actorRef);
+  let completed = false;
+
+  const rebound = replacement.actors.bindOrGet(actorRef).then(() => { completed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(completed, false);
+  releaseReplacement();
+  await rebound;
+  assert.equal(completed, true);
+  assert.equal(previous.actors.find(actorRef.actorId), undefined);
+  assert.equal(replacement.actors.find(actorRef.actorId)?.actorId, actorRef.actorId);
+});
+
+test('stream session binding confirmation carries the accepted native binding generation', async () => {
+  const socket = {
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; },
+    async bindActor() {},
+    async unbindActor() {},
+    sendBoundActor() { return true; }
+  };
+  const confirmedGenerations = [];
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async confirmRemoteActorSessionBinding(actor) {
+      confirmedGenerations.push(actor.bindingGeneration);
+    }
+  });
+  const previousStream = new framework.ZLinkManagedStream(socket, 'session-old');
+  const replacementStream = new framework.ZLinkManagedStream(socket, 'session-new');
+  previousStream.actorBindingGeneration = () => 7n;
+  replacementStream.actorBindingGeneration = () => 8n;
+  const previous = runtime.createSessionContext(previousStream);
+  const replacement = runtime.createSessionContext(replacementStream);
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-confirm-generation',
+    generation: 1n,
+    bindingGeneration: 6n
+  };
+
+  await previous.actors.bindOrGet(actorRef);
+  await replacement.actors.bindOrGet(actorRef);
+
+  assert.deepEqual(confirmedGenerations, [7n, 8n]);
 });
 
 test('bound session without binding is a retriable framework error', async () => {

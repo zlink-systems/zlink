@@ -45,7 +45,11 @@ import type {
   ZLinkMeshCompletionTable
 } from '../backend';
 import { ReceiveKind, type ReceiveRecord } from '../foundation/service-runtime-contracts';
-import { routingIdsEqual } from '../routing-id';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex,
+  routingIdsEqual
+} from '../routing-id';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import type { ServiceSpotMessageFollowSeal } from '../foundation/service-stateful-runtime';
 import {
@@ -4565,7 +4569,9 @@ type RelocationTerminalDelivery =
   | 'alreadyTerminal'
   | 'sourceLeaseExpired';
 
-function decodeQueuedHandoffPacket(message: ServiceRelocationQueuedMessage): ZLinkActorHandoffPacket {
+export function decodeQueuedHandoffPacket(
+  message: ServiceRelocationQueuedMessage
+): ZLinkActorHandoffPacket {
   const payload = Buffer.from(message.payload);
   const frozen = isCanonicalFrozenRecord(payload)
     ? decodeServiceWireFrozenRecord(payload)
@@ -4577,7 +4583,12 @@ function decodeQueuedHandoffPacket(message: ServiceRelocationQueuedMessage): ZLi
   if (!Number.isSafeInteger(index) || index as number < 0) {
     throw new TypeError('Relocation Actor packet index is invalid.');
   }
-  const decoded = decodeHandoffBacklog([{ ...value, index: 0 }])[0]!;
+  const messageFollowOrigin = decodeQueuedMessageFollowOrigin(value.messageFollowOrigin);
+  const decoded = decodeHandoffBacklog([{
+    ...value,
+    index: 0,
+    ...(messageFollowOrigin === undefined ? {} : { messageFollowOrigin })
+  }])[0]!;
   return { ...decoded, index: index as number };
 }
 
@@ -5443,13 +5454,71 @@ function isServiceWireCommand(payload: Uint8Array, command: number): boolean {
     && payload[3] === command;
 }
 
-function encodeHandoffQueuedMessages(
+export function encodeHandoffQueuedMessages(
   backlog: readonly ZLinkActorHandoffPacket[]
 ): readonly ServiceRelocationQueuedMessage[] {
   return backlog.map(packet => ({
     sequence: BigInt(packet.index) + 1n,
-    payload: Buffer.from(JSON.stringify(packet), 'utf8')
+    payload: Buffer.from(JSON.stringify({
+      ...packet,
+      ...(packet.messageFollowOrigin === undefined ? {} : {
+        messageFollowOrigin: {
+          sourceNodeRid: String(packet.messageFollowOrigin.sourceNodeRid),
+          sourceNodeRidHex: encodeRoutingIdStorageHex(
+            packet.messageFollowOrigin.sourceNodeRid
+          ),
+          originalOperation: {
+            high: packet.messageFollowOrigin.originalOperation.high.toString(),
+            low: packet.messageFollowOrigin.originalOperation.low.toString()
+          },
+          originalReplyRouteId:
+            packet.messageFollowOrigin.originalReplyRouteId.toString()
+        }
+      })
+    }), 'utf8')
   }));
+}
+
+function decodeQueuedMessageFollowOrigin(value: unknown) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Relocation Actor Message Follow origin is invalid.');
+  }
+  const origin = value as Record<string, unknown>;
+  const operation = origin.originalOperation;
+  if (
+    typeof origin.sourceNodeRid !== 'string'
+    || origin.sourceNodeRid.length === 0
+    || typeof operation !== 'object'
+    || operation === null
+  ) {
+    throw new TypeError('Relocation Actor Message Follow origin is invalid.');
+  }
+  const operationRecord = operation as Record<string, unknown>;
+  const high = queuedMessageU64(operationRecord.high, 'originalOperation.high');
+  const low = queuedMessageU64(operationRecord.low, 'originalOperation.low');
+  if (high === 0n && low === 0n) {
+    throw new TypeError('Relocation Actor Message Follow operation must not be zero.');
+  }
+  return {
+    sourceNodeRid: decodeRoutingId(origin.sourceNodeRid, origin.sourceNodeRidHex),
+    originalOperation: { high, low },
+    originalReplyRouteId: queuedMessageU64(
+      origin.originalReplyRouteId,
+      'originalReplyRouteId'
+    )
+  };
+}
+
+function queuedMessageU64(value: unknown, field: string): bigint {
+  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw new TypeError(`Relocation Actor Message Follow ${field} is invalid.`);
+  }
+  const result = BigInt(value);
+  if (result > 0xffff_ffff_ffff_ffffn) {
+    throw new TypeError(`Relocation Actor Message Follow ${field} is outside u64.`);
+  }
+  return result;
 }
 
 function toServiceTimer(value: import('../spots/spot-timer').ZLinkTimerRelocationState): ServiceRelocationTimer {
