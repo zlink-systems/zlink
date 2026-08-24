@@ -74,8 +74,8 @@ STREAM socket은 `zlink_socket(context_, ZLINK_SOCKET_STREAM)`으로 생성한�
 
 첫 raw part 수신 또는 handler 등록이 수신 모드를 고정한다. 같은 handle에서 다른 수신
 모드를 활성화하거나 handler를 다시 등록하면 busy 결과와 `errno == EBUSY`로 실패한다.
-data-plane `ZLINK_POLLIN`은 raw part receive 모드에 속한다. send-ready handler와
-`ZLINK_POLLOUT`은 수신 모드와 독립적이다.
+data-plane `ZLINK_POLLIN`은 raw part receive 모드에 속한다. send-completion
+callback과 `ZLINK_POLLOUT`은 수신 모드와 독립적이다.
 
 ## 4. Routed part send
 
@@ -417,8 +417,8 @@ socket/listener 기본값은 다음과 같다.
   다른 수신 모드를 활성화하거나 handler를 다시 등록하면 busy 결과와 `errno == EBUSY`다.
 - callback 안에서 같은 handle에 receive handler를 다시 등록하거나 close하면(수신 모드
   변경 포함) busy 결과와 `errno == EBUSY`다.
-- data-plane `ZLINK_POLLIN`은 raw part receive 모드에 속하고, send-ready
-  handler와 `ZLINK_POLLOUT`은 수신 모드와 독립적으로 동작한다.
+- data-plane `ZLINK_POLLIN`은 raw part receive 모드에 속하고, send-completion
+  callback과 `ZLINK_POLLOUT`은 수신 모드와 독립적으로 동작한다.
 
 **Routed part send**
 - `part_flag_ == ZLINK_PART_MORE`는 `ZLINK_SUBMIT_NOT_SUPPORTED`,

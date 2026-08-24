@@ -568,7 +568,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - PUB/XPUB의 `publish(topic).message(...).submit()`은 동기 `void` 종단이다. 기본
   PUB 경로는 lossy이므로 성공 시 즉시 반환하며, NODROP option은 수락할 수 없을 때
   즉시 `SubmitError`를 발생시킨다. publish에는 `publishAsync`, binding-owned
-  pending queue, worker, retry 또는 send-ready/admission API를 추가하지 않는다.
+  pending queue, worker, retry 또는 readiness/admission API를 추가하지 않는다.
   전달한 Message는 Core submit이 성공한 경우에만 consume하고, 동기 실패에서는
   호출자가 재사용할 수 있다.
 - MeshNode에서 Actor의 bound session으로 보내는 `sendActorBoundSession(...)`은

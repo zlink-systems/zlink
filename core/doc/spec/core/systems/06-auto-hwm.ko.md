@@ -160,16 +160,14 @@ stable queue ID 순서로 1 byte씩 배정한다. 따라서 같은 registry snap
 |---|---|
 | 연결 증가로 queue별 목표가 감소 | 새 목표를 즉시 기록하고, 현재 보관량이 새 목표 아래로 drain될 때까지 추가 admission을 막음 |
 | 연결 감소로 목표가 증가 | cooldown 뒤 같은 generation의 live queue에만 적용 |
-| Detach된 queue | outstanding retained lease가 없으면 제거하고, lease가 남으면 retired queue로 유지 |
+| Detach된 queue | endpoint가 모두 해제되면 남은 provisional·committed charge를 한 번 정리하고 registry entry를 제거 |
 
-multipart 예약, 빈 queue oversize 예외, retained-credit lease의 **관찰 가능한 동작**은
+multipart 예약, 빈 queue oversize 예외, dequeue credit의 **관찰 가능한 동작**은
 [§5 검증 요구](#5-구현-및-contract-test-검증-요구)가, 그 **구현 메커니즘**은
 [§4 내부 구조](#4-내부-구조)가 소유한다.
 
 ```text
-originQueueUsedBytes(queue) =
-    physicalQueueAccountedBytes(queue)
-  + applicationLeaseBytesFrom(queue)
+originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 ```
 
 일반 admission은 이 origin-local 합계와 그 queue의 적용 HWM만 검사한다. Context의
@@ -177,11 +175,11 @@ originQueueUsedBytes(queue) =
 함께 차단하지 않는다.
 
 `total_planned_hwm_bytes`는 현재 application 방향 목표 합계이고
-`total_applied_hwm_bytes`는 live application 방향에 실제 적용된 HWM 합계이다. Retired
-entry는 outstanding lease와 deferred origin credit만 유지하며 applied capacity 합계와 새
-water-filling 분모에는 포함되지 않는다.
-`core_queue_accounted_bytes`와 `application_accounted_bytes`는 owner만 구분하며 두 값을 더한
-`current_accounted_bytes`는 owner 이전 전후에 변하지 않는다.
+`total_applied_hwm_bytes`는 live application 방향에 실제 적용된 HWM 합계이다.
+`core_queue_accounted_bytes`는 Core queue가 현재 보관하는 byte이고
+`current_accounted_bytes`는 그 값과 같다. 제거된 retained-credit 기능의 ABI 호환 field인
+`application_accounted_bytes`·`outstanding_application_lease_count`·
+`deferred_origin_credit_bytes`·`retired_queue_count`는 항상 0이다.
 
 DEALER·ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)에는 byte HWM, LWM, inproc HWM boost와
 legacy 256 KiB floor를 적용하지 않으며 위 water-filling 분모에서도 제외한다. 이
@@ -377,10 +375,7 @@ physical queue의 미반환 byte와 적용된 HWM으로 판단한다.
 ```text
 frameCharge = payloadBytes + sizeof(msg_t)
 
-outstandingCharge =
-    provisionalCharge
-  + committedQueueCharge
-  + retainedLeaseCharge
+outstandingCharge = provisionalCharge + committedQueueCharge
 ```
 
 `sizeof(msg_t)`는 allocator 사용량을 측정한 값이 아니다. Payload가 없는 frame도 queue
@@ -389,9 +384,10 @@ Payload만 합산하면 빈 single-part message나 빈 multipart frame을 HWM과
 보관할 수 있으므로 memory 제한으로 사용할 수 없다.
 
 `provisionalCharge`는 decoder가 payload buffer를 할당하기 전에 예약한 값이다.
-`committedQueueCharge`는 queue가 보관하는 frame의 값이다. Queue에서 꺼낸 message를
-Application이 계속 보유하면 그 값은 `retainedLeaseCharge`로 이동한다. 소유 위치가
-바뀌어도 writer가 돌려받지 못한 합계는 변하지 않는다.
+`committedQueueCharge`는 queue가 보관하는 frame의 값이다. Core queue가 complete
+message를 dequeue해 binding에 넘기면 committed charge를 줄이고 writer credit을
+반환한다. 그 뒤 binding이나 Application이 payload를 보유하는 수명은 Core HWM
+회계 밖이며, Core는 retained-credit lease로 전환하지 않는다.
 
 예를 들어 HWM이 1,024 byte이고 미반환 charge가 900 byte이면, charge가 124 byte 이하인
 frame만 일반 규칙으로 받아들인다. 다른 queue가 비어 있거나 context 전체 합계가 budget
@@ -422,7 +418,7 @@ sequenceDiagram
     D->>D: buffer 할당 전 candidate charge를 reservation token에 기록<br/>(writer가 만든 message 제출 시 생략)
     Note over Q: HWM이 0이 아니고 미반환+candidate가 HWM 초과면 거부<br/>(빈 queue oversize 예외는 별도)
     D->>Q: enqueue 후 provisional → committed
-    Q-->>D: dequeue 시 committed 감소, writer에 credit 반환<br/>(Application이 계속 보유하면 retained lease로 이동)
+    Q-->>D: complete message dequeue 시 committed 감소, writer에 credit 반환
 ```
 
 1. Writer 또는 decoder가 payload 크기에 고정 frame 비용을 더해 candidate charge를 구한다.
@@ -435,8 +431,8 @@ sequenceDiagram
    frame을 받아들이지 않는다. 공개 스펙의 빈 queue oversize 예외는 별도로 적용한다.
 5. Enqueue가 끝나면 예약한 값을 다시 더하지 않고 provisional 상태에서 committed 상태로
    바꾼다.
-6. Queue가 frame을 제거하면 committed 값을 줄인다. Application이 frame을 계속 보유하면
-   같은 값을 retained lease로 옮기고, 그렇지 않으면 writer에 byte credit을 반환한다.
+6. Queue가 complete message를 dequeue하면 그 frame들의 committed 값을 줄이고 writer에
+   byte credit을 반환한다. Binding·Application payload 수명을 Core charge로 연장하지 않는다.
 7. Drop, allocation 실패, protocol 오류와 종료는 자신이 실제로 보유한 값을 한 번만
    반환한다.
 
@@ -459,15 +455,15 @@ Multipart는 각 frame의 charge를 누적한다. Decoder는 wire header에서 f
 두 message에 동시에 적용하지 않으며 `ZLINK_OPT_MAXMSGSIZE` 검사를 건너뛰지 않는다. 자세한 공개 동작은
 [Socket 스펙의 HWM 설명](../socket/README.ko.md#transportbuffer)을 따른다.
 
-### Retained receive와 queue generation
+### Receive dequeue와 queue generation
 
-Queue에서 꺼낸 frame의 memory를 Application이 반환할 때까지 유지하는 receive를 retained
-receive라고 한다. Retained receive는 queue에서 frame을 제거할 때 charge를 반환하지 않고,
-lease가 끝날 때 원래 queue generation의 writer에 반환한다.
+Core HWM charge의 종료 경계는 complete message를 queue에서 dequeue해 binding에 넘기는
+시점이다. Binding·Application이 그 payload를 더 오래 보유하더라도 queue byte HWM은
+그 수명을 추적하지 않는다.
 
-Queue를 detach하거나 다시 연결하면 새 generation을 만든다. 이전 generation의 lease가
-끝나도 새 generation의 charge를 줄이거나 writer를 깨우지 않는다. 이전 generation은 마지막
-lease와 예약이 끝날 때까지 반환 대상만 유지한 뒤 제거한다.
+Queue를 detach하거나 다시 연결하면 새 generation을 만든다. HWM 재계산과 적용은
+같은 generation의 live queue에만 반영한다. 마지막 endpoint가 해제되면 해당 entry의
+남은 provisional·committed charge를 정리하고 entry를 제거한다.
 
 ### HWM 변경
 
@@ -515,7 +511,7 @@ Peak 통계는 snapshot 조회와 Auto HWM 재계산이 queue별 값을 모은 �
 | Physical queue identity와 generation | `ctx_physical_queue_registry.*` |
 | Queue-local charge, HWM 판단과 byte credit | `pipe.*` |
 | Allocation 전 reservation | `zmp_decoder.*`, `session_base_pipe_io.cpp`, `pipe.*` |
-| Retained lease release | retained receive API와 queue lifecycle code |
+| Dequeue credit 반환·detach 정리 | `pipe.*`, `ctx_physical_queue_registry.*` |
 
 ## 5. 구현 및 contract test 검증 요구
 
@@ -536,12 +532,12 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - 빈 queue는 전체 크기를 아는 complete message 1건을 HWM 초과여도 수락하고, 두 번째 oversize는 거부한다.
 - 미리 크기를 모르는 multipart의 `MORE` frame은 HWM 초과 지점부터 막힌다. 다만 빈 queue에서 시작한 multipart의 final frame은 HWM을 넘더라도 수락하며, 이 예외는 중간 `MORE` frame에 적용하지 않는다. Multipart를 폐기한 뒤 snapshot의 `provisional_accounted_bytes`는 0으로 돌아온다.
 
-**credit·lease·generation**
-- 일반 recv 뒤 sender가 다시 보낼 수 있고, retained receive는 lease를 release하기 전에는 snapshot의 `application_accounted_bytes`가 유지된다.
-- lease를 보유한 채 socket을 detach해도 새 generation의 credit이 늘지 않는다(snapshot).
+**credit·dequeue·generation**
+- complete message를 recv하면 Core queue charge가 종료되고 sender가 다시 보낼 수 있다. Application이 payload를 계속 보유해도 snapshot의 `application_accounted_bytes`는 0이다.
+- Socket detach·reconnect 후 이전 generation의 accounting이 새 generation의 charge를 줄이거나 writer credit을 늘리지 않는다(snapshot).
 
 **HWM 변경**
-- HWM을 낮추면 이미 받은 frame은 유지되고, 보관량이 새 목표 아래로 drain된 뒤에 새 HWM이 admission에 적용된다.
+- HWM을 낮추면 이미 받은 frame은 유지되고, queue 보관량이 새 목표 아래로 drain된 뒤에 새 HWM이 admission에 적용된다.
 
 **제외 대상**
 - DEALER·ROUTER completion reply·receive-flow-state frame과 monitor 트래픽은 application send admission 결과와 snapshot의 `total_planned_hwm_bytes` 분모를 바꾸지 않는다.

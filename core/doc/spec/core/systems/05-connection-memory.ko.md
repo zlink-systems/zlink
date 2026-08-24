@@ -78,8 +78,11 @@ receive-flow-state frame은 connection이 유지되고 allocation이 성공하�
 
 ## 4. 측정과 한계
 
-실행 중 memory 상태를 조회하는 monitor는 queue·application lease·completion의 current byte와
-oversize 허용 이력을 구분해 제공한다. [Core budget](../glossary.ko.md#auto-hwm-budget) — Core가
+실행 중 memory 상태를 조회하는 monitor는 application queue와 completion lane의 current byte,
+oversize 허용 이력을 구분해 제공한다. 제거된 retained-credit 기능에 할당됐던
+`application_accounted_bytes`·`outstanding_application_lease_count`·
+`deferred_origin_credit_bytes`·`retired_queue_count` field는 ABI 호환을 위해 남아 있으며 항상
+0이다. [Core budget](../glossary.ko.md#auto-hwm-budget) — Core가
 memory 입력에서 계산해 application queue들의 HWM을 나눌 때 기준으로 삼는 byte 총량 — 은 정상
 상태의 pipe별 HWM 분배 기준이지 context 실제 사용량 hard cap이 아니다. 이 값은 Core 회계를
 설명하지만 process resident memory의 정확한 측정값은 아니다.
@@ -99,7 +102,7 @@ Capacity planning에서는 production transport와 message-size 분포를 사용
 
 ## 6. 구현 및 contract test 검증 요구
 
-byte 회계, admission, credit·lease와 oversize 예외의 상세 검증 항목은
+byte 회계, admission, dequeue credit과 oversize 예외의 상세 검증 항목은
 [Auto HWM의 검증 요구](06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
 connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목은 test 하나로 이어진다.
 
@@ -108,9 +111,9 @@ connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목�
 - multipart 마지막 frame은 provisional 합계를 committed message로 전환할 뿐 counter를 다시 증가시키지 않는다.
 - write 실패, rollback, close와 detach 뒤 실제 제거된 frame의 provisional·committed charge는 정확히 한 번 반환된다.
 
-**HWM과 lease**
-- application directional HWM은 physical queue byte와 retained-credit lease byte의 합에 적용된다 — retained receive는 queue charge를 줄이지 않고 owner만 application lease로 바꾸므로, release 전에는 그 byte가 계속 HWM을 소비한다.
-- lease를 release하면 exact origin generation의 read credit이 반환된다. origin이 먼저 detach된 경우에도 마지막 lease가 반환될 때까지 retired registry entry가 유지된다.
+**HWM과 dequeue credit**
+- application directional HWM은 Core queue가 현재 보관하는 physical frame byte에만 적용된다.
+- Core queue가 complete message를 dequeue해 binding에 넘기면 그 message의 queue charge가 끝나고 writer credit을 반환한다. Binding이나 application이 payload를 계속 보유하는 수명은 Core HWM에 다시 계상하지 않는다.
 
 **oversize와 completion**
 - 빈 application pipe에 socket 최대 message 크기 이내이며 HWM보다 큰 complete message를 보내면 한 건 수락되고, 그 뒤의 write는 중단된다.
@@ -120,5 +123,5 @@ connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목�
 - completion progress lane에는 byte HWM, LWM, manual HWM과 Core budget reservation이 적용되지 않는다.
 
 **측정**
-- monitor는 queue·application lease·completion의 current byte와 oversize 허용 이력을 구분해 보고한다.
+- monitor는 application queue·completion의 current byte와 oversize 허용 이력을 구분해 보고하고, retained-credit 호환 field는 항상 0으로 보고한다.
 - Core budget은 정상 상태의 pipe별 HWM 분배 기준이며 context 실제 사용량 hard cap으로 동작하지 않는다 (상세 admission 계약은 [Auto HWM](06-auto-hwm.ko.md) 소유).

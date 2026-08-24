@@ -1534,8 +1534,9 @@ Terminal replies and error replies use the HWM-free completion lane. A binding
 applies no SNDHWM, RCVHWM, HWM-readiness wait, or backpressure retry to this
 completion submit.
 
-Core byte HWM accounts only payload bytes physically retained by a Core queue.
-The charge ends when receive dequeues the payload and hands it to the binding.
+Core byte HWM accounts the physical-frame charge retained by a Core queue:
+payload bytes plus the `sizeof(zlink_msg_t)` metadata charge. The charge ends
+when receive dequeues the complete message and hands it to the binding.
 Ordinary binding `recv` and `subscribe` transfer normal ownership of message
 parts, routing IDs, request sequences, and topic metadata into a
 `Received`/`TopicMessage`-family result. The result owns the payload until the

@@ -589,42 +589,35 @@ using TypeScript spelling.
   builder's terminal method keeps using `submit(...)` even on a
   Promise-returning surface. Do not add a separate `submitAsync` terminal
   name.
-- DEALER/ROUTER `send(...).message(...).submit()` is the managed send
-  terminal and returns `Promise<void>`. DEALER/ROUTER
-  `request(...).message(...).submit()` returns `Promise<Message[]>`. These
-  managed builders do not expose flag, callback, blocking, no-wait, or polling
-  compatibility terminals. Pair, Stream, and Pub data-plane terminals keep
-  their existing synchronous contracts. The public ROUTER
-  `sendTransportPair(...)` call also remains a distinct explicit one-shot
-  immediate operation; it is not a managed HWM-wait terminal.
+- Pair `send().message(...).submit()` and DEALER/ROUTER routed
+  `send(...).message(...).submit()` are managed `Promise<void>` terminals
+  completed by Core's send-completion callback. The per-operation timeout is
+  passed to Core. `ADMITTED` resolves the Promise; `TIMED_OUT` and `TERMINAL`
+  reject it with a `SubmitError` that preserves Core's errno. Dropping or
+  garbage-collecting the Promise is not cancellation, and no separate cancel
+  API is exposed. The binding owns no admission thread, queue, retry, or
+  readiness state; the native callback only delivers completion to JavaScript.
+- Stream managed `send(routingId)` uses the same send-completion Promise
+  contract. Stream `trySend` and raw one-shot operations such as public ROUTER
+  `sendTransportPair(...)` retain their synchronous `void`/`boolean` contracts
+  and are not managed HWM-wait terminals.
+- DEALER/ROUTER `request(...).message(...).submit()` returns
+  `Promise<Message[]>` completed only through Core's reply callback, not by
+  binding admission. Raw ROUTER reply is a synchronous one-shot. The
+  request/reply path adds no binding-owned retry, pending-admission queue, or
+  progress timer.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.submit(): void`. It returns no Promise, enters no HWM-
   managed path, and submits a terminal reply or error reply to the HWM-free
   completion lane with one native call. HWM backpressure is not a reply result;
   `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit
   failures are thrown immediately as `SubmitError`.
-- A managed routed submit snapshots its payload and establishes its completion
-  state before native submission. It uses Core target selection plus exact
-  per-part DEALER/ROUTER DONTWAIT APIs. The Node addon must not add or call an
-  array/multipart routed-submit ABI such as `zlink_routed_send_parts` or
-  `zlink_routed_request_parts`. One short socket-local complete-record attempt
-  gate covers an attempt from its first part through its final part and is
-  released before any HWM wait.
-- The binding owns pending operations by the exact tuple `(peer routing id,
-  transport pair id, transport pair generation)`, together with a deduplicated
-  ready-target queue/set. The long-lived Core routed-readiness callback only
-  marks or wakes that exact target and schedules event-loop work; it never
-  submits, waits, or retries in the callback. A blocked target therefore does
-  not gate an unrelated target. A stale generation cannot wake a replacement
-  route. This scheduling does not add a strict FIFO guarantee for concurrent
-  calls that use the same routing id.
-- Send and request deadlines are absolute from the public `submit()` call.
-  HWM waiting is readiness-driven, not timer polling. Acceptance consumes the
-  submitted `Message` values exactly once; failure before acceptance leaves
-  them reusable. Request correlation exists before the first exact attempt so
-  a fast reply cannot outrun registration. Timeout, target detach/terminal,
-  socket close, and native failure settle each Promise exactly once and remove
-  its pending state. Socket close does not block the Node event loop.
+- PUB/XPUB `publish(topic).message(...).submit()` is a synchronous `void`
+  terminal. The default PUB path is lossy and returns immediately on success;
+  `NODROP` throws `SubmitError` immediately when it cannot admit the copy.
+  Publish adds no `publishAsync`, binding-owned pending queue, worker, retry,
+  or readiness/admission API. A submitted Message is consumed only when
+  Core submit succeeds and remains reusable after synchronous failure.
 - The MeshNode Logical Multicast publisher also provides `publishAsync(...)`
   because Core's one blocking publish call must run outside the Node.js
   event loop. This name applies only to this publisher and does not change

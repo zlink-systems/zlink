@@ -80,8 +80,11 @@ are admitted if the connection remains available and allocation succeeds.
 
 ## 4. Measurement and limitations
 
-The monitor that reports runtime memory state separately exposes current bytes for queues,
-application leases, and completions, as well as oversize-admission history. The
+The monitor that reports runtime memory state separately exposes current bytes for application
+queues and completion lanes, as well as oversize-admission history. The
+`application_accounted_bytes`, `outstanding_application_lease_count`,
+`deferred_origin_credit_bytes`, and `retired_queue_count` fields that were allocated to the removed
+retained-credit feature remain for ABI compatibility and are always zero. The
 [Core budget](../glossary.en.md#auto-hwm-budget) — the total number of bytes that Core uses as the
 basis for distributing HWM among application queues after calculating it from memory inputs — is
 the normal-state basis for distributing per-pipe HWM, not a hard cap on actual context memory
@@ -103,7 +106,7 @@ message-size distribution.
 ## 6. Implementation and contract-test verification requirements
 
 [Auto HWM verification requirements](06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements)
-own the detailed verification items for byte accounting, admission, credits and leases, and the
+own the detailed verification items for byte accounting, admission, dequeue credit, and the
 oversize exception. From the connection-memory perspective, verify the following items. Each item
 maps to one test.
 
@@ -113,10 +116,10 @@ maps to one test.
 - The final frame of a multipart message only converts the provisional total into a committed message; it does not increment the counter again.
 - After write failure, rollback, close, or detach, the provisional and committed charges of the frames actually removed are returned exactly once.
 
-**HWM and leases**
+**HWM and dequeue credit**
 
-- The application directional HWM applies to the sum of physical-queue bytes and retained-credit lease bytes. Because a retained receive does not reduce the queue charge and only transfers ownership to an application lease, those bytes continue to consume HWM until release.
-- Releasing a lease returns read credit to the exact origin generation. If the origin detaches first, its retired registry entry remains until the final lease is returned.
+- The application directional HWM applies only to physical-frame bytes currently held by the Core queue.
+- When the Core queue dequeues a complete message to the binding, that message's queue charge ends and writer credit is returned. A binding or application continuing to hold the payload does not add it back to Core HWM accounting.
 
 **Oversize and completion**
 
@@ -128,5 +131,5 @@ maps to one test.
 
 **Measurement**
 
-- The monitor separately reports current bytes for queues, application leases, and completions, as well as oversize-admission history.
+- The monitor separately reports current bytes for application queues and completions, as well as oversize-admission history, and reports the retained-credit compatibility fields as zero.
 - The Core budget is the normal-state basis for distributing per-pipe HWM and does not act as a hard cap on actual context memory usage. [Auto HWM](06-auto-hwm.en.md) owns the detailed admission contract.

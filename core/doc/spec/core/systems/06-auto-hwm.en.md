@@ -126,19 +126,17 @@ When the number of connections changes a per-queue target, Core applies the chan
 |---|---|
 | A connection increase lowers the per-queue target | Records the new target immediately and blocks further admission until current retained bytes drain below the new target |
 | A connection decrease raises the target | Applies it after the cooldown only to a live queue with the same generation |
-| Detached queue | Removes it when no outstanding retained lease remains, or preserves it as a retired queue while a lease remains |
+| Detached queue | When all endpoints are released, clears any remaining provisional and committed charge once and removes the registry entry |
 
-The **observable behavior** of multipart reservation, the empty-queue oversize exception, and retained-credit leases is owned by [§5 Verification Requirements](#5-implementation-and-contract-test-verification-requirements), while their **implementation mechanisms** are owned by [§4 Internals](#4-internals).
+The **observable behavior** of multipart reservation, the empty-queue oversize exception, and dequeue credit is owned by [§5 Verification Requirements](#5-implementation-and-contract-test-verification-requirements), while their **implementation mechanisms** are owned by [§4 Internals](#4-internals).
 
 ```text
-originQueueUsedBytes(queue) =
-    physicalQueueAccountedBytes(queue)
-  + applicationLeaseBytesFrom(queue)
+originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 ```
 
 Ordinary admission checks only this origin-local sum and that queue's applied HWM. It does not block other queues merely because the context's `current_accounted_bytes` exceeds `effective_core_budget_bytes`.
 
-`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. A retired entry retains only outstanding leases and deferred origin credit; it is excluded from the applied capacity sum and the new water-filling denominator. `core_queue_accounted_bytes` and `application_accounted_bytes` distinguish only the owner, and their sum, `current_accounted_bytes`, does not change before and after an ownership transfer.
+`total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. `core_queue_accounted_bytes` is the number of bytes currently held by Core queues, and `current_accounted_bytes` equals that value. The ABI compatibility fields for the removed retained-credit feature—`application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`, and `retired_queue_count`—are always zero.
 
 The DEALER and ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) does not apply a byte HWM, LWM, inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the water-filling denominator above. This lane owns the progress of terminal replies and error replies and also synchronizes receive-flow-state frames between peers. The completion lane is excluded from HWM admission and Core budget reservation, but its current and peak accounted bytes and pending message count are observed separately. These values are included in `total_messaging_accounted_bytes` and excluded from application water-filling.
 
@@ -289,15 +287,12 @@ The unreturned bytes of one physical queue are the sum of the following values.
 ```text
 frameCharge = payloadBytes + sizeof(msg_t)
 
-outstandingCharge =
-    provisionalCharge
-  + committedQueueCharge
-  + retainedLeaseCharge
+outstandingCharge = provisionalCharge + committedQueueCharge
 ```
 
 `sizeof(msg_t)` is not a measurement of allocator usage. Even a frame with no payload consumes a queue slot and message object, so this fixed value prevents its byte HWM cost from becoming 0. Payload-only accounting cannot impose a memory limit because it allows empty single-part messages or empty multipart frames to remain in a queue indefinitely regardless of HWM.
 
-`provisionalCharge` is the value reserved before the decoder allocates a payload buffer. `committedQueueCharge` is the value of frames retained by the queue. When the application continues to hold a message dequeued from the queue, that value moves to `retainedLeaseCharge`. The unreturned total does not change when ownership moves.
+`provisionalCharge` is the value reserved before the decoder allocates a payload buffer. `committedQueueCharge` is the value of frames retained by the queue. When the Core queue dequeues a complete message to the binding, it decreases the committed charge and returns writer credit. The later lifetime of a payload held by the binding or application is outside Core HWM accounting; Core does not convert it into a retained-credit lease.
 
 For example, if the HWM is 1,024 bytes and the unreturned charge is 900 bytes, ordinary admission accepts only a frame whose charge is at most 124 bytes. Another queue being empty or the context-wide sum being below the budget does not change this decision.
 
@@ -325,7 +320,7 @@ sequenceDiagram
     D->>D: Record candidate charge in reservation token before buffer allocation<br/>(skip when submitting a message created by the writer)
     Note over Q: Reject if HWM is nonzero and unreturned+candidate exceeds HWM<br/>(empty-queue oversize exception is separate)
     D->>Q: After enqueue, provisional → committed
-    Q-->>D: On dequeue, decrease committed and return credit to writer<br/>(move to retained lease if the application keeps ownership)
+    Q-->>D: On complete-message dequeue, decrease committed and return credit to writer
 ```
 
 1. The writer or decoder adds the fixed frame cost to the payload size to calculate the candidate charge.
@@ -333,7 +328,7 @@ sequenceDiagram
 3. Before allocating the payload buffer, the decoder records the target queue reference, generation, and candidate charge in a reservation token. Accounting for the charge begins at frame write. This step is skipped when the application writer submits a message it has already created.
 4. If the applied HWM is nonzero and adding the candidate charge to the unreturned charge exceeds the HWM, it does not admit the frame. The public empty-queue oversize exception applies separately.
 5. After enqueue completes, it converts the value from provisional state to committed state without adding the reserved value again.
-6. When the queue removes a frame, it decreases the committed value. If the application continues to hold the frame, the same value moves to a retained lease; otherwise, byte credit is returned to the writer.
+6. When the queue dequeues a complete message, it decreases the committed values of its frames and returns byte credit to the writer. It does not extend Core charge through binding or application payload lifetime.
 7. Drop, allocation failure, protocol error, and termination each return only the value they actually own, exactly once.
 
 In this sequence, normal frame processing reads and updates only local state created with the queue.
@@ -346,11 +341,11 @@ When a multipart message whose final size is not yet known reaches HWM, Core sto
 
 An empty queue may admit one complete message whose total charge is known at admission, and the final frame of a multipart that started while the queue was empty, even when either exceeds HWM. This exception does not apply to two messages simultaneously and does not bypass the `ZLINK_OPT_MAXMSGSIZE` check. See the [HWM description in the Socket specification](../socket/README.en.md#transportbuffer) for detailed public behavior.
 
-### Retained Receive and Queue Generation
+### Receive Dequeue and Queue Generation
 
-A receive that retains a frame's memory until the application returns it is called a retained receive. A retained receive does not return the charge when removing the frame from the queue; it returns the charge to the writer of the original queue generation when the lease ends.
+Core HWM charge ends when the Core queue dequeues a complete message to the binding. The queue byte HWM does not track how long the binding or application keeps that payload afterward.
 
-Detaching or reconnecting a queue creates a new generation. Ending a lease from an earlier generation does not reduce the charge of the new generation or wake its writer. The earlier generation retains only the return target until its last lease and reservation end, then is removed.
+Detaching or reconnecting a queue creates a new generation. HWM replanning and application affect only a live queue of the same generation. When the final endpoint is released, Core clears any remaining provisional and committed charge for that entry and removes it.
 
 ### HWM Changes
 
@@ -386,7 +381,7 @@ Peak statistics record the largest total observed when a snapshot query or Auto 
 | Physical queue identity and generation | `ctx_physical_queue_registry.*` |
 | Queue-local charge, HWM decision, and byte credit | `pipe.*` |
 | Reservation before allocation | `zmp_decoder.*`, `session_base_pipe_io.cpp`, `pipe.*` |
-| Retained lease release | Retained receive API and queue lifecycle code |
+| Dequeue credit return and detach cleanup | `pipe.*`, `ctx_physical_queue_registry.*` |
 
 ## 5. Implementation and Contract-Test Verification Requirements
 
@@ -405,12 +400,12 @@ This section collects the items that workers must verify. These behaviors are ob
 - An empty queue admits one complete message of known total size even above HWM and rejects a second oversize message.
 - An unknown-size multipart blocks further `MORE` frames from the point HWM is exceeded. However, it admits the final frame of a multipart that started on an empty queue even when the frame exceeds HWM, and this exception does not apply to an intermediate `MORE` frame. After the multipart is discarded, the snapshot's `provisional_accounted_bytes` returns to 0.
 
-**Credit, lease, and generation**
-- After an ordinary recv, the sender can send again; a retained receive keeps the snapshot's `application_accounted_bytes` until the lease is released.
-- Detaching a socket while holding a lease does not increase credit for a new generation (snapshot).
+**Credit, dequeue, and generation**
+- After receiving a complete message, Core queue charge ends and the sender can send again. The snapshot's `application_accounted_bytes` remains zero even if the application keeps the payload.
+- After socket detach or reconnect, accounting from the previous generation does not reduce the new generation's charge or increase its writer credit (snapshot).
 
 **HWM changes**
-- Lowering the HWM preserves frames already admitted, and the new HWM applies to admission after the retained amount drains below the new target.
+- Lowering the HWM preserves frames already admitted, and the new HWM applies to admission after the queued amount drains below the new target.
 
 **Excluded targets**
 - DEALER and ROUTER completion replies, receive-flow-state frames, and monitor traffic do not change application send admission results or the denominator of the snapshot's `total_planned_hwm_bytes`.

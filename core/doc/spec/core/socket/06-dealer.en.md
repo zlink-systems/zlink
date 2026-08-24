@@ -397,8 +397,8 @@ A successful `ZLINK_PART_FINAL` completes the reply for that token, which cannot
 
 Raw replies and error replies are submitted exactly once through the completion progress lane. This
 lane is not subject to application byte HWM, manual HWM, LWM, or Core budget reservation, so this
-function does not return `ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and does not wait for
-`ZLINK_POLLOUT` or a send-ready callback and then retry. Connection, lifecycle, argument, state,
+function does not return `ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and enters no
+readiness-wait or retry path. Connection, lifecycle, argument, state,
 and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at
 the call.
 
