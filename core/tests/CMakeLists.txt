@@ -117,6 +117,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_flow_state_c_api
   ${INTEGRATION_TEST_ROOT}/test_routed_submit_target
   ${INTEGRATION_TEST_ROOT}/test_send_async_multipart
+  ${INTEGRATION_TEST_ROOT}/test_send_async_tls_admit
   ${INTEGRATION_TEST_ROOT}/test_zmp_metadata
   ${INTEGRATION_TEST_ROOT}/test_stream_socket
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe
@@ -500,6 +501,10 @@ if(TARGET test_transport_matrix)
 set_tests_properties(test_transport_matrix PROPERTIES TIMEOUT 120)
 set_tests_properties(test_router_concurrent_routed_recv PROPERTIES TIMEOUT 120)
 set_tests_properties(test_zmp_metadata PROPERTIES TIMEOUT 30)
+endif()
+if(TARGET test_send_async_tls_admit)
+  # Three cases, each with its own TLS handshake plus a 10s completion budget.
+  set_tests_properties(test_send_async_tls_admit PROPERTIES TIMEOUT 90)
 endif()
 if(TARGET test_xpub_nodrop)
   set_tests_properties(test_xpub_nodrop PROPERTIES TIMEOUT 45)

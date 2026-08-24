@@ -173,7 +173,8 @@ static socket_monitor_handler_js_state_t
 struct send_completion_state_t
 {
     send_completion_state_t ()
-        : socket (NULL), env (NULL), tsfn (NULL), closing (false)
+        : socket (NULL), env (NULL), tsfn (NULL), closing (false),
+          js_thread_outstanding (0)
     {
     }
 
@@ -181,6 +182,14 @@ struct send_completion_state_t
     napi_env env;
     napi_threadsafe_function tsfn;
     std::atomic<bool> closing;
+    //  Operations whose completion has to arrive through the threadsafe
+    //  function. The handler's tsfn is created unreferenced so an idle socket
+    //  never keeps a thread alive, but while this count is non-zero the tsfn
+    //  must hold a reference: the awaiting JavaScript has no other handle, and
+    //  an event loop that drains empty starts tearing the environment down,
+    //  after which the queued completion can no longer call into JavaScript.
+    //  Only the JavaScript thread touches this counter.
+    uint64_t js_thread_outstanding;
 };
 
 struct send_async_operation_t
@@ -1329,7 +1338,6 @@ void send_completion_tsfn_call_js (napi_env env,
                                    void *context,
                                    void *data)
 {
-    (void) context;
     std::unique_ptr<send_completion_js_payload_t> payload (
       static_cast<send_completion_js_payload_t *> (data));
     if (!env || !js_callback || !payload)
@@ -1355,6 +1363,15 @@ void send_completion_tsfn_call_js (napi_env env,
     napi_value ignored;
     napi_get_undefined (env, &this_arg);
     (void) napi_call_function (env, this_arg, js_callback, 1, &event, &ignored);
+
+    //  This runs on the JavaScript thread, so the counter needs no lock. The
+    //  completion is delivered, so the operation no longer has to hold the
+    //  event loop open.
+    send_completion_state_t *state =
+      static_cast<send_completion_state_t *> (context);
+    if (state && state->js_thread_outstanding > 0
+        && --state->js_thread_outstanding == 0)
+        (void) napi_unref_threadsafe_function (env, state->tsfn);
 }
 
 void send_completion_callback (void *subject,
@@ -1491,6 +1508,16 @@ void release_socket_send_completion_handler (void *socket)
         send_completion_state_t *state = entry->second;
         state->closing.store (true, std::memory_order_release);
         tsfn = state->tsfn;
+        //  Runs on the JavaScript thread while the socket closes. Drop the
+        //  outstanding-operation reference here rather than leaving it to the
+        //  queued callbacks: a completion that never reaches the queue would
+        //  otherwise hold the event loop open for the life of the process.
+        //  Zeroing the counter first keeps the callbacks that do arrive from
+        //  releasing it a second time.
+        if (state->js_thread_outstanding > 0) {
+            state->js_thread_outstanding = 0;
+            (void) napi_unref_threadsafe_function (state->env, tsfn);
+        }
         g_send_completion_states.erase (entry);
     }
     if (tsfn)
@@ -2793,6 +2820,12 @@ napi_value socket_send_async (napi_env env, napi_callback_info info)
             inline_event = operation->event;
     }
 
+    if (!inline_completed && state->js_thread_outstanding++ == 0) {
+        //  Taken before returning to JavaScript. The threadsafe callback that
+        //  releases it can only run once this native call has returned, so the
+        //  0 -> 1 transition cannot race its own release.
+        (void) napi_ref_threadsafe_function (env, state->tsfn);
+    }
     napi_value out = create_send_submit_result (env, result, 0, op_id);
     if (inline_completed) {
         napi_value completion =

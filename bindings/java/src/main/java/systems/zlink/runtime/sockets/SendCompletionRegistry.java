@@ -18,6 +18,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 import systems.zlink.contracts.errors.ErrorCategory;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -37,8 +39,9 @@ import systems.zlink.runtime.nativeapi.RuntimeResources;
  *
  * <p>The table is keyed by a binding-owned token, rather than the Core op id:
  * Core may invoke the completion inline before {@code zlink_send_async}
- * returns its op id. The callback only resolves the future; it never retries,
- * queues, or schedules work.
+ * returns its op id. The foreign callback only snapshots the event and queues
+ * stage completion; it never retries or calls user continuations on a Core
+ * thread.
  */
 final class SendCompletionRegistry implements AutoCloseable {
     private static final Linker LINKER = Linker.nativeLinker();
@@ -51,6 +54,8 @@ final class SendCompletionRegistry implements AutoCloseable {
     private final Object lifecycle = new Object();
     private final ConcurrentMap<Long, Pending> pending =
         new ConcurrentHashMap<>();
+    private final ExecutorService completionExecutor =
+        RuntimeResources.daemonSingleThreadExecutor("zlink-send-completion");
     private final Arena callbackArena = Arena.ofShared();
     private final MemorySegment callback;
     private boolean closed;
@@ -67,6 +72,7 @@ final class SendCompletionRegistry implements AutoCloseable {
             }
         } catch (Throwable failure) {
             RuntimeResources.closeArena(callbackArena);
+            RuntimeResources.shutdownExecutor(completionExecutor);
             if (failure instanceof RuntimeException runtimeFailure) {
                 throw runtimeFailure;
             }
@@ -179,21 +185,27 @@ final class SendCompletionRegistry implements AutoCloseable {
                 NativeLayouts.SEND_COMPLETE_RESULT_OFFSET);
             int errno = event.get(ValueLayout.JAVA_INT,
                 NativeLayouts.SEND_COMPLETE_ERRNO_OFFSET);
-            SocketCore.enterCallback();
             try {
-                if (result == 0) {
-                    operation.future.complete(null);
-                } else {
-                    operation.future.completeExceptionally(
-                        new ZlinkSubmitException(SubmitResult.NOT_ADMITTED,
-                            result == 201 && errno == 0
-                                ? NativeErrno.ETIMEDOUT : errno));
-                }
-            } finally {
-                SocketCore.leaveCallback();
+                completionExecutor.execute(() -> complete(operation, result,
+                    errno));
+            } catch (RejectedExecutionException failure) {
+                operation.future.completeExceptionally(
+                    new ZlinkSubmitException(SubmitResult.TERMINATED,
+                        NativeErrno.ECANCELED));
             }
         } catch (Throwable ignored) {
             // A foreign callback must never unwind through the Core boundary.
+        }
+    }
+
+    private static void complete(Pending operation, int result, int errno) {
+        if (result == 0) {
+            operation.future.complete(null);
+        } else {
+            operation.future.completeExceptionally(
+                new ZlinkSubmitException(SubmitResult.NOT_ADMITTED,
+                    result == 201 && errno == 0
+                        ? NativeErrno.ETIMEDOUT : errno));
         }
     }
 
@@ -214,6 +226,7 @@ final class SendCompletionRegistry implements AutoCloseable {
                     NativeErrno.ECANCELED));
         }
         RuntimeResources.closeArena(callbackArena);
+        RuntimeResources.shutdownExecutor(completionExecutor);
     }
 
     private void ensureOpen() {
