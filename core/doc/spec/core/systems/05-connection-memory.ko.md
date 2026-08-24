@@ -5,7 +5,7 @@ title: "Connection별 memory"
 [English](https://zlink-systems.github.io/zlink/spec/core/systems/05-connection-memory/) | 한국어
 
 <!-- zlink-nav:start -->
-[시스템 목차](README.ko.md) | [이전: Thread safety](04-thread-safety.ko.md) | [다음: Auto HWM 내부 설계](06-auto-hwm.ko.md)
+[시스템 목차](README.ko.md) | [이전: Thread safety](04-thread-safety.ko.md) | [다음: Auto HWM](06-auto-hwm.ko.md)
 <!-- zlink-nav:end -->
 
 # Connection별 memory

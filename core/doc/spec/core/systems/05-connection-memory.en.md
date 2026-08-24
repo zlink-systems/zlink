@@ -1,7 +1,7 @@
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/05-connection-memory/) | English
 
 <!-- zlink-nav:start -->
-[Systems Index](README.en.md) | [Previous: Thread Safety](04-thread-safety.en.md) | [Next: Auto HWM Internals](06-auto-hwm.en.md)
+[Systems Index](README.en.md) | [Previous: Thread Safety](04-thread-safety.en.md) | [Next: Auto HWM](06-auto-hwm.en.md)
 <!-- zlink-nav:end -->
 
 # Per-connection memory

@@ -62,7 +62,7 @@ title: "ZLink Core 스펙"
 | [03. I/O thread](systems/03-io-thread.ko.md) | I/O thread의 생성과 작업 분배 |
 | [04. Thread safety](systems/04-thread-safety.ko.md) | 3단 thread-safety 계약 구현 |
 | [05. Connection별 memory](systems/05-connection-memory.ko.md) | connection당 메모리 구성 요소 |
-| [06. Auto HWM 내부 설계](systems/06-auto-hwm.ko.md) | Auto HWM 내부 상태와 계산 |
+| [06. Auto HWM](systems/06-auto-hwm.ko.md) | Auto HWM budget 계약과 내부 구조 |
 | [07. Core source layout](systems/07-core-source-layout.ko.md) | source directory 구성과 include 방향 |
 | [08. Core POSD module 구조](systems/08-posd-module-structure.ko.md) | 계층별 책임 분리 |
 | [09. Core 설계 결정](systems/09-design-decisions.ko.md) | 주요 설계 결정 사항 |
