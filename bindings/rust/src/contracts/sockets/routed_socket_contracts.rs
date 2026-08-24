@@ -2,8 +2,8 @@
 
 use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, Received, RecvError,
-    RecvFlags, RouterSocketOptions,
+    BindError, CommonSocketOptions, ConfigError, ConnectError, Received, RecvError, RecvFlags,
+    RouterSocketOptions,
 };
 use crate::{Empty, ReplyOp, RequestOp, RoutedSendOp, RoutingId};
 
@@ -52,23 +52,6 @@ impl RouterSocket {
         )
     }
 
-    /// Receives while retaining each physical part's Core HWM credit in
-    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
-    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        let inner = crate::socket::router_inner(self);
-        crate::socket::recv_router_retained_once(
-            inner.handle,
-            inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
-            inner
-                .send_completions
-                .as_ref()
-                .expect("ROUTER send completions")
-                .clone(),
-            flags.bits(),
-            out,
-        )
-    }
-
     /// Begins a request addressed to peer `peer_rid`: add parts, then submit and
     /// await a reply. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn request(&self, peer_rid: &RoutingId) -> RequestOp<Empty> {
@@ -95,7 +78,6 @@ impl RouterSocket {
             request_seq,
         )
     }
-
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {

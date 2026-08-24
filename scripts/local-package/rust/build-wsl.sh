@@ -11,7 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-0.11.1.crate with the Core 0.11.1 Linux runtime.
+Creates zlink-<repository-version>.crate with the exact matching Core Linux
+runtime.
 EOF
 }
 

@@ -46,6 +46,48 @@ test('router recv fills caller-provided Received with routing metadata', async (
     router.close();
     ctx.close();
 });
+test('dealer recv reuses Received from plain payload to replyable request', async () => {
+    const ctx = zlink.createContext();
+    const router = zlink.createRouterSocket(ctx);
+    const dealer = zlink.createDealerSocket(ctx);
+    const dealerRid = zlink.RoutingId.from(Buffer.from('dealer-recv-request'));
+    router.bind('inproc://dealer-recv-request-metadata');
+    dealer.setRoutingId(dealerRid);
+    dealer.connect('inproc://dealer-recv-request-metadata');
+    const received = new zlink.Received();
+    await router.send(dealerRid).message('plain').submit();
+    assert.equal(dealer.recv(received), true);
+    assert.equal(received.requestSeq, null);
+    assert.equal(received.singlePartOrThrow().getString(), 'plain');
+    assert.throws(() => received.reply(), zlink.SubmitError);
+    const pendingReply = router.request(dealerRid)
+        .message('request-head')
+        .message('request-body')
+        .timeout(2_000)
+        .submit();
+    assert.equal(dealer.recv(received), true);
+    assert.ok(received.requestSeq !== null && received.requestSeq > 0n);
+    assert.deepEqual(received.parts.map((part) => part.getString()), [
+        'request-head',
+        'request-body',
+    ]);
+    await received.reply().message('reply').submit();
+    const keepAlive = setInterval(() => { }, 10);
+    let replyParts;
+    try {
+        replyParts = await pendingReply;
+        assert.equal(replyParts.length, 1);
+        assert.equal(replyParts[0].getString(), 'reply');
+    }
+    finally {
+        clearInterval(keepAlive);
+        replyParts?.forEach((part) => part.close());
+    }
+    received.close();
+    dealer.close();
+    router.close();
+    ctx.close();
+});
 test('router forwards an unread received Message from managed storage', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
@@ -118,9 +160,8 @@ test('router nonblocking recv preserves order and async send ownership', async (
     router.bind('inproc://dealer-router-recv-order');
     dealer.connect('inproc://dealer-router-recv-order');
     for (let index = 0; index < 80; index += 1) {
-        // Core 0.13.0 has a known multipart-async defect on the routed DEALER
-        // generic-target path. Keep this async regression assertion one-part until
-        // the parallel core/build-sendfix change lands.
+        // Multipart async generic-target behavior has a separate Core regression
+        // gate. Keep this ordering probe one-part so it tests only receive order.
         await dealer.send()
             .message(Buffer.from(`payload-${index}`))
             .submit();

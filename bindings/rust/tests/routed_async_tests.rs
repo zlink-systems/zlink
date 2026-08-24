@@ -1,8 +1,6 @@
 //! Core-driven send-completion contracts for the asynchronous send terminals.
 //!
-//! `bindings/doc/spec/async-coroutine-policy.ko.md` (3rd revision) and
-//! `doc/plan/core-send-completion-design.ko.md`: `submit()` returns a
-//! runtime-independent `Future` whose completion is driven by
+//! `submit()` returns a runtime-independent `Future` whose completion is driven by
 //! `zlink_send_complete_handler`. The binding owns no thread, no park queue, no
 //! retry and no deadline timer; Core answers every operation exactly once.
 

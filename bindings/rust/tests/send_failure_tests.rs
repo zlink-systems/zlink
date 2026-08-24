@@ -66,7 +66,7 @@ fn blocking_publish_failure_surfaces_error() {
 
 #[test]
 fn send_without_peer_completes_through_the_core_deadline() {
-    // 0.13.0: `send()` has no flags stage. `zlink_send_async` never blocks, so
+    // 0.13.1: `send()` has no flags stage. `zlink_send_async` never blocks, so
     // an unroutable record stays a Core-owned pending operation until the
     // per-operation deadline expires and the completion resolves the Future.
     let ctx = Context::new().unwrap();

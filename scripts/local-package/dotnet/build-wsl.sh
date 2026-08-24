@@ -12,7 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates Systems.Zlink.0.11.1.nupkg with the exact Core 0.11.1 Linux runtime.
+Creates Systems.Zlink.<repository-version>.nupkg with the exact matching Core
+Linux runtime.
 EOF
 }
 

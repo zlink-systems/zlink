@@ -39,7 +39,7 @@ public sealed class CoreHwmBudgetSnapshot
     public ulong ManualReservedHwmBytes { get; internal init; }
     /// <summary>Gets bytes accounted in Core application queues.</summary>
     public ulong CoreQueueAccountedBytes { get; internal init; }
-    /// <summary>Gets bytes retained by application leases.</summary>
+    /// <summary>Gets the ABI-reserved application-accounted field; always zero.</summary>
     public ulong ApplicationAccountedBytes { get; internal init; }
     /// <summary>Gets current application-accounted bytes.</summary>
     public ulong CurrentAccountedBytes { get; internal init; }
@@ -75,11 +75,11 @@ public sealed class CoreHwmBudgetSnapshot
     public ulong ActiveSendQueueCount { get; internal init; }
     /// <summary>Gets active application receive queue count.</summary>
     public ulong ActiveReceiveQueueCount { get; internal init; }
-    /// <summary>Gets outstanding application lease count.</summary>
+    /// <summary>Gets the ABI-reserved application-lease count; always zero.</summary>
     public ulong OutstandingApplicationLeaseCount { get; internal init; }
-    /// <summary>Gets retired origin queue count.</summary>
+    /// <summary>Gets the ABI-reserved retired-queue count; always zero.</summary>
     public ulong RetiredQueueCount { get; internal init; }
-    /// <summary>Gets deferred origin credit bytes.</summary>
+    /// <summary>Gets the ABI-reserved deferred-credit field; always zero.</summary>
     public ulong DeferredOriginCreditBytes { get; internal init; }
     /// <summary>Gets unlimited manual queue count.</summary>
     public ulong UnlimitedManualQueueCount { get; internal init; }

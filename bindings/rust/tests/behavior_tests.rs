@@ -3,6 +3,7 @@
 
 mod test_support;
 
+use std::task::Poll;
 use std::thread;
 use std::time::Duration;
 
@@ -102,6 +103,58 @@ fn dealer_router_roundtrip() {
     let mut response = Received::empty();
     dealer.recv(&mut response, RecvFlags::NONE).unwrap();
     assert_eq!(response.parts()[0].as_bytes(), b"response-payload");
+}
+
+#[test]
+fn dealer_recv_reuse_preserves_typed_request_sequence() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let dealer_rid = RoutingId::from(b"dealer-recv-request-seq");
+    dealer.set_routing_id(&dealer_rid).unwrap();
+    router.bind("inproc://beh-dealer-request-seq").unwrap();
+    dealer.connect("inproc://beh-dealer-request-seq").unwrap();
+    thread::sleep(Duration::from_millis(50));
+
+    test_support::block_on(
+        dealer
+            .send()
+            .message(Message::try_from(b"ready").unwrap())
+            .submit(),
+    )
+    .unwrap();
+    let mut router_received = Received::empty();
+    assert!(router.recv(&mut router_received, RecvFlags::NONE).unwrap());
+
+    test_support::block_on(
+        router
+            .send(&dealer_rid)
+            .message(Message::try_from(b"ordinary").unwrap())
+            .submit(),
+    )
+    .unwrap();
+
+    let mut received = Received::empty();
+    assert!(dealer.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes(), b"ordinary");
+    assert_eq!(received.request_seq(), None);
+
+    let mut request = Box::pin(
+        router
+            .request(&dealer_rid)
+            .message(Message::try_from(b"typed-request").unwrap())
+            .timeout(Duration::from_millis(200))
+            .submit(),
+    );
+    assert!(matches!(
+        test_support::poll_once(&mut request),
+        Poll::Pending
+    ));
+
+    assert!(dealer.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes(), b"typed-request");
+    assert!(received.request_seq().is_some());
+    assert!(test_support::block_on(request).is_err());
 }
 
 #[test]

@@ -27,7 +27,7 @@ async def main():
                         raise AssertionError(f"unexpected routing id: {request.routing_id!r}")
                     if request.to_bytes_list() != [b"ping"]:
                         raise AssertionError("unexpected dealer-router request payload")
-                    request.send().message(b"pong").submit()
+                    await request.send().message(b"pong").submit()
 
                 reply = zlink.create_received()
                 if not dealer.recv_into(reply):

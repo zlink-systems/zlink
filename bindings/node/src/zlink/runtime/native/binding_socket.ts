@@ -42,6 +42,16 @@ export interface SocketNativeBinding {
     token: bigint,
     timeoutMs: number
   ) => { result: number; nativeErrno: number };
+  dealerReply: (
+    socket: NativeHandle,
+    requestSeq: bigint,
+    parts: unknown
+  ) => void;
+  dealerRecvMessage: (
+    socket: NativeHandle,
+    flags: number
+  ) => NativeReceivedRaw | null;
+  dealerRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
   routerRequest: (
     socket: NativeHandle,
     peerRid: Buffer,

@@ -3,7 +3,6 @@
 use crate::RecvError;
 use crate::domain::recv_state_error;
 use crate::error::CloseError;
-use crate::internal::ReceiveOwner;
 use crate::message::{Message, RoutingId};
 
 /// A received publish: its topic, source routing id, and message parts.
@@ -17,7 +16,6 @@ pub struct TopicMessage {
     /// The message parts, owned by this envelope.
     parts: Vec<Message>,
     receive_scratch: Vec<Message>,
-    receive_owner: ReceiveOwner,
 }
 
 impl TopicMessage {
@@ -28,12 +26,7 @@ impl TopicMessage {
             topic: smol_str::SmolStr::default(),
             parts: Vec::new(),
             receive_scratch: Vec::new(),
-            receive_owner: ReceiveOwner::default(),
         }
-    }
-
-    pub(crate) fn begin_receive(&mut self) {
-        self.receive_owner.release();
     }
 
     pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
@@ -47,18 +40,6 @@ impl TopicMessage {
     ) {
         self.routing_id = routing_id;
         self.topic = topic;
-        std::mem::swap(&mut self.parts, &mut self.receive_scratch);
-    }
-
-    pub(crate) fn replace_retained_parts(
-        &mut self,
-        routing_id: Option<RoutingId>,
-        topic: smol_str::SmolStr,
-        owner: ReceiveOwner,
-    ) {
-        self.routing_id = routing_id;
-        self.topic = topic;
-        self.receive_owner = owner;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 

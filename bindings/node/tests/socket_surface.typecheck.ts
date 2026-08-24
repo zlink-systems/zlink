@@ -18,18 +18,12 @@ const timer = zlink.createTimer();
 const pairSend: Promise<void> = pair.send().message('one').message(Buffer.from('two')).submit();
 const received = new zlink.Received();
 pair.recv(received, zlink.RecvFlags.DontWait);
-pair.recvRetained(received, zlink.RecvFlags.DontWait);
-dealer.recvRetained(received, zlink.RecvFlags.DontWait);
-router.recvRetained(received, zlink.RecvFlags.DontWait);
-stream.recvRetained(received, zlink.RecvFlags.DontWait);
 received.parts;
 
 const pubSend: void = pub.publish('topic').message('payload').submit();
 sub.setSubscription('topic');
 const topicMessage = new zlink.TopicMessage();
 sub.subscribe(topicMessage, zlink.RecvFlags.DontWait);
-sub.subscribeRetained(topicMessage, zlink.RecvFlags.DontWait);
-xsub.subscribeRetained(topicMessage, zlink.RecvFlags.DontWait);
 
 dealer.setRoutingId(routingId);
 const dealerSend: Promise<void> = dealer.send().message('dealer-send').submit();

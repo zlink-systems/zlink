@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Send and publish terminals for the Core 0.13.0 contract.
+//! Send and publish terminals for the Core 0.13.1 contract.
 //!
 //! HWM-managed send (PAIR send, DEALER/ROUTER routed send, and the routed send
 //! addressed at a received envelope) is asynchronous: one `zlink_send_async`

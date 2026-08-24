@@ -15,9 +15,10 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
-With no language arguments, builds all eight first-party bindings at version
-0.11.1 into .artifacts/wsl. By default the exact Core release is downloaded
-and verified; set --core-source local when testing an in-progress Core build.
+With no language arguments, builds all eight first-party bindings at the
+repository VERSION into .artifacts/wsl. By default the exact matching Core
+release is downloaded and verified; set --core-source local when testing an
+in-progress Core build.
 
 Options:
   --core-source release|local  Core input mode (default: release)
@@ -76,6 +77,7 @@ esac
 }
 
 mkdir -p "$artifact_root"
+artifact_root="$(readlink -f "$artifact_root")"
 if [[ -n "$core_prefix" ]]; then
   [[ "$core_prefix" = /* ]] || {
     echo "--core-prefix or ZLINK_CORE_PACKAGE_PREFIX must be absolute" >&2
@@ -83,7 +85,16 @@ if [[ -n "$core_prefix" ]]; then
   }
   core_prefix="$(readlink -f "$core_prefix")"
 elif [[ "$core_source" = release ]]; then
-  core_prefix="$(bash "$script_dir/core/fetch-release.sh" --version "$release_version")"
+  release_core_prefix="$(bash "$script_dir/core/fetch-release.sh" --version "$release_version")"
+  core_prefix="$artifact_root/install/zlink-core/$version"
+  case "$core_prefix" in
+    "$artifact_root"/*) ;;
+    *) echo "Core release staging prefix escaped artifact root" >&2; exit 2 ;;
+  esac
+  rm -rf -- "$core_prefix"
+  mkdir -p "$(dirname "$core_prefix")"
+  cp -a "$release_core_prefix" "$core_prefix"
+  core_prefix="$(readlink -f "$core_prefix")"
 else
   core_prefix="$artifact_root/install/zlink-core/$version"
   if [[ ! -f "$core_prefix/share/zlink/core-package-provenance.json" || "${ZLINK_REBUILD_CORE:-1}" = "1" ]]; then

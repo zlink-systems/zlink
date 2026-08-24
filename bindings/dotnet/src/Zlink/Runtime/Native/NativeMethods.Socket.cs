@@ -74,7 +74,7 @@ internal static partial class NativeMethods
     internal static extern int zlink_recv_handler(IntPtr subject,
         ZlinkSocketMsgHandlerDelegate handler, IntPtr userData);
 
-    // Core 0.13.0 send-completion family. `zlink_send_async` never blocks:
+    // Core 0.13.1 send-completion family. `zlink_send_async` never blocks:
     // an immediately admitted record can run its completion inline before the
     // call returns, and a backpressured record completes later on a Core
     // dispatch context. Exactly one completion runs per ZLINK_SUBMIT_OK submit.

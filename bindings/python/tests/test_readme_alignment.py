@@ -18,11 +18,10 @@ class ReadmeAlignmentTests(unittest.TestCase):
         self.assertIn("ref_count", readme)
         self.assertIn("on_packet", readme)
         self.assertIn("on_event", readme)
-        # `send_ready` readiness-hint semantics is abolished
-        # (bindings/doc/spec/async-coroutine-policy.ko.md, 2nd revision) —
-        # HWM-managed send completion is Core's `zlink_send_complete_handler`
-        # notification only, delivered through the awaitable `submit()`
-        # already returns.
+        # HWM-managed send completion is Core's
+        # `zlink_send_complete_handler` notification, delivered through the
+        # awaitable `submit()` already returns. There is no send-ready public
+        # callback.
         self.assertIn("zlink_send_complete_handler", readme)
         self.assertIn("receive_subscription_event", readme)
         self.assertIn(

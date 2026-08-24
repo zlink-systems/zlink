@@ -1,6 +1,6 @@
 # Node.js bindings sample 범위
 
-이 디렉터리는 Core 0.13.0의 raw socket public API 사용법만 보여 준다.
+이 디렉터리는 Core 0.13.1의 raw socket public API 사용법만 보여 준다.
 `PAIR`, `PUB/SUB`, `DEALER/ROUTER`, `STREAM`과 socket monitor 예제를 빌드하고 실행한다.
 
 Actor, Spot, session binding, timer와 Logical Multicast는 Framework가 구현하는 service 기능이다.

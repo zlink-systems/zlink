@@ -12,8 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds the C++ binding against the installed Core 0.11.1 local package and
-installs it below .artifacts/wsl/install/zlink-cpp/0.11.1.
+Builds the C++ binding against the matching Core local package and installs it
+below .artifacts/wsl/install/zlink-cpp/<repository-version>.
 EOF
 }
 

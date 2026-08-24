@@ -3,10 +3,9 @@
 //! Shared ownership of one DEALER/ROUTER native handle.
 //!
 //! This is a handle holder only. It owns no thread, no queue, no retry policy
-//! and no deadline timer: the 0.13.0 contract
-//! (`bindings/doc/spec/async-coroutine-policy.ko.md`, 3rd revision) makes the
-//! binding a pure Core wrapper and hands every send completion, every HWM
-//! wait and every deadline to Core.
+//! and no deadline timer. The 0.13.1 contract makes the binding a pure Core
+//! wrapper and hands every send completion, every HWM wait and every deadline
+//! to Core.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, Ordering};

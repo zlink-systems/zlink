@@ -6,7 +6,6 @@
 mod callback_lifecycle;
 mod deferred_cleanup;
 mod handle_storage;
-mod receive_owner;
 mod message_storage;
 mod routed_handle;
 mod send_completion;
@@ -16,9 +15,6 @@ pub(crate) use deferred_cleanup::{DeferredCloseKind, defer_native_close, release
 pub(crate) use handle_storage::{
     ContextStorage, MonitorStorage, PollerStorage, SocketStorage, TimerStorage,
 };
-pub(crate) use receive_owner::ReceiveOwner;
 pub(crate) use message_storage::MessageStorage;
 pub(crate) use routed_handle::{RoutedHandle, RoutedRole};
-pub(crate) use send_completion::{
-    SendCompletionSlot, SendCompletions, send_complete_trampoline,
-};
+pub(crate) use send_completion::{SendCompletionSlot, SendCompletions, send_complete_trampoline};

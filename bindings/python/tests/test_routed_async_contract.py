@@ -1,14 +1,12 @@
-"""HWM-managed send and request completion under the 0.13.0 contract.
+"""HWM-managed send and request completion under the 0.13.1 contract.
 
-Bindings own zero threads, queues, or retry
-(bindings/doc/spec/async-coroutine-policy.ko.md, 2nd/3rd revision;
-doc/plan/core-send-completion-design.ko.md). PAIR send and DEALER/ROUTER
+Bindings own zero threads, queues, or retry. PAIR send and DEALER/ROUTER
 routed send are admitted by `zlink_send_async` and completed by Core's
 `zlink_send_complete_handler` — never by a binding-owned park queue,
 WRITABLE-callback retry, deadline timer, or dispatcher thread. request
-completion is purely the Core reply callback resolving the awaitable; a
-backpressured submit surfaces immediately instead of being queued and
-retried by the binding.
+completion is purely the Core reply callback resolving the awaitable. Core
+retries every accepted send; only an initial rejection at the Core pending
+operation bound surfaces immediately for application policy.
 """
 
 import asyncio
@@ -300,6 +298,53 @@ def test_request_reply_timeout_is_core_driven_with_no_binding_thread():
                         raise AssertionError("request did not time out")
                     assert time.monotonic() - started < 1
                     assert _thread_names() == before
+
+    asyncio.run(scenario())
+
+
+def test_dealer_recv_reuse_preserves_typed_request_sequence():
+    async def scenario():
+        with zlink.create_context() as context:
+            with zlink.create_router_socket(context) as router:
+                with zlink.create_dealer_socket(context) as dealer:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    dealer.set_routing_id(b"dealer-recv-request-seq")
+                    endpoint = _endpoint("dealer-recv-request-seq")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    await _send_when_connected(dealer, b"ready")
+                    router_received = zlink.create_received()
+                    assert router.recv_into(router_received)
+                    router_received.close()
+
+                    received = zlink.create_received()
+                    await _send_when_connected(
+                        router, b"ordinary", b"dealer-recv-request-seq"
+                    )
+                    assert dealer.recv_into(received)
+                    assert received.to_bytes_list() == [b"ordinary"]
+                    assert received.request_seq is None
+
+                    pending = asyncio.create_task(
+                        router.request(b"dealer-recv-request-seq")
+                        .message(b"typed-request")
+                        .timeout(0.05)
+                        .submit()
+                    )
+                    await asyncio.sleep(0)
+                    assert dealer.recv_into(received)
+                    assert received.to_bytes_list() == [b"typed-request"]
+                    assert isinstance(received.request_seq, int)
+                    received.close()
+
+                    try:
+                        await pending
+                    except zlink.RequestError as error:
+                        assert error.result == zlink.RequestResult.TIMED_OUT
+                    else:
+                        raise AssertionError("typed request did not time out")
 
     asyncio.run(scenario())
 

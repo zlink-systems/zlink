@@ -117,7 +117,7 @@ test('Node async surfaces use Core completion callbacks and have no readiness ad
   assert.equal(socketBinding.includes('sendReady'), false);
 });
 
-test('bindings samples stay on the Core 0.13.0 raw socket boundary', () => {
+test('bindings samples stay on the Core 0.13.1 raw socket boundary', () => {
   const sampleRoots = [
     path.resolve(__dirname, '../../samples'),
     path.resolve(__dirname, '../../../javascript/samples')

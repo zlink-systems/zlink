@@ -1,7 +1,6 @@
 use std::ffi::c_void;
 
 use crate::error::{CloseError, RecvError, RecvResult};
-use crate::internal::ReceiveOwner;
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, ReplyOp, SendOp};
 
@@ -30,7 +29,6 @@ pub struct Received {
     route: Option<ReceivedRoute>,
     request_seq: Option<u64>,
     receive_scratch: Vec<Message>,
-    receive_owner: ReceiveOwner,
 }
 
 impl Default for Received {
@@ -51,12 +49,7 @@ impl Received {
             route: None,
             request_seq: None,
             receive_scratch: Vec::new(),
-            receive_owner: ReceiveOwner::default(),
         }
-    }
-
-    pub(crate) fn begin_receive(&mut self) {
-        self.receive_owner.release();
     }
 
     pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
@@ -74,20 +67,9 @@ impl Received {
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
-    pub(crate) fn replace_retained_parts(
-        &mut self,
-        routing_id: Option<RoutingId>,
-        request_seq: Option<u64>,
-        owner: ReceiveOwner,
-    ) {
-        self.route = routing_id.map(|routing_id| ReceivedRoute {
-            handle: None,
-            routed: None,
-            completions: None,
-            routing_id,
-        });
+    pub(crate) fn replace_dealer_parts(&mut self, request_seq: Option<u64>) {
+        self.route = None;
         self.request_seq = request_seq;
-        self.receive_owner = owner;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
@@ -107,27 +89,6 @@ impl Received {
         });
         self.request_seq = (request_seq != 0).then_some(request_seq);
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
-    }
-
-    pub(crate) fn replace_router_retained_parts(
-        &mut self,
-        handle: *mut c_void,
-        routed: std::sync::Arc<crate::internal::RoutedHandle>,
-        completions: std::sync::Arc<crate::internal::SendCompletions>,
-        routing_id: RoutingId,
-        request_seq: u64,
-        owner: ReceiveOwner,
-    ) {
-        self.replace_retained_parts(
-            Some(routing_id),
-            (request_seq != 0).then_some(request_seq),
-            owner,
-        );
-        if let Some(route) = self.route.as_mut() {
-            route.handle = Some(handle);
-            route.routed = Some(routed);
-            route.completions = Some(completions);
-        }
     }
 
     /// Returns `true` when the envelope carries exactly one part.

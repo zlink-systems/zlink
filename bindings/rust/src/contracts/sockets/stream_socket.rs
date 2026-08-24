@@ -43,23 +43,6 @@ impl StreamSocket {
         Ok(received)
     }
 
-    /// Receives while retaining each physical part's Core HWM credit in
-    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
-    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        let received = crate::socket::stream_inner(self).recv_retained(out, flags)?;
-        if received {
-            if let Some(routing_id) = out.routing_id().copied() {
-                let inner = crate::socket::stream_inner(self);
-                out.set_stream_send_context(
-                    inner.handle,
-                    inner.send_completions.clone(),
-                    routing_id,
-                );
-            }
-        }
-        Ok(received)
-    }
-
     /// Disconnects the peer identified by `peer_rid`.
     pub fn disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError> {
         crate::socket::stream_inner(self).disconnect_rid(peer_rid)
@@ -75,7 +58,6 @@ impl StreamSocket {
     {
         crate::socket::stream_on_packet(self, handler)
     }
-
 
     /// Returns the typed options facade common to all socket types.
     pub fn common_options(&self) -> CommonSocketOptions<'_> {

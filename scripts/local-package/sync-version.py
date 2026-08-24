@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -44,6 +45,10 @@ def repository_version() -> tuple[str, str, str, str]:
     if version != f"{major}.{minor}.{patch}":
         raise SyncError("LIBZLINK_VERSION does not match its major/minor/patch fields")
     return major, minor, patch, version
+
+
+def file_sha256(relative: str) -> str:
+    return hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest()
 
 
 class Synchronizer:
@@ -304,6 +309,28 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         1,
     )
     sync.regex(
+        "bindings/go/internal/native/raw_contract_test.go",
+        rf'(allowlist\.CoreVersion != "){SEMVER}("\s*)',
+        rf"\g<1>{version}\2",
+        1,
+    )
+    sync.regex(
+        "bindings/go/tests/raw-core11-allowlist.json",
+        rf'("coreVersion"\s*:\s*"){SEMVER}("\s*,)',
+        rf"\g<1>{version}\2",
+        1,
+    )
+    for header_path, source_path in (
+        ("include/zlink.h", "core/include/zlink.h"),
+        ("include/zlink/common.h", "core/include/zlink/common.h"),
+    ):
+        sync.regex(
+            "bindings/go/tests/raw-core11-allowlist.json",
+            rf'("path"\s*:\s*"{re.escape(header_path)}"\s*,\s*\n\s*"sha256"\s*:\s*")[0-9a-f]{{64}}("\s*)',
+            rf"\g<1>{file_sha256(source_path)}\2",
+            1,
+        )
+    sync.regex(
         "bindings/go/contract_test.go",
         rf"want {SEMVER}",
         f"want {version}",
@@ -318,6 +345,12 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
     )
     for relative in ("bindings/python/setup.py", "bindings/python/src/zlink/_native/_native_loader.py"):
         sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", version, 1)
+    sync.regex(
+        "bindings/python/tests/test_native_contract.py",
+        rf"libzlink\.so\.{SEMVER}",
+        f"libzlink.so.{version}",
+        1,
+    )
 
     sync.regex(
         "bindings/rust/Cargo.toml",

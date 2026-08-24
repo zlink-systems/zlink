@@ -10,7 +10,7 @@ This package must stay aligned with:
 - `doc/perf/PERF_SINGLE_TEST_POLICY.md`
 - `doc/perf/PERF_MULTI_TEST_POLICY.md`
 
-The Python surface is the Core 0.13.0 raw messaging contract with typed Python
+The Python surface is the Core 0.13.1 raw messaging contract with typed Python
 ownership and error handling. The public contract is:
 
 - multipart-only send and subscribe/receive
@@ -37,9 +37,7 @@ ownership and error handling. The public contract is:
   `receive_subscription_event_into()`.
 - callback removal by passing `None` is not part of the public contract;
   callback lifecycle ends with socket close
-- `send_ready` readiness-hint semantics is abolished
-  (`bindings/doc/spec/async-coroutine-policy.ko.md`, 2nd revision). There is
-  no `on_send_ready` handler; HWM-managed send completion is Core's
+- there is no `on_send_ready` handler; HWM-managed send completion is Core's
   `zlink_send_complete_handler` notification, delivered through the
   awaitable `submit()` already returns.
 
@@ -51,10 +49,8 @@ raw-receive registration method.
 
 ## Send, Publish, Request, Raw Reply Completion
 
-Per `bindings/doc/spec/async-coroutine-policy.ko.md` (3rd revision) and
-`doc/plan/core-send-completion-design.ko.md`, bindings are pure Core
-wrappers: **zero binding-owned threads, queues, or retry** anywhere in the
-send/request completion surface.
+Bindings are pure Core wrappers: **zero binding-owned threads, queues, or
+retry** anywhere in the send/request completion surface.
 
 - **HWM-managed send** — PAIR `send()` and DEALER/ROUTER routed `send()` —
   is ASYNC because it can pass through Core's HWM admission queue.
@@ -131,7 +127,7 @@ the topic and subscription state returned by the Core socket.
 ## Native Library Loading
 
 The Python binding loads the native zlink runtime through `ctypes`. A wheel
-loads the native payload bundled in that wheel. The current Core 0.13.0 package
+loads the native payload bundled in that wheel. The current Core 0.13.1 package
 target is Linux x86_64 only. Source builds use the same target policy and
 require an explicit `ZLINK_LIBRARY_PATH` or `ZLINK_CORE_PREFIX`; the loader does
 not search the repository build directory or an arbitrary system library.

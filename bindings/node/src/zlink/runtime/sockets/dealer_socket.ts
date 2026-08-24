@@ -3,6 +3,7 @@
 import { DealerSocketOptions } from './socket_options';
 import { normalizeOperationPayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
+import { materializeReceivedInto } from '../messaging/message_materializer';
 import {
   ManagedRoutedRuntimeSendOperation,
   ReceiveSocket,
@@ -14,15 +15,14 @@ import {
   releaseNativeRequestDispatcher,
 } from '../messaging/request_executor';
 import type { RuntimeContext as Context } from '../core/context';
-import { configCall, submitNativeError } from '../errors/native_errors';
+import { configCall, recvNativeError, submitNativeError } from '../errors/native_errors';
 import { getNativeHandle } from '../handles/native_handle';
-import type { NativeReceivedRaw } from '../messaging/message_materializer';
 import { requireNative } from '../native/native';
 import { RoutingId } from '../../contracts';
 import { RecvFlags, SendFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
-import type { RequestOperation, RoutedSendOperation } from '../../contracts/messaging';
+import type { MessageLike, Received, RequestOperation, RoutedSendOperation } from '../../contracts/messaging';
 import { SubmitResult } from '../../contracts/errors/errors';
-import { submitErrorFromNativeResult } from './socket_submit_errors';
+import { normalizeReplyFlags, submitErrorFromNativeResult } from './socket_submit_errors';
 
 const native = requireNative();
 
@@ -89,9 +89,42 @@ export class DealerSocket extends ReceiveSocket {
       return registration.promise;
     });
   }
+  recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    let raw;
+    try {
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.dealerRecvMessageNoWait(getNativeHandle(this))
+        : native.dealerRecvMessage(getNativeHandle(this), flags | 0);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'recv failed');
+    }
+    if (raw == null) return false;
+    materializeReceivedInto(
+      result,
+      raw,
+      (requestSeq, parts, replyFlags) => this.replyDirect(requestSeq, parts, replyFlags)
+    );
+    return true;
+  }
   close(): void {
     const handle = getNativeHandle(this);
     super.close();
     releaseNativeRequestDispatcher(handle);
+  }
+  private replyDirect(
+    requestSeq: bigint,
+    payloadOrParts: MessageLike | readonly MessageLike[],
+    flags: SendFlags = SendFlags.None
+  ): void {
+    normalizeReplyFlags(flags);
+    try {
+      native.dealerReply(
+        getNativeHandle(this),
+        requestSeq,
+        normalizeOperationPayload(payloadOrParts)
+      );
+    } catch (error) {
+      throw submitNativeError(error, flags, 'reply failed');
+    }
   }
 }

@@ -1,4 +1,4 @@
-//! Raw FFI declarations for the Core 0.13.0 public header set.
+//! Raw FFI declarations for the Core 0.13.1 public header set.
 //!
 //! This module is crate-private. The declarations intentionally contain only
 //! symbols present in the candidate `zlink.h` headers copied into this crate;
@@ -541,7 +541,7 @@ pub type zlink_timer_handler_fn =
     unsafe extern "C" fn(timer: *mut c_void, fire_count: u64, userdata: *mut c_void);
 
 // ---------------------------------------------------------------------------
-// Functions exported by the candidate Core 0.13.0 headers
+// Functions exported by the Core 0.13.1 headers
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" {
@@ -789,6 +789,14 @@ unsafe extern "C" {
     pub fn zlink_router_recv_part(
         router: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
+        request_seq_out: *mut u64,
+        part_out: *mut zlink_msg_t,
+        has_more_out: *mut zlink_part_flag_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
+    pub fn zlink_dealer_recv_part(
+        dealer: *mut c_void,
+        message_type_out: *mut u8,
         request_seq_out: *mut u64,
         part_out: *mut zlink_msg_t,
         has_more_out: *mut zlink_part_flag_t,
