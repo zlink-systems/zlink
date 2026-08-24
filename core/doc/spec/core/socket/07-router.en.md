@@ -288,8 +288,8 @@ Raw replies and error replies are submitted exactly once on the [completion prog
 lane](../glossary.en.md#completion-progress-lane), a separate path that handles only terminal-reply
 progress and bypasses HWM admission. This lane is not subject to application byte HWM, manual HWM,
 LWM, or Core budget reservation. This function therefore does not return
-`ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and does not wait for `ZLINK_POLLOUT` or a
-send-ready callback to retry. Connection, lifecycle, argument, state, and allocation failures
+`ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and enters no readiness-wait or retry path.
+Connection, lifecycle, argument, state, and allocation failures
 terminate immediately with the corresponding `zlink_submit_result_t` at the call.
 
 ## 10. Results and readiness

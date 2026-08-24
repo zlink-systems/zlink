@@ -647,7 +647,7 @@ operations can be called concurrently from multiple threads, low-frequency contr
 serialize for correctness, and close/destroy uses a stricter lifecycle gate.
 If another thread has an in-flight callback or admitted API on the same
 handle, close fails with `errno=EBUSY`. After close is accepted, new API entry
-fails with `errno=ESHUTDOWN`. Self-close from a send-ready or monitor callback
+fails with `errno=ESHUTDOWN`. Self-close from a send-completion or monitor callback
 is deferred until callback epilogue. Self-close from a raw STREAM message or
 packet callback is not deferred, however; it fails with `ZLINK_CLOSE_BUSY` and
 `errno == EBUSY` (see [Socket — STREAM](08-stream.en.md)).
@@ -1214,8 +1214,8 @@ profile.
 flight; the minimum message charge; and oversize single-message admission
 counters, and adds a receive-flow-state detail flag plus five flow-metric
 fields. The context budget snapshot distinguishes physical-queue capacity,
-provisional and committed queue bytes, application-held leases, and completion
-and monitor queues. These fields are diagnostic snapshots. Applications
+provisional and committed queue bytes, and completion and monitor queues. Its
+ABI-compatibility retained-credit fields are always zero. These fields are diagnostic snapshots. Applications
 configure policy inputs through public options rather than mutating internal
 values.
 
@@ -1240,7 +1240,7 @@ callback invocation. Each item maps to one unit test.
 - When another thread is executing an admitted API or callback on the same
   handle, `zlink_close` fails with `EBUSY`; after close is accepted, new API
   entry fails with `ESHUTDOWN`.
-- Self-close from a send-ready or monitor callback is deferred until the
+- Self-close from a send-completion or monitor callback is deferred until the
   callback epilogue.
 - On success, `zlink_socket_monitor_open` returns a monitor handle. On failure,
   it returns `NULL` with `errno` set. The returned monitor starts in recv mode.

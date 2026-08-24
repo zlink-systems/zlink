@@ -618,7 +618,7 @@ socket을 닫고 관련된 모든 자원을 해제한다. 송신 대기열에 �
 제어 경로는 정확성을 위해 직렬화되며, close/destroy는 엄격한 lifecycle gate를
 사용한다. 다른 thread에서 동일 핸들에 대해 callback이나 API 호출이 진행 중이면
 `errno=EBUSY`로 실패한다. close가 accepted된 뒤 새 API 진입은
-`errno=ESHUTDOWN`으로 실패한다. send-ready 또는 monitor callback 내에서의
+`errno=ESHUTDOWN`으로 실패한다. send-completion 또는 monitor callback 내에서의
 self-close는 callback 에필로그까지 지연된다. 단, raw STREAM의 message·packet
 callback 안에서의 self-close는 지연되지 않고 `ZLINK_CLOSE_BUSY`, `errno == EBUSY`로
 실패한다 ([Socket — STREAM](08-stream.ko.md) 참조).
@@ -1157,8 +1157,8 @@ Core pipe low watermark는 `ceil(hwm_bytes / 2)`다. 이 값은 byte credit 반�
 pending message count와 pending byte, in-flight byte, minimum message charge와
 oversize 단일 message 허용 counter를 제공하고, receive-flow 상태 detail flag와
 다섯 개의 flow metric field를 추가한다. context budget snapshot은 physical queue
-capacity, provisional·committed queue byte, application-held lease와 completion·monitor
-queue를 각각 구분한다. 이 field는 진단 snapshot이다. application은 내부 값을 직접
+capacity, provisional·committed queue byte와 completion·monitor queue를 각각
+구분한다. ABI 호환용 retained-credit field는 항상 0이다. 이 field는 진단 snapshot이다. application은 내부 값을 직접
 바꾸지 않고 public option으로 policy 입력을 설정한다.
 
 ### Transport 기본값
@@ -1175,7 +1175,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `zlink_socket`은 성공 시 non-NULL 핸들을 반환하고, 유효하지 않은 타입은 `EINVAL`, 최대 socket 수 도달은 `EMFILE`, 종료된 context는 `ETERM`이다.
 - `zlink_close`는 성공 시 `ZLINK_CLOSE_OK`를 반환한다. 유효하지 않은 pointer는 `EFAULT`, stale opaque value는 `ESTALE`이다.
 - 다른 thread가 같은 핸들에서 admitted API나 callback을 실행 중일 때 `zlink_close`는 `EBUSY`로 실패하고, close가 accepted된 뒤 새 API 진입은 `ESHUTDOWN`이다.
-- send-ready 또는 monitor callback 안의 self-close는 callback 에필로그까지 지연된다.
+- send-completion 또는 monitor callback 안의 self-close는 callback 에필로그까지 지연된다.
 - `zlink_socket_monitor_open`은 성공 시 monitor 핸들을, 실패 시 `NULL`과 설정된 errno를 반환하며, 반환된 monitor는 recv 모드로 시작한다.
 
 **옵션**

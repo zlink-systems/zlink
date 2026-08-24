@@ -383,8 +383,8 @@ reply할 때 모든 호출에서 같은 token을 사용한다. `ZLINK_PART_FINAL
 
 Raw reply와 error reply는 completion progress lane에 한 번만 submit한다. 이 lane은 application
 byte HWM, manual HWM, LWM과 Core budget reservation의 대상이 아니므로 이 함수는 그 capacity를
-이유로 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하지 않으며 `ZLINK_POLLOUT` 또는 send-ready callback을
-기다려 재시도하지 않는다. 연결, lifecycle, argument, state와 allocation failure는 호출 시점의
+이유로 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하지 않으며 readiness 대기나 재시도 경로에
+진입하지 않는다. 연결, lifecycle, argument, state와 allocation failure는 호출 시점의
 해당 `zlink_submit_result_t`로 즉시 끝난다.
 
 ## 10. 구현 및 contract test 검증 요구

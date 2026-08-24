@@ -78,8 +78,8 @@ One STREAM handle uses only one of the following receive modes.
 The first raw part receive or handler registration fixes the receive mode.
 Activating another receive mode or registering a handler again on the same
 handle fails with a busy result and `errno == EBUSY`. Data-plane
-`ZLINK_POLLIN` belongs to raw part receive mode. A send-ready handler and
-`ZLINK_POLLOUT` are independent of the receive mode.
+`ZLINK_POLLIN` belongs to raw part receive mode. The send-completion callback
+and `ZLINK_POLLOUT` are independent of the receive mode.
 
 ## 4. Routed part send
 
@@ -454,8 +454,8 @@ item maps to one test.
 - Registering a receive handler again or closing the same handle from inside a
   callback, including changing the receive mode, returns a busy result with
   `errno == EBUSY`.
-- Data-plane `ZLINK_POLLIN` belongs to raw part receive mode. A send-ready
-  handler and `ZLINK_POLLOUT` operate independently of the receive mode.
+- Data-plane `ZLINK_POLLIN` belongs to raw part receive mode. The send-completion
+  callback and `ZLINK_POLLOUT` operate independently of the receive mode.
 
 **Routed part send**
 
